@@ -42,12 +42,16 @@ weights and experiment artifacts are deliberately excluded from Git.
   start, the four log-probability acceptance ratio, cached current-state token scores, independent chains, and
   acceptance diagnostics.
 - Exact tabular tests enumerate the target power distribution and check the sampler's empirical output.
+- The conditional-energy path samples candidate blocks only from the base model and supports either on-policy completions or a
+  full-support off-policy rollout model. The importance ratio is computed only over the completion suffix, and
+  all random weights are aggregated in the log domain.
 
 Run the standalone exact-state-space MH smoke experiment with:
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\toy_mh.py
+.\.venv\Scripts\python experiments\toy_conditional_is.py
 ```
 
 ## Repository layout
