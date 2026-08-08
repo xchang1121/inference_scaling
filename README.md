@@ -33,8 +33,23 @@ python -m venv .venv
 .\.venv\Scripts\python -m pytest
 ```
 
-GPU installation and reproducible RTX 3090 commands will be added with the Hugging Face backend. Raw model
-weights and experiment artifacts are deliberately excluded from Git.
+Install a CUDA-enabled PyTorch wheel first, then install the tested inference dependencies:
+
+```powershell
+# Choose the PyTorch index that matches a CUDA runtime supported by the local NVIDIA driver.
+.\.venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+.\.venv\Scripts\python -m pip install -e ".[dev,gpu]"
+.\.venv\Scripts\python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name())"
+```
+
+The PyTorch wheel contains its CUDA runtime; a separately installed CUDA Toolkit is needed only when compiling
+CUDA extensions. Consequently, the version printed by `nvcc` does not have to equal `torch.version.cuda`.
+Raw model weights and experiment artifacts are deliberately excluded from Git.
+
+The Transformers backend defaults to FP32. On the tested RTX 3090, BF16 logits changed enough with batch shape to
+make generated token probabilities disagree materially with later batched rescoring. Reduced precision remains an
+explicit option for throughput experiments, but FP32 should be used for off-policy importance weights unless that
+consistency has been measured for the chosen model and hardware.
 
 ## Implemented so far
 
@@ -57,6 +72,9 @@ weights and experiment artifacts are deliberately excluded from Git.
   continuation all match; random generation is never cached.
 - Replay fresh completions and post-selection reserve completions are flattened across candidates into one backend
   batch, while their request-local seeds and replay keys remain distinct.
+- `TransformersBackend` performs exact-policy batched decoding and rescoring, uses request-local random streams,
+  decodes through the model KV cache, and prefills one shared prefix only once before forking its cache across
+  candidates.
 
 Run the standalone finite-state smoke experiments with:
 
