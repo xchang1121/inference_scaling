@@ -1,0 +1,73 @@
+"""Core request and backend contracts.
+
+Algorithms depend on these contracts rather than on Transformers or a particular
+inference server.  A backend must return probabilities under the *actual* sampling
+policy, not merely unprocessed model logits.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol, Sequence, runtime_checkable
+
+from inference_scaling.config import SamplingConfig
+
+TokenSequence = tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationRequest:
+    prefix: TokenSequence
+    max_new_tokens: int
+    sampling: SamplingConfig
+    seed: int
+    request_id: str
+
+    def __post_init__(self) -> None:
+        if self.max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive")
+        if self.seed < 0:
+            raise ValueError("seed must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceSample:
+    prefix: TokenSequence
+    token_ids: TokenSequence
+    token_logprobs: tuple[float, ...]
+    policy_id: str
+    model_id: str
+    request_id: str
+    finish_reason: str = "length"
+
+    def __post_init__(self) -> None:
+        if len(self.token_ids) != len(self.token_logprobs):
+            raise ValueError("each sampled token must have one actual-policy log-probability")
+
+    @property
+    def logprob(self) -> float:
+        return float(sum(self.token_logprobs))
+
+    @property
+    def full_sequence(self) -> TokenSequence:
+        return self.prefix + self.token_ids
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreRequest:
+    prefix: TokenSequence
+    continuations: tuple[TokenSequence, ...]
+    sampling: SamplingConfig | None = None
+
+
+@runtime_checkable
+class AutoregressiveBackend(Protocol):
+    """Minimal interface required by MH, conditional IS, and replay correction."""
+
+    @property
+    def model_id(self) -> str: ...
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]: ...
+
+    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]: ...
+

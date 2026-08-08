@@ -1,0 +1,27 @@
+import numpy as np
+
+from inference_scaling.backends import TabularAutoregressiveBackend
+from inference_scaling.config import SamplingConfig
+from inference_scaling.types import GenerationRequest, ScoreRequest
+
+
+def test_sample_logprob_matches_actual_truncated_policy() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.6, 0.3, 0.1])
+    sampling = SamplingConfig(temperature=1.0, top_k=2)
+    request = GenerationRequest((), 4, sampling, 5, "sample")
+    sample = backend.sample_batch([request])[0]
+
+    assert 2 not in sample.token_ids
+    rescored = backend.score_batch([ScoreRequest((), (sample.token_ids,), sampling)])[0]
+    np.testing.assert_allclose(rescored, sample.token_logprobs)
+
+
+def test_base_and_behavior_scores_are_distinct() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
+    continuation = (1, 0)
+    base = backend.score_batch([ScoreRequest((), (continuation,), None)])[0]
+    behavior = backend.score_batch(
+        [ScoreRequest((), (continuation,), SamplingConfig(temperature=0.5))]
+    )[0]
+    assert not np.allclose(base, behavior)
+

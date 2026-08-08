@@ -1,0 +1,24 @@
+[runtime]
+seed = 17
+max_batch_size = 16
+max_batch_tokens = 2048
+deterministic = true
+
+[sampling]
+temperature = 1.0
+top_p = 1.0
+
+[mh]
+alpha = 4.0
+total_length = 32
+block_size = 8
+steps_per_block = 4
+chains = 4
+
+[conditional_is]
+candidate_count = 4
+rollout_count = 4
+block_size = 4
+total_length = 32
+reward_temperature = 1.0
+

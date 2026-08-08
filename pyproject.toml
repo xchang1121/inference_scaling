@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inference-scaling"
+version = "0.1.0"
+description = "A unified, theory-aligned experiment framework for MH and conditional-energy inference scaling."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+]
+gpu = [
+  "accelerate>=1.0",
+  "safetensors>=0.5",
+  "transformers>=4.49",
+]
+
+[project.scripts]
+inference-scaling = "inference_scaling.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
