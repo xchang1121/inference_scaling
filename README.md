@@ -48,14 +48,18 @@ weights and experiment artifacts are deliberately excluded from Git.
 - `base-replay` implements metadata-only design freezing, single-use evaluation records, behavior-mixture
   denominators, truncated historical ratios with an independent fresh tail correction, and post-selection reserve
   records. Current-decision fresh samples and consumed history are irreversibly moved to the design pool.
+- `dynamic-is` adds defensive candidate mixtures, exact candidate-level probability ratios, and a frozen joint
+  history/fresh allocation. Its default cold-start allocation is replaceable by the included design-pool empirical
+  variance and token-cost estimator.
 
-Run the standalone exact-state-space MH smoke experiment with:
+Run the standalone finite-state smoke experiments with:
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\toy_mh.py
 .\.venv\Scripts\python experiments\toy_conditional_is.py
 .\.venv\Scripts\python experiments\toy_base_replay.py
+.\.venv\Scripts\python experiments\toy_dynamic_is.py
 ```
 
 ## Repository layout

@@ -191,7 +191,7 @@ def _fresh_records(
     )
 
 
-def _estimate_candidate(
+def estimate_replay_energy(
     *,
     base_backend: AutoregressiveBackend,
     base_policy: BehaviorPolicy,
@@ -336,7 +336,7 @@ def base_replay_step(
                 behavior_counts=(),
             )
         else:
-            estimate = _estimate_candidate(
+            estimate = estimate_replay_energy(
                 base_backend=base_backend,
                 base_policy=base_policy,
                 registry=registry,
@@ -368,7 +368,7 @@ def base_replay_step(
     return BaseReplayStep(len(generated_prefix), tuple(candidates), selected_index)
 
 
-def _write_reserve_records(
+def write_reserve_records(
     *,
     base_backend: AutoregressiveBackend,
     base_sampling: SamplingConfig,
@@ -464,7 +464,7 @@ def run_base_replay(
         if eos is not None and eos in step.selected.token_ids:
             generated = generated[: generated.index(eos) + 1]
             break
-        reserve_written += _write_reserve_records(
+        reserve_written += write_reserve_records(
             base_backend=base_backend,
             base_sampling=base_sampling,
             reserve_policy=reserve_policy,

@@ -95,13 +95,29 @@ class BaseReplayConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class DynamicISConfig(BaseReplayConfig):
+class DynamicISConfig:
+    candidate_count: int = 4
+    block_size: int = 16
+    total_length: int = 128
+    reward_temperature: float = 1.0
+    max_history_per_candidate: int = 8
+    truncation: float = 8.0
+    reserve_rollouts: int = 0
     rollout_budget: float = 64.0
     auxiliary_mixture: float = 0.25
     minimum_fresh_per_candidate: int = 1
 
     def __post_init__(self) -> None:
-        BaseReplayConfig.__post_init__(self)
+        for name in ("candidate_count", "block_size", "total_length"):
+            _positive(name, getattr(self, name))
+        _positive("reward_temperature", self.reward_temperature)
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
+        if self.max_history_per_candidate < 0:
+            raise ValueError("max_history_per_candidate must be non-negative")
+        _positive("truncation", self.truncation)
+        if self.reserve_rollouts < 0:
+            raise ValueError("reserve_rollouts must be non-negative")
         _positive("rollout_budget", self.rollout_budget)
         if not 0 <= self.auxiliary_mixture < 1:
             raise ValueError("auxiliary_mixture must lie in [0, 1)")
