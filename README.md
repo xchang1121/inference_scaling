@@ -53,6 +53,8 @@ weights and experiment artifacts are deliberately excluded from Git.
   variance and token-cost estimator.
 - `ContinuousBatchingBackend` merges candidate, rollout, and score requests from concurrently running prompts while
   preserving request-local seeds and original result order; its counters expose achieved batch sizes.
+- `ScoreCachingBackend` reuses exact base and behavior scores only when model, sampling policy, prefix, and
+  continuation all match; random generation is never cached.
 
 Run the standalone finite-state smoke experiments with:
 
