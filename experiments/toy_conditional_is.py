@@ -38,7 +38,9 @@ def run(trials: int, proposal_temperature: float) -> dict[str, object]:
         {(): [0.7, 0.3], (0,): [0.9, 0.1], (1,): [0.2, 0.8]},
         fallback=[0.5, 0.5],
     )
-    config = ConditionalEnergyConfig(candidate_count=12, rollout_count=8, block_size=1, total_length=2)
+    config = ConditionalEnergyConfig(
+        candidate_count=12, rollout_count=8, block_size=1, total_length=2
+    )
     counts: Counter[int] = Counter()
     ess_total = 0.0
     for trial in range(trials):
@@ -83,4 +85,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

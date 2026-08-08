@@ -21,4 +21,3 @@ rollout_count = 4
 block_size = 4
 total_length = 32
 reward_temperature = 1.0
-

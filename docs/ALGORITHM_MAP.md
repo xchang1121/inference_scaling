@@ -19,4 +19,3 @@ The replay algorithms implement the document's data lifecycle literally:
 The dynamic implementation will use the documented continuous allocation before deterministic integer rounding:
 candidate-level probability ratios multiply both replay and fresh variance terms, and each source is divided by the
 square root of its per-sample cost.
-

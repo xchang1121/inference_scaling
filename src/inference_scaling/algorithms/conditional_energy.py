@@ -197,10 +197,16 @@ def estimate_conditional_energies(
                     max_new_tokens=rollout_length,
                     sampling=rollout_sampling,
                     seed=seeds.derive(
-                        "conditional_is", step_index, "candidate", candidate_index, "rollout", rollout_index
+                        "conditional_is",
+                        step_index,
+                        "candidate",
+                        candidate_index,
+                        "rollout",
+                        rollout_index,
                     ),
                     request_id=(
-                        f"conditional-is:step:{step_index}:candidate:{candidate_index}:rollout:{rollout_index}"
+                        "conditional-is:"
+                        f"step:{step_index}:candidate:{candidate_index}:rollout:{rollout_index}"
                     ),
                 )
             )
@@ -299,7 +305,9 @@ def conditional_is_step(
     shifted = np.exp(log_energies - float(np.max(log_energies)))
     probabilities = shifted / shifted.sum()
     selected_index = int(
-        seeds.generator("conditional_is", step_index, "select").choice(len(evaluated), p=probabilities)
+        seeds.generator("conditional_is", step_index, "select").choice(
+            len(evaluated), p=probabilities
+        )
     )
     return ConditionalISStep(
         generated_length_before=len(generated_prefix),
@@ -354,4 +362,3 @@ def run_conditional_is(
             break
         step_index += 1
     return ConditionalISResult(prompt=prompt, token_ids=tuple(generated), steps=tuple(steps))
-

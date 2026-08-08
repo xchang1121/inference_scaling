@@ -1,6 +1,6 @@
 import pytest
 
-from inference_scaling.config import DynamicISConfig, MHConfig, BaseReplayConfig, SamplingConfig
+from inference_scaling.config import BaseReplayConfig, DynamicISConfig, MHConfig, SamplingConfig
 
 
 def test_sampling_config_identifies_actual_policy() -> None:
@@ -21,4 +21,3 @@ def test_sampling_config_identifies_actual_policy() -> None:
 def test_invalid_configs_fail_early(factory) -> None:
     with pytest.raises(ValueError):
         factory()
-

@@ -42,7 +42,7 @@ def _exact_first_token_target() -> dict[int, float]:
 
 
 @pytest.mark.parametrize("off_policy", [False, True])
-def test_conditional_is_first_candidate_approaches_exact_conditional_energy_target(off_policy) -> None:
+def test_first_candidate_approaches_exact_conditional_energy_target(off_policy) -> None:
     backend = _backend()
     config = ConditionalEnergyConfig(
         candidate_count=12,
@@ -78,7 +78,9 @@ def test_off_policy_ratio_scores_only_rollout_suffix() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=2),
+        config=ConditionalEnergyConfig(
+            candidate_count=2, rollout_count=2, block_size=1, total_length=2
+        ),
         base_sampling=SamplingConfig(),
         rollout_sampling=SamplingConfig(temperature=0.5),
         reward=_reward,
@@ -100,7 +102,9 @@ def test_rollout_budget_subtracts_candidate_block() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(candidate_count=3, rollout_count=2, block_size=2, total_length=5),
+        config=ConditionalEnergyConfig(
+            candidate_count=3, rollout_count=2, block_size=2, total_length=5
+        ),
         base_sampling=SamplingConfig(),
         rollout_sampling=SamplingConfig(),
         reward=lambda _prompt, generated: float(sum(generated)),
@@ -115,7 +119,7 @@ def test_rollout_budget_subtracts_candidate_block() -> None:
     )
 
 
-def test_run_conditional_is_never_exceeds_total_length() -> None:
+def test_conditional_is_never_exceeds_total_length() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
     result = run_conditional_is(
         backend,
@@ -143,7 +147,9 @@ def test_conditional_is_rejects_sampling_policies_that_break_the_weight_formula(
         run_conditional_is(
             _backend(),
             (),
-            ConditionalEnergyConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=2),
+            ConditionalEnergyConfig(
+                candidate_count=2, rollout_count=2, block_size=1, total_length=2
+            ),
             _reward,
             SeedStream(1),
             base_sampling=candidate_sampling,
