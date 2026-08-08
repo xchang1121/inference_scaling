@@ -6,6 +6,9 @@
 轻微 logits 差异。为避免大词表上的 FP32 累加误差把固定随机阈值推过 token 边界，inverse-CDF 使用
 FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略。异步 benchmark 还会逐方法检查同步与
 异步 token 输出是否完全一致；这是每次运行都要验证的实现性质，而不是仅凭请求级 seed 假定成立。
+长条件生成仍可能因不同 CUDA batch 形状下的轻微 logits 差异而分叉，因此报告还包含精确 token
+匹配率、最终数值答案匹配率、共同前缀比例和分叉题号。若输出不完全一致，wall-time 比率只解释为
+相同配置与 seed 下的真实 workload 对比，不解释为固定 token trace 的严格成对计时。
 
 每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
 同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的

@@ -76,3 +76,29 @@ def test_select_problems_is_seeded_and_retains_public_order() -> None:
 def test_confidence_reward_normalization_is_decision_local_and_stable() -> None:
     assert _minmax_rewards((-4.0, -2.0, -3.0)) == pytest.approx((0.0, 1.0, 0.5))
     assert _minmax_rewards((7.0, 7.0)) == (0.0, 0.0)
+
+
+def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
+    from types import SimpleNamespace
+
+    from experiments.gsm8k_async_benchmark import _output_agreement
+
+    class Backend:
+        @staticmethod
+        def decode(tokens):
+            return f"#### {tokens[-1]}"
+
+    synchronous = [(1, 2, 3), (4, 5), (6,)]
+    asynchronous = [(1, 2, 3), (4, 9), (6, 7)]
+    problems = [SimpleNamespace(index=index) for index in (10, 20, 30)]
+
+    result = _output_agreement(Backend(), synchronous, asynchronous, problems)
+
+    assert result["outputs_bitwise_equal"] is False
+    assert result["output_exact_match_count"] == 1
+    assert result["output_exact_match_fraction"] == pytest.approx(1 / 3)
+    assert result["answer_match_count"] == 1
+    assert result["answer_match_fraction"] == pytest.approx(1 / 3)
+    assert result["both_answers_parseable_count"] == 3
+    assert result["mean_common_prefix_fraction"] == pytest.approx(2 / 3)
+    assert [item["gsm8k_index"] for item in result["mismatches"]] == [20, 30]

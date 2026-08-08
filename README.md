@@ -208,8 +208,10 @@ self-consistency 奖励。
   的 FLOPs，并固定候选数、rollout 数、block、prompt、seed 和输出长度；比值大于 1 才表示缩减，
   小于 1 则明确报告为精确重要性修正带来的计算增加；
 - 异步耗时加速：分别对 Base、Best-of-N、条件 IS 和小 proposal 条件 IS，使用逐 prompt 同步耗时
-  除以相同请求的连续批处理耗时；四种方法使用同一调度优化，并逐方法核对输出 token 完全一致。
-  该优化改善硬件利用率，不宣称减少算法 FLOPs；
+  除以相同配置与请求 seed 的连续批处理耗时；四种方法使用同一调度优化。报告逐方法给出精确 token
+  匹配率、数值答案匹配率、共同前缀比例和分叉题号；若 CUDA batch 形状使长采样路径分叉，该比率只
+  表示真实 workload 的墙钟对比，不冒充固定 token trace 的严格成对计时。该优化改善硬件利用率，
+  不宣称减少算法 FLOPs；
 - 重复前缀 KV 复用：相对“每条 rollout 都重新计算完整前缀”，逐个不同候选前缀只计算一次并复制
   KV；`shared_prefill_tokens_saved` 报告由此避免的非 padding 前缀 token；
 - replay 在线 FLOPs 缩减：使用 `H+F` 条新 base rollout 的 fresh-only 计算量，除以已有 `H` 条

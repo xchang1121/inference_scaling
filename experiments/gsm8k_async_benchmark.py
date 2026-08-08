@@ -12,14 +12,24 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from gsm8k_reproduction import (
-    IMPLEMENTATION_FILES,
-    _file_sha256,
-    _load_backend,
-    _prompt_tokens,
-    _snapshot_delta,
-    _timed,
-)
+if __package__:
+    from experiments.gsm8k_reproduction import (
+        IMPLEMENTATION_FILES,
+        _file_sha256,
+        _load_backend,
+        _prompt_tokens,
+        _snapshot_delta,
+        _timed,
+    )
+else:
+    from gsm8k_reproduction import (
+        IMPLEMENTATION_FILES,
+        _file_sha256,
+        _load_backend,
+        _prompt_tokens,
+        _snapshot_delta,
+        _timed,
+    )
 from inference_scaling.algorithms import run_conditional_is
 from inference_scaling.backends import ContinuousBatchingBackend, ScoreCachingBackend
 from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
@@ -140,6 +150,80 @@ def _accuracy(raw_backend, outputs, problems) -> float:
         extract_numeric_answer(raw_backend.decode(tokens)) == problem.gold_answer
         for tokens, problem in zip(outputs, problems, strict=True)
     ) / len(problems)
+
+
+def _common_prefix_length(left: TokenSequence, right: TokenSequence) -> int:
+    length = 0
+    for left_token, right_token in zip(left, right):
+        if left_token != right_token:
+            break
+        length += 1
+    return length
+
+
+def _output_agreement(raw_backend, synchronous, asynchronous, problems) -> dict[str, Any]:
+    if len(synchronous) != len(asynchronous) or len(synchronous) != len(problems):
+        raise ValueError("paired output diagnostics require equally sized inputs")
+    exact = [left == right for left, right in zip(synchronous, asynchronous, strict=True)]
+    synchronous_answers = [
+        extract_numeric_answer(raw_backend.decode(tokens)) for tokens in synchronous
+    ]
+    asynchronous_answers = [
+        extract_numeric_answer(raw_backend.decode(tokens)) for tokens in asynchronous
+    ]
+    answer_equal = [
+        left == right
+        for left, right in zip(synchronous_answers, asynchronous_answers, strict=True)
+    ]
+    common_prefix_lengths = [
+        _common_prefix_length(left, right)
+        for left, right in zip(synchronous, asynchronous, strict=True)
+    ]
+    common_prefix_fractions = [
+        common / max(1, len(left), len(right))
+        for common, left, right in zip(
+            common_prefix_lengths,
+            synchronous,
+            asynchronous,
+            strict=True,
+        )
+    ]
+    mismatches = [
+        {
+            "gsm8k_index": problem.index,
+            "common_prefix_tokens": common,
+            "synchronous_tokens": len(left),
+            "asynchronous_tokens": len(right),
+        }
+        for problem, left, right, common, is_exact in zip(
+            problems,
+            synchronous,
+            asynchronous,
+            common_prefix_lengths,
+            exact,
+            strict=True,
+        )
+        if not is_exact
+    ]
+    count = len(problems)
+    return {
+        "outputs_bitwise_equal": all(exact),
+        "output_exact_match_count": sum(exact),
+        "output_exact_match_fraction": sum(exact) / count,
+        "answer_match_count": sum(answer_equal),
+        "answer_match_fraction": sum(answer_equal) / count,
+        "both_answers_parseable_count": sum(
+            left is not None and right is not None
+            for left, right in zip(
+                synchronous_answers,
+                asynchronous_answers,
+                strict=True,
+            )
+        ),
+        "mean_common_prefix_fraction": statistics.fmean(common_prefix_fractions),
+        "median_common_prefix_fraction": statistics.median(common_prefix_fractions),
+        "mismatches": mismatches,
+    }
 
 
 def _compute_delta(base_before, base_after, proposal_before, proposal_after):
@@ -307,7 +391,12 @@ def main() -> None:
             async_proposal_before,
             async_proposal_after,
         )
-        outputs_equal = synchronous == asynchronous
+        agreement = _output_agreement(
+            raw_backend,
+            synchronous,
+            asynchronous,
+            problems,
+        )
         method_reports[method] = {
             "synchronous_seconds": synchronous_seconds,
             "asynchronous_continuous_batching_seconds": asynchronous_seconds,
@@ -321,15 +410,20 @@ def main() -> None:
                 synchronous_compute["estimated_dense_forward_flops"]
                 / asynchronous_compute["estimated_dense_forward_flops"]
             ),
-            "outputs_bitwise_equal": outputs_equal,
+            **agreement,
             "synchronous_accuracy": _accuracy(raw_backend, synchronous, problems),
             "asynchronous_accuracy": _accuracy(raw_backend, asynchronous, problems),
-            "mean_output_tokens": statistics.fmean(len(item) for item in synchronous),
+            "synchronous_mean_output_tokens": statistics.fmean(
+                len(item) for item in synchronous
+            ),
+            "asynchronous_mean_output_tokens": statistics.fmean(
+                len(item) for item in asynchronous
+            ),
             "continuous_batching": batching,
         }
 
     report = {
-        "schema_version": 3,
+        "schema_version": 4,
         "benchmark": "GSM8K cross-request scheduling for source-aligned TTS methods",
         "examples": len(problems),
         "workers": workers,
@@ -359,8 +453,12 @@ def main() -> None:
             "Continuous batching is applied separately but uniformly to Base, "
             "Best-of-N, conditional IS, and small-proposal conditional IS. Its intended "
             "benefit is higher hardware utilization, not lower algorithmic FLOPs; any "
-            "token-slot difference is physical padding or batch formation. Exact output "
-            "equality is checked method by method under request-local seeds."
+            "token-slot difference is physical padding, batch formation, or a numerically "
+            "diverged live sampling path. Request-local seeds fix the random streams, but "
+            "CUDA logits can still vary slightly with batch shape. Exact token agreement, "
+            "numeric-answer agreement, common-prefix overlap, and mismatch indices are "
+            "therefore reported rather than assumed. A speedup with non-identical outputs "
+            "is a representative live-workload comparison, not a fixed-trace comparison."
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

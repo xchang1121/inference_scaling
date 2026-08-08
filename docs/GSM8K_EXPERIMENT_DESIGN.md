@@ -137,7 +137,9 @@ MH adapter 把 EOS 视为吸收 token。解码后的回答保持不变，但状�
   耗时。只有 rollout 生成器和精确重要性修正发生变化；该比值大于 1 才称为加速。
 - 异步加速：分别对 Base、Best-of-N、条件 IS 和小 proposal 条件 IS，以逐 prompt 同步耗时除以
   相同请求和 seed 的连续批处理耗时。四种方法统一使用这一调度方式；它衡量硬件利用率，不宣称减少
-  算法 FLOPs，并逐方法核对解码 token ID。
+  算法 FLOPs。请求级 seed 固定随机流，但不同 CUDA batch 形状仍可能造成轻微 logits 差异；因此同时
+  报告精确 token 匹配率、最终答案匹配率、共同前缀比例和分叉题号。输出不完全相同时，wall-time
+  speedup 只表示真实 workload 对比，而不是固定 token trace 的严格成对计时。
 - 重复前缀 KV 复用：分母是同一个生成 batch 对每条 rollout 分别重算完整 prefill 的前缀 token；
   分子只对每个不同的“prompt + 候选”前缀计算一次，再复制 KV 状态。结果直接报告没有重复处理的
   非 padding 前缀 token 数，不把它与连续批处理的 wall-time 收益混为一项。
