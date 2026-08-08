@@ -41,6 +41,7 @@ from inference_scaling.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,
+    SequenceSample,
     TokenSequence,
 )
 
@@ -531,10 +532,24 @@ def _score_candidate(
     prefix: TokenSequence,
     candidate: TokenSequence,
 ) -> tuple[float, ...]:
-    scored = backend.score_batch([ScoreRequest(prefix, (candidate,), sampling)])
-    if len(scored) != 1 or len(scored[0]) != len(candidate):
+    return _score_candidates(backend, sampling, prefix, (candidate,))[0]
+
+
+def _score_candidates(
+    backend: AutoregressiveBackend,
+    sampling: SamplingConfig | None,
+    prefix: TokenSequence,
+    candidates: Sequence[TokenSequence],
+) -> tuple[tuple[float, ...], ...]:
+    if not candidates:
+        return ()
+    scored = backend.score_batch([ScoreRequest(prefix, tuple(candidates), sampling)])
+    if len(scored) != len(candidates) or any(
+        len(token_scores) != len(candidate)
+        for token_scores, candidate in zip(scored, candidates, strict=True)
+    ):
         raise RuntimeError("candidate proposal returned an invalid score shape")
-    return scored[0]
+    return tuple(scored)
 
 
 def _resolve_auxiliary(
@@ -563,6 +578,124 @@ def _draw_candidates(
     seeds: SeedStream,
     step_index: int,
 ) -> tuple[DynamicCandidateDraw, ...]:
+    if auxiliary_source is None or isinstance(auxiliary_source, CandidateProposal):
+        auxiliary = auxiliary_source
+        if mixture > 0 and auxiliary is None:
+            raise ValueError("a positive auxiliary mixture requires a candidate proposal")
+        if (
+            auxiliary is not None
+            and auxiliary.sampling.eos_token_id != base_sampling.eos_token_id
+        ):
+            raise ValueError(
+                "base and auxiliary candidate policies must agree on eos_token_id"
+            )
+
+        request_groups: dict[
+            tuple[int, SamplingConfig],
+            tuple[AutoregressiveBackend, list[tuple[int, GenerationRequest]]],
+        ] = {}
+        used_auxiliary: list[bool] = []
+        for candidate_index in range(count):
+            use_auxiliary = bool(
+                mixture > 0
+                and seeds.generator(
+                    "dynamic_is", step_index, candidate_index, "component"
+                ).random()
+                < mixture
+            )
+            used_auxiliary.append(use_auxiliary)
+            backend = (
+                auxiliary.backend
+                if use_auxiliary and auxiliary is not None
+                else base_backend
+            )
+            sampling = (
+                auxiliary.sampling
+                if use_auxiliary and auxiliary is not None
+                else base_sampling
+            )
+            request = GenerationRequest(
+                prefix=prefix,
+                max_new_tokens=block_length,
+                sampling=sampling,
+                seed=seeds.derive("dynamic_is", step_index, candidate_index, "sample"),
+                request_id=f"dynamic-is:step:{step_index}:candidate:{candidate_index}",
+            )
+            key = (id(backend), sampling)
+            if key not in request_groups:
+                request_groups[key] = (backend, [])
+            request_groups[key][1].append((candidate_index, request))
+
+        ordered_samples: list[SequenceSample | None] = [None] * count
+        for backend, indexed_requests in request_groups.values():
+            sampled = backend.sample_batch([request for _, request in indexed_requests])
+            if len(sampled) != len(indexed_requests):
+                raise RuntimeError("candidate proposal returned an invalid sample count")
+            for (candidate_index, request), sample in zip(
+                indexed_requests, sampled, strict=True
+            ):
+                if not sample.token_ids:
+                    raise RuntimeError("candidate proposal must return a non-empty candidate")
+                if (
+                    sample.model_id != backend.model_id
+                    or sample.policy_id != request.sampling.policy_id
+                ):
+                    raise RuntimeError("candidate sample does not match its declared proposal")
+                ordered_samples[candidate_index] = sample
+        if any(sample is None for sample in ordered_samples):
+            raise RuntimeError("candidate proposal omitted a sample")
+        samples = tuple(sample for sample in ordered_samples if sample is not None)
+        token_sequences = tuple(sample.token_ids for sample in samples)
+        base_scores = _score_candidates(base_backend, None, prefix, token_sequences)
+        auxiliary_scores = (
+            _score_candidates(
+                auxiliary.backend, auxiliary.sampling, prefix, token_sequences
+            )
+            if auxiliary is not None
+            else None
+        )
+
+        draws: list[DynamicCandidateDraw] = []
+        for candidate_index, (sample, base_token_scores) in enumerate(
+            zip(samples, base_scores, strict=True)
+        ):
+            base_logprob = float(sum(base_token_scores))
+            if not isfinite(base_logprob):
+                raise ValueError("auxiliary candidate proposal generated outside base support")
+            auxiliary_logprob = float("-inf")
+            auxiliary_id: str | None = None
+            if auxiliary is not None:
+                assert auxiliary_scores is not None
+                auxiliary_logprob = float(sum(auxiliary_scores[candidate_index]))
+                auxiliary_id = auxiliary.proposal_id
+                if used_auxiliary[candidate_index] and not isfinite(auxiliary_logprob):
+                    raise RuntimeError(
+                        "auxiliary sampler generated a zero-probability candidate"
+                    )
+            proposal_logprob = (
+                base_logprob
+                if mixture == 0
+                else float(
+                    np.logaddexp(
+                        log(1.0 - mixture) + base_logprob,
+                        log(mixture) + auxiliary_logprob,
+                    )
+                )
+            )
+            draws.append(
+                DynamicCandidateDraw(
+                    token_ids=sample.token_ids,
+                    base_token_logprobs=tuple(base_token_scores),
+                    base_logprob=base_logprob,
+                    auxiliary_logprob=auxiliary_logprob,
+                    proposal_logprob=proposal_logprob,
+                    outer_log_ratio=base_logprob - proposal_logprob,
+                    source="auxiliary" if used_auxiliary[candidate_index] else "base",
+                    auxiliary_proposal_id=auxiliary_id,
+                )
+            )
+        return tuple(draws)
+
     draws: list[DynamicCandidateDraw] = []
     for candidate_index in range(count):
         auxiliary = _resolve_auxiliary(

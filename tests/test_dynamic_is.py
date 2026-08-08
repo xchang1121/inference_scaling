@@ -24,6 +24,27 @@ from inference_scaling.replay import (
 from inference_scaling.rng import SeedStream
 
 
+class CountingBackend:
+    def __init__(self, backend: TabularAutoregressiveBackend) -> None:
+        self.backend = backend
+        self.sample_batch_sizes: list[int] = []
+        self.score_batch_sizes: list[int] = []
+
+    @property
+    def model_id(self) -> str:
+        return self.backend.model_id
+
+    def sample_batch(self, requests):
+        self.sample_batch_sizes.append(len(requests))
+        return self.backend.sample_batch(requests)
+
+    def score_batch(self, requests):
+        self.score_batch_sizes.append(
+            sum(len(request.continuations) for request in requests)
+        )
+        return self.backend.score_batch(requests)
+
+
 def test_variance_cost_allocation_matches_continuous_optimum() -> None:
     allocations = allocate_variance_cost_budget(
         outer_ratios=[2.0, 1.0],
@@ -128,6 +149,45 @@ def test_dynamic_candidate_logs_exact_defensive_mixture_probability() -> None:
             (0.75, 0.25)[token] / expected_q[token]
         )
         assert candidate.log_weight == pytest.approx(candidate.draw.outer_log_ratio)
+
+
+def test_static_candidate_proposals_are_generated_and_scored_in_batches() -> None:
+    base = CountingBackend(
+        TabularAutoregressiveBackend({}, fallback=[0.75, 0.25], model_id="base")
+    )
+    auxiliary = CountingBackend(
+        TabularAutoregressiveBackend({}, fallback=[0.1, 0.9], model_id="auxiliary")
+    )
+    candidate_count = 40
+    step = dynamic_is_step(
+        base_backend=base,
+        registry=BehaviorRegistry(),
+        store=InMemoryReplayStore(),
+        prompt=(),
+        generated_prefix=(),
+        config=DynamicISConfig(
+            candidate_count=candidate_count,
+            block_size=1,
+            total_length=1,
+            rollout_budget=1.0,
+            auxiliary_mixture=0.5,
+        ),
+        base_sampling=SamplingConfig(),
+        reward=lambda _prompt, _generated: 0.0,
+        reward_version="constant",
+        seeds=SeedStream(92),
+        step_index=0,
+        auxiliary_proposal=CandidateProposal.for_backend(
+            auxiliary, SamplingConfig(), label="static-auxiliary"
+        ),
+    )
+
+    assert len(step.candidates) == candidate_count
+    assert len(base.sample_batch_sizes) == 1
+    assert len(auxiliary.sample_batch_sizes) == 1
+    assert sum(base.sample_batch_sizes + auxiliary.sample_batch_sizes) == candidate_count
+    assert base.score_batch_sizes == [candidate_count]
+    assert auxiliary.score_batch_sizes == [candidate_count]
 
 
 def test_outer_importance_resampling_recovers_base_candidate_distribution() -> None:
