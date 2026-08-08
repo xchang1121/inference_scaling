@@ -36,6 +36,20 @@ python -m venv .venv
 GPU installation and reproducible RTX 3090 commands will be added with the Hugging Face backend. Raw model
 weights and experiment artifacts are deliberately excluded from Git.
 
+## Implemented so far
+
+- The MH path follows the staged fixed-length algorithm in the article, including a uniformly sampled suffix
+  start, the four log-probability acceptance ratio, cached current-state token scores, independent chains, and
+  acceptance diagnostics.
+- Exact tabular tests enumerate the target power distribution and check the sampler's empirical output.
+
+Run the standalone exact-state-space MH smoke experiment with:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\toy_mh.py
+```
+
 ## Repository layout
 
 - `src/inference_scaling/`: reusable algorithms, backends, schedulers, replay storage, and metrics;
@@ -44,4 +58,3 @@ weights and experiment artifacts are deliberately excluded from Git.
 - `experiments/`: command-line experiment entry points;
 - `docs/`: algorithm-to-document mapping and reproduction reports;
 - `results/`: small checked-in summaries only; raw outputs remain local.
-

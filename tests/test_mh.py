@@ -1,0 +1,80 @@
+from itertools import product
+
+import pytest
+
+from inference_scaling.algorithms.mh import run_mh_chain, run_mh_chains
+from inference_scaling.backends import TabularAutoregressiveBackend
+from inference_scaling.config import MHConfig, SamplingConfig
+from inference_scaling.metrics import empirical_distribution, total_variation
+from inference_scaling.rng import SeedStream
+
+
+def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):
+    weights = {
+        sequence: float(__import__("math").prod(probabilities[token] for token in sequence) ** alpha)
+        for sequence in product(range(len(probabilities)), repeat=length)
+    }
+    normalizer = sum(weights.values())
+    return {sequence: weight / normalizer for sequence, weight in weights.items()}
+
+
+def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
+    result = run_mh_chain(
+        backend,
+        (),
+        MHConfig(alpha=2, total_length=5, block_size=2, steps_per_block=40),
+        SamplingConfig(temperature=0.8),
+        SeedStream(11),
+    )
+    assert len(result.token_ids) == 5
+    assert {step.stage_length for step in result.trace} == {2, 4, 5}
+    final_cuts = {step.cut for step in result.trace if step.stage_length == 5}
+    assert final_cuts == set(range(5))
+    assert 0 <= result.acceptance_rate <= 1
+
+
+def test_mh_empirical_output_approaches_enumerated_power_target() -> None:
+    probabilities = (0.65, 0.35)
+    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
+    config = MHConfig(alpha=2, total_length=2, block_size=2, steps_per_block=20, chains=3000)
+    outputs = run_mh_chains(
+        backend,
+        (),
+        config,
+        SamplingConfig(temperature=0.7),
+        SeedStream(2026),
+    )
+    empirical = empirical_distribution(result.token_ids for result in outputs)
+    target = _power_target(probabilities, length=2, alpha=2)
+    assert total_variation(empirical, target) < 0.035
+
+
+def test_base_proposal_at_alpha_one_accepts_every_move() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
+    result = run_mh_chain(
+        backend,
+        (),
+        MHConfig(alpha=1, total_length=4, block_size=4, steps_per_block=20),
+        SamplingConfig(),
+        SeedStream(3),
+    )
+    assert result.accepted == result.attempts
+    assert all(step.log_acceptance == pytest.approx(0.0) for step in result.trace)
+
+
+@pytest.mark.parametrize(
+    "sampling",
+    [SamplingConfig(top_k=1), SamplingConfig(top_p=0.9), SamplingConfig(eos_token_id=1)],
+)
+def test_mh_rejects_proposals_that_break_fixed_support_contract(sampling) -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
+    with pytest.raises(ValueError):
+        run_mh_chain(
+            backend,
+            (),
+            MHConfig(total_length=2, block_size=2, steps_per_block=1),
+            sampling,
+            SeedStream(0),
+        )
+
