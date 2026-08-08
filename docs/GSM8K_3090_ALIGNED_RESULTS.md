@@ -7,10 +7,11 @@
 Qwen2.5-1.5B-Instruct，小 proposal 为同系列 0.5B 模型，RL 对照为本仓库已经完成训练和核验的
 GRPO LoRA。
 
-当前已完成主要方法的单次回答质量与计算量比较、共享目标诊断以及 GRPO 训练摊销。replay、连续批处理、
-答案分布和消融实验会在各自完成核验后增量加入本记录；未完成的阶段不提前填写结论。可追溯汇总为
+当前已完成主要方法的单次回答质量与计算量比较、共享目标诊断、GRPO 训练摊销以及 rollout replay。
+连续批处理、答案分布和消融实验会在各自完成核验后增量加入本记录；未完成的阶段不提前填写结论。可追溯汇总为
 `results/gsm8k_3090_aligned_comparison_validated.json` 和
-`results/gsm8k_3090_aligned_compute_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略。
+`results/gsm8k_3090_aligned_compute_validated.json`、
+`results/gsm8k_3090_aligned_replay_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略。
 
 ## 单次回答质量与计算量
 
@@ -91,6 +92,38 @@ GRPO 随机采样平均使用 0.7938 TFLOPs、254.1 个 forward token slots 和 
 标准 verifier-IS 和小 proposal verifier-IS 与 GRPO 的差分别为 +9.375、+6.25 和 -6.25 个百分点，
 三者都没有通过该严格判据；答案分布审计也尚未完成。因此上表只报告原始成本交点，不报告“达到相同
 效果所需查询数”。这样可以保留计算事实，同时避免在实验完成前把单个准确率点估计当作效果等价。
+
+## 历史轨迹回放与复用
+
+replay 配置固定 8 个 base 候选，每个候选的总 rollout 预算为 3。fresh-only 对照全部生成 3 条新的
+base rollout；warm replay 使用最多 2 条已经生成并完成 base/behavior 评分的 0.5B 历史 rollout，
+另生成 1 条独立 fresh base rollout。候选来源、候选数、block size、最大长度、随机 seed 和总 rollout
+数保持不变。实际被选择器使用的历史比例为 59.02%，没有把“缓存里存在”误记成“已经复用”。
+
+| 路径 | 正确数 / 32 | 估算稠密前向计算量 | 聚合墙钟 |
+| --- | ---: | ---: | ---: |
+| fresh-only | 23 | 1.3483 PFLOPs | 422.5 s |
+| warm replay 在线阶段 | 22 | 1.0326 PFLOPs | 362.9 s |
+| 历史缓存构建 | 不单独产生最终答案 | 2.1236 PFLOPs | 400.4 s |
+| 首次构建并执行 warm replay | 22 | 3.1563 PFLOPs | 763.4 s |
+
+warm replay 与 fresh-only 的准确率差为 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
+[-12.5, 6.25]，通过 5 个百分点接近判据；两条路径有 25/32（78.125%）的解析数值答案相同。
+
+缓存已经存在时，`fresh-only / warm replay` 的聚合 FLOPs 比为 `1.306×`，即 warm replay 少用约
+23.4% 的估算稠密 FLOPs；聚合墙钟比为 `1.164×`，即本机耗时减少约 14.1%。逐题墙钟比的均值为
+`1.183×`、中位数为 `1.135×`。这里的分母始终是相同总 rollout 预算的 fresh-only，因而这是 warm
+在线阶段相对 fresh-only 的收益，不是相对 Base 单次采样的收益。
+
+首次查询必须先构建缓存，此时 `fresh-only / cold-start replay` 的聚合 FLOPs 比只有 `0.427×`，
+墙钟比只有 `0.553×`；换向表达就是首次 replay 使用约 `2.341×` FLOPs 和 `1.807×` 墙钟。按本轮
+32 题聚合成本，最小整数 (q) 同时满足 FLOPs 与墙钟回本的是 (q=7)：缓存构建成本加 7 次 warm
+在线评估不超过 7 次匹配的 fresh-only 评估。
+
+这个回本点以每次后续评估都具有本轮相同的 replay-key 覆盖为前提。benchmark 重复相同 prompt 和
+候选 seed，所有候选 batch 均成功复现；它测的是同 key 的可复用上界，不代表无关 prompt、不同候选
+或策略变化后仍能命中。后续若测跨轮策略漂移，必须把检索命中率和被拒绝的历史记录一起计入，不能
+直接沿用这里的 7 次回本结论。
 
 ## 结果边界
 

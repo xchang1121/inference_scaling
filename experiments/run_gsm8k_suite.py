@@ -96,13 +96,24 @@ def main() -> None:
             )
 
     if args.with_replay:
+        replay_output = f"results/{args.config.stem}_replay_{args.tag}.json"
         _run(
             [
                 sys.executable,
                 "experiments/gsm8k_replay_benchmark.py",
                 *common,
                 "--aggregate-output",
-                f"results/{args.config.stem}_replay_{args.tag}.json",
+                replay_output,
+            ],
+            environment,
+        )
+        _run(
+            [
+                sys.executable,
+                "experiments/summarize_gsm8k_replay.py",
+                *common,
+                "--output",
+                replay_output,
             ],
             environment,
         )

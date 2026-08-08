@@ -254,6 +254,22 @@ replay 性能实验把 GSM8K 公开答案当作固定 verifier，结果不会混
 复用率。详细公平性约束和完整消融矩阵见
 [`docs/GSM8K_EXPERIMENT_DESIGN.md`](docs/GSM8K_EXPERIMENT_DESIGN.md)。
 
+`run_gsm8k_suite.py --with-replay` 会先生成带 manifest 的逐题原始记录，再调用独立后处理器补充 fresh
+与 warm 的配对准确率、答案一致率、聚合墙钟比和缓存回本轮数。也可以分两步复现；第二步会核对原始
+manifest、每条记录的 fingerprint 及文件 SHA-256，不会改写原始运行目录：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\gsm8k_replay_benchmark.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_replay.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --output results\gsm8k_3090_aligned_replay_validated.json
+```
+
 ## 已实现内容
 
 - MH 路径实现固定长度的分阶段算法，包括在所有后缀起点中均匀采样、完整四项 log-probability 接受

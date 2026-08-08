@@ -1,5 +1,9 @@
 from experiments.gsm8k_passk import _estimated_pass_at_k
 from experiments.summarize_gsm8k_compute import _comparison
+from experiments.summarize_gsm8k_replay import (
+    _minimum_warm_online_uses,
+    _paired_quality,
+)
 from inference_scaling.compute import (
     estimate_grpo_compute,
     estimate_grpo_compute_from_logs,
@@ -100,6 +104,39 @@ def test_compute_break_even_does_not_claim_distribution_match_without_audit() ->
     assert report["accuracy_matched_flop_break_even_queries"] == 5
     assert report["answer_distribution_matched"] is None
     assert report["joint_empirical_match_flop_break_even_queries"] is None
+
+
+def test_replay_cache_break_even_counts_repeated_warm_uses() -> None:
+    assert _minimum_warm_online_uses(100.0, 30.0, 10.0) == 5
+    assert _minimum_warm_online_uses(100.0, 10.0, 10.0) is None
+    assert _minimum_warm_online_uses(100.0, 9.0, 10.0) is None
+
+
+def test_replay_quality_is_paired_and_keeps_answer_agreement() -> None:
+    records = [
+        {
+            "fresh": {"correct": True, "prediction": "1"},
+            "warm_replay": {"correct": True, "prediction": "1"},
+        },
+        {
+            "fresh": {"correct": True, "prediction": "2"},
+            "warm_replay": {"correct": False, "prediction": "3"},
+        },
+        {
+            "fresh": {"correct": False, "prediction": "4"},
+            "warm_replay": {"correct": True, "prediction": "4"},
+        },
+        {
+            "fresh": {"correct": True, "prediction": "5"},
+            "warm_replay": {"correct": False, "prediction": "6"},
+        },
+    ]
+    report = _paired_quality(records, bootstrap_samples=1_000)
+
+    assert report["fresh_accuracy"] == 0.75
+    assert report["warm_accuracy"] == 0.5
+    assert report["warm_minus_fresh_accuracy"] == -0.25
+    assert report["same_numeric_prediction_rate"] == 0.5
 
 
 def test_compute_break_even_requires_both_answer_distribution_thresholds() -> None:
