@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import hashlib
 import json
@@ -70,6 +71,7 @@ from inference_scaling.rng import SeedStream
 IS_PASSK_METHODS = (
     "conditional_is",
     "conditional_is_small_proposal",
+    "conditional_is_small_proposal_unclipped",
 )
 IS_PASSK_IMPLEMENTATION_FILES = tuple(
     dict.fromkeys((*PASSK_IMPLEMENTATION_FILES, "experiments/gsm8k_is_passk.py"))
@@ -81,6 +83,20 @@ _BATCHING_SUM_FIELDS = (
     "score_sequences",
 )
 _BATCHING_MAX_FIELDS = ("maximum_sample_batch", "maximum_score_batch")
+
+
+def _uses_small_proposal(method: str) -> bool:
+    return method.startswith("conditional_is_small_proposal")
+
+
+def _execution_method_and_config(
+    method: str, config: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    if method != "conditional_is_small_proposal_unclipped":
+        return method, config
+    effective = copy.deepcopy(config)
+    effective["conditional_is"]["importance_log_ratio_clip"] = None
+    return "conditional_is_small_proposal", effective
 
 
 def _combine_numeric_deltas(
@@ -162,7 +178,7 @@ def _input_weight_hashes(
 ) -> dict[str, str]:
     hashes: dict[str, str] = {}
     model_keys = ["base"]
-    if any(method.endswith("small_proposal") for method in methods):
+    if any(_uses_small_proposal(method) for method in methods):
         model_keys.append("proposal")
     for key in model_keys:
         path = Path(str(config["models"][key])) / "model.safetensors"
@@ -198,7 +214,7 @@ def _run_chunk(
     workers: int,
     fingerprint: str,
 ) -> dict[str, Any]:
-    if method.endswith("small_proposal") != (raw_proposal is not None):
+    if _uses_small_proposal(method) != (raw_proposal is not None):
         raise ValueError("proposal backend presence does not match the IS method")
 
     base_before = raw_base.snapshot()
@@ -222,15 +238,22 @@ def _run_chunk(
             seeds = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("draw", draw)
             )
-            return _run_method(
-                method,
+            execution_method, execution_config = _execution_method_and_config(
+                method, config
+            )
+            tokens, diagnostics = _run_method(
+                execution_method,
                 base,
                 problems_by_index[problem_index],
                 prompts_by_index[problem_index],
-                config,
+                execution_config,
                 seeds,
                 proposal,
             )
+            diagnostics = dict(diagnostics)
+            diagnostics["reported_method"] = method
+            diagnostics["execution_method"] = execution_method
+            return tokens, diagnostics
 
         def run_parallel():
             with ThreadPoolExecutor(
@@ -316,7 +339,7 @@ def _run_pending_chunks(
         raw_base = _load_backend(str(config["models"]["base"]), config)
         raw_proposal = (
             _load_backend(str(config["models"]["proposal"]), config)
-            if method.endswith("small_proposal")
+            if _uses_small_proposal(method)
             else None
         )
         if (
@@ -384,32 +407,32 @@ def _run_pending_chunks(
             torch.cuda.empty_cache()
 
 
-def _paired_pass_at_k_comparison(
-    standard: dict[str, Any],
-    small: dict[str, Any],
+def _paired_pass_at_k_difference(
+    reference: dict[str, Any],
+    candidate: dict[str, Any],
     *,
     draws: int,
     seed: int,
     replicates: int = 10_000,
 ) -> dict[str, Any]:
-    standard_by_problem = {
+    reference_by_problem = {
         int(item["problem_index"]): int(item["correct_draws"])
-        for item in standard["per_problem"]
+        for item in reference["per_problem"]
     }
-    small_by_problem = {
+    candidate_by_problem = {
         int(item["problem_index"]): int(item["correct_draws"])
-        for item in small["per_problem"]
+        for item in candidate["per_problem"]
     }
-    if standard_by_problem.keys() != small_by_problem.keys():
+    if reference_by_problem.keys() != candidate_by_problem.keys():
         raise ValueError("paired IS comparison requires the same problem indices")
-    problem_indices = tuple(standard_by_problem)
+    problem_indices = tuple(reference_by_problem)
     rng = random.Random(seed)
     result: dict[str, Any] = {}
-    for k_text in standard["estimated_pass_at_k"]:
+    for k_text in reference["estimated_pass_at_k"]:
         k = int(k_text)
         differences = [
-            _estimated_pass_at_k(small_by_problem[index], draws, k)
-            - _estimated_pass_at_k(standard_by_problem[index], draws, k)
+            _estimated_pass_at_k(candidate_by_problem[index], draws, k)
+            - _estimated_pass_at_k(reference_by_problem[index], draws, k)
             for index in problem_indices
         ]
         bootstrap = sorted(
@@ -419,13 +442,31 @@ def _paired_pass_at_k_comparison(
             for _ in range(replicates)
         )
         result[k_text] = {
-            "small_proposal_minus_standard": statistics.fmean(differences),
+            "candidate_minus_reference": statistics.fmean(differences),
             "paired_problem_bootstrap_95": [
                 bootstrap[int(0.025 * replicates)],
                 bootstrap[int(0.975 * replicates)],
             ],
         }
     return result
+
+
+def _cost_ratio(reference: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "reference_over_candidate_wall_time": (
+            float(reference["seconds_excluding_model_load"])
+            / float(candidate["seconds_excluding_model_load"])
+        ),
+        "reference_over_candidate_flops": (
+            int(reference["estimated_dense_forward_flops"])
+            / int(candidate["estimated_dense_forward_flops"])
+        ),
+        "interpretation": (
+            "The named reference method is the numerator and the named candidate "
+            "method is the denominator. A ratio above one means the candidate used "
+            "less wall time or FLOPs."
+        ),
+    }
 
 
 def main() -> None:
@@ -454,6 +495,27 @@ def main() -> None:
     with args.config.open("rb") as source:
         config = tomllib.load(source)
     config["run"]["sample_count"] = args.limit
+    config["is_passk"] = {
+        "method_definitions": {
+            "conditional_is": {
+                "candidate_model": "base",
+                "rollout_model": "base",
+                "importance_log_ratio_clip": None,
+            },
+            "conditional_is_small_proposal": {
+                "candidate_model": "base",
+                "rollout_model": "proposal",
+                "importance_log_ratio_clip": config["conditional_is"].get(
+                    "importance_log_ratio_clip"
+                ),
+            },
+            "conditional_is_small_proposal_unclipped": {
+                "candidate_model": "base",
+                "rollout_model": "proposal",
+                "importance_log_ratio_clip": None,
+            },
+        }
+    }
     if str(config["runtime"]["device"]).startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
     problems = select_problems(
@@ -525,41 +587,70 @@ def main() -> None:
         }
         table[method] = summary
 
-    comparisons = None
-    if set(IS_PASSK_METHODS).issubset(table):
+    comparisons: dict[str, Any] = {}
+    if "conditional_is" in table:
         standard = table["conditional_is"]
-        small = table["conditional_is_small_proposal"]
-        comparisons = {
-            "small_proposal_minus_standard_pass_at_k": _paired_pass_at_k_comparison(
+        if "conditional_is_small_proposal" in table:
+            clipped = table["conditional_is_small_proposal"]
+            comparisons["clipped_small_proposal_minus_standard_pass_at_k"] = (
+                _paired_pass_at_k_difference(
+                    standard,
+                    clipped,
+                    draws=args.draws,
+                    seed=SeedStream(int(config["run"]["seed"])).derive(
+                        "is-passk-paired-clipped"
+                    ),
+                )
+            )
+            comparisons["standard_over_clipped_small_proposal_cost"] = _cost_ratio(
+                standard, clipped
+            )
+        if "conditional_is_small_proposal_unclipped" in table:
+            unclipped = table["conditional_is_small_proposal_unclipped"]
+            comparisons["unclipped_small_proposal_minus_standard_pass_at_k"] = (
+                _paired_pass_at_k_difference(
+                    standard,
+                    unclipped,
+                    draws=args.draws,
+                    seed=SeedStream(int(config["run"]["seed"])).derive(
+                        "is-passk-paired-unclipped"
+                    ),
+                )
+            )
+            comparisons["standard_over_unclipped_small_proposal_cost"] = _cost_ratio(
                 standard,
-                small,
+                unclipped,
+            )
+    if {
+        "conditional_is_small_proposal",
+        "conditional_is_small_proposal_unclipped",
+    }.issubset(table):
+        clipped = table["conditional_is_small_proposal"]
+        unclipped = table["conditional_is_small_proposal_unclipped"]
+        comparisons["clipped_minus_unclipped_pass_at_k"] = (
+            _paired_pass_at_k_difference(
+                unclipped,
+                clipped,
                 draws=args.draws,
-                seed=SeedStream(int(config["run"]["seed"])).derive("is-passk-paired"),
-            ),
-            "standard_over_small_proposal_wall_time": (
-                float(standard["seconds_excluding_model_load"])
-                / float(small["seconds_excluding_model_load"])
-            ),
-            "standard_over_small_proposal_flops": (
-                int(standard["estimated_dense_forward_flops"])
-                / int(small["estimated_dense_forward_flops"])
-            ),
-            "ratio_interpretation": (
-                "Each ratio uses standard conditional IS as the numerator and the "
-                "small-proposal off-policy variant as the denominator. A value above "
-                "one means the small-proposal variant used less wall time or FLOPs."
-            ),
-        }
+                seed=SeedStream(int(config["run"]["seed"])).derive(
+                    "is-passk-paired-clipping"
+                ),
+            )
+        )
+        comparisons["unclipped_over_clipped_cost"] = _cost_ratio(
+            unclipped, clipped
+        )
 
     report = {
         "schema_version": 1,
         "benchmark": "OpenAI GSM8K official test split",
         "profile": profile,
         "methods": table,
-        "comparisons": comparisons,
+        "comparisons": comparisons or None,
         "problem_indices": problem_indices,
         "draws_per_problem": args.draws,
         "workers": args.workers,
+        "method_definitions": config["is_passk"]["method_definitions"],
         "manifest_fingerprint": fingerprint,
         "raw_chunks_sha256": _file_sha256(raw_path),
         "input_weight_sha256": input_weight_sha256,
@@ -575,10 +666,10 @@ def main() -> None:
             "between draws."
         ),
         "limitations": (
-            "Eight draws estimate pass@k only through k=8. The standard and small-proposal "
-            "methods use the same problem grid and candidate/rollout budgets, but finite "
-            "importance-weight variance and clipped off-policy corrections can change "
-            "their output distributions."
+            "Eight draws estimate pass@k only through k=8. All three methods use the "
+            "same problem grid and candidate/rollout budgets. Finite importance-weight "
+            "variance affects both small-proposal methods; the clipped variant adds "
+            "finite bias, while the unclipped variant can have higher variance."
         ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)

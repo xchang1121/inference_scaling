@@ -10,9 +10,11 @@ import experiments.gsm8k_is_passk as is_passk
 from experiments.gsm8k_is_passk import (
     _combine_batching_snapshots,
     _combine_numeric_deltas,
-    _paired_pass_at_k_comparison,
+    _execution_method_and_config,
+    _paired_pass_at_k_difference,
     _summarize_batching_by_model,
     _summarize_model_compute,
+    _uses_small_proposal,
 )
 from inference_scaling.backends.transformers_backend import TransformersBackendSnapshot
 from inference_scaling.config import SamplingConfig
@@ -255,10 +257,29 @@ def test_is_passk_paired_bootstrap_uses_problem_level_differences() -> None:
             {"problem_index": 2, "correct_draws": 2},
         ],
     }
-    comparison = _paired_pass_at_k_comparison(
+    comparison = _paired_pass_at_k_difference(
         standard, small, draws=2, seed=3, replicates=1_000
     )
-    assert comparison["1"]["small_proposal_minus_standard"] == pytest.approx(0.25)
-    assert comparison["2"]["small_proposal_minus_standard"] == pytest.approx(0.5)
+    assert comparison["1"]["candidate_minus_reference"] == pytest.approx(0.25)
+    assert comparison["2"]["candidate_minus_reference"] == pytest.approx(0.5)
     assert comparison["1"]["paired_problem_bootstrap_95"] == [0.0, 0.5]
     assert comparison["2"]["paired_problem_bootstrap_95"] == [0.0, 1.0]
+
+
+def test_is_passk_unclipped_method_changes_only_the_clip_override() -> None:
+    config = {
+        "conditional_is": {
+            "importance_log_ratio_clip": 10.0,
+            "candidate_count": 8,
+        }
+    }
+    method, effective = _execution_method_and_config(
+        "conditional_is_small_proposal_unclipped", config
+    )
+    assert method == "conditional_is_small_proposal"
+    assert effective["conditional_is"]["importance_log_ratio_clip"] is None
+    assert effective["conditional_is"]["candidate_count"] == 8
+    assert config["conditional_is"]["importance_log_ratio_clip"] == 10.0
+    assert _uses_small_proposal("conditional_is_small_proposal")
+    assert _uses_small_proposal("conditional_is_small_proposal_unclipped")
+    assert not _uses_small_proposal("conditional_is")
