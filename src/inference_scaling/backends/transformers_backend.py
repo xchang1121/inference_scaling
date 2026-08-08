@@ -395,10 +395,19 @@ class TransformersBackend:
                         else 0.0
                         for index in range(len(requests))
                     ],
-                    dtype=probabilities.dtype,
+                    dtype=torch_module.float64,
                     device=self.device,
                 )
-                cumulative = probabilities.cumsum(dim=-1)
+                # Inverse-CDF sampling is especially sensitive to accumulated
+                # roundoff over a language model's large vocabulary.  A
+                # float32 CDF can move a fixed request-local uniform across a
+                # token boundary when otherwise equivalent requests are
+                # decoded in different batch shapes.  Accumulating the same
+                # policy probabilities in float64 preserves the categorical
+                # policy while making request-local seeds robust to scheduling.
+                cumulative = probabilities.to(dtype=torch_module.float64).cumsum(
+                    dim=-1
+                )
                 sampled_tokens = (cumulative < random_values[:, None]).sum(dim=-1)
                 sampled_tokens = sampled_tokens.clamp_max(probabilities.shape[-1] - 1)
                 sampled_logprobs = log_probs.gather(-1, sampled_tokens[:, None]).squeeze(-1)

@@ -3,8 +3,9 @@
 本框架采用大 batch 结构与跨 prompt 的连续批处理。独立算法 worker 把同步调用提交给共享
 后端，后台 dispatcher 合并时间上相邻的请求。每个生成请求拥有自己的 seed，因此改变调度顺序不会
 改变该请求的随机数流；评分结果会按原请求顺序拆回。GPU 浮点 kernel 仍可能因 batch 形状不同产生
-轻微 logits 差异，因此请求级随机数保证的是相同数学采样策略，而不是跨 batch 形状逐 bit 相同的
-文本。
+轻微 logits 差异。为避免大词表上的 FP32 累加误差把固定随机阈值推过 token 边界，inverse-CDF 使用
+FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略。异步 benchmark 还会逐方法检查同步与
+异步 token 输出是否完全一致；这是每次运行都要验证的实现性质，而不是仅凭请求级 seed 假定成立。
 
 每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
 同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的

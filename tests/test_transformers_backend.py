@@ -62,6 +62,24 @@ def test_request_local_randomness_is_independent_of_batch_order() -> None:
         assert sample == by_id[sample.request_id]
 
 
+def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
+    vocabulary_size = 1000
+    seed = 12434
+    model = ConstantLogitModel([1 / vocabulary_size] * vocabulary_size)
+    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+
+    sample = backend.sample_batch(
+        [GenerationRequest((0,), 1, SamplingConfig(), seed, "large-vocabulary")]
+    )[0]
+    probabilities = torch.log_softmax(model.constant_logits, dim=-1).exp().double().numpy()
+    uniform = np.random.default_rng(seed).random()
+    expected = int((np.cumsum(probabilities, dtype=np.float64) < uniform).sum())
+
+    # This seed lies on a boundary where a float32 CDF returns token 668.
+    assert expected == 669
+    assert sample.token_ids == (expected,)
+
+
 def test_sampled_logprobabilities_match_exact_rescoring() -> None:
     model = ConstantLogitModel([0.5, 0.35, 0.15])
     backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
