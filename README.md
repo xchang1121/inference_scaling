@@ -130,6 +130,26 @@ $env:PYTHONPATH = "src"
   --output results\gsm8k_3090_aligned_passk_validated.json
 ```
 
+条件 IS 使用单独的可恢复运行器，在完全相同的 32 道题、8 个 draw、候选数、rollout 数、长度和
+worker 数下比较标准条件 IS 与 0.5B proposal off-policy 条件 IS：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\gsm8k_is_passk.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --limit 32 `
+  --draws 8 `
+  --workers 8 `
+  --tag validated `
+  --output results\gsm8k_3090_aligned_is_passk_validated.json
+```
+
+这里每个 draw 使用独立随机流，不在不同 draw 之间共享候选或 rollout；连续批处理只合并物理模型
+调用。标准版本只计 1.5B base 模型，off-policy 版本分别记录 1.5B base 与 0.5B proposal 的账本，
+再按各自参数量计算并相加 FLOPs。报告中的耗时和 FLOPs 比值都以“标准条件 IS / 小 proposal
+off-policy 条件 IS”为方向；比值大于 1 才说明小 proposal 版本在对应指标上更省。rollout replay
+仍由下述 replay 实验单独测量，不把跨 draw 共享数据伪装成独立 pass@k 样本。
+
 pass@k 使用每题 \(n\) 次独立采样中答对 \(c\) 次时的标准估计
 `1 - choose(n-c,k)/choose(n,k)`，并对题目做 bootstrap 区间。pass@k 是主要的多样性诊断；不同的
 可解析最终数值答案数和完整输出哈希数只是补充，不把它们冒充语义层面的推理路径多样性。

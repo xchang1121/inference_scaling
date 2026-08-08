@@ -179,6 +179,10 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
   输出哈希多样性。每个任务块只含同一道题的不同 draw；Base/GRPO 合并独立生成，MH 在相同阶段和
   更新编号向量化独立链。每个固定任务块单独保存实际 padded token slots、估算 FLOPs 与墙钟，不能
   把异步吞吐收益写成算法计算量下降。
+- 标准条件 IS 与 0.5B proposal off-policy 条件 IS 在同一题目和 draw 网格上的 pass@k 与多样性。
+  两种方法保持候选、rollout、长度和 worker 预算相同；每个 draw 独立，连续批处理只改变调度。小
+  proposal 版本将两个模型的 token slots 分别乘各自参数量后再相加，并以标准版本为耗时和 FLOPs
+  比值的分子，只有比值大于 1 才表示对应成本下降。
 
 每条原始结果只追加写入 JSONL。分布审计也按“方法 × draw × 题目”逐样本落盘，不等待整个方法结束。
 manifest 会对有效配置和选中的 GSM8K 行号取 fingerprint，因此恢复
