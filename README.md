@@ -165,6 +165,25 @@ $env:PYTHONPATH = "src"
   --output results\gsm8k_standard_ablations.json
 ```
 
+若要先在单张 RTX 3090 上完成同一测量结构、但缩放数据量和超参数，使用 32 条固定测试题的
+`configs/gsm8k_3090_aligned.toml`。该配置保留 Base、Beam、Best-of-N、MH、标准/小 proposal 条件
+IS、GRPO、共同 exact-verifier 目标、replay、异步、pass@k 及相同消融维度；它使用 192 token、
+Beam/Best-of-8、8 个候选、每候选 3 条 rollout，以及 16 个 MH 长度阶段、每阶段 3 次更新：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\run_gsm8k_suite.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --with-matched-target `
+  --with-replay `
+  --with-async
+```
+
+这里缩放的是模型、样本数和算法预算，不改变要测的问题、方法对照、目标定义或 token/FLOPs 口径。
+`gsm8k_standard.toml` 与 `gsm8k_full.toml` 仍分别保留 128 条和全部 1,319 条的更大预算，可从已有逐题
+记录继续运行。
+
 `configs/gsm8k_standard.toml` 使用 128 条固定测试样本、最大生成 256 token、20 beams、Best-of-20、
 15 个候选、每个候选 3 条 rollout 和 4 个引导步。`configs/gsm8k_full.toml` 覆盖官方测试集全部
 1,319 条样本，并采用来源主表的较大 GSM8K 预算：最大生成 512 token、20 beams、Best-of-30、
