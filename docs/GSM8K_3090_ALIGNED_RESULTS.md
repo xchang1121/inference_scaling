@@ -8,16 +8,17 @@ Qwen2.5-1.5B-Instruct，小 proposal 为同系列 0.5B 模型，RL 对照为本�
 GRPO LoRA。
 
 当前已完成主要方法的单次回答质量与计算量比较、共享目标诊断、答案分布审计、GRPO 训练摊销、
-rollout replay 以及连续批处理的优化前后对照。消融实验会在完成核验后增量加入本记录；未完成的阶段
-不提前填写结论。可追溯汇总为
+rollout replay、连续批处理的优化前后对照，以及 Base、幂分布 MH、GRPO 的 8 次采样 pass@k。
+消融实验会在完成核验后增量加入本记录；未完成的阶段不提前填写结论。可追溯汇总为
 `results/gsm8k_3090_aligned_comparison_validated.json` 和
 `results/gsm8k_3090_aligned_compute_validated.json`、
 `results/gsm8k_3090_aligned_replay_validated.json`、
 `results/gsm8k_3090_aligned_async_validated.json`、
 `results/gsm8k_3090_aligned_async_grouped_validated.json` 和
 `results/gsm8k_3090_aligned_async_optimization_validated.json`、
-`results/gsm8k_3090_aligned_distribution_audit_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略；
-分布审计汇总记录原始 JSONL 的 SHA-256 与实验清单指纹。
+`results/gsm8k_3090_aligned_distribution_audit_validated.json` 和
+`results/gsm8k_3090_aligned_passk_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略；分布审计与
+pass@k 汇总都记录原始 JSONL 的 SHA-256 与实验清单指纹。
 
 ## 单次回答质量与计算量
 
@@ -62,6 +63,35 @@ FLOPs 采用 `2 × 参数量 × 实际 forward token slots` 的主导稠密矩�
 精确后缀重评分加截断修正虽然减少了 1.5B 模型直接生成，却被主模型重评分和 0.5B proposal 的额外
 计算抵消；这一配置既不是 wall-time 加速，也不是 FLOPs 缩减。后续消融需要区分 proposal 生成、主模
 重评分、权重截断和候选预算，不能笼统称为“相对标准条件 IS 的加速”。
+
+## 多次采样的质量与答案多样性
+
+这一组在相同 32 道题上为每种方法独立生成 8 次，共 256 条回答。它对齐“Base—幂分布 MH—训练后
+策略”的多次采样比较结构；每题的 8 条 MH 链使用独立 cut、proposal 和接受随机流，只在物理执行时
+按相同长度阶段向量化。pass@k 使用每题 8 次采样中答对次数的无放回估计，再在 32 道题上取平均。
+
+| 方法 | pass@1 | pass@2 | pass@4 | pass@8 | 每题不同数值答案 | 每题不同完整输出 | 推理 PFLOPs | 墙钟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Base | 39.844% | 52.009% | 61.518% | 68.750% | 4.56 | 8.00 | 0.1613 | 145.7 s |
+| 幂分布 MH | 38.281% | 47.098% | 53.571% | 59.375% | 3.25 | 7.34 | 13.2872 | 4053.7 s |
+| GRPO 随机采样 | 58.984% | 68.638% | 75.536% | 81.250% | 3.59 | 8.00 | 0.1516 | 186.0 s |
+
+GRPO 相对 Base 的题目级配对差异在 pass@1 为 +19.141 个百分点，bootstrap 95% 区间为
+[12.500, 25.781]；在 pass@8 为 +12.500 个百分点，区间为 [3.125, 25.000]。相对幂分布 MH，
+GRPO 的 pass@1 和 pass@8 分别高 +20.703 与 +21.875 个百分点，对应区间为
+[11.328, 31.250] 和 [6.250, 37.500]。这轮训练后策略在单次成功率和 8 次尝试覆盖率上都稳定更高。
+
+幂分布 MH 相对 Base 的 pass@1 差异为 -1.562 个百分点，区间为 [-7.031, 3.906]；pass@8 差异为
+-9.375 个百分点，区间为 [-25.000, 6.250]。与此同时，它把每题不同数值答案从 4.56 降到 3.25，
+却没有提高成功率。当前 (\alpha=4)、48 次后缀更新的有限链因此只表现为概率锐化与多样性收缩，
+没有复现 GRPO 的质量收益。它的目标是 (p_{\mathrm{base}}^4)，而 GRPO 使用正确性奖励，两者本来就
+不是同一分布；共享奖励目标下的 MH/IS 关系仍应看下一节的独立诊断。
+
+幂分布 MH 的推理 FLOPs 是 Base 的 82.39 倍，墙钟是 27.83 倍；分母都是同一 32 题、8 draw 的
+Base。GRPO 的表内数值只含训练后的 256 次推理，不能用 0.1516 PFLOPs 宣称训练方法总体更省；其
+15.646 PFLOPs 一次性训练成本仍按后文的查询摊销口径单独计算。完整网格重跑 `--summarize-only`
+后，原始文件与汇总文件 SHA-256 都保持不变；raw SHA-256 为
+`3b5b04a564bcbd35a677e68ee8154ba5a4f4924870993c0822a05665085d3b66`。
 
 ## 共享目标诊断
 
