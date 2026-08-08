@@ -144,8 +144,103 @@ def main() -> None:
         int(standard_conditional["estimated_dense_forward_flops"])
         / int(accelerated_conditional["estimated_dense_forward_flops"])
     )
+    verifier_methods = (
+        "verifier_mh",
+        "verifier_conditional_is",
+        "verifier_conditional_is_small_proposal",
+    )
+    verifier_directories = {
+        method: profile_root / f"{method}-{args.tag}" for method in verifier_methods
+    }
+    matched_target: dict[str, Any] | None = None
+    if all((directory / "summary.json").is_file() for directory in verifier_directories.values()):
+        verifier_summaries = {
+            method: json.loads(
+                (directory / "summary.json").read_text(encoding="utf-8")
+            )
+            for method, directory in verifier_directories.items()
+        }
+        verifier_manifests = {
+            method: json.loads(
+                (directory / "manifest.json").read_text(encoding="utf-8")
+            )
+            for method, directory in verifier_directories.items()
+        }
+        verifier_records = {
+            method: _records(directory / "records.jsonl")
+            for method, directory in verifier_directories.items()
+        }
+        verifier_indices = {
+            method: tuple(
+                sorted(int(item["problem_index"]) for item in method_records)
+            )
+            for method, method_records in verifier_records.items()
+        }
+        expected_indices = indices["base"]
+        if any(value != expected_indices for value in verifier_indices.values()):
+            raise ValueError(
+                "matched-target methods did not evaluate the main comparison rows"
+            )
+        verifier_implementations = {
+            json.dumps(
+                manifest["effective"]["implementation_sha256"], sort_keys=True
+            )
+            for manifest in verifier_manifests.values()
+        }
+        if verifier_implementations != implementation_variants:
+            raise ValueError(
+                "matched-target methods used different implementation files"
+            )
+        matched_target = {
+            "target_definition": (
+                "base probability multiplied by exp(exact numeric verifier reward / beta)"
+            ),
+            "reward_temperature_beta": float(config["matched_target"]["reward_temperature"]),
+            "same_problem_indices_as_main_table": True,
+            "method_manifest_fingerprints": {
+                method: manifest["fingerprint"]
+                for method, manifest in verifier_manifests.items()
+            },
+            "table": [
+                {
+                    "method": method,
+                    "examples": int(verifier_summaries[method]["examples"]),
+                    "accuracy": float(verifier_summaries[method]["accuracy"]),
+                    "accuracy_wilson_95": verifier_summaries[method][
+                        "accuracy_wilson_95"
+                    ],
+                    "seconds_excluding_model_load": float(
+                        verifier_summaries[method]["sum_example_seconds"]
+                    ),
+                    "forward_token_slots": int(
+                        verifier_summaries[method]["total_forward_token_slots"]
+                    ),
+                    "estimated_dense_forward_flops": int(
+                        verifier_summaries[method]["estimated_dense_forward_flops"]
+                    ),
+                }
+                for method in verifier_methods
+            ],
+            "quality_comparisons": {
+                "verifier_mh_minus_verifier_conditional_is": _paired_difference(
+                    verifier_records["verifier_mh"],
+                    verifier_records["verifier_conditional_is"],
+                ),
+                "verifier_mh_minus_rl_sample": _paired_difference(
+                    verifier_records["verifier_mh"], records["rl_sample"]
+                ),
+                "verifier_conditional_is_minus_rl_sample": _paired_difference(
+                    verifier_records["verifier_conditional_is"],
+                    records["rl_sample"],
+                ),
+                "small_proposal_minus_standard_conditional_is": _paired_difference(
+                    verifier_records["verifier_conditional_is_small_proposal"],
+                    verifier_records["verifier_conditional_is"],
+                ),
+            },
+        }
     report = {
-        "schema_version": 3,
+        "schema_version": 4,
         "profile": str(config["run"]["name"]),
         "public_dataset": "GSM8K official test split",
         "same_problem_indices_for_every_method": True,
@@ -162,6 +257,7 @@ def main() -> None:
             "implementation_sha256"
         ],
         "table": table,
+        "matched_target_comparison": matched_target,
         "quality_comparisons": {
             "mh_minus_rl_sample": _paired_difference(
                 records["mh"], records["rl_sample"]

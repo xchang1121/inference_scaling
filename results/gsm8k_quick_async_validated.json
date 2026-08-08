@@ -1,0 +1,391 @@
+{
+  "algorithm_config": {
+    "best_of_n": {
+      "samples": 4
+    },
+    "conditional_is": {
+      "block_size": 32,
+      "candidate_count": 4,
+      "importance_log_ratio_clip": 10.0,
+      "reward": "self_consistency",
+      "reward_temperature": 0.1,
+      "rollout_count": 2
+    },
+    "max_new_tokens": 128,
+    "sampling": {
+      "temperature": 1.0
+    }
+  },
+  "benchmark": "GSM8K cross-request scheduling for source-aligned TTS methods",
+  "compute_interpretation": "Continuous batching is applied separately but uniformly to Base, Best-of-N, conditional IS, and small-proposal conditional IS. Its intended benefit is higher hardware utilization, not lower algorithmic FLOPs; any token-slot difference is physical padding, batch formation, or a numerically diverged live sampling path. Request-local seeds fix the random streams, but CUDA logits can still vary slightly with batch shape. Exact token agreement, numeric-answer agreement, common-prefix overlap, and mismatch indices are therefore reported rather than assumed. A speedup with non-identical outputs is a representative live-workload comparison, not a fixed-trace comparison.",
+  "examples": 32,
+  "implementation_sha256": {
+    "experiments/gsm8k_async_benchmark.py": "f6c9ae28d07a741a16fc271a279aeb8ba38cab98dedf2133e096bd2b72a0f0de",
+    "experiments/gsm8k_reproduction.py": "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
+    "src/inference_scaling/algorithms/conditional_energy.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
+    "src/inference_scaling/algorithms/mh.py": "30aee50781a6b556dc7b50d6a2ea8f3004a79767b17319d028e7979fd881f6b7",
+    "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
+    "src/inference_scaling/backends/batching.py": "0d44322a558d24be89741b661a93a0d9267859aa39a5404c95d0fb632b1cebfe",
+    "src/inference_scaling/backends/cache.py": "296caa7857d1a12d59af53999641a0fc3475924fc5886ee00659d5c75adbe89e",
+    "src/inference_scaling/backends/transformers_backend.py": "de535ad58e9e0f256e1c23b1de36e05e971230281e9f3f2a3067d1f821359deb",
+    "src/inference_scaling/config.py": "d4e78869e64e0532e7598723f618270b2de159dc55c2e23813d01266e4e20318",
+    "src/inference_scaling/evaluation/consensus.py": "c83b2be2f0e28e77555bd418f496315eb0e14ee7de9b118aed1e3798e3ad8e79",
+    "src/inference_scaling/evaluation/gsm8k.py": "2b7fcb57f685e550d0d718a298db948adb11d61637fe5126441c7c0a0b53bf91",
+    "src/inference_scaling/types.py": "59836039990883025a7dd54eafe5b8054d1ef2e66fd06ac43e77f18cc75e6588"
+  },
+  "methods": {
+    "base": {
+      "answer_match_count": 32,
+      "answer_match_fraction": 1.0,
+      "asynchronous_accuracy": 0.1875,
+      "asynchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 27539863183360,
+          "generated_tokens": 4041,
+          "generation_forward_token_slots": 8920,
+          "prefill_tokens": 3755,
+          "sample_calls": 4,
+          "sampled_sequences": 32,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 0
+        },
+        "estimated_dense_forward_flops": 27539863183360,
+        "proposal_backend": null,
+        "total_forward_token_slots": 8920
+      },
+      "asynchronous_continuous_batching_seconds": 13.064342400000896,
+      "asynchronous_mean_output_tokens": 126.28125,
+      "both_answers_parseable_count": 32,
+      "continuous_batching": {
+        "base": {
+          "maximum_sample_batch": 8,
+          "maximum_score_batch": 0,
+          "sample_batches": 4,
+          "sample_requests": 32,
+          "score_batches": 0,
+          "score_sequences": 0
+        },
+        "proposal": null
+      },
+      "mean_common_prefix_fraction": 1.0,
+      "median_common_prefix_fraction": 1.0,
+      "mismatches": [],
+      "output_exact_match_count": 32,
+      "output_exact_match_fraction": 1.0,
+      "outputs_bitwise_equal": true,
+      "synchronous_accuracy": 0.1875,
+      "synchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 23970795712512,
+          "generated_tokens": 4041,
+          "generation_forward_token_slots": 7764,
+          "prefill_tokens": 3755,
+          "sample_calls": 32,
+          "sampled_sequences": 32,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 0
+        },
+        "estimated_dense_forward_flops": 23970795712512,
+        "proposal_backend": null,
+        "total_forward_token_slots": 7764
+      },
+      "synchronous_mean_output_tokens": 126.28125,
+      "synchronous_over_asynchronous_flops": 0.8704035874439462,
+      "synchronous_seconds": 70.8080925999966,
+      "wall_time_gain_fraction": 0.8154964789998944,
+      "wall_time_speedup_synchronous_over_asynchronous": 5.419950766139729
+    },
+    "best_of_n": {
+      "answer_match_count": 32,
+      "answer_match_fraction": 1.0,
+      "asynchronous_accuracy": 0.1875,
+      "asynchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 64354361905152,
+          "generated_tokens": 16041,
+          "generation_forward_token_slots": 20844,
+          "prefill_tokens": 3755,
+          "sample_calls": 8,
+          "sampled_sequences": 128,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 11265
+        },
+        "estimated_dense_forward_flops": 64354361905152,
+        "proposal_backend": null,
+        "total_forward_token_slots": 20844
+      },
+      "asynchronous_continuous_batching_seconds": 28.58012100000633,
+      "asynchronous_mean_output_tokens": 124.0625,
+      "both_answers_parseable_count": 32,
+      "continuous_batching": {
+        "base": {
+          "maximum_sample_batch": 16,
+          "maximum_score_batch": 0,
+          "sample_batches": 8,
+          "sample_requests": 128,
+          "score_batches": 0,
+          "score_sequences": 0
+        },
+        "proposal": null
+      },
+      "mean_common_prefix_fraction": 1.0,
+      "median_common_prefix_fraction": 1.0,
+      "mismatches": [],
+      "output_exact_match_count": 32,
+      "output_exact_match_fraction": 1.0,
+      "outputs_bitwise_equal": true,
+      "synchronous_accuracy": 0.1875,
+      "synchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 61782533874688,
+          "generated_tokens": 16041,
+          "generation_forward_token_slots": 20011,
+          "prefill_tokens": 3755,
+          "sample_calls": 32,
+          "sampled_sequences": 128,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 11265
+        },
+        "estimated_dense_forward_flops": 61782533874688,
+        "proposal_backend": null,
+        "total_forward_token_slots": 20011
+      },
+      "synchronous_mean_output_tokens": 124.0625,
+      "synchronous_over_asynchronous_flops": 0.9600364613317981,
+      "synchronous_seconds": 80.78943999999319,
+      "wall_time_gain_fraction": 0.6462393971290217,
+      "wall_time_speedup_synchronous_over_asynchronous": 2.82677039750725
+    },
+    "conditional_is": {
+      "answer_match_count": 30,
+      "answer_match_fraction": 0.9375,
+      "asynchronous_accuracy": 0.1875,
+      "asynchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 788448993339392,
+          "generated_tokens": 64083,
+          "generation_forward_token_slots": 255374,
+          "prefill_tokens": 159246,
+          "sample_calls": 81,
+          "sampled_sequences": 1274,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 63562
+        },
+        "estimated_dense_forward_flops": 788448993339392,
+        "proposal_backend": null,
+        "total_forward_token_slots": 255374
+      },
+      "asynchronous_continuous_batching_seconds": 164.334154199998,
+      "asynchronous_mean_output_tokens": 127.15625,
+      "both_answers_parseable_count": 32,
+      "continuous_batching": {
+        "base": {
+          "maximum_sample_batch": 16,
+          "maximum_score_batch": 0,
+          "sample_batches": 81,
+          "sample_requests": 1274,
+          "score_batches": 0,
+          "score_sequences": 0
+        },
+        "proposal": null
+      },
+      "mean_common_prefix_fraction": 0.882568359375,
+      "median_common_prefix_fraction": 1.0,
+      "mismatches": [
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 0,
+          "gsm8k_index": 236,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 32,
+          "gsm8k_index": 258,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 32,
+          "gsm8k_index": 951,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 93,
+          "gsm8k_index": 1152,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 98,
+          "gsm8k_index": 1215,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 32,
+          "gsm8k_index": 1256,
+          "synchronous_tokens": 128
+        }
+      ],
+      "output_exact_match_count": 26,
+      "output_exact_match_fraction": 0.8125,
+      "outputs_bitwise_equal": false,
+      "synchronous_accuracy": 0.1875,
+      "synchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 486961589768192,
+          "generated_tokens": 64105,
+          "generation_forward_token_slots": 157724,
+          "prefill_tokens": 93938,
+          "sample_calls": 224,
+          "sampled_sequences": 1274,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 128870
+        },
+        "estimated_dense_forward_flops": 486961589768192,
+        "proposal_backend": null,
+        "total_forward_token_slots": 157724
+      },
+      "synchronous_mean_output_tokens": 127.15625,
+      "synchronous_over_asynchronous_flops": 0.6176196480456115,
+      "synchronous_seconds": 232.12232119998953,
+      "wall_time_gain_fraction": 0.29203639981519613,
+      "wall_time_speedup_synchronous_over_asynchronous": 1.4125019983216145
+    },
+    "conditional_is_small_proposal": {
+      "answer_match_count": 30,
+      "answer_match_fraction": 0.9375,
+      "asynchronous_accuracy": 0.1875,
+      "asynchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 703334761474048,
+          "generated_tokens": 15722,
+          "generation_forward_token_slots": 41776,
+          "prefill_tokens": 22687,
+          "sample_calls": 59,
+          "sampled_sequences": 504,
+          "score_calls": 48,
+          "score_forward_token_slots": 186030,
+          "scored_tokens": 45549,
+          "shared_prefill_tokens_saved": 60369
+        },
+        "estimated_dense_forward_flops": 838818307770368,
+        "proposal_backend": {
+          "estimated_dense_forward_flops": 135483546296320,
+          "generated_tokens": 46893,
+          "generation_forward_token_slots": 137120,
+          "prefill_tokens": 79060,
+          "sample_calls": 47,
+          "sampled_sequences": 752,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 57012
+        },
+        "total_forward_token_slots": 364926
+      },
+      "asynchronous_continuous_batching_seconds": 143.57190309998987,
+      "asynchronous_mean_output_tokens": 122.84375,
+      "both_answers_parseable_count": 32,
+      "continuous_batching": {
+        "base": {
+          "maximum_sample_batch": 16,
+          "maximum_score_batch": 16,
+          "sample_batches": 59,
+          "sample_requests": 504,
+          "score_batches": 48,
+          "score_sequences": 717
+        },
+        "proposal": {
+          "maximum_sample_batch": 16,
+          "maximum_score_batch": 0,
+          "sample_batches": 47,
+          "sample_requests": 752,
+          "score_batches": 0,
+          "score_sequences": 0
+        }
+      },
+      "mean_common_prefix_fraction": 0.937744140625,
+      "median_common_prefix_fraction": 1.0,
+      "mismatches": [
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 1,
+          "gsm8k_index": 69,
+          "synchronous_tokens": 128
+        },
+        {
+          "asynchronous_tokens": 128,
+          "common_prefix_tokens": 0,
+          "gsm8k_index": 115,
+          "synchronous_tokens": 128
+        }
+      ],
+      "output_exact_match_count": 30,
+      "output_exact_match_fraction": 0.9375,
+      "outputs_bitwise_equal": false,
+      "synchronous_accuracy": 0.1875,
+      "synchronous_compute": {
+        "base_backend": {
+          "estimated_dense_forward_flops": 652123583153152,
+          "generated_tokens": 15711,
+          "generation_forward_token_slots": 36140,
+          "prefill_tokens": 20764,
+          "sample_calls": 126,
+          "sampled_sequences": 504,
+          "score_calls": 94,
+          "score_forward_token_slots": 175079,
+          "scored_tokens": 45421,
+          "shared_prefill_tokens_saved": 62292
+        },
+        "estimated_dense_forward_flops": 768869454624768,
+        "proposal_backend": {
+          "estimated_dense_forward_flops": 116745871471616,
+          "generated_tokens": 46829,
+          "generation_forward_token_slots": 118156,
+          "prefill_tokens": 70554,
+          "sample_calls": 94,
+          "sampled_sequences": 750,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 65152
+        },
+        "total_forward_token_slots": 329375
+      },
+      "synchronous_mean_output_tokens": 122.84375,
+      "synchronous_over_asynchronous_flops": 0.916610245034436,
+      "synchronous_seconds": 223.05126259999815,
+      "wall_time_gain_fraction": 0.35632777225090206,
+      "wall_time_speedup_synchronous_over_asynchronous": 1.5535857489097662
+    }
+  },
+  "models": {
+    "base": {
+      "parameter_count": 1543714304,
+      "path": "models/Qwen2.5-1.5B-Instruct",
+      "weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "proposal": {
+      "parameter_count": 494032768,
+      "path": "models/Qwen2.5-0.5B-Instruct",
+      "weight_sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+    }
+  },
+  "schema_version": 4,
+  "workers": 8
+}

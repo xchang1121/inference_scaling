@@ -110,6 +110,10 @@ $env:PYTHONPATH = "src"
   --output results\gsm8k_quick_comparison.json
 ```
 
+本机已完成的 `validated` quick 集成检查见 `docs/GSM8K_QUICK_VALIDATION.md`。其中主方法与 replay
+使用 8 条固定测试题，异步调度使用 32 条；这些结果用于验证代码路径和指标口径，不代替 128 条
+standard 主实验。
+
 在相同公开子集上复现 Base、幂分布 MH 与 GRPO 的多样性和 pass@k；这里使用 quick 预算、32 条固定
 测试样本及 8 个独立 draw，避免把完整 128 条主表的高成本 MH 重复八遍：
 
