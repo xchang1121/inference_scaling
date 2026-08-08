@@ -114,21 +114,28 @@ $env:PYTHONPATH = "src"
 使用 8 条固定测试题，异步调度使用 32 条；这些结果用于验证代码路径和指标口径，不代替 128 条
 standard 主实验。
 
-在相同公开子集上复现 Base、幂分布 MH 与 GRPO 的多样性和 pass@k；这里使用 quick 预算、32 条固定
-测试样本及 8 个独立 draw，避免把完整 128 条主表的高成本 MH 重复八遍：
+在相同公开子集上复现 Base、幂分布 MH 与 GRPO 的多样性和 pass@k。单卡对齐运行沿用 32 条固定
+测试样本、192 token、16 个 MH 长度阶段和 8 个独立 draw；8 个 worker 只合并不同题目或 draw 的
+兼容模型调用，每条链仍使用独立随机流：
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\gsm8k_passk.py `
-  --config configs\gsm8k_quick.toml `
+  --config configs\gsm8k_3090_aligned.toml `
   --limit 32 `
   --draws 8 `
-  --tag passk
+  --workers 8 `
+  --tag validated `
+  --output results\gsm8k_3090_aligned_passk_validated.json
 ```
 
 pass@k 使用每题 \(n\) 次独立采样中答对 \(c\) 次时的标准估计
-`1 - choose(n-c,k)/choose(n,k)`；多样性另报告不同的可解析最终数值答案数，不把它冒充完整 token
-序列多样性。
+`1 - choose(n-c,k)/choose(n,k)`，并对题目做 bootstrap 区间。pass@k 是主要的多样性诊断；不同的
+可解析最终数值答案数和完整输出哈希数只是补充，不把它们冒充语义层面的推理路径多样性。
+
+运行器按固定任务块追加保存 JSONL；每个块同时记录实际 padded token slots、估算 FLOPs、墙钟和连续
+批处理统计。相同命令会校验配置、权重、实现文件、题目行号和 worker 数的指纹，然后只补尚未完成的
+块。原始块留在本机，最终汇总记录其 SHA-256。`--summarize-only` 只在网格完整时生成汇总。
 
 在单张 RTX 3090 上运行预注册的 128 条样本比较与算法消融：
 
@@ -306,8 +313,9 @@ $env:PYTHONPATH = "src"
 - `TransformersBackend` 提供与真实采样策略一致的批量解码与重评分、请求级随机数流、KV cache 解码、
   多组重复 prefix 各自只做一次 prefill 后复制 KV、仅计算所需尾部 vocabulary logits，以及 forward
   token slot/FLOPs 计数。
-- `gsm8k_passk.py` 对 Base、MH 与 GRPO 使用相同公开问题和独立 seed，报告标准 pass@k、解析答案
-  多样性及累计 token/FLOPs。
+- `gsm8k_passk.py` 对 Base、MH 与 GRPO 使用相同公开问题、独立 seed 和同一 worker 数，报告标准
+  pass@k、题目 bootstrap 区间、解析答案/完整输出多样性及实际连续批处理下的累计 token/FLOPs；
+  每个任务块完成后即可恢复。
 
 运行独立的有限状态 smoke 实验：
 

@@ -175,7 +175,9 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
   长度 128、256、512；
 - Base、Best-of-N、条件 IS 和小 proposal 条件 IS 的同步执行与连续批处理；
 - fresh-only 与 warm off-policy rollout replay。
-- Base、MH 与 GRPO 在 8 个独立 draw 下的标准 pass@k 与解析答案多样性。
+- Base、MH 与 GRPO 在 8 个独立 draw 下的标准 pass@k、题目 bootstrap 区间，以及解析答案和完整
+  输出哈希多样性。三种方法使用同一连续批处理 worker 数；每个固定任务块单独保存实际 padded
+  token slots、估算 FLOPs 与墙钟，不能把异步吞吐收益写成算法计算量下降。
 
 每条原始结果只追加写入 JSONL。分布审计也按“方法 × draw × 题目”逐样本落盘，不等待整个方法结束。
 manifest 会对有效配置和选中的 GSM8K 行号取 fingerprint，因此恢复
