@@ -20,3 +20,4 @@ results/*
 !results/gsm8k_quick_comparison_validated.json
 !results/gsm8k_quick_replay_validated.json
 !results/gsm8k_quick_async_validated.json
+!results/gsm8k_quick_compute_validated.json

@@ -12,6 +12,7 @@ Wilson 区间很宽，不能据此确认论文级质量排序。可追溯结果�
 - `results/gsm8k_quick_comparison_validated.json`；
 - `results/gsm8k_quick_replay_validated.json`；
 - `results/gsm8k_quick_async_validated.json`；
+- `results/gsm8k_quick_compute_validated.json`；
 - `results/gsm8k_grpo_training_summary.json`。
 
 这些 JSON 保存模型权重、关键实现文件和方法 manifest 的 SHA-256；原始逐题记录保留在本机并被
@@ -56,6 +57,13 @@ verifier MH 与 GRPO 在这 8 条样本上的逐题正确向量完全相同；ve
 答对的具体题目不完全相同。这个结果与“直接采样和训练可以近似同一输出目标”的预期一致，但样本太少，
 还不能确认统计等价。GRPO 行的推理 FLOPs 不包含一次性的 15.646 PFLOPs 训练成本；重复查询的盈亏平衡
 必须在 standard 计算报告中另算。
+
+quick 账本把这次相同准确率暂时视为“准确率匹配”，得到以下探索性盈亏平衡：verifier MH 相对 GRPO
+随机采样约为 1,369 次查询（FLOPs）或 352 次查询（本机墙钟）；verifier 条件 IS 约为 1,083 次
+查询（FLOPs）或 1,410 次查询（墙钟）。这些数字的分母都是“无训练方法每题成本减去 GRPO 每题推理
+成本”，并包含 GRPO 的一次性 15.646 PFLOPs / 9,545 s 训练成本。0.5B proposal verifier 条件 IS
+比 GRPO 低 12.5 个百分点，因此只报告原始盈亏平衡，不把它标成质量匹配。尚未运行答案分布审计，
+所以本阶段没有“准确率与输出分布同时匹配”的结论。
 
 ## rollout replay
 
