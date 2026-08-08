@@ -1,17 +1,14 @@
-"""Empirical answer-distribution audit for GRPO and same-target MH/IS.
-
-Sequence-level distributions are too large to enumerate for a language model.
-This diagnostic therefore states its limitation explicitly and compares the
-induced distributions of parsed final answers on fixed public GSM8K prompts.
-"""
+"""Empirical, resumable answer-distribution audit for GRPO and same-target MH/IS."""
 
 from __future__ import annotations
 
 import argparse
 import copy
 import gc
+import hashlib
 import json
 import math
+import random
 import statistics
 import time
 import tomllib
@@ -22,15 +19,26 @@ from typing import Any, Mapping
 
 import torch
 
-from gsm8k_reproduction import (
-    IMPLEMENTATION_FILES,
-    _file_sha256,
-    _load_backend,
-    _prompt_tokens,
-    _run_method,
-    _sample_one,
-    _snapshot_delta,
-)
+if __package__:
+    from experiments.gsm8k_reproduction import (
+        IMPLEMENTATION_FILES,
+        _file_sha256,
+        _load_backend,
+        _prompt_tokens,
+        _run_method,
+        _sample_one,
+        _snapshot_delta,
+    )
+else:
+    from gsm8k_reproduction import (
+        IMPLEMENTATION_FILES,
+        _file_sha256,
+        _load_backend,
+        _prompt_tokens,
+        _run_method,
+        _sample_one,
+        _snapshot_delta,
+    )
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.rng import SeedStream
 
@@ -57,6 +65,8 @@ def _answer_key(answer: Fraction | None) -> str:
 
 def _distribution(counts: Mapping[str, int]) -> dict[str, float]:
     total = sum(counts.values())
+    if total <= 0:
+        raise ValueError("answer distribution requires at least one draw")
     return {answer: count / total for answer, count in counts.items()}
 
 
@@ -79,6 +89,90 @@ def _js(left: Mapping[str, float], right: Mapping[str, float]) -> float:
     return 0.5 * (kl(left) + kl(right))
 
 
+def _quantile(values: list[float], probability: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("quantile requires at least one value")
+    position = (len(ordered) - 1) * probability
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _fingerprint(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _bootstrap_answer_distance(
+    left: Mapping[int, list[str]],
+    right: Mapping[int, list[str]],
+    problem_indices: list[int],
+    *,
+    samples: int = 2_000,
+) -> dict[str, list[float]]:
+    rng = random.Random(0)
+    tv_samples: list[float] = []
+    js_samples: list[float] = []
+    for _ in range(samples):
+        televisions: list[float] = []
+        divergences: list[float] = []
+        for problem_index in problem_indices:
+            left_answers = left[problem_index]
+            right_answers = right[problem_index]
+            left_resample = Counter(
+                left_answers[rng.randrange(len(left_answers))] for _ in left_answers
+            )
+            right_resample = Counter(
+                right_answers[rng.randrange(len(right_answers))] for _ in right_answers
+            )
+            left_distribution = _distribution(left_resample)
+            right_distribution = _distribution(right_resample)
+            televisions.append(_tv(left_distribution, right_distribution))
+            divergences.append(_js(left_distribution, right_distribution))
+        tv_samples.append(statistics.fmean(televisions))
+        js_samples.append(statistics.fmean(divergences))
+    return {
+        "mean_total_variation_bootstrap_95": [
+            _quantile(tv_samples, 0.025),
+            _quantile(tv_samples, 0.975),
+        ],
+        "mean_jensen_shannon_bits_bootstrap_95": [
+            _quantile(js_samples, 0.025),
+            _quantile(js_samples, 0.975),
+        ],
+    }
+
+
+def _split_half_noise_floor(
+    answers: Mapping[int, list[str]], problem_indices: list[int]
+) -> dict[str, float] | None:
+    if min(len(answers[index]) for index in problem_indices) < 2:
+        return None
+    televisions: list[float] = []
+    divergences: list[float] = []
+    for problem_index in problem_indices:
+        values = answers[problem_index]
+        midpoint = len(values) // 2
+        left = _distribution(Counter(values[:midpoint]))
+        right = _distribution(Counter(values[midpoint:]))
+        televisions.append(_tv(left, right))
+        divergences.append(_js(left, right))
+    return {
+        "mean_total_variation": statistics.fmean(televisions),
+        "mean_jensen_shannon_bits": statistics.fmean(divergences),
+    }
+
+
 def _method_backend(config: dict[str, Any], method: str):
     if method.startswith("rl_"):
         adapter_base = (
@@ -86,10 +180,244 @@ def _method_backend(config: dict[str, Any], method: str):
             if config["models"].get("rl_kind") == "peft_adapter"
             else None
         )
-        return _load_backend(
-            str(config["models"]["rl"]), config, adapter_base=adapter_base
-        )
+        return _load_backend(str(config["models"]["rl"]), config, adapter_base=adapter_base)
     return _load_backend(str(config["models"]["base"]), config)
+
+
+def _input_weight_hashes(config: dict[str, Any], methods: tuple[str, ...]) -> dict[str, str]:
+    hashes = {
+        "base": _file_sha256(Path(str(config["models"]["base"])) / "model.safetensors")
+    }
+    if hashes["base"] != str(config["models"]["base_weight_sha256"]):
+        raise ValueError("base model weight hash does not match the pinned configuration")
+    if "rl_sample" in methods:
+        hashes["rl_adapter"] = _file_sha256(
+            Path(str(config["models"]["rl"])) / "adapter_model.safetensors"
+        )
+    if any(method.endswith("small_proposal") for method in methods):
+        hashes["proposal"] = _file_sha256(
+            Path(str(config["models"]["proposal"])) / "model.safetensors"
+        )
+        if hashes["proposal"] != str(config["models"]["proposal_weight_sha256"]):
+            raise ValueError("proposal model weight hash does not match the pinned configuration")
+    return hashes
+
+
+def _prepare_manifest(
+    *,
+    config: dict[str, Any],
+    methods: tuple[str, ...],
+    problem_indices: list[int],
+    draws: int,
+    input_weight_hashes: dict[str, str],
+    implementation_hashes: dict[str, str],
+    raw_path: Path,
+) -> tuple[dict[str, Any], str, Path]:
+    effective = {
+        "config": config,
+        "problem_indices": problem_indices,
+        "draws_per_problem": draws,
+        "methods": list(methods),
+        "input_weight_sha256": input_weight_hashes,
+        "implementation_sha256": implementation_hashes,
+    }
+    fingerprint = _fingerprint(effective)
+    manifest = {"schema_version": 1, "fingerprint": fingerprint, "effective": effective}
+    manifest_path = raw_path.with_suffix(".manifest.json")
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if previous != manifest:
+            raise ValueError(
+                f"{raw_path} belongs to a different distribution audit; choose new paths"
+            )
+    elif raw_path.is_file() and raw_path.stat().st_size:
+        raise ValueError("distribution audit records exist without their manifest")
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest, fingerprint, manifest_path
+
+
+def _validate_existing_records(
+    records: list[dict[str, Any]],
+    fingerprint: str,
+    expected_keys: set[tuple[str, int, int]],
+) -> set[tuple[str, int, int]]:
+    completed: set[tuple[str, int, int]] = set()
+    for item in records:
+        if item.get("manifest_fingerprint") != fingerprint:
+            raise ValueError("a distribution-audit record has the wrong fingerprint")
+        key = (str(item["method"]), int(item["draw"]), int(item["problem_index"]))
+        if key not in expected_keys:
+            raise ValueError("a distribution-audit record is outside the requested grid")
+        if key in completed:
+            raise ValueError("duplicate distribution-audit sample")
+        completed.add(key)
+    return completed
+
+
+def _run_pending_samples(
+    *,
+    raw_path: Path,
+    fingerprint: str,
+    config: dict[str, Any],
+    methods: tuple[str, ...],
+    problems,
+    draws: int,
+    completed: set[tuple[str, int, int]],
+    expected_count: int,
+) -> None:
+    with raw_path.open("a", encoding="utf-8", buffering=1) as sink:
+        for method in methods:
+            pending = [
+                (draw, problem)
+                for draw in range(draws)
+                for problem in problems
+                if (method, draw, problem.index) not in completed
+            ]
+            if not pending:
+                continue
+            backend = _method_backend(config, method)
+            proposal_backend = None
+            if method.endswith("small_proposal"):
+                proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
+                if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
+                    raise ValueError(
+                        "base and proposal tokenizers do not have identical vocabularies"
+                    )
+            warm_prompt = _prompt_tokens(backend, problems[0])
+            _sample_one(
+                backend,
+                warm_prompt,
+                max_new_tokens=2,
+                temperature=1.0,
+                seed=int(config["run"]["seed"]),
+                request_id=f"distribution-audit-warmup:{method}",
+            )
+            if proposal_backend is not None:
+                _sample_one(
+                    proposal_backend,
+                    warm_prompt,
+                    max_new_tokens=2,
+                    temperature=1.0,
+                    seed=int(config["run"]["seed"]),
+                    request_id=f"distribution-audit-proposal-warmup:{method}",
+                )
+
+            for draw, problem in pending:
+                draw_config = copy.deepcopy(config)
+                draw_config["run"]["seed"] = int(config["run"]["seed"]) + 1_000_003 * draw
+                seeds = SeedStream(int(draw_config["run"]["seed"]))
+                prompt = _prompt_tokens(backend, problem)
+                backend_before = backend.snapshot()
+                proposal_before = proposal_backend.snapshot() if proposal_backend else None
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                started = time.perf_counter()
+                tokens, _ = _run_method(
+                    method,
+                    backend,
+                    problem,
+                    prompt,
+                    draw_config,
+                    seeds,
+                    proposal_backend,
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                elapsed = time.perf_counter() - started
+                backend_after = backend.snapshot()
+                proposal_after = proposal_backend.snapshot() if proposal_backend else None
+                answer = extract_numeric_answer(backend.decode(tokens))
+                record = {
+                    "schema_version": 1,
+                    "manifest_fingerprint": fingerprint,
+                    "method": method,
+                    "draw": draw,
+                    "problem_index": problem.index,
+                    "answer": _answer_key(answer),
+                    "correct": answer == problem.gold_answer,
+                    "seconds": elapsed,
+                    "base_delta": _snapshot_delta(backend_before, backend_after),
+                    "proposal_delta": (
+                        _snapshot_delta(proposal_before, proposal_after)
+                        if proposal_before is not None and proposal_after is not None
+                        else None
+                    ),
+                }
+                sink.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                completed.add((method, draw, problem.index))
+                print(
+                    f"[{len(completed)}/{expected_count}] method={method} "
+                    f"draw={draw + 1}/{draws} gsm8k_index={problem.index} "
+                    f"seconds={elapsed:.3f}",
+                    flush=True,
+                )
+            del proposal_backend
+            del backend
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
+def _aggregate_records(
+    raw_records: list[dict[str, Any]], methods: tuple[str, ...], problem_indices: list[int]
+) -> tuple[
+    dict[str, dict[int, Counter[str]]],
+    dict[str, dict[int, list[str]]],
+    dict[str, float],
+    dict[str, int],
+    dict[str, dict[str, int | float]],
+]:
+    counts = {
+        method: {problem_index: Counter() for problem_index in problem_indices}
+        for method in methods
+    }
+    answer_draws: dict[str, dict[int, list[tuple[int, str]]]] = {
+        method: {problem_index: [] for problem_index in problem_indices}
+        for method in methods
+    }
+    runtimes = {method: 0.0 for method in methods}
+    correctness = {method: 0 for method in methods}
+    compute: dict[str, dict[str, int | float]] = {
+        method: {"forward_token_slots": 0, "estimated_dense_forward_flops": 0}
+        for method in methods
+    }
+    for item in raw_records:
+        method = str(item["method"])
+        problem_index = int(item["problem_index"])
+        answer = str(item["answer"])
+        counts[method][problem_index][answer] += 1
+        answer_draws[method][problem_index].append((int(item["draw"]), answer))
+        runtimes[method] += float(item["seconds"])
+        correctness[method] += int(bool(item["correct"]))
+        for delta in (item["base_delta"], item["proposal_delta"]):
+            if delta is None:
+                continue
+            compute[method]["forward_token_slots"] = int(
+                compute[method]["forward_token_slots"]
+            ) + int(delta["generation_forward_token_slots"]) + int(
+                delta["score_forward_token_slots"]
+            )
+            compute[method]["estimated_dense_forward_flops"] = int(
+                compute[method]["estimated_dense_forward_flops"]
+            ) + int(delta["estimated_dense_forward_flops"])
+    ordered_answers = {
+        method: {
+            problem_index: [
+                answer for _, answer in sorted(answer_draws[method][problem_index])
+            ]
+            for problem_index in problem_indices
+        }
+        for method in methods
+    }
+    for method in methods:
+        compute[method]["estimated_dense_forward_petaflops"] = (
+            int(compute[method]["estimated_dense_forward_flops"]) / 1e15
+        )
+    return counts, ordered_answers, runtimes, correctness, compute
 
 
 def main() -> None:
@@ -102,6 +430,11 @@ def main() -> None:
     parser.add_argument(
         "--output", type=Path, default=Path("results/gsm8k_distribution_audit.json")
     )
+    parser.add_argument(
+        "--raw-output",
+        type=Path,
+        help="append-only per-sample JSONL; defaults beside --output",
+    )
     args = parser.parse_args()
     if args.problem_count <= 0 or args.draws <= 0:
         raise ValueError("problem-count and draws must be positive")
@@ -113,136 +446,66 @@ def main() -> None:
         args.problem_count,
         seed=int(config["run"]["subset_seed"]),
     )
+    problem_indices = [problem.index for problem in problems]
     methods = tuple(item.strip() for item in args.methods.split(",") if item.strip())
     unknown = set(methods) - set(DEFAULT_METHODS)
     if unknown:
         raise ValueError(f"unknown distribution-audit methods: {sorted(unknown)}")
-
-    input_weight_hashes = {
-        "base": _file_sha256(
-            Path(str(config["models"]["base"])) / "model.safetensors"
-        )
-    }
-    if input_weight_hashes["base"] != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    if "rl_sample" in methods:
-        input_weight_hashes["rl_adapter"] = _file_sha256(
-            Path(str(config["models"]["rl"])) / "adapter_model.safetensors"
-        )
-    if any(method.endswith("small_proposal") for method in methods):
-        input_weight_hashes["proposal"] = _file_sha256(
-            Path(str(config["models"]["proposal"])) / "model.safetensors"
-        )
-        if input_weight_hashes["proposal"] != str(
-            config["models"]["proposal_weight_sha256"]
-        ):
-            raise ValueError(
-                "proposal model weight hash does not match the pinned configuration"
-            )
-
-    records: dict[str, dict[int, Counter[str]]] = {}
-    runtimes: dict[str, float] = {}
-    correctness: dict[str, tuple[int, int]] = {}
-    compute: dict[str, dict[str, int | float]] = {}
-    for method in methods:
-        backend = _method_backend(config, method)
-        proposal_backend = None
-        if method.endswith("small_proposal"):
-            proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
-            if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
-                raise ValueError("base and proposal tokenizers do not have identical vocabularies")
-        warm_prompt = _prompt_tokens(backend, problems[0])
-        _sample_one(
-            backend,
-            warm_prompt,
-            max_new_tokens=2,
-            temperature=1.0,
-            seed=int(config["run"]["seed"]),
-            request_id=f"distribution-audit-warmup:{method}",
-        )
-        if proposal_backend is not None:
-            _sample_one(
-                proposal_backend,
-                warm_prompt,
-                max_new_tokens=2,
-                temperature=1.0,
-                seed=int(config["run"]["seed"]),
-                request_id=f"distribution-audit-proposal-warmup:{method}",
-            )
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        method_counts: dict[int, Counter[str]] = {
-            problem.index: Counter() for problem in problems
-        }
-        correct = 0
-        backend_before = backend.snapshot()
-        proposal_before = proposal_backend.snapshot() if proposal_backend else None
-        started = time.perf_counter()
-        for draw in range(args.draws):
-            draw_config = copy.deepcopy(config)
-            draw_config["run"]["seed"] = int(config["run"]["seed"]) + 1_000_003 * draw
-            seeds = SeedStream(int(draw_config["run"]["seed"]))
-            for problem in problems:
-                prompt = _prompt_tokens(backend, problem)
-                tokens, _ = _run_method(
-                    method,
-                    backend,
-                    problem,
-                    prompt,
-                    draw_config,
-                    seeds,
-                    proposal_backend,
-                )
-                answer = extract_numeric_answer(backend.decode(tokens))
-                method_counts[problem.index][_answer_key(answer)] += 1
-                correct += int(answer == problem.gold_answer)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        runtimes[method] = time.perf_counter() - started
-        backend_after = backend.snapshot()
-        proposal_after = proposal_backend.snapshot() if proposal_backend else None
-        base_delta = _snapshot_delta(backend_before, backend_after)
-        proposal_delta = (
-            _snapshot_delta(proposal_before, proposal_after)
-            if proposal_before is not None and proposal_after is not None
-            else {}
-        )
-        total_slots = (
-            int(base_delta["generation_forward_token_slots"])
-            + int(base_delta["score_forward_token_slots"])
-            + int(proposal_delta.get("generation_forward_token_slots", 0))
-            + int(proposal_delta.get("score_forward_token_slots", 0))
-        )
-        total_flops = int(base_delta["estimated_dense_forward_flops"]) + int(
-            proposal_delta.get("estimated_dense_forward_flops", 0)
-        )
-        compute[method] = {
-            "forward_token_slots": total_slots,
-            "estimated_dense_forward_flops": total_flops,
-            "estimated_dense_forward_petaflops": total_flops / 1e15,
-        }
-        correctness[method] = (correct, args.problem_count * args.draws)
-        records[method] = method_counts
-        del proposal_backend
-        del backend
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    reference = "rl_sample"
-    if reference not in records:
+    if "rl_sample" not in methods:
         raise ValueError("the audit requires rl_sample as its GRPO reference")
+
+    input_weight_hashes = _input_weight_hashes(config, methods)
+    implementation_hashes = {
+        path: _file_sha256(Path(path)) for path in AUDIT_IMPLEMENTATION_FILES
+    }
+    raw_path = args.raw_output or args.output.with_suffix(".records.jsonl")
+    _, manifest_fingerprint, _ = _prepare_manifest(
+        config=config,
+        methods=methods,
+        problem_indices=problem_indices,
+        draws=args.draws,
+        input_weight_hashes=input_weight_hashes,
+        implementation_hashes=implementation_hashes,
+        raw_path=raw_path,
+    )
+    expected_keys = {
+        (method, draw, problem_index)
+        for method in methods
+        for draw in range(args.draws)
+        for problem_index in problem_indices
+    }
+    completed = _validate_existing_records(
+        _load_jsonl(raw_path), manifest_fingerprint, expected_keys
+    )
+    _run_pending_samples(
+        raw_path=raw_path,
+        fingerprint=manifest_fingerprint,
+        config=config,
+        methods=methods,
+        problems=problems,
+        draws=args.draws,
+        completed=completed,
+        expected_count=len(expected_keys),
+    )
+
+    raw_records = _load_jsonl(raw_path)
+    if len(raw_records) != len(expected_keys):
+        raise RuntimeError("distribution audit did not complete the requested sample grid")
+    records, answer_draws, runtimes, correctness, compute = _aggregate_records(
+        raw_records, methods, problem_indices
+    )
+    reference = "rl_sample"
     comparisons: dict[str, Any] = {}
     for method in methods:
         if method == reference:
             continue
         per_problem = []
-        for problem in problems:
-            left = _distribution(records[method][problem.index])
-            right = _distribution(records[reference][problem.index])
+        for problem_index in problem_indices:
+            left = _distribution(records[method][problem_index])
+            right = _distribution(records[reference][problem_index])
             per_problem.append(
                 {
-                    "problem_index": problem.index,
+                    "problem_index": problem_index,
                     "jensen_shannon_bits": _js(left, right),
                     "total_variation": _tv(left, right),
                 }
@@ -255,26 +518,32 @@ def main() -> None:
                 item["total_variation"] for item in per_problem
             ),
             "per_problem": per_problem,
+            **_bootstrap_answer_distance(
+                answer_draws[method], answer_draws[reference], problem_indices
+            ),
         }
 
+    sample_count = args.problem_count * args.draws
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "manifest_fingerprint": manifest_fingerprint,
+        "raw_records_sha256": _file_sha256(raw_path),
         "public_dataset": "OpenAI GSM8K official test split",
-        "problem_indices": [problem.index for problem in problems],
+        "problem_indices": problem_indices,
         "input_weight_sha256": input_weight_hashes,
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in AUDIT_IMPLEMENTATION_FILES
-        },
+        "implementation_sha256": implementation_hashes,
         "draws_per_problem": args.draws,
         "distribution_level": "parsed final answer, not full token sequence",
         "target_by_method": {
             "base": "base_probability",
             "rl_sample": (
-                "finite-step GRPO approximation to base_probability_times_exp_exact_reward_over_beta"
+                "finite-step GRPO approximation to "
+                "base_probability_times_exp_exact_reward_over_beta"
             ),
             "verifier_mh": "base_probability_times_exp_exact_reward_over_beta",
             "verifier_conditional_is": (
-                "finite-rollout approximation to base_probability_times_exp_exact_reward_over_beta"
+                "finite-rollout approximation to "
+                "base_probability_times_exp_exact_reward_over_beta"
             ),
             "verifier_conditional_is_small_proposal": (
                 "clipped off-policy finite-rollout approximation to "
@@ -284,9 +553,9 @@ def main() -> None:
         "reward_temperature_beta": float(config["matched_target"]["reward_temperature"]),
         "methods": {
             method: {
-                "accuracy_over_draws": correctness[method][0] / correctness[method][1],
-                "correct": correctness[method][0],
-                "samples": correctness[method][1],
+                "accuracy_over_draws": correctness[method] / sample_count,
+                "correct": correctness[method],
+                "samples": sample_count,
                 "seconds_excluding_model_load": runtimes[method],
                 **compute[method],
                 "answer_counts": {
@@ -297,13 +566,19 @@ def main() -> None:
             for method in methods
         },
         "comparisons": comparisons,
+        "rl_sample_split_half_sampling_noise_floor": _split_half_noise_floor(
+            answer_draws[reference], problem_indices
+        ),
         "compute_definition": (
             "2 * each model's parameter count * observed padded forward token slots; "
             "the small proposal is accounted separately before summation"
         ),
         "limitation": (
-            "Finite draws estimate answer-level distributions only. They cannot establish "
-            "equality of the underlying full sequence distributions."
+            "Finite draws estimate answer-level distributions only. Bootstrap intervals "
+            "include finite-draw variability but not model, prompt, or hyperparameter "
+            "uncertainty. The GRPO split-half distance is a sampling-noise reference, not "
+            "a correction. None of these quantities can establish equality of full "
+            "token-sequence distributions."
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

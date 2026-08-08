@@ -177,6 +177,7 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
 - fresh-only 与 warm off-policy rollout replay。
 - Base、MH 与 GRPO 在 8 个独立 draw 下的标准 pass@k 与解析答案多样性。
 
-每条原始结果只追加写入 JSONL。manifest 会对有效配置和选中的 GSM8K 行号取 fingerprint，因此恢复
+每条原始结果只追加写入 JSONL。分布审计也按“方法 × draw × 题目”逐样本落盘，不等待整个方法结束。
+manifest 会对有效配置和选中的 GSM8K 行号取 fingerprint，因此恢复
 运行时不会把另一组实验结果静默追加到当前目录。fingerprint 还包含实际输入权重与关键实现文件的
 SHA-256；算法或后端代码改变后必须使用新 tag 重新运行，不能沿用旧记录。

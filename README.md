@@ -231,7 +231,10 @@ gradient-checkpoint 重算的策略前向/反向，以及 LoRA 参数上的 Adam
 “准确率与答案分布联合匹配”的临界点。wall time、显存和实测训练能耗仅作为补充诊断。
 
 分布审计会重复随机解码，并报告经验最终答案分布之间的 Jensen--Shannon divergence 与 total
-variation。有限次采样不能恢复完整 token 序列分布的差异，报告不会作这种声明。
+variation。每个“方法 × draw × 题目”完成后都会追加一条带 manifest fingerprint 的 JSONL；使用完全
+相同的命令会跳过已有样本并继续未完成网格。最终报告还给出有限 draw bootstrap 区间和 GRPO 样本的
+split-half 距离作为采样噪声参照。有限次采样不能恢复完整 token 序列分布的差异，bootstrap 也不包含
+模型、prompt 或超参数不确定性，报告不会据此声称完整序列分布相同。
 
 为了让 GRPO、MH 与 IS 真正共享 `base * exp(reward / beta)` 目标，`verifier_*` 诊断会读取 GSM8K
 测试集 gold answer。它们是计算量与分布的 oracle 对照，不是可部署的无监督算法；可部署主表仍使用
