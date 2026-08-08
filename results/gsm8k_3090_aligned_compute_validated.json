@@ -6,14 +6,47 @@
       "accuracy_matched_token_break_even_queries": null,
       "accuracy_matched_wall_time_break_even_queries": null,
       "accuracy_tolerance": 0.05,
-      "answer_distribution_diagnostic": null,
-      "answer_distribution_level": null,
-      "answer_distribution_matched": null,
+      "answer_distribution_diagnostic": {
+        "mean_jensen_shannon_bits": 0.14225155183993954,
+        "mean_jensen_shannon_bits_bootstrap_95": [
+          0.06550784501721568,
+          0.26027080823196724
+        ],
+        "mean_total_variation": 0.25,
+        "mean_total_variation_bootstrap_95": [
+          0.125,
+          0.40625
+        ],
+        "per_problem": [
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 69,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 704,
+            "total_variation": 0.375
+          },
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 1104,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 1311,
+            "total_variation": 0.375
+          }
+        ]
+      },
+      "answer_distribution_level": "parsed final answer",
+      "answer_distribution_matched": true,
       "answer_jensen_shannon_bits_tolerance": 0.2,
       "answer_total_variation_tolerance": 0.25,
       "flop_break_even_definition": "ceil(GRPO training estimated dense FLOPs / (training-free method estimated dense FLOPs per query - GRPO inference estimated dense FLOPs per query))",
       "interpretation": "Below the FLOP break-even, training-free inference uses fewer estimated dense-model FLOPs; above it, GRPO training plus repeated GRPO inference uses fewer.",
-      "joint_accuracy_and_answer_distribution_match": null,
+      "joint_accuracy_and_answer_distribution_match": false,
       "joint_empirical_match_flop_break_even_queries": null,
       "joint_empirical_match_token_break_even_queries": null,
       "joint_empirical_match_wall_time_break_even_queries": null,
@@ -42,14 +75,47 @@
       "accuracy_matched_token_break_even_queries": null,
       "accuracy_matched_wall_time_break_even_queries": null,
       "accuracy_tolerance": 0.05,
-      "answer_distribution_diagnostic": null,
-      "answer_distribution_level": null,
-      "answer_distribution_matched": null,
+      "answer_distribution_diagnostic": {
+        "mean_jensen_shannon_bits": 0.14225155183993954,
+        "mean_jensen_shannon_bits_bootstrap_95": [
+          0.06550784501721568,
+          0.26027080823196724
+        ],
+        "mean_total_variation": 0.25,
+        "mean_total_variation_bootstrap_95": [
+          0.125,
+          0.40625
+        ],
+        "per_problem": [
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 69,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 704,
+            "total_variation": 0.375
+          },
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 1104,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 1311,
+            "total_variation": 0.375
+          }
+        ]
+      },
+      "answer_distribution_level": "parsed final answer",
+      "answer_distribution_matched": true,
       "answer_jensen_shannon_bits_tolerance": 0.2,
       "answer_total_variation_tolerance": 0.25,
       "flop_break_even_definition": "ceil(GRPO training estimated dense FLOPs / (training-free method estimated dense FLOPs per query - GRPO inference estimated dense FLOPs per query))",
       "interpretation": "Below the FLOP break-even, training-free inference uses fewer estimated dense-model FLOPs; above it, GRPO training plus repeated GRPO inference uses fewer.",
-      "joint_accuracy_and_answer_distribution_match": null,
+      "joint_accuracy_and_answer_distribution_match": false,
       "joint_empirical_match_flop_break_even_queries": null,
       "joint_empirical_match_token_break_even_queries": null,
       "joint_empirical_match_wall_time_break_even_queries": null,
@@ -78,14 +144,47 @@
       "accuracy_matched_token_break_even_queries": null,
       "accuracy_matched_wall_time_break_even_queries": null,
       "accuracy_tolerance": 0.05,
-      "answer_distribution_diagnostic": null,
-      "answer_distribution_level": null,
-      "answer_distribution_matched": null,
+      "answer_distribution_diagnostic": {
+        "mean_jensen_shannon_bits": 0.14225155183993954,
+        "mean_jensen_shannon_bits_bootstrap_95": [
+          0.06550784501721568,
+          0.26027080823196724
+        ],
+        "mean_total_variation": 0.25,
+        "mean_total_variation_bootstrap_95": [
+          0.125,
+          0.40625
+        ],
+        "per_problem": [
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 69,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 704,
+            "total_variation": 0.375
+          },
+          {
+            "jensen_shannon_bits": 0.06550784501721568,
+            "problem_index": 1104,
+            "total_variation": 0.125
+          },
+          {
+            "jensen_shannon_bits": 0.21899525866266342,
+            "problem_index": 1311,
+            "total_variation": 0.375
+          }
+        ]
+      },
+      "answer_distribution_level": "parsed final answer",
+      "answer_distribution_matched": true,
       "answer_jensen_shannon_bits_tolerance": 0.2,
       "answer_total_variation_tolerance": 0.25,
       "flop_break_even_definition": "ceil(GRPO training estimated dense FLOPs / (training-free method estimated dense FLOPs per query - GRPO inference estimated dense FLOPs per query))",
       "interpretation": "Below the FLOP break-even, training-free inference uses fewer estimated dense-model FLOPs; above it, GRPO training plus repeated GRPO inference uses fewer.",
-      "joint_accuracy_and_answer_distribution_match": null,
+      "joint_accuracy_and_answer_distribution_match": false,
       "joint_empirical_match_flop_break_even_queries": null,
       "joint_empirical_match_token_break_even_queries": null,
       "joint_empirical_match_wall_time_break_even_queries": null,
@@ -109,7 +208,18 @@
       "wall_time_break_even_definition": "ceil(GRPO training wall seconds / (method inference seconds per query - GRPO inference seconds per query)); model loading is excluded from both inference terms"
     }
   },
-  "distribution_audit": null,
+  "distribution_audit": {
+    "distribution_level": "parsed final answer, not full token sequence",
+    "draws_per_problem": 8,
+    "limitation": "Finite draws estimate answer-level distributions only. Bootstrap intervals include finite-draw variability but not model, prompt, or hyperparameter uncertainty. The GRPO split-half distance is a sampling-noise reference, not a correction. None of these quantities can establish equality of full token-sequence distributions.",
+    "path": "results\\gsm8k_3090_aligned_distribution_audit_validated.json",
+    "problem_indices": [
+      69,
+      704,
+      1104,
+      1311
+    ]
+  },
   "method_manifest_fingerprints": {
     "base": "f34d1411ee3771dfa1e74704fe2476aa193457cecd890142f1f6845bd19f785a",
     "conditional_is": "fbe40f525107bf0302896e46ed51f4c56dd4e0f98362857849ae93eeabe1c9ce",
