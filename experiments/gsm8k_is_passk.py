@@ -112,6 +112,51 @@ def _combine_batching_snapshots(
     }
 
 
+def _summarize_model_compute(
+    chunks: Sequence[dict[str, Any]], key: str
+) -> dict[str, int | float] | None:
+    deltas = [chunk.get(key) for chunk in chunks if chunk.get(key) is not None]
+    if not deltas:
+        return None
+    field_names = set(deltas[0])
+    if any(set(delta) != field_names for delta in deltas):
+        raise ValueError(f"inconsistent {key} fields across IS pass@k chunks")
+    totals = {
+        name: sum(delta[name] for delta in deltas)
+        for name in sorted(field_names)
+    }
+    total_slots = int(totals["generation_forward_token_slots"]) + int(
+        totals["score_forward_token_slots"]
+    )
+    totals["total_forward_token_slots"] = total_slots
+    totals["estimated_dense_forward_petaflops"] = (
+        int(totals["estimated_dense_forward_flops"]) / 1e15
+    )
+    return totals
+
+
+def _summarize_batching_by_model(
+    chunks: Sequence[dict[str, Any]], model: str
+) -> dict[str, int] | None:
+    snapshots = [
+        chunk["continuous_batching_by_model"].get(model)
+        for chunk in chunks
+        if chunk["continuous_batching_by_model"].get(model) is not None
+    ]
+    if not snapshots:
+        return None
+    return {
+        **{
+            name: sum(int(snapshot[name]) for snapshot in snapshots)
+            for name in _BATCHING_SUM_FIELDS
+        },
+        **{
+            name: max(int(snapshot[name]) for snapshot in snapshots)
+            for name in _BATCHING_MAX_FIELDS
+        },
+    }
+
+
 def _input_weight_hashes(
     config: dict[str, Any], methods: Sequence[str]
 ) -> dict[str, str]:
@@ -460,7 +505,7 @@ def main() -> None:
         method_records = [
             record for chunk in method_chunks for record in chunk["records"]
         ]
-        table[method] = _summarize_method(
+        summary = _summarize_method(
             method_records,
             method_chunks,
             problem_indices,
@@ -468,6 +513,17 @@ def main() -> None:
             ks,
             bootstrap_seed=SeedStream(int(config["run"]["seed"])).derive(method),
         )
+        summary["compute_by_model"] = {
+            "base": _summarize_model_compute(method_chunks, "base_backend_delta"),
+            "proposal": _summarize_model_compute(
+                method_chunks, "proposal_backend_delta"
+            ),
+        }
+        summary["continuous_batching_by_model"] = {
+            "base": _summarize_batching_by_model(method_chunks, "base"),
+            "proposal": _summarize_batching_by_model(method_chunks, "proposal"),
+        }
+        table[method] = summary
 
     comparisons = None
     if set(IS_PASSK_METHODS).issubset(table):

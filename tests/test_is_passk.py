@@ -6,6 +6,8 @@ from experiments.gsm8k_is_passk import (
     _combine_batching_snapshots,
     _combine_numeric_deltas,
     _paired_pass_at_k_comparison,
+    _summarize_batching_by_model,
+    _summarize_model_compute,
 )
 
 
@@ -52,6 +54,68 @@ def test_is_passk_combines_batching_by_sum_and_max() -> None:
         "score_sequences": 12,
         "maximum_sample_batch": 8,
         "maximum_score_batch": 7,
+    }
+
+
+def test_is_passk_keeps_model_specific_compute_and_batching() -> None:
+    base_delta = {
+        "generation_forward_token_slots": 10,
+        "score_forward_token_slots": 5,
+        "estimated_dense_forward_flops": 30,
+    }
+    proposal_delta = {
+        "generation_forward_token_slots": 7,
+        "score_forward_token_slots": 0,
+        "estimated_dense_forward_flops": 8,
+    }
+    base_batching = {
+        "sample_batches": 2,
+        "score_batches": 1,
+        "sample_requests": 5,
+        "score_sequences": 3,
+        "maximum_sample_batch": 4,
+        "maximum_score_batch": 3,
+    }
+    proposal_batching = {
+        "sample_batches": 3,
+        "score_batches": 0,
+        "sample_requests": 7,
+        "score_sequences": 0,
+        "maximum_sample_batch": 6,
+        "maximum_score_batch": 0,
+    }
+    chunks = [
+        {
+            "base_backend_delta": base_delta,
+            "proposal_backend_delta": proposal_delta,
+            "continuous_batching_by_model": {
+                "base": base_batching,
+                "proposal": proposal_batching,
+            },
+        },
+        {
+            "base_backend_delta": base_delta,
+            "proposal_backend_delta": proposal_delta,
+            "continuous_batching_by_model": {
+                "base": base_batching,
+                "proposal": proposal_batching,
+            },
+        },
+    ]
+    assert _summarize_model_compute(chunks, "base_backend_delta") == {
+        "estimated_dense_forward_flops": 60,
+        "generation_forward_token_slots": 20,
+        "score_forward_token_slots": 10,
+        "total_forward_token_slots": 30,
+        "estimated_dense_forward_petaflops": 60 / 1e15,
+    }
+    assert _summarize_batching_by_model(chunks, "proposal") == {
+        "sample_batches": 6,
+        "score_batches": 0,
+        "sample_requests": 14,
+        "score_sequences": 0,
+        "maximum_sample_batch": 6,
+        "maximum_score_batch": 0,
     }
 
 
