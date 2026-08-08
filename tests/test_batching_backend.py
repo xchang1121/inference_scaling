@@ -64,6 +64,94 @@ def test_concurrent_sampling_is_coalesced_and_seed_stable() -> None:
     assert snapshot.maximum_sample_batch > 1
 
 
+def test_caller_sample_groups_are_not_split_to_fill_an_unrelated_batch() -> None:
+    recording = RecordingBackend()
+    request_groups = [
+        [
+            GenerationRequest(
+                (group,), 3, SamplingConfig(), 100 * group + index, f"{group}-{index}"
+            )
+            for index in range(4)
+        ]
+        for group in range(2)
+    ]
+    expected = [recording.backend.sample_batch(group) for group in request_groups]
+    with ContinuousBatchingBackend(
+        recording,
+        max_batch_size=6,
+        max_batch_tokens=100,
+        batch_wait_seconds=0.02,
+    ) as batched:
+        barrier = threading.Barrier(2)
+
+        def run(group):
+            barrier.wait()
+            return batched.sample_batch(group)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            actual = list(executor.map(run, request_groups))
+
+    assert actual == expected
+    assert sorted(recording.sample_batch_sizes) == [4, 4]
+
+
+def test_compatible_caller_groups_are_merged_without_losing_order() -> None:
+    recording = RecordingBackend()
+    request_groups = [
+        [
+            GenerationRequest(
+                (group,), 3, SamplingConfig(), 100 * group + index, f"{group}-{index}"
+            )
+            for index in range(4)
+        ]
+        for group in range(2)
+    ]
+    expected = [recording.backend.sample_batch(group) for group in request_groups]
+    with ContinuousBatchingBackend(
+        recording,
+        max_batch_size=8,
+        max_batch_tokens=100,
+        batch_wait_seconds=0.02,
+    ) as batched:
+        barrier = threading.Barrier(2)
+
+        def run(group):
+            barrier.wait()
+            return batched.sample_batch(group)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            actual = list(executor.map(run, request_groups))
+
+    assert actual == expected
+    assert recording.sample_batch_sizes == [8]
+
+
+def test_oversized_rollout_group_splits_on_repeated_prefix_boundaries() -> None:
+    recording = RecordingBackend()
+    requests = [
+        GenerationRequest(
+            (candidate,),
+            3,
+            SamplingConfig(),
+            100 * candidate + rollout,
+            f"{candidate}-{rollout}",
+        )
+        for candidate in range(15)
+        for rollout in range(3)
+    ]
+    expected = recording.backend.sample_batch(requests)
+    with ContinuousBatchingBackend(
+        recording,
+        max_batch_size=32,
+        max_batch_tokens=1_000,
+        batch_wait_seconds=0.0,
+    ) as batched:
+        actual = batched.sample_batch(requests)
+
+    assert actual == expected
+    assert recording.sample_batch_sizes == [30, 15]
+
+
 def test_score_requests_are_flattened_and_split_without_reordering() -> None:
     recording = RecordingBackend()
     requests = [

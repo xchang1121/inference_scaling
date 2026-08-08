@@ -1,8 +1,12 @@
 # 推理性能设计
 
 本框架采用大 batch 结构与跨 prompt 的连续批处理。独立算法 worker 把同步调用提交给共享
-后端，后台 dispatcher 合并时间上相邻的请求。每个生成请求拥有自己的 seed，因此改变调度顺序不会
-改变该请求的随机数流；评分结果会按原请求顺序拆回。GPU 浮点 kernel 仍可能因 batch 形状不同产生
+后端，后台 dispatcher 将时间上相邻且采样策略、生成长度、重复前缀数兼容的调用组进行合并。一次
+`sample_batch` 或 `score_batch` 的请求不会被拆成零散单条再与其他 prompt 混排；超过预算的 rollout
+组优先沿候选前缀的完整重复组切分。例如 15 个候选各 3 条 rollout 在 32 行上限下切成 30+15，而
+不是 32+13。这样既保留跨 prompt 组批，也让 Transformers 后端仍能识别每个候选的重复 prefix 并
+复制 KV。每个生成请求拥有自己的 seed，因此改变调度顺序不会改变该请求的随机数流；评分结果会按
+原请求顺序拆回。GPU 浮点 kernel 仍可能因 batch 形状不同产生
 轻微 logits 差异。为避免大词表上的 FP32 累加误差把固定随机阈值推过 token 边界，inverse-CDF 使用
 FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略。异步 benchmark 还会逐方法检查同步与
 异步 token 输出是否完全一致；这是每次运行都要验证的实现性质，而不是仅凭请求级 seed 假定成立。

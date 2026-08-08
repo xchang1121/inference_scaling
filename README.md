@@ -283,8 +283,9 @@ $env:PYTHONPATH = "src"
   都会不可逆地移入 design pool。
 - `dynamic-is` 加入 defensive candidate mixture、精确的候选层概率比以及冻结后的 history/fresh 联合
   分配。默认冷启动分配可替换为基于 design pool 的经验方差和 token 成本估计器。
-- `ContinuousBatchingBackend` 合并并发 prompt 的候选、rollout 与评分请求，同时保持请求级 seed 和
-  原始结果顺序；其计数器记录实际形成的 batch 大小。
+- `ContinuousBatchingBackend` 把一次算法调用的候选、rollout 或评分请求作为完整组入队，只合并采样
+  策略、生成长度和重复前缀结构兼容的并发 prompt 组；超大 rollout 组优先在候选前缀边界切分。这样
+  同时保持请求级 seed、原始结果顺序和组内 KV 复用；计数器记录实际形成的物理 batch 大小。
 - `ScoreCachingBackend` 只有在模型、采样策略、prefix 和 continuation 全部一致时才复用 base/behavior
   分数；随机生成永不缓存。
 - replay 的 fresh completion 和选择后 reserve completion 会跨候选展平成一个后端 batch，但保持
