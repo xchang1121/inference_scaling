@@ -152,6 +152,26 @@ $env:PYTHONPATH = "src"
 指标上更省。rollout replay 仍由下述 replay 实验单独测量，不把跨 draw 共享数据伪装成独立
 pass@k 样本。
 
+两个网格都完成后，使用只读后处理器核对题目/draw 网格、来源文件 SHA-256，计算所有方法之间的
+题目级配对区间，并汇总 off-policy 权重诊断；随后从该汇总生成 Markdown 中使用的 pass@k 图：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\summarize_gsm8k_passk.py `
+  results\gsm8k_3090_aligned_passk_validated.json `
+  results\gsm8k_3090_aligned_is_passk_validated.json `
+  --is-raw-chunks results\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl `
+  --output results\gsm8k_3090_aligned_passk_comparison_validated.json
+
+.\.venv\Scripts\python experiments\plot_gsm8k_passk.py `
+  --input results\gsm8k_3090_aligned_passk_comparison_validated.json `
+  --output docs\assets\gsm8k_3090_aligned_passk.svg
+```
+
+raw 诊断包括 rollout ESS、原始/应用后 log 权重修正、截断比例，以及各方法在同一题目/draw 上的
+完整输出、解析答案和正确性一致率。后处理器会先验证 raw SHA 与最终 IS 报告一致，不能把另一轮
+原始数据静默拼入结果。
+
 pass@k 使用每题 \(n\) 次独立采样中答对 \(c\) 次时的标准估计
 `1 - choose(n-c,k)/choose(n,k)`，并对题目做 bootstrap 区间。pass@k 是主要的多样性诊断；不同的
 可解析最终数值答案数和完整输出哈希数只是补充，不把它们冒充语义层面的推理路径多样性。
