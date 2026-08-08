@@ -25,6 +25,13 @@ on-policy 条件 rollout 会直接携带生成时得到的精确 base-policy log
 同时计算实际 proposal 概率和温度 1 的基模概率，并把两者随 token 一起返回；MH 接受率直接使用这两组
 概率，不再为同一后缀增加一次模型前向。这与来源实现读取 scaled/unscaled logits 的做法一致，减少
 forward token slot，但不改变四项接受比。
+
+多次采样实验进一步把同一道题的独立 MH 链按阶段和更新编号同步推进。每条链分别抽取后缀起点、
+proposal seed 与接受随机数，只把该步所有不同长度的生成请求放进同一个物理 batch；因此它等价于逐链
+执行相同随机流，而不是让链共享状态。有限状态测试逐字段比较向量化与逐链结果，真实模型 smoke 也检查
+已有逐链 draw 0 的完整输出哈希。变长后缀会增加 padding，报告同时保留实际 forward token slots 与
+墙钟：只有墙钟下降时才称为吞吐加速，不能把物理 batch 数减少直接写成 FLOPs 减少。
+
 对支持 `logits_to_keep` 的 Qwen 模型，生成 prefill 只计算最后一个位置的 vocabulary logits，评分也
 只保留覆盖 continuation 所需的尾部 logits；Transformer body 仍处理完整上下文，但不会为未使用的
 prompt 位置反复执行大词表输出投影。

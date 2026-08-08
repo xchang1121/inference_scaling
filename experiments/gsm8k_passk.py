@@ -28,6 +28,7 @@ if __package__:
         _sample_one,
         _snapshot_delta,
         _timed,
+        _trim_eos,
     )
 else:
     from gsm8k_reproduction import (
@@ -39,8 +40,15 @@ else:
         _sample_one,
         _snapshot_delta,
         _timed,
+        _trim_eos,
     )
-from inference_scaling.backends import ContinuousBatchingBackend
+from inference_scaling.algorithms import run_mh_chains_batched
+from inference_scaling.backends import (
+    AbsorbingEOSBackend,
+    ContinuousBatchingBackend,
+    ScoreCachingBackend,
+)
+from inference_scaling.config import MHConfig, SamplingConfig
 from inference_scaling.evaluation import (
     extract_numeric_answer,
     load_gsm8k,
@@ -117,13 +125,14 @@ def _chunk_plan(
         raise ValueError("draws, chunk size, and problem indices must be non-empty")
     plan: dict[tuple[str, int], tuple[tuple[int, int], ...]] = {}
     for method in methods:
-        tasks = [
-            (draw, problem_index)
-            for draw in range(draws)
-            for problem_index in problem_indices
-        ]
-        for chunk_index, offset in enumerate(range(0, len(tasks), chunk_size)):
-            plan[(method, chunk_index)] = tuple(tasks[offset : offset + chunk_size])
+        chunk_index = 0
+        for problem_index in problem_indices:
+            tasks = [(draw, problem_index) for draw in range(draws)]
+            for offset in range(0, len(tasks), chunk_size):
+                plan[(method, chunk_index)] = tuple(
+                    tasks[offset : offset + chunk_size]
+                )
+                chunk_index += 1
     return plan
 
 
@@ -247,8 +256,61 @@ def _run_chunk(
             return tokens, diagnostics
 
         def run_parallel():
-            with ThreadPoolExecutor(max_workers=min(workers, len(task_keys))) as executor:
-                return list(executor.map(run_one, task_keys))
+            if method != "mh":
+                with ThreadPoolExecutor(
+                    max_workers=min(workers, len(task_keys))
+                ) as executor:
+                    return list(executor.map(run_one, task_keys))
+
+            problem_indices = {problem_index for _, problem_index in task_keys}
+            if len(problem_indices) != 1:
+                raise ValueError("a vectorized MH chunk must contain one problem")
+            problem_index = next(iter(problem_indices))
+            prompt = prompts_by_index[problem_index]
+            section = config["mh"]
+            alpha = float(section["alpha"])
+            absorbing = AbsorbingEOSBackend(
+                ScoreCachingBackend(backend),
+                raw_backend.tokenizer.eos_token_id,
+                absorbing_after=len(prompt),
+            )
+            chain_seeds = tuple(
+                SeedStream(
+                    SeedStream(int(config["run"]["seed"])).derive("draw", draw)
+                )
+                for draw, _ in task_keys
+            )
+            chain_seeds = tuple(
+                SeedStream(stream.derive("mh", problem_index))
+                for stream in chain_seeds
+            )
+            results = run_mh_chains_batched(
+                absorbing,
+                prompt,
+                MHConfig(
+                    alpha=alpha,
+                    total_length=int(config["generation"]["max_new_tokens"]),
+                    block_size=int(section["block_size"]),
+                    steps_per_block=int(section["steps_per_block"]),
+                ),
+                SamplingConfig(temperature=1.0 / alpha),
+                chain_seeds,
+            )
+            return [
+                (
+                    _trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id),
+                    {
+                        "alpha": alpha,
+                        "block_size": int(section["block_size"]),
+                        "steps_per_block": int(section["steps_per_block"]),
+                        "attempts": result.attempts,
+                        "accepted": result.accepted,
+                        "acceptance_rate": result.acceptance_rate,
+                        "execution": "lockstep_vectorized_independent_chains",
+                    },
+                )
+                for result in results
+            ]
 
         outputs, elapsed = _timed(run_parallel)
         batching_snapshot = asdict(batching.snapshot())

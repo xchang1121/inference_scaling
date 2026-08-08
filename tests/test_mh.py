@@ -5,6 +5,7 @@ import pytest
 from inference_scaling.algorithms.mh import (
     run_mh_chain,
     run_mh_chains,
+    run_mh_chains_batched,
     run_reward_mh_chains,
 )
 from inference_scaling.backends import TabularAutoregressiveBackend
@@ -53,6 +54,30 @@ def test_mh_empirical_output_approaches_enumerated_power_target() -> None:
     empirical = empirical_distribution(result.token_ids for result in outputs)
     target = _power_target(probabilities, length=2, alpha=2)
     assert total_variation(empirical, target) < 0.035
+
+
+def test_batched_mh_preserves_independent_chain_random_streams_exactly() -> None:
+    config = MHConfig(alpha=3, total_length=7, block_size=2, steps_per_block=4)
+    proposal = SamplingConfig(temperature=0.5)
+    roots = (SeedStream(17), SeedStream(29), SeedStream(41))
+    sequential = tuple(
+        run_mh_chain(
+            TabularAutoregressiveBackend({}, fallback=[0.6, 0.3, 0.1]),
+            (2,),
+            config,
+            proposal,
+            root,
+        )
+        for root in roots
+    )
+    batched = run_mh_chains_batched(
+        TabularAutoregressiveBackend({}, fallback=[0.6, 0.3, 0.1]),
+        (2,),
+        config,
+        proposal,
+        roots,
+    )
+    assert batched == sequential
 
 
 def test_base_proposal_at_alpha_one_accepts_every_move() -> None:

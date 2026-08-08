@@ -32,10 +32,11 @@ def _chunk(
 
 def test_passk_chunk_plan_preserves_draw_problem_grid() -> None:
     plan = _chunk_plan(("base", "mh"), 2, (11, 13, 17), 4)
-    assert plan[("base", 0)] == ((0, 11), (0, 13), (0, 17), (1, 11))
-    assert plan[("base", 1)] == ((1, 13), (1, 17))
+    assert plan[("base", 0)] == ((0, 11), (1, 11))
+    assert plan[("base", 1)] == ((0, 13), (1, 13))
+    assert plan[("base", 2)] == ((0, 17), (1, 17))
     assert plan[("mh", 0)] == plan[("base", 0)]
-    assert len(plan) == 4
+    assert len(plan) == 6
 
 
 def test_passk_manifest_allows_only_identical_resume_grid(tmp_path: Path) -> None:

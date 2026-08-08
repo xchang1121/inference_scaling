@@ -10,7 +10,7 @@ algorithmic reproduction, not the later paged-KV runtime optimization.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from math import isfinite, log
 
@@ -152,6 +152,87 @@ def _sample_exact_length(
     return sample.token_ids, sample.token_logprobs, cached_base
 
 
+def _sample_exact_lengths(
+    backend: AutoregressiveBackend,
+    *,
+    prefixes: Sequence[TokenSequence],
+    lengths: Sequence[int],
+    sampling: SamplingConfig,
+    seeds: Sequence[int],
+    request_ids: Sequence[str],
+) -> tuple[
+    tuple[TokenSequence, ...],
+    tuple[tuple[float, ...], ...],
+    tuple[tuple[float, ...], ...],
+]:
+    """Sample independent, possibly different-length suffixes in one backend call."""
+
+    count = len(prefixes)
+    if not (
+        count
+        and len(lengths) == count
+        and len(seeds) == count
+        and len(request_ids) == count
+    ):
+        raise ValueError("batched MH proposal inputs must have one entry per chain")
+    if any(length <= 0 for length in lengths):
+        raise ValueError("batched MH proposal lengths must be positive")
+    samples = backend.sample_batch(
+        [
+            GenerationRequest(prefix, length, sampling, seed, request_id)
+            for prefix, length, seed, request_id in zip(
+                prefixes, lengths, seeds, request_ids, strict=True
+            )
+        ]
+    )
+    if len(samples) != count:
+        raise RuntimeError("backend returned an invalid batched MH sample count")
+
+    tokens: list[TokenSequence] = []
+    proposal_logs: list[tuple[float, ...]] = []
+    base_logs: list[tuple[float, ...] | None] = []
+    missing_indices: list[int] = []
+    for index, (sample, length) in enumerate(zip(samples, lengths, strict=True)):
+        if len(sample.token_ids) != length:
+            raise RuntimeError(
+                f"MH requires a fixed-length suffix of {length} tokens, "
+                f"but backend returned {len(sample.token_ids)}"
+            )
+        if sample.policy_id != sampling.policy_id:
+            raise RuntimeError("backend did not score tokens under the requested proposal policy")
+        if any(not isfinite(value) for value in sample.token_logprobs):
+            raise RuntimeError("a sampled proposal token must have finite proposal log-probability")
+        tokens.append(sample.token_ids)
+        proposal_logs.append(sample.token_logprobs)
+        if sample.reference_policy_id == SamplingConfig().policy_id:
+            assert sample.reference_token_logprobs is not None
+            base_logs.append(sample.reference_token_logprobs)
+        else:
+            base_logs.append(None)
+            missing_indices.append(index)
+
+    if missing_indices:
+        scored = backend.score_batch(
+            [
+                ScoreRequest(prefixes[index], (tokens[index],), None)
+                for index in missing_indices
+            ]
+        )
+        if len(scored) != len(missing_indices):
+            raise RuntimeError("backend returned an invalid batched MH score count")
+        for index, values in zip(missing_indices, scored, strict=True):
+            if len(values) != lengths[index]:
+                raise RuntimeError("backend returned an invalid batched MH score shape")
+            base_logs[index] = values
+
+    resolved_base_logs = tuple(value for value in base_logs if value is not None)
+    if len(resolved_base_logs) != count:
+        raise RuntimeError("batched MH failed to resolve all base-model scores")
+    if any(not isfinite(value) for values in resolved_base_logs for value in values):
+        raise ValueError("proposal generated a sequence outside the base model support")
+    return tuple(tokens), tuple(proposal_logs), resolved_base_logs
+
+
 def run_mh_chain(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
@@ -254,11 +335,146 @@ def run_mh_chains(
     proposal: SamplingConfig,
     seeds: SeedStream,
 ) -> tuple[MHChainResult, ...]:
-    """Run independent chains with order-independent random streams."""
+    """Run independent chains in lockstep with order-independent random streams."""
+
+    return run_mh_chains_batched(
+        backend,
+        prompt,
+        config,
+        proposal,
+        (seeds,) * config.chains,
+        chain_ids=tuple(range(config.chains)),
+    )
+
+
+def run_mh_chains_batched(
+    backend: AutoregressiveBackend,
+    prompt: TokenSequence,
+    config: MHConfig,
+    proposal: SamplingConfig,
+    seed_streams: Sequence[SeedStream],
+    *,
+    chain_ids: Sequence[int] | None = None,
+) -> tuple[MHChainResult, ...]:
+    """Vectorize independent chains without sharing their stochastic decisions.
+
+    All chains use the same prompt and staged target.  At each extension or MH
+    update, their independent generation requests are submitted together.  Cuts,
+    proposal uniforms, and accept/reject uniforms retain the exact names used by
+    :func:`run_mh_chain`, so batching changes scheduling rather than random streams.
+    """
+
+    _validate_proposal(proposal)
+    if not seed_streams:
+        raise ValueError("batched MH requires at least one seed stream")
+    ids = tuple(chain_ids) if chain_ids is not None else (0,) * len(seed_streams)
+    if len(ids) != len(seed_streams):
+        raise ValueError("batched MH requires one chain id per seed stream")
+
+    count = len(seed_streams)
+    tokens: list[list[int]] = [[] for _ in range(count)]
+    base_logs: list[list[float]] = [[] for _ in range(count)]
+    proposal_logs: list[list[float]] = [[] for _ in range(count)]
+    traces: list[list[MHStep]] = [[] for _ in range(count)]
+
+    for stage_index, stage_length in enumerate(
+        _stage_lengths(config.total_length, config.block_size)
+    ):
+        extension_length = stage_length - len(tokens[0])
+        if extension_length > 0:
+            prefixes = tuple(prompt + tuple(chain_tokens) for chain_tokens in tokens)
+            extensions, extension_qs, extension_ps = _sample_exact_lengths(
+                backend,
+                prefixes=prefixes,
+                lengths=(extension_length,) * count,
+                sampling=proposal,
+                seeds=tuple(
+                    stream.derive("mh", chain_id, stage_index, "extend")
+                    for stream, chain_id in zip(seed_streams, ids, strict=True)
+                ),
+                request_ids=tuple(
+                    f"mh:{chain_id}:stage:{stage_index}:extend"
+                    for chain_id in ids
+                ),
+            )
+            for chain_index in range(count):
+                tokens[chain_index].extend(extensions[chain_index])
+                base_logs[chain_index].extend(extension_ps[chain_index])
+                proposal_logs[chain_index].extend(extension_qs[chain_index])
+
+        for step_index in range(config.steps_per_block):
+            cuts = tuple(
+                int(
+                    stream.generator(
+                        "mh", chain_id, stage_index, step_index, "cut"
+                    ).integers(0, stage_length)
+                )
+                for stream, chain_id in zip(seed_streams, ids, strict=True)
+            )
+            prefixes = tuple(
+                prompt + tuple(chain_tokens[:cut])
+                for chain_tokens, cut in zip(tokens, cuts, strict=True)
+            )
+            suffix_lengths = tuple(stage_length - cut for cut in cuts)
+            proposed_tokens, proposed_qs, proposed_ps = _sample_exact_lengths(
+                backend,
+                prefixes=prefixes,
+                lengths=suffix_lengths,
+                sampling=proposal,
+                seeds=tuple(
+                    stream.derive(
+                        "mh", chain_id, stage_index, step_index, "proposal"
+                    )
+                    for stream, chain_id in zip(seed_streams, ids, strict=True)
+                ),
+                request_ids=tuple(
+                    f"mh:{chain_id}:stage:{stage_index}:step:{step_index}"
+                    for chain_id in ids
+                ),
+            )
+
+            for chain_index, (stream, chain_id) in enumerate(
+                zip(seed_streams, ids, strict=True)
+            ):
+                cut = cuts[chain_index]
+                old_p = float(sum(base_logs[chain_index][cut:stage_length]))
+                old_q = float(sum(proposal_logs[chain_index][cut:stage_length]))
+                new_p = float(sum(proposed_ps[chain_index]))
+                new_q = float(sum(proposed_qs[chain_index]))
+                log_acceptance = min(
+                    0.0,
+                    config.alpha * (new_p - old_p) + old_q - new_q,
+                )
+                accept_rng = stream.generator(
+                    "mh", chain_id, stage_index, step_index, "accept"
+                )
+                uniform = max(float(accept_rng.random()), np.finfo(np.float64).tiny)
+                accepted = log(uniform) <= log_acceptance
+                if accepted:
+                    tokens[chain_index][cut:stage_length] = proposed_tokens[chain_index]
+                    base_logs[chain_index][cut:stage_length] = proposed_ps[chain_index]
+                    proposal_logs[chain_index][cut:stage_length] = proposed_qs[chain_index]
+                traces[chain_index].append(
+                    MHStep(
+                        stage_length=stage_length,
+                        step=step_index,
+                        cut=cut,
+                        proposed_suffix_length=suffix_lengths[chain_index],
+                        log_acceptance=log_acceptance,
+                        accepted=accepted,
+                    )
+                )
 
     return tuple(
-        run_mh_chain(backend, prompt, config, proposal, seeds, chain_id=chain_id)
-        for chain_id in range(config.chains)
+        MHChainResult(
+            prompt=prompt,
+            token_ids=tuple(tokens[index]),
+            base_token_logprobs=tuple(base_logs[index]),
+            proposal_token_logprobs=tuple(proposal_logs[index]),
+            trace=tuple(traces[index]),
+            chain_id=ids[index],
+        )
+        for index in range(count)
     )
 
 

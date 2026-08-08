@@ -115,8 +115,9 @@ $env:PYTHONPATH = "src"
 standard 主实验。
 
 在相同公开子集上复现 Base、幂分布 MH 与 GRPO 的多样性和 pass@k。单卡对齐运行沿用 32 条固定
-测试样本、192 token、16 个 MH 长度阶段和 8 个独立 draw；8 个 worker 只合并不同题目或 draw 的
-兼容模型调用，每条链仍使用独立随机流：
+测试样本、192 token、16 个 MH 长度阶段和 8 个独立 draw。每个任务块固定为同一道题的至多 8 个
+draw：Base/GRPO 合并独立生成，MH 则让独立链在相同长度阶段与更新编号同步提交不同后缀；每条链的
+cut、proposal 和接受随机数流保持独立：
 
 ```powershell
 $env:PYTHONPATH = "src"

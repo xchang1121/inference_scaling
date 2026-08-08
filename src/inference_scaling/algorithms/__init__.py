@@ -44,6 +44,7 @@ from inference_scaling.algorithms.mh import (
     RewardMHStep,
     run_mh_chain,
     run_mh_chains,
+    run_mh_chains_batched,
     run_reward_mh_chain,
     run_reward_mh_chains,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "run_dynamic_is",
     "run_mh_chain",
     "run_mh_chains",
+    "run_mh_chains_batched",
     "run_reward_mh_chain",
     "run_reward_mh_chains",
     "write_reserve_records",
