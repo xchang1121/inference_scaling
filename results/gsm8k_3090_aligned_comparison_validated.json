@@ -1,0 +1,282 @@
+{
+  "compute_comparisons": {
+    "small_proposal_forward_token_slots": 389399,
+    "small_proposal_main_model_generation_slots_avoided": 379334,
+    "standard_over_small_proposal_flop_factor": 0.5543521400630829,
+    "standard_over_small_proposal_flop_factor_definition": "standard on-policy conditional-IS estimated dominant dense FLOPs divided by small-proposal off-policy conditional-IS FLOPs; each model's term is 2 * its parameter count * observed forward token slots; values above one are a reduction and values below one are a compute increase",
+    "standard_over_small_proposal_wall_time_factor": 0.998119364968008,
+    "standard_over_small_proposal_wall_time_factor_definition": "standard on-policy conditional-IS wall time divided by small-proposal off-policy conditional-IS wall time; model, GSM8K rows, seeds, candidate count, rollout count, block size, output length, and reward are fixed; values above one are a speedup and values below one are a slowdown"
+  },
+  "compute_scope": "primary compute units are observed model-input forward token slots and the dominant-matmul estimate 2 * parameters * token slots; quadratic attention, elementwise kernels, tokenization, sampling, and host work are excluded",
+  "implementation_sha256": {
+    "experiments/gsm8k_reproduction.py": "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
+    "src/inference_scaling/algorithms/conditional_energy.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
+    "src/inference_scaling/algorithms/mh.py": "30aee50781a6b556dc7b50d6a2ea8f3004a79767b17319d028e7979fd881f6b7",
+    "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
+    "src/inference_scaling/backends/cache.py": "296caa7857d1a12d59af53999641a0fc3475924fc5886ee00659d5c75adbe89e",
+    "src/inference_scaling/backends/transformers_backend.py": "de535ad58e9e0f256e1c23b1de36e05e971230281e9f3f2a3067d1f821359deb",
+    "src/inference_scaling/config.py": "d4e78869e64e0532e7598723f618270b2de159dc55c2e23813d01266e4e20318",
+    "src/inference_scaling/evaluation/consensus.py": "c83b2be2f0e28e77555bd418f496315eb0e14ee7de9b118aed1e3798e3ad8e79",
+    "src/inference_scaling/evaluation/gsm8k.py": "2b7fcb57f685e550d0d718a298db948adb11d61637fe5126441c7c0a0b53bf91",
+    "src/inference_scaling/types.py": "59836039990883025a7dd54eafe5b8054d1ef2e66fd06ac43e77f18cc75e6588"
+  },
+  "input_weight_sha256_by_method": {
+    "base": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "beam": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "best_of_n": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "conditional_is": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "conditional_is_small_proposal": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "proposal": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+    },
+    "mh": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    "rl_greedy": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "rl_adapter": "720a0b06a41a21a3fbfd3f6fa710f716294c623b40b0c47085f2ce8df107a477"
+    },
+    "rl_sample": {
+      "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "rl_adapter": "720a0b06a41a21a3fbfd3f6fa710f716294c623b40b0c47085f2ce8df107a477"
+    }
+  },
+  "matched_target_comparison": null,
+  "method_manifest_fingerprints": {
+    "base": "f34d1411ee3771dfa1e74704fe2476aa193457cecd890142f1f6845bd19f785a",
+    "beam": "1099bd68f6d8cc13a6905988a8d55fbed2930b759b3e2765ecf66c5c8d297f25",
+    "best_of_n": "e6203e5541527ac603c890ebc8de811256700b10402d0a9ee4abdb17534002df",
+    "conditional_is": "fbe40f525107bf0302896e46ed51f4c56dd4e0f98362857849ae93eeabe1c9ce",
+    "conditional_is_small_proposal": "827e557d9e6eebdfc1dc5bf0c9c7500a85333096b423b957396aff8429d70613",
+    "mh": "4cef0af905375b63f809e4bab8ebcd107e1a3efeda79f69904b6431848dc055e",
+    "rl_greedy": "223613dc80241d22124ff0e2819ffa6a45629dd74bcc969202e42f782b2d29ca",
+    "rl_sample": "fc1747a8bed5a0f58cb1502d8387b93c82e578c4b9d8ac1457533cbb59be0bd7"
+  },
+  "problem_indices": [
+    55,
+    68,
+    69,
+    115,
+    174,
+    213,
+    222,
+    236,
+    258,
+    276,
+    421,
+    485,
+    497,
+    599,
+    704,
+    735,
+    776,
+    846,
+    895,
+    935,
+    951,
+    1016,
+    1018,
+    1104,
+    1116,
+    1152,
+    1215,
+    1256,
+    1269,
+    1289,
+    1311,
+    1314
+  ],
+  "profile": "gsm8k-3090-aligned",
+  "public_dataset": "GSM8K official test split",
+  "quality_comparisons": {
+    "accelerated_conditional_is_minus_standard_conditional_is": {
+      "left_minus_right_accuracy": -0.1875,
+      "paired_bootstrap_95": [
+        -0.34375,
+        -0.0625
+      ],
+      "within_five_percentage_points": false
+    },
+    "conditional_is_minus_rl_greedy": {
+      "left_minus_right_accuracy": 0.09375,
+      "paired_bootstrap_95": [
+        -0.03125,
+        0.21875
+      ],
+      "within_five_percentage_points": false
+    },
+    "conditional_is_minus_rl_sample": {
+      "left_minus_right_accuracy": -0.03125,
+      "paired_bootstrap_95": [
+        -0.125,
+        0.0625
+      ],
+      "within_five_percentage_points": true
+    },
+    "mh_minus_rl_sample": {
+      "left_minus_right_accuracy": -0.3125,
+      "paired_bootstrap_95": [
+        -0.46875,
+        -0.15625
+      ],
+      "within_five_percentage_points": false
+    }
+  },
+  "same_problem_indices_for_every_method": true,
+  "schema_version": 4,
+  "table": [
+    {
+      "accuracy": 0.40625,
+      "accuracy_wilson_95": [
+        0.2551963484266544,
+        0.5773997512461713
+      ],
+      "base_over_method_wall_time": 1.0,
+      "compute_multiple_vs_base": 1.0,
+      "estimated_dense_forward_flops": 27894917473280,
+      "estimated_dense_forward_petaflops": 0.02789491747328,
+      "examples": 32,
+      "forward_token_slots": 9035,
+      "mean_selected_output_tokens": 166.0,
+      "method": "base",
+      "runtime_multiple_vs_base": 1.0,
+      "seconds_excluding_model_load": 91.07608370001253,
+      "shared_prefill_tokens_saved": 0
+    },
+    {
+      "accuracy": 0.375,
+      "accuracy_wilson_95": [
+        0.22933887309454212,
+        0.5474559264692255
+      ],
+      "base_over_method_wall_time": 0.6974703000005517,
+      "compute_multiple_vs_base": 8.265633646928611,
+      "estimated_dense_forward_flops": 230569168445440,
+      "estimated_dense_forward_petaflops": 0.23056916844544,
+      "examples": 32,
+      "forward_token_slots": 74680,
+      "mean_selected_output_tokens": 175.375,
+      "method": "beam",
+      "runtime_multiple_vs_base": 1.4337528063907654,
+      "seconds_excluding_model_load": 130.58059059997322,
+      "shared_prefill_tokens_saved": 0
+    },
+    {
+      "accuracy": 0.4375,
+      "accuracy_wilson_95": [
+        0.2816533111504036,
+        0.6067440886314801
+      ],
+      "base_over_method_wall_time": 0.6655606973550132,
+      "compute_multiple_vs_base": 5.810625345877145,
+      "estimated_dense_forward_flops": 162086914491392,
+      "estimated_dense_forward_petaflops": 0.162086914491392,
+      "examples": 32,
+      "forward_token_slots": 52499,
+      "mean_selected_output_tokens": 163.5,
+      "method": "best_of_n",
+      "runtime_multiple_vs_base": 1.502492566003481,
+      "seconds_excluding_model_load": 136.84113869997964,
+      "shared_prefill_tokens_saved": 26285
+    },
+    {
+      "accuracy": 0.375,
+      "accuracy_wilson_95": [
+        0.22933887309454212,
+        0.5474559264692255
+      ],
+      "base_over_method_wall_time": 0.061318189235879846,
+      "compute_multiple_vs_base": 46.881018262313226,
+      "estimated_dense_forward_flops": 1307742135490560,
+      "estimated_dense_forward_petaflops": 1.30774213549056,
+      "examples": 32,
+      "forward_token_slots": 423570,
+      "mean_selected_output_tokens": 172.90625,
+      "method": "mh",
+      "runtime_multiple_vs_base": 16.30837460240685,
+      "seconds_excluding_model_load": 1485.302890299965,
+      "shared_prefill_tokens_saved": 0
+    },
+    {
+      "accuracy": 0.65625,
+      "accuracy_wilson_95": [
+        0.4831108797896222,
+        0.7958956207556682
+      ],
+      "base_over_method_wall_time": 0.21579389211364897,
+      "compute_multiple_vs_base": 49.13325954620919,
+      "estimated_dense_forward_flops": 1370568220234752,
+      "estimated_dense_forward_petaflops": 1.370568220234752,
+      "examples": 32,
+      "forward_token_slots": 443919,
+      "mean_selected_output_tokens": 166.75,
+      "method": "conditional_is",
+      "runtime_multiple_vs_base": 4.634051456254122,
+      "seconds_excluding_model_load": 422.0512582999654,
+      "shared_prefill_tokens_saved": 421537
+    },
+    {
+      "accuracy": 0.46875,
+      "accuracy_wilson_95": [
+        0.30869387108068835,
+        0.6355048288102536
+      ],
+      "base_over_method_wall_time": 0.21538806256045015,
+      "compute_multiple_vs_base": 88.63185689265678,
+      "estimated_dense_forward_flops": 2472378333524224,
+      "estimated_dense_forward_petaflops": 2.472378333524224,
+      "examples": 32,
+      "forward_token_slots": 1065569,
+      "mean_selected_output_tokens": 166.34375,
+      "method": "conditional_is_small_proposal",
+      "runtime_multiple_vs_base": 4.642782836302003,
+      "seconds_excluding_model_load": 422.84647820002283,
+      "shared_prefill_tokens_saved": 403241
+    },
+    {
+      "accuracy": 0.6875,
+      "accuracy_wilson_95": [
+        0.5143332169904459,
+        0.8204745836639026
+      ],
+      "base_over_method_wall_time": 0.7292231036531779,
+      "compute_multiple_vs_base": 0.9105971270591194,
+      "estimated_dense_forward_flops": 25401031710720,
+      "estimated_dense_forward_petaflops": 0.02540103171072,
+      "examples": 32,
+      "forward_token_slots": 8130,
+      "mean_selected_output_tokens": 137.71875,
+      "method": "rl_sample",
+      "runtime_multiple_vs_base": 1.371322432038035,
+      "seconds_excluding_model_load": 124.89467660000082,
+      "shared_prefill_tokens_saved": 0
+    },
+    {
+      "accuracy": 0.5625,
+      "accuracy_wilson_95": [
+        0.3932559113685198,
+        0.7183466888495963
+      ],
+      "base_over_method_wall_time": 0.7157437685683864,
+      "compute_multiple_vs_base": 0.9428544422612137,
+      "estimated_dense_forward_flops": 26300846856192,
+      "estimated_dense_forward_petaflops": 0.026300846856192,
+      "examples": 32,
+      "forward_token_slots": 8418,
+      "mean_selected_output_tokens": 146.71875,
+      "method": "rl_greedy",
+      "runtime_multiple_vs_base": 1.3971480352531411,
+      "seconds_excluding_model_load": 127.24677140002314,
+      "shared_prefill_tokens_saved": 0
+    }
+  ],
+  "timing_scope": "supplemental per-example CUDA-synchronized inference time; model loading, dataset loading, and checkpoint serialization are excluded"
+}

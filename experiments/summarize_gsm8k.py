@@ -262,6 +262,9 @@ def main() -> None:
             "mh_minus_rl_sample": _paired_difference(
                 records["mh"], records["rl_sample"]
             ),
+            "conditional_is_minus_rl_sample": _paired_difference(
+                records["conditional_is"], records["rl_sample"]
+            ),
             "conditional_is_minus_rl_greedy": _paired_difference(
                 records["conditional_is"], records["rl_greedy"]
             ),
