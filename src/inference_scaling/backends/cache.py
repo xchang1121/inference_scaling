@@ -85,11 +85,16 @@ class ScoreCachingBackend:
                 ScoreRequest(prefix, tuple(continuations), sampling)
                 for (sampling, prefix), continuations in grouped.items()
             ]
+            score_keys = [
+                (sampling, prefix, continuation)
+                for (sampling, prefix), continuations in grouped.items()
+                for continuation in continuations
+            ]
             scored = self._backend.score_batch(score_requests)
-            if len(scored) != len(missing):
+            if len(scored) != len(score_keys):
                 raise RuntimeError("underlying backend returned an invalid score batch")
             with self._lock:
-                for key, value in zip(missing, scored, strict=True):
+                for key, value in zip(score_keys, scored, strict=True):
                     if len(value) != len(key[2]):
                         raise RuntimeError("underlying backend returned an invalid score shape")
                     existing = self._cache.get(key)

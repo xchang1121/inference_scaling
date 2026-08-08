@@ -43,6 +43,22 @@ def test_score_cache_deduplicates_and_preserves_flattened_order() -> None:
     assert snapshot.misses == 3
 
 
+def test_interleaved_prefix_groups_map_scores_back_to_their_exact_keys() -> None:
+    counting = CountingBackend()
+    cached = ScoreCachingBackend(counting)
+    requests = [
+        ScoreRequest((0,), ((1,),)),
+        ScoreRequest((1,), ((0, 1, 0),)),
+        ScoreRequest((0,), ((1, 1),)),
+    ]
+    expected = counting.backend.score_batch(requests)
+
+    assert cached.score_batch(requests) == expected
+    assert cached.score_batch(requests) == expected
+    assert counting.score_calls == 1
+    assert counting.scored_sequences == 3
+
+
 def test_actual_sampling_policy_is_part_of_the_cache_key() -> None:
     counting = CountingBackend()
     cached = ScoreCachingBackend(counting)
