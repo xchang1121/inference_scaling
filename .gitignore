@@ -24,3 +24,4 @@ results/*
 !results/gsm8k_3090_aligned_comparison_validated.json
 !results/gsm8k_3090_aligned_compute_validated.json
 !results/gsm8k_3090_aligned_replay_validated.json
+!results/gsm8k_3090_aligned_async_validated.json
