@@ -12,4 +12,5 @@ models/
 artifacts/
 results/*
 !results/.gitkeep
-
+!results/rtx3090_reproduction.json
+!results/rtx3090_backend_bfloat16.json

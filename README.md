@@ -86,6 +86,19 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\toy_dynamic_is.py
 ```
 
+Run the pinned real-model reproduction on an NVIDIA GPU with:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\rtx3090_reproduction.py `
+  --model models\Qwen2.5-0.5B-Instruct `
+  --dtype float32 `
+  --output results\rtx3090_reproduction.json
+```
+
+The checked RTX 3090 measurements and their interpretation are in
+[`docs/RTX3090_REPRODUCTION.md`](docs/RTX3090_REPRODUCTION.md).
+
 ## Repository layout
 
 - `src/inference_scaling/`: reusable algorithms, backends, schedulers, replay storage, and metrics;
