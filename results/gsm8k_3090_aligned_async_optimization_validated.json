@@ -1,0 +1,93 @@
+{
+  "benchmark": "GSM8K preserved-group continuous batching comparison",
+  "comparison_contract": {
+    "baseline_over_grouped_async_flop_factor": "ungrouped asynchronous FLOPs divided by preserved-group asynchronous FLOPs; values above one are a measured compute reduction",
+    "baseline_over_grouped_async_wall_time_factor": "ungrouped continuous-batching seconds divided by preserved-group continuous-batching seconds; values above one favor preserved groups",
+    "cross_run_output_scope": "the two scheduler runs did not store per-example token hashes, so the baseline-over-grouped timing is a same-configuration live-workload comparison; exact token and answer agreement are only asserted against the synchronous path inside each grouped run",
+    "grouped_async_over_sync_flop_factor": "preserved-group asynchronous FLOPs divided by its synchronous FLOPs; values above one are padding or live-path overhead",
+    "grouped_sync_over_async_wall_time_factor": "preserved-group run's per-prompt synchronous seconds divided by its continuous-batching seconds; values above one are a scheduling speedup"
+  },
+  "examples": 32,
+  "implementation_changes": {
+    "src/inference_scaling/backends/batching.py": {
+      "baseline": "0d44322a558d24be89741b661a93a0d9267859aa39a5404c95d0fb632b1cebfe",
+      "grouped": "989982adaa8c2d43fd172f7a41d2ab51e0404d1bdfee1829f815520d79d73cbf"
+    }
+  },
+  "methods": {
+    "base": {
+      "baseline_async_estimated_dense_forward_flops": 33862916972544,
+      "baseline_async_seconds": 19.609513200004585,
+      "baseline_async_shared_prefill_tokens_saved": 0,
+      "baseline_over_grouped_async_flop_factor": 1.0,
+      "baseline_over_grouped_async_wall_time_factor": 0.9962161946649531,
+      "grouped_answer_match_count_vs_its_sync_path": 32,
+      "grouped_async_estimated_dense_forward_flops": 33862916972544,
+      "grouped_async_over_sync_flop_factor": 1.1769503165575705,
+      "grouped_async_seconds": 19.683993600003305,
+      "grouped_async_shared_prefill_tokens_saved": 0,
+      "grouped_asynchronous_accuracy": 0.40625,
+      "grouped_output_exact_match_count_vs_its_sync_path": 32,
+      "grouped_sync_over_async_wall_time_factor": 4.845269305512883,
+      "grouped_synchronous_accuracy": 0.40625
+    },
+    "best_of_n": {
+      "baseline_async_estimated_dense_forward_flops": 164356174518272,
+      "baseline_async_seconds": 67.7613435999956,
+      "baseline_async_shared_prefill_tokens_saved": 26285,
+      "baseline_over_grouped_async_flop_factor": 1.0,
+      "baseline_over_grouped_async_wall_time_factor": 0.997980652113062,
+      "grouped_answer_match_count_vs_its_sync_path": 30,
+      "grouped_async_estimated_dense_forward_flops": 164356174518272,
+      "grouped_async_over_sync_flop_factor": 1.0206883328539929,
+      "grouped_async_seconds": 67.89845420001075,
+      "grouped_async_shared_prefill_tokens_saved": 26285,
+      "grouped_asynchronous_accuracy": 0.5,
+      "grouped_output_exact_match_count_vs_its_sync_path": 30,
+      "grouped_sync_over_async_wall_time_factor": 2.0164386732088455,
+      "grouped_synchronous_accuracy": 0.5
+    },
+    "conditional_is": {
+      "baseline_async_estimated_dense_forward_flops": 2664061872699392,
+      "baseline_async_seconds": 516.4500880999985,
+      "baseline_async_shared_prefill_tokens_saved": 115224,
+      "baseline_over_grouped_async_flop_factor": 1.8610059095026528,
+      "baseline_over_grouped_async_wall_time_factor": 1.3958846026058096,
+      "grouped_answer_match_count_vs_its_sync_path": 32,
+      "grouped_async_estimated_dense_forward_flops": 1431517148385280,
+      "grouped_async_over_sync_flop_factor": 1.008447591870824,
+      "grouped_async_seconds": 369.98050350000267,
+      "grouped_async_shared_prefill_tokens_saved": 420888,
+      "grouped_asynchronous_accuracy": 0.46875,
+      "grouped_output_exact_match_count_vs_its_sync_path": 30,
+      "grouped_sync_over_async_wall_time_factor": 1.1542933245399856,
+      "grouped_synchronous_accuracy": 0.46875
+    },
+    "conditional_is_small_proposal": {
+      "baseline_async_estimated_dense_forward_flops": 2556955414675456,
+      "baseline_async_seconds": 433.006609700009,
+      "baseline_async_shared_prefill_tokens_saved": 391223,
+      "baseline_over_grouped_async_flop_factor": 1.0178606518227928,
+      "baseline_over_grouped_async_wall_time_factor": 1.0838849563755262,
+      "grouped_answer_match_count_vs_its_sync_path": 32,
+      "grouped_async_estimated_dense_forward_flops": 2512087887567360,
+      "grouped_async_over_sync_flop_factor": 1.003032579824416,
+      "grouped_async_seconds": 399.49498990000575,
+      "grouped_async_shared_prefill_tokens_saved": 401686,
+      "grouped_asynchronous_accuracy": 0.5,
+      "grouped_output_exact_match_count_vs_its_sync_path": 32,
+      "grouped_sync_over_async_wall_time_factor": 1.050091779386292,
+      "grouped_synchronous_accuracy": 0.5
+    }
+  },
+  "provenance": {
+    "baseline_path": "results\\gsm8k_3090_aligned_async_validated.json",
+    "baseline_sha256": "2161d1cea636ec39ce4245d150a9cc7601e9bc17c18754c3376673d4c9bafc83",
+    "grouped_path": "results\\gsm8k_3090_aligned_async_grouped_validated.json",
+    "grouped_sha256": "4a6e3ac5d1a00c5865f4fd6741351a9129dd2722dd33d4c91a1beafab1c072c2",
+    "postprocessor": "experiments/summarize_gsm8k_batching.py",
+    "postprocessor_sha256": "ef24ed5e57ea36fd7f9f38f7840205feeb53ac0243eeda7087fcaf1ad63f3d49"
+  },
+  "schema_version": 1,
+  "workers": 8
+}

@@ -128,7 +128,7 @@ def main() -> None:
                 "--limit",
                 str(async_limit),
                 "--output",
-                f"results/{args.config.stem}_async_{args.tag}.json",
+                f"results/{args.config.stem}_async_grouped_{args.tag}.json",
             ],
             environment,
         )

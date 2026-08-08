@@ -182,6 +182,16 @@ $env:PYTHONPATH = "src"
 
 这组 32 题配置的分阶段实测结果见
 [`docs/GSM8K_3090_ALIGNED_RESULTS.md`](docs/GSM8K_3090_ALIGNED_RESULTS.md)。
+其中连续批处理保留优化前与“调用组完整入队”后的两份结果；可用下列命令复核每种方法相对同步路径、
+以及新调度器相对旧调度器的两个独立加速分母：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\summarize_gsm8k_batching.py `
+  --baseline results\gsm8k_3090_aligned_async_validated.json `
+  --grouped results\gsm8k_3090_aligned_async_grouped_validated.json `
+  --output results\gsm8k_3090_aligned_async_optimization_validated.json
+```
 
 这里缩放的是模型、样本数和算法预算，不改变要测的问题、方法对照、目标定义或 token/FLOPs 口径。
 `gsm8k_standard.toml` 与 `gsm8k_full.toml` 仍分别保留 128 条和全部 1,319 条的更大预算，可从已有逐题

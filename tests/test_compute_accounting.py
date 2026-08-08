@@ -1,5 +1,6 @@
 from experiments.gsm8k_passk import _estimated_pass_at_k
 from experiments.summarize_gsm8k_compute import _comparison
+from experiments.summarize_gsm8k_batching import _compare_method
 from experiments.summarize_gsm8k_replay import (
     _minimum_warm_online_uses,
     _paired_quality,
@@ -137,6 +138,43 @@ def test_replay_quality_is_paired_and_keeps_answer_agreement() -> None:
     assert report["warm_accuracy"] == 0.5
     assert report["warm_minus_fresh_accuracy"] == -0.25
     assert report["same_numeric_prediction_rate"] == 0.5
+
+
+def test_batching_comparison_names_both_speedup_denominators() -> None:
+    synchronous = {
+        "estimated_dense_forward_flops": 100,
+        "base_backend": {"shared_prefill_tokens_saved": 10},
+        "proposal_backend": None,
+    }
+    baseline = {
+        "asynchronous_continuous_batching_seconds": 12.0,
+        "asynchronous_compute": {
+            "estimated_dense_forward_flops": 200,
+            "base_backend": {"shared_prefill_tokens_saved": 2},
+            "proposal_backend": None,
+        },
+    }
+    grouped = {
+        "asynchronous_continuous_batching_seconds": 8.0,
+        "wall_time_speedup_synchronous_over_asynchronous": 1.25,
+        "synchronous_compute": synchronous,
+        "asynchronous_compute": {
+            "estimated_dense_forward_flops": 110,
+            "base_backend": {"shared_prefill_tokens_saved": 10},
+            "proposal_backend": None,
+        },
+        "output_exact_match_count": 4,
+        "answer_match_count": 4,
+        "synchronous_accuracy": 0.5,
+        "asynchronous_accuracy": 0.5,
+    }
+
+    report = _compare_method(baseline, grouped)
+
+    assert report["baseline_over_grouped_async_wall_time_factor"] == 1.5
+    assert report["grouped_sync_over_async_wall_time_factor"] == 1.25
+    assert report["baseline_over_grouped_async_flop_factor"] == 200 / 110
+    assert report["grouped_async_over_sync_flop_factor"] == 1.1
 
 
 def test_compute_break_even_requires_both_answer_distribution_thresholds() -> None:

@@ -8,12 +8,14 @@ Qwen2.5-1.5B-Instruct，小 proposal 为同系列 0.5B 模型，RL 对照为本�
 GRPO LoRA。
 
 当前已完成主要方法的单次回答质量与计算量比较、共享目标诊断、GRPO 训练摊销、rollout replay 以及
-连续批处理的优化前基线。答案分布和消融实验会在各自完成核验后增量加入本记录；未完成的阶段不提前
+连续批处理的优化前后对照。答案分布和消融实验会在各自完成核验后增量加入本记录；未完成的阶段不提前
 填写结论。可追溯汇总为
 `results/gsm8k_3090_aligned_comparison_validated.json` 和
 `results/gsm8k_3090_aligned_compute_validated.json`、
 `results/gsm8k_3090_aligned_replay_validated.json`、
-`results/gsm8k_3090_aligned_async_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略。
+`results/gsm8k_3090_aligned_async_validated.json`、
+`results/gsm8k_3090_aligned_async_grouped_validated.json` 和
+`results/gsm8k_3090_aligned_async_optimization_validated.json`。逐题 JSONL 保留在本机，并由 Git 忽略。
 
 ## 单次回答质量与计算量
 
@@ -152,9 +154,45 @@ Base 的两条路径逐 token 完全相同，所以 `4.874×` 是固定输出轨
 
 账本定位到一个具体实现问题：调度器把一次算法调用中的请求逐条入队，再将不同 prompt 的单条请求
 混合成最多 24 行的 batch。这样破坏了 rollout 原本规则的重复前缀组；标准条件 IS 避免重复计算的
-prefill token 从同步路径的 420,888 降到 115,224，同时不等长 decode 行产生大量 padding。下一阶段
-将保留每次 `sample_batch`/`score_batch` 的原始请求组，只在不拆组的前提下跨 prompt 合并，然后用
-相同 32 题、8 worker 和配置重新测量。当前表作为优化前基线保留，不会用后续结果覆盖。
+prefill token 从同步路径的 420,888 降到 115,224，同时不等长 decode 行产生大量 padding。优化前表
+作为独立基线保留，没有被后续结果覆盖。
+
+### 保留调用组后的连续批处理
+
+修改后的 dispatcher 将一次 `sample_batch` 或 `score_batch` 作为完整调用组入队，只合并采样策略、
+生成长度和重复前缀数兼容的组；超大 rollout 组优先沿完整候选前缀边界切分。算法、模型、题目、seed、
+worker 数和 batch 上限均不变，比较器还验证除 `backends/batching.py` 外的所有关键实现哈希相同。
+
+| 方法 | 同步耗时 | 分组连续批处理耗时 | 同步 / 分组连续批处理墙钟 | 分组连续批处理 / 同步 FLOPs | token 完全一致 | 数值答案一致 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Base | 95.4 s | 19.7 s | 4.845× | 1.177× | 32/32 | 32/32 |
+| Best-of-8 | 136.9 s | 67.9 s | 2.016× | 1.021× | 30/32 | 30/32 |
+| 标准条件 IS | 427.1 s | 370.0 s | 1.154× | 1.008× | 30/32 | 32/32 |
+| 0.5B proposal 条件 IS | 419.5 s | 399.5 s | 1.050× | 1.003× | 32/32 | 32/32 |
+
+标准条件 IS 从优化前慢于同步的 `0.827×` 变为相对同步加速 `1.154×`；小 proposal 从 `0.973×` 变为
+`1.050×`。Base 和小 proposal 的分组异步输出分别 32/32 与同步路径逐 token 相同，所以对应 `4.845×`
+和 `1.050×` 是固定输出轨迹上的严格墙钟加速。Best-of-8 与标准条件 IS 仍各有两题 token 分叉；前者
+答案匹配 30/32，后者答案匹配 32/32 且准确率相同，因此其比值仍按 live workload 解释。
+
+下面直接比较两次连续批处理运行。“旧 / 新墙钟”与“旧 / 新 FLOPs”的分子都是优化前逐条混批，分母
+都是保留调用组的新调度；大于 1 表示新调度更省。
+
+| 方法 | 旧 / 新墙钟 | 旧 / 新 FLOPs | 优化前 → 优化后避免的重复 prefill token |
+| --- | ---: | ---: | ---: |
+| Base | 0.996× | 1.000× | 0 → 0 |
+| Best-of-8 | 0.998× | 1.000× | 26,285 → 26,285 |
+| 标准条件 IS | 1.396× | 1.861× | 115,224 → 420,888 |
+| 0.5B proposal 条件 IS | 1.084× | 1.018× | 391,223 → 401,686 |
+
+对标准条件 IS，新调度相对旧调度减少约 28.4% 墙钟与 46.3% 估算 FLOPs；forward slots 从 862,874
+降到 463,660，只比同步路径的 459,776 多 0.84%。小 proposal 的墙钟减少约 7.7%，FLOPs 减少约
+1.8%。Base 与 Best-of-8 基本不变，说明改动针对的是原先被拆散的多组 rollout，而不是依靠全局计时
+波动宣称所有方法都变快。
+
+两次独立运行没有保存逐题 token 哈希，因此“旧调度 / 新调度”只作为同配置、同硬件的 live-workload
+对比；不能从相同的分叉题号反推跨运行逐 token 相同。新调度相对其同一次运行中同步路径的 token 与
+答案一致率则已显式记录在结果 JSON 中。
 
 ## 结果边界
 
