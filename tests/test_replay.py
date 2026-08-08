@@ -16,7 +16,9 @@ from inference_scaling.replay import (
     BehaviorRegistry,
     InMemoryReplayStore,
     ReplayKey,
+    ReplayRecord,
     sample_replay_record,
+    validate_record_probabilities,
 )
 from inference_scaling.rng import SeedStream
 
@@ -97,6 +99,34 @@ def test_evaluation_claims_are_metadata_only_disjoint_and_single_use() -> None:
     assert store.design_count == 3
     with pytest.raises(ValueError):
         store.reveal_and_consume(first)
+
+
+def test_probability_validation_allows_small_per_token_roundoff_only() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.6, 0.4])
+    behavior = BehaviorPolicy.for_backend(backend, SamplingConfig(), label="behavior")
+    registry = BehaviorRegistry([behavior])
+    key = ReplayKey((), (), (0,), "reward-v1")
+    exact = 2 * log(0.4)
+    rounded = ReplayRecord(
+        "rounded",
+        key,
+        (1, 1),
+        0.0,
+        behavior.behavior_id,
+        exact + 3e-4,
+    )
+    corrupted = ReplayRecord(
+        "corrupted",
+        key,
+        (1, 1),
+        0.0,
+        behavior.behavior_id,
+        exact + 1e-2,
+    )
+
+    validate_record_probabilities([rounded], registry)
+    with pytest.raises(ValueError, match="cannot be reproduced"):
+        validate_record_probabilities([corrupted], registry)
 
 
 def test_base_replay_uses_matching_history_and_moves_all_used_data_to_design() -> None:

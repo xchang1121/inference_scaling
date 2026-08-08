@@ -246,7 +246,10 @@ def validate_record_probabilities(
     registry: BehaviorRegistry,
     *,
     absolute_tolerance: float = 1e-5,
+    per_token_tolerance: float = 2e-4,
 ) -> None:
+    if absolute_tolerance < 0 or per_token_tolerance < 0:
+        raise ValueError("probability validation tolerances must be non-negative")
     grouped: dict[tuple[ReplayKey, str], list[ReplayRecord]] = defaultdict(list)
     for record in records:
         grouped[(record.key, record.behavior_id)].append(record)
@@ -255,14 +258,16 @@ def validate_record_probabilities(
             registry.get(behavior_id), key, [record.completion for record in group]
         )
         for record, score in zip(group, rescored, strict=True):
+            tolerance = absolute_tolerance + per_token_tolerance * len(record.completion)
             if not isclose(
                 record.behavior_logprob,
                 score,
                 rel_tol=0.0,
-                abs_tol=absolute_tolerance,
+                abs_tol=tolerance,
             ):
                 raise ValueError(
-                    f"stored behavior probability for {record.record_id!r} cannot be reproduced"
+                    f"stored behavior probability for {record.record_id!r} cannot be reproduced "
+                    f"within tolerance {tolerance:g}"
                 )
 
 
