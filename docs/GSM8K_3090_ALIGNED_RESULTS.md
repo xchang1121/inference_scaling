@@ -36,6 +36,15 @@ FLOPs 采用 `2 × 参数量 × 实际 forward token slots` 的主导稠密矩�
 和 proposal 模型，但不计二次 attention、逐元素 kernel、tokenization、采样与主机工作。耗时在每题
 起止处同步 CUDA，排除模型和数据加载；它是硬件相关的补充指标，不替代 FLOPs。
 
+### 质量—计算量图
+
+![GSM8K 单次回答准确率与推理计算量](assets/gsm8k_3090_aligned_quality_compute.svg)
+
+左图是不读取测试集标准答案的主比较；右图把使用精确数值奖励的 oracle 诊断单独列出，不能当作可部署
+方法的结果。横轴使用对数尺度，点为 32 道固定题的准确率，竖线为 Wilson 95% 区间。该图由
+`experiments/plot_gsm8k_quality_compute.py` 直接读取正式汇总 JSON 生成；更新结果后应重新运行脚本，
+避免图表与表格数值分离。
+
 ## 目前能够支持的结论
 
 标准条件 IS 的 21/32 与 GRPO 随机采样的 22/32 相差 -3.125 个百分点，逐题配对 bootstrap 95% 区间
