@@ -10,6 +10,11 @@ important for replay: the same stored completion is often rescored under the bas
 policies, while a score from one temperature or truncation policy must never be reused for another. Random
 generations are deliberately not cached.
 
+Replay generation is flattened across candidates as well: a decision with candidate-specific fresh counts emits
+one heterogeneous generation batch, and post-selection reserve completions use the same path. This removes the
+candidate-by-candidate synchronization point while leaving replay keys, seeds, and behavior log-probabilities
+unchanged.
+
 The remaining distribution-preserving optimization layers are:
 
 1. retain and fork prefix KV state for candidate blocks and MH suffixes where the concrete backend supports it;

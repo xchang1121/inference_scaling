@@ -116,4 +116,3 @@ class ScoreCachingBackend:
                 misses=self._misses,
                 evictions=self._evictions,
             )
-

@@ -51,6 +51,22 @@ class ReplayRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplaySampleRequest:
+    key: ReplayKey
+    max_new_tokens: int
+    seed: int
+    record_id: str
+
+    def __post_init__(self) -> None:
+        if self.max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        if self.seed < 0:
+            raise ValueError("seed must be non-negative")
+        if not self.record_id:
+            raise ValueError("record_id cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class BehaviorPolicy:
     behavior_id: str
     backend: AutoregressiveBackend
@@ -259,32 +275,63 @@ def sample_replay_record(
     seed: int,
     record_id: str,
 ) -> ReplayRecord:
-    if max_new_tokens < 0:
-        raise ValueError("max_new_tokens must be non-negative")
-    if max_new_tokens == 0:
-        completion: TokenSequence = ()
-        behavior_logprob = 0.0
-    else:
-        sample = policy.backend.sample_batch(
-            [
-                GenerationRequest(
-                    prefix=key.rollout_prefix,
-                    max_new_tokens=max_new_tokens,
-                    sampling=policy.sampling,
-                    seed=seed,
-                    request_id=f"replay:{record_id}",
-                )
-            ]
-        )[0]
-        completion = sample.token_ids
-        behavior_logprob = sample.logprob
-    full_generated = key.generated_prefix + key.candidate + completion
-    return ReplayRecord(
-        record_id=record_id,
-        key=key,
-        completion=completion,
-        reward=float(reward(key.prompt, full_generated)),
-        behavior_id=policy.behavior_id,
-        behavior_logprob=behavior_logprob,
-    )
+    return sample_replay_records(
+        policy,
+        [ReplaySampleRequest(key, max_new_tokens, seed, record_id)],
+        reward,
+    )[0]
 
+
+def sample_replay_records(
+    policy: BehaviorPolicy,
+    requests: Sequence[ReplaySampleRequest],
+    reward: Callable[[TokenSequence, TokenSequence], float],
+) -> tuple[ReplayRecord, ...]:
+    """Generate heterogeneous replay completions in one backend batch."""
+
+    generation_requests: list[GenerationRequest] = []
+    generated_positions: list[int] = []
+    for index, request in enumerate(requests):
+        if request.max_new_tokens == 0:
+            continue
+        generation_requests.append(
+            GenerationRequest(
+                prefix=request.key.rollout_prefix,
+                max_new_tokens=request.max_new_tokens,
+                sampling=policy.sampling,
+                seed=request.seed,
+                request_id=f"replay:{request.record_id}",
+            )
+        )
+        generated_positions.append(index)
+    samples = policy.backend.sample_batch(generation_requests) if generation_requests else []
+    if len(samples) != len(generation_requests):
+        raise RuntimeError("replay backend returned an invalid number of samples")
+    samples_by_position = dict(zip(generated_positions, samples, strict=True))
+
+    records: list[ReplayRecord] = []
+    for index, request in enumerate(requests):
+        sample = samples_by_position.get(index)
+        if sample is None:
+            completion: TokenSequence = ()
+            behavior_logprob = 0.0
+        else:
+            if (
+                sample.model_id != policy.backend.model_id
+                or sample.policy_id != policy.sampling.policy_id
+            ):
+                raise RuntimeError("replay sample does not match its declared behavior policy")
+            completion = sample.token_ids
+            behavior_logprob = sample.logprob
+        full_generated = request.key.generated_prefix + request.key.candidate + completion
+        records.append(
+            ReplayRecord(
+                record_id=request.record_id,
+                key=request.key,
+                completion=completion,
+                reward=float(reward(request.key.prompt, full_generated)),
+                behavior_id=policy.behavior_id,
+                behavior_logprob=behavior_logprob,
+            )
+        )
+    return tuple(records)

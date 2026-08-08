@@ -55,6 +55,8 @@ weights and experiment artifacts are deliberately excluded from Git.
   preserving request-local seeds and original result order; its counters expose achieved batch sizes.
 - `ScoreCachingBackend` reuses exact base and behavior scores only when model, sampling policy, prefix, and
   continuation all match; random generation is never cached.
+- Replay fresh completions and post-selection reserve completions are flattened across candidates into one backend
+  batch, while their request-local seeds and replay keys remain distinct.
 
 Run the standalone finite-state smoke experiments with:
 

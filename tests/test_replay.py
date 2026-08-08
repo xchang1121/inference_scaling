@@ -21,6 +21,23 @@ from inference_scaling.replay import (
 from inference_scaling.rng import SeedStream
 
 
+class BatchCountingBackend:
+    def __init__(self, backend):
+        self.backend = backend
+        self.sample_batch_sizes: list[int] = []
+
+    @property
+    def model_id(self):
+        return self.backend.model_id
+
+    def sample_batch(self, requests):
+        self.sample_batch_sizes.append(len(requests))
+        return self.backend.sample_batch(requests)
+
+    def score_batch(self, requests):
+        return self.backend.score_batch(requests)
+
+
 def test_truncated_history_and_fresh_tail_are_exact_in_expectation() -> None:
     p = np.asarray([0.8, 0.2])
     q = np.asarray([0.55, 0.45])
@@ -198,3 +215,30 @@ def test_post_selection_reserve_can_use_an_off_policy_behavior() -> None:
     assert replayed.history_count == 2
     assert store.evaluation_count == 0
     assert store.reserved_count == 0
+
+
+def test_fresh_replay_is_generated_in_one_cross_candidate_batch() -> None:
+    backend = BatchCountingBackend(
+        TabularAutoregressiveBackend({}, fallback=[0.6, 0.4])
+    )
+    step = base_replay_step(
+        base_backend=backend,
+        registry=BehaviorRegistry(),
+        store=InMemoryReplayStore(),
+        prompt=(),
+        generated_prefix=(),
+        config=BaseReplayConfig(
+            candidate_count=4,
+            block_size=1,
+            total_length=2,
+            fresh_rollouts=3,
+        ),
+        base_sampling=SamplingConfig(),
+        reward=lambda _prompt, generated: float(sum(generated)),
+        reward_version="reward-v1",
+        seeds=SeedStream(31),
+        step_index=0,
+    )
+
+    assert len(step.candidates) == 4
+    assert backend.sample_batch_sizes == [4, 12]

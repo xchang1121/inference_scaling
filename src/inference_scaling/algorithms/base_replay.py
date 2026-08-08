@@ -23,8 +23,9 @@ from inference_scaling.replay import (
     InMemoryReplayStore,
     ReplayKey,
     ReplayRecord,
+    ReplaySampleRequest,
     mixture_logprobabilities,
-    sample_replay_record,
+    sample_replay_records,
     validate_record_probabilities,
 )
 from inference_scaling.rng import SeedStream
@@ -162,6 +163,31 @@ def _score_base(
     return tuple(totals)
 
 
+def build_fresh_replay_requests(
+    *,
+    key: ReplayKey,
+    count: int,
+    rollout_length: int,
+    seeds: SeedStream,
+    step_index: int,
+    candidate_index: int,
+) -> tuple[ReplaySampleRequest, ...]:
+    return tuple(
+        ReplaySampleRequest(
+            key=key,
+            max_new_tokens=rollout_length,
+            seed=seeds.derive(
+                "base_replay", step_index, "candidate", candidate_index, "fresh", fresh_index
+            ),
+            record_id=(
+                f"fresh:{step_index}:{candidate_index}:{fresh_index}:"
+                f"{seeds.derive('fresh-id', step_index, candidate_index, fresh_index)}"
+            ),
+        )
+        for fresh_index in range(count)
+    )
+
+
 def _fresh_records(
     *,
     base_policy: BehaviorPolicy,
@@ -173,21 +199,17 @@ def _fresh_records(
     step_index: int,
     candidate_index: int,
 ) -> tuple[ReplayRecord, ...]:
-    return tuple(
-        sample_replay_record(
-            base_policy,
-            key,
-            rollout_length,
-            reward,
-            seed=seeds.derive(
-                "base_replay", step_index, "candidate", candidate_index, "fresh", fresh_index
-            ),
-            record_id=(
-                f"fresh:{step_index}:{candidate_index}:{fresh_index}:"
-                f"{seeds.derive('fresh-id', step_index, candidate_index, fresh_index)}"
-            ),
-        )
-        for fresh_index in range(count)
+    return sample_replay_records(
+        base_policy,
+        build_fresh_replay_requests(
+            key=key,
+            count=count,
+            rollout_length=rollout_length,
+            seeds=seeds,
+            step_index=step_index,
+            candidate_index=candidate_index,
+        ),
+        reward,
     )
 
 
@@ -206,17 +228,28 @@ def estimate_replay_energy(
     seeds: SeedStream,
     step_index: int,
     candidate_index: int,
+    precomputed_fresh_records: Sequence[ReplayRecord] | None = None,
 ) -> ReplayEnergyEstimate:
-    fresh_records = _fresh_records(
-        base_policy=base_policy,
-        key=claim.key,
-        count=fresh_count,
-        rollout_length=rollout_length,
-        reward=reward,
-        seeds=seeds,
-        step_index=step_index,
-        candidate_index=candidate_index,
-    )
+    if precomputed_fresh_records is None:
+        fresh_records = _fresh_records(
+            base_policy=base_policy,
+            key=claim.key,
+            count=fresh_count,
+            rollout_length=rollout_length,
+            reward=reward,
+            seeds=seeds,
+            step_index=step_index,
+            candidate_index=candidate_index,
+        )
+    else:
+        fresh_records = tuple(precomputed_fresh_records)
+        if len(fresh_records) != fresh_count:
+            raise ValueError("precomputed fresh record count does not match the frozen design")
+        if any(
+            record.key != claim.key or record.behavior_id != base_policy.behavior_id
+            for record in fresh_records
+        ):
+            raise ValueError("precomputed fresh records do not match the candidate and base policy")
 
     if claim.count == 0:
         if store.reveal_and_consume(claim):
@@ -322,9 +355,29 @@ def base_replay_step(
             else store.freeze_claims([key], config.max_history_per_candidate)[0]
         )
 
+    fresh_requests: list[ReplaySampleRequest] = []
+    fresh_ranges: list[tuple[int, int] | None] = []
+    for candidate_index, (key, claim) in enumerate(zip(keys, claims, strict=True)):
+        if claim is None:
+            fresh_ranges.append(None)
+            continue
+        start = len(fresh_requests)
+        fresh_requests.extend(
+            build_fresh_replay_requests(
+                key=key,
+                count=config.fresh_rollouts,
+                rollout_length=rollout_length,
+                seeds=seeds,
+                step_index=step_index,
+                candidate_index=candidate_index,
+            )
+        )
+        fresh_ranges.append((start, len(fresh_requests)))
+    batched_fresh = sample_replay_records(base_policy, fresh_requests, reward)
+
     candidates: list[BaseReplayCandidate] = []
-    for candidate_index, (candidate, key, claim) in enumerate(
-        zip(candidate_samples, keys, claims, strict=True)
+    for candidate_index, (candidate, key, claim, fresh_range) in enumerate(
+        zip(candidate_samples, keys, claims, fresh_ranges, strict=True)
     ):
         if claim is None:
             terminal_reward = float(reward(prompt, generated_prefix + candidate.token_ids))
@@ -336,6 +389,7 @@ def base_replay_step(
                 behavior_counts=(),
             )
         else:
+            assert fresh_range is not None
             estimate = estimate_replay_energy(
                 base_backend=base_backend,
                 base_policy=base_policy,
@@ -350,6 +404,9 @@ def base_replay_step(
                 seeds=seeds,
                 step_index=step_index,
                 candidate_index=candidate_index,
+                precomputed_fresh_records=batched_fresh[
+                    fresh_range[0] : fresh_range[1]
+                ],
             )
         candidates.append(
             BaseReplayCandidate(candidate.token_ids, candidate.token_logprobs, estimate)
@@ -395,7 +452,7 @@ def write_reserve_records(
         seeds,
         step_index + 1_000_000,
     )
-    written = 0
+    reserve_requests: list[ReplaySampleRequest] = []
     for reserve_index, candidate in enumerate(reserve_candidates):
         rollout_length = remaining - len(candidate.token_ids)
         eos = base_sampling.eos_token_id
@@ -405,20 +462,21 @@ def write_reserve_records(
         if terminal:
             continue
         key = ReplayKey(prompt, generated_prefix, candidate.token_ids, reward_version)
-        record = sample_replay_record(
-            reserve_policy,
-            key,
-            rollout_length,
-            reward,
-            seed=seeds.derive("base_replay", step_index, "reserve", reserve_index),
-            record_id=(
+        reserve_requests.append(
+            ReplaySampleRequest(
+                key=key,
+                max_new_tokens=rollout_length,
+                seed=seeds.derive("base_replay", step_index, "reserve", reserve_index),
+                record_id=(
                 f"reserve:{step_index}:{reserve_index}:"
                 f"{seeds.derive('reserve-id', step_index, reserve_index)}"
-            ),
+                ),
+            )
         )
+    records = sample_replay_records(reserve_policy, reserve_requests, reward)
+    for record in records:
         store.add_evaluation(record)
-        written += 1
-    return written
+    return len(records)
 
 
 def run_base_replay(

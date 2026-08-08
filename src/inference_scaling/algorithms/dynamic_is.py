@@ -16,6 +16,7 @@ import numpy as np
 
 from inference_scaling.algorithms.base_replay import (
     ReplayEnergyEstimate,
+    build_fresh_replay_requests,
     estimate_replay_energy,
     write_reserve_records,
 )
@@ -29,8 +30,10 @@ from inference_scaling.replay import (
     BehaviorRegistry,
     InMemoryReplayStore,
     ReplayKey,
+    ReplaySampleRequest,
     mixture_logprobabilities,
     score_continuations,
+    sample_replay_records,
     validate_record_probabilities,
 )
 from inference_scaling.rng import SeedStream
@@ -731,9 +734,38 @@ def dynamic_is_step(
             raise RuntimeError("frozen replay inventory changed during allocation")
         claims.append(claim)
 
+    fresh_requests: list[ReplaySampleRequest] = []
+    fresh_ranges: list[tuple[int, int] | None] = []
+    for candidate_index, (key, allocation, is_terminal) in enumerate(
+        zip(keys, allocations, terminal, strict=True)
+    ):
+        if is_terminal:
+            fresh_ranges.append(None)
+            continue
+        start = len(fresh_requests)
+        fresh_requests.extend(
+            build_fresh_replay_requests(
+                key=key,
+                count=allocation.fresh_count,
+                rollout_length=rollout_length,
+                seeds=seeds,
+                step_index=step_index,
+                candidate_index=candidate_index,
+            )
+        )
+        fresh_ranges.append((start, len(fresh_requests)))
+    batched_fresh = sample_replay_records(base_policy, fresh_requests, reward)
+
     candidates: list[DynamicCandidate] = []
-    for candidate_index, (draw, key, allocation, claim, is_terminal) in enumerate(
-        zip(draws, keys, allocations, claims, terminal, strict=True)
+    for candidate_index, (
+        draw,
+        key,
+        allocation,
+        claim,
+        is_terminal,
+        fresh_range,
+    ) in enumerate(
+        zip(draws, keys, allocations, claims, terminal, fresh_ranges, strict=True)
     ):
         if is_terminal:
             reward_value = float(reward(prompt, generated_prefix + draw.token_ids))
@@ -746,6 +778,7 @@ def dynamic_is_step(
             )
         else:
             assert claim is not None
+            assert fresh_range is not None
             estimate = estimate_replay_energy(
                 base_backend=base_backend,
                 base_policy=base_policy,
@@ -760,6 +793,9 @@ def dynamic_is_step(
                 seeds=seeds,
                 step_index=step_index,
                 candidate_index=candidate_index,
+                precomputed_fresh_records=batched_fresh[
+                    fresh_range[0] : fresh_range[1]
+                ],
             )
         candidates.append(
             DynamicCandidate(
