@@ -84,6 +84,12 @@ $env:PYTHONPATH = "src"
 以及训练集/测试集零重合检查；`training_cost.json` 记录生成的 rollout 数和模型实际处理的 token。
 wall time、峰值 CUDA 显存、采样得到的 GPU 功率及积分能耗仅作为硬件相关诊断。
 
+本机已完成的训练及端到端加载检查记录在
+`results/gsm8k_grpo_training_summary.json`。这次运行由前 100 步和从 `checkpoint-100` 继续的 105 步
+组成，因此摘要把它明确记为两段调度，不把它解释成一次未中断的 205 步学习率轨迹。累计计算量、
+rollout 数、adapter 哈希和 FP32 概率一致性检查均来自实际产物；训练 rollout 准确率只用于检查训练
+过程，不能代替保留测试集上的方法比较。
+
 先运行八条样本的集成检查。实验问题与比较结构围绕条件采样方法；主表沿用其单次最终回答
 （pass@1）口径，比较 Base、Beam
 Search、Best-of-N、Power Sampling 对应的幂分布 MH、条件能量重要性采样、小 proposal 加速版本与

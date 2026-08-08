@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "stage": "gsm8k_grpo_training",
+  "status": "complete",
+  "recorded_at": "2026-08-08T22:01:35+08:00",
+  "training_schedule": {
+    "continuous_205_step_schedule": false,
+    "segments": [
+      {
+        "steps": "1-100",
+        "resume_from": null
+      },
+      {
+        "steps": "101-205",
+        "resume_from": "checkpoint-100"
+      }
+    ],
+    "note_zh": "这是 100+105 步的分段续训；第 101 步学习率为 0，随后按续训时建立的调度变化。因此结果不应描述为一次未中断的 205 步学习率轨迹。"
+  },
+  "data": {
+    "name": "OpenAI GSM8K",
+    "train_rows": 7473,
+    "test_rows_reserved_for_evaluation": 1319,
+    "exact_question_overlap": 0,
+    "train_sha256": "17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465",
+    "test_sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
+  },
+  "model": {
+    "base": "Qwen/Qwen2.5-1.5B-Instruct",
+    "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "base_weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+    "adapter_path": "models/Qwen2.5-1.5B-Instruct-GRPO-GSM8K",
+    "adapter_weight_sha256": "720a0b06a41a21a3fbfd3f6fa710f716294c623b40b0c47085f2ce8df107a477",
+    "total_parameters": 1562179072,
+    "trainable_parameters": 18464768,
+    "trainable_fraction": 0.011819879251333359
+  },
+  "training_result": {
+    "global_step": 205,
+    "generated_prompt_groups": 820,
+    "generated_completions": 3280,
+    "generated_completion_tokens": 552849,
+    "correct_training_rollouts": 1463,
+    "parseable_training_rollouts": 3279,
+    "observed_training_rollout_accuracy": 0.44603658536585367,
+    "mean_logged_reward": 0.44603658536585367,
+    "mean_logged_kl": 0.0015790917314361871,
+    "mean_completion_length": 168.552,
+    "train_loss": 0.000050840099685024694
+  },
+  "primary_compute": {
+    "accounting_basis": "模型实际处理的 padded forward-equivalent token slots；主导稠密矩阵乘 FLOPs 按 2 * parameter_count * token_slots 估算，另计 LoRA AdamW 更新。",
+    "rollout_generation_forward_token_slots": 998908,
+    "reference_scoring_forward_token_slots": 1002188,
+    "policy_forward_backward_equivalent_token_slots": 3006564,
+    "total_forward_equivalent_token_slots": 5007660,
+    "trainer_observed_prompt_plus_completion_tokens": 940601,
+    "optimizer_steps": 205,
+    "estimated_dense_model_flops": 15645723303383040,
+    "estimated_optimizer_flops": 37852774400,
+    "estimated_total_flops": 15645761156157440,
+    "estimated_total_petaflops": 15.64576115615744,
+    "exclusions": "二次注意力项、逐元素 kernel、奖励解析、数据读取、分词、采样和 host 工作。"
+  },
+  "hardware_diagnostics": {
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "training_wall_seconds_cumulative": 9545.174915400014,
+    "gpu_energy_wh_cumulative": 445.9864026389339,
+    "peak_nvidia_smi_memory_mib_last_segment": 8980.0,
+    "peak_power_watts_last_segment": 307.03
+  },
+  "logged_windows": [
+    {"steps": "1-25", "reward": 0.3825, "kl": 0.000393, "mean_completion_length": 176.618},
+    {"steps": "26-50", "reward": 0.4275, "kl": 0.000551, "mean_completion_length": 171.585},
+    {"steps": "51-75", "reward": 0.4575, "kl": 0.00086, "mean_completion_length": 171.23},
+    {"steps": "76-100", "reward": 0.4575, "kl": 0.001231, "mean_completion_length": 167.755},
+    {"steps": "101-125", "reward": 0.3725, "kl": 0.001423, "mean_completion_length": 170.955},
+    {"steps": "126-150", "reward": 0.4975, "kl": 0.002244, "mean_completion_length": 162.882},
+    {"steps": "151-175", "reward": 0.4925, "kl": 0.002676, "mean_completion_length": 164.628},
+    {"steps": "176-200", "reward": 0.4675, "kl": 0.002957, "mean_completion_length": 162.222},
+    {"steps": "201-205", "reward": 0.5125, "kl": 0.003068, "mean_completion_length": 171.238}
+  ],
+  "end_to_end_smoke_checks": {
+    "request_order_preserved": true,
+    "grouped_prefill_tokens_saved": 22,
+    "reference_rescore_max_abs_logprob_error_fp32": 0.000002205371856689453,
+    "reference_rescore_tolerance": 0.0002,
+    "confidence_statistics_finite": true,
+    "mh_total_length": 4,
+    "mh_updates": 2,
+    "mh_raw_score_calls_added": 0,
+    "mh_reused_same_forward_reference_scores": true,
+    "final_adapter_loaded": true,
+    "final_adapter_nonempty_generation": true,
+    "arithmetic_smoke_answer": 12
+  },
+  "artifacts": {
+    "training_cost_sha256": "2b235c3d4d83d328baddd1a6cdc4cca47e3375e7076cd85477f4b9ae7800f9a6",
+    "run_manifest_sha256": "8197127171ae1c396a87ae506bc164341f45f1d1a3d39c22ccf34caee831d86f",
+    "checkpoint_205_trainer_state_sha256": "eea23cd0652d59835d697dfcd82e2675aa64f65cc628e59c41ae73a7db1b6bc4",
+    "resume_fingerprint": "58e9834c7801991d829a671ba19df30a652c58eda5854e7133569c73f4b48036"
+  }
+}
