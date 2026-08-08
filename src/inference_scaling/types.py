@@ -39,10 +39,25 @@ class SequenceSample:
     model_id: str
     request_id: str
     finish_reason: str = "length"
+    reference_token_logprobs: tuple[float, ...] | None = None
+    reference_policy_id: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.token_ids) != len(self.token_logprobs):
             raise ValueError("each sampled token must have one actual-policy log-probability")
+        if (self.reference_token_logprobs is None) != (
+            self.reference_policy_id is None
+        ):
+            raise ValueError(
+                "reference token probabilities and their policy id must be provided together"
+            )
+        if (
+            self.reference_token_logprobs is not None
+            and len(self.token_ids) != len(self.reference_token_logprobs)
+        ):
+            raise ValueError(
+                "each sampled token must have one reference-policy log-probability"
+            )
 
     @property
     def logprob(self) -> float:

@@ -17,6 +17,7 @@ from inference_scaling.algorithms.conditional_energy import (
     ConditionalISResult,
     ConditionalISStep,
     RolloutEvaluation,
+    RewardBatchFunction,
     conditional_is_step,
     estimate_conditional_energies,
     run_conditional_is,
@@ -36,7 +37,16 @@ from inference_scaling.algorithms.dynamic_is import (
     empirical_design_statistics,
     run_dynamic_is,
 )
-from inference_scaling.algorithms.mh import MHChainResult, MHStep, run_mh_chain, run_mh_chains
+from inference_scaling.algorithms.mh import (
+    MHChainResult,
+    MHStep,
+    RewardMHChainResult,
+    RewardMHStep,
+    run_mh_chain,
+    run_mh_chains,
+    run_reward_mh_chain,
+    run_reward_mh_chains,
+)
 
 __all__ = [
     "BaseReplayCandidate",
@@ -56,7 +66,10 @@ __all__ = [
     "MHStep",
     "ProbabilityObservation",
     "ReplayEnergyEstimate",
+    "RewardMHChainResult",
+    "RewardMHStep",
     "RolloutEvaluation",
+    "RewardBatchFunction",
     "VarianceCostEstimate",
     "allocate_variance_cost_budget",
     "base_replay_step",
@@ -72,5 +85,7 @@ __all__ = [
     "run_dynamic_is",
     "run_mh_chain",
     "run_mh_chains",
+    "run_reward_mh_chain",
+    "run_reward_mh_chains",
     "write_reserve_records",
 ]

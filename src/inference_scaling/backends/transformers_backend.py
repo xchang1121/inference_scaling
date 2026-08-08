@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import math
 import threading
 import warnings
 from collections import OrderedDict
@@ -12,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from inference_scaling.config import SamplingConfig
+from inference_scaling.compute import dense_forward_flops
 from inference_scaling.types import (
     GenerationRequest,
     ScoreRequest,
@@ -43,6 +46,19 @@ class TransformersBackendSnapshot:
     prefill_tokens: int
     shared_prefill_tokens_saved: int
     scored_tokens: int
+    generation_forward_token_slots: int
+    score_forward_token_slots: int
+    estimated_dense_forward_flops: int
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceScoreStatistics:
+    """Reference-policy statistics for one scored continuation."""
+
+    token_logprobs: tuple[float, ...]
+    mean_logprob: float
+    mean_negative_entropy: float
+    mean_self_certainty: float
 
 
 class TransformersBackend:
@@ -55,6 +71,7 @@ class TransformersBackend:
         *,
         model_id: str | None = None,
         device: str | Any | None = None,
+        max_score_batch_size: int = 8,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
@@ -72,9 +89,18 @@ class TransformersBackend:
         if pad_token_id is None:
             raise ValueError("tokenizer must define pad_token_id or eos_token_id")
         self.pad_token_id = int(pad_token_id)
+        if max_score_batch_size <= 0:
+            raise ValueError("max_score_batch_size must be positive")
+        self.max_score_batch_size = int(max_score_batch_size)
         bos_token_id = getattr(tokenizer, "bos_token_id", None)
         self.bos_token_id = None if bos_token_id is None else int(bos_token_id)
         self.model.eval()
+        forward_parameters = inspect.signature(model.forward).parameters
+        self._supports_logits_to_keep = (
+            "logits_to_keep" in forward_parameters
+            or getattr(getattr(model, "config", None), "model_type", None)
+            in {"qwen2", "qwen3"}
+        )
         self._model_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
         self._sample_calls = 0
@@ -84,17 +110,23 @@ class TransformersBackend:
         self._prefill_tokens = 0
         self._shared_prefill_tokens_saved = 0
         self._scored_tokens = 0
+        self._generation_forward_token_slots = 0
+        self._score_forward_token_slots = 0
+        self._estimated_dense_forward_flops = 0
+        self._parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
     @classmethod
     def from_pretrained(
         cls,
         model_name_or_path: str,
         *,
+        adapter_name_or_path: str | None = None,
         device: str = "cuda",
         dtype: str = "float32",
         cache_dir: str | None = None,
         local_files_only: bool = False,
         trust_remote_code: bool = False,
+        max_score_batch_size: int = 8,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -130,12 +162,51 @@ class TransformersBackend:
             trust_remote_code=trust_remote_code,
             dtype=torch_dtype,
         )
+        if adapter_name_or_path is not None:
+            try:
+                from peft import PeftModel
+            except ImportError as error:  # pragma: no cover - optional training extra
+                raise ModuleNotFoundError(
+                    "Loading a GRPO adapter requires the project's training extra"
+                ) from error
+            model = PeftModel.from_pretrained(
+                model,
+                adapter_name_or_path,
+                local_files_only=local_files_only,
+            )
         model.to(torch_module.device(device))
-        return cls(model, tokenizer, model_id=model_name_or_path, device=device)
+        return cls(
+            model,
+            tokenizer,
+            model_id=(
+                model_name_or_path
+                if adapter_name_or_path is None
+                else f"{model_name_or_path}+adapter:{adapter_name_or_path}"
+            ),
+            device=device,
+            max_score_batch_size=max_score_batch_size,
+        )
 
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def parameter_count(self) -> int:
+        """Number of model parameters used by the dominant-matmul FLOP estimate."""
+
+        return self._parameter_count
+
+    def _dense_forward_flops(self, token_slots: int) -> int:
+        """Return the conventional ``2 * parameters * tokens`` estimate.
+
+        This deliberately estimates the dominant dense matrix multiplications.
+        Attention's sequence-length term, elementwise operations, sampling, and
+        host work are reported as exclusions rather than hidden in a wall-clock
+        proxy.
+        """
+
+        return dense_forward_flops(self._parameter_count, token_slots)
 
     def _model_prefix(self, prefix: TokenSequence) -> TokenSequence:
         if prefix:
@@ -217,40 +288,74 @@ class TransformersBackend:
         requests = [request for _, request in indexed_requests]
         sampling = requests[0].sampling
         prefixes = [self._model_prefix(request.prefix) for request in requests]
+        prefix_positions: OrderedDict[TokenSequence, list[int]] = OrderedDict()
+        for position, prefix in enumerate(prefixes):
+            prefix_positions.setdefault(prefix, []).append(position)
+        repeat_counts = {len(positions) for positions in prefix_positions.values()}
+        reusable_prefixes: list[TokenSequence] | None = None
+        prefix_repeat_count = 1
+        if len(prefix_positions) < len(prefixes) and len(repeat_counts) == 1:
+            prefix_repeat_count = repeat_counts.pop()
+            if prefix_repeat_count > 1:
+                row_order = [
+                    position
+                    for positions in prefix_positions.values()
+                    for position in positions
+                ]
+                indexed_requests = [indexed_requests[position] for position in row_order]
+                requests = [request for _, request in indexed_requests]
+                prefixes = [self._model_prefix(request.prefix) for request in requests]
+                reusable_prefixes = list(prefix_positions)
         uniforms = [
             np.random.default_rng(request.seed).random(request.max_new_tokens)
             for request in requests
         ]
         token_lists: list[list[int]] = [[] for _ in requests]
         logprob_lists: list[list[float]] = [[] for _ in requests]
+        reference_logprob_lists: list[list[float]] = [[] for _ in requests]
+        reference_sampling = SamplingConfig(eos_token_id=sampling.eos_token_id)
         active = torch_module.ones(len(requests), dtype=torch_module.bool, device=self.device)
         finish_reasons = ["length"] * len(requests)
         maximum_new_tokens = max(request.max_new_tokens for request in requests)
         prefill_tokens = sum(len(prefix) for prefix in prefixes)
         shared_prefill_tokens_saved = 0
+        generation_forward_token_slots = len(requests) * max(len(prefix) for prefix in prefixes)
 
         with self._model_lock, torch_module.inference_mode():
-            shared_prefix = len(requests) > 1 and all(
-                prefix == prefixes[0] for prefix in prefixes[1:]
-            )
             cache = None
-            if shared_prefix:
-                shared_input_ids, shared_attention_mask = self._padded_inputs([prefixes[0]])
-                shared_outputs = self.model(
-                    input_ids=shared_input_ids,
-                    attention_mask=shared_attention_mask,
-                    position_ids=self._position_ids(shared_attention_mask),
+            if reusable_prefixes is not None:
+                unique_input_ids, unique_attention_mask = self._padded_inputs(
+                    reusable_prefixes
+                )
+                unique_outputs = self.model(
+                    input_ids=unique_input_ids,
+                    attention_mask=unique_attention_mask,
+                    position_ids=self._position_ids(unique_attention_mask),
                     use_cache=True,
                     return_dict=True,
+                    **(
+                        {"logits_to_keep": 1}
+                        if self._supports_logits_to_keep
+                        else {}
+                    ),
                 )
                 cache = self._repeat_cache(
-                    getattr(shared_outputs, "past_key_values", None), len(requests)
+                    getattr(unique_outputs, "past_key_values", None),
+                    prefix_repeat_count,
                 )
                 if cache is not None:
-                    attention_mask = shared_attention_mask.expand(len(requests), -1).clone()
-                    logits = shared_outputs.logits[:, -1, :].expand(len(requests), -1)
-                    prefill_tokens = len(prefixes[0])
-                    shared_prefill_tokens_saved = (len(requests) - 1) * len(prefixes[0])
+                    attention_mask = unique_attention_mask.repeat_interleave(
+                        prefix_repeat_count, dim=0
+                    )
+                    logits = unique_outputs.logits[:, -1, :].repeat_interleave(
+                        prefix_repeat_count, dim=0
+                    )
+                    prefill_tokens = sum(len(prefix) for prefix in reusable_prefixes)
+                    shared_prefill_tokens_saved = sum(
+                        (prefix_repeat_count - 1) * len(prefix)
+                        for prefix in reusable_prefixes
+                    )
+                    generation_forward_token_slots = int(unique_input_ids.numel())
             if cache is None:
                 input_ids, attention_mask = self._padded_inputs(prefixes)
                 outputs = self.model(
@@ -259,6 +364,11 @@ class TransformersBackend:
                     position_ids=self._position_ids(attention_mask),
                     use_cache=True,
                     return_dict=True,
+                    **(
+                        {"logits_to_keep": 1}
+                        if self._supports_logits_to_keep
+                        else {}
+                    ),
                 )
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
@@ -272,6 +382,11 @@ class TransformersBackend:
                 if not bool(step_active.any()):
                     break
                 log_probs = self._policy_log_probs(logits, sampling)
+                reference_log_probs = (
+                    log_probs
+                    if sampling == reference_sampling
+                    else self._policy_log_probs(logits, reference_sampling)
+                )
                 probabilities = log_probs.exp()
                 random_values = torch_module.tensor(
                     [
@@ -287,15 +402,24 @@ class TransformersBackend:
                 sampled_tokens = (cumulative < random_values[:, None]).sum(dim=-1)
                 sampled_tokens = sampled_tokens.clamp_max(probabilities.shape[-1] - 1)
                 sampled_logprobs = log_probs.gather(-1, sampled_tokens[:, None]).squeeze(-1)
+                sampled_reference_logprobs = reference_log_probs.gather(
+                    -1, sampled_tokens[:, None]
+                ).squeeze(-1)
 
                 sampled_cpu = sampled_tokens.detach().cpu().tolist()
                 logprobs_cpu = sampled_logprobs.detach().cpu().tolist()
+                reference_logprobs_cpu = (
+                    sampled_reference_logprobs.detach().cpu().tolist()
+                )
                 for index, is_active in enumerate(step_active.detach().cpu().tolist()):
                     if not is_active:
                         continue
                     token = int(sampled_cpu[index])
                     token_lists[index].append(token)
                     logprob_lists[index].append(float(logprobs_cpu[index]))
+                    reference_logprob_lists[index].append(
+                        float(reference_logprobs_cpu[index])
+                    )
                     if sampling.eos_token_id is not None and token == sampling.eos_token_id:
                         finish_reasons[index] = "eos"
 
@@ -333,16 +457,29 @@ class TransformersBackend:
                     past_key_values=cache,
                     use_cache=True,
                     return_dict=True,
+                    **(
+                        {"logits_to_keep": 1}
+                        if self._supports_logits_to_keep
+                        else {}
+                    ),
                 )
+                generation_forward_token_slots += len(requests)
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
                 active = active_after
 
         results: list[tuple[int, SequenceSample]] = []
-        for (original_index, request), tokens, token_logprobs, finish_reason in zip(
+        for (
+            (original_index, request),
+            tokens,
+            token_logprobs,
+            reference_token_logprobs,
+            finish_reason,
+        ) in zip(
             indexed_requests,
             token_lists,
             logprob_lists,
+            reference_logprob_lists,
             finish_reasons,
             strict=True,
         ):
@@ -357,12 +494,18 @@ class TransformersBackend:
                         model_id=self.model_id,
                         request_id=request.request_id,
                         finish_reason=finish_reason,
+                        reference_token_logprobs=tuple(reference_token_logprobs),
+                        reference_policy_id=reference_sampling.policy_id,
                     ),
                 )
             )
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
             self._shared_prefill_tokens_saved += shared_prefill_tokens_saved
+            self._generation_forward_token_slots += generation_forward_token_slots
+            self._estimated_dense_forward_flops += self._dense_forward_flops(
+                generation_forward_token_slots
+            )
         return results
 
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
@@ -393,14 +536,100 @@ class TransformersBackend:
         ]
         results: list[tuple[float, ...]] = [()] * len(flattened)
         nonempty: list[tuple[int, ScoreRequest, TokenSequence, TokenSequence]] = []
+        score_forward_token_slots = 0
         for index, (request, continuation) in enumerate(flattened):
             if continuation:
                 nonempty.append(
                     (index, request, continuation, self._model_prefix(request.prefix))
                 )
         if nonempty:
-            sequences = [prefix + continuation for _, _, continuation, prefix in nonempty]
+            for start in range(0, len(nonempty), self.max_score_batch_size):
+                chunk = nonempty[start : start + self.max_score_batch_size]
+                sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
+                input_ids, attention_mask = self._padded_inputs(sequences)
+                score_forward_token_slots += int(input_ids.numel())
+                logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
+                with self._model_lock, torch_module.inference_mode():
+                    outputs = self.model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        position_ids=self._position_ids(attention_mask),
+                        use_cache=False,
+                        return_dict=True,
+                        **(
+                            {"logits_to_keep": logits_to_keep}
+                            if self._supports_logits_to_keep
+                            else {}
+                        ),
+                    )
+                padded_length = input_ids.shape[1]
+                logits_start = padded_length - outputs.logits.shape[1]
+                for row, (flat_index, request, continuation, prefix) in enumerate(chunk):
+                    padding = padded_length - len(prefix) - len(continuation)
+                    predictor_positions = torch_module.arange(
+                        padding + len(prefix) - 1,
+                        padding + len(prefix) + len(continuation) - 1,
+                        device=self.device,
+                    ) - logits_start
+                    if int(predictor_positions.min()) < 0:
+                        raise RuntimeError("logits_to_keep omitted a required score position")
+                    token_logits = outputs.logits[row].index_select(0, predictor_positions)
+                    log_probs = self._policy_log_probs(token_logits, request.sampling)
+                    targets = torch_module.tensor(
+                        continuation, dtype=torch_module.long, device=self.device
+                    )
+                    selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
+                    results[flat_index] = tuple(
+                        float(value) for value in selected.cpu().tolist()
+                    )
+        with self._statistics_lock:
+            self._score_calls += 1
+            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
+            self._score_forward_token_slots += score_forward_token_slots
+            self._estimated_dense_forward_flops += self._dense_forward_flops(
+                score_forward_token_slots
+            )
+        return results
+
+    def score_statistics_batch(
+        self,
+        requests: Sequence[ScoreRequest],
+    ) -> list[SequenceScoreStatistics]:
+        """Score continuations and return the three confidence rewards used by conditional sampling.
+
+        Entropy and self-certainty require a finite log-probability for every
+        vocabulary item, so this diagnostic deliberately accepts only a
+        full-support temperature policy.  The forward passes are included in
+        the same token-slot and FLOP counters as ordinary sequence scoring.
+        """
+
+        torch_module = _require_torch()
+        flattened: list[tuple[ScoreRequest, TokenSequence]] = [
+            (request, continuation)
+            for request in requests
+            for continuation in request.continuations
+        ]
+        if any(not continuation for _, continuation in flattened):
+            raise ValueError("confidence rewards require nonempty continuations")
+        for request, _ in flattened:
+            policy = request.sampling or SamplingConfig()
+            if policy.top_p < 1 or policy.top_k is not None:
+                raise ValueError(
+                    "entropy and self-certainty require a full-support policy"
+                )
+
+        results: list[SequenceScoreStatistics | None] = [None] * len(flattened)
+        score_forward_token_slots = 0
+        indexed = [
+            (index, request, continuation, self._model_prefix(request.prefix))
+            for index, (request, continuation) in enumerate(flattened)
+        ]
+        for start in range(0, len(indexed), self.max_score_batch_size):
+            chunk = indexed[start : start + self.max_score_batch_size]
+            sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
             input_ids, attention_mask = self._padded_inputs(sequences)
+            score_forward_token_slots += int(input_ids.numel())
+            logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
             with self._model_lock, torch_module.inference_mode():
                 outputs = self.model(
                     input_ids=input_ids,
@@ -408,26 +637,53 @@ class TransformersBackend:
                     position_ids=self._position_ids(attention_mask),
                     use_cache=False,
                     return_dict=True,
+                    **(
+                        {"logits_to_keep": logits_to_keep}
+                        if self._supports_logits_to_keep
+                        else {}
+                    ),
                 )
             padded_length = input_ids.shape[1]
-            for row, (flat_index, request, continuation, prefix) in enumerate(nonempty):
+            logits_start = padded_length - outputs.logits.shape[1]
+            for row, (flat_index, request, continuation, prefix) in enumerate(chunk):
                 padding = padded_length - len(prefix) - len(continuation)
                 predictor_positions = torch_module.arange(
                     padding + len(prefix) - 1,
                     padding + len(prefix) + len(continuation) - 1,
                     device=self.device,
-                )
+                ) - logits_start
+                if int(predictor_positions.min()) < 0:
+                    raise RuntimeError("logits_to_keep omitted a required score position")
                 token_logits = outputs.logits[row].index_select(0, predictor_positions)
                 log_probs = self._policy_log_probs(token_logits, request.sampling)
+                probabilities = log_probs.exp()
                 targets = torch_module.tensor(
                     continuation, dtype=torch_module.long, device=self.device
                 )
                 selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
-                results[flat_index] = tuple(float(value) for value in selected.cpu().tolist())
+                negative_entropy = (probabilities * log_probs).sum(dim=-1)
+                vocabulary_size = log_probs.shape[-1]
+                self_certainty = -(
+                    math.log(vocabulary_size) + log_probs
+                ).mean(dim=-1)
+                token_logprobs = tuple(float(value) for value in selected.cpu().tolist())
+                results[flat_index] = SequenceScoreStatistics(
+                    token_logprobs=token_logprobs,
+                    mean_logprob=float(selected.mean().cpu()),
+                    mean_negative_entropy=float(negative_entropy.mean().cpu()),
+                    mean_self_certainty=float(self_certainty.mean().cpu()),
+                )
+
         with self._statistics_lock:
             self._score_calls += 1
             self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
-        return results
+            self._score_forward_token_slots += score_forward_token_slots
+            self._estimated_dense_forward_flops += self._dense_forward_flops(
+                score_forward_token_slots
+            )
+        if any(result is None for result in results):
+            raise RuntimeError("backend returned an incomplete confidence-score batch")
+        return [result for result in results if result is not None]
 
     def snapshot(self) -> TransformersBackendSnapshot:
         with self._statistics_lock:
@@ -439,6 +695,9 @@ class TransformersBackend:
                 prefill_tokens=self._prefill_tokens,
                 shared_prefill_tokens_saved=self._shared_prefill_tokens_saved,
                 scored_tokens=self._scored_tokens,
+                generation_forward_token_slots=self._generation_forward_token_slots,
+                score_forward_token_slots=self._score_forward_token_slots,
+                estimated_dense_forward_flops=self._estimated_dense_forward_flops,
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:

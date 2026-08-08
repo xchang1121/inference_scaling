@@ -4,7 +4,9 @@ Candidate blocks are always sampled from the base model in this module.  A
 completion may be sampled on-policy or from a full-support off-policy proposal.
 Only the completion suffix receives the ``p_base / q`` correction.  This is the
 finite-candidate, finite-rollout sampling-importance-resampling algorithm used as
-the foundation for the replay extensions.
+the foundation for the replay extensions.  Optional symmetric clipping of the
+sequence log-ratio is recorded explicitly; it is a biased variance-control
+setting, while the default ``None`` retains the exact importance ratio.
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ from inference_scaling.types import (
 )
 
 RewardFunction = Callable[[TokenSequence, TokenSequence], float]
+RewardBatchFunction = Callable[
+    [TokenSequence, Sequence[TokenSequence]], Sequence[float]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +39,8 @@ class RolloutEvaluation:
     reward: float
     base_logprob: float
     proposal_logprob: float
+    raw_log_importance_ratio: float
+    applied_log_importance_ratio: float
     log_weight: float
     proposal_model_id: str
     proposal_policy_id: str
@@ -75,10 +82,10 @@ def _logmeanexp(values: Sequence[float]) -> float:
 
 
 def _validate_base_sampling(sampling: SamplingConfig) -> None:
-    if sampling.temperature != 1 or sampling.top_p < 1 or sampling.top_k is not None:
+    if sampling.top_p < 1 or sampling.top_k is not None:
         raise ValueError(
-            "base candidates must use the unmodified base distribution: "
-            "temperature=1, top_p=1, top_k=None"
+            "base candidates must use a full-support autoregressive policy: "
+            "top_p=1 and top_k=None"
         )
 
 
@@ -94,9 +101,10 @@ def _score_samples(
     base_backend: AutoregressiveBackend,
     prefixes: Sequence[TokenSequence],
     samples: Sequence[SequenceSample],
+    base_sampling: SamplingConfig,
 ) -> list[float]:
     requests = [
-        ScoreRequest(prefix, (sample.token_ids,), None)
+        ScoreRequest(prefix, (sample.token_ids,), base_sampling)
         for prefix, sample in zip(prefixes, samples, strict=True)
     ]
     token_scores = base_backend.score_batch(requests)
@@ -152,11 +160,14 @@ def estimate_conditional_energies(
     candidates: Sequence[SequenceSample],
     rollout_length: int,
     rollout_count: int,
+    base_sampling: SamplingConfig,
     rollout_sampling: SamplingConfig,
     reward_temperature: float,
-    reward: RewardFunction,
+    importance_log_ratio_clip: float | None,
+    reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
+    reward_batch: RewardBatchFunction | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional energy with on/off-policy rollouts."""
 
@@ -165,11 +176,13 @@ def estimate_conditional_energies(
         raise ValueError("rollout_count must be positive")
     if reward_temperature <= 0:
         raise ValueError("reward_temperature must be positive")
+    if (reward is None) == (reward_batch is None):
+        raise ValueError("provide exactly one of reward or reward_batch")
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
     rollout_prefixes: list[TokenSequence] = []
-    terminal_evaluations: dict[int, RolloutEvaluation] = {}
+    terminal_candidates: set[int] = set()
     eos = rollout_sampling.eos_token_id
 
     for candidate_index, candidate in enumerate(candidates):
@@ -178,16 +191,7 @@ def estimate_conditional_energies(
             eos is not None and candidate.token_ids[-1] == eos
         )
         if terminal:
-            reward_value = float(reward(prompt, full_generated_candidate))
-            terminal_evaluations[candidate_index] = RolloutEvaluation(
-                token_ids=(),
-                reward=reward_value,
-                base_logprob=0.0,
-                proposal_logprob=0.0,
-                log_weight=reward_value / reward_temperature,
-                proposal_model_id=rollout_backend.model_id,
-                proposal_policy_id=rollout_sampling.policy_id,
-            )
+            terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + full_generated_candidate
         for rollout_index in range(rollout_count):
@@ -216,37 +220,100 @@ def estimate_conditional_energies(
     samples = rollout_backend.sample_batch(requests) if requests else []
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
-    base_totals = _score_samples(base_backend, rollout_prefixes, samples) if samples else []
+    rollout_is_base_policy = (
+        rollout_backend.model_id == base_backend.model_id
+        and rollout_sampling == base_sampling
+    )
+    if rollout_is_base_policy:
+        base_totals = [sample.logprob for sample in samples]
+    else:
+        base_totals = (
+            _score_samples(
+                base_backend,
+                rollout_prefixes,
+                samples,
+                base_sampling,
+            )
+            if samples
+            else []
+        )
 
-    by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
+    pending_by_candidate: list[
+        list[tuple[TokenSequence, float, float, str, str, TokenSequence]]
+    ] = [[] for _ in candidates]
+    for candidate_index in terminal_candidates:
+        generated = generated_prefix + candidates[candidate_index].token_ids
+        pending_by_candidate[candidate_index].append(
+            (
+                (),
+                0.0,
+                0.0,
+                rollout_backend.model_id,
+                rollout_sampling.policy_id,
+                generated,
+            )
+        )
     for candidate_index, sample, base_logprob in zip(
         request_candidates, samples, base_totals, strict=True
     ):
         generated = generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
-        reward_value = float(reward(prompt, generated))
-        if not isfinite(reward_value):
-            raise ValueError("reward must be finite")
         proposal_logprob = sample.logprob
-        log_weight = (
-            reward_value / reward_temperature + base_logprob - proposal_logprob
-        )
-        by_candidate[candidate_index].append(
-            RolloutEvaluation(
-                token_ids=sample.token_ids,
-                reward=reward_value,
-                base_logprob=base_logprob,
-                proposal_logprob=proposal_logprob,
-                log_weight=log_weight,
-                proposal_model_id=sample.model_id,
-                proposal_policy_id=sample.policy_id,
+        pending_by_candidate[candidate_index].append(
+            (
+                sample.token_ids,
+                base_logprob,
+                proposal_logprob,
+                sample.model_id,
+                sample.policy_id,
+                generated,
             )
         )
+
+    pending = [item for group in pending_by_candidate for item in group]
+    generated_sequences = [item[-1] for item in pending]
+    if reward_batch is not None:
+        rewards = tuple(float(value) for value in reward_batch(prompt, generated_sequences))
+        if len(rewards) != len(pending):
+            raise ValueError("reward_batch returned an invalid number of rewards")
+    else:
+        assert reward is not None
+        rewards = tuple(float(reward(prompt, generated)) for generated in generated_sequences)
+    if any(not isfinite(value) for value in rewards):
+        raise ValueError("reward must be finite")
+
+    by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
+    reward_index = 0
+    for candidate_index, group in enumerate(pending_by_candidate):
+        for token_ids, base_logprob, proposal_logprob, model_id, policy_id, _ in group:
+            reward_value = rewards[reward_index]
+            reward_index += 1
+            raw_log_ratio = base_logprob - proposal_logprob
+            applied_log_ratio = raw_log_ratio
+            if importance_log_ratio_clip is not None:
+                applied_log_ratio = max(
+                    -importance_log_ratio_clip,
+                    min(importance_log_ratio_clip, raw_log_ratio),
+                )
+            by_candidate[candidate_index].append(
+                RolloutEvaluation(
+                    token_ids=token_ids,
+                    reward=reward_value,
+                    base_logprob=base_logprob,
+                    proposal_logprob=proposal_logprob,
+                    raw_log_importance_ratio=raw_log_ratio,
+                    applied_log_importance_ratio=applied_log_ratio,
+                    log_weight=(
+                        reward_value / reward_temperature
+                        + applied_log_ratio
+                    ),
+                    proposal_model_id=model_id,
+                    proposal_policy_id=policy_id,
+                )
+            )
 
     evaluated: list[ConditionalCandidate] = []
     for candidate_index, candidate in enumerate(candidates):
         evaluations = by_candidate[candidate_index]
-        if candidate_index in terminal_evaluations:
-            evaluations = [terminal_evaluations[candidate_index]]
         if not evaluations:
             raise RuntimeError("each candidate must have at least one energy contribution")
         evaluated.append(
@@ -269,9 +336,10 @@ def conditional_is_step(
     config: ConditionalEnergyConfig,
     base_sampling: SamplingConfig,
     rollout_sampling: SamplingConfig,
-    reward: RewardFunction,
+    reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
+    reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISStep:
     _validate_base_sampling(base_sampling)
     remaining = config.total_length - len(generated_prefix)
@@ -295,11 +363,14 @@ def conditional_is_step(
         candidates=candidates,
         rollout_length=max(0, remaining - block_length),
         rollout_count=config.rollout_count,
+        base_sampling=base_sampling,
         rollout_sampling=rollout_sampling,
         reward_temperature=config.reward_temperature,
+        importance_log_ratio_clip=config.importance_log_ratio_clip,
         reward=reward,
         seeds=seeds,
         step_index=step_index,
+        reward_batch=reward_batch,
     )
     log_energies = np.asarray([candidate.log_energy for candidate in evaluated], dtype=np.float64)
     shifted = np.exp(log_energies - float(np.max(log_energies)))
@@ -320,12 +391,13 @@ def run_conditional_is(
     base_backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: ConditionalEnergyConfig,
-    reward: RewardFunction,
+    reward: RewardFunction | None,
     seeds: SeedStream,
     *,
     base_sampling: SamplingConfig | None = None,
     rollout_backend: AutoregressiveBackend | None = None,
     rollout_sampling: SamplingConfig | None = None,
+    reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISResult:
     """Generate a sequence by repeatedly applying finite conditional-IS steps."""
 
@@ -352,6 +424,7 @@ def run_conditional_is(
             reward=reward,
             seeds=seeds,
             step_index=step_index,
+            reward_batch=reward_batch,
         )
         generated.extend(step.selected.token_ids)
         steps.append(step)

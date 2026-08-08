@@ -8,7 +8,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .cache/
+tmp/
 models/
+data/
 artifacts/
 results/*
 !results/.gitkeep

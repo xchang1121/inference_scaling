@@ -1,34 +1,55 @@
-# Inference performance design
+# 推理性能设计
 
-This framework uses large-batch execution and cross-prompt continuous batching. Independent
-algorithm workers submit synchronous calls to one shared backend; a background dispatcher merges requests that
-become ready at nearly the same time. Every generation request already owns its seed, so changing scheduling order
-does not change its random stream. Score results are split back into original request order. GPU floating-point
-kernels can nevertheless produce slightly different logits for different batch shapes; request-local randomness is
-therefore a distributional scheduling guarantee, not a promise of bitwise-identical generated text.
+本框架采用大 batch 结构与跨 prompt 的连续批处理。独立算法 worker 把同步调用提交给共享
+后端，后台 dispatcher 合并时间上相邻的请求。每个生成请求拥有自己的 seed，因此改变调度顺序不会
+改变该请求的随机数流；评分结果会按原请求顺序拆回。GPU 浮点 kernel 仍可能因 batch 形状不同产生
+轻微 logits 差异，因此请求级随机数保证的是相同数学采样策略，而不是跨 batch 形状逐 bit 相同的
+文本。
 
-The exact score cache is keyed by model wrapper, complete sampling configuration, prefix, and continuation. This is
-important for replay: the same stored completion is often rescored under the base model and several behavior
-policies, while a score from one temperature or truncation policy must never be reused for another. Random
-generations are deliberately not cached.
+每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
+同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的
+分数绝不能复用于另一策略。随机生成结果不会缓存。
 
-Replay generation is flattened across candidates as well: a decision with candidate-specific fresh counts emits
-one heterogeneous generation batch, and post-selection reserve completions use the same path. This removes the
-candidate-by-candidate synchronization point while leaving replay keys, seeds, and behavior log-probabilities
-unchanged.
+on-policy 条件 rollout 会直接携带生成时得到的精确 base-policy log-probability，因此后端不会再进行
+冗余的完整序列评分。off-policy rollout 仍显式计算主模型分数。长评分请求会拆成有界 microbatch，
+避免 `[batch, length, vocabulary]` logits 张量耗尽 24 GB GPU；该处理不改变概率与请求顺序。
+幂分布 MH 的温度 proposal 与目标概率来自同一个主模型。后端因此会在每个生成位置对同一份 logits
+同时计算实际 proposal 概率和温度 1 的基模概率，并把两者随 token 一起返回；MH 接受率直接使用这两组
+概率，不再为同一后缀增加一次模型前向。这与来源实现读取 scaled/unscaled logits 的做法一致，减少
+forward token slot，但不改变四项接受比。
+对支持 `logits_to_keep` 的 Qwen 模型，生成 prefill 只计算最后一个位置的 vocabulary logits，评分也
+只保留覆盖 continuation 所需的尾部 logits；Transformer body 仍处理完整上下文，但不会为未使用的
+prompt 位置反复执行大词表输出投影。
 
-The Transformers backend performs one prefill for an identical shared prefix, forks the resulting KV state across
-the candidate batch, and then decodes through that cache. Static dynamic-candidate proposals are grouped by their
-actual sampling policy, generated in one batch per policy, and scored in one batch under both the base and auxiliary
-policies. A proposal factory that explicitly depends on earlier candidate draws remains sequential by necessity.
+replay 生成也会跨候选展平：候选拥有不同 fresh 数量时，仍只发出一个异构生成 batch；选择后的
+reserve completion 使用同一路径。这消除了逐候选同步点，同时保持 replay key、seed 和 behavior
+log-probability 不变。
+对于固定基模与固定 behavior 版本，历史 completion 的两侧概率在 cache 构建时完成验证并进入精确
+评分缓存。重复查询的在线阶段只读取这些不可变分数；fresh base rollout 在 behavior 下的概率仍在
+在线阶段计算并进入 token/FLOPs 账本。端到端口径则把历史生成、base 评分和 behavior 评分全部计入
+cache 构建成本，因此预评分只移动计算发生的时间，不会凭空删掉第一次查询的成本。
 
-The remaining distribution-preserving optimization layers are:
+Transformers 后端不仅会对完全相同的候选 prefix 执行一次 prefill，还会识别同一 batch 中的多组
+重复 prefix。例如 (M) 个候选各有 (K) 条 rollout 时，只对 (M) 个不同的“prompt + 候选”前缀
+做 prefill，再把每组 KV 状态复制 (K) 次，并继续用一个 (M K) 大 batch 解码。这样既避免了
+重复候选前缀计算，也不牺牲 rollout 的并行度；请求级 seed、真实 log-probability 和输出顺序保持
+不变。静态动态候选 proposal 按真实 sampling policy 分组，每个 policy 只生成一个 batch，并分别在
+base 与辅助 policy 下批量评分。若 proposal factory 显式依赖先前候选，则该部分在算法上必须保持
+串行。结果中的 `shared_prefill_tokens_saved` 明确以“同一个物理 batch 对每条序列都重新做完整
+prefill”为分母，记录因 KV 复制而没有再次处理的非 padding 前缀 token 数。
 
-1. retain paged KV states across successive MH suffix proposals instead of only within one generation request;
-2. overlap CPU reward parsing with the next ready GPU batch;
-3. bucket variable-length work while retaining request-local seeds and actual sampling probabilities;
-4. keep consumed replay records in the design pool so variance and cost estimates improve without leaking values
-   into future evaluation decisions.
+计算量以实际 forward token slot 和估算 FLOPs 为主，而不是 wall time。后端对生成 prefill、KV decode
+和完整序列评分分别计数；不同模型按 `2 * parameter_count * forward_token_slots` 分别计算后相加。
+连续批处理的主要收益是提高硬件利用率，通常不会降低算法 FLOPs；replay 和小 proposal 是否降低
+计算量则由上述 token/FLOPs 计数直接判断。耗时、显存和能耗只作为硬件相关补充。
 
-Hard proposal truncation, unrecorded sampling transforms, and data-dependent reuse of current evaluation rollouts
-are intentionally excluded because they can change the estimator or its support.
+仍可继续加入、且不改变分布的优化包括：
+
+1. 在连续 MH 后缀 proposal 之间保留 paged KV 状态，而不只在一次 generation 内使用；
+2. CPU 奖励解析与下一批 GPU 工作重叠；
+3. 对变长请求分桶，同时保持请求级 seed 和真实采样概率；
+4. 已消费 replay record 留在 design pool，用于改善方差和成本估计，但其数值不泄漏给未来 evaluation
+   决策。
+
+硬截断 proposal、未记录的 sampling transform，以及依赖当前 evaluation rollout 数值的数据复用会
+改变估计器或 support，因此明确排除。

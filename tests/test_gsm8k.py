@@ -1,0 +1,78 @@
+from fractions import Fraction
+
+import pytest
+
+from experiments.gsm8k_reproduction import _minmax_rewards
+from inference_scaling.evaluation import (
+    CumulativeConsensusReward,
+    ExactNumericReward,
+    GSM8KProblem,
+    consensus_index,
+    extract_numeric_answer,
+    gsm8k_prompt,
+    modal_answer,
+    select_problems,
+)
+
+
+def test_extract_numeric_answer_prefers_explicit_final_markers() -> None:
+    assert extract_numeric_answer("2 + 3 = 5\n#### 5") == Fraction(5)
+    assert extract_numeric_answer(r"work 100 then \boxed{3/4}") == Fraction(3, 4)
+    assert extract_numeric_answer("The final answer is $1,250.50") == Fraction(2501, 2)
+    assert extract_numeric_answer("intermediate 7, last 9") == Fraction(9)
+
+
+def test_training_and_evaluation_share_one_prompt_contract() -> None:
+    prompt = gsm8k_prompt("What is 2 + 3?")
+    assert prompt.startswith("What is 2 + 3?")
+    assert "#### <number>" in prompt
+
+
+def test_grpo_reward_uses_the_public_benchmark_parser_and_counts_tokens() -> None:
+    reward = ExactNumericReward()
+    values = reward(
+        [
+            [{"role": "assistant", "content": "work\n#### 5"}],
+            [{"role": "assistant", "content": "work\n#### 4"}],
+        ],
+        ["5", "5"],
+        [[1, 2, 3], [4, 5]],
+    )
+    assert values == [1.0, 0.0]
+    assert reward.snapshot(num_generations=2) == {
+        "reward_calls": 1,
+        "generated_completions": 2,
+        "generated_prompt_groups": 1,
+        "generated_completion_tokens": 5,
+        "parseable_completions": 2,
+        "correct_completions": 1,
+        "observed_rollout_accuracy": 0.5,
+    }
+
+
+def test_consensus_is_deterministic_and_uses_likelihood_for_representative() -> None:
+    texts = ("#### 2", "#### 3", "#### 2")
+    assert modal_answer([extract_numeric_answer(text) for text in texts]) == Fraction(2)
+    assert consensus_index(texts, (-2.0, -0.1, -1.0)) == 2
+
+
+def test_cumulative_consensus_reward_carries_counts_across_steps() -> None:
+    decoded = {1: "#### 2", 2: "#### 3", 3: "#### 2"}
+    reward = CumulativeConsensusReward(lambda tokens: decoded[tokens[0]])
+    assert reward((), ((1,), (2,), (3,))) == (1.0, 0.0, 1.0)
+    assert reward((), ((2,),)) == (0.0,)
+
+
+def test_select_problems_is_seeded_and_retains_public_order() -> None:
+    problems = tuple(
+        GSM8KProblem(index, str(index), "#### 0", Fraction(0)) for index in range(20)
+    )
+    first = select_problems(problems, 6, seed=17)
+    second = select_problems(problems, 6, seed=17)
+    assert first == second
+    assert [problem.index for problem in first] == sorted(problem.index for problem in first)
+
+
+def test_confidence_reward_normalization_is_decision_local_and_stable() -> None:
+    assert _minmax_rewards((-4.0, -2.0, -3.0)) == pytest.approx((0.0, 1.0, 0.5))
+    assert _minmax_rewards((7.0, 7.0)) == (0.0, 0.0)

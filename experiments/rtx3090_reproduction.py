@@ -292,9 +292,10 @@ ARITHMETIC_TASKS = (
 )
 
 
-def _conditional_diagnostics(result: Any) -> tuple[float, float]:
+def _conditional_diagnostics(result: Any) -> tuple[float, float, float]:
     effective_sizes: list[float] = []
-    corrections: list[float] = []
+    raw_corrections: list[float] = []
+    applied_corrections: list[float] = []
     for step in result.steps:
         for candidate in step.candidates:
             effective_sizes.append(
@@ -302,13 +303,19 @@ def _conditional_diagnostics(result: Any) -> tuple[float, float]:
                     [rollout.log_weight for rollout in candidate.rollouts]
                 )
             )
-            corrections.extend(
-                rollout.base_logprob - rollout.proposal_logprob
+            raw_corrections.extend(
+                rollout.raw_log_importance_ratio for rollout in candidate.rollouts
+            )
+            applied_corrections.extend(
+                rollout.applied_log_importance_ratio
                 for rollout in candidate.rollouts
             )
     return (
         fmean(effective_sizes) if effective_sizes else 0.0,
-        fmean(abs(value) for value in corrections) if corrections else 0.0,
+        fmean(abs(value) for value in raw_corrections) if raw_corrections else 0.0,
+        fmean(abs(value) for value in applied_corrections)
+        if applied_corrections
+        else 0.0,
     )
 
 
@@ -373,8 +380,11 @@ def run_conditional_checks(
             )
             / len(ARITHMETIC_TASKS),
             "average_completion_ess": fmean(value[0] for value in diagnostics),
-            "mean_absolute_log_importance_correction": fmean(
+            "mean_absolute_raw_log_importance_correction": fmean(
                 value[1] for value in diagnostics
+            ),
+            "mean_absolute_applied_log_importance_correction": fmean(
+                value[2] for value in diagnostics
             ),
             "outputs": texts,
         }

@@ -146,10 +146,13 @@ def _score_base(
     backend: AutoregressiveBackend,
     key: ReplayKey,
     completions: Sequence[TokenSequence],
+    sampling: SamplingConfig,
 ) -> tuple[float, ...]:
     if not completions:
         return ()
-    scored = backend.score_batch([ScoreRequest(key.rollout_prefix, tuple(completions), None)])
+    scored = backend.score_batch(
+        [ScoreRequest(key.rollout_prefix, tuple(completions), sampling)]
+    )
     if len(scored) != len(completions):
         raise RuntimeError("base backend returned an invalid number of scores")
     totals: list[float] = []
@@ -270,7 +273,12 @@ def estimate_replay_energy(
     behavior_counts = dict(claim.behavior_counts)
     history_completions = [record.completion for record in history_records]
     fresh_completions = [record.completion for record in fresh_records]
-    history_base = _score_base(base_backend, claim.key, history_completions)
+    history_base = _score_base(
+        base_backend,
+        claim.key,
+        history_completions,
+        base_policy.sampling,
+    )
     fresh_base = tuple(record.behavior_logprob for record in fresh_records)
     history_mixture = mixture_logprobabilities(
         registry, claim.key, behavior_counts, history_completions

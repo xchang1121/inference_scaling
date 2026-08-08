@@ -54,17 +54,45 @@ class MHConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RewardMHConfig:
+    """Full-sequence MH budget for a base-times-exponentiated-reward target."""
+
+    total_length: int = 192
+    block_size: int = 32
+    steps_per_block: int = 10
+    reward_temperature: float = 0.1
+
+    def __post_init__(self) -> None:
+        for name in ("total_length", "block_size", "steps_per_block"):
+            _positive(name, getattr(self, name))
+        _positive("reward_temperature", self.reward_temperature)
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
+
+    @property
+    def updates(self) -> int:
+        blocks = (self.total_length + self.block_size - 1) // self.block_size
+        return blocks * self.steps_per_block
+
+
+@dataclass(frozen=True, slots=True)
 class ConditionalEnergyConfig:
     candidate_count: int = 4
     rollout_count: int = 4
     block_size: int = 16
     total_length: int = 128
     reward_temperature: float = 1.0
+    importance_log_ratio_clip: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             _positive(name, getattr(self, name))
         _positive("reward_temperature", self.reward_temperature)
+        if self.importance_log_ratio_clip is not None:
+            _positive(
+                "importance_log_ratio_clip",
+                self.importance_log_ratio_clip,
+            )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
 

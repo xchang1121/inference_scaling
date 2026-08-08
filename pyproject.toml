@@ -22,6 +22,13 @@ gpu = [
   "safetensors>=0.8,<1",
   "transformers>=5.14,<6",
 ]
+training = [
+  "datasets==5.0.1",
+  "modelscope==1.39.1",
+  "peft==0.20.0",
+  "pyarrow==25.0.0",
+  "trl==1.9.2",
+]
 
 [project.scripts]
 inference-scaling = "inference_scaling.cli:main"

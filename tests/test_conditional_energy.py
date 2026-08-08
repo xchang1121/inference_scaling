@@ -8,6 +8,7 @@ from inference_scaling.backends import TabularAutoregressiveBackend
 from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
 from inference_scaling.metrics import total_variation
 from inference_scaling.rng import SeedStream
+from inference_scaling.types import ScoreRequest
 
 
 def _backend() -> TabularAutoregressiveBackend:
@@ -95,6 +96,71 @@ def test_off_policy_ratio_scores_only_rollout_suffix() -> None:
             )
 
 
+def test_temperature_scaled_base_policy_is_used_in_off_policy_ratio() -> None:
+    backend = _backend()
+    base_sampling = SamplingConfig(temperature=0.8)
+    step = conditional_is_step(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        generated_prefix=(),
+        config=ConditionalEnergyConfig(
+            candidate_count=2, rollout_count=2, block_size=1, total_length=2
+        ),
+        base_sampling=base_sampling,
+        rollout_sampling=SamplingConfig(temperature=0.5),
+        reward=_reward,
+        seeds=SeedStream(192),
+        step_index=0,
+    )
+    for candidate in step.candidates:
+        for rollout in candidate.rollouts:
+            expected = backend.score_batch(
+                [
+                    ScoreRequest(
+                        candidate.token_ids,
+                        (rollout.token_ids,),
+                        base_sampling,
+                    )
+                ]
+            )[0]
+            assert rollout.base_logprob == pytest.approx(sum(expected))
+
+
+def test_optional_log_ratio_clipping_is_explicit_in_rollout_record() -> None:
+    backend = _backend()
+    step = conditional_is_step(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        generated_prefix=(),
+        config=ConditionalEnergyConfig(
+            candidate_count=4,
+            rollout_count=4,
+            block_size=1,
+            total_length=2,
+            importance_log_ratio_clip=0.05,
+        ),
+        base_sampling=SamplingConfig(),
+        rollout_sampling=SamplingConfig(temperature=0.25),
+        reward=_reward,
+        seeds=SeedStream(293),
+        step_index=0,
+    )
+    rollouts = [
+        rollout for candidate in step.candidates for rollout in candidate.rollouts
+    ]
+    assert all(abs(item.applied_log_importance_ratio) <= 0.05 for item in rollouts)
+    assert any(
+        item.raw_log_importance_ratio != item.applied_log_importance_ratio
+        for item in rollouts
+    )
+    for item in rollouts:
+        assert item.log_weight == pytest.approx(
+            item.reward + item.applied_log_importance_ratio
+        )
+
+
 def test_rollout_budget_subtracts_candidate_block() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
     step = conditional_is_step(
@@ -135,7 +201,8 @@ def test_conditional_is_never_exceeds_total_length() -> None:
 @pytest.mark.parametrize(
     "candidate_sampling,rollout_sampling",
     [
-        (SamplingConfig(temperature=0.8), SamplingConfig()),
+        (SamplingConfig(top_p=0.9), SamplingConfig()),
+        (SamplingConfig(top_k=1), SamplingConfig()),
         (SamplingConfig(), SamplingConfig(top_p=0.9)),
         (SamplingConfig(), SamplingConfig(top_k=1)),
     ],
@@ -155,3 +222,31 @@ def test_conditional_is_rejects_sampling_policies_that_break_the_weight_formula(
             base_sampling=candidate_sampling,
             rollout_sampling=rollout_sampling,
         )
+
+
+def test_conditional_is_accepts_one_joint_batch_reward() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
+    seen: list[tuple[tuple[int, ...], ...]] = []
+
+    def reward_batch(_prompt, generated):
+        seen.append(tuple(generated))
+        return tuple(float(tokens[-1] == 1) for tokens in generated)
+
+    result = run_conditional_is(
+        backend,
+        (),
+        ConditionalEnergyConfig(
+            candidate_count=2,
+            rollout_count=2,
+            block_size=1,
+            total_length=2,
+            reward_temperature=1.0,
+        ),
+        None,
+        SeedStream(91),
+        reward_batch=reward_batch,
+    )
+
+    assert len(result.token_ids) == 2
+    assert seen
+    assert len(seen[0]) == 4

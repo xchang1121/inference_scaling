@@ -27,6 +27,7 @@ class BatchCountingBackend:
     def __init__(self, backend):
         self.backend = backend
         self.sample_batch_sizes: list[int] = []
+        self.score_samplings = []
 
     @property
     def model_id(self):
@@ -37,6 +38,7 @@ class BatchCountingBackend:
         return self.backend.sample_batch(requests)
 
     def score_batch(self, requests):
+        self.score_samplings.extend(request.sampling for request in requests)
         return self.backend.score_batch(requests)
 
 
@@ -272,3 +274,49 @@ def test_fresh_replay_is_generated_in_one_cross_candidate_batch() -> None:
 
     assert len(step.candidates) == 4
     assert backend.sample_batch_sizes == [4, 12]
+
+
+def test_history_is_scored_under_the_configured_base_temperature() -> None:
+    backend = BatchCountingBackend(
+        TabularAutoregressiveBackend({(): [1.0, 0.0]}, fallback=[0.8, 0.2])
+    )
+    behavior = BehaviorPolicy.for_backend(
+        backend, SamplingConfig(temperature=0.5), label="old-policy"
+    )
+    registry = BehaviorRegistry([behavior])
+    store = InMemoryReplayStore()
+    key = ReplayKey((), (), (0,), "reward-v1")
+    store.add_evaluation(
+        sample_replay_record(
+            behavior,
+            key,
+            1,
+            lambda _prompt, generated: float(generated[-1]),
+            seed=5,
+            record_id="history",
+        )
+    )
+    base_sampling = SamplingConfig(temperature=0.7)
+
+    base_replay_step(
+        base_backend=backend,
+        registry=registry,
+        store=store,
+        prompt=(),
+        generated_prefix=(),
+        config=BaseReplayConfig(
+            candidate_count=1,
+            block_size=1,
+            total_length=2,
+            max_history_per_candidate=1,
+            fresh_rollouts=1,
+        ),
+        base_sampling=base_sampling,
+        reward=lambda _prompt, generated: float(generated[-1]),
+        reward_version="reward-v1",
+        seeds=SeedStream(11),
+        step_index=0,
+    )
+
+    assert base_sampling in backend.score_samplings
+    assert None not in backend.score_samplings

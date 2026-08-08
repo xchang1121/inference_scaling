@@ -1,31 +1,31 @@
-# RTX 3090 reproduction
+# RTX 3090 复现记录
 
-## Scope
+## 实验范围
 
-This is a small real-model behavioral and systems check, not a paper-scale accuracy claim. Exact finite-state tests
-in `tests/` check the target distributions and replay estimators; this run checks that the same implementation works
-with a causal language model on a physical GPU and exhibits the intended qualitative behavior.
+这是一次小规模真实模型的行为与系统检查，不是论文规模的准确率结论。`tests/` 中的精确有限状态
+测试负责检查目标分布与 replay 估计器；本实验检查同一套实现能否在物理 GPU 上运行，并表现出预期的
+定性行为。
 
-The checked JSON artifacts are `results/rtx3090_reproduction.json` (FP32 algorithms and systems) and
-`results/rtx3090_backend_bfloat16.json` (reduced-precision diagnostic).
+已核验的 JSON 产物为 `results/rtx3090_reproduction.json`（FP32 算法与系统结果）和
+`results/rtx3090_backend_bfloat16.json`（低精度诊断）。
 
-## Environment
+## 环境
 
-- GPU: NVIDIA GeForce RTX 3090, 24 GiB;
-- driver: 596.49 (`nvidia-smi` reports support through CUDA 13.2);
-- PyTorch: 2.13.0+cu130, with its bundled CUDA 13.0 runtime;
-- Transformers: 5.14.1;
-- model: Qwen2.5-0.5B-Instruct at revision
-  `7ae557604adf67be50417f59c2c2f167def9a775`;
-- model weight SHA-256:
-  `fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe`;
-- operating system: Windows 11; Python 3.12.5.
+- GPU：NVIDIA GeForce RTX 3090，24 GiB；
+- 驱动：596.49，`nvidia-smi` 显示最高支持 CUDA 13.2；
+- PyTorch：2.13.0+cu130，自带 CUDA 13.0 运行时；
+- Transformers：5.14.1；
+- 模型：`Qwen2.5-0.5B-Instruct`，revision
+  `7ae557604adf67be50417f59c2c2f167def9a775`；
+- 模型权重 SHA-256：
+  `fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe`；
+- 操作系统：Windows 11；Python 3.12.5。
 
-The machine also has CUDA Toolkits 11.8 and 12.6, and the current `PATH` resolves `nvcc` to 11.8. That does not
-prevent this experiment from using CUDA: ordinary PyTorch inference uses the runtime bundled with its wheel, while
-`nvcc` matters when compiling a CUDA extension. The installed driver is new enough to run the cu130 wheel.
+机器还安装了 CUDA Toolkit 11.8 与 12.6，当前 `PATH` 中的 `nvcc` 指向 11.8。这不会阻碍本实验使用
+CUDA：普通 PyTorch 推理使用 wheel 自带的运行时，只有编译 CUDA 扩展时才依赖 `nvcc`。当前驱动
+足以运行 cu130 wheel。
 
-## Command
+## 运行命令
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -35,77 +35,72 @@ $env:PYTHONPATH = "src"
   --output results\rtx3090_reproduction.json
 ```
 
-The BF16 diagnostic changes `--dtype` to `bfloat16` and writes the second JSON artifact.
+BF16 诊断把 `--dtype` 改为 `bfloat16`，并写入第二个 JSON 文件。
 
-## Backend efficiency
+## 后端效率
 
-Eight requests with a common 47-token prompt and 24 generated tokens each were run sequentially and as one batch.
+实验对 8 个具有相同 47-token prompt、各生成 24 个 token 的请求，分别逐个运行与组成一个 batch
+运行。
 
-| Measurement | Result |
+| 指标 | 结果 |
 | --- | ---: |
-| Sequential generation | 2.820 s |
-| Batched generation | 0.352 s |
-| Speedup | 8.02x |
-| Batched throughput | 545.7 generated tokens/s |
-| Shared-prefix prefill tokens avoided | 329 |
-| Peak allocated CUDA memory | 2.390 GB |
-| Largest continuous batch formed from eight concurrent callers | 8 |
+| 顺序生成 | 2.820 s |
+| 批量生成 | 0.352 s |
+| wall-time 加速 | 8.02x |
+| 批量吞吐 | 545.7 generated tokens/s |
+| 共享 prefix 避免的 prefill token | 329 |
+| CUDA 峰值已分配显存 | 2.390 GB |
+| 8 个并发调用形成的最大连续 batch | 8 |
 
-The continuous dispatcher combined all eight synchronous single-request callers into one physical model batch. The
-shared-prefix path computed the 47-token prefill once rather than eight times, then forked the KV cache.
+连续调度器把 8 个同步单请求调用合并成一个物理模型 batch。共享 prefix 路径只计算一次 47-token
+prefill，再复制 KV cache。这里的 8.02x 是“顺序 wall time / 批量 wall time”，表示硬件利用率提升；
+它不表示算法所需 FLOPs 降低。
 
-In FP32, generated token log-probabilities and later full-sequence rescoring differed by `5.33e-6` on average and
-`1.09e-4` at worst. In BF16 the same measurements were `4.93e-2` and `1.26`; its single-run throughput was lower
-at 486.0 tokens/s, although allocated memory fell to 1.229 GB. This is why FP32 is the default for importance
-weights in this environment. The timing comparison is one warm run rather than a confidence interval.
+FP32 下，生成时 token log-probability 与随后完整序列重评分的平均差为 `5.33e-6`，最大差为
+`1.09e-4`。BF16 下对应数值为 `4.93e-2` 与 `1.26`；虽然已分配显存降至 1.229 GB，但单次吞吐也
+降至 486.0 tokens/s。因此，此环境下重要性权重默认使用 FP32。耗时比较只包含一次 warm run，不能
+当作置信区间。
 
-Even FP32 sequential and batched text was not bitwise identical. Different batch shapes can change a logit by a few
-floating-point ulps; a fixed uniform draw can then fall on the other side of a categorical CDF boundary, after which
-the autoregressive contexts diverge. The random stream and mathematical policy are scheduling-independent, but
-GPU bitwise identity across batch shapes is not assumed.
+即使使用 FP32，顺序 batch 与合并 batch 的文本也不保证逐 bit 相同。batch 形状变化可能让某个
+logit 改变几个浮点 ulp；固定均匀随机数可能因此落到 categorical CDF 边界另一侧，之后自回归上下文
+就会分叉。请求级随机数流与数学 policy 不依赖调度，但不假设不同 batch 形状下 GPU 逐 bit 一致。
 
-## Algorithm behavior
+## 算法行为
 
-### Suffix-resampling Metropolis-Hastings
+### 后缀重采样 Metropolis--Hastings
 
-Four fixed-length chains used `alpha=2`, length 16, block size 8, and three MH updates per block. The aggregate
-acceptance rate was 54.2%. Mean base-model log-probability improved from `-1.761` per token for direct samples to
-`-0.971` per token for the final chain states, a gain of `0.790` per token. This is the expected sharpening behavior;
-four chains are not enough for a distributional accuracy estimate, which is instead covered by the enumerated
-tests.
+四条固定长度链使用 `alpha=2`、总长度 16、block size 8，每个 block 进行 3 次 MH 更新。合并接受率
+为 54.2%。直接采样的平均 base-model log-probability 为每 token `-1.761`，最终链状态为 `-0.971`，
+每 token 提升 `0.790`，符合分布锐化的预期。四条链不足以估计分布级准确率；该性质由枚举测试检查。
 
-### Conditional importance sampling
+### 条件重要性采样
 
-The check used four fixed arithmetic prompts, four candidates, four rollouts per candidate, block size 8, and a
-binary final-answer reward. Direct sampling answered three of four prompts correctly. Both on-policy rollouts and
-temperature-0.7 off-policy rollouts with the exact completion likelihood ratio answered all four in this fixed run.
+检查使用四个固定算术 prompt、四个候选、每候选四条 rollout、block size 8 和二元最终答案奖励。
+直接采样答对 3/4。固定 seed 下，on-policy rollout 与温度 0.7、带精确 completion likelihood ratio
+的 off-policy rollout 都答对 4/4。
 
-The on-policy mean absolute log correction was `2.56e-6`, which measures only FP32 recomputation noise. The
-off-policy correction was nontrivial at `0.223`; its average completion ESS was `1.73` out of at most four, compared
-with `1.84` on-policy. Matching outputs in this seed show that the correction can preserve the decision despite a
-different rollout policy, but this four-prompt check is not a statistical equivalence proof.
+on-policy 平均绝对 log 修正为 `2.56e-6`，只反映 FP32 重算误差。off-policy 修正为非平凡的
+`0.223`；最大为 4 的 completion ESS 平均为 `1.73`，on-policy 则为 `1.84`。该 seed 下相同输出说明
+修正可以在 rollout policy 改变时保持决策，但四条 prompt 不是统计等价性证明。
 
-### Off-policy rollout replay
+### 离策略 rollout 回放
 
-A controlled decision first generated two temperature-0.7 historical completions for each of four reproduced base
-candidates. The replay decision used all two historical completions per candidate and only one new base completion
-per candidate. All four historical ESS values were 2.0.
+受控决策先为四个可复现的 base 候选分别生成两条温度 0.7 的历史 completion。replay 决策对每个
+候选使用全部两条历史 completion，只补充一条新的 base completion；四个历史 ESS 都为 2.0。
 
-Before the decision the evaluation pool contained eight records. Afterwards it contained zero evaluation records,
-zero reserved records, and twelve design records: eight consumed histories plus four fresh completions. This checks
-the intended metadata-only claim, single-use evaluation, and fresh-data lifecycle on a real model.
+决策前 evaluation pool 含 8 条记录。决策后 evaluation record 与 reserved record 均为 0，design
+record 为 12：8 条已消费历史加 4 条 fresh completion。这验证了真实模型上的“设计阶段只读元数据”、
+evaluation 单次使用与 fresh 数据生命周期。
 
-### Dynamic candidate importance sampling
+### 动态候选重要性采样
 
-The defensive proposal mixed the base candidate policy and a temperature-0.7 auxiliary policy equally. Across six
-two-token decisions it drew 24 candidates from each component. Candidate-level outer-weight ESS ranged from 2.20
-to 8.0 out of eight. The run produced the correct answer `27 * 14 = 378`; all nonterminal candidates received one
-fresh rollout under the fixed eight-rollout budget.
+defensive proposal 以相同比例混合 base candidate policy 与温度 0.7 的辅助 policy。在六次 2-token
+决策中，两种分量各生成 24 个候选。每批 8 个候选的外层权重 ESS 范围为 2.20 至 8.0。实验正确
+生成 `27 * 14 = 378`；固定 8-rollout 预算下，每个非终止候选都获得一条 fresh rollout。
 
-## Interpretation and limits
+## 解释与限制
 
-These measurements establish that CUDA execution, exact-policy metadata, off-policy correction, replay
-consumption, outer candidate correction, KV reuse, and continuous batching operate together on the reference
-machine. They do not estimate benchmark-level confidence intervals, long-chain mixing, or scaling behavior for
-multi-billion-parameter models. Those require more prompts, multiple seeds, and a larger model while retaining the
-same pinned model, reward, and behavior-policy metadata recorded here.
+这些测量说明 CUDA 执行、精确 policy 元数据、off-policy 修正、replay 消费、候选外层修正、KV
+复用和连续批处理能在参考机器上共同运行。它们没有估计 benchmark 级置信区间、长链混合速度或
+十亿参数模型的 scaling 行为。后续结论需要更多 prompt、多个 seed 与更大的模型，同时继续固定并
+记录模型、奖励和 behavior-policy 元数据。

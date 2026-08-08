@@ -2,11 +2,16 @@ from itertools import product
 
 import pytest
 
-from inference_scaling.algorithms.mh import run_mh_chain, run_mh_chains
+from inference_scaling.algorithms.mh import (
+    run_mh_chain,
+    run_mh_chains,
+    run_reward_mh_chains,
+)
 from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import MHConfig, SamplingConfig
+from inference_scaling.config import MHConfig, RewardMHConfig, SamplingConfig
 from inference_scaling.metrics import empirical_distribution, total_variation
 from inference_scaling.rng import SeedStream
+from inference_scaling.types import SequenceSample
 
 
 def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):
@@ -63,6 +68,79 @@ def test_base_proposal_at_alpha_one_accepts_every_move() -> None:
     assert all(step.log_acceptance == pytest.approx(0.0) for step in result.trace)
 
 
+def test_mh_reuses_reference_scores_emitted_during_proposal_generation() -> None:
+    class DualScoreBackend:
+        model_id = "dual-score"
+
+        def __init__(self) -> None:
+            self.score_calls = 0
+
+        def sample_batch(self, requests):
+            return [
+                SequenceSample(
+                    prefix=request.prefix,
+                    token_ids=(0,) * request.max_new_tokens,
+                    token_logprobs=(-0.2,) * request.max_new_tokens,
+                    policy_id=request.sampling.policy_id,
+                    model_id=self.model_id,
+                    request_id=request.request_id,
+                    reference_token_logprobs=(-0.4,) * request.max_new_tokens,
+                    reference_policy_id=SamplingConfig().policy_id,
+                )
+                for request in requests
+            ]
+
+        def score_batch(self, requests):
+            self.score_calls += 1
+            raise AssertionError("cached reference scores should avoid rescoring")
+
+    backend = DualScoreBackend()
+    result = run_mh_chain(
+        backend,
+        (),
+        MHConfig(alpha=2, total_length=4, block_size=2, steps_per_block=3),
+        SamplingConfig(temperature=0.5),
+        SeedStream(7),
+    )
+    assert len(result.token_ids) == 4
+    assert backend.score_calls == 0
+
+
+def test_reward_mh_approaches_enumerated_base_times_energy_target() -> None:
+    probabilities = (0.7, 0.3)
+    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
+    temperature = 0.8
+
+    def reward(_, sequence):
+        return float(sequence == (1, 1))
+
+    outputs = run_reward_mh_chains(
+        backend,
+        (),
+        RewardMHConfig(
+            total_length=2,
+            block_size=1,
+            steps_per_block=25,
+            reward_temperature=temperature,
+        ),
+        SamplingConfig(temperature=0.7),
+        reward,
+        SeedStream(91),
+        chains=3000,
+    )
+    weights = {
+        sequence: float(
+            __import__("math").prod(probabilities[token] for token in sequence)
+            * __import__("math").exp(reward((), sequence) / temperature)
+        )
+        for sequence in product(range(2), repeat=2)
+    }
+    normalizer = sum(weights.values())
+    target = {sequence: weight / normalizer for sequence, weight in weights.items()}
+    empirical = empirical_distribution(result.token_ids for result in outputs)
+    assert total_variation(empirical, target) < 0.04
+
+
 @pytest.mark.parametrize(
     "sampling",
     [SamplingConfig(top_k=1), SamplingConfig(top_p=0.9), SamplingConfig(eos_token_id=1)],
@@ -77,4 +155,3 @@ def test_mh_rejects_proposals_that_break_fixed_support_contract(sampling) -> Non
             sampling,
             SeedStream(0),
         )
-

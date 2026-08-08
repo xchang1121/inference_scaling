@@ -10,12 +10,13 @@ algorithmic reproduction, not the later paged-KV runtime optimization.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite, log
 
 import numpy as np
 
-from inference_scaling.config import MHConfig, SamplingConfig
+from inference_scaling.config import MHConfig, RewardMHConfig, SamplingConfig
 from inference_scaling.rng import SeedStream
 from inference_scaling.types import (
     AutoregressiveBackend,
@@ -57,6 +58,40 @@ class MHChainResult:
         return self.accepted / self.attempts if self.attempts else 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class RewardMHStep:
+    step: int
+    cut: int
+    proposed_suffix_length: int
+    current_reward: float
+    proposed_reward: float
+    log_acceptance: float
+    accepted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RewardMHChainResult:
+    prompt: TokenSequence
+    token_ids: TokenSequence
+    reward: float
+    base_token_logprobs: tuple[float, ...]
+    proposal_token_logprobs: tuple[float, ...]
+    trace: tuple[RewardMHStep, ...]
+    chain_id: int
+
+    @property
+    def attempts(self) -> int:
+        return len(self.trace)
+
+    @property
+    def accepted(self) -> int:
+        return sum(step.accepted for step in self.trace)
+
+    @property
+    def acceptance_rate(self) -> float:
+        return self.accepted / self.attempts if self.attempts else 0.0
+
+
 def _stage_lengths(total_length: int, block_size: int) -> tuple[int, ...]:
     stages = list(range(block_size, total_length + 1, block_size))
     if not stages or stages[-1] != total_length:
@@ -72,6 +107,10 @@ def _validate_proposal(sampling: SamplingConfig) -> None:
             "hard top-k/top-p truncation normally violates MH's equal-support condition; "
             "use a full-support proposal"
         )
+
+
+def _is_base_proposal(sampling: SamplingConfig) -> bool:
+    return sampling.temperature == 1 and sampling.top_p == 1 and sampling.top_k is None
 
 
 def _score_one(
@@ -94,7 +133,7 @@ def _sample_exact_length(
     sampling: SamplingConfig,
     seed: int,
     request_id: str,
-) -> tuple[TokenSequence, tuple[float, ...]]:
+) -> tuple[TokenSequence, tuple[float, ...], tuple[float, ...] | None]:
     sample = backend.sample_batch(
         [GenerationRequest(prefix, length, sampling, seed, request_id)]
     )[0]
@@ -107,7 +146,10 @@ def _sample_exact_length(
         raise RuntimeError("backend did not score tokens under the requested proposal policy")
     if any(not isfinite(value) for value in sample.token_logprobs):
         raise RuntimeError("a sampled proposal token must have finite proposal log-probability")
-    return sample.token_ids, sample.token_logprobs
+    cached_base = None
+    if sample.reference_policy_id == SamplingConfig().policy_id:
+        cached_base = sample.reference_token_logprobs
+    return sample.token_ids, sample.token_logprobs, cached_base
 
 
 def run_mh_chain(
@@ -133,7 +175,7 @@ def run_mh_chain(
         extension_length = stage_length - len(tokens)
         if extension_length > 0:
             extension_prefix = prompt + tuple(tokens)
-            extension, extension_q = _sample_exact_length(
+            extension, extension_q, extension_cached_p = _sample_exact_length(
                 backend,
                 prefix=extension_prefix,
                 length=extension_length,
@@ -141,7 +183,9 @@ def run_mh_chain(
                 seed=seeds.derive("mh", chain_id, stage_index, "extend"),
                 request_id=f"mh:{chain_id}:stage:{stage_index}:extend",
             )
-            extension_p = _score_one(backend, extension_prefix, extension, None)
+            extension_p = extension_cached_p or _score_one(
+                backend, extension_prefix, extension, None
+            )
             if any(not isfinite(value) for value in extension_p):
                 raise ValueError("proposal generated a sequence outside the base model support")
             tokens.extend(extension)
@@ -153,7 +197,7 @@ def run_mh_chain(
             cut = int(cut_rng.integers(0, stage_length))
             shared_prefix = prompt + tuple(tokens[:cut])
             suffix_length = stage_length - cut
-            proposed_tokens, proposed_q = _sample_exact_length(
+            proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
                 backend,
                 prefix=shared_prefix,
                 length=suffix_length,
@@ -161,7 +205,9 @@ def run_mh_chain(
                 seed=seeds.derive("mh", chain_id, stage_index, step_index, "proposal"),
                 request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}",
             )
-            proposed_p = _score_one(backend, shared_prefix, proposed_tokens, None)
+            proposed_p = proposed_cached_p or _score_one(
+                backend, shared_prefix, proposed_tokens, None
+            )
             if any(not isfinite(value) for value in proposed_p):
                 raise ValueError("proposal generated a sequence outside the base model support")
 
@@ -215,3 +261,147 @@ def run_mh_chains(
         for chain_id in range(config.chains)
     )
 
+
+def run_reward_mh_chain(
+    backend: AutoregressiveBackend,
+    prompt: TokenSequence,
+    config: RewardMHConfig,
+    proposal: SamplingConfig,
+    reward: Callable[[TokenSequence, TokenSequence], float],
+    seeds: SeedStream,
+    *,
+    chain_id: int = 0,
+) -> RewardMHChainResult:
+    """Sample ``p_base(x) exp(reward(x) / temperature)`` with suffix MH.
+
+    The chain is initialized at full length and every update draws one of all
+    suffix starts uniformly.  For a base-model proposal the likelihood terms
+    cancel, leaving only the reward difference; the expanded ratio below also
+    remains correct for any full-support temperature proposal.
+    """
+
+    _validate_proposal(proposal)
+    tokens, proposal_logs, cached_base_logs = _sample_exact_length(
+        backend,
+        prefix=prompt,
+        length=config.total_length,
+        sampling=proposal,
+        seed=seeds.derive("reward_mh", chain_id, "initialize"),
+        request_id=f"reward-mh:{chain_id}:initialize",
+    )
+    base_logs = (
+        proposal_logs
+        if _is_base_proposal(proposal)
+        else cached_base_logs or _score_one(backend, prompt, tokens, None)
+    )
+    if any(not isfinite(value) for value in base_logs):
+        raise ValueError("proposal generated a sequence outside the base model support")
+    current_reward = float(reward(prompt, tokens))
+    if not isfinite(current_reward):
+        raise ValueError("reward must be finite")
+    mutable_tokens = list(tokens)
+    mutable_base_logs = list(base_logs)
+    mutable_proposal_logs = list(proposal_logs)
+    trace: list[RewardMHStep] = []
+
+    for step_index in range(config.updates):
+        cut = int(
+            seeds.generator("reward_mh", chain_id, step_index, "cut").integers(
+                0, config.total_length
+            )
+        )
+        shared_prefix = prompt + tuple(mutable_tokens[:cut])
+        suffix_length = config.total_length - cut
+        proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
+            backend,
+            prefix=shared_prefix,
+            length=suffix_length,
+            sampling=proposal,
+            seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
+            request_id=f"reward-mh:{chain_id}:step:{step_index}",
+        )
+        proposed_p = (
+            proposed_q
+            if _is_base_proposal(proposal)
+            else proposed_cached_p
+            or _score_one(backend, shared_prefix, proposed_tokens, None)
+        )
+        if any(not isfinite(value) for value in proposed_p):
+            raise ValueError("proposal generated a sequence outside the base model support")
+        proposed_sequence = tuple(mutable_tokens[:cut]) + proposed_tokens
+        proposed_reward = float(reward(prompt, proposed_sequence))
+        if not isfinite(proposed_reward):
+            raise ValueError("reward must be finite")
+
+        old_p = float(sum(mutable_base_logs[cut:]))
+        old_q = float(sum(mutable_proposal_logs[cut:]))
+        new_p = float(sum(proposed_p))
+        new_q = float(sum(proposed_q))
+        log_acceptance = min(
+            0.0,
+            new_p
+            - old_p
+            + (proposed_reward - current_reward) / config.reward_temperature
+            + old_q
+            - new_q,
+        )
+        uniform = max(
+            float(
+                seeds.generator("reward_mh", chain_id, step_index, "accept").random()
+            ),
+            np.finfo(np.float64).tiny,
+        )
+        accepted = log(uniform) <= log_acceptance
+        previous_reward = current_reward
+        if accepted:
+            mutable_tokens[cut:] = proposed_tokens
+            mutable_base_logs[cut:] = proposed_p
+            mutable_proposal_logs[cut:] = proposed_q
+            current_reward = proposed_reward
+        trace.append(
+            RewardMHStep(
+                step=step_index,
+                cut=cut,
+                proposed_suffix_length=suffix_length,
+                current_reward=previous_reward,
+                proposed_reward=proposed_reward,
+                log_acceptance=log_acceptance,
+                accepted=accepted,
+            )
+        )
+
+    return RewardMHChainResult(
+        prompt=prompt,
+        token_ids=tuple(mutable_tokens),
+        reward=current_reward,
+        base_token_logprobs=tuple(mutable_base_logs),
+        proposal_token_logprobs=tuple(mutable_proposal_logs),
+        trace=tuple(trace),
+        chain_id=chain_id,
+    )
+
+
+def run_reward_mh_chains(
+    backend: AutoregressiveBackend,
+    prompt: TokenSequence,
+    config: RewardMHConfig,
+    proposal: SamplingConfig,
+    reward: Callable[[TokenSequence, TokenSequence], float],
+    seeds: SeedStream,
+    *,
+    chains: int,
+) -> tuple[RewardMHChainResult, ...]:
+    if chains <= 0:
+        raise ValueError("chains must be positive")
+    return tuple(
+        run_reward_mh_chain(
+            backend,
+            prompt,
+            config,
+            proposal,
+            reward,
+            seeds,
+            chain_id=chain_id,
+        )
+        for chain_id in range(chains)
+    )
