@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import threading
+from fractions import Fraction
+from types import SimpleNamespace
+
 import pytest
 
+import experiments.gsm8k_is_passk as is_passk
 from experiments.gsm8k_is_passk import (
     _combine_batching_snapshots,
     _combine_numeric_deltas,
@@ -9,6 +14,73 @@ from experiments.gsm8k_is_passk import (
     _summarize_batching_by_model,
     _summarize_model_compute,
 )
+from inference_scaling.backends.transformers_backend import TransformersBackendSnapshot
+from inference_scaling.config import SamplingConfig
+from inference_scaling.types import GenerationRequest, SequenceSample
+
+
+class _Tokenizer:
+    eos_token_id = 99
+
+
+class _CountingRawBackend:
+    def __init__(self, model_id: str, parameter_count: int) -> None:
+        self._model_id = model_id
+        self.parameter_count = parameter_count
+        self.tokenizer = _Tokenizer()
+        self._lock = threading.Lock()
+        self._sample_calls = 0
+        self._sampled_sequences = 0
+        self._generated_tokens = 0
+        self._prefill_tokens = 0
+        self._generation_slots = 0
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def sample_batch(self, requests):
+        with self._lock:
+            self._sample_calls += 1
+            self._sampled_sequences += len(requests)
+            self._generated_tokens += len(requests)
+            self._prefill_tokens += sum(len(request.prefix) for request in requests)
+            slots = sum(len(request.prefix) + 1 for request in requests)
+            self._generation_slots += slots
+        return [
+            SequenceSample(
+                prefix=request.prefix,
+                token_ids=(1,),
+                token_logprobs=(-0.1,),
+                policy_id="test-policy",
+                model_id=self.model_id,
+                request_id=request.request_id,
+            )
+            for request in requests
+        ]
+
+    def score_batch(self, requests):
+        raise AssertionError("this test path does not score sequences")
+
+    def decode(self, tokens) -> str:
+        return "#### 1"
+
+    def snapshot(self) -> TransformersBackendSnapshot:
+        with self._lock:
+            return TransformersBackendSnapshot(
+                sample_calls=self._sample_calls,
+                score_calls=0,
+                sampled_sequences=self._sampled_sequences,
+                generated_tokens=self._generated_tokens,
+                prefill_tokens=self._prefill_tokens,
+                shared_prefill_tokens_saved=0,
+                scored_tokens=0,
+                generation_forward_token_slots=self._generation_slots,
+                score_forward_token_slots=0,
+                estimated_dense_forward_flops=(
+                    2 * self.parameter_count * self._generation_slots
+                ),
+            )
 
 
 def test_is_passk_combines_base_and_proposal_compute() -> None:
@@ -117,6 +189,55 @@ def test_is_passk_keeps_model_specific_compute_and_batching() -> None:
         "maximum_sample_batch": 6,
         "maximum_score_batch": 0,
     }
+
+
+def test_is_passk_chunk_accounts_both_models_and_keeps_draws_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_method(
+        method, backend, problem, prompt, config, seeds, proposal_backend
+    ):
+        request = GenerationRequest(
+            prompt,
+            1,
+            SamplingConfig(),
+            seeds.derive("fake"),
+            f"{method}:{problem.question}",
+        )
+        backend.sample_batch([request])
+        assert proposal_backend is not None
+        proposal_backend.sample_batch([request])
+        return (1,), {"fake": True}
+
+    monkeypatch.setattr(is_passk, "_run_method", fake_run_method)
+    monkeypatch.setattr(is_passk, "_timed", lambda call: (call(), 0.25))
+    base = _CountingRawBackend("base", 10)
+    proposal = _CountingRawBackend("proposal", 3)
+    chunk = is_passk._run_chunk(
+        method="conditional_is_small_proposal",
+        chunk_index=0,
+        task_keys=((0, 7), (1, 7)),
+        problems_by_index={
+            7: SimpleNamespace(question="one", gold_answer=Fraction(1))
+        },
+        prompts_by_index={7: (4, 5)},
+        raw_base=base,
+        raw_proposal=proposal,
+        config={
+            "run": {"seed": 11},
+            "runtime": {"max_batch_size": 8, "max_batch_tokens": 100},
+        },
+        workers=2,
+        fingerprint="grid",
+    )
+    assert len(chunk["records"]) == 2
+    assert all(record["correct"] for record in chunk["records"])
+    assert chunk["base_backend_delta"]["generation_forward_token_slots"] == 6
+    assert chunk["proposal_backend_delta"]["generation_forward_token_slots"] == 6
+    assert chunk["backend_delta"]["generation_forward_token_slots"] == 12
+    assert chunk["backend_delta"]["estimated_dense_forward_flops"] == 156
+    assert chunk["continuous_batching_by_model"]["base"]["sample_requests"] == 2
+    assert chunk["continuous_batching_by_model"]["proposal"]["sample_requests"] == 2
 
 
 def test_is_passk_paired_bootstrap_uses_problem_level_differences() -> None:
