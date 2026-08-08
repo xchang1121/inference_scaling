@@ -49,7 +49,88 @@
       "rl_adapter": "720a0b06a41a21a3fbfd3f6fa710f716294c623b40b0c47085f2ce8df107a477"
     }
   },
-  "matched_target_comparison": null,
+  "matched_target_comparison": {
+    "method_manifest_fingerprints": {
+      "verifier_conditional_is": "c43abbd1629225b6858aad2924465e08b0f070c55733437338cbc9f3e94672af",
+      "verifier_conditional_is_small_proposal": "ee083a87c26e27296808d48a23a369094c9023dd4da7484d15f85347ede6e175",
+      "verifier_mh": "dc65e3af7ec4b89f71a91d6b12af0b6b804426ea8409dc59c1028ca24407481c"
+    },
+    "quality_comparisons": {
+      "small_proposal_minus_standard_conditional_is": {
+        "left_minus_right_accuracy": -0.125,
+        "paired_bootstrap_95": [
+          -0.28125,
+          0.0
+        ],
+        "within_five_percentage_points": false
+      },
+      "verifier_conditional_is_minus_rl_sample": {
+        "left_minus_right_accuracy": 0.0625,
+        "paired_bootstrap_95": [
+          0.0,
+          0.15625
+        ],
+        "within_five_percentage_points": false
+      },
+      "verifier_mh_minus_rl_sample": {
+        "left_minus_right_accuracy": 0.09375,
+        "paired_bootstrap_95": [
+          -0.0625,
+          0.25
+        ],
+        "within_five_percentage_points": false
+      },
+      "verifier_mh_minus_verifier_conditional_is": {
+        "left_minus_right_accuracy": 0.03125,
+        "paired_bootstrap_95": [
+          -0.09375,
+          0.15625
+        ],
+        "within_five_percentage_points": true
+      }
+    },
+    "reward_temperature_beta": 0.04,
+    "same_problem_indices_as_main_table": true,
+    "table": [
+      {
+        "accuracy": 0.78125,
+        "accuracy_wilson_95": [
+          0.6124500635075647,
+          0.8897616374739581
+        ],
+        "estimated_dense_forward_flops": 1302820774289408,
+        "examples": 32,
+        "forward_token_slots": 421976,
+        "method": "verifier_mh",
+        "seconds_excluding_model_load": 2319.748614600001
+      },
+      {
+        "accuracy": 0.75,
+        "accuracy_wilson_95": [
+          0.5789344100575552,
+          0.8674759908149096
+        ],
+        "estimated_dense_forward_flops": 1483904637005824,
+        "examples": 32,
+        "forward_token_slots": 480628,
+        "method": "verifier_conditional_is",
+        "seconds_excluding_model_load": 439.6649436000007
+      },
+      {
+        "accuracy": 0.625,
+        "accuracy_wilson_95": [
+          0.4525440735307745,
+          0.7706611269054578
+        ],
+        "estimated_dense_forward_flops": 2207726461277952,
+        "examples": 32,
+        "forward_token_slots": 953539,
+        "method": "verifier_conditional_is_small_proposal",
+        "seconds_excluding_model_load": 374.4559752000787
+      }
+    ],
+    "target_definition": "base probability multiplied by exp(exact numeric verifier reward / beta)"
+  },
   "method_manifest_fingerprints": {
     "base": "f34d1411ee3771dfa1e74704fe2476aa193457cecd890142f1f6845bd19f785a",
     "beam": "1099bd68f6d8cc13a6905988a8d55fbed2930b759b3e2765ecf66c5c8d297f25",
