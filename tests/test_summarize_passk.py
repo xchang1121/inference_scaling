@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
-from experiments.summarize_gsm8k_passk import combine_reports
+from experiments.summarize_gsm8k_passk import (
+    combine_reports,
+    summarize_is_raw_chunks,
+)
 
 
 def _method(correct: tuple[int, int]) -> dict:
@@ -78,3 +84,57 @@ def test_combined_passk_summary_rejects_mismatched_grids() -> None:
             bootstrap_seed=7,
             bootstrap_replicates=100,
         )
+
+
+def test_is_raw_diagnostics_validate_sha_and_compare_outputs(tmp_path) -> None:
+    diagnostics = {
+        "guidance_steps": 2,
+        "rollout_evaluations": 6,
+        "mean_rollout_ess": 2.0,
+        "mean_rollout_reward": 0.5,
+        "mean_absolute_raw_log_importance_correction": 4.0,
+        "mean_absolute_applied_log_importance_correction": 3.0,
+        "clipped_rollout_corrections": 2,
+    }
+    chunks = [
+        {
+            "manifest_fingerprint": "grid",
+            "method": method,
+            "records": [
+                {
+                    "problem_index": 3,
+                    "draw_index": 0,
+                    "prediction": "1",
+                    "correct": True,
+                    "output_sha256": output_hash,
+                    "diagnostics": diagnostics,
+                }
+            ],
+        }
+        for method, output_hash in (("clipped", "a"), ("unclipped", "b"))
+    ]
+    raw = tmp_path / "chunks.jsonl"
+    raw.write_text(
+        "".join(json.dumps(chunk) + "\n" for chunk in chunks), encoding="utf-8"
+    )
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    report = {
+        "raw_chunks_sha256": digest,
+        "manifest_fingerprint": "grid",
+        "methods": {
+            "clipped": {"generated_answers": 1},
+            "unclipped": {"generated_answers": 1},
+        },
+    }
+    summary = summarize_is_raw_chunks(raw, [report])
+    assert summary["methods"]["clipped"]["clipped_rollout_corrections"] == 2
+    assert summary["methods"]["clipped"]["clipped_rollout_correction_fraction"] == pytest.approx(
+        1 / 3
+    )
+    agreement = summary["pairwise_agreement"]["clipped_vs_unclipped"]
+    assert agreement["exact_output_match_fraction"] == 0.0
+    assert agreement["parsed_answer_match_fraction"] == 1.0
+
+    report["raw_chunks_sha256"] = "wrong"
+    with pytest.raises(ValueError, match="exactly one input report"):
+        summarize_is_raw_chunks(raw, [report])

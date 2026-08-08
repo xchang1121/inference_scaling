@@ -118,6 +118,122 @@ def _concise_method(summary: dict[str, Any]) -> dict[str, Any]:
     return {key: summary[key] for key in keys if key in summary}
 
 
+def summarize_is_raw_chunks(
+    path: Path, reports: list[dict[str, Any]]
+) -> dict[str, Any]:
+    actual_sha256 = _file_sha256(path)
+    matching = [
+        report
+        for report in reports
+        if str(report.get("raw_chunks_sha256", "")) == actual_sha256
+    ]
+    if len(matching) != 1:
+        raise ValueError("IS raw chunks must match exactly one input report SHA-256")
+    report = matching[0]
+    chunks = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not chunks:
+        raise ValueError("IS raw chunks are empty")
+    if any(
+        chunk.get("manifest_fingerprint") != report["manifest_fingerprint"]
+        for chunk in chunks
+    ):
+        raise ValueError("IS raw chunks and final report use different manifests")
+
+    records_by_method: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunks:
+        records_by_method.setdefault(str(chunk["method"]), []).extend(chunk["records"])
+    if set(records_by_method) != set(report["methods"]):
+        raise ValueError("IS raw chunks and final report contain different methods")
+
+    method_diagnostics: dict[str, Any] = {}
+    for method, records in records_by_method.items():
+        expected_records = int(report["methods"][method]["generated_answers"])
+        if len(records) != expected_records:
+            raise ValueError(f"{method} raw record count does not match its final report")
+        diagnostics = [record["diagnostics"] for record in records]
+        rollout_counts = [int(item["rollout_evaluations"]) for item in diagnostics]
+        total_rollouts = sum(rollout_counts)
+        if total_rollouts <= 0:
+            raise ValueError(f"{method} has no rollout diagnostics")
+
+        def weighted(field: str) -> float:
+            return sum(
+                float(item[field]) * count
+                for item, count in zip(diagnostics, rollout_counts, strict=True)
+            ) / total_rollouts
+
+        clipped = sum(int(item["clipped_rollout_corrections"]) for item in diagnostics)
+        method_diagnostics[method] = {
+            "records": len(records),
+            "rollout_evaluations": total_rollouts,
+            "mean_guidance_steps_per_record": statistics.fmean(
+                int(item["guidance_steps"]) for item in diagnostics
+            ),
+            "mean_rollout_ess_weighted_by_rollout_evaluations": weighted(
+                "mean_rollout_ess"
+            ),
+            "mean_rollout_reward_weighted_by_rollout_evaluations": weighted(
+                "mean_rollout_reward"
+            ),
+            "mean_absolute_raw_log_importance_correction": weighted(
+                "mean_absolute_raw_log_importance_correction"
+            ),
+            "mean_absolute_applied_log_importance_correction": weighted(
+                "mean_absolute_applied_log_importance_correction"
+            ),
+            "clipped_rollout_corrections": clipped,
+            "clipped_rollout_correction_fraction": clipped / total_rollouts,
+        }
+
+    pairwise_agreement: dict[str, Any] = {}
+    for left, right in combinations(records_by_method, 2):
+        left_by_key = {
+            (int(item["problem_index"]), int(item["draw_index"])): item
+            for item in records_by_method[left]
+        }
+        right_by_key = {
+            (int(item["problem_index"]), int(item["draw_index"])): item
+            for item in records_by_method[right]
+        }
+        if left_by_key.keys() != right_by_key.keys():
+            raise ValueError("IS methods do not contain the same raw draw/problem grid")
+        keys = tuple(left_by_key)
+        pairwise_agreement[f"{left}_vs_{right}"] = {
+            "samples": len(keys),
+            "exact_output_match_fraction": statistics.fmean(
+                left_by_key[key]["output_sha256"]
+                == right_by_key[key]["output_sha256"]
+                for key in keys
+            ),
+            "parsed_answer_match_fraction": statistics.fmean(
+                left_by_key[key]["prediction"] == right_by_key[key]["prediction"]
+                for key in keys
+            ),
+            "correctness_match_fraction": statistics.fmean(
+                bool(left_by_key[key]["correct"])
+                == bool(right_by_key[key]["correct"])
+                for key in keys
+            ),
+        }
+
+    return {
+        "source": {"path": str(path), "sha256": actual_sha256},
+        "manifest_fingerprint": report["manifest_fingerprint"],
+        "methods": method_diagnostics,
+        "pairwise_agreement": pairwise_agreement,
+        "weighting_note": (
+            "Correction and reward means weight each per-record mean by that record's "
+            "rollout evaluation count. ESS uses the same weighting; rollout count is "
+            "fixed within this experiment, so it is also proportional to the number "
+            "of candidate-step ESS values."
+        ),
+    }
+
+
 def combine_reports(
     reports: list[dict[str, Any]],
     sources: list[dict[str, str]],
@@ -204,6 +320,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--bootstrap-seed", type=int, default=20260808)
     parser.add_argument("--bootstrap-replicates", type=int, default=10_000)
+    parser.add_argument("--is-raw-chunks", type=Path)
     args = parser.parse_args()
 
     reports = [json.loads(path.read_text(encoding="utf-8")) for path in args.inputs]
@@ -216,6 +333,10 @@ def main() -> None:
         bootstrap_seed=args.bootstrap_seed,
         bootstrap_replicates=args.bootstrap_replicates,
     )
+    if args.is_raw_chunks is not None:
+        combined["is_raw_diagnostics"] = summarize_is_raw_chunks(
+            args.is_raw_chunks, reports
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(combined, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
