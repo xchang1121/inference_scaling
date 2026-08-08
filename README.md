@@ -45,6 +45,9 @@ weights and experiment artifacts are deliberately excluded from Git.
 - The conditional-energy path samples candidate blocks only from the base model and supports either on-policy completions or a
   full-support off-policy rollout model. The importance ratio is computed only over the completion suffix, and
   all random weights are aggregated in the log domain.
+- `base-replay` implements metadata-only design freezing, single-use evaluation records, behavior-mixture
+  denominators, truncated historical ratios with an independent fresh tail correction, and post-selection reserve
+  records. Current-decision fresh samples and consumed history are irreversibly moved to the design pool.
 
 Run the standalone exact-state-space MH smoke experiment with:
 
@@ -52,6 +55,7 @@ Run the standalone exact-state-space MH smoke experiment with:
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\toy_mh.py
 .\.venv\Scripts\python experiments\toy_conditional_is.py
+.\.venv\Scripts\python experiments\toy_base_replay.py
 ```
 
 ## Repository layout

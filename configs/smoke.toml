@@ -21,3 +21,13 @@ rollout_count = 4
 block_size = 4
 total_length = 32
 reward_temperature = 1.0
+
+[base_replay]
+candidate_count = 4
+block_size = 4
+total_length = 32
+reward_temperature = 1.0
+max_history_per_candidate = 8
+fresh_rollouts = 2
+truncation = 8.0
+reserve_rollouts = 2

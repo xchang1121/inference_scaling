@@ -70,14 +70,22 @@ class ConditionalEnergyConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class BaseReplayConfig(ConditionalEnergyConfig):
+class BaseReplayConfig:
+    candidate_count: int = 4
+    block_size: int = 16
+    total_length: int = 128
+    reward_temperature: float = 1.0
     max_history_per_candidate: int = 8
     fresh_rollouts: int = 2
     truncation: float = 8.0
     reserve_rollouts: int = 0
 
     def __post_init__(self) -> None:
-        ConditionalEnergyConfig.__post_init__(self)
+        for name in ("candidate_count", "block_size", "total_length"):
+            _positive(name, getattr(self, name))
+        _positive("reward_temperature", self.reward_temperature)
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
         if self.max_history_per_candidate < 0:
             raise ValueError("max_history_per_candidate must be non-negative")
         _positive("fresh_rollouts", self.fresh_rollouts)
