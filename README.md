@@ -51,6 +51,8 @@ weights and experiment artifacts are deliberately excluded from Git.
 - `dynamic-is` adds defensive candidate mixtures, exact candidate-level probability ratios, and a frozen joint
   history/fresh allocation. Its default cold-start allocation is replaceable by the included design-pool empirical
   variance and token-cost estimator.
+- `ContinuousBatchingBackend` merges candidate, rollout, and score requests from concurrently running prompts while
+  preserving request-local seeds and original result order; its counters expose achieved batch sizes.
 
 Run the standalone finite-state smoke experiments with:
 
