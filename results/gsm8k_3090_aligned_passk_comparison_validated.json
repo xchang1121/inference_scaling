@@ -1,0 +1,1094 @@
+{
+  "benchmark": "OpenAI GSM8K official test split",
+  "bootstrap": {
+    "replicates": 10000,
+    "seed": 20260808,
+    "unit": "problem"
+  },
+  "cost_scope": "Inference only. GRPO training cost is intentionally absent and must be added separately for end-to-end or amortized comparisons. Each method's FLOPs already sum model-specific parameter_count * forward_token_slots.",
+  "draws_per_problem": 8,
+  "is_raw_diagnostics": {
+    "manifest_fingerprint": "452a4ce0db9c43856191885d32f21548acea8bf88bbf061d3e9ab39171f33cd5",
+    "methods": {
+      "conditional_is": {
+        "clipped_rollout_correction_fraction": 0.0,
+        "clipped_rollout_corrections": 0,
+        "mean_absolute_applied_log_importance_correction": 0.0,
+        "mean_absolute_raw_log_importance_correction": 0.0,
+        "mean_guidance_steps_per_record": 3.7421875,
+        "mean_rollout_ess_weighted_by_rollout_evaluations": 2.064207539671228,
+        "mean_rollout_reward_weighted_by_rollout_evaluations": 0.5694503171247357,
+        "records": 256,
+        "rollout_evaluations": 18920
+      },
+      "conditional_is_small_proposal": {
+        "clipped_rollout_correction_fraction": 0.4332244008714597,
+        "clipped_rollout_corrections": 7954,
+        "mean_absolute_applied_log_importance_correction": 6.177521191658319,
+        "mean_absolute_raw_log_importance_correction": 12.191676912433522,
+        "mean_guidance_steps_per_record": 3.64453125,
+        "mean_rollout_ess_weighted_by_rollout_evaluations": 1.4784850892609889,
+        "mean_rollout_reward_weighted_by_rollout_evaluations": 0.516285403050109,
+        "records": 256,
+        "rollout_evaluations": 18360
+      },
+      "conditional_is_small_proposal_unclipped": {
+        "clipped_rollout_correction_fraction": 0.0,
+        "clipped_rollout_corrections": 0,
+        "mean_absolute_applied_log_importance_correction": 11.933158683954561,
+        "mean_absolute_raw_log_importance_correction": 11.933158683954561,
+        "mean_guidance_steps_per_record": 3.61328125,
+        "mean_rollout_ess_weighted_by_rollout_evaluations": 1.2313672686994572,
+        "mean_rollout_reward_weighted_by_rollout_evaluations": 0.5259540305729682,
+        "records": 256,
+        "rollout_evaluations": 18186
+      }
+    },
+    "pairwise_agreement": {
+      "conditional_is_small_proposal_vs_conditional_is_small_proposal_unclipped": {
+        "correctness_match_fraction": 0.953125,
+        "exact_output_match_fraction": 0.72265625,
+        "parsed_answer_match_fraction": 0.796875,
+        "samples": 256
+      },
+      "conditional_is_vs_conditional_is_small_proposal": {
+        "correctness_match_fraction": 0.828125,
+        "exact_output_match_fraction": 0.0,
+        "parsed_answer_match_fraction": 0.546875,
+        "samples": 256
+      },
+      "conditional_is_vs_conditional_is_small_proposal_unclipped": {
+        "correctness_match_fraction": 0.828125,
+        "exact_output_match_fraction": 0.0,
+        "parsed_answer_match_fraction": 0.52734375,
+        "samples": 256
+      }
+    },
+    "source": {
+      "path": "results\\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl",
+      "sha256": "4d1ee4c78069790861ad51608245d60f94ed24a80ba26c6058dcc2382ff2542a"
+    },
+    "weighting_note": "Correction and reward means weight each per-record mean by that record's rollout evaluation count. ESS uses the same weighting; rollout count is fixed within this experiment, so it is also proportional to the number of candidate-step ESS values."
+  },
+  "limitations": "Problem bootstrap intervals capture row sampling uncertainty only. They do not include model, prompt, hyperparameter, finite-chain mixing, or finite importance-weight approximation uncertainty.",
+  "method_order": [
+    "base",
+    "mh",
+    "rl_sample",
+    "conditional_is",
+    "conditional_is_small_proposal",
+    "conditional_is_small_proposal_unclipped"
+  ],
+  "methods": {
+    "base": {
+      "continuous_batching": {
+        "maximum_sample_batch": 8,
+        "maximum_score_batch": 0,
+        "sample_batches": 35,
+        "sample_requests": 256,
+        "score_batches": 0,
+        "score_sequences": 0
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 161256396195840,
+      "estimated_dense_forward_petaflops": 0.16125639619584,
+      "estimated_pass_at_k": {
+        "1": 0.3984375,
+        "2": 0.5200892857142857,
+        "4": 0.6151785714285715,
+        "8": 0.6875
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.2734375,
+          0.52734375
+        ],
+        "2": [
+          0.37611607142857145,
+          0.6629464285714286
+        ],
+        "4": [
+          0.4611607142857143,
+          0.7625
+        ],
+        "8": [
+          0.53125,
+          0.84375
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 4.5625,
+      "seconds_excluding_model_load": 145.67825209999864,
+      "seconds_per_generated_answer": 0.5690556722656197,
+      "single_draw_accuracy": 0.3984375,
+      "total_forward_token_slots": 52230,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 11028393785491456,
+          "estimated_dense_forward_petaflops": 11.028393785491456,
+          "generated_tokens": 1761643,
+          "generation_forward_token_slots": 3572032,
+          "prefill_tokens": 1593087,
+          "sample_calls": 1083,
+          "sampled_sequences": 24548,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 3393190,
+          "total_forward_token_slots": 3572032
+        },
+        "proposal": null
+      },
+      "continuous_batching": {
+        "maximum_sample_batch": 24,
+        "maximum_score_batch": 0,
+        "sample_batches": 1083,
+        "sample_requests": 24548,
+        "score_batches": 0,
+        "score_sequences": 0
+      },
+      "continuous_batching_by_model": {
+        "base": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 0,
+          "sample_batches": 1083,
+          "sample_requests": 24548,
+          "score_batches": 0,
+          "score_sequences": 0
+        },
+        "proposal": null
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 11028393785491456,
+      "estimated_dense_forward_petaflops": 11.028393785491456,
+      "estimated_pass_at_k": {
+        "1": 0.58203125,
+        "2": 0.6372767857142857,
+        "4": 0.6892857142857143,
+        "8": 0.75
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.4296875,
+          0.734375
+        ],
+        "2": [
+          0.4799107142857143,
+          0.7845982142857143
+        ],
+        "4": [
+          0.5334821428571429,
+          0.8321428571428572
+        ],
+        "8": [
+          0.59375,
+          0.90625
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 2.625,
+      "seconds_excluding_model_load": 2662.4246867999755,
+      "seconds_per_generated_answer": 10.400096432812404,
+      "single_draw_accuracy": 0.58203125,
+      "total_forward_token_slots": 3572032,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is_small_proposal": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 16407506414351360,
+          "estimated_dense_forward_petaflops": 16.40750641435136,
+          "generated_tokens": 340164,
+          "generation_forward_token_slots": 495998,
+          "prefill_tokens": 153830,
+          "sample_calls": 768,
+          "sampled_sequences": 7464,
+          "score_calls": 702,
+          "score_forward_token_slots": 4818297,
+          "scored_tokens": 1395420,
+          "shared_prefill_tokens_saved": 1227010,
+          "total_forward_token_slots": 5314295
+        },
+        "proposal": {
+          "estimated_dense_forward_flops": 3070588540719872,
+          "estimated_dense_forward_petaflops": 3.070588540719872,
+          "generated_tokens": 1429471,
+          "generation_forward_token_slots": 3107677,
+          "prefill_tokens": 1507804,
+          "sample_calls": 699,
+          "sampled_sequences": 16344,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1930766,
+          "total_forward_token_slots": 3107677
+        }
+      },
+      "continuous_batching": {
+        "maximum_sample_batch": 24,
+        "maximum_score_batch": 24,
+        "sample_batches": 1467,
+        "sample_requests": 23808,
+        "score_batches": 702,
+        "score_sequences": 15645
+      },
+      "continuous_batching_by_model": {
+        "base": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 24,
+          "sample_batches": 768,
+          "sample_requests": 7464,
+          "score_batches": 702,
+          "score_sequences": 15645
+        },
+        "proposal": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 0,
+          "sample_batches": 699,
+          "sample_requests": 16344,
+          "score_batches": 0,
+          "score_sequences": 0
+        }
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 19478094955071232,
+      "estimated_dense_forward_petaflops": 19.47809495507123,
+      "estimated_pass_at_k": {
+        "1": 0.46484375,
+        "2": 0.53125,
+        "4": 0.5870535714285714,
+        "8": 0.625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.31640625,
+          0.61328125
+        ],
+        "2": [
+          0.37276785714285715,
+          0.6852678571428571
+        ],
+        "4": [
+          0.42410714285714285,
+          0.7455357142857143
+        ],
+        "8": [
+          0.46875,
+          0.78125
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 2.78125,
+      "seconds_excluding_model_load": 2842.9092550000205,
+      "seconds_per_generated_answer": 11.10511427734383,
+      "single_draw_accuracy": 0.46484375,
+      "total_forward_token_slots": 8421972,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is_small_proposal_unclipped": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 16210228988585984,
+          "estimated_dense_forward_petaflops": 16.210228988585985,
+          "generated_tokens": 336022,
+          "generation_forward_token_slots": 490384,
+          "prefill_tokens": 151768,
+          "sample_calls": 759,
+          "sampled_sequences": 7400,
+          "score_calls": 696,
+          "score_forward_token_slots": 4760014,
+          "scored_tokens": 1381248,
+          "shared_prefill_tokens_saved": 1212576,
+          "total_forward_token_slots": 5250398
+        },
+        "proposal": {
+          "estimated_dense_forward_flops": 3058775229171456,
+          "estimated_dense_forward_petaflops": 3.058775229171456,
+          "generated_tokens": 1416243,
+          "generation_forward_token_slots": 3095721,
+          "prefill_tokens": 1508136,
+          "sample_calls": 693,
+          "sampled_sequences": 16179,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1889628,
+          "total_forward_token_slots": 3095721
+        }
+      },
+      "continuous_batching": {
+        "maximum_sample_batch": 24,
+        "maximum_score_batch": 24,
+        "sample_batches": 1452,
+        "sample_requests": 23579,
+        "score_batches": 696,
+        "score_sequences": 15462
+      },
+      "continuous_batching_by_model": {
+        "base": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 24,
+          "sample_batches": 759,
+          "sample_requests": 7400,
+          "score_batches": 696,
+          "score_sequences": 15462
+        },
+        "proposal": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 0,
+          "sample_batches": 693,
+          "sample_requests": 16179,
+          "score_batches": 0,
+          "score_sequences": 0
+        }
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 19269004217757440,
+      "estimated_dense_forward_petaflops": 19.26900421775744,
+      "estimated_pass_at_k": {
+        "1": 0.46484375,
+        "2": 0.5334821428571429,
+        "4": 0.5950892857142858,
+        "8": 0.65625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.31640625,
+          0.6171875
+        ],
+        "2": [
+          0.3783482142857143,
+          0.6875
+        ],
+        "4": [
+          0.4388392857142857,
+          0.7504464285714286
+        ],
+        "8": [
+          0.5,
+          0.8125
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 2.96875,
+      "seconds_excluding_model_load": 2814.307333099976,
+      "seconds_per_generated_answer": 10.993388019921781,
+      "single_draw_accuracy": 0.46484375,
+      "total_forward_token_slots": 8346119,
+      "unparseable_fraction": 0.0
+    },
+    "mh": {
+      "continuous_batching": {
+        "maximum_sample_batch": 8,
+        "maximum_score_batch": 0,
+        "sample_batches": 2030,
+        "sample_requests": 15851,
+        "score_batches": 0,
+        "score_sequences": 0
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 13287193604247552,
+      "estimated_dense_forward_petaflops": 13.287193604247552,
+      "estimated_pass_at_k": {
+        "1": 0.3828125,
+        "2": 0.47098214285714285,
+        "4": 0.5357142857142857,
+        "8": 0.59375
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.24609375,
+          0.5234375
+        ],
+        "2": [
+          0.31473214285714285,
+          0.6238839285714286
+        ],
+        "4": [
+          0.375,
+          0.6919642857142857
+        ],
+        "8": [
+          0.4375,
+          0.75
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 7.34375,
+      "mean_unique_parsed_answers_across_all_draws": 3.25,
+      "seconds_excluding_model_load": 4053.684999600009,
+      "seconds_per_generated_answer": 15.834707029687536,
+      "single_draw_accuracy": 0.3828125,
+      "total_forward_token_slots": 4303644,
+      "unparseable_fraction": 0.0
+    },
+    "rl_sample": {
+      "continuous_batching": {
+        "maximum_sample_batch": 8,
+        "maximum_score_batch": 0,
+        "sample_batches": 36,
+        "sample_requests": 256,
+        "score_batches": 0,
+        "score_sequences": 0
+      },
+      "draws_per_example": 8,
+      "estimated_dense_forward_flops": 151587608430592,
+      "estimated_dense_forward_petaflops": 0.151587608430592,
+      "estimated_pass_at_k": {
+        "1": 0.58984375,
+        "2": 0.6863839285714286,
+        "4": 0.7553571428571428,
+        "8": 0.8125
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.4453125,
+          0.72265625
+        ],
+        "2": [
+          0.5435267857142857,
+          0.8191964285714286
+        ],
+        "4": [
+          0.6142857142857143,
+          0.8866071428571428
+        ],
+        "8": [
+          0.65625,
+          0.9375
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 3.59375,
+      "seconds_excluding_model_load": 185.98799189999409,
+      "seconds_per_generated_answer": 0.7265155933593519,
+      "single_draw_accuracy": 0.58984375,
+      "total_forward_token_slots": 48518,
+      "unparseable_fraction": 0.0
+    }
+  },
+  "paired_comparisons": {
+    "conditional_is_minus_base": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.014621929478795263,
+        "reference_over_candidate_inference_wall_time": 0.05471638421257745
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.18359375,
+          "paired_problem_bootstrap_95": [
+            0.109375,
+            0.2578125
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.1171875,
+          "paired_problem_bootstrap_95": [
+            0.05245535714285714,
+            0.18973214285714285
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.07410714285714286,
+          "paired_problem_bootstrap_95": [
+            0.009374999999999998,
+            0.14910714285714285
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.0625,
+          "paired_problem_bootstrap_95": [
+            0.0,
+            0.15625
+          ]
+        }
+      }
+    },
+    "conditional_is_minus_mh": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 1.204816754161217,
+        "reference_over_candidate_inference_wall_time": 1.522553865916943
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.19921875,
+          "paired_problem_bootstrap_95": [
+            0.109375,
+            0.296875
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.16629464285714285,
+          "paired_problem_bootstrap_95": [
+            0.06696428571428571,
+            0.28125
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.15357142857142858,
+          "paired_problem_bootstrap_95": [
+            0.040178571428571425,
+            0.28125
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.15625,
+          "paired_problem_bootstrap_95": [
+            0.0,
+            0.3125
+          ]
+        }
+      }
+    },
+    "conditional_is_minus_rl_sample": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.013745211803192502,
+        "reference_over_candidate_inference_wall_time": 0.06985662085470556
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.0078125,
+          "paired_problem_bootstrap_95": [
+            -0.0625,
+            0.04296875
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.049107142857142856,
+          "paired_problem_bootstrap_95": [
+            -0.10714285714285714,
+            0.001116071428571428
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.06607142857142857,
+          "paired_problem_bootstrap_95": [
+            -0.1263392857142857,
+            -0.01473214285714286
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.0625,
+          "paired_problem_bootstrap_95": [
+            -0.15625,
+            0.0
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_minus_base": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.008278858716306648,
+        "reference_over_candidate_inference_wall_time": 0.051242666941895616
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.06640625,
+          "paired_problem_bootstrap_95": [
+            0.01171875,
+            0.12109375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.011160714285714288,
+          "paired_problem_bootstrap_95": [
+            -0.04352678571428571,
+            0.0625
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.028125000000000004,
+          "paired_problem_bootstrap_95": [
+            -0.09955357142857144,
+            0.03392857142857142
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.0625,
+          "paired_problem_bootstrap_95": [
+            -0.15625,
+            0.0
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_minus_conditional_is": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.5661946823305813,
+        "reference_over_candidate_inference_wall_time": 0.9365141297132104
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.1171875,
+          "paired_problem_bootstrap_95": [
+            -0.19140625,
+            -0.05078125
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.10602678571428571,
+          "paired_problem_bootstrap_95": [
+            -0.1875,
+            -0.03794642857142857
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.10223214285714285,
+          "paired_problem_bootstrap_95": [
+            -0.19642857142857142,
+            -0.026785714285714284
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.125,
+          "paired_problem_bootstrap_95": [
+            -0.25,
+            -0.03125
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_minus_mh": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.6821608393888724,
+        "reference_over_candidate_inference_wall_time": 1.42589320868069
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.08203125,
+          "paired_problem_bootstrap_95": [
+            0.01953125,
+            0.1484375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.060267857142857144,
+          "paired_problem_bootstrap_95": [
+            -0.026785714285714295,
+            0.15848214285714285
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.05133928571428571,
+          "paired_problem_bootstrap_95": [
+            -0.07589285714285715,
+            0.18526785714285715
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.03125,
+          "paired_problem_bootstrap_95": [
+            -0.125,
+            0.1875
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_minus_rl_sample": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.007782465830475136,
+        "reference_over_candidate_inference_wall_time": 0.06542171248445028
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.125,
+          "paired_problem_bootstrap_95": [
+            -0.20703125,
+            -0.05078125
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.15513392857142858,
+          "paired_problem_bootstrap_95": [
+            -0.24888392857142858,
+            -0.07254464285714285
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.16830357142857144,
+          "paired_problem_bootstrap_95": [
+            -0.2741071428571429,
+            -0.07723214285714286
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.1875,
+          "paired_problem_bootstrap_95": [
+            -0.34375,
+            -0.0625
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_unclipped_minus_base": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.008368693803452149,
+        "reference_over_candidate_inference_wall_time": 0.05176344828677016
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.06640625,
+          "paired_problem_bootstrap_95": [
+            0.015625,
+            0.12109375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.013392857142857144,
+          "paired_problem_bootstrap_95": [
+            -0.04129464285714286,
+            0.06584821428571429
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.020089285714285716,
+          "paired_problem_bootstrap_95": [
+            -0.09687499999999999,
+            0.05089285714285714
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.03125,
+          "paired_problem_bootstrap_95": [
+            -0.15625,
+            0.0625
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_unclipped_minus_conditional_is": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.5723385422962433,
+        "reference_over_candidate_inference_wall_time": 0.9460319615723345
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.1171875,
+          "paired_problem_bootstrap_95": [
+            -0.19140625,
+            -0.0546875
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.10379464285714285,
+          "paired_problem_bootstrap_95": [
+            -0.18638392857142858,
+            -0.03794642857142857
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.09419642857142857,
+          "paired_problem_bootstrap_95": [
+            -0.19107142857142856,
+            -0.008928571428571428
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.09375,
+          "paired_problem_bootstrap_95": [
+            -0.21875,
+            0.03125
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_unclipped_minus_conditional_is_small_proposal": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 1.0108511438863614,
+        "reference_over_candidate_inference_wall_time": 1.0101630413862936
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.0,
+          "paired_problem_bootstrap_95": [
+            -0.0234375,
+            0.0234375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.002232142857142856,
+          "paired_problem_bootstrap_95": [
+            -0.033482142857142856,
+            0.03794642857142857
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.008035714285714288,
+          "paired_problem_bootstrap_95": [
+            -0.03392857142857143,
+            0.052678571428571436
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.03125,
+          "paired_problem_bootstrap_95": [
+            0.0,
+            0.09375
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_unclipped_minus_mh": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.6895630648107222,
+        "reference_over_candidate_inference_wall_time": 1.440384620372947
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.08203125,
+          "paired_problem_bootstrap_95": [
+            0.01953125,
+            0.1484375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.0625,
+          "paired_problem_bootstrap_95": [
+            -0.02008928571428572,
+            0.15401785714285715
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.059375,
+          "paired_problem_bootstrap_95": [
+            -0.05803571428571429,
+            0.17946428571428572
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.0625,
+          "paired_problem_bootstrap_95": [
+            -0.09375,
+            0.21875
+          ]
+        }
+      }
+    },
+    "conditional_is_small_proposal_unclipped_minus_rl_sample": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.007866914486992314,
+        "reference_over_candidate_inference_wall_time": 0.06608659605599194
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.125,
+          "paired_problem_bootstrap_95": [
+            -0.20703125,
+            -0.046875
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.1529017857142857,
+          "paired_problem_bootstrap_95": [
+            -0.25,
+            -0.06584821428571429
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.16026785714285716,
+          "paired_problem_bootstrap_95": [
+            -0.2727678571428571,
+            -0.057589285714285725
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.15625,
+          "paired_problem_bootstrap_95": [
+            -0.3125,
+            0.0
+          ]
+        }
+      }
+    },
+    "mh_minus_base": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 0.012136226881219729,
+        "reference_over_candidate_inference_wall_time": 0.03593724034165783
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": -0.015625,
+          "paired_problem_bootstrap_95": [
+            -0.0703125,
+            0.0390625
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": -0.049107142857142856,
+          "paired_problem_bootstrap_95": [
+            -0.12388392857142855,
+            0.01674107142857143
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": -0.07946428571428571,
+          "paired_problem_bootstrap_95": [
+            -0.18794642857142857,
+            0.01875
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": -0.09375,
+          "paired_problem_bootstrap_95": [
+            -0.25,
+            0.0625
+          ]
+        }
+      }
+    },
+    "rl_sample_minus_base": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 1.063783496984683,
+        "reference_over_candidate_inference_wall_time": 0.7832669766031453
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.19140625,
+          "paired_problem_bootstrap_95": [
+            0.125,
+            0.2578125
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.16629464285714285,
+          "paired_problem_bootstrap_95": [
+            0.09486607142857142,
+            0.24441964285714285
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.14017857142857143,
+          "paired_problem_bootstrap_95": [
+            0.05982142857142857,
+            0.23169642857142858
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.125,
+          "paired_problem_bootstrap_95": [
+            0.03125,
+            0.25
+          ]
+        }
+      }
+    },
+    "rl_sample_minus_mh": {
+      "cost": {
+        "interpretation": "The pair name is candidate_minus_reference, while each cost ratio uses reference as numerator and candidate as denominator. A cost ratio above one means the candidate used less of that inference-only resource.",
+        "reference_over_candidate_inference_flops": 87.65356048434137,
+        "reference_over_candidate_inference_wall_time": 21.795412478993157
+      },
+      "pass_at_k": {
+        "1": {
+          "candidate_minus_reference": 0.20703125,
+          "paired_problem_bootstrap_95": [
+            0.1171875,
+            0.30859375
+          ]
+        },
+        "2": {
+          "candidate_minus_reference": 0.2154017857142857,
+          "paired_problem_bootstrap_95": [
+            0.10714285714285714,
+            0.33482142857142855
+          ]
+        },
+        "4": {
+          "candidate_minus_reference": 0.21964285714285714,
+          "paired_problem_bootstrap_95": [
+            0.09285714285714286,
+            0.3575892857142857
+          ]
+        },
+        "8": {
+          "candidate_minus_reference": 0.21875,
+          "paired_problem_bootstrap_95": [
+            0.0625,
+            0.375
+          ]
+        }
+      }
+    }
+  },
+  "problem_indices": [
+    55,
+    68,
+    69,
+    115,
+    174,
+    213,
+    222,
+    236,
+    258,
+    276,
+    421,
+    485,
+    497,
+    599,
+    704,
+    735,
+    776,
+    846,
+    895,
+    935,
+    951,
+    1016,
+    1018,
+    1104,
+    1116,
+    1152,
+    1215,
+    1256,
+    1269,
+    1289,
+    1311,
+    1314
+  ],
+  "schema_version": 1,
+  "source_by_method": {
+    "base": "results\\gsm8k_3090_aligned_passk_validated.json",
+    "conditional_is": "results\\gsm8k_3090_aligned_is_passk_validated.json",
+    "conditional_is_small_proposal": "results\\gsm8k_3090_aligned_is_passk_validated.json",
+    "conditional_is_small_proposal_unclipped": "results\\gsm8k_3090_aligned_is_passk_validated.json",
+    "mh": "results\\gsm8k_3090_aligned_passk_validated.json",
+    "rl_sample": "results\\gsm8k_3090_aligned_passk_validated.json"
+  },
+  "source_reports": [
+    {
+      "path": "results\\gsm8k_3090_aligned_passk_validated.json",
+      "sha256": "64bfef9be4177bffc49501093d2e43f005aceb45d80f636c912f6db1bc602c48"
+    },
+    {
+      "path": "results\\gsm8k_3090_aligned_is_passk_validated.json",
+      "sha256": "b3ae583a9193e8906355549e1b32fa73a641358f3c2e93bf21259783bb1641a3"
+    }
+  ]
+}

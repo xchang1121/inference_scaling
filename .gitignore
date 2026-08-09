@@ -29,3 +29,5 @@ results/*
 !results/gsm8k_3090_aligned_async_optimization_validated.json
 !results/gsm8k_3090_aligned_distribution_audit_validated.json
 !results/gsm8k_3090_aligned_passk_validated.json
+!results/gsm8k_3090_aligned_is_passk_validated.json
+!results/gsm8k_3090_aligned_passk_comparison_validated.json
