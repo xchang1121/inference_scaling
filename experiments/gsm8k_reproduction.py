@@ -96,6 +96,16 @@ def _fraction_text(value: Fraction | None) -> str | None:
     return f"{value.numerator}/{value.denominator}"
 
 
+def _answer_counts(values: Sequence[Fraction | None]) -> dict[str, int]:
+    """Return JSON-stable diagnostic keys, including unparseable candidates."""
+
+    keys = (
+        _fraction_text(value) if value is not None else "<unparseable>"
+        for value in values
+    )
+    return dict(sorted(Counter(keys).items()))
+
+
 def _cuda_sync() -> None:
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -312,7 +322,6 @@ def _run_best_of_n(
                 -index,
             ),
         )
-    answers = [_fraction_text(answer) for answer in parsed_answers]
     return candidates[chosen].token_ids, {
         "candidate_count": samples,
         "selected_index": chosen,
@@ -325,7 +334,7 @@ def _run_best_of_n(
         ),
         "selection_rewards": list(selection_rewards),
         "raw_confidence_rewards": list(raw_rewards) if raw_rewards is not None else None,
-        "answer_counts": dict(sorted(Counter(answers).items(), key=lambda item: str(item[0]))),
+        "answer_counts": _answer_counts(parsed_answers),
     }
 
 

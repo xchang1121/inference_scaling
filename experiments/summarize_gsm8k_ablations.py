@@ -9,6 +9,45 @@ from pathlib import Path
 from typing import Any
 
 
+RUNNER_PATH = "experiments/gsm8k_reproduction.py"
+SERIALIZATION_ONLY_RUNNER_TRANSITION = frozenset(
+    {
+        "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
+        "823e365c3807e7633707cb9fe62c66cdd897b23e456e5f7cc226a123fd191a4c",
+    }
+)
+
+
+def _implementation_provenance(
+    variants: list[dict[str, str]],
+) -> tuple[dict[str, str], list[str], str]:
+    if not variants:
+        return {}, [], "no ablation summaries were found"
+    core_variants = {
+        json.dumps(
+            {path: digest for path, digest in variant.items() if path != RUNNER_PATH},
+            sort_keys=True,
+        )
+        for variant in variants
+    }
+    if len(core_variants) != 1:
+        raise ValueError("ablation summaries were produced by different algorithms")
+    runner_hashes = sorted({variant[RUNNER_PATH] for variant in variants})
+    if len(runner_hashes) > 1 and frozenset(runner_hashes) != (
+        SERIALIZATION_ONLY_RUNNER_TRANSITION
+    ):
+        raise ValueError("ablation summaries were produced by incompatible runners")
+    core = json.loads(next(iter(core_variants)))
+    note = (
+        "Two runner hashes differ only by the JSON-stable encoding of unparseable "
+        "Best-of-N answer-count diagnostic keys; model calls, seeds, selections, "
+        "quality metrics, and compute accounting are unchanged."
+        if len(runner_hashes) > 1
+        else "All ablation summaries use one runner hash."
+    )
+    return core, runner_hashes, note
+
+
 def _groups(tag: str) -> tuple[str, ...]:
     references = {
         "conditional-reference": (
@@ -86,6 +125,7 @@ def main() -> None:
         row = {
             "method": summary["method"],
             "tag": tag,
+            "runner_sha256": implementation[RUNNER_PATH],
             "examples": int(summary["examples"]),
             "accuracy": float(summary["accuracy"]),
             "accuracy_wilson_95": summary["accuracy_wilson_95"],
@@ -116,14 +156,16 @@ def main() -> None:
         for group in groups:
             grouped.setdefault(group, []).append(row)
 
-    if len(implementation_variants) > 1:
-        raise ValueError("ablation summaries were produced by different implementations")
-    implementation = next(iter(implementation_variants.values()), {})
+    algorithm_implementation, runner_hashes, runner_compatibility = (
+        _implementation_provenance(list(implementation_variants.values()))
+    )
 
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile": profile,
-        "implementation_sha256": implementation,
+        "algorithm_implementation_sha256": algorithm_implementation,
+        "runner_sha256": runner_hashes,
+        "runner_compatibility": runner_compatibility,
         "groups": grouped,
         "alignment": {
             "main_metric": "single final response accuracy (pass@1)",

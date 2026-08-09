@@ -1,8 +1,9 @@
+import json
 from fractions import Fraction
 
 import pytest
 
-from experiments.gsm8k_reproduction import _minmax_rewards
+from experiments.gsm8k_reproduction import _answer_counts, _minmax_rewards
 from inference_scaling.evaluation import (
     CumulativeConsensusReward,
     ExactNumericReward,
@@ -76,6 +77,15 @@ def test_select_problems_is_seeded_and_retains_public_order() -> None:
 def test_confidence_reward_normalization_is_decision_local_and_stable() -> None:
     assert _minmax_rewards((-4.0, -2.0, -3.0)) == pytest.approx((0.0, 1.0, 0.5))
     assert _minmax_rewards((7.0, 7.0)) == (0.0, 0.0)
+
+
+def test_best_of_n_answer_counts_are_json_stable_with_unparseable_outputs() -> None:
+    counts = _answer_counts((Fraction(3), None, Fraction(3, 2), None))
+
+    assert counts == {"3": 1, "3/2": 1, "<unparseable>": 2}
+    assert json.loads(json.dumps({"answer_counts": counts}, sort_keys=True)) == {
+        "answer_counts": counts
+    }
 
 
 def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
