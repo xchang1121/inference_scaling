@@ -10,6 +10,7 @@ from inference_scaling.backends.transformers_backend import (
     TransformersBackend,
     TransformersBackendSnapshot,
 )
+from inference_scaling.backends.vllm_backend import VLLMBackend, VLLMBackendSnapshot
 
 __all__ = [
     "AbsorbingEOSBackend",
@@ -22,4 +23,6 @@ __all__ = [
     "TabularAutoregressiveBackend",
     "TransformersBackend",
     "TransformersBackendSnapshot",
+    "VLLMBackend",
+    "VLLMBackendSnapshot",
 ]
