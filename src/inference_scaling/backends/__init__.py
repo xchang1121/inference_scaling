@@ -10,10 +10,15 @@ from inference_scaling.backends.transformers_backend import (
     TransformersBackend,
     TransformersBackendSnapshot,
 )
-from inference_scaling.backends.vllm_backend import VLLMBackend, VLLMBackendSnapshot
+from inference_scaling.backends.vllm_backend import (
+    AsyncVLLMBackend,
+    VLLMBackend,
+    VLLMBackendSnapshot,
+)
 
 __all__ = [
     "AbsorbingEOSBackend",
+    "AsyncVLLMBackend",
     "BatchingSnapshot",
     "CachedCandidateBackend",
     "ContinuousBatchingBackend",

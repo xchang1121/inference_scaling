@@ -74,6 +74,9 @@ class ContinuousBatchingBackend:
         if batch_wait_seconds < 0:
             raise ValueError("batch_wait_seconds must be non-negative")
         self._backend = backend
+        self._native_passthrough = bool(
+            getattr(backend, "supports_native_continuous_batching", False)
+        )
         self._max_batch_size = int(max_batch_size)
         self._max_batch_tokens = int(max_batch_tokens)
         self._batch_wait_seconds = float(batch_wait_seconds)
@@ -87,12 +90,14 @@ class ContinuousBatchingBackend:
         self._score_sequences = 0
         self._maximum_sample_batch = 0
         self._maximum_score_batch = 0
-        self._worker = threading.Thread(
-            target=self._run,
-            name=f"batching-backend:{backend.model_id}",
-            daemon=True,
-        )
-        self._worker.start()
+        self._worker: threading.Thread | None = None
+        if not self._native_passthrough:
+            self._worker = threading.Thread(
+                target=self._run,
+                name=f"batching-backend:{backend.model_id}",
+                daemon=True,
+            )
+            self._worker.start()
 
     @property
     def model_id(self) -> str:
@@ -119,6 +124,12 @@ class ContinuousBatchingBackend:
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         if not requests:
             return []
+        if self._native_passthrough:
+            with self._state_lock:
+                if self._closed:
+                    raise RuntimeError("continuous batching backend is closed")
+            self._record_batch("sample", len(requests))
+            return self._backend.sample_batch(requests)
         futures = [
             self._submit(
                 _QueuedRequestGroup(
@@ -140,6 +151,13 @@ class ContinuousBatchingBackend:
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         if not requests:
             return []
+        if self._native_passthrough:
+            with self._state_lock:
+                if self._closed:
+                    raise RuntimeError("continuous batching backend is closed")
+            sequence_count = sum(len(request.continuations) for request in requests)
+            self._record_batch("score", sequence_count)
+            return self._backend.score_batch(requests)
         groups = self._score_request_groups(requests)
         futures = [
             self._submit(
@@ -449,7 +467,10 @@ class ContinuousBatchingBackend:
             if self._closed:
                 return
             self._closed = True
+            if self._native_passthrough:
+                return
             self._queue.put(_STOP)
+        assert self._worker is not None
         self._worker.join()
 
     def __enter__(self) -> "ContinuousBatchingBackend":

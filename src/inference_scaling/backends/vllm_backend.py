@@ -15,7 +15,9 @@ using incorrect importance ratios.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import itertools
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -48,6 +50,81 @@ class VLLMBackendSnapshot:
     engine_requests: int
     native_score_sequences: int
     delegated_score_sequences: int
+    maximum_in_flight_requests: int
+
+
+class _AsyncLoopRunner:
+    """Own one event loop and construct the vLLM engine on that loop's thread."""
+
+    def __init__(self, engine_factory: Callable[[], Any]) -> None:
+        self._engine_factory = engine_factory
+        self._ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._engine: Any | None = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="inference-scaling-vllm",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait()
+        if self._error is not None:
+            raise RuntimeError("failed to initialize the asynchronous vLLM engine") from self._error
+
+    def _run_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        try:
+            self._engine = self._engine_factory()
+        except BaseException as error:
+            self._error = error
+            self._ready.set()
+            asyncio.set_event_loop(None)
+            loop.close()
+            return
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    @property
+    def engine(self) -> Any:
+        if self._engine is None:
+            raise RuntimeError("asynchronous vLLM engine is unavailable")
+        return self._engine
+
+    def run(self, coroutine):
+        if self._loop is None or not self._thread.is_alive():
+            raise RuntimeError("asynchronous vLLM event loop is not running")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
+
+    def close(self) -> None:
+        if self._loop is None or not self._thread.is_alive():
+            return
+
+        async def shutdown() -> None:
+            callback = getattr(self.engine, "shutdown", None)
+            if callback is None:
+                return
+            result = callback()
+            if inspect.isawaitable(result):
+                await result
+
+        try:
+            self.run(shutdown())
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join()
 
 
 def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
@@ -152,6 +229,8 @@ class VLLMBackend:
         self._engine_requests = 0
         self._native_score_sequences = 0
         self._delegated_score_sequences = 0
+        self._active_engine_requests = 0
+        self._maximum_in_flight_requests = 0
 
     @classmethod
     def from_pretrained(
@@ -328,9 +407,27 @@ class VLLMBackend:
         }
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
-        with self._engine_lock:
-            outputs = self._engine.generate(list(prompts), **kwargs)
+        self._engine_requests_started(len(prompts))
+        try:
+            with self._engine_lock:
+                outputs = self._engine.generate(list(prompts), **kwargs)
+        finally:
+            self._engine_requests_finished(len(prompts))
         return list(outputs)
+
+    def _engine_requests_started(self, count: int) -> None:
+        with self._statistics_lock:
+            self._active_engine_requests += int(count)
+            self._maximum_in_flight_requests = max(
+                self._maximum_in_flight_requests,
+                self._active_engine_requests,
+            )
+
+    def _engine_requests_finished(self, count: int) -> None:
+        with self._statistics_lock:
+            self._active_engine_requests -= int(count)
+            if self._active_engine_requests < 0:
+                raise RuntimeError("vLLM in-flight request accounting became negative")
 
     @staticmethod
     def _completion(output: Any) -> Any:
@@ -498,6 +595,7 @@ class VLLMBackend:
                 engine_requests=self._engine_requests,
                 native_score_sequences=self._native_score_sequences,
                 delegated_score_sequences=self._delegated_score_sequences,
+                maximum_in_flight_requests=self._maximum_in_flight_requests,
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -529,3 +627,204 @@ class VLLMBackend:
     def __exit__(self, _type, _value, _traceback) -> None:
         self.close()
 
+
+class AsyncVLLMBackend(VLLMBackend):
+    """Persistent AsyncLLM backend with cross-caller continuous batching."""
+
+    supports_native_continuous_batching = True
+
+    def __init__(
+        self,
+        engine: Any | None,
+        tokenizer: Any,
+        *,
+        model_id: str,
+        parameter_count: int,
+        sampling_params_factory: Callable[..., Any],
+        tokens_prompt_factory: Callable[..., Any] | None = None,
+        scoring_backend: AutoregressiveBackend | None = None,
+        lora_request: Any | None = None,
+        engine_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        if (engine is None) == (engine_factory is None):
+            raise ValueError("provide exactly one of engine or engine_factory")
+        self._runner = _AsyncLoopRunner(
+            engine_factory if engine_factory is not None else lambda: engine
+        )
+        self._request_counter = itertools.count()
+        self._request_counter_lock = threading.Lock()
+        super().__init__(
+            self._runner.engine,
+            tokenizer,
+            model_id=model_id,
+            parameter_count=parameter_count,
+            sampling_params_factory=sampling_params_factory,
+            tokens_prompt_factory=tokens_prompt_factory,
+            scoring_backend=scoring_backend,
+            lora_request=lora_request,
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: str,
+        *,
+        adapter_name_or_path: str | None = None,
+        dtype: str = "bfloat16",
+        tensor_parallel_size: int = 1,
+        data_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.9,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        max_num_batched_tokens: int | None = None,
+        quantization: str | None = None,
+        enforce_eager: bool = False,
+        trust_remote_code: bool = False,
+        revision: str | None = None,
+        download_dir: str | None = None,
+        seed: int = 0,
+        parameter_count: int | None = None,
+        scoring_backend: AutoregressiveBackend | None = None,
+        enable_prefix_caching: bool = True,
+        max_lora_rank: int = 16,
+        engine_kwargs: dict[str, Any] | None = None,
+    ) -> "AsyncVLLMBackend":
+        try:
+            from transformers import AutoTokenizer
+            from vllm import SamplingParams, TokensPrompt
+            from vllm.engine.arg_utils import AsyncEngineArgs
+            from vllm.v1.engine.async_llm import AsyncLLM
+        except ImportError as error:  # pragma: no cover - optional GPU installation
+            raise ModuleNotFoundError(
+                "AsyncVLLMBackend.from_pretrained requires the project's vllm extra"
+            ) from error
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path,
+            local_files_only=Path(model_name_or_path).exists(),
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+            cache_dir=download_dir,
+        )
+        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        kwargs: dict[str, Any] = {
+            "model": model_name_or_path,
+            "dtype": dtype,
+            "tensor_parallel_size": int(tensor_parallel_size),
+            "data_parallel_size": int(data_parallel_size),
+            "gpu_memory_utilization": float(gpu_memory_utilization),
+            "quantization": quantization,
+            "enforce_eager": bool(enforce_eager),
+            "trust_remote_code": bool(trust_remote_code),
+            "revision": revision,
+            "download_dir": download_dir,
+            "seed": int(seed),
+            "enable_prefix_caching": bool(enable_prefix_caching),
+            "generation_config": "vllm",
+            "logprobs_mode": "processed_logprobs",
+            "enable_lora": adapter_name_or_path is not None,
+            "max_lora_rank": int(max_lora_rank),
+        }
+        optional = {
+            "max_model_len": max_model_len,
+            "max_num_seqs": max_num_seqs,
+            "max_num_batched_tokens": max_num_batched_tokens,
+        }
+        kwargs.update({name: value for name, value in optional.items() if value is not None})
+        if engine_kwargs:
+            protected = {
+                "model",
+                "generation_config",
+                "logprobs_mode",
+                "enable_prefix_caching",
+            }
+            overlap = protected.intersection(engine_kwargs)
+            if overlap:
+                raise ValueError(
+                    "engine_kwargs cannot override correctness-critical settings: "
+                    + ", ".join(sorted(overlap))
+                )
+            kwargs.update(engine_kwargs)
+
+        lora_request = None
+        if adapter_name_or_path is not None:
+            from vllm.lora.request import LoRARequest
+
+            lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
+        model_id = (
+            model_name_or_path
+            if adapter_name_or_path is None
+            else f"{model_name_or_path}+adapter:{adapter_name_or_path}"
+        )
+        counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
+        if counted is None:
+            raise ValueError(
+                "parameter_count could not be read from a local safetensors checkpoint; "
+                "pass parameter_count explicitly"
+            )
+
+        def create_engine():
+            return AsyncLLM.from_engine_args(AsyncEngineArgs(**kwargs))
+
+        return cls(
+            None,
+            tokenizer,
+            model_id=model_id,
+            parameter_count=counted,
+            sampling_params_factory=SamplingParams,
+            tokens_prompt_factory=TokensPrompt,
+            scoring_backend=scoring_backend,
+            lora_request=lora_request,
+            engine_factory=create_engine,
+        )
+
+    def _next_request_id(self) -> str:
+        with self._request_counter_lock:
+            value = next(self._request_counter)
+        return f"inference-scaling:{self.model_id}:{value}"
+
+    async def _generate_one(self, prompt: Any, params: Any) -> Any:
+        kwargs = {
+            "prompt": prompt,
+            "sampling_params": params,
+            "request_id": self._next_request_id(),
+        }
+        if self._lora_request is not None:
+            kwargs["lora_request"] = self._lora_request
+        self._engine_requests_started(1)
+        final = None
+        try:
+            async for output in self._engine.generate(**kwargs):
+                final = output
+        finally:
+            self._engine_requests_finished(1)
+        if final is None:
+            raise RuntimeError("asynchronous vLLM request returned no output")
+        return final
+
+    async def _generate_many(self, prompts: Sequence[Any], params: Any) -> list[Any]:
+        policies = params if isinstance(params, list) else [params] * len(prompts)
+        if len(policies) != len(prompts):
+            raise ValueError("the number of vLLM sampling policies must match the prompts")
+        return list(
+            await asyncio.gather(
+                *(
+                    self._generate_one(prompt, policy)
+                    for prompt, policy in zip(prompts, policies, strict=True)
+                )
+            )
+        )
+
+    def _generate(self, prompts: Sequence[Any], params: Any) -> list[Any]:
+        if self._closed:
+            raise RuntimeError("vLLM backend is closed")
+        return self._runner.run(self._generate_many(tuple(prompts), params))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._runner.close()

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.backends import VLLMBackend
+from inference_scaling.backends import AsyncVLLMBackend, VLLMBackend
 from inference_scaling.config import SamplingConfig
 from inference_scaling.types import GenerationRequest, ScoreRequest
 
@@ -172,5 +174,52 @@ def test_vllm_encode_decode_and_close() -> None:
     assert backend.encode("ab", add_special_tokens=False) == (7, 8)
     assert backend.decode((1, 2, 3)) == "1,2,3"
     backend.close()
+    backend.close()
+    assert engine.closed
+
+
+class _AsyncEngine(_Engine):
+    def __init__(self):
+        super().__init__()
+        self.active = 0
+        self.maximum_active = 0
+
+    async def _stream(self, *, prompt, sampling_params, request_id, **kwargs):
+        self.active += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        await asyncio.sleep(0.02)
+        token = int(sampling_params.seed % 5) + 3
+        self.active -= 1
+        yield _Output([_Completion([token], [{token: _Logprob(-0.25)}])])
+
+    def generate(self, **kwargs):
+        return self._stream(**kwargs)
+
+    async def shutdown(self):
+        self.closed = True
+
+
+def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
+    engine = _AsyncEngine()
+    backend = AsyncVLLMBackend(
+        engine,
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+    )
+    sampling = SamplingConfig()
+
+    def generate(seed):
+        return backend.sample_batch(
+            [GenerationRequest((1,), 1, sampling, seed, f"r{seed}")]
+        )[0]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        samples = list(executor.map(generate, (1, 2)))
+
+    assert [sample.request_id for sample in samples] == ["r1", "r2"]
+    assert engine.maximum_active == 2
+    assert backend.snapshot().maximum_in_flight_requests == 2
     backend.close()
     assert engine.closed

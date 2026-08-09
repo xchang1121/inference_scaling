@@ -180,3 +180,21 @@ def test_closed_batching_backend_rejects_new_work() -> None:
         batched.sample_batch(
             [GenerationRequest((), 1, SamplingConfig(), 1, "after-close")]
         )
+
+
+def test_native_continuous_backend_is_not_serialized_by_dispatcher() -> None:
+    class NativeBackend(RecordingBackend):
+        supports_native_continuous_batching = True
+
+    raw = NativeBackend()
+    batched = ContinuousBatchingBackend(raw)
+    requests = [
+        GenerationRequest((), 1, SamplingConfig(), seed, f"request-{seed}")
+        for seed in (1, 2)
+    ]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outputs = list(executor.map(lambda item: batched.sample_batch([item]), requests))
+    assert [group[0].request_id for group in outputs] == ["request-1", "request-2"]
+    assert raw.sample_batch_sizes == [1, 1]
+    assert batched.snapshot().sample_batches == 2
+    batched.close()
