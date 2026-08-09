@@ -51,6 +51,9 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
   有限样本权重方差抵消了小模型生成的收益。
 - warm rollout replay 相对相同总 rollout 预算的 fresh-only 路径减少 23.4% 在线 FLOPs 和 14.1%
   墙钟；包含缓存构建时首次查询更贵，本轮从第 7 次重复查询开始回本。
+- 在单独的正确答案 oracle 诊断中，动态候选 + 固定 replay 相对 base 候选固定组得到 `1.086×` 稳态
+  FLOPs 因子，但准确率点估计低 6.25 个百分点且含建库的一次性 FLOPs 为 `2.325×`；再加入方差—
+  成本分配后只复用 5.7% rollout，稳态 FLOPs 反而是固定分配的 `1.200×`。两项质量差异区间均跨 0。
 - 连续批处理相对同一方法的逐 prompt 执行得到 1.050×–4.845× 墙钟吞吐提升，但它主要改善硬件
   利用率，不等同于减少算法 FLOPs。
 
