@@ -128,16 +128,17 @@ DesignPreparation = Callable[[tuple[DesignStatisticsContext, ...]], None]
 class RolloutBudgetContext:
     """Metadata available when freezing one step's rollout budget.
 
-    The context intentionally exposes replay inventory counts but not evaluation
-    completions or rewards.  This permits a cost-matched budget to depend on the
-    candidates that were actually drawn and on cache hits without leaking the
-    values later used by the estimator.
+    The context intentionally exposes per-candidate and shared-key replay inventory
+    counts but not evaluation completions or rewards.  This permits a cost-matched
+    budget to depend on the candidates that were actually drawn and on cache hits
+    without leaking the values later used by the estimator.
     """
 
     draws: tuple[DynamicCandidateDraw, ...]
     keys: tuple[ReplayKey, ...]
     terminal: tuple[bool, ...]
     history_capacities: tuple[int, ...]
+    group_capacities: Mapping[ReplayKey, int]
 
 
 RolloutBudgetProvider = Callable[[RolloutBudgetContext], float]
@@ -887,6 +888,7 @@ def dynamic_is_step(
                     keys=tuple(keys),
                     terminal=tuple(terminal),
                     history_capacities=tuple(history_capacities),
+                    group_capacities=dict(group_capacities),
                 )
             )
         )

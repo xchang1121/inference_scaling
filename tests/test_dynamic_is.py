@@ -114,6 +114,7 @@ def test_step_budget_can_be_frozen_from_candidate_metadata() -> None:
 
     assert len(seen) == 1
     assert seen[0].history_capacities == (0, 0)
+    assert all(capacity == 0 for capacity in seen[0].group_capacities.values())
     assert seen[0].terminal == (False, False)
     assert sum(candidate.allocation.fresh_count for candidate in step.candidates) == 2
 

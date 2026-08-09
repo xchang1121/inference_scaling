@@ -17,19 +17,32 @@ import tomllib
 from dataclasses import dataclass, field
 from math import exp, isfinite, log, sqrt
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from gsm8k_reproduction import (
-    _file_sha256,
-    _fingerprint,
-    _fraction_text,
-    _load_backend,
-    _prompt_tokens,
-    _snapshot_delta,
-    _timed,
-)
+if __package__:
+    from experiments.gsm8k_reproduction import (
+        _file_sha256,
+        _fingerprint,
+        _fraction_text,
+        _load_backend,
+        _prompt_tokens,
+        _snapshot_delta,
+        _timed,
+    )
+    from experiments.summarize_gsm8k_dynamic_is import METHODS, build_summary
+else:
+    from gsm8k_reproduction import (
+        _file_sha256,
+        _fingerprint,
+        _fraction_text,
+        _load_backend,
+        _prompt_tokens,
+        _snapshot_delta,
+        _timed,
+    )
+    from summarize_gsm8k_dynamic_is import METHODS, build_summary
 from inference_scaling.algorithms.base_replay import _score_base
 from inference_scaling.algorithms.dynamic_is import (
     CandidateProposal,
@@ -53,8 +66,6 @@ from inference_scaling.replay import (
 )
 from inference_scaling.rng import SeedStream
 from inference_scaling.types import GenerationRequest, ScoreRequest, SequenceSample
-from summarize_gsm8k_dynamic_is import METHODS, build_summary
-
 IMPLEMENTATION_FILES = (
     "experiments/gsm8k_dynamic_is_benchmark.py",
     "experiments/summarize_gsm8k_dynamic_is.py",
@@ -145,13 +156,19 @@ class MatchedProxyBudget:
     budgets: list[float] = field(default_factory=list)
 
     def __call__(self, context: RolloutBudgetContext) -> float:
+        history_targets = _fixed_history_targets(
+            keys=context.keys,
+            terminal=context.terminal,
+            history_capacities=context.history_capacities,
+            group_capacities=context.group_capacities,
+            rollouts_per_candidate=self.rollouts_per_candidate,
+        )
         budget = 0.0
-        for terminal, capacity in zip(
-            context.terminal, context.history_capacities, strict=True
+        for terminal, history in zip(
+            context.terminal, history_targets, strict=True
         ):
             if terminal:
                 continue
-            history = min(capacity, self.rollouts_per_candidate - 1)
             fresh = self.rollouts_per_candidate - history
             budget += self.history_cost * history + self.fresh_cost * fresh
         # The allocator requires a positive scalar even when every candidate is terminal.
@@ -160,8 +177,44 @@ class MatchedProxyBudget:
         return budget
 
 
+def _fixed_history_targets(
+    *,
+    keys: Sequence[ReplayKey],
+    terminal: Sequence[bool],
+    history_capacities: Sequence[int],
+    group_capacities: Mapping[ReplayKey, int],
+    rollouts_per_candidate: int,
+) -> tuple[int, ...]:
+    """Freeze a deterministic fixed control without reusing shared records."""
+
+    if not (len(keys) == len(terminal) == len(history_capacities)):
+        raise ValueError("fixed-allocation metadata must have matching lengths")
+    if rollouts_per_candidate < 1:
+        raise ValueError("rollouts_per_candidate must be positive")
+    remaining = dict(group_capacities)
+    if any(value < 0 for value in remaining.values()):
+        raise ValueError("shared history capacities must be non-negative")
+    targets: list[int] = []
+    for key, is_terminal, capacity in zip(
+        keys, terminal, history_capacities, strict=True
+    ):
+        if capacity < 0:
+            raise ValueError("candidate history capacities must be non-negative")
+        if is_terminal:
+            targets.append(0)
+            continue
+        history = min(
+            capacity,
+            rollouts_per_candidate - 1,
+            remaining.get(key, 0),
+        )
+        targets.append(history)
+        remaining[key] = remaining.get(key, 0) - history
+    return tuple(targets)
+
+
 class FixedPerCandidateStatistics:
-    """Encode H cached + (K-H) fresh as a deterministic allocation control."""
+    """Encode a group-feasible H cached + (K-H) fresh control."""
 
     def __init__(
         self,
@@ -181,6 +234,30 @@ class FixedPerCandidateStatistics:
         self.fresh_cost = fresh_cost
         self.max_history = max_history
         self.rollouts_per_candidate = rollouts_per_candidate
+        self._history_targets: dict[int, int] = {}
+
+    def prepare(self, contexts: tuple[DesignStatisticsContext, ...]) -> None:
+        group_capacities: dict[ReplayKey, int] = {}
+        for context in contexts:
+            previous = group_capacities.setdefault(
+                context.key, context.available_history
+            )
+            if previous != context.available_history:
+                raise RuntimeError("duplicate replay keys exposed inconsistent inventory")
+        targets = _fixed_history_targets(
+            keys=tuple(context.key for context in contexts),
+            terminal=(False,) * len(contexts),
+            history_capacities=tuple(
+                min(self.max_history, context.available_history)
+                for context in contexts
+            ),
+            group_capacities=group_capacities,
+            rollouts_per_candidate=self.rollouts_per_candidate,
+        )
+        self._history_targets = {
+            id(context): target
+            for context, target in zip(contexts, targets, strict=True)
+        }
 
     def _outer_log_ratio(self, context: DesignStatisticsContext) -> float:
         if self.mixture == 0:
@@ -204,7 +281,12 @@ class FixedPerCandidateStatistics:
         return base_logprob - mixture_logprob
 
     def __call__(self, context: DesignStatisticsContext) -> VarianceCostEstimate:
-        history = min(self.max_history, context.available_history)
+        try:
+            history = self._history_targets[id(context)]
+        except KeyError as error:
+            raise RuntimeError(
+                "fixed allocation statistics were read before preparation"
+            ) from error
         fresh_extra = self.rollouts_per_candidate - 1 - history
         if fresh_extra < 0:
             raise ValueError("fixed allocation has more history than its rollout target")
@@ -627,7 +709,7 @@ def _run_method(
                 max_history=history_count,
                 rollouts_per_candidate=rollouts_per_candidate,
             )
-            design_prepare = None
+            design_prepare = statistics_provider.prepare
 
         algorithm = DynamicISConfig(
             candidate_count=candidate_count,

@@ -21,9 +21,9 @@ replay 算法严格实现文档规定的数据生命周期：
 
 动态 guidance step 在抽出候选后分成两个明确阶段。`design_prepare` 只接收候选对应的设计上下文，
 可把独立 design rollout 和概率评分跨候选批量执行；随后 `statistics_provider` 只读取 design pool。
-`rollout_budget_provider` 只能根据本轮候选、终止标记与 evaluation inventory 数量冻结成本预算，不能
-读取 evaluation completion 或 reward。默认路径仍使用配置中的固定预算，这两个接口只把文档允许的
-“先看元数据、再冻结设计”变成可测试的实现约束。
+`rollout_budget_provider` 只能根据本轮候选、终止标记、逐候选容量与相同 replay key 共享的总库存冻结
+成本预算，不能读取 evaluation completion 或 reward。重复候选必须共同遵守一次性库存上限。默认路径
+仍使用配置中的固定预算，这两个接口只把文档允许的“先看元数据、再冻结设计”变成可测试的实现约束。
 
 GSM8K 实验把各项基线映射为 `experiments/gsm8k_reproduction.py` 中的中性实现标识。
 `conditional_is` 使用联合的累积 self-consistency 奖励；可复用估计器仍支持普通的固定逐序列奖励。

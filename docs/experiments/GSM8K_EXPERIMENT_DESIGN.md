@@ -281,7 +281,9 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
    fresh rollout。
 2. `replay_aware_fixed` 先由 0.5B proposal 生成候选块及每块 2 条隐藏历史 rollout，再从
    `0.5 × base + 0.5 × proposal` 抽候选，并乘精确候选层 `p_base/q`。命中时固定使用 2 条历史加
-   1 条 fresh，未命中时使用 3 条 fresh。
+   1 条 fresh，未命中时使用 3 条 fresh。若相同候选块在一批中重复出现，这些槽共享同一个一次性
+   evaluation 库存；按候选顺序领取可用历史后，其余槽用 fresh 补足，保证每个非终止候选仍恰好使用
+   3 条 rollout，且同一历史记录不会被重复计算。
 3. `replay_aware_optimal` 保持相同候选 proposal、缓存和每步成本预算；在读取 evaluation rollout 前，
    每个候选分别生成 2 条独立 base design rollout，命中候选再生成 2 条 proposal design rollout，
    用它们估计历史项与 fresh 项标准差后进行方差—成本分配。
