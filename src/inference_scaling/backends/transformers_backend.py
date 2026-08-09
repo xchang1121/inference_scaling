@@ -604,7 +604,7 @@ class TransformersBackend:
         self,
         requests: Sequence[ScoreRequest],
     ) -> list[SequenceScoreStatistics]:
-        """Score continuations and return the three confidence rewards used by conditional sampling.
+        """Score continuations and return three confidence rewards.
 
         Entropy and self-certainty require a finite log-probability for every
         vocabulary item, so this diagnostic deliberately accepts only a

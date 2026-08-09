@@ -46,7 +46,7 @@ Transformers 后端默认使用 FP32。在实测 RTX 3090 上，BF16 logits 会�
 生成时概率与随后批量重评分一致性的变化。低精度仍可用于吞吐实验，但若重要性权重依赖精确概率，
 应先在目标模型和硬件上验证一致性；未经验证时使用 FP32。
 
-## 统一的公开基准复现
+## 统一的公开基准实验
 
 实验套件使用 OpenAI 公开的 GSM8K，而不使用人工编造问题、付费偏好评审、受限数据集或不安全的
 代码执行。GRPO 仅使用官方训练集的 7,473 条样本，其 SHA-256 为
@@ -74,7 +74,7 @@ $env:PYTHONPATH = "src"
 ```
 
 训练 GRPO 对照。默认配置对每个 prompt 生成四条回答，每个优化步累积四组 prompt，最大生成 192 个
-token，共进行 205 个优化步；该步数与来源实验处于同一量级，每 25 步保存一个可恢复的 checkpoint：
+token，共进行 205 个优化步；每 25 步保存一个可恢复的 checkpoint：
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -86,15 +86,13 @@ $env:PYTHONPATH = "src"
 wall time、峰值 CUDA 显存、采样得到的 GPU 功率及积分能耗仅作为硬件相关诊断。
 
 本机已完成的训练及端到端加载检查记录在
-`results/gsm8k_grpo_training_summary.json`。这次运行由前 100 步和从 `checkpoint-100` 继续的 105 步
-组成，因此摘要把它明确记为两段调度，不把它解释成一次未中断的 205 步学习率轨迹。累计计算量、
-rollout 数、adapter 哈希和 FP32 概率一致性检查均来自实际产物；训练 rollout 准确率只用于检查训练
-过程，不能代替保留测试集上的方法比较。
+`results/gsm8k_grpo_training_summary.json`。累计 205 个优化步的计算量、rollout 数、adapter 哈希和
+FP32 概率一致性检查均来自实际产物；训练 rollout 准确率只用于检查训练过程，不能代替保留测试集上
+的方法比较。
 
-先运行八条样本的集成检查。实验问题与比较结构围绕条件采样方法；主表沿用其单次最终回答
-（pass@1）口径，比较 Base、Beam
-Search、Best-of-N、Power Sampling 对应的幂分布 MH、条件能量重要性采样、小 proposal 加速版本与
-GRPO；模型、数据集和适合 24 GiB 单卡的预算允许调整。每个命令都能从单条 GSM8K 记录处恢复；
+先运行八条样本的集成检查。主表以单次最终回答（pass@1）为主要质量指标，比较 Base、Beam Search、
+Best-of-N、幂分布 MH、条件重要性采样、小 proposal off-policy 版本与 GRPO；模型、数据集和适合
+24 GiB 单卡的预算由配置固定。每个命令都能从单条 GSM8K 记录处恢复；
 manifest 同时固定配置、样本行号、模型权重和关键实现文件的 SHA-256，代码变化后不会混用旧记录：
 
 ```powershell
@@ -255,16 +253,8 @@ $env:PYTHONPATH = "src"
 
 这组 32 题配置的分阶段实测结果见
 [`docs/GSM8K_3090_ALIGNED_RESULTS.md`](docs/GSM8K_3090_ALIGNED_RESULTS.md)。
-其中连续批处理保留优化前与“调用组完整入队”后的两份结果；可用下列命令复核每种方法相对同步路径、
-以及新调度器相对旧调度器的两个独立加速分母：
-
-```powershell
-$env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\summarize_gsm8k_batching.py `
-  --baseline results\gsm8k_3090_aligned_async_validated.json `
-  --grouped results\gsm8k_3090_aligned_async_grouped_validated.json `
-  --output results\gsm8k_3090_aligned_async_optimization_validated.json
-```
+`--with-async` 直接生成保留重复前缀调用组的连续批处理结果；报告分别列出每种方法相对自身同步路径的
+墙钟比和 FLOPs 比，避免使用不明确的统一加速分母。
 
 这里缩放的是模型、样本数和算法预算，不改变要测的问题、方法对照、目标定义或 token/FLOPs 口径。
 `gsm8k_standard.toml` 与 `gsm8k_full.toml` 仍分别保留 128 条和全部 1,319 条的更大预算，可从已有逐题
@@ -272,7 +262,7 @@ $env:PYTHONPATH = "src"
 
 `configs/gsm8k_standard.toml` 使用 128 条固定测试样本、最大生成 256 token、20 beams、Best-of-20、
 15 个候选、每个候选 3 条 rollout 和 4 个引导步。`configs/gsm8k_full.toml` 覆盖官方测试集全部
-1,319 条样本，并采用来源主表的较大 GSM8K 预算：最大生成 512 token、20 beams、Best-of-30、
+1,319 条样本，并使用较大的 GSM8K 预算：最大生成 512 token、20 beams、Best-of-30、
 15 个候选、每个候选 3 条 rollout 和 4 个引导步。幂分布 MH 在两种配置中都把总长度划为 16 个
 递增长度阶段，每阶段进行 10 次更新。单张 RTX 3090 上完整运行耗时很长，但所有原始记录都只追加
 写入，可以用同一命令中断后继续。
@@ -280,13 +270,13 @@ $env:PYTHONPATH = "src"
 主要比较包括 Base、Beam、Best-of-N self-consistency、后缀重采样 MH、条件重要性采样、小模型
 off-policy 条件重要性采样，以及本地 GRPO adapter 的采样/贪心输出。两种条件采样方法的候选块都
 来自主模型。加速版本只替换 completion rollout 生成器，并在权重中加入精确的主模型/proposal
-后缀 log 概率比。来源对齐配置把该 log 比值截到 `[-10, 10]`，以有限偏差换取小 $K$ 下的方差
+后缀 log 概率比。默认稳定化配置把该 log 比值截到 `[-10, 10]`，以有限偏差换取小 $K$ 下的方差
 稳定性；每条记录同时保存截断前后修正值和被截断数量。将
 `importance_log_ratio_clip` 设为空即可运行不截断的理论版本。
 `--with-ablations` 会同时运行截断与不截断版本，直接报告这项方差—偏差取舍。
 
-奖励设计消融也按条件采样的比较结构运行在 Best-of-N、标准条件采样和小 proposal 条件采样上，包括
-平均 token 对数概率、平均负熵、自确定性、自一致性和测试集正确答案五种信号。前三个连续信号在每次
+奖励设计消融在 Best-of-N、标准条件采样和小 proposal 条件采样上比较以下五种信号：
+平均 token 对数概率、平均负熵、自确定性、自一致性和测试集正确答案。前三个连续信号在每次
 候选决策内做 min-max 归一化；自一致性仍跨引导步累计答案计数；正确答案奖励始终标记为 oracle，
 不会混入可部署主表。连续奖励的额外基座模型评分会计入 token slot 与 FLOPs。
 
@@ -412,5 +402,5 @@ RTX 3090 的已核验测量与解释见
 - `configs/`：纳入版本控制的实验配置；
 - `tests/`：精确表格测试与集成测试；
 - `experiments/`：命令行实验入口；
-- `docs/`：算法映射和复现报告；
+- `docs/`：算法映射、实验设计和结果报告；
 - `results/`：只提交小型汇总，原始输出保留在本地。

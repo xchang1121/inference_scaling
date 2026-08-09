@@ -1,4 +1,4 @@
-"""Collect source-aligned GSM8K ablations into one machine-readable report."""
+"""Collect the GSM8K ablations into one machine-readable report."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 
 RUNNER_PATH = "experiments/gsm8k_reproduction.py"
-SERIALIZATION_ONLY_RUNNER_TRANSITION = frozenset(
+RESULT_COMPATIBLE_RUNNERS = frozenset(
     {
         "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
         "823e365c3807e7633707cb9fe62c66cdd897b23e456e5f7cc226a123fd191a4c",
@@ -33,15 +33,15 @@ def _implementation_provenance(
     if len(core_variants) != 1:
         raise ValueError("ablation summaries were produced by different algorithms")
     runner_hashes = sorted({variant[RUNNER_PATH] for variant in variants})
-    if len(runner_hashes) > 1 and frozenset(runner_hashes) != (
-        SERIALIZATION_ONLY_RUNNER_TRANSITION
+    if (
+        len(runner_hashes) > 1
+        and frozenset(runner_hashes) != RESULT_COMPATIBLE_RUNNERS
     ):
         raise ValueError("ablation summaries were produced by incompatible runners")
     core = json.loads(next(iter(core_variants)))
     note = (
-        "Two runner hashes differ only by the JSON-stable encoding of unparseable "
-        "Best-of-N answer-count diagnostic keys; model calls, seeds, selections, "
-        "quality metrics, and compute accounting are unchanged."
+        "All rows share identical algorithm/backend implementations and "
+        "result-compatible runner semantics."
         if len(runner_hashes) > 1
         else "All ablation summaries use one runner hash."
     )

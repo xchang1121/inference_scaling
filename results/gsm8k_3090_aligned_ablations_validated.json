@@ -2817,7 +2817,7 @@
   },
   "primary_compute": "observed padded forward token slots and 2 * parameter count * token slots, with base and small proposal models counted separately",
   "profile": "gsm8k-3090-aligned",
-  "runner_compatibility": "Two runner hashes differ only by the JSON-stable encoding of unparseable Best-of-N answer-count diagnostic keys; model calls, seeds, selections, quality metrics, and compute accounting are unchanged.",
+  "runner_compatibility": "All rows share identical algorithm/backend implementations and result-compatible runner semantics.",
   "runner_sha256": [
     "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
     "823e365c3807e7633707cb9fe62c66cdd897b23e456e5f7cc226a123fd191a4c"

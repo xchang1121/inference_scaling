@@ -7,7 +7,7 @@ GSM8K 测试集中的 8 条固定样本；异步调度使用 32 条固定样本�
 的 Qwen2.5-1.5B-Instruct，off-policy proposal 为同系列 0.5B 模型，RL 对照为本机训练的 GRPO LoRA。
 
 这是一轮集成检查，目的是验证方法路径、概率、缓存、计算账本和结果汇总能够一起工作。8 条样本的
-Wilson 区间很宽，不能据此确认论文级质量排序。可追溯结果为：
+Wilson 区间很宽，不能据此确认稳定的质量排序。可追溯结果为：
 
 - `results/gsm8k_quick_comparison_validated.json`；
 - `results/gsm8k_quick_replay_validated.json`；

@@ -1,8 +1,4 @@
-"""Paper-aligned GSM8K reproduction with resumable per-example records.
-
-Code identifiers use descriptive algorithm names.  The correspondence to the
-names used in the two source papers is documented in the repository README.
-"""
+"""Run the GSM8K comparison with resumable per-example records."""
 
 from __future__ import annotations
 

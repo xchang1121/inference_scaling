@@ -33,7 +33,7 @@ def consensus_index(texts: Sequence[str], logprobs: Sequence[float]) -> int:
 
 
 class CumulativeConsensusReward:
-    """Paper-compatible self-consistency reward accumulated across guidance steps."""
+    """Self-consistency reward accumulated across guidance steps."""
 
     def __init__(self, decoder: Callable[[TokenSequence], str]) -> None:
         self._decoder = decoder

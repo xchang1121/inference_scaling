@@ -19,10 +19,10 @@ replay 算法严格实现文档规定的数据生命周期：
 动态实现先使用文档中的连续预算分配，再进行确定性整数舍入：候选层概率比同时乘到 history 和 fresh
 的方差项上，每个来源还要除以其单样本成本的平方根。
 
-GSM8K 复现把面向论文的基线映射为 `experiments/gsm8k_reproduction.py` 中的中性实现标识。
+GSM8K 实验把各项基线映射为 `experiments/gsm8k_reproduction.py` 中的中性实现标识。
 `conditional_is` 使用联合的累积 self-consistency 奖励；可复用估计器仍支持普通的固定逐序列奖励。
-实验入口还可把该奖励替换成平均 token 对数概率、平均负熵、自确定性或正确答案 oracle，用于与来源
-实验相同类型的奖励设计消融；这些替换不改变候选和 rollout 的概率修正公式。
+实验入口还可把该奖励替换成平均 token 对数概率、平均负熵、自确定性或正确答案 oracle，用于奖励
+设计消融；这些替换不改变候选和 rollout 的概率修正公式。
 小 proposal 路径只改变 completion 的生成方式，并加入主模型/proposal likelihood ratio；候选块仍由
 主模型生成。`AbsorbingEOSBackend` 提供 MH 所需的固定长度状态空间，同时不会把 chat prompt 内与
 EOS 相同的 token 误判为生成终止。

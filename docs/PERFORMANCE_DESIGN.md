@@ -1,6 +1,6 @@
 # 推理性能设计
 
-本框架采用大 batch 结构与跨 prompt 的连续批处理。独立算法 worker 把同步调用提交给共享
+实现采用大 batch、KV cache 和跨 prompt 连续批处理。独立算法 worker 把同步调用提交给共享
 后端，后台 dispatcher 将时间上相邻且采样策略、生成长度、重复前缀数兼容的调用组进行合并。一次
 `sample_batch` 或 `score_batch` 的请求不会被拆成零散单条再与其他 prompt 混排；超过预算的 rollout
 组优先沿候选前缀的完整重复组切分。例如 15 个候选各 3 条 rollout 在 32 行上限下切成 30+15，而
@@ -23,8 +23,7 @@ on-policy 条件 rollout 会直接携带生成时得到的精确 base-policy log
 避免 `[batch, length, vocabulary]` logits 张量耗尽 24 GB GPU；该处理不改变概率与请求顺序。
 幂分布 MH 的温度 proposal 与目标概率来自同一个主模型。后端因此会在每个生成位置对同一份 logits
 同时计算实际 proposal 概率和温度 1 的基模概率，并把两者随 token 一起返回；MH 接受率直接使用这两组
-概率，不再为同一后缀增加一次模型前向。这与来源实现读取 scaled/unscaled logits 的做法一致，减少
-forward token slot，但不改变四项接受比。
+概率，不再为同一后缀增加一次模型前向，从而减少 forward token slot，但不改变四项接受比。
 
 多次采样实验进一步把同一道题的独立 MH 链按阶段和更新编号同步推进。每条链分别抽取后缀起点、
 proposal seed 与接受随机数，只把该步所有不同长度的生成请求放进同一个物理 batch；因此它等价于逐链
