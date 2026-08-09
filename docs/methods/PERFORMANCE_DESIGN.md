@@ -16,7 +16,9 @@ FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略�
 
 每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
 同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的
-分数绝不能复用于另一策略。随机生成结果不会缓存。
+分数绝不能复用于另一策略。普通随机生成结果不会被评分缓存透明复用；动态候选实验中的候选 replay
+是算法显式管理的数据：先按辅助分布抽样并冻结 request id，后续读取同一候选块，同时仍重新计算精确
+的 base/辅助概率。它不会把一个随机请求的输出冒充为另一个请求。
 
 on-policy 条件 rollout 会直接携带生成时得到的精确 base-policy log-probability，因此后端不会再进行
 冗余的完整序列评分。off-policy rollout 仍显式计算主模型分数。长评分请求会拆成有界 microbatch，

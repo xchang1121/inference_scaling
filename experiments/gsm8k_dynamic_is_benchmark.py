@@ -39,7 +39,7 @@ from inference_scaling.algorithms.dynamic_is import (
     dynamic_is_step,
     empirical_design_statistics,
 )
-from inference_scaling.backends import ScoreCachingBackend
+from inference_scaling.backends import CachedCandidateBackend, ScoreCachingBackend
 from inference_scaling.config import DynamicISConfig, SamplingConfig
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.replay import (
@@ -60,6 +60,7 @@ IMPLEMENTATION_FILES = (
     "experiments/summarize_gsm8k_dynamic_is.py",
     "src/inference_scaling/algorithms/dynamic_is.py",
     "src/inference_scaling/algorithms/base_replay.py",
+    "src/inference_scaling/backends/candidate_cache.py",
     "src/inference_scaling/backends/cache.py",
     "src/inference_scaling/backends/transformers_backend.py",
     "src/inference_scaling/replay.py",
@@ -522,9 +523,6 @@ def _run_method(
     registry = BehaviorRegistry([base_policy, history_policy])
     store = InMemoryReplayStore()
     reward = _correctness_reward(backend, gold)
-    proposal = CandidateProposal.for_backend(
-        cached_proposal, proposal_sampling, label="replay-cache-source"
-    )
     history_cost = 1.0
     fresh_cost = 1.0 + proposal_backend.parameter_count / backend.parameter_count
 
@@ -642,6 +640,15 @@ def _run_method(
             auxiliary_mixture=mixture,
             minimum_fresh_per_candidate=1,
         )
+        step_proposal = (
+            CandidateProposal.for_backend(
+                CachedCandidateBackend(cached_proposal, cache_samples),
+                proposal_sampling,
+                label="replay-cache-source",
+            )
+            if mixture
+            else None
+        )
         online_base_before = backend.snapshot()
         online_proposal_before = proposal_backend.snapshot()
         step, seconds = _timed(
@@ -657,7 +664,7 @@ def _run_method(
                 reward_version=REWARD_VERSION,
                 seeds=seeds,
                 step_index=step_index,
-                auxiliary_proposal=proposal if mixture else None,
+                auxiliary_proposal=step_proposal,
                 statistics_provider=statistics_provider,
                 design_prepare=design_prepare,
                 rollout_budget_provider=budget,
