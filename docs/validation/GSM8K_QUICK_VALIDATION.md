@@ -1,5 +1,8 @@
 # GSM8K quick 集成检查
 
+> 这是工程验证记录，不是当前主实验报告。正式比较见
+> [GSM8K 单卡对齐实验](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
+
 ## 范围
 
 本记录使用 `configs/gsm8k_quick.toml` 和 tag `validated`。主方法、共同目标诊断与 replay 使用官方
@@ -9,11 +12,11 @@ GSM8K 测试集中的 8 条固定样本；异步调度使用 32 条固定样本�
 这是一轮集成检查，目的是验证方法路径、概率、缓存、计算账本和结果汇总能够一起工作。8 条样本的
 Wilson 区间很宽，不能据此确认稳定的质量排序。可追溯结果为：
 
-- `results/gsm8k_quick_comparison_validated.json`；
-- `results/gsm8k_quick_replay_validated.json`；
-- `results/gsm8k_quick_async_validated.json`；
-- `results/gsm8k_quick_compute_validated.json`；
-- `results/gsm8k_grpo_training_summary.json`。
+- `results/validation/gsm8k_quick_comparison_validated.json`；
+- `results/validation/gsm8k_quick_replay_validated.json`；
+- `results/validation/gsm8k_quick_async_validated.json`；
+- `results/validation/gsm8k_quick_compute_validated.json`；
+- `results/training/gsm8k_grpo_training_summary.json`。
 
 这些 JSON 保存模型权重、关键实现文件和方法 manifest 的 SHA-256；原始逐题记录保留在本机并被
 Git 忽略。
@@ -56,14 +59,14 @@ IS；小模型减少了主模型生成，却需要主模型重评分和精确 im
 verifier MH 与 GRPO 在这 8 条样本上的逐题正确向量完全相同；verifier 条件 IS 的总正确数相同，但
 答对的具体题目不完全相同。这个结果与“直接采样和训练可以近似同一输出目标”的预期一致，但样本太少，
 还不能确认统计等价。GRPO 行的推理 FLOPs 不包含一次性的 15.646 PFLOPs 训练成本；重复查询的盈亏平衡
-必须在 standard 计算报告中另算。
+必须在正式计算报告中另算。
 
 quick 账本把这次相同准确率暂时视为“准确率匹配”，得到以下探索性盈亏平衡：verifier MH 相对 GRPO
 随机采样约为 1,369 次查询（FLOPs）或 352 次查询（本机墙钟）；verifier 条件 IS 约为 1,083 次
 查询（FLOPs）或 1,410 次查询（墙钟）。这些数字的分母都是“无训练方法每题成本减去 GRPO 每题推理
 成本”，并包含 GRPO 的一次性 15.646 PFLOPs / 9,545 s 训练成本。0.5B proposal verifier 条件 IS
-比 GRPO 低 12.5 个百分点，因此只报告原始盈亏平衡，不把它标成质量匹配。尚未运行答案分布审计，
-所以本阶段没有“准确率与输出分布同时匹配”的结论。
+比 GRPO 低 12.5 个百分点，因此只报告原始盈亏平衡，不把它标成质量匹配。该 quick 产物没有运行
+答案分布审计，所以不能给出“准确率与输出分布同时匹配”的结论；正式实验已单独补充该诊断。
 
 ## rollout replay
 
@@ -95,12 +98,9 @@ replay 的分母是相同候选、相同 `H+F` 总 rollout 预算的 fresh-only 
 方法存在 live sampling path 分叉，其墙钟因子只表示相同配置与 seed 下的真实 workload 对比。连续
 批处理提高硬件利用率，但 padding 和分叉路径使模型处理的 token slots 增加，因此它不是 FLOPs 优化。
 
-## 下一阶段
+## 与正式结果的关系
 
-standard 主实验使用 128 条固定测试题；质量—预算、奖励、候选数、rollout 数、block、长度与 replay
-消融使用 32 条固定题。只有 standard 结果才能用于判断以下结论是否在更稳定的样本规模上成立：
-
-- 共同目标下 MH、IS 与 GRPO 的质量是否接近；
-- 0.5B proposal 是否在墙钟或 FLOPs 上真正优于标准条件 IS；
-- replay 的缓存构建成本需要复用多少次才能回本；
-- 条件采样的准确率、ESS、裁剪率和计算量随预算如何变化。
+后续 32 题单卡对齐实验沿用相同方法和计量口径，并补充独立 draw 的 pass@k、共享目标答案分布审计、
+更完整的 replay 成本及消融。quick 阶段观察到的小 proposal 墙钟优势没有在正式实验中转化为质量匹配
+或 FLOPs 缩减；replay 的在线收益则在更完整的缓存实验中变得可测。后续结论统一以
+[主实验报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)为准。

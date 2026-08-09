@@ -212,7 +212,7 @@
     "distribution_level": "parsed final answer, not full token sequence",
     "draws_per_problem": 8,
     "limitation": "Finite draws estimate answer-level distributions only. Bootstrap intervals include finite-draw variability but not model, prompt, or hyperparameter uncertainty. The GRPO split-half distance is a sampling-noise reference, not a correction. None of these quantities can establish equality of full token-sequence distributions.",
-    "path": "results\\gsm8k_3090_aligned_distribution_audit_validated.json",
+    "path": "results\\gsm8k_3090\\gsm8k_3090_aligned_distribution_audit_validated.json",
     "problem_indices": [
       69,
       704,

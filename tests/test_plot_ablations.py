@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_ablation_svg_loads_formal_report_and_is_valid_xml() -> None:
     payload = json.loads(
-        (ROOT / "results" / "gsm8k_3090_aligned_ablations_validated.json").read_text(
+        (
+            ROOT
+            / "results"
+            / "gsm8k_3090"
+            / "gsm8k_3090_aligned_ablations_validated.json"
+        ).read_text(
             encoding="utf-8"
         )
     )

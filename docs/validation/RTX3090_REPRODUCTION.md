@@ -6,8 +6,8 @@
 测试负责检查目标分布与 replay 估计器；本实验检查同一套实现能否在物理 GPU 上运行，并表现出预期的
 定性行为。
 
-已核验的 JSON 产物为 `results/rtx3090_reproduction.json`（FP32 算法与系统结果）和
-`results/rtx3090_backend_bfloat16.json`（低精度诊断）。
+已核验的 JSON 产物为 `results/validation/rtx3090_reproduction.json`（FP32 算法与系统结果）和
+`results/validation/rtx3090_backend_bfloat16.json`（低精度诊断）。
 
 ## 环境
 
@@ -32,7 +32,7 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\rtx3090_reproduction.py `
   --model models\Qwen2.5-0.5B-Instruct `
   --dtype float32 `
-  --output results\rtx3090_reproduction.json
+  --output results\validation\rtx3090_reproduction.json
 ```
 
 BF16 诊断把 `--dtype` 改为 `bfloat16`，并写入第二个 JSON 文件。

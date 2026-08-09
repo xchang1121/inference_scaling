@@ -17,7 +17,12 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = ROOT / "results" / "gsm8k_3090_aligned_comparison_validated.json"
+DEFAULT_INPUT = (
+    ROOT
+    / "results"
+    / "gsm8k_3090"
+    / "gsm8k_3090_aligned_comparison_validated.json"
+)
 DEFAULT_OUTPUT = ROOT / "docs" / "assets" / "gsm8k_3090_aligned_quality_compute.svg"
 
 WIDTH = 1280

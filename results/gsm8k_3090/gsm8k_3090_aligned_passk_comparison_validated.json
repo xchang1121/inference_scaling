@@ -65,7 +65,7 @@
       }
     },
     "source": {
-      "path": "results\\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl",
+      "path": "results\\gsm8k_3090\\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl",
       "sha256": "4d1ee4c78069790861ad51608245d60f94ed24a80ba26c6058dcc2382ff2542a"
     },
     "weighting_note": "Correction and reward means weight each per-record mean by that record's rollout evaluation count. ESS uses the same weighting; rollout count is fixed within this experiment, so it is also proportional to the number of candidate-step ESS values."
@@ -1074,20 +1074,20 @@
   ],
   "schema_version": 1,
   "source_by_method": {
-    "base": "results\\gsm8k_3090_aligned_passk_validated.json",
-    "conditional_is": "results\\gsm8k_3090_aligned_is_passk_validated.json",
-    "conditional_is_small_proposal": "results\\gsm8k_3090_aligned_is_passk_validated.json",
-    "conditional_is_small_proposal_unclipped": "results\\gsm8k_3090_aligned_is_passk_validated.json",
-    "mh": "results\\gsm8k_3090_aligned_passk_validated.json",
-    "rl_sample": "results\\gsm8k_3090_aligned_passk_validated.json"
+    "base": "results\\gsm8k_3090\\gsm8k_3090_aligned_passk_validated.json",
+    "conditional_is": "results\\gsm8k_3090\\gsm8k_3090_aligned_is_passk_validated.json",
+    "conditional_is_small_proposal": "results\\gsm8k_3090\\gsm8k_3090_aligned_is_passk_validated.json",
+    "conditional_is_small_proposal_unclipped": "results\\gsm8k_3090\\gsm8k_3090_aligned_is_passk_validated.json",
+    "mh": "results\\gsm8k_3090\\gsm8k_3090_aligned_passk_validated.json",
+    "rl_sample": "results\\gsm8k_3090\\gsm8k_3090_aligned_passk_validated.json"
   },
   "source_reports": [
     {
-      "path": "results\\gsm8k_3090_aligned_passk_validated.json",
+      "path": "results\\gsm8k_3090\\gsm8k_3090_aligned_passk_validated.json",
       "sha256": "64bfef9be4177bffc49501093d2e43f005aceb45d80f636c912f6db1bc602c48"
     },
     {
-      "path": "results\\gsm8k_3090_aligned_is_passk_validated.json",
+      "path": "results\\gsm8k_3090\\gsm8k_3090_aligned_is_passk_validated.json",
       "sha256": "b3ae583a9193e8906355549e1b32fa73a641358f3c2e93bf21259783bb1641a3"
     }
   ]

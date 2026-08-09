@@ -42,6 +42,12 @@ def main() -> None:
     parser.add_argument("--ablation-limit", type=int, default=32)
     parser.add_argument("--passk-limit", type=int, default=32)
     parser.add_argument("--passk-draws", type=int, default=8)
+    parser.add_argument(
+        "--summary-root",
+        type=Path,
+        default=Path("results"),
+        help="directory for replay and asynchronous aggregate reports",
+    )
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
@@ -96,7 +102,10 @@ def main() -> None:
             )
 
     if args.with_replay:
-        replay_output = f"results/{args.config.stem}_replay_{args.tag}.json"
+        args.summary_root.mkdir(parents=True, exist_ok=True)
+        replay_output = str(
+            args.summary_root / f"{args.config.stem}_replay_{args.tag}.json"
+        )
         _run(
             [
                 sys.executable,
@@ -118,6 +127,7 @@ def main() -> None:
             environment,
         )
     if args.with_async:
+        args.summary_root.mkdir(parents=True, exist_ok=True)
         async_limit = args.limit if args.limit is not None else min(args.ablation_limit, 32)
         _run(
             [
@@ -128,7 +138,10 @@ def main() -> None:
                 "--limit",
                 str(async_limit),
                 "--output",
-                f"results/{args.config.stem}_async_grouped_{args.tag}.json",
+                str(
+                    args.summary_root
+                    / f"{args.config.stem}_async_grouped_{args.tag}.json"
+                ),
             ],
             environment,
         )

@@ -83,7 +83,7 @@ prompt 和重评分。墙钟排除模型与数据加载，并在每题起止处�
 | GRPO 随机采样 | 22 | 68.750% | 0.0254 | 0.91× | 124.9 s |
 | GRPO 贪心 | 18 | 56.250% | 0.0263 | 0.94× | 127.2 s |
 
-![GSM8K 单次回答准确率与推理计算量](assets/gsm8k_3090_aligned_quality_compute.svg)
+![GSM8K 单次回答准确率与推理计算量](../assets/gsm8k_3090_aligned_quality_compute.svg)
 
 标准条件 IS 与 GRPO 随机采样相差 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
 [-12.500, 6.250]；相对 Base 提高 25 个百分点。两者的奖励不同，因此该结果只说明单次回答质量
@@ -102,7 +102,7 @@ prompt 和重评分。墙钟排除模型与数据加载，并在每题起止处�
 每种方法在相同 32 道题上独立采样 8 次，共生成 256 条回答。不同 draw 不共享候选、rollout 或
 replay 数据；连续批处理只改变物理执行方式。
 
-![GSM8K 六种方法的 pass@k 与题目级不确定性](assets/gsm8k_3090_aligned_passk.svg)
+![GSM8K 六种方法的 pass@k 与题目级不确定性](../assets/gsm8k_3090_aligned_passk.svg)
 
 | 方法 | pass@1 | pass@2 | pass@4 | pass@8 | 8 draw 推理 PFLOPs |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -202,7 +202,7 @@ rollout replay 固定 8 个 base 候选和每候选 3 条 rollout。warm 路径�
 所有消融点使用同一组 8 道题；每题只贡献 0 或 1，因此准确率的最小变化为 12.5%。图中误差线为
 Wilson 95% 区间。
 
-![GSM8K 候选、引导阶段、MH 更新次数和生成长度消融](assets/gsm8k_3090_aligned_ablations.svg)
+![GSM8K 候选、引导阶段、MH 更新次数和生成长度消融](../assets/gsm8k_3090_aligned_ablations.svg)
 
 | 维度 | 设置与正确数 | 8 题合计 PFLOPs | 结论 |
 | --- | --- | --- | --- |
@@ -234,4 +234,5 @@ Wilson 95% 区间。
 
 这些结论来自 32 道固定题和单张 RTX 3090，不能替代完整 1,319 题评测。FLOPs 估算不包含二次
 attention、逐元素 kernel、tokenization 和主机调度；墙钟用于补充反映这些实现成本。正式机器可读
-结果保存在 `results/gsm8k_3090_aligned_*_validated.json`，图表均由相应汇总 JSON 确定性生成。
+结果保存在 `results/gsm8k_3090/gsm8k_3090_aligned_*_validated.json`，图表均由相应汇总 JSON
+确定性生成。各文件用途见 [`results/README.md`](../../results/README.md)。

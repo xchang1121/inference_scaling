@@ -21,6 +21,117 @@ wall-time 收益，以及候选数、rollout 数、引导轮数、奖励、温�
 和本地 GRPO 是额外的统一对照，用来检验 training-free 重分配与训练方法能否得到相近效果，并比较
 达到相近效果所需的 token slot 与 FLOPs。
 
+## 复现流程与产物
+
+以下命令均从仓库根目录运行。原始逐题记录写入 `results/gsm8k/<profile>/`，该目录默认不提交；只有
+完成网格和一致性检查后的汇总才写入 `results/gsm8k_3090/`。同一命令可以按 manifest fingerprint
+恢复，不会把不同配置或实现版本的记录混在一起。
+
+### 1. 准备数据、模型与训练对照
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\prepare_gsm8k.py `
+  --config configs\gsm8k_3090_aligned.toml
+
+.\.venv\Scripts\python experiments\train_gsm8k_grpo.py --resume auto
+```
+
+训练是可选步骤：若已有与 `configs/gsm8k_grpo.toml` 和固定基座 revision 匹配的 adapter，可以直接
+使用。训练摘要保存到 `results/training/gsm8k_grpo_training_summary.json`。
+
+### 2. 运行主网格、replay 与批处理实验
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\run_gsm8k_suite.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --summary-root results\gsm8k_3090 `
+  --with-matched-target `
+  --with-replay `
+  --with-async `
+  --with-ablations `
+  --with-budget-curve `
+  --with-length-ablation `
+  --ablation-limit 8
+```
+
+主方法与共享目标使用 32 道固定题；消融使用另一组 8 道题。`--summary-root` 只控制 replay 和连续
+批处理的汇总位置，逐题可恢复记录仍由各运行器写入 `results/gsm8k/`。
+
+### 3. 生成主表、计算量、分布审计与消融汇总
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\summarize_gsm8k.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_comparison_validated.json
+
+.\.venv\Scripts\python experiments\gsm8k_distribution_audit.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --problem-count 4 `
+  --draws 8 `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_compute.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --training-cost models\Qwen2.5-1.5B-Instruct-GRPO-GSM8K\training_cost.json `
+  --distribution-audit results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_compute_validated.json
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_ablations.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_ablations_validated.json
+```
+
+这些后处理器只读取完成的原始记录，并核对题目网格、manifest 与输入文件哈希。失败时不会生成带
+`validated` 后缀的正式汇总。
+
+### 4. 运行独立 draw 的 pass@k 比较
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\gsm8k_passk.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --limit 32 `
+  --draws 8 `
+  --workers 8 `
+  --tag validated `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json
+
+.\.venv\Scripts\python experiments\gsm8k_is_passk.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --limit 32 `
+  --draws 8 `
+  --workers 8 `
+  --tag validated `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_passk.py `
+  results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json `
+  results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json `
+  --is-raw-chunks results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_passk_comparison_validated.json
+```
+
+不同 draw 不共享候选、rollout 或 replay。raw chunks 用于恢复和诊断，正式汇总记录其 SHA-256；raw
+文件本身不提交。
+
+### 5. 从正式 JSON 生成图表
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\plot_gsm8k_quality_compute.py
+.\.venv\Scripts\python experiments\plot_gsm8k_passk.py
+.\.venv\Scripts\python experiments\plot_gsm8k_ablations.py
+```
+
+三个绘图脚本默认读取 `results/gsm8k_3090/`，并确定性写入 `docs/assets/`。正式产物的逐文件用途见
+[`results/README.md`](../../results/README.md)。
+
 ## 固定比较约定
 
 主模型为 `Qwen/Qwen2.5-1.5B-Instruct`。RL 对照是在同一个冻结 checkpoint 上训练得到的本地 GRPO
