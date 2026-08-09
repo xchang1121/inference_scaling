@@ -52,7 +52,13 @@ from inference_scaling.algorithms.dynamic_is import (
     dynamic_is_step,
     empirical_design_statistics,
 )
-from inference_scaling.backends import CachedCandidateBackend, ScoreCachingBackend
+from inference_scaling.backends import (
+    BACKEND_CHOICES,
+    CachedCandidateBackend,
+    ScoreCachingBackend,
+    close_backend,
+    set_backend_override,
+)
 from inference_scaling.config import DynamicISConfig, SamplingConfig
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.replay import (
@@ -73,7 +79,9 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/algorithms/base_replay.py",
     "src/inference_scaling/backends/candidate_cache.py",
     "src/inference_scaling/backends/cache.py",
+    "src/inference_scaling/backends/loader.py",
     "src/inference_scaling/backends/transformers_backend.py",
+    "src/inference_scaling/backends/vllm_backend.py",
     "src/inference_scaling/replay.py",
     "src/inference_scaling/config.py",
     "src/inference_scaling/types.py",
@@ -958,6 +966,7 @@ def _run_method(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument(
         "--config", type=Path, default=Path("configs/gsm8k_3090_aligned.toml")
     )
@@ -975,6 +984,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     with args.extension_config.open("rb") as source:
         extension_config = tomllib.load(source)
     if "dynamic_extension" not in extension_config:
@@ -1141,6 +1151,8 @@ def main() -> None:
         args.aggregate_output.parent.mkdir(parents=True, exist_ok=True)
         args.aggregate_output.write_text(serialized, encoding="utf-8")
     print(serialized)
+    close_backend(proposal_backend)
+    close_backend(backend)
 
 
 if __name__ == "__main__":

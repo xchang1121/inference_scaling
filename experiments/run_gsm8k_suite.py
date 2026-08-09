@@ -9,6 +9,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from inference_scaling.backends import BACKEND_CHOICES
+
 DEFAULT_METHODS = (
     "base",
     "beam",
@@ -29,6 +31,7 @@ def _run(command: list[str], environment: dict[str, str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--tag", default="default")
     parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     parser.add_argument("--limit", type=int)
@@ -66,8 +69,13 @@ def main() -> None:
     existing = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = "src" + (os.pathsep + existing if existing else "")
     common = ["--config", str(args.config), "--tag", args.tag]
+    summary_common = ["--config", str(args.config), "--tag", args.tag]
+    backend_args = [] if args.backend is None else ["--backend", args.backend]
+    if args.backend is not None:
+        common.extend(backend_args)
     if args.limit is not None:
         common.extend(["--limit", str(args.limit)])
+        summary_common.extend(["--limit", str(args.limit)])
 
     methods = tuple(method.strip() for method in args.methods.split(",") if method.strip())
     unknown = sorted(set(methods) - set(DEFAULT_METHODS))
@@ -121,7 +129,7 @@ def main() -> None:
             [
                 sys.executable,
                 "experiments/summarize_gsm8k_replay.py",
-                *common,
+                *summary_common,
                 "--output",
                 replay_output,
             ],
@@ -151,6 +159,7 @@ def main() -> None:
                 "experiments/gsm8k_async_benchmark.py",
                 "--config",
                 str(args.config),
+                *backend_args,
                 "--limit",
                 str(async_limit),
                 "--output",
@@ -175,6 +184,7 @@ def main() -> None:
                 str(args.passk_limit),
                 "--draws",
                 str(args.passk_draws),
+                *backend_args,
             ],
             environment,
         )
@@ -183,6 +193,7 @@ def main() -> None:
         ablation_common = [
             "--config",
             str(args.config),
+            *backend_args,
             "--limit",
             str(args.ablation_limit),
         ]
@@ -420,6 +431,7 @@ def main() -> None:
         curve_common = [
             "--config",
             str(args.config),
+            *backend_args,
             "--limit",
             str(args.ablation_limit),
         ]
@@ -533,6 +545,7 @@ def main() -> None:
         length_common = [
             "--config",
             str(args.config),
+            *backend_args,
             "--limit",
             str(args.ablation_limit),
         ]

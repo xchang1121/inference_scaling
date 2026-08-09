@@ -28,7 +28,12 @@ from gsm8k_reproduction import (
 )
 from inference_scaling.algorithms.base_replay import _score_base, base_replay_step
 from inference_scaling.algorithms.conditional_energy import _sample_candidates
-from inference_scaling.backends import ScoreCachingBackend
+from inference_scaling.backends import (
+    BACKEND_CHOICES,
+    ScoreCachingBackend,
+    close_backend,
+    set_backend_override,
+)
 from inference_scaling.config import BaseReplayConfig, SamplingConfig
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.replay import (
@@ -48,7 +53,9 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/algorithms/base_replay.py",
     "src/inference_scaling/algorithms/conditional_energy.py",
     "src/inference_scaling/backends/cache.py",
+    "src/inference_scaling/backends/loader.py",
     "src/inference_scaling/backends/transformers_backend.py",
+    "src/inference_scaling/backends/vllm_backend.py",
     "src/inference_scaling/replay.py",
     "src/inference_scaling/config.py",
     "src/inference_scaling/types.py",
@@ -347,6 +354,7 @@ def _load_records(path: Path) -> list[dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--output-root", type=Path, default=Path("results/gsm8k"))
     parser.add_argument(
@@ -360,6 +368,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
     problems = select_problems(
@@ -667,6 +676,8 @@ def main() -> None:
         args.aggregate_output.parent.mkdir(parents=True, exist_ok=True)
         args.aggregate_output.write_text(serialized_summary, encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    close_backend(proposal)
+    close_backend(backend)
 
 
 if __name__ == "__main__":

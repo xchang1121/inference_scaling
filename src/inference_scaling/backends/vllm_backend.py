@@ -50,6 +50,8 @@ class VLLMBackendSnapshot:
     engine_requests: int
     native_score_sequences: int
     delegated_score_sequences: int
+    delegated_score_forward_token_slots: int
+    delegated_estimated_dense_forward_flops: int
     maximum_in_flight_requests: int
 
 
@@ -189,6 +191,7 @@ class VLLMBackend:
         parameter_count: int,
         sampling_params_factory: Callable[..., Any],
         tokens_prompt_factory: Callable[..., Any] | None = None,
+        beam_search_params_factory: Callable[..., Any] | None = None,
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
     ) -> None:
@@ -202,6 +205,7 @@ class VLLMBackend:
         self._parameter_count = int(parameter_count)
         self._sampling_params_factory = sampling_params_factory
         self._tokens_prompt_factory = tokens_prompt_factory
+        self._beam_search_params_factory = beam_search_params_factory
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
         pad = getattr(tokenizer, "pad_token_id", None)
@@ -214,6 +218,7 @@ class VLLMBackend:
             else int(tokenizer.bos_token_id)
         )
         self._engine_lock = threading.RLock()
+        self._delegated_score_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
         self._closed = False
         self._sample_calls = 0
@@ -229,6 +234,8 @@ class VLLMBackend:
         self._engine_requests = 0
         self._native_score_sequences = 0
         self._delegated_score_sequences = 0
+        self._delegated_score_forward_token_slots = 0
+        self._delegated_estimated_dense_forward_flops = 0
         self._active_engine_requests = 0
         self._maximum_in_flight_requests = 0
 
@@ -259,7 +266,7 @@ class VLLMBackend:
     ) -> "VLLMBackend":
         try:
             from transformers import AutoTokenizer
-            from vllm import LLM, SamplingParams, TokensPrompt
+            from vllm import BeamSearchParams, LLM, SamplingParams, TokensPrompt
         except ImportError as error:  # pragma: no cover - optional GPU installation
             raise ModuleNotFoundError(
                 "VLLMBackend.from_pretrained requires the project's vllm extra"
@@ -340,6 +347,7 @@ class VLLMBackend:
             parameter_count=counted,
             sampling_params_factory=SamplingParams,
             tokens_prompt_factory=TokensPrompt,
+            beam_search_params_factory=BeamSearchParams,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
         )
@@ -351,6 +359,12 @@ class VLLMBackend:
     @property
     def parameter_count(self) -> int:
         return self._parameter_count
+
+    @property
+    def scoring_backend(self) -> AutoregressiveBackend | None:
+        """Optional exact backend used for policies vLLM cannot rescore itself."""
+
+        return self._scoring_backend
 
     def _model_prefix(self, prefix: TokenSequence) -> TokenSequence:
         if prefix:
@@ -503,9 +517,9 @@ class VLLMBackend:
         self,
         items: Sequence[tuple[int, ScoreRequest, TokenSequence]],
         results: list[tuple[float, ...]],
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         if not items:
-            return 0, 0
+            return 0, 0, 0
         prompts = [
             self._prompt(self._model_prefix(request.prefix) + continuation)
             for _, request, continuation in items
@@ -514,6 +528,7 @@ class VLLMBackend:
         if len(outputs) != len(items):
             raise RuntimeError("vLLM returned an invalid number of scoring outputs")
         forward_slots = 0
+        cached_tokens = 0
         for (index, request, continuation), output in zip(items, outputs, strict=True):
             prompt_logprobs = getattr(output, "prompt_logprobs", None)
             prefix = self._model_prefix(request.prefix)
@@ -524,8 +539,51 @@ class VLLMBackend:
                 _logprob_value(position, token)
                 for position, token in zip(positions, continuation, strict=True)
             )
-            forward_slots += len(prefix) + len(continuation)
-        return len(items), forward_slots
+            prompt_length = len(prefix) + len(continuation)
+            cached = min(
+                prompt_length,
+                int(getattr(output, "num_cached_tokens", 0) or 0),
+            )
+            forward_slots += prompt_length - cached
+            cached_tokens += cached
+        return len(items), forward_slots, cached_tokens
+
+    def _delegated_compute_delta(
+        self,
+        before: Any | None,
+        after: Any | None,
+        requests: Sequence[ScoreRequest],
+    ) -> tuple[int, int]:
+        if before is not None and after is not None:
+            slots = int(after.score_forward_token_slots) - int(
+                before.score_forward_token_slots
+            )
+            flops = int(after.estimated_dense_forward_flops) - int(
+                before.estimated_dense_forward_flops
+            )
+            return slots, flops
+        slots = sum(
+            len(self._model_prefix(request.prefix)) + len(continuation)
+            for request in requests
+            for continuation in request.continuations
+        )
+        return slots, dense_forward_flops(self.parameter_count, slots)
+
+    def _run_delegated_score(self, requests: Sequence[ScoreRequest], method: str):
+        if self._scoring_backend is None:
+            raise RuntimeError("an exact scoring backend is not configured")
+        callback = getattr(self._scoring_backend, method, None)
+        if callback is None:
+            raise ValueError(
+                f"the configured exact scoring backend does not implement {method}"
+            )
+        snapshot = getattr(self._scoring_backend, "snapshot", None)
+        with self._delegated_score_lock:
+            before = snapshot() if snapshot is not None else None
+            outputs = callback(requests)
+            after = snapshot() if snapshot is not None else None
+        slots, flops = self._delegated_compute_delta(before, after, requests)
+        return outputs, slots, flops
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         flattened = [
@@ -545,7 +603,9 @@ class VLLMBackend:
             else:
                 delegated.append(item)
 
-        native_count, score_slots = self._score_native(native, results)
+        native_count, score_slots, cached_tokens = self._score_native(native, results)
+        delegated_slots = 0
+        delegated_flops = 0
         if delegated:
             if self._scoring_backend is None:
                 policies = sorted({item[1].sampling.policy_id for item in delegated if item[1].sampling})
@@ -557,7 +617,10 @@ class VLLMBackend:
                 ScoreRequest(request.prefix, (continuation,), request.sampling)
                 for _, request, continuation in delegated
             ]
-            delegated_outputs = self._scoring_backend.score_batch(delegated_requests)
+            delegated_outputs, delegated_slots, delegated_flops = self._run_delegated_score(
+                delegated_requests,
+                "score_batch",
+            )
             if len(delegated_outputs) != len(delegated):
                 raise RuntimeError("exact scoring backend returned an invalid result count")
             for (index, _, continuation), scores in zip(
@@ -570,14 +633,47 @@ class VLLMBackend:
         with self._statistics_lock:
             self._score_calls += 1
             self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
-            self._score_forward_token_slots += score_slots
+            self._shared_prefill_tokens_saved += cached_tokens
+            self._score_forward_token_slots += score_slots + delegated_slots
             self._estimated_dense_forward_flops += dense_forward_flops(
                 self.parameter_count, score_slots
-            )
+            ) + delegated_flops
             self._engine_requests += native_count
             self._native_score_sequences += native_count
             self._delegated_score_sequences += len(delegated)
+            self._delegated_score_forward_token_slots += delegated_slots
+            self._delegated_estimated_dense_forward_flops += delegated_flops
         return results
+
+    def score_statistics_batch(self, requests: Sequence[ScoreRequest]) -> list[Any]:
+        """Delegate full-vocabulary confidence statistics to the exact backend.
+
+        Selected-token prompt log-probabilities are enough for IS and MH at the
+        base policy, but entropy and self-certainty require the whole vocabulary.
+        Keeping that operation explicit prevents a vLLM speed setting from
+        silently changing a confidence reward.
+        """
+
+        flattened = [
+            continuation
+            for request in requests
+            for continuation in request.continuations
+        ]
+        outputs, slots, flops = self._run_delegated_score(
+            requests,
+            "score_statistics_batch",
+        )
+        if len(outputs) != len(flattened):
+            raise RuntimeError("exact scoring backend returned an invalid result count")
+        with self._statistics_lock:
+            self._score_calls += 1
+            self._scored_tokens += sum(len(continuation) for continuation in flattened)
+            self._score_forward_token_slots += slots
+            self._estimated_dense_forward_flops += flops
+            self._delegated_score_sequences += len(flattened)
+            self._delegated_score_forward_token_slots += slots
+            self._delegated_estimated_dense_forward_flops += flops
+        return list(outputs)
 
     def snapshot(self) -> VLLMBackendSnapshot:
         with self._statistics_lock:
@@ -595,6 +691,12 @@ class VLLMBackend:
                 engine_requests=self._engine_requests,
                 native_score_sequences=self._native_score_sequences,
                 delegated_score_sequences=self._delegated_score_sequences,
+                delegated_score_forward_token_slots=(
+                    self._delegated_score_forward_token_slots
+                ),
+                delegated_estimated_dense_forward_flops=(
+                    self._delegated_estimated_dense_forward_flops
+                ),
                 maximum_in_flight_requests=self._maximum_in_flight_requests,
             )
 
@@ -608,6 +710,71 @@ class VLLMBackend:
         return str(
             self.tokenizer.decode(list(tokens), skip_special_tokens=skip_special_tokens)
         )
+
+    def direct_generate(
+        self,
+        prefix: TokenSequence,
+        *,
+        max_new_tokens: int,
+        num_beams: int = 1,
+    ) -> TokenSequence:
+        """Run the greedy/beam baseline without changing algorithm sampling."""
+
+        if max_new_tokens <= 0 or num_beams <= 0:
+            raise ValueError("generation length and beam count must be positive")
+        model_prefix = self._model_prefix(prefix)
+        prompt = self._prompt(model_prefix)
+        if num_beams == 1:
+            params = self._sampling_params_factory(
+                max_tokens=int(max_new_tokens),
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                seed=0,
+                ignore_eos=False,
+                stop_token_ids=[],
+                detokenize=False,
+                skip_special_tokens=False,
+                spaces_between_special_tokens=False,
+            )
+            outputs = self._generate([prompt], params)
+            if len(outputs) != 1:
+                raise RuntimeError("vLLM returned an invalid greedy output count")
+            return tuple(int(token) for token in self._completion(outputs[0]).token_ids)
+
+        beam_search = getattr(self._engine, "beam_search", None)
+        if beam_search is None or self._beam_search_params_factory is None:
+            delegated = getattr(self._scoring_backend, "direct_generate", None)
+            if delegated is not None:
+                return tuple(
+                    delegated(
+                        prefix,
+                        max_new_tokens=max_new_tokens,
+                        num_beams=num_beams,
+                    )
+                )
+            raise ValueError(
+                "beam search requires runtime.backend='vllm-sync' or a "
+                "Transformers exact_scoring_backend"
+            )
+        kwargs: dict[str, Any] = {
+            "prompts": [prompt],
+            "params": self._beam_search_params_factory(
+                beam_width=int(num_beams),
+                max_tokens=int(max_new_tokens),
+                ignore_eos=False,
+            ),
+            "use_tqdm": False,
+        }
+        if self._lora_request is not None:
+            kwargs["lora_request"] = self._lora_request
+        outputs = list(beam_search(**kwargs))
+        if len(outputs) != 1 or not getattr(outputs[0], "sequences", None):
+            raise RuntimeError("vLLM returned an invalid beam-search output")
+        full_tokens = tuple(int(token) for token in outputs[0].sequences[0].tokens)
+        if full_tokens[: len(model_prefix)] != model_prefix:
+            raise RuntimeError("vLLM beam-search output did not preserve the prompt")
+        return full_tokens[len(model_prefix) :]
 
     def close(self) -> None:
         if self._closed:
@@ -642,6 +809,7 @@ class AsyncVLLMBackend(VLLMBackend):
         parameter_count: int,
         sampling_params_factory: Callable[..., Any],
         tokens_prompt_factory: Callable[..., Any] | None = None,
+        beam_search_params_factory: Callable[..., Any] | None = None,
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
         engine_factory: Callable[[], Any] | None = None,
@@ -660,6 +828,7 @@ class AsyncVLLMBackend(VLLMBackend):
             parameter_count=parameter_count,
             sampling_params_factory=sampling_params_factory,
             tokens_prompt_factory=tokens_prompt_factory,
+            beam_search_params_factory=beam_search_params_factory,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
         )
@@ -691,7 +860,7 @@ class AsyncVLLMBackend(VLLMBackend):
     ) -> "AsyncVLLMBackend":
         try:
             from transformers import AutoTokenizer
-            from vllm import SamplingParams, TokensPrompt
+            from vllm import BeamSearchParams, SamplingParams, TokensPrompt
             from vllm.engine.arg_utils import AsyncEngineArgs
             from vllm.v1.engine.async_llm import AsyncLLM
         except ImportError as error:  # pragma: no cover - optional GPU installation
@@ -776,6 +945,7 @@ class AsyncVLLMBackend(VLLMBackend):
             parameter_count=counted,
             sampling_params_factory=SamplingParams,
             tokens_prompt_factory=TokensPrompt,
+            beam_search_params_factory=BeamSearchParams,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
             engine_factory=create_engine,
@@ -822,6 +992,96 @@ class AsyncVLLMBackend(VLLMBackend):
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
         return self._runner.run(self._generate_many(tuple(prompts), params))
+
+    def _beam_score(self, tokens: Sequence[int], cumulative_logprob: float) -> float:
+        length = len(tokens)
+        eos = getattr(self.tokenizer, "eos_token_id", None)
+        if eos is not None and tokens and int(tokens[-1]) == int(eos):
+            length -= 1
+        return cumulative_logprob / max(1, length)
+
+    async def _beam_search_async(
+        self,
+        prefix: TokenSequence,
+        *,
+        max_new_tokens: int,
+        num_beams: int,
+    ) -> TokenSequence:
+        params = self._sampling_params_factory(
+            max_tokens=1,
+            temperature=0.0,
+            top_p=1.0,
+            top_k=0,
+            seed=0,
+            logprobs=2 * int(num_beams),
+            flat_logprobs=False,
+            ignore_eos=True,
+            detokenize=False,
+            skip_special_tokens=False,
+            spaces_between_special_tokens=False,
+        )
+        model_prefix = self._model_prefix(prefix)
+        active: list[tuple[TokenSequence, float]] = [(model_prefix, 0.0)]
+        completed: list[tuple[TokenSequence, float]] = []
+        eos = getattr(self.tokenizer, "eos_token_id", None)
+        for _ in range(max_new_tokens):
+            outputs = await asyncio.gather(
+                *(
+                    self._generate_one(self._prompt(tokens), params)
+                    for tokens, _ in active
+                )
+            )
+            candidates: list[tuple[TokenSequence, float]] = []
+            for (tokens, cumulative), output in zip(active, outputs, strict=True):
+                completion = self._completion(output)
+                positions = completion.logprobs
+                if positions is None or len(positions) != 1:
+                    raise RuntimeError("vLLM beam expansion omitted next-token log-probabilities")
+                for token, value in positions[0].items():
+                    token_id = int(token)
+                    expanded = tokens + (token_id,)
+                    scored = cumulative + float(getattr(value, "logprob", value))
+                    if eos is not None and token_id == int(eos):
+                        completed.append((expanded, scored))
+                    else:
+                        candidates.append((expanded, scored))
+            active = sorted(
+                candidates,
+                key=lambda item: self._beam_score(*item),
+                reverse=True,
+            )[:num_beams]
+            if not active:
+                break
+        finalists = completed + active
+        if not finalists:
+            raise RuntimeError("vLLM beam search produced no sequence")
+        full_tokens = max(finalists, key=lambda item: self._beam_score(*item))[0]
+        if full_tokens[: len(model_prefix)] != model_prefix:
+            raise RuntimeError("vLLM beam-search output did not preserve the prompt")
+        return full_tokens[len(model_prefix) :]
+
+    def direct_generate(
+        self,
+        prefix: TokenSequence,
+        *,
+        max_new_tokens: int,
+        num_beams: int = 1,
+    ) -> TokenSequence:
+        if num_beams == 1:
+            return super().direct_generate(
+                prefix,
+                max_new_tokens=max_new_tokens,
+                num_beams=num_beams,
+            )
+        if max_new_tokens <= 0 or num_beams <= 0:
+            raise ValueError("generation length and beam count must be positive")
+        return self._runner.run(
+            self._beam_search_async(
+                prefix,
+                max_new_tokens=max_new_tokens,
+                num_beams=num_beams,
+            )
+        )
 
     def close(self) -> None:
         if self._closed:

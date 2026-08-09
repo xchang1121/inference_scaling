@@ -4,6 +4,13 @@ from inference_scaling.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.backends.batching import BatchingSnapshot, ContinuousBatchingBackend
 from inference_scaling.backends.cache import ScoreCacheSnapshot, ScoreCachingBackend
 from inference_scaling.backends.candidate_cache import CachedCandidateBackend
+from inference_scaling.backends.loader import (
+    BACKEND_CHOICES,
+    close_backend,
+    configured_backend,
+    load_backend_from_config,
+    set_backend_override,
+)
 from inference_scaling.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.backends.transformers_backend import (
     SequenceScoreStatistics,
@@ -19,6 +26,7 @@ from inference_scaling.backends.vllm_backend import (
 __all__ = [
     "AbsorbingEOSBackend",
     "AsyncVLLMBackend",
+    "BACKEND_CHOICES",
     "BatchingSnapshot",
     "CachedCandidateBackend",
     "ContinuousBatchingBackend",
@@ -30,4 +38,8 @@ __all__ = [
     "TransformersBackendSnapshot",
     "VLLMBackend",
     "VLLMBackendSnapshot",
+    "close_backend",
+    "configured_backend",
+    "load_backend_from_config",
+    "set_backend_override",
 ]

@@ -44,9 +44,12 @@ else:
     )
 from inference_scaling.algorithms import run_mh_chains_batched
 from inference_scaling.backends import (
+    BACKEND_CHOICES,
     AbsorbingEOSBackend,
     ContinuousBatchingBackend,
     ScoreCachingBackend,
+    close_backend,
+    set_backend_override,
 )
 from inference_scaling.config import MHConfig, SamplingConfig
 from inference_scaling.evaluation import (
@@ -406,6 +409,7 @@ def _run_pending_chunks(
                     f"seconds={chunk['seconds_excluding_model_load']:.3f}",
                     flush=True,
                 )
+        close_backend(raw_backend)
         del raw_backend
         gc.collect()
         if torch.cuda.is_available():
@@ -562,6 +566,7 @@ def _summarize_method(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--tag", default="passk")
     parser.add_argument("--limit", type=int, default=32)
@@ -584,6 +589,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit
     if str(config["runtime"]["device"]).startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")

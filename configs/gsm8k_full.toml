@@ -22,11 +22,37 @@ rl_base = "models/Qwen2.5-1.5B-Instruct"
 rl_kind = "peft_adapter"
 
 [runtime]
+backend = "transformers"
 device = "cuda"
 dtype = "float32"
 max_batch_size = 32
 max_batch_tokens = 16384
 max_score_batch_size = 8
+
+[vllm]
+asynchronous = true
+enable_prefix_caching = true
+exact_scoring_backend = "none"
+tensor_parallel_size = 1
+data_parallel_size = 1
+
+[vllm.base]
+gpu_memory_utilization = 0.62
+max_num_seqs = 128
+max_num_batched_tokens = 16384
+
+[vllm.proposal]
+gpu_memory_utilization = 0.28
+max_num_seqs = 64
+max_num_batched_tokens = 8192
+
+[vllm.rl]
+gpu_memory_utilization = 0.62
+max_num_seqs = 128
+max_num_batched_tokens = 16384
+
+[vllm.engine_kwargs]
+enable_chunked_prefill = true
 
 [generation]
 max_new_tokens = 512

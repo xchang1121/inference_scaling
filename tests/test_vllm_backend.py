@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -33,6 +34,10 @@ class _Output:
 class _SamplingParams:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+
+class _BeamParams(_SamplingParams):
+    pass
 
 
 class _Tokenizer:
@@ -76,6 +81,7 @@ class _Engine:
                     _Output(
                         [_Completion([7], [{7: _Logprob(-0.7)}])],
                         prompt_logprobs=prompt_scores,
+                        num_cached_tokens=min(1, len(prompt_ids)),
                     )
                 )
                 continue
@@ -95,6 +101,14 @@ class _Engine:
         self.closed = True
 
 
+class _BeamEngine(_Engine):
+    def beam_search(self, **kwargs):
+        self.calls.append(kwargs)
+        prompt = self._ids(kwargs["prompts"][0])
+        sequence = type("Beam", (), {"tokens": prompt + [4, 2]})()
+        return [type("BeamOutput", (), {"sequences": [sequence]})()]
+
+
 class _Fallback:
     model_id = "fake"
 
@@ -103,6 +117,13 @@ class _Fallback:
 
     def score_batch(self, requests):
         return [tuple(-0.5 for _ in continuation) for request in requests for continuation in request.continuations]
+
+    def score_statistics_batch(self, requests):
+        return [
+            {"tokens": continuation}
+            for request in requests
+            for continuation in request.continuations
+        ]
 
 
 def _backend(*, fallback=None):
@@ -155,7 +176,8 @@ def test_vllm_native_score_extracts_continuation_prompt_logprobs() -> None:
     snapshot = backend.snapshot()
     assert snapshot.native_score_sequences == 2
     assert snapshot.scored_tokens == 3
-    assert snapshot.score_forward_token_slots == 7
+    assert snapshot.score_forward_token_slots == 5
+    assert snapshot.shared_prefill_tokens_saved == 2
 
 
 def test_vllm_nonunit_score_requires_or_uses_exact_fallback() -> None:
@@ -166,7 +188,21 @@ def test_vllm_nonunit_score_requires_or_uses_exact_fallback() -> None:
 
     backend, _ = _backend(fallback=_Fallback())
     assert backend.score_batch([request]) == [(-0.5, -0.5)]
-    assert backend.snapshot().delegated_score_sequences == 1
+    snapshot = backend.snapshot()
+    assert snapshot.delegated_score_sequences == 1
+    assert snapshot.delegated_score_forward_token_slots == 3
+    assert snapshot.delegated_estimated_dense_forward_flops == 600
+
+
+def test_vllm_delegates_full_vocabulary_confidence_statistics() -> None:
+    backend, _ = _backend(fallback=_Fallback())
+    request = ScoreRequest((1,), ((2, 3),), SamplingConfig())
+
+    assert backend.score_statistics_batch([request]) == [{"tokens": (2, 3)}]
+    snapshot = backend.snapshot()
+    assert snapshot.delegated_score_sequences == 1
+    assert snapshot.score_forward_token_slots == 3
+    assert snapshot.estimated_dense_forward_flops == 600
 
 
 def test_vllm_encode_decode_and_close() -> None:
@@ -176,6 +212,24 @@ def test_vllm_encode_decode_and_close() -> None:
     backend.close()
     backend.close()
     assert engine.closed
+
+
+def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
+    engine = _BeamEngine()
+    backend = VLLMBackend(
+        engine,
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+        beam_search_params_factory=_BeamParams,
+    )
+
+    assert backend.direct_generate((1,), max_new_tokens=2) == (3, 3)
+    assert backend.direct_generate((1,), max_new_tokens=5, num_beams=4) == (4, 2)
+    beam_call = engine.calls[-1]
+    assert beam_call["params"].beam_width == 4
+    assert beam_call["use_tqdm"] is False
 
 
 class _AsyncEngine(_Engine):
@@ -209,8 +263,10 @@ def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
         sampling_params_factory=_SamplingParams,
     )
     sampling = SamplingConfig()
+    start = threading.Barrier(2)
 
     def generate(seed):
+        start.wait()
         return backend.sample_batch(
             [GenerationRequest((1,), 1, sampling, seed, f"r{seed}")]
         )[0]
@@ -221,5 +277,6 @@ def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
     assert [sample.request_id for sample in samples] == ["r1", "r2"]
     assert engine.maximum_active == 2
     assert backend.snapshot().maximum_in_flight_requests == 2
+    assert backend.direct_generate((1,), max_new_tokens=2, num_beams=2) == (3, 3)
     backend.close()
     assert engine.closed

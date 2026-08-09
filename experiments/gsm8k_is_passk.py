@@ -59,7 +59,12 @@ else:
         _snapshot_delta,
         _timed,
     )
-from inference_scaling.backends import ContinuousBatchingBackend
+from inference_scaling.backends import (
+    BACKEND_CHOICES,
+    ContinuousBatchingBackend,
+    close_backend,
+    set_backend_override,
+)
 from inference_scaling.evaluation import (
     extract_numeric_answer,
     load_gsm8k,
@@ -400,6 +405,8 @@ def _run_pending_chunks(
                     flush=True,
                 )
 
+        close_backend(raw_proposal)
+        close_backend(raw_base)
         del raw_proposal
         del raw_base
         gc.collect()
@@ -472,6 +479,7 @@ def _cost_ratio(reference: dict[str, Any], candidate: dict[str, Any]) -> dict[st
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--tag", default="is-passk")
     parser.add_argument("--limit", type=int, default=32)
@@ -494,6 +502,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit
     config["is_passk"] = {
         "method_definitions": {

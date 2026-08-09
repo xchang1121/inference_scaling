@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
+import importlib.metadata
 import json
 import math
 import platform
@@ -27,9 +28,13 @@ from inference_scaling.algorithms import (
     run_reward_mh_chain,
 )
 from inference_scaling.backends import (
+    BACKEND_CHOICES,
     AbsorbingEOSBackend,
     ScoreCachingBackend,
-    TransformersBackend,
+    close_backend,
+    configured_backend,
+    load_backend_from_config,
+    set_backend_override,
 )
 from inference_scaling.config import (
     ConditionalEnergyConfig,
@@ -78,11 +83,22 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/backends/absorbing.py",
     "src/inference_scaling/backends/cache.py",
     "src/inference_scaling/backends/transformers_backend.py",
+    "src/inference_scaling/backends/vllm_backend.py",
+    "src/inference_scaling/backends/loader.py",
     "src/inference_scaling/evaluation/consensus.py",
     "src/inference_scaling/evaluation/gsm8k.py",
     "src/inference_scaling/config.py",
     "src/inference_scaling/types.py",
 )
+
+
+def _installed_package_version(name: str) -> str | None:
+    """Return an optional runtime dependency version without masking load errors."""
+
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 def _fraction_text(value: Fraction | None) -> str | None:
     if value is None:
@@ -134,7 +150,7 @@ def _snapshot_delta(before: Any, after: Any) -> dict[str, int | float]:
     return {name: right[name] - left[name] for name in left}
 
 
-def _prompt_tokens(backend: TransformersBackend, problem: GSM8KProblem) -> TokenSequence:
+def _prompt_tokens(backend: Any, problem: GSM8KProblem) -> TokenSequence:
     messages = [{"role": "user", "content": gsm8k_prompt(problem.question)}]
     rendered = backend.tokenizer.apply_chat_template(
         messages,
@@ -149,17 +165,8 @@ def _load_backend(
     config: dict[str, Any],
     *,
     adapter_base: str | None = None,
-) -> TransformersBackend:
-    return TransformersBackend.from_pretrained(
-        adapter_base or path,
-        adapter_name_or_path=path if adapter_base is not None else None,
-        device=str(config["runtime"]["device"]),
-        dtype=str(config["runtime"]["dtype"]),
-        local_files_only=True,
-        max_score_batch_size=int(
-            config["runtime"].get("max_score_batch_size", 8)
-        ),
-    )
+) -> Any:
+    return load_backend_from_config(path, config, adapter_base=adapter_base)
 
 
 def _trim_eos(tokens: TokenSequence, eos_token_id: int | None) -> TokenSequence:
@@ -169,31 +176,22 @@ def _trim_eos(tokens: TokenSequence, eos_token_id: int | None) -> TokenSequence:
 
 
 def _direct_generate(
-    backend: TransformersBackend,
+    backend: Any,
     prompt: TokenSequence,
     *,
     max_new_tokens: int,
     num_beams: int,
 ) -> TokenSequence:
-    input_ids = torch.tensor([prompt], dtype=torch.long, device=backend.device)
-    attention_mask = torch.ones_like(input_ids)
-    with backend._model_lock, torch.inference_mode():  # noqa: SLF001 - benchmark adapter
-        output = backend.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            num_beams=num_beams,
-            use_cache=True,
-            pad_token_id=backend.pad_token_id,
-            eos_token_id=backend.tokenizer.eos_token_id,
-        )
-    generated = tuple(int(token) for token in output[0, input_ids.shape[1] :].tolist())
+    generated = backend.direct_generate(
+        prompt,
+        max_new_tokens=max_new_tokens,
+        num_beams=num_beams,
+    )
     return _trim_eos(generated, backend.tokenizer.eos_token_id)
 
 
 def _sample_one(
-    backend: TransformersBackend,
+    backend: Any,
     prompt: TokenSequence,
     *,
     max_new_tokens: int,
@@ -232,7 +230,7 @@ def _minmax_rewards(values: Sequence[float]) -> tuple[float, ...]:
 
 
 def _confidence_rewards(
-    backend: TransformersBackend,
+    backend: Any,
     prompt: TokenSequence,
     sequences: Sequence[TokenSequence],
     *,
@@ -254,7 +252,7 @@ def _confidence_rewards(
 
 
 def _run_best_of_n(
-    backend: TransformersBackend,
+    backend: Any,
     problem: GSM8KProblem,
     prompt: TokenSequence,
     *,
@@ -383,12 +381,12 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
 
 def _run_method(
     method: str,
-    backend: TransformersBackend,
+    backend: Any,
     problem: GSM8KProblem,
     prompt: TokenSequence,
     config: dict[str, Any],
     seeds: SeedStream,
-    proposal_backend: TransformersBackend | None,
+    proposal_backend: Any | None,
 ) -> tuple[TokenSequence, dict[str, Any]]:
     maximum = int(config["generation"]["max_new_tokens"])
     sampling_temperature = float(
@@ -755,6 +753,7 @@ def _load_records(path: Path) -> list[dict[str, Any]]:
 
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+    set_backend_override(config, args.backend)
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
     if args.max_new_tokens is not None:
@@ -810,6 +809,11 @@ def _model_metadata(config: dict[str, Any], method: str) -> dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument(
+        "--backend",
+        choices=BACKEND_CHOICES,
+        help="override runtime.backend before the experiment fingerprint is computed",
+    )
     parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--tag", default="default")
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
@@ -918,12 +922,18 @@ def main() -> None:
             else None
         ),
         "environment": {
+            "backend": configured_backend(config),
             "python": sys.version.split()[0],
             "platform": platform.platform(),
             "torch": torch.__version__,
             "transformers": transformers.__version__,
             "cuda_runtime": torch.version.cuda,
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "vllm": (
+                _installed_package_version("vllm")
+                if configured_backend(config).startswith("vllm")
+                else None
+            ),
         },
     }
     if manifest_path.is_file():
@@ -1048,6 +1058,8 @@ def main() -> None:
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
 
+    close_backend(proposal_backend)
+    close_backend(backend)
     del proposal_backend
     del backend
     gc.collect()

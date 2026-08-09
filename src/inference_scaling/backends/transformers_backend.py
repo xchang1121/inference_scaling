@@ -719,3 +719,30 @@ class TransformersBackend:
         return str(
             self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
         )
+
+    def direct_generate(
+        self,
+        prefix: TokenSequence,
+        *,
+        max_new_tokens: int,
+        num_beams: int = 1,
+    ) -> TokenSequence:
+        """Greedy/beam baseline using Transformers' native generation path."""
+
+        if max_new_tokens <= 0 or num_beams <= 0:
+            raise ValueError("generation length and beam count must be positive")
+        torch_module = _require_torch()
+        input_ids = torch_module.tensor([prefix], dtype=torch_module.long, device=self.device)
+        attention_mask = torch_module.ones_like(input_ids)
+        with self._model_lock, torch_module.inference_mode():
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                num_beams=num_beams,
+                use_cache=True,
+                pad_token_id=self.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+        return tuple(int(token) for token in output[0, input_ids.shape[1] :].tolist())

@@ -31,7 +31,13 @@ else:
         _timed,
     )
 from inference_scaling.algorithms import run_conditional_is
-from inference_scaling.backends import ContinuousBatchingBackend, ScoreCachingBackend
+from inference_scaling.backends import (
+    BACKEND_CHOICES,
+    ContinuousBatchingBackend,
+    ScoreCachingBackend,
+    close_backend,
+    set_backend_override,
+)
 from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
 from inference_scaling.evaluation import (
     CumulativeConsensusReward,
@@ -233,6 +239,19 @@ def _compute_delta(base_before, base_after, proposal_before, proposal_after):
         if proposal_before is not None and proposal_after is not None
         else {}
     )
+    # A high-water mark is a gauge, not an additive counter.  Report the
+    # observed value itself so a warm-up request does not turn concurrency 4
+    # into the misleading delta 3.
+    if hasattr(base_after, "maximum_in_flight_requests"):
+        base["maximum_in_flight_requests"] = int(
+            base_after.maximum_in_flight_requests
+        )
+    if proposal_after is not None and hasattr(
+        proposal_after, "maximum_in_flight_requests"
+    ):
+        proposal["maximum_in_flight_requests"] = int(
+            proposal_after.maximum_in_flight_requests
+        )
     slots = int(base["generation_forward_token_slots"]) + int(
         base["score_forward_token_slots"]
     )
@@ -264,6 +283,7 @@ def _batching_context(stack: ExitStack, raw_backend, config: dict[str, Any]):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--output", type=Path, default=Path("results/gsm8k_async.json"))
     parser.add_argument("--limit", type=int, default=8)
@@ -273,6 +293,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit
     methods = tuple(item.strip() for item in args.methods.split(",") if item.strip())
     unknown = sorted(set(methods) - set(METHODS))
@@ -427,6 +448,7 @@ def main() -> None:
         "benchmark": "GSM8K cross-request scheduling for source-aligned TTS methods",
         "examples": len(problems),
         "workers": workers,
+        "runtime_backend": config["runtime"].get("backend", "transformers"),
         "methods": method_reports,
         "algorithm_config": {
             "sampling": config.get("sampling", {"temperature": 1.0}),
@@ -467,6 +489,8 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    close_backend(raw_proposal)
+    close_backend(raw_backend)
 
 
 if __name__ == "__main__":

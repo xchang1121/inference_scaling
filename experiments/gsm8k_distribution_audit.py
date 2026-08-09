@@ -40,6 +40,11 @@ else:
         _snapshot_delta,
     )
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
+from inference_scaling.backends import (
+    BACKEND_CHOICES,
+    close_backend,
+    set_backend_override,
+)
 from inference_scaling.rng import SeedStream
 
 DEFAULT_METHODS = (
@@ -355,6 +360,8 @@ def _run_pending_samples(
                     f"seconds={elapsed:.3f}",
                     flush=True,
                 )
+            close_backend(proposal_backend)
+            close_backend(backend)
             del proposal_backend
             del backend
             gc.collect()
@@ -423,6 +430,7 @@ def _aggregate_records(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--backend", choices=BACKEND_CHOICES)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--problem-count", type=int, default=4)
     parser.add_argument("--draws", type=int, default=8)
@@ -441,6 +449,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    set_backend_override(config, args.backend)
     problems = select_problems(
         load_gsm8k(args.data),
         args.problem_count,
