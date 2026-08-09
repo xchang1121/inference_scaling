@@ -4,6 +4,7 @@ from experiments.summarize_gsm8k_ablations import (
     RUNNER_PATH,
     SERIALIZATION_ONLY_RUNNER_TRANSITION,
     _implementation_provenance,
+    _is_method_summary,
 )
 
 
@@ -31,3 +32,8 @@ def test_unknown_runner_or_algorithm_transition_is_rejected() -> None:
         _implementation_provenance(
             [_variant(runner, "first"), _variant(runner, "second")]
         )
+
+
+def test_non_method_aggregate_summary_is_ignored() -> None:
+    assert _is_method_summary({"method": "conditional_is", "tag": "budget"})
+    assert not _is_method_summary({"comparison": {"fresh": {}, "replay": {}}})

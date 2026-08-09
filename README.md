@@ -230,6 +230,29 @@ $env:PYTHONPATH = "src"
   --with-async
 ```
 
+同一配置的消融使用另一组固定的 8 道题，覆盖候选/rollout 预算、引导阶段数、MH 幂次与每阶段更新数、
+奖励信号、sampling temperature、off-policy 重要性比截断和最大生成长度。完成运行后生成机器可读汇总
+与中文结果图：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\run_gsm8k_suite.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --tag validated `
+  --with-ablations `
+  --with-budget-curve `
+  --with-length-ablation `
+  --ablation-limit 8
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_ablations.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --output results\gsm8k_3090_aligned_ablations_validated.json
+
+.\.venv\Scripts\python experiments\plot_gsm8k_ablations.py `
+  --input results\gsm8k_3090_aligned_ablations_validated.json `
+  --output docs\assets\gsm8k_3090_aligned_ablations.svg
+```
+
 这组 32 题配置的分阶段实测结果见
 [`docs/GSM8K_3090_ALIGNED_RESULTS.md`](docs/GSM8K_3090_ALIGNED_RESULTS.md)。
 其中连续批处理保留优化前与“调用组完整入队”后的两份结果；可用下列命令复核每种方法相对同步路径、

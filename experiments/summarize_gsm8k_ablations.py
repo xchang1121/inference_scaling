@@ -48,6 +48,14 @@ def _implementation_provenance(
     return core, runner_hashes, note
 
 
+def _is_method_summary(summary: dict[str, Any]) -> bool:
+    """Exclude replay/aggregate summaries that share the profile directory."""
+
+    return isinstance(summary.get("method"), str) and isinstance(
+        summary.get("tag"), str
+    )
+
+
 def _groups(tag: str) -> tuple[str, ...]:
     references = {
         "conditional-reference": (
@@ -111,6 +119,8 @@ def main() -> None:
     implementation_variants: dict[str, dict[str, str]] = {}
     for summary_path in sorted(profile_root.glob("*/summary.json")):
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        if not _is_method_summary(summary):
+            continue
         tag = str(summary["tag"])
         groups = _groups(tag)
         if not groups:
