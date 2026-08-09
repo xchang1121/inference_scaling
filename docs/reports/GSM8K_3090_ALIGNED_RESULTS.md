@@ -19,10 +19,10 @@
 
 | 方法 | 目标或决策规则 | 主要比较目的 |
 | --- | --- | --- |
-| Base | 从 `p_base(y|x)` 采样一次 | 单次生成基线 |
+| Base | 从 `p_base(y∣x)` 采样一次 | 单次生成基线 |
 | Beam-8 | 8-beam 确定性搜索 | 搜索基线 |
 | Best-of-8 | 8 条独立 Base 回答，以数值答案众数选择 | 并行采样基线 |
-| 幂分布 MH | 后缀重采样，目标为 `p_base(y|x)^4` | 检验直接概率锐化 |
+| 幂分布 MH | 后缀重采样，目标为 `p_base(y∣x)^4` | 检验直接概率锐化 |
 | 标准条件 IS | Base 候选与 Base rollout，以累积 self-consistency 选择 | training-free 质量主方法 |
 | 小 proposal 条件 IS | Base 候选、0.5B rollout，并乘精确 `p_base/q` 后缀权重 | 检验 off-policy rollout |
 | GRPO | 正确性奖励加 KL 正则的训练后策略 | 训练方法对照 |
