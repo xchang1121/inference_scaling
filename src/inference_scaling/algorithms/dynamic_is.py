@@ -121,6 +121,26 @@ class DesignStatisticsContext:
 
 
 DesignStatisticsProvider = Callable[[DesignStatisticsContext], VarianceCostEstimate]
+DesignPreparation = Callable[[tuple[DesignStatisticsContext, ...]], None]
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutBudgetContext:
+    """Metadata available when freezing one step's rollout budget.
+
+    The context intentionally exposes replay inventory counts but not evaluation
+    completions or rewards.  This permits a cost-matched budget to depend on the
+    candidates that were actually drawn and on cache hits without leaking the
+    values later used by the estimator.
+    """
+
+    draws: tuple[DynamicCandidateDraw, ...]
+    keys: tuple[ReplayKey, ...]
+    terminal: tuple[bool, ...]
+    history_capacities: tuple[int, ...]
+
+
+RolloutBudgetProvider = Callable[[RolloutBudgetContext], float]
 
 
 def constant_design_statistics(context: DesignStatisticsContext) -> VarianceCostEstimate:
@@ -778,6 +798,8 @@ def dynamic_is_step(
     step_index: int,
     auxiliary_proposal: CandidateProposalSource = None,
     statistics_provider: DesignStatisticsProvider = constant_design_statistics,
+    design_prepare: DesignPreparation | None = None,
+    rollout_budget_provider: RolloutBudgetProvider | None = None,
 ) -> DynamicISStep:
     """Run one two-phase dynamic-candidate decision."""
 
@@ -814,13 +836,13 @@ def dynamic_is_step(
     group_capacities = {
         key: sum(inventory.values()) for key, inventory in inventory_by_key.items()
     }
-    statistics: list[VarianceCostEstimate] = []
+    contexts: list[DesignStatisticsContext | None] = []
     history_capacities: list[int] = []
     minimum_fresh: list[int] = []
     for key, is_terminal in zip(keys, terminal, strict=True):
         inventory = inventory_by_key[key]
         if is_terminal:
-            statistics.append(VarianceCostEstimate(0.0, 0.0))
+            contexts.append(None)
             history_capacities.append(0)
             minimum_fresh.append(0)
             continue
@@ -833,11 +855,20 @@ def dynamic_is_step(
             reward_temperature=config.reward_temperature,
             truncation=config.truncation,
         )
-        statistics.append(statistics_provider(context))
+        contexts.append(context)
         history_capacities.append(
             min(config.max_history_per_candidate, context.available_history)
         )
         minimum_fresh.append(config.minimum_fresh_per_candidate)
+
+    if design_prepare is not None:
+        design_prepare(tuple(context for context in contexts if context is not None))
+    statistics = [
+        VarianceCostEstimate(0.0, 0.0)
+        if context is None
+        else statistics_provider(context)
+        for context in contexts
+    ]
 
     outer_log_ratios = np.asarray([draw.outer_log_ratio for draw in draws], dtype=np.float64)
     relative_outer_ratios = np.exp(
@@ -846,6 +877,22 @@ def dynamic_is_step(
             log(np.finfo(np.float64).tiny),
         )
     )
+    rollout_budget = (
+        config.rollout_budget
+        if rollout_budget_provider is None
+        else float(
+            rollout_budget_provider(
+                RolloutBudgetContext(
+                    draws=draws,
+                    keys=tuple(keys),
+                    terminal=tuple(terminal),
+                    history_capacities=tuple(history_capacities),
+                )
+            )
+        )
+    )
+    if rollout_budget <= 0 or not isfinite(rollout_budget):
+        raise ValueError("rollout budget provider must return a positive finite value")
     allocations = allocate_variance_cost_budget(
         # A common scale cancels from every continuous allocation formula.
         outer_ratios=relative_outer_ratios,
@@ -853,7 +900,7 @@ def dynamic_is_step(
         history_capacities=history_capacities,
         history_groups=keys,
         group_capacities=group_capacities,
-        rollout_budget=config.rollout_budget,
+        rollout_budget=rollout_budget,
         minimum_fresh=minimum_fresh,
     )
 
@@ -967,6 +1014,8 @@ def run_dynamic_is(
     base_sampling: SamplingConfig | None = None,
     auxiliary_proposal: CandidateProposalSource = None,
     statistics_provider: DesignStatisticsProvider = constant_design_statistics,
+    design_prepare: DesignPreparation | None = None,
+    rollout_budget_provider: RolloutBudgetProvider | None = None,
     reserve_policy: BehaviorPolicy | None = None,
 ) -> DynamicISResult:
     base_sampling = base_sampling or SamplingConfig()
@@ -994,6 +1043,8 @@ def run_dynamic_is(
             step_index=step_index,
             auxiliary_proposal=auxiliary_proposal,
             statistics_provider=statistics_provider,
+            design_prepare=design_prepare,
+            rollout_budget_provider=rollout_budget_provider,
         )
         generated.extend(step.selected.token_ids)
         steps.append(step)

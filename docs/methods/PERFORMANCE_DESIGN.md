@@ -52,6 +52,11 @@ base 与辅助 policy 下批量评分。若 proposal factory 显式依赖先前�
 串行。结果中的 `shared_prefill_tokens_saved` 明确以“同一个物理 batch 对每条序列都重新做完整
 prefill”为分母，记录因 KV 复制而没有再次处理的非 padding 前缀 token 数。
 
+方差—成本分配的 design 阶段也不会逐候选同步。候选全部确定后，独立 base design rollout 与命中
+缓存所需的 behavior design rollout 分别组成异构 batch；两侧概率评分再按模型各提交一个跨候选
+batch。所有 design 数据完成后才读取冻结的统计量并分配 evaluation 记录。账本把这部分单列为
+`design`，稳定在线口径可以表示已有 design pool 的重复查询，冷启动口径仍把它完整加回。
+
 计算量以实际 forward token slot 和估算 FLOPs 为主，而不是 wall time。后端对生成 prefill、KV decode
 和完整序列评分分别计数；不同模型按 `2 * parameter_count * forward_token_slots` 分别计算后相加。
 连续批处理的主要收益是提高硬件利用率，通常不会降低算法 FLOPs；replay 和小 proposal 是否降低

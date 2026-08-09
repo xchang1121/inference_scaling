@@ -124,12 +124,16 @@ $env:PYTHONPATH = "src"
   --summary-root results\gsm8k_3090 `
   --with-matched-target `
   --with-replay `
+  --with-dynamic-is `
   --with-async `
   --with-ablations `
   --with-budget-curve `
   --with-length-ablation `
   --ablation-limit 8
 ```
+
+`--with-dynamic-is` 会同时读取 `configs/gsm8k_3090_dynamic_is.toml`，其中只保存动态候选 mixture、缓存
+条数、独立 design 样本数和每候选总 rollout 数，因而不会改变已经固定的主网格配置指纹。
 
 主表、计算量汇总、分布审计、pass@k、消融和绘图需要在网格完成后运行只读后处理器。完整命令、输出
 文件和恢复规则见 [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。

@@ -40,7 +40,7 @@ $env:PYTHONPATH = "src"
 训练是可选步骤：若已有与 `configs/gsm8k_grpo.toml` 和固定基座 revision 匹配的 adapter，可以直接
 使用。训练摘要保存到 `results/training/gsm8k_grpo_training_summary.json`。
 
-### 2. 运行主网格、replay 与批处理实验
+### 2. 运行主网格、replay、动态候选与批处理实验
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -50,6 +50,7 @@ $env:PYTHONPATH = "src"
   --summary-root results\gsm8k_3090 `
   --with-matched-target `
   --with-replay `
+  --with-dynamic-is `
   --with-async `
   --with-ablations `
   --with-budget-curve `
@@ -57,8 +58,9 @@ $env:PYTHONPATH = "src"
   --ablation-limit 8
 ```
 
-主方法与共享目标使用 32 道固定题；消融使用另一组 8 道题。`--summary-root` 只控制 replay 和连续
-批处理的汇总位置，逐题可恢复记录仍由各运行器写入 `results/gsm8k/`。
+主方法、共享目标、replay 与动态候选对照使用同一组 32 道固定题；其余消融使用另一组 8 道题。
+动态候选的额外设置固定在 `configs/gsm8k_3090_dynamic_is.toml`。`--summary-root` 控制 replay、动态
+候选和连续批处理的汇总位置，逐题可恢复记录仍由各运行器写入 `results/gsm8k/`。
 
 ### 3. 生成主表、计算量、分布审计与消融汇总
 
@@ -262,10 +264,33 @@ MH adapter 把 EOS 视为吸收 token。解码后的回答保持不变，但状�
 - replay 单次端到端 FLOPs 缩减：分母包括 cache 构建与 warm 决策。在线 warm-cache 收益不会冒充
   第一次查询即可获得的收益；cache 构建账本包含历史生成及上述 base/behavior 评分，wall-time 比率
   使用完全相同的两种分母。若该比值小于 1，就明确表示第一次查询的总成本更高。
+- 动态候选在线因子：`base_candidate_fixed` 的稳定在线 FLOPs 除以 `replay_aware_fixed` 的稳定在线
+  FLOPs。分母包括辅助候选采样、两种候选概率评分、外层 IS、实际领取的历史记录和 fresh 校正，但
+  不包括已经完成的 cache 构建；只有比值大于 1 才表示动态候选在线计算下降。
+- 最优预算在线因子：`replay_aware_fixed` 除以 `replay_aware_optimal`。两者逐步使用相同代理成本预算；
+  稳定在线口径排除独立 design pool 构建，冷启动口径则把 design 与 cache 全部加回。任一比值小于 1
+  都明确表示完整扩展在相应口径下更贵。
 
 replay 中每条历史记录最多使用一次。性能 benchmark 重复同一个公开 prompt 与候选 seed，保证历史
 缓存中确实存在相同候选 key；因此它测量重复查询缓存，不代表跨无关 prompt 复用。该独立性能实验
 把 GSM8K gold answer 当作固定 verifier，其准确率不混入 self-consistency 主表。
+
+动态候选扩展另做三组受控比较：
+
+1. `base_candidate_fixed` 只从 1.5B base 抽候选，不构建 replay cache；每个非终止候选使用 3 条
+   fresh rollout。
+2. `replay_aware_fixed` 先由 0.5B proposal 生成候选块及每块 2 条隐藏历史 rollout，再从
+   `0.5 × base + 0.5 × proposal` 抽候选，并乘精确候选层 `p_base/q`。命中时固定使用 2 条历史加
+   1 条 fresh，未命中时使用 3 条 fresh。
+3. `replay_aware_optimal` 保持相同候选 proposal、缓存和每步成本预算；在读取 evaluation rollout 前，
+   每个候选分别生成 2 条独立 base design rollout，命中候选再生成 2 条 proposal design rollout，
+   用它们估计历史项与 fresh 项标准差后进行方差—成本分配。
+
+预算代理把一条历史样本成本记为 1 个 base 重评分等价，把一条 fresh 样本成本记为
+`1 + P_0.5B/P_1.5B = 1.3200`。它只用于冻结整数配额；最终比较仍以真实 forward token slots 和
+`2 × 参数量 × token slots` 为准。报告将 cache 构建、独立 design 构建、稳定在线决策和冷启动总成本
+分开。候选及配额冻结时只能读取候选、策略版本和缓存数量；evaluation completion 与 reward 仍保持
+隐藏且每条最多消费一次。
 
 ## 消融实验
 
@@ -282,7 +307,8 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
 - 采样温度 0.7、1.0、1.5，以及 Base、Beam Search、Best-of-N、两种条件方法和 GRPO 的最大回答
   长度 128、256、512；
 - Base、Best-of-N、条件 IS 和小 proposal 条件 IS 的同步执行与连续批处理；
-- fresh-only 与 warm off-policy rollout replay。
+- fresh-only 与 warm off-policy rollout replay；base 固定候选、动态候选加外层 IS、以及再加入方差—
+  成本预算分配的三组对照。
 - Base、MH 与 GRPO 在 8 个独立 draw 下的标准 pass@k、题目 bootstrap 区间，以及解析答案和完整
   输出哈希多样性。每个任务块只含同一道题的不同 draw；Base/GRPO 合并独立生成，MH 在相同阶段和
   更新编号向量化独立链。每个固定任务块单独保存实际 padded token slots、估算 FLOPs 与墙钟，不能

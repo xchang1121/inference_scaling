@@ -6,6 +6,7 @@ import pytest
 from inference_scaling.algorithms.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
+    RolloutBudgetContext,
     VarianceCostEstimate,
     allocate_variance_cost_budget,
     dynamic_is_step,
@@ -78,6 +79,96 @@ def test_allocation_respects_shared_history_inventory_and_fresh_minimum() -> Non
     assert sum(item.history_count for item in allocations) <= 1
     assert all(item.fresh_count >= 1 for item in allocations)
     assert sum(item.estimated_cost for item in allocations) <= 6.0
+
+
+def test_step_budget_can_be_frozen_from_candidate_metadata() -> None:
+    base = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5], model_id="base")
+    seen: list[RolloutBudgetContext] = []
+
+    def budget(context: RolloutBudgetContext) -> float:
+        seen.append(context)
+        return 2.0
+
+    step = dynamic_is_step(
+        base_backend=base,
+        registry=BehaviorRegistry(),
+        store=InMemoryReplayStore(),
+        prompt=(),
+        generated_prefix=(),
+        config=DynamicISConfig(
+            candidate_count=2,
+            block_size=1,
+            total_length=2,
+            max_history_per_candidate=0,
+            rollout_budget=99.0,
+            auxiliary_mixture=0.0,
+            minimum_fresh_per_candidate=1,
+        ),
+        base_sampling=SamplingConfig(),
+        reward=lambda _prompt, _generated: 0.0,
+        reward_version="constant",
+        seeds=SeedStream(19),
+        step_index=0,
+        rollout_budget_provider=budget,
+    )
+
+    assert len(seen) == 1
+    assert seen[0].history_capacities == (0, 0)
+    assert seen[0].terminal == (False, False)
+    assert sum(candidate.allocation.fresh_count for candidate in step.candidates) == 2
+
+
+def test_design_preparation_runs_before_statistics_are_read() -> None:
+    base = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5], model_id="base")
+    prepared: list[ReplayKey] = []
+
+    def prepare(contexts: tuple[DesignStatisticsContext, ...]) -> None:
+        for index, context in enumerate(contexts):
+            prepared.append(context.key)
+            context.store.add_design(
+                ReplayRecord(
+                    f"prepared-{index}",
+                    context.key,
+                    (0,),
+                    float(index),
+                    "base",
+                    log(0.5),
+                )
+            )
+
+    observed_design_counts: list[int] = []
+
+    def statistics(context: DesignStatisticsContext) -> VarianceCostEstimate:
+        observed_design_counts.append(len(context.store.design_records(context.key)))
+        return VarianceCostEstimate(0.0, 1.0)
+
+    dynamic_is_step(
+        base_backend=base,
+        registry=BehaviorRegistry(),
+        store=InMemoryReplayStore(),
+        prompt=(),
+        generated_prefix=(),
+        config=DynamicISConfig(
+            candidate_count=2,
+            block_size=1,
+            total_length=2,
+            max_history_per_candidate=0,
+            rollout_budget=2.0,
+            auxiliary_mixture=0.0,
+            minimum_fresh_per_candidate=1,
+        ),
+        base_sampling=SamplingConfig(),
+        reward=lambda _prompt, _generated: 0.0,
+        reward_version="constant",
+        seeds=SeedStream(23),
+        step_index=0,
+        design_prepare=prepare,
+        statistics_provider=statistics,
+    )
+
+    assert len(prepared) == 2
+    assert len(observed_design_counts) == 2
+    assert all(count >= 1 for count in observed_design_counts)
 
 
 def test_empirical_statistics_read_only_the_design_pool() -> None:

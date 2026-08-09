@@ -33,6 +33,7 @@ def main() -> None:
     parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     parser.add_argument("--limit", type=int)
     parser.add_argument("--with-replay", action="store_true")
+    parser.add_argument("--with-dynamic-is", action="store_true")
     parser.add_argument("--with-async", action="store_true")
     parser.add_argument("--with-ablations", action="store_true")
     parser.add_argument("--with-budget-curve", action="store_true")
@@ -123,6 +124,21 @@ def main() -> None:
                 *common,
                 "--output",
                 replay_output,
+            ],
+            environment,
+        )
+    if args.with_dynamic_is:
+        args.summary_root.mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                sys.executable,
+                "experiments/gsm8k_dynamic_is_benchmark.py",
+                *common,
+                "--aggregate-output",
+                str(
+                    args.summary_root
+                    / f"{args.config.stem}_dynamic_is_{args.tag}.json"
+                ),
             ],
             environment,
         )

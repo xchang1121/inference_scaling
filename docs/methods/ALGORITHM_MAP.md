@@ -19,10 +19,19 @@ replay 算法严格实现文档规定的数据生命周期：
 动态实现先使用文档中的连续预算分配，再进行确定性整数舍入：候选层概率比同时乘到 history 和 fresh
 的方差项上，每个来源还要除以其单样本成本的平方根。
 
+动态 guidance step 在抽出候选后分成两个明确阶段。`design_prepare` 只接收候选对应的设计上下文，
+可把独立 design rollout 和概率评分跨候选批量执行；随后 `statistics_provider` 只读取 design pool。
+`rollout_budget_provider` 只能根据本轮候选、终止标记与 evaluation inventory 数量冻结成本预算，不能
+读取 evaluation completion 或 reward。默认路径仍使用配置中的固定预算，这两个接口只把文档允许的
+“先看元数据、再冻结设计”变成可测试的实现约束。
+
 GSM8K 实验把各项基线映射为 `experiments/gsm8k_reproduction.py` 中的中性实现标识。
 `conditional_is` 使用联合的累积 self-consistency 奖励；可复用估计器仍支持普通的固定逐序列奖励。
 实验入口还可把该奖励替换成平均 token 对数概率、平均负熵、自确定性或正确答案 oracle，用于奖励
 设计消融；这些替换不改变候选和 rollout 的概率修正公式。
+动态候选的正式对照位于 `experiments/gsm8k_dynamic_is_benchmark.py`：固定组用于隔离候选 proposal 与
+外层 IS，最优组才读取独立 design pool 并改变 rollout 配额。两组都记录 cache、design、稳定在线与
+冷启动账本，不能用缓存命中率代替实际 FLOPs。
 小 proposal 路径只改变 completion 的生成方式，并加入主模型/proposal likelihood ratio；候选块仍由
 主模型生成。`AbsorbingEOSBackend` 提供 MH 所需的固定长度状态空间，同时不会把 chat prompt 内与
 EOS 相同的 token 误判为生成终止。
