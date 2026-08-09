@@ -12,6 +12,7 @@
 3. [算法映射](methods/ALGORITHM_MAP.md)：数学对象、实现标识与必须保持的概率性质。
 4. [推理性能设计](methods/PERFORMANCE_DESIGN.md)：连续批处理、KV 复用、评分缓存和 token/FLOPs
    计量。
+5. [vLLM 推理运行时](methods/VLLM_RUNTIME.md)：异步调度、概率精确性边界、配置与成对 benchmark。
 
 ## 正式报告
 
@@ -28,6 +29,7 @@
 | --- | --- |
 | [算法映射](methods/ALGORITHM_MAP.md) | 将 MH、条件 IS、base replay 和 dynamic IS 对应到代码入口 |
 | [推理性能设计](methods/PERFORMANCE_DESIGN.md) | 说明哪些优化保持算法不变，以及每种加速的分母 |
+| [vLLM 推理运行时](methods/VLLM_RUNTIME.md) | 说明 vLLM 的安装、调度、精确评分 fallback 与公平测速方式 |
 
 ## 实验协议
 

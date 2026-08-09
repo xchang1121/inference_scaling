@@ -107,6 +107,10 @@ def test_vllm_sync_override_and_unknown_setting(monkeypatch) -> None:
     with pytest.raises(ValueError, match="gpu_memroy_utilization"):
         loader.load_backend_from_config("base-model", config)
 
+    config["vllm"] = {"engine_kwargs": {"dtype": "float16"}}
+    with pytest.raises(ValueError, match="duplicate explicit settings: dtype"):
+        loader.load_backend_from_config("base-model", config)
+
 
 def test_backend_override_is_fingerprinted_in_config() -> None:
     config = _config()

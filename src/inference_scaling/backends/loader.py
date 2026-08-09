@@ -35,6 +35,27 @@ _VLLM_SETTINGS = {
     "trust_remote_code",
 }
 _MODEL_ROLES = ("base", "proposal", "rl")
+_EXPLICIT_ENGINE_SETTINGS = {
+    "data_parallel_size",
+    "download_dir",
+    "dtype",
+    "enable_lora",
+    "enable_prefix_caching",
+    "enforce_eager",
+    "generation_config",
+    "gpu_memory_utilization",
+    "logprobs_mode",
+    "max_lora_rank",
+    "max_model_len",
+    "max_num_batched_tokens",
+    "max_num_seqs",
+    "model",
+    "quantization",
+    "revision",
+    "seed",
+    "tensor_parallel_size",
+    "trust_remote_code",
+}
 
 
 def _mapping(value: Any, *, name: str) -> dict[str, Any]:
@@ -171,6 +192,12 @@ def load_backend_from_config(
         settings.pop("engine_kwargs", None),
         name="vllm.engine_kwargs",
     )
+    collisions = sorted(_EXPLICIT_ENGINE_SETTINGS.intersection(engine_kwargs))
+    if collisions:
+        raise ValueError(
+            "vLLM engine_kwargs duplicate explicit settings: "
+            + ", ".join(collisions)
+        )
     beam_width = int(_mapping(config.get("beam"), name="beam").get("num_beams", 1))
     required_logprobs = max(20, 2 * beam_width)
     engine_kwargs["max_logprobs"] = max(

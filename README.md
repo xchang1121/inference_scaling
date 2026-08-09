@@ -15,6 +15,7 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
 | 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |
+| 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
 | 查找全部文档 | [文档导航](docs/README.md) |
 | 查找机器可读结果 | [结果索引](results/README.md) |
 
@@ -83,6 +84,20 @@ python -m venv .venv
 PyTorch wheel 自带 CUDA 运行时；普通推理不要求本机 `nvcc` 与 `torch.version.cuda` 相同。当前
 RTX 3090 结果默认使用 FP32，因为 BF16 下生成概率与批量重评分的偏差足以影响重要性权重。
 
+vLLM 是独立的可选运行时，固定在 `vllm>=0.17,<0.18`。其官方 GPU wheel 要求 Linux，并不原生支持
+Windows；Windows 主机请在 WSL2 中新建 Linux 虚拟环境，不要复用上面的 Windows `.venv`：
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev,vllm]"
+python -c "import torch, vllm; print(torch.cuda.is_available(), vllm.__version__)"
+```
+
+安装、精确评分边界、显存划分和配置说明见
+[vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md)。
+
 ## 快速功能检查
 
 无需下载模型即可运行有限状态实验：
@@ -137,6 +152,21 @@ $env:PYTHONPATH = "src"
 
 `--with-dynamic-is` 会同时读取 `configs/gsm8k_3090_dynamic_is.toml`，其中只保存动态候选 mixture、缓存
 条数、独立 design 样本数和每候选总 rollout 数，因而不会改变已经固定的主网格配置指纹。
+
+在 Linux/WSL2 上使用异步 vLLM 时，为同一命令增加 `--backend vllm`。若要先回答“vLLM 相对
+Transformers 到底快多少”，建议运行会严格核对 setting 的成对入口：
+
+```bash
+export PYTHONPATH=src
+python experiments/run_vllm_backend_benchmark.py \
+  --config configs/gsm8k_3090_aligned.toml \
+  --limit 32 \
+  --workers 8 \
+  --tag rtx3090
+```
+
+这里的加速分母始终是同模型、同 dtype、同请求网格和同硬件下的 Transformers 并发路径；既有 3090
+结果尚未用 vLLM 重跑，不能直接当作 vLLM 结果。
 
 主表、计算量汇总、分布审计、pass@k、消融和绘图需要在网格完成后运行只读后处理器。完整命令、输出
 文件和恢复规则见 [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。

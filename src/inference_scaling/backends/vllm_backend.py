@@ -34,6 +34,30 @@ from inference_scaling.types import (
     TokenSequence,
 )
 
+_PROTECTED_ENGINE_KWARGS = frozenset(
+    {
+        "model",
+        "dtype",
+        "tensor_parallel_size",
+        "data_parallel_size",
+        "gpu_memory_utilization",
+        "quantization",
+        "enforce_eager",
+        "trust_remote_code",
+        "revision",
+        "download_dir",
+        "seed",
+        "enable_prefix_caching",
+        "generation_config",
+        "logprobs_mode",
+        "enable_lora",
+        "max_lora_rank",
+        "max_model_len",
+        "max_num_seqs",
+        "max_num_batched_tokens",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class VLLMBackendSnapshot:
@@ -309,13 +333,7 @@ class VLLMBackend:
         }
         kwargs.update({name: value for name, value in optional.items() if value is not None})
         if engine_kwargs:
-            protected = {
-                "model",
-                "generation_config",
-                "logprobs_mode",
-                "enable_prefix_caching",
-            }
-            overlap = protected.intersection(engine_kwargs)
+            overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
                     "engine_kwargs cannot override correctness-critical settings: "
@@ -904,13 +922,7 @@ class AsyncVLLMBackend(VLLMBackend):
         }
         kwargs.update({name: value for name, value in optional.items() if value is not None})
         if engine_kwargs:
-            protected = {
-                "model",
-                "generation_config",
-                "logprobs_mode",
-                "enable_prefix_caching",
-            }
-            overlap = protected.intersection(engine_kwargs)
+            overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
                     "engine_kwargs cannot override correctness-critical settings: "

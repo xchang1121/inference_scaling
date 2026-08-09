@@ -37,6 +37,7 @@
 | 文件组 | 用途 |
 | --- | --- |
 | `gsm8k_quick_*_validated.json` | 检查主比较、replay、连续批处理与计算汇总路径能够贯通 |
+| `*_runtime_*_{transformers,vllm,comparison}.json` | 同 setting 的 Transformers/vLLM 原始吞吐报告与成对汇总 |
 | `rtx3090_reproduction.json` | FP32 真实模型算法与后端 smoke |
 | `rtx3090_backend_bfloat16.json` | BF16 概率一致性和显存诊断 |
 

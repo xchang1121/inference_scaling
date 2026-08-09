@@ -14,6 +14,13 @@ FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略�
 匹配率、最终数值答案匹配率、共同前缀比例和分叉题号。若输出不完全一致，wall-time 比率只解释为
 相同配置与 seed 下的真实 workload 对比，不解释为固定 token trace 的严格成对计时。
 
+异步 vLLM 路径不使用上述 Python dispatcher。每个模型拥有一个常驻 `AsyncLLM` 和事件循环，不同
+算法 worker 的请求直接交给 vLLM 的连续 scheduler；仓库 wrapper 只保留同步接口、请求顺序、统计和
+生命周期。Automatic Prefix Caching 会在不同调用之间复用共同 prefix，实际命中的
+`num_cached_tokens` 会从 prefill token slot 中扣除。生成概率、prompt 评分的适用边界、角色级显存
+划分以及与 Transformers 成对测速的固定分母见 [vLLM 推理运行时](VLLM_RUNTIME.md)。正式结果必须明确
+区分“同一 Transformers 后端的逐 prompt / 连续批处理比”与“Transformers / vLLM 后端比”。
+
 每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
 同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的
 分数绝不能复用于另一策略。普通随机生成结果不会被评分缓存透明复用；动态候选实验中的候选 replay
@@ -66,7 +73,8 @@ batch。所有 design 数据完成后才读取冻结的统计量并分配 evalua
 
 仍可继续加入、且不改变分布的优化包括：
 
-1. 在连续 MH 后缀 proposal 之间保留 paged KV 状态，而不只在一次 generation 内使用；
+1. Transformers 路径在连续 MH 后缀 proposal 之间保留可直接寻址的 KV 状态；vLLM 已能通过 APC
+   复用完整匹配的 prefix block，但尚未把链状态作为显式 cache handle 传递；
 2. CPU 奖励解析与下一批 GPU 工作重叠；
 3. 对变长请求分桶，同时保持请求级 seed 和真实采样概率；
 4. 已消费 replay record 留在 design pool，用于改善方差和成本估计，但其数值不泄漏给未来 evaluation

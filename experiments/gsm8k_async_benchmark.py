@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
+import platform
 import statistics
+import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+import torch
+import transformers
 
 if __package__:
     from experiments.gsm8k_reproduction import (
@@ -60,6 +66,13 @@ ASYNC_IMPLEMENTATION_FILES = (
     "experiments/gsm8k_async_benchmark.py",
     "src/inference_scaling/backends/batching.py",
 )
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def _sampling(raw_backend, config: dict[str, Any]) -> SamplingConfig:
@@ -299,6 +312,7 @@ def main() -> None:
     unknown = sorted(set(methods) - set(METHODS))
     if unknown:
         raise ValueError(f"unknown asynchronous methods: {unknown}")
+    needs_proposal = any(method.endswith("small_proposal") for method in methods)
     problems = select_problems(
         load_gsm8k(args.data),
         args.limit,
@@ -310,15 +324,32 @@ def main() -> None:
     )
     if base_weight_hash != str(config["models"]["base_weight_sha256"]):
         raise ValueError("base model weight hash does not match the pinned configuration")
-    proposal_weight_hash = _file_sha256(
-        Path(str(config["models"]["proposal"])) / "model.safetensors"
-    )
-    if proposal_weight_hash != str(config["models"]["proposal_weight_sha256"]):
-        raise ValueError("proposal model weight hash does not match the pinned configuration")
+    proposal_weight_hash = None
+    if needs_proposal:
+        proposal_weight_hash = _file_sha256(
+            Path(str(config["models"]["proposal"])) / "model.safetensors"
+        )
+        if proposal_weight_hash != str(config["models"]["proposal_weight_sha256"]):
+            raise ValueError(
+                "proposal model weight hash does not match the pinned configuration"
+            )
 
     raw_backend = _load_backend(str(config["models"]["base"]), config)
-    raw_proposal = _load_backend(str(config["models"]["proposal"]), config)
-    if raw_backend.tokenizer.get_vocab() != raw_proposal.tokenizer.get_vocab():
+    try:
+        raw_proposal = (
+            _load_backend(str(config["models"]["proposal"]), config)
+            if needs_proposal
+            else None
+        )
+    except BaseException:
+        close_backend(raw_backend)
+        raise
+    if (
+        raw_proposal is not None
+        and raw_backend.tokenizer.get_vocab() != raw_proposal.tokenizer.get_vocab()
+    ):
+        close_backend(raw_proposal)
+        close_backend(raw_backend)
         raise ValueError("base and proposal tokenizers do not have identical vocabularies")
     prompts = [_prompt_tokens(raw_backend, problem) for problem in problems]
     root_seed = int(config["run"]["seed"])
@@ -326,14 +357,17 @@ def main() -> None:
     raw_backend.sample_batch(
         [GenerationRequest(prompts[0], 2, warm_sampling, root_seed, "warmup-base")]
     )
-    raw_proposal.sample_batch(
-        [GenerationRequest(prompts[0], 2, warm_sampling, root_seed, "warmup-proposal")]
-    )
+    if raw_proposal is not None:
+        raw_proposal.sample_batch(
+            [GenerationRequest(prompts[0], 2, warm_sampling, root_seed, "warmup-proposal")]
+        )
 
     workers = min(args.workers, len(problems))
     method_reports: dict[str, Any] = {}
     for method in methods:
         uses_proposal = method.endswith("small_proposal")
+        if uses_proposal and raw_proposal is None:
+            raise RuntimeError("small-proposal method requires a proposal backend")
         synchronous_base = ScoreCachingBackend(raw_backend)
         synchronous_proposal = (
             ScoreCachingBackend(raw_proposal) if uses_proposal else None
@@ -444,11 +478,44 @@ def main() -> None:
         }
 
     report = {
-        "schema_version": 4,
+        "schema_version": 5,
         "benchmark": "GSM8K cross-request scheduling for source-aligned TTS methods",
         "examples": len(problems),
         "workers": workers,
         "runtime_backend": config["runtime"].get("backend", "transformers"),
+        "runtime_backend_classes": {
+            "base": type(raw_backend).__name__,
+            "proposal": type(raw_proposal).__name__ if raw_proposal is not None else None,
+        },
+        "experiment_config": {
+            "path": str(args.config),
+            "sha256": _file_sha256(args.config),
+        },
+        "evaluation": {
+            "dataset_path": str(args.data),
+            "dataset_sha256": _file_sha256(args.data),
+            "problem_indices": [problem.index for problem in problems],
+        },
+        "runtime_config": {
+            key: config["runtime"].get(key)
+            for key in (
+                "device",
+                "dtype",
+                "max_batch_size",
+                "max_batch_tokens",
+                "max_score_batch_size",
+            )
+        }
+        | {"vllm": config.get("vllm", {})},
+        "environment": {
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "torch": torch.__version__,
+            "transformers": transformers.__version__,
+            "cuda_runtime": torch.version.cuda,
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "vllm": _package_version("vllm"),
+        },
         "methods": method_reports,
         "algorithm_config": {
             "sampling": config.get("sampling", {"temperature": 1.0}),
@@ -465,7 +532,10 @@ def main() -> None:
             "proposal": {
                 "path": str(config["models"]["proposal"]),
                 "weight_sha256": proposal_weight_hash,
-                "parameter_count": raw_proposal.parameter_count,
+                "parameter_count": (
+                    raw_proposal.parameter_count if raw_proposal is not None else None
+                ),
+                "loaded": raw_proposal is not None,
             },
         },
         "implementation_sha256": {

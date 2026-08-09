@@ -62,6 +62,23 @@ $env:PYTHONPATH = "src"
 动态候选的额外设置固定在 `configs/gsm8k_3090_dynamic_is.toml`。`--summary-root` 控制 replay、动态
 候选和连续批处理的汇总位置，逐题可恢复记录仍由各运行器写入 `results/gsm8k/`。
 
+vLLM 是可选的执行后端，不改变方法设置。Linux/WSL2 环境可在套件命令中加入 `--backend vllm`；该值
+会进入 manifest fingerprint 并传给所有子实验。后端吞吐比较使用独立的成对入口，避免把上面的
+Transformers 批处理数字误写成 vLLM 加速：
+
+```bash
+export PYTHONPATH=src
+python experiments/run_vllm_backend_benchmark.py \
+  --config configs/gsm8k_3090_aligned.toml \
+  --limit 32 \
+  --workers 8 \
+  --tag rtx3090
+```
+
+汇总器要求两侧具有相同数据哈希与题号、权重、算法参数、dtype、worker 数、环境和代码哈希，并拒绝
+量化、额外评分模型或不同 GPU 数混入单卡 backend 比较。指标的精确定义和概率评分限制见
+[vLLM 推理运行时](../methods/VLLM_RUNTIME.md)。
+
 ### 3. 生成主表、计算量、分布审计与消融汇总
 
 ```powershell
