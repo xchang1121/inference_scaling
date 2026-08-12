@@ -50,6 +50,22 @@ from inference_scaling.algorithms.mh import (
     run_reward_mh_chain,
     run_reward_mh_chains,
 )
+from inference_scaling.algorithms.progressive_is import (
+    PilotSummary,
+    ProgressiveCandidate,
+    ProgressiveISResult,
+    ProgressiveISStep,
+    progressive_is_step,
+    run_progressive_conditional_is,
+)
+from inference_scaling.algorithms.smc_forest import (
+    ForestRollout,
+    SMCBranch,
+    SMCForestResult,
+    SMCForestStep,
+    SMCParticle,
+    run_smc_rollout_forest,
+)
 
 __all__ = [
     "BaseReplayCandidate",
@@ -66,14 +82,23 @@ __all__ = [
     "DynamicCandidateDraw",
     "DynamicISResult",
     "DynamicISStep",
+    "ForestRollout",
     "MHChainResult",
     "MHStep",
     "ProbabilityObservation",
+    "PilotSummary",
+    "ProgressiveCandidate",
+    "ProgressiveISResult",
+    "ProgressiveISStep",
     "ReplayEnergyEstimate",
     "RewardMHChainResult",
     "RewardMHStep",
     "RolloutEvaluation",
     "RolloutBudgetContext",
+    "SMCBranch",
+    "SMCForestResult",
+    "SMCForestStep",
+    "SMCParticle",
     "RewardBatchFunction",
     "VarianceCostEstimate",
     "allocate_variance_cost_budget",
@@ -91,7 +116,10 @@ __all__ = [
     "run_mh_chain",
     "run_mh_chains",
     "run_mh_chains_batched",
+    "progressive_is_step",
+    "run_progressive_conditional_is",
     "run_reward_mh_chain",
     "run_reward_mh_chains",
+    "run_smc_rollout_forest",
     "write_reserve_records",
 ]

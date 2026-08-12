@@ -5,8 +5,10 @@ from inference_scaling.config import (
     ConditionalEnergyConfig,
     DynamicISConfig,
     MHConfig,
+    ProgressiveISConfig,
     RewardMHConfig,
     RuntimeConfig,
+    SMCForestConfig,
     SamplingConfig,
 )
 
@@ -15,8 +17,10 @@ __all__ = [
     "ConditionalEnergyConfig",
     "DynamicISConfig",
     "MHConfig",
+    "ProgressiveISConfig",
     "RewardMHConfig",
     "RuntimeConfig",
+    "SMCForestConfig",
     "SamplingConfig",
 ]
 

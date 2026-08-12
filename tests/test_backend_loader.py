@@ -42,6 +42,39 @@ def test_transformers_loader_preserves_existing_defaults(monkeypatch) -> None:
     }
 
 
+def test_loader_builds_one_active_batch_schedule_for_both_backends(monkeypatch) -> None:
+    config = _config("transformers")
+    config["acceleration"] = {
+        "speculation": {
+            "enabled": True,
+            "tiers": [[2, 8], [16, 3], [64, 0]],
+            "min_context_tokens": 1,
+            "dynamic_vllm": False,
+        }
+    }
+    transformer_calls = []
+    monkeypatch.setattr(
+        loader.TransformersBackend,
+        "from_pretrained",
+        lambda model, **kwargs: transformer_calls.append((model, kwargs)) or "transformers",
+    )
+    assert loader.load_backend_from_config("base-model", config) == "transformers"
+    schedule = transformer_calls[0][1]["speculation"]
+    assert schedule.draft_tokens(2) == 8
+    assert schedule.draft_tokens(10) == 3
+
+    config["runtime"]["backend"] = "vllm"
+    vllm_calls = []
+    monkeypatch.setattr(
+        loader.AsyncVLLMBackend,
+        "from_pretrained",
+        lambda model, **kwargs: vllm_calls.append((model, kwargs)) or "vllm",
+    )
+    assert loader.load_backend_from_config("base-model", config) == "vllm"
+    assert vllm_calls[0][1]["speculation"] == schedule
+    assert vllm_calls[0][1]["dynamic_speculation"] is False
+
+
 def test_async_vllm_loader_merges_role_settings_and_exact_scorer(monkeypatch) -> None:
     config = _config("vllm")
     config["vllm"] = {

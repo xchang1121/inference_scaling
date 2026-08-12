@@ -7,12 +7,19 @@ import math
 import threading
 import warnings
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from inference_scaling.acceleration import (
+    ActiveBatchSpeculationConfig,
+    DraftProposal,
+    RolloutTokenTree,
+    RolloutTokenTreeSnapshot,
+    SampleCompletionCallback,
+)
 from inference_scaling.config import SamplingConfig
 from inference_scaling.compute import dense_forward_flops
 from inference_scaling.types import (
@@ -49,6 +56,11 @@ class TransformersBackendSnapshot:
     generation_forward_token_slots: int
     score_forward_token_slots: int
     estimated_dense_forward_flops: int
+    speculative_requests: int = 0
+    speculative_hits: int = 0
+    draft_tokens_proposed: int = 0
+    draft_tokens_accepted: int = 0
+    speculative_verification_forward_token_slots: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +84,8 @@ class TransformersBackend:
         model_id: str | None = None,
         device: str | Any | None = None,
         max_score_batch_size: int = 8,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
@@ -114,6 +128,23 @@ class TransformersBackend:
         self._score_forward_token_slots = 0
         self._estimated_dense_forward_flops = 0
         self._parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        self._speculation = speculation
+        self._draft_tree = (
+            draft_tree
+            if draft_tree is not None
+            else (
+                RolloutTokenTree.from_config(speculation)
+                if speculation is not None
+                else None
+            )
+        )
+        if self._draft_tree is not None and self._speculation is None:
+            raise ValueError("draft_tree requires an active-batch speculation config")
+        self._speculative_requests = 0
+        self._speculative_hits = 0
+        self._draft_tokens_proposed = 0
+        self._draft_tokens_accepted = 0
+        self._speculative_verification_forward_token_slots = 0
 
     @classmethod
     def from_pretrained(
@@ -127,6 +158,8 @@ class TransformersBackend:
         local_files_only: bool = False,
         trust_remote_code: bool = False,
         max_score_batch_size: int = 8,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -185,6 +218,8 @@ class TransformersBackend:
             ),
             device=device,
             max_score_batch_size=max_score_batch_size,
+            draft_tree=draft_tree,
+            speculation=speculation,
         )
 
     @property
@@ -280,9 +315,165 @@ class TransformersBackend:
             return tuple(repeated_layers)
         return None
 
+    @staticmethod
+    def _sample_from_log_probs(log_probs, uniform: float):
+        """Inverse-CDF sample one row with a float64 cumulative sum."""
+
+        torch_module = _require_torch()
+        probabilities = log_probs.exp()
+        cumulative = probabilities.to(dtype=torch_module.float64).cumsum(dim=-1)
+        value = torch_module.tensor(
+            float(uniform), dtype=torch_module.float64, device=log_probs.device
+        )
+        token = (cumulative < value).sum(dim=-1)
+        token = token.clamp_max(probabilities.shape[-1] - 1)
+        selected = log_probs.gather(-1, token[..., None]).squeeze(-1)
+        return token, selected
+
+    def _sequence_sample(
+        self,
+        request: GenerationRequest,
+        tokens: Sequence[int],
+        token_logprobs: Sequence[float],
+        reference_logprobs: Sequence[float],
+        finish_reason: str,
+    ) -> SequenceSample:
+        reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
+        return SequenceSample(
+            prefix=request.prefix,
+            token_ids=tuple(int(token) for token in tokens),
+            token_logprobs=tuple(float(value) for value in token_logprobs),
+            policy_id=request.sampling.policy_id,
+            model_id=self.model_id,
+            request_id=request.request_id,
+            finish_reason=finish_reason,
+            reference_token_logprobs=tuple(float(value) for value in reference_logprobs),
+            reference_policy_id=reference_sampling.policy_id,
+        )
+
+    def _verify_draft(
+        self,
+        request: GenerationRequest,
+        proposal: DraftProposal,
+        uniforms: np.ndarray,
+    ) -> tuple[list[int], list[float], list[float], str, int]:
+        """Verify one deterministic draft against exact base-policy samples.
+
+        A single target forward pass evaluates the whole proposed path.  Tokens
+        are accepted only while they equal the token selected by the request's
+        own base-policy random stream.  At the first mismatch the base-selected
+        token is emitted, so the resulting distribution is exactly the same base
+        policy regardless of where the draft came from.
+        """
+
+        torch_module = _require_torch()
+        draft = proposal.token_ids[: request.max_new_tokens]
+        if not draft:
+            return [], [], [], "length", 0
+        prefix = self._model_prefix(request.prefix)
+        sequence = prefix + draft
+        input_ids, attention_mask = self._padded_inputs([sequence])
+        logits_to_keep = len(draft) + 1
+        with self._model_lock, torch_module.inference_mode():
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=self._position_ids(attention_mask),
+                use_cache=True,
+                return_dict=True,
+                **(
+                    {"logits_to_keep": logits_to_keep}
+                    if self._supports_logits_to_keep
+                    else {}
+                ),
+            )
+        first_predictor = len(prefix) - 1
+        logits_start = len(sequence) - outputs.logits.shape[1]
+        predictor_rows = torch_module.arange(
+            first_predictor,
+            first_predictor + len(draft) + 1,
+            device=self.device,
+        ) - logits_start
+        if int(predictor_rows.min()) < 0 or int(predictor_rows.max()) >= outputs.logits.shape[1]:
+            raise RuntimeError("draft verification omitted a required predictor position")
+        token_logits = outputs.logits[0].index_select(0, predictor_rows)
+        policy_log_probs = self._policy_log_probs(token_logits, request.sampling)
+        reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
+        reference_log_probs = (
+            policy_log_probs
+            if request.sampling == reference_sampling
+            else self._policy_log_probs(token_logits, reference_sampling)
+        )
+
+        tokens: list[int] = []
+        token_logprobs: list[float] = []
+        reference_values: list[float] = []
+        accepted = 0
+        consumed = 0
+        finish_reason = "length"
+        for position, draft_token in enumerate(draft):
+            sampled, selected = self._sample_from_log_probs(
+                policy_log_probs[position], uniforms[consumed]
+            )
+            sampled_token = int(sampled.detach().cpu())
+            reference_selected = reference_log_probs[position, sampled_token]
+            tokens.append(sampled_token)
+            token_logprobs.append(float(selected.detach().cpu()))
+            reference_values.append(float(reference_selected.detach().cpu()))
+            consumed += 1
+            matches_draft = sampled_token == int(draft_token)
+            if matches_draft:
+                accepted += 1
+            if (
+                request.sampling.eos_token_id is not None
+                and sampled_token == request.sampling.eos_token_id
+            ):
+                finish_reason = "eos"
+                break
+            if not matches_draft:
+                break
+        else:
+            # When every draft token is accepted, the last verification logit
+            # supplies the standard speculative-decoding bonus token.
+            if len(tokens) < request.max_new_tokens:
+                sampled, selected = self._sample_from_log_probs(
+                    policy_log_probs[len(draft)], uniforms[consumed]
+                )
+                sampled_token = int(sampled.detach().cpu())
+                tokens.append(sampled_token)
+                token_logprobs.append(float(selected.detach().cpu()))
+                reference_values.append(
+                    float(reference_log_probs[len(draft), sampled_token].detach().cpu())
+                )
+                consumed += 1
+                if (
+                    request.sampling.eos_token_id is not None
+                    and sampled_token == request.sampling.eos_token_id
+                ):
+                    finish_reason = "eos"
+
+        verified_proposed = min(len(draft), consumed)
+        self._draft_tree.record_verification(
+            proposed=verified_proposed, accepted=accepted
+        )
+        slots = int(input_ids.numel())
+        with self._statistics_lock:
+            self._speculative_hits += 1
+            self._draft_tokens_proposed += verified_proposed
+            self._draft_tokens_accepted += accepted
+            self._speculative_verification_forward_token_slots += slots
+            self._prefill_tokens += len(prefix)
+            self._generation_forward_token_slots += slots
+            self._estimated_dense_forward_flops += self._dense_forward_flops(slots)
+        return tokens, token_logprobs, reference_values, finish_reason, consumed
+
     def _sample_same_policy(
         self,
         indexed_requests: Sequence[tuple[int, GenerationRequest]],
+        *,
+        uniform_streams: Mapping[int, np.ndarray] | None = None,
+        uniform_offsets: Mapping[int, int] | None = None,
+        on_complete: SampleCompletionCallback | None = None,
     ) -> list[tuple[int, SequenceSample]]:
         torch_module = _require_torch()
         requests = [request for _, request in indexed_requests]
@@ -307,8 +498,20 @@ class TransformersBackend:
                 prefixes = [self._model_prefix(request.prefix) for request in requests]
                 reusable_prefixes = list(prefix_positions)
         uniforms = [
-            np.random.default_rng(request.seed).random(request.max_new_tokens)
-            for request in requests
+            (
+                uniform_streams[original_index]
+                if uniform_streams is not None and original_index in uniform_streams
+                else np.random.default_rng(request.seed).random(request.max_new_tokens)
+            )
+            for original_index, request in indexed_requests
+        ]
+        offsets = [
+            (
+                int(uniform_offsets.get(original_index, 0))
+                if uniform_offsets is not None
+                else 0
+            )
+            for original_index, _ in indexed_requests
         ]
         token_lists: list[list[int]] = [[] for _ in requests]
         logprob_lists: list[list[float]] = [[] for _ in requests]
@@ -316,6 +519,7 @@ class TransformersBackend:
         reference_sampling = SamplingConfig(eos_token_id=sampling.eos_token_id)
         active = torch_module.ones(len(requests), dtype=torch_module.bool, device=self.device)
         finish_reasons = ["length"] * len(requests)
+        callback_completed: set[int] = set()
         maximum_new_tokens = max(request.max_new_tokens for request in requests)
         prefill_tokens = sum(len(prefix) for prefix in prefixes)
         shared_prefill_tokens_saved = 0
@@ -390,8 +594,8 @@ class TransformersBackend:
                 probabilities = log_probs.exp()
                 random_values = torch_module.tensor(
                     [
-                        uniforms[index][step]
-                        if step < len(uniforms[index])
+                        uniforms[index][offsets[index] + step]
+                        if offsets[index] + step < len(uniforms[index])
                         else 0.0
                         for index in range(len(requests))
                     ],
@@ -431,6 +635,22 @@ class TransformersBackend:
                     )
                     if sampling.eos_token_id is not None and token == sampling.eos_token_id:
                         finish_reasons[index] = "eos"
+                    if on_complete is not None and (
+                        finish_reasons[index] == "eos"
+                        or step + 1 >= requests[index].max_new_tokens
+                    ):
+                        original_index, request = indexed_requests[index]
+                        on_complete(
+                            original_index,
+                            self._sequence_sample(
+                                request,
+                                token_lists[index],
+                                logprob_lists[index],
+                                reference_logprob_lists[index],
+                                finish_reasons[index],
+                            ),
+                        )
+                        callback_completed.add(original_index)
 
                 eos_finished = torch_module.tensor(
                     [
@@ -495,19 +715,17 @@ class TransformersBackend:
             results.append(
                 (
                     original_index,
-                    SequenceSample(
-                        prefix=request.prefix,
-                        token_ids=tuple(tokens),
-                        token_logprobs=tuple(token_logprobs),
-                        policy_id=request.sampling.policy_id,
-                        model_id=self.model_id,
-                        request_id=request.request_id,
-                        finish_reason=finish_reason,
-                        reference_token_logprobs=tuple(reference_token_logprobs),
-                        reference_policy_id=reference_sampling.policy_id,
+                    self._sequence_sample(
+                        request,
+                        tokens,
+                        token_logprobs,
+                        reference_token_logprobs,
+                        finish_reason,
                     ),
                 )
             )
+            if on_complete is not None and original_index not in callback_completed:
+                on_complete(original_index, results[-1][1])
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
             self._shared_prefill_tokens_saved += shared_prefill_tokens_saved
@@ -517,24 +735,123 @@ class TransformersBackend:
             )
         return results
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+    def _sample_with_verified_draft(
+        self,
+        original_index: int,
+        request: GenerationRequest,
+        proposal: DraftProposal,
+        on_complete: SampleCompletionCallback | None,
+    ) -> SequenceSample:
+        uniforms = np.random.default_rng(request.seed).random(request.max_new_tokens)
+        tokens, logprobs, reference_logprobs, finish_reason, consumed = self._verify_draft(
+            request, proposal, uniforms
+        )
+        if finish_reason != "eos" and consumed < request.max_new_tokens:
+            tail_request = GenerationRequest(
+                prefix=request.prefix + tuple(tokens),
+                max_new_tokens=request.max_new_tokens - consumed,
+                sampling=request.sampling,
+                seed=request.seed,
+                request_id=f"{request.request_id}:verified-tail",
+            )
+            tail = self._sample_same_policy(
+                [(original_index, tail_request)],
+                uniform_streams={original_index: uniforms},
+                uniform_offsets={original_index: consumed},
+            )[0][1]
+            tokens.extend(tail.token_ids)
+            logprobs.extend(tail.token_logprobs)
+            if tail.reference_token_logprobs is None:
+                raise RuntimeError("Transformers tail omitted reference log-probabilities")
+            reference_logprobs.extend(tail.reference_token_logprobs)
+            finish_reason = tail.finish_reason
+        sample = self._sequence_sample(
+            request,
+            tokens,
+            logprobs,
+            reference_logprobs,
+            finish_reason,
+        )
+        if on_complete is not None:
+            on_complete(original_index, sample)
+        return sample
+
+    def _sample_batch(
+        self,
+        requests: Sequence[GenerationRequest],
+        on_complete: SampleCompletionCallback | None,
+    ) -> list[SequenceSample]:
         if not requests:
             return []
+        proposals: dict[int, DraftProposal] = {}
+        if self._draft_tree is not None and self._speculation is not None:
+            draft_tokens = self._speculation.draft_tokens(len(requests))
+            if draft_tokens > 0:
+                for index, request in enumerate(requests):
+                    proposal = self._draft_tree.draft(
+                        self._model_prefix(request.prefix),
+                        min(draft_tokens, request.max_new_tokens),
+                    )
+                    if proposal.token_ids:
+                        proposals[index] = proposal
+            with self._statistics_lock:
+                self._speculative_requests += len(requests)
+
         grouped: OrderedDict[
             SamplingConfig, list[tuple[int, GenerationRequest]]
         ] = OrderedDict()
         for index, request in enumerate(requests):
-            grouped.setdefault(request.sampling, []).append((index, request))
+            if index not in proposals:
+                grouped.setdefault(request.sampling, []).append((index, request))
         indexed_outputs: list[tuple[int, SequenceSample]] = []
         for group in grouped.values():
-            indexed_outputs.extend(self._sample_same_policy(group))
+            indexed_outputs.extend(
+                self._sample_same_policy(group, on_complete=on_complete)
+            )
+        for index, proposal in proposals.items():
+            indexed_outputs.append(
+                (
+                    index,
+                    self._sample_with_verified_draft(
+                        index, requests[index], proposal, on_complete
+                    ),
+                )
+            )
         indexed_outputs.sort(key=lambda item: item[0])
         outputs = [sample for _, sample in indexed_outputs]
+        if self._draft_tree is not None:
+            self._draft_tree.observe_samples(outputs)
         with self._statistics_lock:
             self._sample_calls += 1
             self._sampled_sequences += len(outputs)
             self._generated_tokens += sum(len(output.token_ids) for output in outputs)
         return outputs
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        return self._sample_batch(requests, None)
+
+    def sample_batch_with_callback(
+        self,
+        requests: Sequence[GenerationRequest],
+        on_complete: SampleCompletionCallback,
+    ) -> list[SequenceSample]:
+        """Invoke ``on_complete`` as each row reaches EOS or its token limit."""
+
+        return self._sample_batch(requests, on_complete)
+
+    def observe_draft_samples(self, samples: Iterable[SequenceSample]) -> None:
+        """Add arbitrary historical/off-policy samples as draft-only material."""
+
+        if self._draft_tree is not None:
+            self._draft_tree.observe_samples(samples)
+
+    def observe_draft_sequences(self, sequences: Iterable[TokenSequence]) -> None:
+        if self._draft_tree is not None:
+            for sequence in sequences:
+                self._draft_tree.observe(sequence)
+
+    def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
+        return None if self._draft_tree is None else self._draft_tree.snapshot()
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         torch_module = _require_torch()
@@ -707,6 +1024,13 @@ class TransformersBackend:
                 generation_forward_token_slots=self._generation_forward_token_slots,
                 score_forward_token_slots=self._score_forward_token_slots,
                 estimated_dense_forward_flops=self._estimated_dense_forward_flops,
+                speculative_requests=self._speculative_requests,
+                speculative_hits=self._speculative_hits,
+                draft_tokens_proposed=self._draft_tokens_proposed,
+                draft_tokens_accepted=self._draft_tokens_accepted,
+                speculative_verification_forward_token_slots=(
+                    self._speculative_verification_forward_token_slots
+                ),
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:

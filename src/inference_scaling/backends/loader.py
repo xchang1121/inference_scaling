@@ -6,6 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from inference_scaling.acceleration import (
+    ActiveBatchSpeculationConfig,
+    SpeculationTier,
+)
 from inference_scaling.backends.transformers_backend import TransformersBackend
 from inference_scaling.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
 
@@ -64,6 +68,43 @@ def _mapping(value: Any, *, name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{name} must be a table")
     return dict(value)
+
+
+def _speculation_from_config(
+    config: Mapping[str, Any],
+) -> tuple[ActiveBatchSpeculationConfig | None, bool]:
+    acceleration = _mapping(config.get("acceleration"), name="acceleration")
+    table = _mapping(acceleration.get("speculation"), name="acceleration.speculation")
+    if not table or not bool(table.pop("enabled", False)):
+        return None, True
+    dynamic_vllm = bool(table.pop("dynamic_vllm", True))
+    raw_tiers = table.pop("tiers", None)
+    tiers = None
+    if raw_tiers is not None:
+        if not isinstance(raw_tiers, (list, tuple)):
+            raise TypeError("acceleration.speculation.tiers must be an array")
+        try:
+            tiers = tuple(
+                SpeculationTier(int(item[0]), int(item[1])) for item in raw_tiers
+            )
+        except (TypeError, ValueError, IndexError) as error:
+            raise ValueError(
+                "each speculation tier must be [maximum_active_batch, draft_tokens]"
+            ) from error
+    aliases = {
+        "min_context_tokens": "min_context_tokens",
+        "min_token_probability": "min_token_probability",
+        "tree_max_context_tokens": "tree_max_context_tokens",
+        "tree_max_contexts": "tree_max_contexts",
+        "vllm_max_cached_requests": "vllm_max_cached_requests",
+    }
+    unknown = sorted(set(table) - set(aliases))
+    if unknown:
+        raise ValueError("unknown speculation settings: " + ", ".join(unknown))
+    kwargs = {aliases[name]: value for name, value in table.items()}
+    if tiers is not None:
+        kwargs["tiers"] = tiers
+    return ActiveBatchSpeculationConfig(**kwargs), dynamic_vllm
 
 
 def _infer_role(
@@ -129,7 +170,11 @@ def _transformers_backend(
     *,
     device: str | None = None,
     dtype: str | None = None,
+    speculation: ActiveBatchSpeculationConfig | None = None,
 ) -> TransformersBackend:
+    kwargs: dict[str, Any] = {}
+    if speculation is not None:
+        kwargs["speculation"] = speculation
     return TransformersBackend.from_pretrained(
         model_name_or_path,
         adapter_name_or_path=adapter_name_or_path,
@@ -138,6 +183,7 @@ def _transformers_backend(
         local_files_only=True,
         trust_remote_code=bool(runtime.get("trust_remote_code", False)),
         max_score_batch_size=int(runtime.get("max_score_batch_size", 8)),
+        **kwargs,
     )
 
 
@@ -156,6 +202,7 @@ def load_backend_from_config(
     """
 
     runtime = _mapping(config.get("runtime"), name="runtime")
+    speculation, dynamic_vllm_speculation = _speculation_from_config(config)
     backend_kind = configured_backend(config)
     model_name_or_path = adapter_base or path
     adapter_name_or_path = path if adapter_base is not None else None
@@ -164,6 +211,7 @@ def load_backend_from_config(
             model_name_or_path,
             adapter_name_or_path,
             runtime,
+            speculation=speculation,
         )
 
     role = _infer_role(path, config, adapter_base=adapter_base)
@@ -205,6 +253,12 @@ def load_backend_from_config(
         int(engine_kwargs.get("max_logprobs", required_logprobs)),
     )
     loader = AsyncVLLMBackend if asynchronous else VLLMBackend
+    acceleration_kwargs: dict[str, Any] = {}
+    if speculation is not None:
+        acceleration_kwargs = {
+            "speculation": speculation,
+            "dynamic_speculation": dynamic_vllm_speculation,
+        }
     try:
         return loader.from_pretrained(
             model_name_or_path,
@@ -229,6 +283,7 @@ def load_backend_from_config(
             enable_prefix_caching=bool(settings.pop("enable_prefix_caching", True)),
             max_lora_rank=int(settings.pop("max_lora_rank", 16)),
             engine_kwargs=engine_kwargs,
+            **acceleration_kwargs,
         )
     except BaseException:
         close_backend(exact_backend)

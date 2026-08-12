@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pytest
 
 from inference_scaling.backends import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.acceleration import ActiveBatchSpeculationConfig
 from inference_scaling.config import SamplingConfig
 from inference_scaling.types import GenerationRequest, ScoreRequest
 
@@ -280,3 +281,35 @@ def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
     assert backend.direct_generate((1,), max_new_tokens=2, num_beams=2) == (3, 3)
     backend.close()
     assert engine.closed
+
+
+def test_async_vllm_streams_completion_callbacks_and_draft_observations() -> None:
+    engine = _AsyncEngine()
+    config = ActiveBatchSpeculationConfig(min_context_tokens=1)
+    backend = AsyncVLLMBackend(
+        engine,
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+        speculation=config,
+        native_suffix_speculation=True,
+    )
+    completed = []
+    requests = [
+        GenerationRequest((1,), 1, SamplingConfig(), seed, f"r{seed}")
+        for seed in (1, 2, 3)
+    ]
+    try:
+        outputs = backend.sample_batch_with_callback(
+            requests,
+            lambda index, sample: completed.append((index, sample.request_id)),
+        )
+        assert sorted(completed) == [(0, "r1"), (1, "r2"), (2, "r3")]
+        assert [sample.request_id for sample in outputs] == ["r1", "r2", "r3"]
+        snapshot = backend.snapshot()
+        assert snapshot.native_suffix_speculation
+        assert snapshot.observed_draft_sequences == 3
+        assert backend.draft_cache_snapshot().observed_sequences == 3
+    finally:
+        backend.close()

@@ -1,5 +1,12 @@
 """Inference backends."""
 
+from inference_scaling.acceleration import (
+    ActiveBatchSpeculationConfig,
+    LowPriorityRunAheadBackend,
+    RolloutTokenTree,
+    SpeculationTier,
+    StreamingRewardEvaluator,
+)
 from inference_scaling.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.backends.batching import BatchingSnapshot, ContinuousBatchingBackend
 from inference_scaling.backends.cache import ScoreCacheSnapshot, ScoreCachingBackend
@@ -25,14 +32,19 @@ from inference_scaling.backends.vllm_backend import (
 
 __all__ = [
     "AbsorbingEOSBackend",
+    "ActiveBatchSpeculationConfig",
     "AsyncVLLMBackend",
     "BACKEND_CHOICES",
     "BatchingSnapshot",
     "CachedCandidateBackend",
     "ContinuousBatchingBackend",
+    "LowPriorityRunAheadBackend",
+    "RolloutTokenTree",
     "ScoreCacheSnapshot",
     "ScoreCachingBackend",
     "SequenceScoreStatistics",
+    "SpeculationTier",
+    "StreamingRewardEvaluator",
     "TabularAutoregressiveBackend",
     "TransformersBackend",
     "TransformersBackendSnapshot",

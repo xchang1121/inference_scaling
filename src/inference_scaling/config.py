@@ -98,6 +98,66 @@ class ConditionalEnergyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ProgressiveISConfig:
+    """Pilot/evaluation split for cost-aware conditional-energy estimation."""
+
+    candidate_count: int = 4
+    pilot_rollouts_per_candidate: int = 2
+    evaluation_cost_budget: float = 16.0
+    minimum_evaluation_per_candidate: int = 1
+    block_size: int = 16
+    total_length: int = 128
+    reward_temperature: float = 1.0
+    importance_log_ratio_clip: float | None = None
+    reward_workers: int = 4
+
+    def __post_init__(self) -> None:
+        for name in (
+            "candidate_count",
+            "pilot_rollouts_per_candidate",
+            "minimum_evaluation_per_candidate",
+            "block_size",
+            "total_length",
+            "reward_workers",
+        ):
+            _positive(name, getattr(self, name))
+        _positive("evaluation_cost_budget", self.evaluation_cost_budget)
+        _positive("reward_temperature", self.reward_temperature)
+        if self.importance_log_ratio_clip is not None:
+            _positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
+
+
+@dataclass(frozen=True, slots=True)
+class SMCForestConfig:
+    """Auxiliary particle filter with reusable conditional rollout suffixes."""
+
+    particle_count: int = 8
+    branch_factor: int = 2
+    rollout_count: int = 4
+    block_size: int = 16
+    total_length: int = 128
+    reward_temperature: float = 1.0
+    reward_workers: int = 4
+    reuse_rollout_forest: bool = True
+
+    def __post_init__(self) -> None:
+        for name in (
+            "particle_count",
+            "branch_factor",
+            "rollout_count",
+            "block_size",
+            "total_length",
+            "reward_workers",
+        ):
+            _positive(name, getattr(self, name))
+        _positive("reward_temperature", self.reward_temperature)
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
+
+
+@dataclass(frozen=True, slots=True)
 class BaseReplayConfig:
     candidate_count: int = 4
     block_size: int = 16

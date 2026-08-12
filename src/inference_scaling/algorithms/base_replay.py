@@ -269,6 +269,11 @@ def estimate_replay_energy(
         )
 
     history_records = store.reveal_and_consume(claim)
+    observe_drafts = getattr(base_backend, "observe_draft_sequences", None)
+    if callable(observe_drafts):
+        observe_drafts(
+            claim.key.rollout_prefix + record.completion for record in history_records
+        )
     validate_record_probabilities(history_records, registry)
     behavior_counts = dict(claim.behavior_counts)
     history_completions = [record.completion for record in history_records]

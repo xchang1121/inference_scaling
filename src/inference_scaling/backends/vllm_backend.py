@@ -19,11 +19,17 @@ import asyncio
 import inspect
 import itertools
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from inference_scaling.acceleration import (
+    ActiveBatchSpeculationConfig,
+    RolloutTokenTree,
+    RolloutTokenTreeSnapshot,
+    SampleCompletionCallback,
+)
 from inference_scaling.compute import dense_forward_flops
 from inference_scaling.config import SamplingConfig
 from inference_scaling.types import (
@@ -77,6 +83,8 @@ class VLLMBackendSnapshot:
     delegated_score_forward_token_slots: int
     delegated_estimated_dense_forward_flops: int
     maximum_in_flight_requests: int
+    native_suffix_speculation: bool = False
+    observed_draft_sequences: int = 0
 
 
 class _AsyncLoopRunner:
@@ -218,6 +226,9 @@ class VLLMBackend:
         beam_search_params_factory: Callable[..., Any] | None = None,
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
+        native_suffix_speculation: bool = False,
     ) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
@@ -232,6 +243,17 @@ class VLLMBackend:
         self._beam_search_params_factory = beam_search_params_factory
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
+        self._speculation = speculation
+        self._draft_tree = (
+            draft_tree
+            if draft_tree is not None
+            else (
+                RolloutTokenTree.from_config(speculation)
+                if speculation is not None
+                else None
+            )
+        )
+        self._native_suffix_speculation = bool(native_suffix_speculation)
         pad = getattr(tokenizer, "pad_token_id", None)
         eos = getattr(tokenizer, "eos_token_id", None)
         if pad is None and eos is not None:
@@ -262,6 +284,7 @@ class VLLMBackend:
         self._delegated_estimated_dense_forward_flops = 0
         self._active_engine_requests = 0
         self._maximum_in_flight_requests = 0
+        self._observed_draft_sequences = 0
 
     @classmethod
     def from_pretrained(
@@ -286,6 +309,9 @@ class VLLMBackend:
         scoring_backend: AutoregressiveBackend | None = None,
         enable_prefix_caching: bool = True,
         max_lora_rank: int = 16,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
+        dynamic_speculation: bool = True,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "VLLMBackend":
         try:
@@ -332,7 +358,16 @@ class VLLMBackend:
             "max_num_batched_tokens": max_num_batched_tokens,
         }
         kwargs.update({name: value for name, value in optional.items() if value is not None})
+        if speculation is not None:
+            kwargs["speculative_config"] = speculation.vllm_suffix_config(
+                dynamic=dynamic_speculation
+            )
         if engine_kwargs:
+            if speculation is not None and "speculative_config" in engine_kwargs:
+                raise ValueError(
+                    "engine_kwargs.speculative_config conflicts with the explicit "
+                    "active-batch speculation config"
+                )
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
@@ -368,6 +403,9 @@ class VLLMBackend:
             beam_search_params_factory=BeamSearchParams,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
+            draft_tree=draft_tree,
+            speculation=speculation,
+            native_suffix_speculation=speculation is not None,
         )
 
     @property
@@ -468,51 +506,50 @@ class VLLMBackend:
             raise RuntimeError("vLLM must return exactly one completion per request")
         return completions[0]
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
-        if not requests:
-            return []
-        outputs = self._generate(
-            [self._prompt(request.prefix) for request in requests],
-            [self._sampling_params(request) for request in requests],
+    def _sample_from_output(
+        self,
+        request: GenerationRequest,
+        output: Any,
+    ) -> tuple[SequenceSample, int, int, int]:
+        completion = self._completion(output)
+        tokens = tuple(int(token) for token in completion.token_ids)
+        positions = completion.logprobs
+        if positions is None or len(positions) != len(tokens):
+            raise RuntimeError("vLLM returned an invalid generated log-probability shape")
+        token_logprobs = tuple(
+            _logprob_value(position, token)
+            for position, token in zip(positions, tokens, strict=True)
         )
-        if len(outputs) != len(requests):
-            raise RuntimeError("vLLM returned an invalid number of request outputs")
+        finish_reason = str(getattr(completion, "finish_reason", "length") or "length")
+        eos = request.sampling.eos_token_id
+        if eos is not None and tokens and tokens[-1] == eos:
+            finish_reason = "eos"
+        sample = SequenceSample(
+            prefix=request.prefix,
+            token_ids=tokens,
+            token_logprobs=token_logprobs,
+            policy_id=request.sampling.policy_id,
+            model_id=self.model_id,
+            request_id=request.request_id,
+            finish_reason=finish_reason,
+        )
+        prompt_length = len(self._model_prefix(request.prefix))
+        cached = min(prompt_length, int(getattr(output, "num_cached_tokens", 0) or 0))
+        return (
+            sample,
+            prompt_length - cached,
+            cached,
+            prompt_length - cached + max(0, len(tokens) - 1),
+        )
 
-        samples: list[SequenceSample] = []
-        prefill_tokens = 0
-        cached_tokens = 0
-        forward_slots = 0
-        for request, output in zip(requests, outputs, strict=True):
-            completion = self._completion(output)
-            tokens = tuple(int(token) for token in completion.token_ids)
-            positions = completion.logprobs
-            if positions is None or len(positions) != len(tokens):
-                raise RuntimeError("vLLM returned an invalid generated log-probability shape")
-            token_logprobs = tuple(
-                _logprob_value(position, token)
-                for position, token in zip(positions, tokens, strict=True)
-            )
-            finish_reason = str(getattr(completion, "finish_reason", "length") or "length")
-            eos = request.sampling.eos_token_id
-            if eos is not None and tokens and tokens[-1] == eos:
-                finish_reason = "eos"
-            samples.append(
-                SequenceSample(
-                    prefix=request.prefix,
-                    token_ids=tokens,
-                    token_logprobs=token_logprobs,
-                    policy_id=request.sampling.policy_id,
-                    model_id=self.model_id,
-                    request_id=request.request_id,
-                    finish_reason=finish_reason,
-                )
-            )
-            prompt_length = len(self._model_prefix(request.prefix))
-            cached = min(prompt_length, int(getattr(output, "num_cached_tokens", 0) or 0))
-            prefill_tokens += prompt_length - cached
-            cached_tokens += cached
-            forward_slots += prompt_length - cached + max(0, len(tokens) - 1)
-
+    def _record_sample_batch(
+        self,
+        samples: Sequence[SequenceSample],
+        *,
+        prefill_tokens: int,
+        cached_tokens: int,
+        forward_slots: int,
+    ) -> None:
         with self._statistics_lock:
             self._sample_calls += 1
             self._sampled_sequences += len(samples)
@@ -523,8 +560,60 @@ class VLLMBackend:
             self._estimated_dense_forward_flops += dense_forward_flops(
                 self.parameter_count, forward_slots
             )
-            self._engine_requests += len(requests)
+            self._engine_requests += len(samples)
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        if not requests:
+            return []
+        outputs = self._generate(
+            [self._prompt(request.prefix) for request in requests],
+            [self._sampling_params(request) for request in requests],
+        )
+        if len(outputs) != len(requests):
+            raise RuntimeError("vLLM returned an invalid number of request outputs")
+        parsed = [
+            self._sample_from_output(request, output)
+            for request, output in zip(requests, outputs, strict=True)
+        ]
+        samples = [item[0] for item in parsed]
+        self._record_sample_batch(
+            samples,
+            prefill_tokens=sum(item[1] for item in parsed),
+            cached_tokens=sum(item[2] for item in parsed),
+            forward_slots=sum(item[3] for item in parsed),
+        )
+        self.observe_draft_samples(samples)
         return samples
+
+    def sample_batch_with_callback(
+        self,
+        requests: Sequence[GenerationRequest],
+        on_complete: SampleCompletionCallback,
+    ) -> list[SequenceSample]:
+        """Synchronous LLM fallback; AsyncVLLMBackend overrides this hook."""
+
+        samples = self.sample_batch(requests)
+        for index, sample in enumerate(samples):
+            on_complete(index, sample)
+        return samples
+
+    def observe_draft_samples(self, samples: Iterable[SequenceSample]) -> None:
+        materialized = tuple(samples)
+        if self._draft_tree is not None:
+            self._draft_tree.observe_samples(materialized)
+        with self._statistics_lock:
+            self._observed_draft_sequences += len(materialized)
+
+    def observe_draft_sequences(self, sequences: Iterable[TokenSequence]) -> None:
+        materialized = tuple(tuple(int(token) for token in sequence) for sequence in sequences)
+        if self._draft_tree is not None:
+            for sequence in materialized:
+                self._draft_tree.observe(sequence)
+        with self._statistics_lock:
+            self._observed_draft_sequences += len(materialized)
+
+    def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
+        return None if self._draft_tree is None else self._draft_tree.snapshot()
 
     @staticmethod
     def _supports_native_score(sampling: SamplingConfig | None) -> bool:
@@ -716,6 +805,8 @@ class VLLMBackend:
                     self._delegated_estimated_dense_forward_flops
                 ),
                 maximum_in_flight_requests=self._maximum_in_flight_requests,
+                native_suffix_speculation=self._native_suffix_speculation,
+                observed_draft_sequences=self._observed_draft_sequences,
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -831,6 +922,9 @@ class AsyncVLLMBackend(VLLMBackend):
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
         engine_factory: Callable[[], Any] | None = None,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
+        native_suffix_speculation: bool = False,
     ) -> None:
         if (engine is None) == (engine_factory is None):
             raise ValueError("provide exactly one of engine or engine_factory")
@@ -849,6 +943,9 @@ class AsyncVLLMBackend(VLLMBackend):
             beam_search_params_factory=beam_search_params_factory,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
+            draft_tree=draft_tree,
+            speculation=speculation,
+            native_suffix_speculation=native_suffix_speculation,
         )
 
     @classmethod
@@ -874,6 +971,9 @@ class AsyncVLLMBackend(VLLMBackend):
         scoring_backend: AutoregressiveBackend | None = None,
         enable_prefix_caching: bool = True,
         max_lora_rank: int = 16,
+        draft_tree: RolloutTokenTree | None = None,
+        speculation: ActiveBatchSpeculationConfig | None = None,
+        dynamic_speculation: bool = True,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "AsyncVLLMBackend":
         try:
@@ -921,7 +1021,16 @@ class AsyncVLLMBackend(VLLMBackend):
             "max_num_batched_tokens": max_num_batched_tokens,
         }
         kwargs.update({name: value for name, value in optional.items() if value is not None})
+        if speculation is not None:
+            kwargs["speculative_config"] = speculation.vllm_suffix_config(
+                dynamic=dynamic_speculation
+            )
         if engine_kwargs:
+            if speculation is not None and "speculative_config" in engine_kwargs:
+                raise ValueError(
+                    "engine_kwargs.speculative_config conflicts with the explicit "
+                    "active-batch speculation config"
+                )
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
@@ -961,6 +1070,9 @@ class AsyncVLLMBackend(VLLMBackend):
             scoring_backend=scoring_backend,
             lora_request=lora_request,
             engine_factory=create_engine,
+            draft_tree=draft_tree,
+            speculation=speculation,
+            native_suffix_speculation=speculation is not None,
         )
 
     def _next_request_id(self) -> str:
@@ -1000,10 +1112,78 @@ class AsyncVLLMBackend(VLLMBackend):
             )
         )
 
+    async def _generate_many_as_completed(
+        self,
+        prompts: Sequence[Any],
+        params: Any,
+        requests: Sequence[GenerationRequest],
+        on_complete: SampleCompletionCallback,
+    ) -> list[tuple[SequenceSample, int, int, int]]:
+        policies = params if isinstance(params, list) else [params] * len(prompts)
+        if len(policies) != len(prompts) or len(requests) != len(prompts):
+            raise ValueError("vLLM prompts, policies, and requests must have equal length")
+
+        async def indexed(index: int, prompt: Any, policy: Any):
+            return index, await self._generate_one(prompt, policy)
+
+        tasks = [
+            asyncio.create_task(indexed(index, prompt, policy))
+            for index, (prompt, policy) in enumerate(
+                zip(prompts, policies, strict=True)
+            )
+        ]
+        parsed: list[tuple[SequenceSample, int, int, int] | None] = [None] * len(tasks)
+        try:
+            for completed in asyncio.as_completed(tasks):
+                index, output = await completed
+                item = self._sample_from_output(requests[index], output)
+                parsed[index] = item
+                self.observe_draft_samples((item[0],))
+                on_complete(index, item[0])
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        if any(item is None for item in parsed):
+            raise RuntimeError("asynchronous vLLM omitted a request result")
+        return [item for item in parsed if item is not None]
+
     def _generate(self, prompts: Sequence[Any], params: Any) -> list[Any]:
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
         return self._runner.run(self._generate_many(tuple(prompts), params))
+
+    def sample_batch_with_callback(
+        self,
+        requests: Sequence[GenerationRequest],
+        on_complete: SampleCompletionCallback,
+    ) -> list[SequenceSample]:
+        """Stream final request outputs from the persistent AsyncLLM engine."""
+
+        if not requests:
+            return []
+        if self._closed:
+            raise RuntimeError("vLLM backend is closed")
+        prompts = tuple(self._prompt(request.prefix) for request in requests)
+        params = [self._sampling_params(request) for request in requests]
+        parsed = self._runner.run(
+            self._generate_many_as_completed(
+                prompts,
+                params,
+                tuple(requests),
+                on_complete,
+            )
+        )
+        samples = [item[0] for item in parsed]
+        self._record_sample_batch(
+            samples,
+            prefill_tokens=sum(item[1] for item in parsed),
+            cached_tokens=sum(item[2] for item in parsed),
+            forward_slots=sum(item[3] for item in parsed),
+        )
+        return samples
 
     def _beam_score(self, tokens: Sequence[int], cumulative_logprob: float) -> float:
         length = len(tokens)

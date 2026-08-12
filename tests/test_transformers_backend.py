@@ -4,6 +4,11 @@ import numpy as np
 import pytest
 import torch
 
+from inference_scaling.acceleration import (
+    ActiveBatchSpeculationConfig,
+    RolloutTokenTree,
+    SpeculationTier,
+)
 from inference_scaling.backends import TransformersBackend
 from inference_scaling.config import SamplingConfig
 from inference_scaling.types import GenerationRequest, ScoreRequest
@@ -237,3 +242,94 @@ def test_confidence_statistics_reject_truncated_support() -> None:
         backend.score_statistics_batch(
             [ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))]
         )
+
+
+def test_verified_history_draft_preserves_the_exact_request_random_stream() -> None:
+    probabilities = [0.55, 0.3, 0.15]
+    request = GenerationRequest((7, 8), 6, SamplingConfig(), 37, "same-request")
+    baseline = TransformersBackend(
+        ConstantLogitModel(probabilities), TinyTokenizer(), device="cpu"
+    ).sample_batch([request])[0]
+    config = ActiveBatchSpeculationConfig(
+        tiers=(SpeculationTier(1, 6),),
+        min_context_tokens=1,
+        tree_max_context_tokens=8,
+    )
+    tree = RolloutTokenTree.from_config(config)
+    tree.observe(baseline.full_sequence)
+    accelerated = TransformersBackend(
+        ConstantLogitModel(probabilities),
+        TinyTokenizer(),
+        device="cpu",
+        draft_tree=tree,
+        speculation=config,
+    )
+
+    sample = accelerated.sample_batch([request])[0]
+
+    assert sample == baseline
+    snapshot = accelerated.snapshot()
+    assert snapshot.speculative_hits == 1
+    assert snapshot.draft_tokens_accepted > 0
+    assert snapshot.speculative_verification_forward_token_slots > 0
+    assert accelerated.draft_cache_snapshot().acceptance_rate > 0
+
+
+def test_high_active_batch_disables_transformers_speculation() -> None:
+    config = ActiveBatchSpeculationConfig(
+        tiers=(SpeculationTier(1, 4), SpeculationTier(8, 0)),
+        min_context_tokens=1,
+    )
+    tree = RolloutTokenTree.from_config(config)
+    tree.observe((0, 1, 0, 1, 0, 1))
+    backend = TransformersBackend(
+        ConstantLogitModel([0.6, 0.3, 0.1]),
+        TinyTokenizer(),
+        device="cpu",
+        draft_tree=tree,
+        speculation=config,
+    )
+    backend.sample_batch(
+        [GenerationRequest((0, 1), 2, SamplingConfig(), index, str(index)) for index in range(2)]
+    )
+    assert backend.snapshot().speculative_hits == 0
+    assert backend.snapshot().draft_tokens_proposed == 0
+
+
+def test_draft_mismatch_that_samples_eos_stops_immediately() -> None:
+    config = ActiveBatchSpeculationConfig(
+        tiers=(SpeculationTier(1, 4),), min_context_tokens=1
+    )
+    tree = RolloutTokenTree.from_config(config)
+    tree.observe((7, 8, 1, 1, 1))
+    backend = TransformersBackend(
+        ConstantLogitModel([0.0, 0.0, 1.0]),
+        TinyTokenizer(),
+        device="cpu",
+        draft_tree=tree,
+        speculation=config,
+    )
+    sample = backend.sample_batch(
+        [GenerationRequest((7, 8), 4, SamplingConfig(eos_token_id=2), 4, "eos")]
+    )[0]
+    assert sample.token_ids == (2,)
+    assert sample.finish_reason == "eos"
+    assert backend.snapshot().draft_tokens_accepted == 0
+
+
+def test_transformers_completion_callback_releases_short_rows_first() -> None:
+    backend = TransformersBackend(
+        ConstantLogitModel([0.6, 0.3, 0.1]), TinyTokenizer(), device="cpu"
+    )
+    completed = []
+    requests = [
+        GenerationRequest((0,), length, SamplingConfig(), length, f"length-{length}")
+        for length in (1, 3)
+    ]
+
+    outputs = backend.sample_batch_with_callback(
+        requests, lambda index, sample: completed.append((index, len(sample.token_ids)))
+    )
+
+    assert [len(sample.token_ids) for sample in outputs] == [1, 3]
+    assert completed == [(0, 1), (1, 3)]

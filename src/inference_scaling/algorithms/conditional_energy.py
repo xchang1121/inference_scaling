@@ -220,6 +220,10 @@ def estimate_conditional_energies(
     samples = rollout_backend.sample_batch(requests) if requests else []
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
+    if rollout_backend is not base_backend:
+        observe = getattr(base_backend, "observe_draft_samples", None)
+        if callable(observe):
+            observe(samples)
     rollout_is_base_policy = (
         rollout_backend.model_id == base_backend.model_id
         and rollout_sampling == base_sampling
