@@ -20,3 +20,12 @@ results/*
 !results/training/*.json
 !results/validation/
 !results/validation/*.json
+!results/infra/
+results/infra/*
+!results/infra/rtx3090_transformers_decode_seed20260812.json
+!results/infra/rtx3090_transformers_decode_seed20260813.json
+!results/infra/rtx3090_transformers_decode_seed20260814.json
+!results/infra/rtx3090_transformers_algorithms_seed20260812.json
+!results/infra/rtx3090_transformers_algorithms_seed20260813.json
+!results/infra/rtx3090_transformers_algorithms_seed20260814.json
+!results/infra/rtx3090_transformers_summary.json

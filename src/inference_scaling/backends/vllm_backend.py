@@ -85,6 +85,10 @@ class VLLMBackendSnapshot:
     maximum_in_flight_requests: int
     native_suffix_speculation: bool = False
     observed_draft_sequences: int = 0
+    native_speculative_drafts: int = 0
+    native_draft_tokens: int = 0
+    native_accepted_draft_tokens: int = 0
+    rejected_verification_token_slots: int = 0
 
 
 class _AsyncLoopRunner:
@@ -237,6 +241,7 @@ class VLLMBackend:
         self._engine = engine
         self.tokenizer = tokenizer
         self._model_id = str(model_id)
+        self._metric_model_name = self._model_id.split("+adapter:", 1)[0]
         self._parameter_count = int(parameter_count)
         self._sampling_params_factory = sampling_params_factory
         self._tokens_prompt_factory = tokens_prompt_factory
@@ -244,15 +249,10 @@ class VLLMBackend:
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
         self._speculation = speculation
-        self._draft_tree = (
-            draft_tree
-            if draft_tree is not None
-            else (
-                RolloutTokenTree.from_config(speculation)
-                if speculation is not None
-                else None
-            )
-        )
+        # Native suffix decoding owns its global tree inside vLLM.  A separate
+        # Python tree would consume CPU and memory without influencing drafts;
+        # retain one only when a caller explicitly requests diagnostics.
+        self._draft_tree = draft_tree
         self._native_suffix_speculation = bool(native_suffix_speculation)
         pad = getattr(tokenizer, "pad_token_id", None)
         eos = getattr(tokenizer, "eos_token_id", None)
@@ -311,7 +311,7 @@ class VLLMBackend:
         max_lora_rank: int = 16,
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
-        dynamic_speculation: bool = True,
+        dynamic_speculation: bool = False,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "VLLMBackend":
         try:
@@ -498,6 +498,49 @@ class VLLMBackend:
             self._active_engine_requests -= int(count)
             if self._active_engine_requests < 0:
                 raise RuntimeError("vLLM in-flight request accounting became negative")
+
+    @staticmethod
+    def _sum_metric_values(
+        metrics: Any, *, model_name: str | None = None
+    ) -> tuple[int, int, int]:
+        totals = {
+            "vllm:spec_decode_num_drafts": 0.0,
+            "vllm:spec_decode_num_draft_tokens": 0.0,
+            "vllm:spec_decode_num_accepted_tokens": 0.0,
+        }
+        for metric in metrics or ():
+            labels = getattr(metric, "labels", {}) or {}
+            if (
+                model_name is not None
+                and labels.get("model_name") is not None
+                and str(labels["model_name"]) != model_name
+            ):
+                continue
+            name = str(getattr(metric, "name", ""))
+            if name not in totals:
+                continue
+            value = getattr(metric, "value", 0.0)
+            if isinstance(value, (list, tuple)):
+                totals[name] += sum(float(item) for item in value)
+            else:
+                totals[name] += float(value)
+        return (
+            int(totals["vllm:spec_decode_num_drafts"]),
+            int(totals["vllm:spec_decode_num_draft_tokens"]),
+            int(totals["vllm:spec_decode_num_accepted_tokens"]),
+        )
+
+    def _native_speculation_totals(self) -> tuple[int, int, int]:
+        callback = getattr(self._engine, "get_metrics", None)
+        if callback is None or self._closed:
+            return 0, 0, 0
+        try:
+            metrics = callback()
+        except (AssertionError, RuntimeError):
+            return 0, 0, 0
+        if inspect.isawaitable(metrics):
+            raise RuntimeError("an asynchronous metrics API requires AsyncVLLMBackend")
+        return self._sum_metric_values(metrics, model_name=self._metric_model_name)
 
     @staticmethod
     def _completion(output: Any) -> Any:
@@ -783,6 +826,8 @@ class VLLMBackend:
         return list(outputs)
 
     def snapshot(self) -> VLLMBackendSnapshot:
+        drafts, draft_tokens, accepted = self._native_speculation_totals()
+        rejected = max(0, draft_tokens - accepted)
         with self._statistics_lock:
             return VLLMBackendSnapshot(
                 sample_calls=self._sample_calls,
@@ -792,9 +837,14 @@ class VLLMBackend:
                 prefill_tokens=self._prefill_tokens,
                 shared_prefill_tokens_saved=self._shared_prefill_tokens_saved,
                 scored_tokens=self._scored_tokens,
-                generation_forward_token_slots=self._generation_forward_token_slots,
+                generation_forward_token_slots=(
+                    self._generation_forward_token_slots + rejected
+                ),
                 score_forward_token_slots=self._score_forward_token_slots,
-                estimated_dense_forward_flops=self._estimated_dense_forward_flops,
+                estimated_dense_forward_flops=(
+                    self._estimated_dense_forward_flops
+                    + dense_forward_flops(self.parameter_count, rejected)
+                ),
                 engine_requests=self._engine_requests,
                 native_score_sequences=self._native_score_sequences,
                 delegated_score_sequences=self._delegated_score_sequences,
@@ -807,6 +857,10 @@ class VLLMBackend:
                 maximum_in_flight_requests=self._maximum_in_flight_requests,
                 native_suffix_speculation=self._native_suffix_speculation,
                 observed_draft_sequences=self._observed_draft_sequences,
+                native_speculative_drafts=drafts,
+                native_draft_tokens=draft_tokens,
+                native_accepted_draft_tokens=accepted,
+                rejected_verification_token_slots=rejected,
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -973,7 +1027,7 @@ class AsyncVLLMBackend(VLLMBackend):
         max_lora_rank: int = 16,
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
-        dynamic_speculation: bool = True,
+        dynamic_speculation: bool = False,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "AsyncVLLMBackend":
         try:
@@ -1079,6 +1133,31 @@ class AsyncVLLMBackend(VLLMBackend):
         with self._request_counter_lock:
             value = next(self._request_counter)
         return f"inference-scaling:{self.model_id}:{value}"
+
+    def _native_speculation_totals(self) -> tuple[int, int, int]:
+        if self._closed:
+            return 0, 0, 0
+
+        async def read() -> tuple[int, int, int]:
+            callback = getattr(self._engine, "get_metrics", None)
+            try:
+                if callback is None:
+                    # AsyncLLM does not expose LLM.get_metrics(), but records
+                    # the same counters in the process-wide Prometheus registry.
+                    from vllm.v1.metrics.reader import get_metrics_snapshot
+
+                    metrics = get_metrics_snapshot()
+                else:
+                    metrics = callback()
+                    if inspect.isawaitable(metrics):
+                        metrics = await metrics
+            except (AssertionError, ImportError, RuntimeError):
+                return 0, 0, 0
+            return self._sum_metric_values(
+                metrics, model_name=self._metric_model_name
+            )
+
+        return self._runner.run(read())
 
     async def _generate_one(self, prompt: Any, params: Any) -> Any:
         kwargs = {

@@ -107,6 +107,7 @@ def _draw_rollouts(
     step_index: int,
     phase: str,
     streaming_evaluator: StreamingRewardEvaluator | None,
+    run_ahead_rollouts_per_candidate: int,
 ) -> tuple[tuple[RolloutEvaluation, ...], ...] | tuple:
     if len(counts) != len(candidates):
         raise ValueError("rollout counts must match candidates")
@@ -153,11 +154,45 @@ def _draw_rollouts(
     if requests and streaming_evaluator is not None:
         if reward is None or reward_batch is not None:
             raise ValueError("streaming rewards require the scalar reward callback")
+        run_ahead_requests: list[GenerationRequest] = []
+        submit_run_ahead = getattr(base_backend, "submit_run_ahead", None)
+        if callable(submit_run_ahead) and run_ahead_rollouts_per_candidate:
+            for candidate_index, candidate in enumerate(candidates):
+                generated = generated_prefix + candidate.token_ids
+                if rollout_length == 0 or (
+                    eos is not None and candidate.token_ids[-1] == eos
+                ):
+                    continue
+                for rollout_index in range(run_ahead_rollouts_per_candidate):
+                    run_ahead_requests.append(
+                        GenerationRequest(
+                            prefix=prompt + generated,
+                            max_new_tokens=rollout_length,
+                            sampling=base_sampling,
+                            seed=seeds.derive(
+                                "progressive_is",
+                                step_index,
+                                phase,
+                                "run_ahead",
+                                candidate_index,
+                                rollout_index,
+                            ),
+                            request_id=(
+                                f"progressive-is:{phase}:run-ahead:step:{step_index}:"
+                                f"candidate:{candidate_index}:rollout:{rollout_index}"
+                            ),
+                        )
+                    )
         samples, rewards, stream_snapshot = streaming_evaluator.sample_and_score(
             rollout_backend,
             requests,
             reward_inputs,
             reward,
+            on_generation_complete=(
+                (lambda _samples: submit_run_ahead(run_ahead_requests))
+                if run_ahead_requests
+                else None
+            ),
         )
     else:
         samples = rollout_backend.sample_batch(requests) if requests else []
@@ -340,6 +375,7 @@ def progressive_is_step(
         step_index=step_index,
         phase="pilot",
         streaming_evaluator=streaming_evaluator,
+        run_ahead_rollouts_per_candidate=config.run_ahead_rollouts_per_candidate,
     )
     on_policy = (
         rollout_backend.model_id == base_backend.model_id
@@ -359,7 +395,23 @@ def progressive_is_step(
             config.minimum_evaluation_per_candidate * costs[index]
             for index in active_indices
         )
-        if config.evaluation_cost_budget + 1e-12 < minimum_cost:
+        evaluation_cost_budget = config.evaluation_cost_budget
+        if config.evaluation_reference_rollouts_per_candidate is not None:
+            # Convert a familiar per-candidate count into a cost budget using
+            # only the already-frozen pilot costs.  Allocation may still move
+            # samples between candidates, but its total estimated cost matches
+            # that fixed-count reference workload and always covers the minimum.
+            reference_count = (
+                len(active_indices)
+                * config.evaluation_reference_rollouts_per_candidate
+            )
+            mean_cost = sum(costs[index] for index in active_indices) / len(
+                active_indices
+            )
+            evaluation_cost_budget = max(
+                minimum_cost, reference_count * mean_cost
+            )
+        if evaluation_cost_budget + 1e-12 < minimum_cost:
             raise ValueError(
                 "evaluation_cost_budget cannot cover the minimum independent "
                 "evaluation rollouts"
@@ -377,7 +429,7 @@ def progressive_is_step(
             history_capacities=[0] * len(active_indices),
             history_groups=active_indices,
             group_capacities={index: 0 for index in active_indices},
-            rollout_budget=config.evaluation_cost_budget,
+            rollout_budget=evaluation_cost_budget,
             minimum_fresh=config.minimum_evaluation_per_candidate,
         )
         for index, allocation in zip(active_indices, allocations, strict=True):
@@ -401,6 +453,7 @@ def progressive_is_step(
         step_index=step_index,
         phase="evaluation",
         streaming_evaluator=streaming_evaluator,
+        run_ahead_rollouts_per_candidate=config.run_ahead_rollouts_per_candidate,
     )
     progressive: list[ProgressiveCandidate] = []
     for index, candidate in enumerate(candidates):
@@ -493,4 +546,3 @@ def run_progressive_conditional_is(
         if evaluator is not None:
             evaluator.close()
     return ProgressiveISResult(prompt, tuple(generated), tuple(steps))
-

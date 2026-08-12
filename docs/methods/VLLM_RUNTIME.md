@@ -1,9 +1,10 @@
 # vLLM 推理运行时
 
-仓库现在可以在不改动 MH、条件 IS、rollout replay 和动态 IS 算法代码的情况下，把模型执行层从
-Transformers 切换为 vLLM。默认的 `vllm` 模式使用一个常驻 `AsyncLLM`：不同题目、候选和 rollout
-产生的请求都进入同一个连续调度器；算法仍通过同步的 `sample_batch` / `score_batch` 接口取回完整结果。
-请求级 seed、实际采样分布的 token log-probability、原始请求顺序和现有 token/FLOPs 账本都保留。
+仓库现在可以在不改动 MH、条件 IS、rollout replay、渐进预算和 SMC forest 算法代码的情况下，把模型
+执行层从 Transformers 切换为 vLLM。默认的 `vllm` 模式使用一个常驻 `AsyncLLM`：不同题目、候选和
+rollout 产生的请求都进入同一个连续调度器；算法仍通过同步的 `sample_batch` / `score_batch` 接口取回
+完整结果。请求级 seed、实际采样分布的 token log-probability、原始请求顺序和现有 token/FLOPs 账本
+都保留。
 
 这里的支持是运行时实现，不是新的实验结论。当前仓库中的正式 3090 数字仍来自 Transformers 后端；
 在 Linux 或 WSL2 上完成下面的成对 benchmark 前，不能把既有批处理加速数字写成 vLLM 加速数字。
@@ -22,7 +23,8 @@ Transformers 切换为 vLLM。默认的 `vllm` 模式使用一个常驻 `AsyncLL
 
 ## 安装
 
-本项目固定 `vllm>=0.17,<0.18`。vLLM 0.17 的官方 GPU 安装要求是 Linux，且明确不原生支持
+本项目固定 `vllm>=0.25,<0.26`，因为历史 suffix proposer、动态 speculative batch table 和原生
+speculation metrics 在这一版本线内使用统一接口。vLLM 的官方 GPU 安装要求是 Linux，且明确不原生支持
 Windows；Windows 机器应使用 WSL2 的 Linux 环境。不要把 Windows 下创建的 `.venv` 直接拿到 WSL
 中使用。为了避免 `/mnt/c` 的文件系统开销影响模型加载与 benchmark，长实验最好把仓库和模型放在
 WSL 的 Linux 文件系统内。
@@ -37,7 +39,7 @@ python -c "import torch, vllm; print(torch.__version__, torch.cuda.is_available(
 ```
 
 安装版本必须与驱动、PyTorch 和 vLLM wheel 相容。官方安装说明见
-[vLLM GPU installation](https://docs.vllm.ai/en/v0.17.0/getting_started/installation/gpu/)。
+[vLLM GPU installation](https://docs.vllm.ai/en/v0.25.1/getting_started/installation/gpu/)。
 
 ## 运行
 
@@ -103,6 +105,15 @@ gpu_memory_utilization = 0.62
 
 [vllm.engine_kwargs]
 enable_chunked_prefill = true
+
+[acceleration.speculation]
+enabled = false
+tiers = [[1, 8], [4, 0], [512, 0]]
+min_context_tokens = 2
+min_token_probability = 0.10
+tree_max_context_tokens = 24
+vllm_max_cached_requests = 10000
+dynamic_vllm = false
 ```
 
 公共 `[vllm]` 值会先应用，再由 `[vllm.base]`、`[vllm.proposal]` 或 `[vllm.rl]` 覆盖。支持的显式
@@ -118,15 +129,32 @@ Transformers 的耗时直接写成“同硬件加速”；应单独报告 GPU �
 能放入单卡，vLLM 官方也建议先使用单卡；模型放不下时再采用 tensor parallel。
 
 LoRA adapter 会自动以 `LoRARequest` 加载。量化会改变数值表示；如要与 FP32 主表比较，必须把它当成
-单独设置。以下 n-gram speculative decoding 也可以通过透传配置试验，但当前账本不统计 draft 与
-verification kernel 的真实 FLOPs，因此只能把它的墙钟结果写成该显式配置相对基线的加速，并重新做
-输出与分布诊断：
+单独设置。
+
+`[acceleration.speculation]` 是两套后端共用的历史草稿入口。vLLM 路径把它转换为原生 global suffix
+proposer；`tiers` 进一步转换为 `[起始 batch, 结束 batch, K]` 的动态表。每个草稿 token 都由 target
+模型验证，历史数据不直接进入算法权重。`dynamic_vllm=false` 会保留 suffix proposer，但固定使用表中
+最大的 $K$，也是当前默认值。只有显式设置 `dynamic_vllm=true` 才启用动态表；vLLM 0.25 已有并发
+阈值附近的吞吐下降与部分 speculator CUDA graph 兼容性报告，因此它必须作为独立消融测量。原生
+suffix proposer 本身还断言 $K$ 固定；动态模式自动改用仓库的
+`inference_scaling.vllm_suffix_proposer.DynamicSuffixDecodingProposer`。该类委托给官方 suffix proposer，
+只解除这一处运行时 $K$ 约束，不替换 suffix cache 或 target verification。对应限制可直接核对
+[vLLM 0.25 suffix proposer 源码](https://github.com/vllm-project/vllm/blob/v0.25.0/vllm/v1/spec_decode/suffix_decoding.py)；
+动态调度的并发风险见上游
+[吞吐问题 #49548](https://github.com/vllm-project/vllm/issues/49548)。
+
+如果只想试验 vLLM 自带的其他 proposer，仍可通过 `engine_kwargs` 显式传入；它不能与上面的统一配置
+同时出现：
 
 ```toml
 [vllm.engine_kwargs]
 enable_chunked_prefill = true
 speculative_config = { method = "ngram", num_speculative_tokens = 4, prompt_lookup_min = 2, prompt_lookup_max = 4 }
 ```
+
+原生 metrics 提供 draft 次数、draft token 和 accepted token。仓库把未接受的 draft slot 计入 target
+verification slot，再估算主模型 FLOPs；这仍是逻辑 FLOPs，不等于 fused verifier kernel 的硬件指令数。
+更完整的实现与正确性边界见 [rollout 生成与复用](ROLLOUT_ACCELERATION.md)。
 
 ## 哪些概率量由 vLLM 原生精确提供
 
@@ -169,7 +197,17 @@ Automatic Prefix Caching 默认开启。共同题目 prompt、候选前缀、重
 已有 KV block；报告读取 vLLM 返回的 `num_cached_tokens`，从实际 prefill token slot 中扣除并写入
 `shared_prefill_tokens_saved`。APC 只减少共同前缀的 prefill，不能加快第一个请求，也不能减少长输出的
 decode。相关语义见
-[vLLM Automatic Prefix Caching](https://docs.vllm.ai/en/v0.17.0/features/automatic_prefix_caching/)。
+[vLLM Automatic Prefix Caching](https://docs.vllm.ai/en/v0.25.1/features/automatic_prefix_caching/)。
+
+启用 suffix proposer 后，常驻引擎还会把已完成请求维护在 global suffix cache 中，用历史 token 路径
+提出草稿；这与 APC 的 KV block 复用是两件事。APC 减少共同前缀 prefill，suffix proposer 减少接受
+草稿时所需的串行 decode 轮次。两者都不能保证加速：低 suffix 命中或低接受率会增加验证工作，因此
+必须同时报告墙钟、draft 接受率、target slot 和 cache build。
+
+global suffix cache 的公开路径缓存同一引擎已经处理的请求；vLLM 0.25 没有直接插入任意外部 token
+轨迹的公共 API。因此，来自其他模型的离线 off-policy 数据可以按原算法进入 replay estimator，但只有
+经过该 base 引擎的历史请求才会进入原生 suffix 草稿路径。仓库不会维护一份无法影响 vLLM proposer 的
+Python 副本来制造“已支持外部注入”的假象。
 
 运行时快照还记录 engine request 数、原生/委托评分数和 `maximum_in_flight_requests`。后者是并发请求
 高水位，不是可相加的计算量；吞吐报告按高水位本身展示，不对两次 snapshot 做差。
@@ -202,3 +240,19 @@ kernel、padding、通信或 speculative verification 的硬件 FLOPs。
 每个原始报告会比较该后端的逐 prompt 与并发输出，包括精确 token、数值答案、共同前缀和准确率；成对
 报告目前不保存两后端逐题 token trace，因此不会声称 cross-backend 输出逐 token 相等。一次成对运行也
 不是耗时置信区间；要报告稳定吞吐，应重复整个 pair 并给出离散程度。
+
+## rollout 基础设施消融入口
+
+`benchmark_rollout_infra.py` 在同一 schema 下比较无草稿、固定草稿、active-batch 草稿，以及固定条件
+IS、渐进预算、流式奖励/run-ahead 和 SMC forest。vLLM 模式使用常驻异步引擎并读取原生 draft 指标：
+
+```bash
+export PYTHONPATH=src
+python experiments/benchmark_rollout_infra.py \
+  --backend vllm --dtype bfloat16 --section all \
+  --output results/infra/rtx3090_vllm.json
+```
+
+当前仓库中的 Transformers 三随机种子实测见
+[RTX 3090 rollout 基础设施消融](../reports/RTX3090_ROLLOUT_INFRA.md)。这台 3090 是 Windows 主机且
+未安装 WSL，因此报告明确留空 vLLM 数值；不能把 Transformers 的负载感知收益冒充成 vLLM 收益。

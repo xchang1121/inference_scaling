@@ -106,7 +106,7 @@ class ActiveBatchSpeculationConfig:
             start = tier.max_batch + 1
         return schedule
 
-    def vllm_suffix_config(self, *, dynamic: bool = True) -> dict[str, Any]:
+    def vllm_suffix_config(self, *, dynamic: bool = False) -> dict[str, Any]:
         """Build the native suffix-decoding engine configuration.
 
         Native suffix decoding verifies drafts with the target model.  The
@@ -117,7 +117,7 @@ class ActiveBatchSpeculationConfig:
         if self.maximum_draft_tokens <= 0:
             raise ValueError("native suffix speculation needs at least one positive tier")
         result: dict[str, Any] = {
-            "method": "suffix",
+            "method": "custom_class" if dynamic else "suffix",
             "num_speculative_tokens": self.maximum_draft_tokens,
             "suffix_decoding_max_tree_depth": self.tree_max_context_tokens,
             "suffix_decoding_max_cached_requests": self.vllm_max_cached_requests,
@@ -125,6 +125,10 @@ class ActiveBatchSpeculationConfig:
             "suffix_decoding_min_token_prob": self.min_token_probability,
         }
         if dynamic:
+            result["model"] = (
+                "inference_scaling.vllm_suffix_proposer."
+                "DynamicSuffixDecodingProposer"
+            )
             result["num_speculative_tokens_per_batch_size"] = self.vllm_batch_schedule()
         return result
 
@@ -340,6 +344,7 @@ class StreamingRewardEvaluator:
         requests: Sequence[GenerationRequest],
         reward_inputs: Sequence[tuple[TokenSequence, TokenSequence]],
         reward: Callable[[TokenSequence, TokenSequence], float],
+        on_generation_complete: Callable[[Sequence[SequenceSample]], None] | None = None,
     ) -> tuple[list[SequenceSample], tuple[float, ...], StreamingRewardSnapshot]:
         if self._closed:
             raise RuntimeError("streaming reward evaluator is closed")
@@ -362,6 +367,8 @@ class StreamingRewardEvaluator:
         started = time.perf_counter()
         samples = sample_batch_with_callback(backend, requests, completed)
         generation_finished = time.perf_counter()
+        if on_generation_complete is not None:
+            on_generation_complete(samples)
         if len(samples) != len(requests) or any(future is None for future in futures):
             raise RuntimeError("backend returned an incomplete streaming batch")
         rewards = tuple(float(future.result()) for future in futures if future is not None)
@@ -409,15 +416,21 @@ class LowPriorityRunAheadBackend:
     def __init__(
         self,
         backend: AutoregressiveBackend,
-        tree: RolloutTokenTree,
+        tree: RolloutTokenTree | None,
         *,
         chunk_tokens: int = 32,
         queue_limit: int = 1_024,
+        outputs_already_observed: bool = False,
     ) -> None:
         if chunk_tokens <= 0 or queue_limit <= 0:
             raise ValueError("run-ahead limits must be positive")
+        if tree is None and not outputs_already_observed:
+            raise ValueError(
+                "a draft tree is required unless the backend observes its own outputs"
+            )
         self.backend = backend
         self.tree = tree
+        self._outputs_already_observed = bool(outputs_already_observed)
         self.chunk_tokens = int(chunk_tokens)
         self._queue: queue.Queue[GenerationRequest | None] = queue.Queue(queue_limit)
         self._condition = threading.Condition()
@@ -537,7 +550,9 @@ class LowPriorityRunAheadBackend:
                     request_id=request.request_id,
                 )
                 sample = self.backend.sample_batch([chunk_request])[0]
-                self.tree.observe_sample(sample)
+                if not self._outputs_already_observed:
+                    assert self.tree is not None
+                    self.tree.observe_sample(sample)
                 with self._condition:
                     self._completed_tokens += len(sample.token_ids)
                 eos = request.sampling.eos_token_id

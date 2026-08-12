@@ -15,6 +15,8 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
 | 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |
+| 查看 rollout 生成与复用的五层优化 | [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md) |
+| 查看 RTX 3090 基础设施消融 | [rollout 基础设施消融](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
 | 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
 | 查找全部文档 | [文档导航](docs/README.md) |
 | 查找机器可读结果 | [结果索引](results/README.md) |
@@ -27,8 +29,10 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
 | `conditional-is` | 基座模型 | on-policy completion | 用条件能量重新分配基座候选的选择概率 |
 | `base-replay` | 基座模型 | 历史 off-policy rollout + fresh tail | 在不改变候选来源的前提下复用 rollout |
 | `dynamic-is` | base/辅助 proposal 混合 | 动态 proposal + 外层 IS | 支持候选层修正与方差—成本预算分配 |
+| `progressive-is` | 基座模型 | pilot 后冻结独立 evaluation 预算 | 根据实际 rollout 成本分配预算而不让 pilot 进入最终估计 |
+| `smc-forest` | 基座模型粒子 | 可继承的条件后缀 reservoir | 逐 block 重采样并复用仍满足条件分布的 rollout 后缀 |
 
-四条路径共享后端、请求级随机数、概率评分、token/FLOPs 账本和诊断接口。算法实现位于
+这些路径共享后端、请求级随机数、概率评分、token/FLOPs 账本和诊断接口。算法实现位于
 `src/inference_scaling/algorithms/`；GSM8K 对照实现位于 `experiments/`。
 
 ## 当前主要结果
@@ -61,6 +65,11 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
 这些结果是单卡、有限题目上的实测，不代表完整 1,319 题评测或完整序列分布等价。统计区间、pass@k、
 共享目标实验、消融和限制均保留在主报告中。
 
+另有一组专门回答基础设施成本的 RTX 3090 三随机种子消融：低接受率历史树若始终草稿，会把在线墙钟
+放大到无草稿的 `2.162×`；按 active batch 只在单请求长尾启用后为 `0.986×`，主模型 FLOPs 约为
+`1.006×`。SMC forest 的后缀复用相对同一 SMC 不复用版为 `0.856×` 墙钟和 `0.963×` FLOPs。完整
+setting、误差线和端到端成本边界见 [rollout 基础设施消融](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+
 ## 安装与测试
 
 基础开发环境：
@@ -84,7 +93,7 @@ python -m venv .venv
 PyTorch wheel 自带 CUDA 运行时；普通推理不要求本机 `nvcc` 与 `torch.version.cuda` 相同。当前
 RTX 3090 结果默认使用 FP32，因为 BF16 下生成概率与批量重评分的偏差足以影响重要性权重。
 
-vLLM 是独立的可选运行时，固定在 `vllm>=0.17,<0.18`。其官方 GPU wheel 要求 Linux，并不原生支持
+vLLM 是独立的可选运行时，固定在 `vllm>=0.25,<0.26`。其官方 GPU wheel 要求 Linux，并不原生支持
 Windows；Windows 主机请在 WSL2 中新建 Linux 虚拟环境，不要复用上面的 Windows `.venv`：
 
 ```bash
@@ -168,6 +177,19 @@ python experiments/run_vllm_backend_benchmark.py \
 这里的加速分母始终是同模型、同 dtype、同请求网格和同硬件下的 Transformers 并发路径；既有 3090
 结果尚未用 vLLM 重跑，不能直接当作 vLLM 结果。
 
+五层 rollout 基础设施使用单独的可恢复 benchmark 入口；`--section decode` 与
+`--section algorithms` 可以分开运行：
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python experiments\benchmark_rollout_infra.py `
+  --backend transformers --dtype bfloat16 --section all `
+  --output results\infra\rtx3090_transformers.json
+```
+
+Linux/WSL2 上把后端改为 `vllm` 即可使用同一 workload 和结果 schema。实现原理、配置与哪些成本必须
+分列见 [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md)。
+
 主表、计算量汇总、分布审计、pass@k、消融和绘图需要在网格完成后运行只读后处理器。完整命令、输出
 文件和恢复规则见 [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
 
@@ -176,6 +198,7 @@ python experiments/run_vllm_backend_benchmark.py \
 - `results/gsm8k_3090/`：主实验的正式机器可读汇总；
 - `results/training/`：GRPO 训练摘要；
 - `results/validation/`：quick 与后端工程检查，不作为最终结论；
+- `results/infra/`：RTX 3090 rollout 基础设施的原始重复运行与机器可读聚合；
 - `results/gsm8k/`、`*.chunks.jsonl`、模型 checkpoint 和运行日志：可恢复的中间产物，默认不提交。
 
 `validated` 表示网格、manifest 和输入哈希已经通过对应后处理器检查，不表示统计结论可以外推到其他

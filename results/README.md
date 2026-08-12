@@ -23,6 +23,16 @@
 对应的可读报告是
 [`docs/reports/GSM8K_3090_ALIGNED_RESULTS.md`](../docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
+## rollout 基础设施消融
+
+目录：[`infra/`](infra/)
+
+三份 `rtx3090_transformers_decode_*.json` 和三份
+`rtx3090_transformers_algorithms_*.json` 是 RTX 3090 上的独立随机种子原始报告；
+`rtx3090_transformers_summary.json` 保存均值、样本标准差和成对因子。它们只比较基础设施成本，不用
+单题 reward 对方法质量排序。对应文字与图表见
+[`docs/reports/RTX3090_ROLLOUT_INFRA.md`](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+
 ## 训练摘要
 
 目录：[`training/`](training/)

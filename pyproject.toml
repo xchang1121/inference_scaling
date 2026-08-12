@@ -25,7 +25,7 @@ gpu = [
 vllm = [
   "safetensors>=0.8,<1",
   "transformers>=5.14,<6",
-  "vllm>=0.17,<0.18",
+  "vllm>=0.25,<0.26",
 ]
 training = [
   "datasets==5.0.1",

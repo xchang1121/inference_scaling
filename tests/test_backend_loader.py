@@ -75,6 +75,16 @@ def test_loader_builds_one_active_batch_schedule_for_both_backends(monkeypatch) 
     assert vllm_calls[0][1]["dynamic_speculation"] is False
 
 
+def test_vllm_dynamic_speculation_is_opt_in() -> None:
+    config = _config("vllm")
+    config["acceleration"] = {"speculation": {"enabled": True}}
+
+    schedule, dynamic = loader._speculation_from_config(config)
+
+    assert schedule is not None
+    assert dynamic is False
+
+
 def test_async_vllm_loader_merges_role_settings_and_exact_scorer(monkeypatch) -> None:
     config = _config("vllm")
     config["vllm"] = {

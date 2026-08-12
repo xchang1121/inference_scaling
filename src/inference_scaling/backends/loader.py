@@ -76,8 +76,8 @@ def _speculation_from_config(
     acceleration = _mapping(config.get("acceleration"), name="acceleration")
     table = _mapping(acceleration.get("speculation"), name="acceleration.speculation")
     if not table or not bool(table.pop("enabled", False)):
-        return None, True
-    dynamic_vllm = bool(table.pop("dynamic_vllm", True))
+        return None, False
+    dynamic_vllm = bool(table.pop("dynamic_vllm", False))
     raw_tiers = table.pop("tiers", None)
     tiers = None
     if raw_tiers is not None:

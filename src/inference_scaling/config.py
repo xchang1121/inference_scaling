@@ -110,6 +110,8 @@ class ProgressiveISConfig:
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
     reward_workers: int = 4
+    run_ahead_rollouts_per_candidate: int = 0
+    evaluation_reference_rollouts_per_candidate: int | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -127,6 +129,15 @@ class ProgressiveISConfig:
             _positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
+        if self.run_ahead_rollouts_per_candidate < 0:
+            raise ValueError("run_ahead_rollouts_per_candidate must be non-negative")
+        if (
+            self.evaluation_reference_rollouts_per_candidate is not None
+            and self.evaluation_reference_rollouts_per_candidate <= 0
+        ):
+            raise ValueError(
+                "evaluation_reference_rollouts_per_candidate must be positive"
+            )
 
 
 @dataclass(frozen=True, slots=True)

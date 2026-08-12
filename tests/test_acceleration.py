@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from inference_scaling.acceleration import (
     ActiveBatchSpeculationConfig,
     LowPriorityRunAheadBackend,
@@ -41,12 +43,17 @@ def test_active_batch_schedule_is_shared_with_vllm_schema() -> None:
     assert config.draft_tokens(4) == 3
     assert config.draft_tokens(8) == 0
     native = config.vllm_suffix_config(dynamic=True)
-    assert native["method"] == "suffix"
+    assert native["method"] == "custom_class"
+    assert native["model"].endswith("DynamicSuffixDecodingProposer")
     assert native["num_speculative_tokens_per_batch_size"] == [
         [1, 2, 8],
         [3, 5, 3],
         [6, 12, 0],
     ]
+    static = config.vllm_suffix_config()
+    assert static["method"] == "suffix"
+    assert "model" not in static
+    assert "num_speculative_tokens_per_batch_size" not in static
 
 
 def test_low_priority_run_ahead_populates_only_the_draft_tree() -> None:
@@ -76,3 +83,23 @@ def test_low_priority_run_ahead_populates_only_the_draft_tree() -> None:
     finally:
         wrapper.close()
 
+
+def test_run_ahead_can_reuse_a_backend_managed_draft_store() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2], model_id="base")
+    with pytest.raises(ValueError, match="draft tree"):
+        LowPriorityRunAheadBackend(backend, None)
+
+    wrapper = LowPriorityRunAheadBackend(
+        backend,
+        None,
+        chunk_tokens=2,
+        outputs_already_observed=True,
+    )
+    try:
+        wrapper.submit_run_ahead(
+            [GenerationRequest((1,), 2, SamplingConfig(), 7, "managed")]
+        )
+        wrapper.wait_for_run_ahead()
+        assert wrapper.snapshot().completed_tokens == 2
+    finally:
+        wrapper.close()

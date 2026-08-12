@@ -41,6 +41,13 @@ class _BeamParams(_SamplingParams):
     pass
 
 
+@dataclass
+class _Metric:
+    name: str
+    value: int
+    labels: dict[str, str]
+
+
 class _Tokenizer:
     bos_token_id = 9
     eos_token_id = 2
@@ -108,6 +115,24 @@ class _BeamEngine(_Engine):
         prompt = self._ids(kwargs["prompts"][0])
         sequence = type("Beam", (), {"tokens": prompt + [4, 2]})()
         return [type("BeamOutput", (), {"sequences": [sequence]})()]
+
+
+class _MetricEngine(_Engine):
+    def get_metrics(self):
+        return [
+            _Metric("vllm:spec_decode_num_drafts", 3, {"model_name": "fake"}),
+            _Metric("vllm:spec_decode_num_draft_tokens", 7, {"model_name": "fake"}),
+            _Metric(
+                "vllm:spec_decode_num_accepted_tokens",
+                2,
+                {"model_name": "fake"},
+            ),
+            _Metric(
+                "vllm:spec_decode_num_draft_tokens",
+                100,
+                {"model_name": "another-model"},
+            ),
+        ]
 
 
 class _Fallback:
@@ -233,6 +258,26 @@ def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
     assert beam_call["use_tqdm"] is False
 
 
+def test_vllm_snapshot_accounts_rejected_native_draft_slots() -> None:
+    backend = VLLMBackend(
+        _MetricEngine(),
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+        native_suffix_speculation=True,
+    )
+
+    snapshot = backend.snapshot()
+
+    assert snapshot.native_speculative_drafts == 3
+    assert snapshot.native_draft_tokens == 7
+    assert snapshot.native_accepted_draft_tokens == 2
+    assert snapshot.rejected_verification_token_slots == 5
+    assert snapshot.generation_forward_token_slots == 5
+    assert snapshot.estimated_dense_forward_flops == 1000
+
+
 class _AsyncEngine(_Engine):
     def __init__(self):
         super().__init__()
@@ -310,6 +355,6 @@ def test_async_vllm_streams_completion_callbacks_and_draft_observations() -> Non
         snapshot = backend.snapshot()
         assert snapshot.native_suffix_speculation
         assert snapshot.observed_draft_sequences == 3
-        assert backend.draft_cache_snapshot().observed_sequences == 3
+        assert backend.draft_cache_snapshot() is None
     finally:
         backend.close()
