@@ -3,35 +3,40 @@
 此目录只提交体积较小、可由脚本读取的汇总结果。逐题 JSONL、pass@k raw chunks、模型权重、checkpoint
 和运行日志属于可恢复的中间产物，由 `.gitignore` 排除。
 
-## GSM8K 单卡主实验
+## GSM8K 方法效果结果
 
 目录：[`gsm8k_3090/`](gsm8k_3090/)
 
 | 文件 | 内容 |
 | --- | --- |
-| `gsm8k_3090_aligned_comparison_validated.json` | Base、搜索、MH、条件 IS 与 GRPO 的 pass@1、成本和配对区间 |
-| `gsm8k_3090_aligned_compute_validated.json` | GRPO 训练成本、推理 FLOPs 和摊销临界查询数 |
-| `gsm8k_3090_aligned_replay_validated.json` | fresh-only、warm replay、缓存构建与回本次数 |
-| `gsm8k_3090_aligned_dynamic_is_validated.json` | base 固定候选、动态候选外层 IS 与方差—成本预算的质量、复用和分阶段成本 |
-| `gsm8k_3090_aligned_async_grouped_validated.json` | 各方法同步/连续批处理墙钟、FLOPs 与输出一致性 |
+| `gsm8k_3090_aligned_comparison_validated.json` | Base、搜索、MH、条件 IS 与 GRPO 的 pass@1、成本背景和配对区间 |
 | `gsm8k_3090_aligned_distribution_audit_validated.json` | 共享目标下的答案分布 TV/JS 诊断 |
 | `gsm8k_3090_aligned_passk_validated.json` | Base、MH 与 GRPO 的独立 draw 汇总 |
 | `gsm8k_3090_aligned_is_passk_validated.json` | 标准、截断 off-policy 与非截断 off-policy IS 的独立 draw 汇总 |
 | `gsm8k_3090_aligned_passk_comparison_validated.json` | 六种方法的统一 pass@k、配对区间与权重诊断 |
 | `gsm8k_3090_aligned_ablations_validated.json` | 候选、rollout、引导阶段、奖励、温度和长度消融 |
 
-对应的可读报告是
-[`docs/reports/GSM8K_3090_ALIGNED_RESULTS.md`](../docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。
+这些文件对应的可读报告是
+[`GSM8K 方法效果与准确率`](../docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
-## rollout 基础设施消融
+## 推理基础设施优化结果
 
-目录：[`infra/`](infra/)
+早期完整 GSM8K 网格中可分离的 infra 汇总仍位于 [`gsm8k_3090/`](gsm8k_3090/)：
+
+| 文件 | Infra 内容 |
+| --- | --- |
+| `gsm8k_3090_aligned_compute_validated.json` | GRPO 训练成本、推理 FLOPs 和累计成本交点 |
+| `gsm8k_3090_aligned_replay_validated.json` | fresh-only、warm replay、cache build 与回本次数 |
+| `gsm8k_3090_aligned_dynamic_is_validated.json` | 动态候选、缓存、design 阶段、复用率与稳态/一次性成本 |
+| `gsm8k_3090_aligned_async_grouped_validated.json` | 各方法逐 prompt/连续批处理墙钟、FLOPs 与输出一致性 |
+
+新增 rollout 加速栈的结果目录为 [`infra/`](infra/)。
 
 三份 `rtx3090_transformers_decode_*.json` 和三份
 `rtx3090_transformers_algorithms_*.json` 是 RTX 3090 上的独立随机种子原始报告；
 `rtx3090_transformers_summary.json` 保存均值、样本标准差和成对因子。它们只比较基础设施成本，不用
 单题 reward 对方法质量排序。对应文字与图表见
-[`docs/reports/RTX3090_ROLLOUT_INFRA.md`](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+[`RTX 3090 推理基础设施优化汇总`](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 
 ## 训练摘要
 

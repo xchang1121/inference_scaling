@@ -3,20 +3,20 @@
 本仓库研究如何在不修改或少量修改语言模型参数的情况下，直接控制推理时输出分布，并统一比较
 Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout replay 与 GRPO 的质量和计算量。
 
-当前最完整的实测结论见
-[GSM8K 单卡对齐实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。实验协议、机器可读结果和工程验证
-已分别归档，不再混在 README 中。
+实测结论分为两份互补报告：[GSM8K 方法效果与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)
+只负责方法质量，[RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)只负责墙钟、
+FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证已分别归档。
 
 ## 从哪里开始
 
 | 目的 | 入口 |
 | --- | --- |
-| 阅读主要实验设置、数据和结论 | [GSM8K 单卡对齐实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
+| 比较方法准确率、pass@k 和共享目标 | [GSM8K 方法效果与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
+| 比较 infra 优化的墙钟、FLOPs 与复用影响 | [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
 | 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |
 | 查看 rollout 生成与复用的五层优化 | [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md) |
-| 查看 RTX 3090 基础设施消融 | [rollout 基础设施消融](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
 | 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
 | 查找全部文档 | [文档导航](docs/README.md) |
 | 查找机器可读结果 | [结果索引](results/README.md) |
@@ -35,40 +35,43 @@ Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout repl
 这些路径共享后端、请求级随机数、概率评分、token/FLOPs 账本和诊断接口。算法实现位于
 `src/inference_scaling/algorithms/`；GSM8K 对照实现位于 `experiments/`。
 
-## 当前主要结果
+## 方法效果概览
 
 以下数据来自 32 道固定 GSM8K 测试题、`Qwen2.5-1.5B-Instruct` 和单张 RTX 3090。各方法的奖励目标
-并不完全相同，因此这张表比较任务质量与成本；共享奖励目标的受控比较见完整报告。
+并不完全相同，因此这里只比较单次生成的任务准确率；共享奖励目标的受控比较见完整报告。
 
-| 方法 | pass@1 | 每 32 题推理 PFLOPs |
+| 方法 | 正确数 / 32 | pass@1 |
 | --- | ---: | ---: |
-| Base | 40.625% | 0.0279 |
-| 幂分布 MH | 37.500% | 1.3077 |
-| 标准条件 IS | 65.625% | 1.3706 |
-| 0.5B proposal 条件 IS | 46.875% | 2.4724 |
-| GRPO 随机采样 | 68.750% | 0.0254 |
+| Base | 13 | 40.625% |
+| 幂分布 MH | 12 | 37.500% |
+| 标准条件 IS | 21 | 65.625% |
+| 0.5B proposal 条件 IS | 15 | 46.875% |
+| GRPO 随机采样 | 22 | 68.750% |
 
 结论可以概括为：
 
-- 标准条件 IS 的 pass@1 与本地 GRPO 接近，但单次推理约使用 GRPO 的 54 倍 FLOPs；GRPO 另有一次性
-  15.646 PFLOPs 训练成本。
-- 当前 0.5B off-policy proposal 既没有保持标准 IS 的质量，也没有减少 FLOPs；主模型精确重评分和
-  有限样本权重方差抵消了小模型生成的收益。
-- warm rollout replay 相对相同总 rollout 预算的 fresh-only 路径减少 23.4% 在线 FLOPs 和 14.1%
-  墙钟；包含缓存构建时首次查询更贵，本轮从第 7 次重复查询开始回本。
-- 在单独的正确答案 oracle 诊断中，动态候选 + 固定 replay 相对 base 候选固定组得到 `1.086×` 稳态
-  FLOPs 因子，但准确率点估计低 6.25 个百分点且含建库的一次性 FLOPs 为 `2.325×`；再加入方差—
-  成本分配后只复用 5.7% rollout，稳态 FLOPs 反而是固定分配的 `1.200×`。两项质量差异区间均跨 0。
-- 连续批处理相对同一方法的逐 prompt 执行得到 1.050×–4.845× 墙钟吞吐提升，但它主要改善硬件
-  利用率，不等同于减少算法 FLOPs。
+- 标准条件 IS 与本地 GRPO 相差 -3.125 个百分点，配对区间跨 0；当前样本只支持二者准确率接近，
+  不支持完整输出分布相同。
+- 0.5B off-policy proposal 条件 IS 比标准版本低 18.75 个百分点，当前实现没有保持质量。
+- 幂分布 MH 没有相对 Base 提升 GSM8K 准确率；在统一正确性奖励的 oracle 诊断中，MH 与标准 IS
+  则得到接近的点估计。
+- warm replay、动态候选和方差—成本分配的质量差异区间均跨 0，但样本量不足以宣称质量等价。
 
 这些结果是单卡、有限题目上的实测，不代表完整 1,319 题评测或完整序列分布等价。统计区间、pass@k、
-共享目标实验、消融和限制均保留在主报告中。
+共享目标实验、质量消融和限制均保留在准确率报告中。
 
-另有一组专门回答基础设施成本的 RTX 3090 三随机种子消融：低接受率历史树若始终草稿，会把在线墙钟
-放大到无草稿的 `2.162×`；按 active batch 只在单请求长尾启用后为 `0.986×`，主模型 FLOPs 约为
-`1.006×`。SMC forest 的后缀复用相对同一 SMC 不复用版为 `0.856×` 墙钟和 `0.963×` FLOPs。完整
-setting、误差线和端到端成本边界见 [rollout 基础设施消融](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+## Infra 优化概览
+
+下表统一使用“优化路径 / 对照路径”；小于 1 表示减少。不同实验组的绝对时间不能横比，完整 setting、
+冷启动成本和误差线见 [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+
+| 优化 | 对照 | 墙钟因子 | 逻辑 FLOPs 因子 | 当前结论 |
+| --- | --- | ---: | ---: | --- |
+| 连续批处理 | 同方法逐 prompt | 0.206×–0.952× | 1.003×–1.177× | 提升硬件利用率，不减少算法计算量 |
+| warm replay 在线阶段 | fresh-only | 0.859× | 0.766× | 热缓存有效；第 7 次重复查询才覆盖建库成本 |
+| 历史树，始终草稿 | 无草稿 | 2.162× | 1.660× | 低接受率造成明显退化 |
+| 历史树，负载感知 | 无草稿 | 0.986× | 1.006× | 主要用于保护长尾吞吐 |
+| SMC 条件后缀复用 | 同一 SMC 不复用 | 0.856× | 0.963× | 同时减少墙钟、主模型计算和 fresh rollout |
 
 ## 安装与测试
 

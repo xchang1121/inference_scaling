@@ -161,7 +161,7 @@ off-policy 序列仍可进入带概率修正的 replay estimator，但不会被�
 ## 复现实测
 
 RTX 3090 的三随机种子结果、图表、计算量口径和限制见
-[rollout 基础设施消融](../reports/RTX3090_ROLLOUT_INFRA.md)。同一入口支持两套后端：
+[推理基础设施优化汇总](../reports/RTX3090_ROLLOUT_INFRA.md)。同一入口支持两套后端：
 
 ```powershell
 $env:PYTHONPATH = "src"

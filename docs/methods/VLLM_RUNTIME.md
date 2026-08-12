@@ -241,7 +241,7 @@ kernel、padding、通信或 speculative verification 的硬件 FLOPs。
 报告目前不保存两后端逐题 token trace，因此不会声称 cross-backend 输出逐 token 相等。一次成对运行也
 不是耗时置信区间；要报告稳定吞吐，应重复整个 pair 并给出离散程度。
 
-## rollout 基础设施消融入口
+## rollout 基础设施测量入口
 
 `benchmark_rollout_infra.py` 在同一 schema 下比较无草稿、固定草稿、active-batch 草稿，以及固定条件
 IS、渐进预算、流式奖励/run-ahead 和 SMC forest。vLLM 模式使用常驻异步引擎并读取原生 draft 指标：
@@ -254,5 +254,5 @@ python experiments/benchmark_rollout_infra.py \
 ```
 
 当前仓库中的 Transformers 三随机种子实测见
-[RTX 3090 rollout 基础设施消融](../reports/RTX3090_ROLLOUT_INFRA.md)。这台 3090 是 Windows 主机且
+[RTX 3090 推理基础设施优化汇总](../reports/RTX3090_ROLLOUT_INFRA.md)。这台 3090 是 Windows 主机且
 未安装 WSL，因此报告明确留空 vLLM 数值；不能把 Transformers 的负载感知收益冒充成 vLLM 收益。
