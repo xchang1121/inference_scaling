@@ -275,6 +275,45 @@ def test_verified_history_draft_preserves_the_exact_request_random_stream() -> N
     assert accelerated.draft_cache_snapshot().acceptance_rate > 0
 
 
+def test_stochastic_history_draft_with_residual_correction_preserves_target() -> None:
+    target = {0: 0.2, 1: 0.8}
+    config = ActiveBatchSpeculationConfig(
+        tiers=(SpeculationTier(2000, 1),),
+        min_context_tokens=1,
+        min_token_probability=0.0,
+        tree_max_context_tokens=8,
+        stochastic_tree=True,
+    )
+    tree = RolloutTokenTree.from_config(config)
+    for _ in range(8):
+        tree.observe((7, 8, 0))
+    for _ in range(2):
+        tree.observe((7, 8, 1))
+    backend = TransformersBackend(
+        ConstantLogitModel([0.2, 0.8]),
+        TinyTokenizer(),
+        device="cpu",
+        draft_tree=tree,
+        speculation=config,
+    )
+    requests = [
+        GenerationRequest((7, 8), 1, SamplingConfig(), seed, f"stochastic-{seed}")
+        for seed in range(2000)
+    ]
+
+    samples = backend.sample_batch(requests)
+    empirical = {
+        token: sum(sample.token_ids == (token,) for sample in samples) / len(samples)
+        for token in target
+    }
+
+    assert empirical[0] == pytest.approx(target[0], abs=0.035)
+    assert empirical[1] == pytest.approx(target[1], abs=0.035)
+    snapshot = backend.snapshot()
+    assert snapshot.draft_tokens_proposed == len(samples)
+    assert 0 < snapshot.draft_tokens_accepted < snapshot.draft_tokens_proposed
+
+
 def test_high_active_batch_disables_transformers_speculation() -> None:
     config = ActiveBatchSpeculationConfig(
         tiers=(SpeculationTier(1, 4), SpeculationTier(8, 0)),

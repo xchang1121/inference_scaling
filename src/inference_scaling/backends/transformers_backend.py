@@ -22,6 +22,7 @@ from inference_scaling.acceleration import (
 )
 from inference_scaling.config import SamplingConfig
 from inference_scaling.compute import dense_forward_flops
+from inference_scaling.rng import SeedStream
 from inference_scaling.types import (
     GenerationRequest,
     ScoreRequest,
@@ -349,6 +350,18 @@ class TransformersBackend:
         selected = log_probs.gather(-1, token[..., None]).squeeze(-1)
         return token, selected
 
+    @staticmethod
+    def _sample_from_probabilities(probabilities, uniform: float):
+        """Inverse-CDF sample from an already normalized probability row."""
+
+        torch_module = _require_torch()
+        cumulative = probabilities.to(dtype=torch_module.float64).cumsum(dim=-1)
+        value = torch_module.tensor(
+            float(uniform), dtype=torch_module.float64, device=probabilities.device
+        )
+        token = (cumulative < value).sum(dim=-1)
+        return token.clamp_max(probabilities.shape[-1] - 1)
+
     def _sequence_sample(
         self,
         request: GenerationRequest,
@@ -375,20 +388,26 @@ class TransformersBackend:
         request: GenerationRequest,
         proposal: DraftProposal,
         uniforms: np.ndarray,
+        acceptance_uniforms: np.ndarray | None = None,
     ) -> tuple[list[int], list[float], list[float], str, int, Any | None, int]:
-        """Verify one deterministic draft against exact base-policy samples.
+        """Verify a deterministic or stochastic draft against the exact policy.
 
-        A single target forward pass evaluates the whole proposed path.  Tokens
-        are accepted only while they equal the token selected by the request's
-        own base-policy random stream.  At the first mismatch the base-selected
-        token is emitted, so the resulting distribution is exactly the same base
-        policy regardless of where the draft came from.
+        Deterministic drafts use target-sample equality.  Stochastic drafts use
+        standard speculative sampling: accept with ``min(1, p(x) / q(x))`` and,
+        on rejection, sample from normalized ``(p-q)_+``.  Both paths preserve
+        the requested target policy exactly.
         """
 
         torch_module = _require_torch()
         draft = proposal.token_ids[: request.max_new_tokens]
         if not draft:
             return [], [], [], "length", 0, None, 0
+        stochastic = proposal.stochastic
+        if stochastic:
+            if len(proposal.token_distributions) < len(draft):
+                raise RuntimeError("stochastic draft omitted proposal distributions")
+            if acceptance_uniforms is None or len(acceptance_uniforms) < len(draft):
+                raise RuntimeError("stochastic draft omitted acceptance random numbers")
         prefix = self._model_prefix(request.prefix)
         sequence = prefix + draft
         input_ids, attention_mask = self._padded_inputs([sequence])
@@ -431,16 +450,45 @@ class TransformersBackend:
         consumed = 0
         finish_reason = "length"
         for position, draft_token in enumerate(draft):
-            sampled, selected = self._sample_from_log_probs(
-                policy_log_probs[position], uniforms[consumed]
-            )
-            sampled_token = int(sampled.detach().cpu())
+            matches_draft = False
+            if stochastic:
+                distribution = proposal.token_distributions[position]
+                proposal_probability = dict(distribution).get(int(draft_token), 0.0)
+                if proposal_probability <= 0:
+                    raise RuntimeError("drafted token has zero proposal probability")
+                target_probability = float(
+                    policy_log_probs[position, int(draft_token)].exp().detach().cpu()
+                )
+                threshold = min(1.0, target_probability / proposal_probability)
+                if float(acceptance_uniforms[position]) < threshold:
+                    sampled_token = int(draft_token)
+                    selected = policy_log_probs[position, sampled_token]
+                    matches_draft = True
+                else:
+                    residual = policy_log_probs[position].exp().clone()
+                    for token, probability in distribution:
+                        residual[int(token)] -= float(probability)
+                    residual.clamp_min_(0.0)
+                    total = residual.sum()
+                    if not bool(torch_module.isfinite(total)) or float(total.detach().cpu()) <= 0:
+                        raise RuntimeError("rejected stochastic draft has no residual mass")
+                    residual /= total
+                    sampled = self._sample_from_probabilities(
+                        residual, uniforms[consumed]
+                    )
+                    sampled_token = int(sampled.detach().cpu())
+                    selected = policy_log_probs[position, sampled_token]
+            else:
+                sampled, selected = self._sample_from_log_probs(
+                    policy_log_probs[position], uniforms[consumed]
+                )
+                sampled_token = int(sampled.detach().cpu())
+                matches_draft = sampled_token == int(draft_token)
             reference_selected = reference_log_probs[position, sampled_token]
             tokens.append(sampled_token)
             token_logprobs.append(float(selected.detach().cpu()))
             reference_values.append(float(reference_selected.detach().cpu()))
             consumed += 1
-            matches_draft = sampled_token == int(draft_token)
             if matches_draft:
                 accepted += 1
             if (
@@ -885,6 +933,13 @@ class TransformersBackend:
         on_complete: SampleCompletionCallback | None,
     ) -> SequenceSample:
         uniforms = np.random.default_rng(request.seed).random(request.max_new_tokens)
+        acceptance_uniforms = None
+        if proposal.stochastic:
+            acceptance_uniforms = np.random.default_rng(
+                SeedStream(request.seed).derive(
+                    "stochastic-draft-verification", request.request_id
+                )
+            ).random(len(proposal.token_ids))
         (
             tokens,
             logprobs,
@@ -893,7 +948,9 @@ class TransformersBackend:
             consumed,
             reusable_cache,
             cached_continuation_tokens,
-        ) = self._verify_draft(request, proposal, uniforms)
+        ) = self._verify_draft(
+            request, proposal, uniforms, acceptance_uniforms=acceptance_uniforms
+        )
         if finish_reason != "eos" and consumed < request.max_new_tokens:
             if reusable_cache is not None:
                 finish_reason = self._continue_verified_cache(
@@ -951,6 +1008,14 @@ class TransformersBackend:
                     proposal = self._draft_tree.draft(
                         self._model_prefix(request.prefix),
                         min(draft_tokens, request.max_new_tokens),
+                        stochastic=self._speculation.stochastic_tree,
+                        seed=(
+                            SeedStream(request.seed).derive(
+                                "stochastic-draft", request.request_id
+                            )
+                            if self._speculation.stochastic_tree
+                            else None
+                        ),
                     )
                     if proposal.token_ids:
                         proposals[index] = proposal

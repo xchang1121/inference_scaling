@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from inference_scaling.acceleration import (
@@ -35,6 +37,33 @@ def test_rollout_tree_uses_longest_suffix_and_tracks_verification() -> None:
     assert snapshot.accepted_tokens == 1
 
 
+def test_stochastic_rollout_tree_returns_its_full_empirical_proposal() -> None:
+    tree = RolloutTokenTree(
+        max_context_tokens=4,
+        max_contexts=100,
+        min_context_tokens=1,
+        min_token_probability=0.0,
+    )
+    for _ in range(8):
+        tree.observe((7, 8, 0))
+    for _ in range(2):
+        tree.observe((7, 8, 1))
+
+    draws = [
+        tree.draft((7, 8), 1, stochastic=True, seed=seed)
+        for seed in range(2000)
+    ]
+    counts = Counter(proposal.token_ids[0] for proposal in draws)
+
+    assert counts[0] / len(draws) == pytest.approx(0.8, abs=0.035)
+    assert draws[0].token_distributions[0] == ((0, 0.8), (1, 0.2))
+    assert all(
+        proposal.token_probabilities[0]
+        == dict(proposal.token_distributions[0])[proposal.token_ids[0]]
+        for proposal in draws
+    )
+
+
 def test_active_batch_schedule_is_shared_with_vllm_schema() -> None:
     config = ActiveBatchSpeculationConfig(
         tiers=(SpeculationTier(2, 8), SpeculationTier(5, 3), SpeculationTier(12, 0))
@@ -54,6 +83,12 @@ def test_active_batch_schedule_is_shared_with_vllm_schema() -> None:
     assert static["method"] == "suffix"
     assert "model" not in static
     assert "num_speculative_tokens_per_batch_size" not in static
+
+
+def test_vllm_config_rejects_the_transformers_only_stochastic_tree() -> None:
+    config = ActiveBatchSpeculationConfig(stochastic_tree=True)
+    with pytest.raises(ValueError, match="Transformers verifier"):
+        config.vllm_suffix_config()
 
 
 def test_low_priority_run_ahead_populates_only_the_draft_tree() -> None:

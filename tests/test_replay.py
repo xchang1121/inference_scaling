@@ -14,12 +14,16 @@ from inference_scaling.config import BaseReplayConfig, SamplingConfig
 from inference_scaling.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
+    BrokeredReplayState,
     InMemoryReplayStore,
     ReplayKey,
     ReplayRecord,
+    ReplaySampleRequest,
     sample_replay_record,
+    sample_replay_records_brokered,
     validate_record_probabilities,
 )
+from inference_scaling.rollout_broker import AsyncRolloutBroker
 from inference_scaling.rng import SeedStream
 
 
@@ -320,3 +324,46 @@ def test_history_is_scored_under_the_configured_base_temperature() -> None:
 
     assert base_sampling in backend.score_samplings
     assert None not in backend.score_samplings
+
+
+def test_brokered_replay_only_exposes_completed_records_and_resumes_partials() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
+    policy = BehaviorPolicy.for_backend(backend, SamplingConfig(), label="base")
+    key = ReplayKey((), (), (1,), "reward-v1")
+    requests = (
+        ReplaySampleRequest(key, 1, 10, "short"),
+        ReplaySampleRequest(key, 4, 11, "long-a"),
+        ReplaySampleRequest(key, 4, 12, "long-b"),
+    )
+    broker = AsyncRolloutBroker(backend, chunk_tokens=2)
+    callbacks: list[str] = []
+
+    first = sample_replay_records_brokered(
+        policy,
+        requests,
+        lambda _prompt, generated: float(sum(generated)),
+        broker,
+        completion_target=1,
+        on_record=lambda record: callbacks.append(record.record_id),
+    )
+    assert tuple(record.record_id for record in first.records) == ("short",)
+    assert callbacks == ["short"]
+    assert len(first.partial) == 2
+    assert all(isinstance(item, BrokeredReplayState) for item in first.partial)
+    assert all(len(item.rollout.token_ids) == 2 for item in first.partial)
+    assert first.snapshot.partial_tokens_preserved == 4
+
+    second = sample_replay_records_brokered(
+        policy,
+        first.partial,
+        lambda _prompt, generated: float(sum(generated)),
+        broker,
+        on_record=lambda record: callbacks.append(record.record_id),
+    )
+    assert {record.record_id for record in second.records} == {"long-a", "long-b"}
+    assert not second.partial
+    assert set(callbacks) == {"short", "long-a", "long-b"}
+    assert all(len(record.completion) == 4 for record in second.records)
+    assert all(np.isfinite(record.behavior_logprob) for record in second.records)
+    assert second.snapshot.initial_partial_tokens == 4
+    assert second.snapshot.resumed_prefill_tokens == 4

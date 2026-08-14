@@ -50,6 +50,7 @@ def test_loader_builds_one_active_batch_schedule_for_both_backends(monkeypatch) 
             "tiers": [[2, 8], [16, 3], [64, 0]],
             "min_context_tokens": 1,
             "dynamic_vllm": False,
+            "stochastic_tree": True,
         }
     }
     transformer_calls = []
@@ -62,6 +63,7 @@ def test_loader_builds_one_active_batch_schedule_for_both_backends(monkeypatch) 
     schedule = transformer_calls[0][1]["speculation"]
     assert schedule.draft_tokens(2) == 8
     assert schedule.draft_tokens(10) == 3
+    assert schedule.stochastic_tree is True
 
     config["runtime"]["backend"] = "vllm"
     vllm_calls = []

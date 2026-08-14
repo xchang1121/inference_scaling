@@ -66,6 +66,7 @@ class ActiveBatchSpeculationConfig:
     tree_max_context_tokens: int = 24
     tree_max_contexts: int = 100_000
     vllm_max_cached_requests: int = 10_000
+    stochastic_tree: bool = False
 
     def __post_init__(self) -> None:
         if not self.tiers:
@@ -114,6 +115,12 @@ class ActiveBatchSpeculationConfig:
         still labels dynamic schedules on non-EAGLE proposers as less mature.
         """
 
+        if self.stochastic_tree:
+            raise ValueError(
+                "stochastic_tree uses an explicit empirical proposal and residual "
+                "correction available only in the Transformers verifier; vLLM's "
+                "native suffix proposer must be benchmarked as a separate arm"
+            )
         if self.maximum_draft_tokens <= 0:
             raise ValueError("native suffix speculation needs at least one positive tier")
         result: dict[str, Any] = {
@@ -138,6 +145,11 @@ class DraftProposal:
     token_ids: TokenSequence
     token_probabilities: tuple[float, ...]
     matched_context_tokens: int
+    token_distributions: tuple[tuple[tuple[int, float], ...], ...] = ()
+
+    @property
+    def stochastic(self) -> bool:
+        return bool(self.token_distributions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,14 +250,27 @@ class RolloutTokenTree:
         for sample in samples:
             self.observe_sample(sample)
 
-    def draft(self, prefix: TokenSequence, max_tokens: int) -> DraftProposal:
+    def draft(
+        self,
+        prefix: TokenSequence,
+        max_tokens: int,
+        *,
+        stochastic: bool = False,
+        seed: int | None = None,
+    ) -> DraftProposal:
         if max_tokens < 0:
             raise ValueError("max_tokens must be non-negative")
         if max_tokens == 0:
             return DraftProposal((), (), 0)
+        if stochastic and seed is None:
+            raise ValueError("stochastic token-tree drafts require an explicit seed")
+        if seed is not None and seed < 0:
+            raise ValueError("draft seed must be non-negative")
+        rng = np.random.default_rng(seed) if stochastic else None
         working = list(int(token) for token in prefix)
         drafted: list[int] = []
         probabilities: list[float] = []
+        distributions: list[tuple[tuple[int, float], ...]] = []
         initial_match = 0
         with self._lock:
             self._queries += 1
@@ -263,11 +288,27 @@ class RolloutTokenTree:
                         break
                 if counts is None:
                     break
-                # Stable tie-breaking keeps drafts reproducible across processes.
-                token, count = min(counts.items(), key=lambda item: (-item[1], item[0]))
-                probability = count / sum(counts.values())
-                if probability < self.min_token_probability:
+                total = sum(counts.values())
+                distribution = tuple(
+                    (int(token), float(count / total))
+                    for token, count in sorted(counts.items())
+                )
+                maximum_probability = max(probability for _, probability in distribution)
+                if maximum_probability < self.min_token_probability:
                     break
+                if stochastic:
+                    assert rng is not None
+                    support = np.asarray([token for token, _ in distribution], dtype=np.int64)
+                    masses = np.asarray(
+                        [probability for _, probability in distribution], dtype=np.float64
+                    )
+                    token = int(rng.choice(support, p=masses))
+                    probability = dict(distribution)[token]
+                    distributions.append(distribution)
+                else:
+                    # Stable tie-breaking keeps deterministic drafts reproducible.
+                    token, count = min(counts.items(), key=lambda item: (-item[1], item[0]))
+                    probability = count / total
                 if not drafted:
                     initial_match = matched
                 drafted.append(int(token))
@@ -276,7 +317,12 @@ class RolloutTokenTree:
             if drafted:
                 self._hits += 1
                 self._proposed_tokens += len(drafted)
-        return DraftProposal(tuple(drafted), tuple(probabilities), initial_match)
+        return DraftProposal(
+            tuple(drafted),
+            tuple(probabilities),
+            initial_match,
+            tuple(distributions),
+        )
 
     def record_verification(self, *, proposed: int, accepted: int) -> None:
         if proposed < 0 or accepted < 0 or accepted > proposed:

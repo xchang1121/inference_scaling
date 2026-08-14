@@ -97,6 +97,7 @@ def _speculation_from_config(
         "tree_max_context_tokens": "tree_max_context_tokens",
         "tree_max_contexts": "tree_max_contexts",
         "vllm_max_cached_requests": "vllm_max_cached_requests",
+        "stochastic_tree": "stochastic_tree",
     }
     unknown = sorted(set(table) - set(aliases))
     if unknown:

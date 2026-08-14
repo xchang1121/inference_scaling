@@ -10,6 +10,11 @@ from math import isclose, isfinite, log
 import numpy as np
 
 from inference_scaling.config import SamplingConfig
+from inference_scaling.rollout_broker import (
+    AsyncRolloutBroker,
+    PartialRollout,
+    RolloutBrokerSnapshot,
+)
 from inference_scaling.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -82,6 +87,56 @@ class BehaviorPolicy:
     ) -> "BehaviorPolicy":
         identifier = label or f"{backend.model_id}|{sampling.policy_id}"
         return cls(identifier, backend, sampling)
+
+
+@dataclass(frozen=True, slots=True)
+class BrokeredReplayState:
+    """Replay metadata paired with a resumable, not-yet-finished rollout."""
+
+    request: ReplaySampleRequest
+    rollout: PartialRollout
+
+    def __post_init__(self) -> None:
+        if self.request.max_new_tokens <= 0:
+            raise ValueError("brokered replay requires a positive rollout length")
+        expected_id = f"replay:{self.request.record_id}"
+        if self.rollout.request.request_id != expected_id:
+            raise ValueError("brokered replay request id does not match its record")
+        if self.rollout.request.prefix != self.request.key.rollout_prefix:
+            raise ValueError("brokered replay rollout has the wrong prefix")
+        if self.rollout.request.max_new_tokens != self.request.max_new_tokens:
+            raise ValueError("brokered replay rollout has the wrong token budget")
+        if self.rollout.request.seed != self.request.seed:
+            raise ValueError("brokered replay rollout has the wrong seed")
+
+    @classmethod
+    def start(
+        cls,
+        policy: BehaviorPolicy,
+        request: ReplaySampleRequest,
+        *,
+        priority: float = 0.0,
+    ) -> "BrokeredReplayState":
+        if request.max_new_tokens <= 0:
+            raise ValueError("brokered replay requires a positive rollout length")
+        generation = GenerationRequest(
+            prefix=request.key.rollout_prefix,
+            max_new_tokens=request.max_new_tokens,
+            sampling=policy.sampling,
+            seed=request.seed,
+            request_id=f"replay:{request.record_id}",
+        )
+        return cls(
+            request,
+            PartialRollout.from_request(generation, priority=float(priority)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BrokeredReplayResult:
+    records: tuple[ReplayRecord, ...]
+    partial: tuple[BrokeredReplayState, ...]
+    snapshot: RolloutBrokerSnapshot
 
 
 class BehaviorRegistry:
@@ -340,3 +395,83 @@ def sample_replay_records(
             )
         )
     return tuple(records)
+
+
+def sample_replay_records_brokered(
+    policy: BehaviorPolicy,
+    work: Sequence[ReplaySampleRequest | BrokeredReplayState],
+    reward: Callable[[TokenSequence, TokenSequence], float],
+    broker: AsyncRolloutBroker,
+    *,
+    completion_target: int | None = None,
+    on_record: Callable[[ReplayRecord], None] | None = None,
+) -> BrokeredReplayResult:
+    """Generate replay records with bounded partial-rollout preservation.
+
+    A returned partial state can be passed to a later call unchanged.  Only
+    completed trajectories become :class:`ReplayRecord` objects or trigger
+    ``on_record``; unfinished tokens are scheduling state, never statistical
+    observations.  This makes the callback safe to connect directly to a
+    frozen-design streaming IS estimator.
+    """
+
+    if broker.backend is not policy.backend:
+        raise ValueError("rollout broker must use the behavior policy backend")
+    states = tuple(
+        item
+        if isinstance(item, BrokeredReplayState)
+        else BrokeredReplayState.start(policy, item)
+        for item in work
+    )
+    if not states:
+        raise ValueError("brokered replay requires at least one rollout")
+    by_request_id: dict[str, BrokeredReplayState] = {}
+    for state in states:
+        generation = state.rollout.request
+        if generation.sampling != policy.sampling:
+            raise ValueError("brokered replay state uses the wrong behavior policy")
+        if state.rollout.complete:
+            raise ValueError("completed replay state must not be resubmitted")
+        if generation.request_id in by_request_id:
+            raise ValueError("brokered replay record ids must be unique")
+        by_request_id[generation.request_id] = state
+
+    result = broker.run_until(
+        tuple(state.rollout for state in states),
+        completion_target=completion_target,
+    )
+    records: list[ReplayRecord] = []
+    for sample in result.completed:
+        try:
+            state = by_request_id[sample.request_id]
+        except KeyError as error:
+            raise RuntimeError("broker completed an unknown replay request") from error
+        if (
+            sample.model_id != policy.backend.model_id
+            or sample.policy_id != policy.sampling.policy_id
+        ):
+            raise RuntimeError("brokered replay sample used the wrong behavior policy")
+        request = state.request
+        full_generated = (
+            request.key.generated_prefix + request.key.candidate + sample.token_ids
+        )
+        record = ReplayRecord(
+            record_id=request.record_id,
+            key=request.key,
+            completion=sample.token_ids,
+            reward=float(reward(request.key.prompt, full_generated)),
+            behavior_id=policy.behavior_id,
+            behavior_logprob=sample.logprob,
+        )
+        records.append(record)
+        if on_record is not None:
+            on_record(record)
+
+    partial = tuple(
+        BrokeredReplayState(
+            by_request_id[state.request.request_id].request,
+            state,
+        )
+        for state in result.partial
+    )
+    return BrokeredReplayResult(tuple(records), partial, result.snapshot)
