@@ -16,7 +16,7 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
 | 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |
-| 查看 rollout 生成与复用的五层优化 | [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md) |
+| 查看 rollout 生成、复用与验证优化 | [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md) |
 | 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
 | 查找全部文档 | [文档导航](docs/README.md) |
 | 查找机器可读结果 | [结果索引](results/README.md) |
@@ -69,8 +69,13 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 | --- | --- | ---: | ---: | --- |
 | 连续批处理 | 同方法逐 prompt | 0.206×–0.952× | 1.003×–1.177× | 提升硬件利用率，不减少算法计算量 |
 | warm replay 在线阶段 | fresh-only | 0.859× | 0.766× | 热缓存有效；第 7 次重复查询才覆盖建库成本 |
+| 部分 rollout 续跑 | 丢弃部分 token 后重启 | 0.793× | 3.346× | 少生成 23.1%，但 token-only 恢复重复 prefill |
+| 流式 IS（0.2 s verifier） | 整批完成后提交 verifier | 0.671× | 1.000× | 提前消化有限 CPU worker 队列 |
 | 历史树，始终草稿 | 无草稿 | 2.162× | 1.660× | 低接受率造成明显退化 |
 | 历史树，负载感知 | 无草稿 | 0.986× | 1.006× | 主要用于保护长尾吞吐 |
+| MH proposal-tree 预取（0.2 s 奖励） | 普通 MH | 0.817× | 1.267× | 用作废分支的 FLOPs 隐藏奖励延迟 |
+| delayed acceptance（0.2 s 奖励） | 普通 MH | 0.827× | 1.000× | 精确奖励调用降到 0.556× |
+| replay 混合 MH proposal，在线 | base suffix proposal | 0.534× | 1.003× | 历史命中把串行生成改成并行评分 |
 | SMC 条件后缀复用 | 同一 SMC 不复用 | 0.856× | 0.963× | 同时减少墙钟、主模型计算和 fresh rollout |
 
 ## 安装与测试
@@ -180,8 +185,8 @@ python experiments/run_vllm_backend_benchmark.py \
 这里的加速分母始终是同模型、同 dtype、同请求网格和同硬件下的 Transformers 并发路径；既有 3090
 结果尚未用 vLLM 重跑，不能直接当作 vLLM 结果。
 
-五层 rollout 基础设施使用单独的可恢复 benchmark 入口；`--section decode` 与
-`--section algorithms` 可以分开运行：
+rollout 基础设施使用单独的可恢复 benchmark 入口；`--section decode` 与
+`--section algorithm` 可以分开运行：
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -192,6 +197,18 @@ $env:PYTHONPATH = "src"
 
 Linux/WSL2 上把后端改为 `vllm` 即可使用同一 workload 和结果 schema。实现原理、配置与哪些成本必须
 分列见 [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md)。
+
+部分 rollout、流式 frozen-design IS、随机历史草稿和三种 MH 执行优化使用独立入口：
+
+```powershell
+$env:PYTHONPATH = "src;."
+.\.venv\Scripts\python experiments\benchmark_is_mh_reuse.py `
+  --backend transformers --dtype bfloat16 --section all --seed 20260812 `
+  --output results\infra\rtx3090_transformers_is_mh_seed20260812.json
+```
+
+该实验中的 0.2 s verifier 是明确标注的受控 infra 诊断，不用于方法准确率排序。三 seed 聚合命令和
+每项优化的分母见 [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 
 主表、计算量汇总、分布审计、pass@k、消融和绘图需要在网格完成后运行只读后处理器。完整命令、输出
 文件和恢复规则见 [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。

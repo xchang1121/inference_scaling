@@ -71,14 +71,20 @@ batch。所有 design 数据完成后才读取冻结的统计量并分配 evalua
 连续批处理的主要收益是提高硬件利用率，通常不会降低算法 FLOPs；replay 和小 proposal 是否降低
 计算量则由上述 token/FLOPs 计数直接判断。耗时、显存和能耗只作为硬件相关补充。
 
+新增执行路径已经覆盖 CPU 奖励与 GPU 工作重叠、部分 rollout token 续跑、流式 frozen-design IS、
+MH accept/reject proposal-tree 预取、delayed acceptance，以及冻结 replay 混合 proposal。它们分别把
+完成回调、无效分支、精确奖励调用和正反向 proposal 概率写入账本；详细分母见
+[rollout 生成、复用与验证优化](ROLLOUT_ACCELERATION.md)。
+
 仍可继续加入、且不改变分布的优化包括：
 
-1. Transformers 路径在连续 MH 后缀 proposal 之间保留可直接寻址的 KV 状态；vLLM 已能通过 APC
-   复用完整匹配的 prefix block，但尚未把链状态作为显式 cache handle 传递；
-2. CPU 奖励解析与下一批 GPU 工作重叠；
-3. 对变长请求分桶，同时保持请求级 seed 和真实采样概率；
-4. 已消费 replay record 留在 design pool，用于改善方差和成本估计，但其数值不泄漏给未来 evaluation
-   决策。
+1. Transformers 路径在连续 MH 后缀 proposal 或 broker chunk 之间保留可直接寻址的 KV 状态；vLLM
+   已能通过 APC 复用完整匹配的 prefix block，但尚未把链状态作为显式 cache handle 传递；
+2. 对变长请求做在线长度预测与分桶，同时保持请求级 seed 和真实采样概率；
+3. 已消费 replay record 留在 design pool，用于改善方差和成本估计，但其数值不泄漏给未来 evaluation
+   决策；
+4. 根据实测 verifier 延迟、proposal batch 成本和历史前缀命中率，自动选择 streaming、MH 预取、
+   delayed acceptance 或普通路径。
 
 硬截断 proposal、未记录的 sampling transform，以及依赖当前 evaluation rollout 数值的数据复用会
 改变估计器或 support，因此明确排除。

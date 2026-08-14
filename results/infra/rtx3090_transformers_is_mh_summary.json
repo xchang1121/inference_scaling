@@ -1,0 +1,1191 @@
+{
+  "schema_version": 1,
+  "runs": 3,
+  "machine": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_total_memory_mib": 24575.5
+  },
+  "setting": {
+    "backend": "transformers",
+    "dtype": "bfloat16",
+    "dataset": "pinned OpenAI GSM8K test split",
+    "problem_index": 1311,
+    "model": "models/Qwen2.5-1.5B-Instruct",
+    "chunk_tokens": 16,
+    "max_new_tokens": 64,
+    "history_rollouts": 8,
+    "draft_tokens": 8,
+    "controlled_verifier_delay_seconds": 0.2,
+    "streaming_is_sequences": 12,
+    "streaming_is_verifier_workers": 2,
+    "mh_replay_chains": 4
+  },
+  "seeds": [
+    20260812,
+    20260813,
+    20260814
+  ],
+  "arms": {
+    "broker_arms": {
+      "discard_partial_rollouts": {
+        "online_wall_seconds": {
+          "mean": 1.3558757666663344,
+          "sample_std": 0.13591172288918965,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.001982129166336,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 416.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 240.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 46.522222222222226,
+          "sample_std": 7.389958151537905,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5576.333333333333,
+          "sample_std": 10.066445913694333,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 170.85144444444444,
+          "sample_std": 7.490136954194674,
+          "runs": 3
+        }
+      },
+      "resume_partial_rollouts": {
+        "online_wall_seconds": {
+          "mean": 1.0677282000002986,
+          "sample_std": 0.008929793934280722,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.006631796649984,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 320.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 1848.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 65.66666666666667,
+          "sample_std": 1.3768926368215255,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5587.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 234.8625,
+          "sample_std": 2.3881203382576977,
+          "runs": 3
+        }
+      }
+    },
+    "streaming_is_arms": {
+      "wait_batch_then_verify_cheap": {
+        "online_wall_seconds": {
+          "mean": 1.2442942000009982,
+          "sample_std": 0.04098616941212594,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.002704587460608,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 120.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 66.33333333333334,
+          "sample_std": 2.386070689089771,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5637.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 248.85399999999998,
+          "sample_std": 2.103017831593452,
+          "runs": 3
+        },
+        "first_estimator_update_seconds": {
+          "mean": 1.243651666666968,
+          "sample_std": 0.041002840620479264,
+          "runs": 3
+        }
+      },
+      "stream_completion_into_is_cheap": {
+        "online_wall_seconds": {
+          "mean": 1.2774007666660812,
+          "sample_std": 0.03513869897617877,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.002704587460608,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 120.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 67.26666666666667,
+          "sample_std": 3.2145502536643145,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5634.333333333333,
+          "sample_std": 3.7859388972001824,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 247.27733333333333,
+          "sample_std": 2.9642755157598355,
+          "runs": 3
+        },
+        "first_estimator_update_seconds": {
+          "mean": 0.33499590000064927,
+          "sample_std": 0.018715913430235303,
+          "runs": 3
+        }
+      },
+      "wait_batch_then_verify_delayed": {
+        "online_wall_seconds": {
+          "mean": 2.4405095333337763,
+          "sample_std": 0.015800291216713006,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.002704587460608,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 120.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 41.14814814814815,
+          "sample_std": 4.4226316579490295,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5637.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 232.05962962962963,
+          "sample_std": 5.395486492022434,
+          "runs": 3
+        },
+        "first_estimator_update_seconds": {
+          "mean": 1.436956166666884,
+          "sample_std": 0.01609567549416111,
+          "runs": 3
+        }
+      },
+      "stream_completion_into_is_delayed": {
+        "online_wall_seconds": {
+          "mean": 1.6378166333336897,
+          "sample_std": 0.030520469091117414,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.002704587460608,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 120.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 43.88888888888889,
+          "sample_std": 11.644423240014621,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5637.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 198.98388888888888,
+          "sample_std": 6.719916569698148,
+          "runs": 3
+        },
+        "first_estimator_update_seconds": {
+          "mean": 0.5273588666671761,
+          "sample_std": 0.009266442616167207,
+          "runs": 3
+        }
+      }
+    },
+    "stochastic_draft_arms": {
+      "no_history_draft": {
+        "online_wall_seconds": {
+          "mean": 5.005377299999964,
+          "sample_std": 0.32329538765542093,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.002259997741056,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 256.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 51.31166150670795,
+          "sample_std": 1.1293238948853517,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5637.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 220.04598555211558,
+          "sample_std": 2.168421862503314,
+          "runs": 3
+        }
+      },
+      "deterministic_history_draft": {
+        "online_wall_seconds": {
+          "mean": 4.902386033333944,
+          "sample_std": 0.3038576985162287,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.0023413000277333336,
+          "sample_std": 1.2853990318105245e-05,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 256.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 1.3257013999997678,
+          "sample_std": 0.035961869854261364,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.001926555451392,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 53.98406862745098,
+          "sample_std": 1.075292753383311,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5638.0,
+          "sample_std": 1.7320508075688772,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 227.2465931372549,
+          "sample_std": 1.6840609522014076,
+          "runs": 3
+        },
+        "draft_acceptance_fraction": {
+          "mean": 0.17708333333333334,
+          "sample_std": 0.1301041249666333,
+          "runs": 3
+        }
+      },
+      "stochastic_history_draft_exact": {
+        "online_wall_seconds": {
+          "mean": 4.90392886666632,
+          "sample_std": 0.30577014901236366,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.0023351251705173333,
+          "sample_std": 8.9126386896628e-06,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 256.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 480.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 1.4822519999997894,
+          "sample_std": 0.12875159564298955,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.001926555451392,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 52.40890522875817,
+          "sample_std": 2.840061389056834,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5637.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 224.63040168845316,
+          "sample_std": 2.5831496325403926,
+          "runs": 3
+        },
+        "draft_acceptance_fraction": {
+          "mean": 0.23958333333333334,
+          "sample_std": 0.09021097956087902,
+          "runs": 3
+        }
+      }
+    },
+    "mh_prefetch_arms": {
+      "ordinary_mh_cheap_reward": {
+        "online_wall_seconds": {
+          "mean": 1.9680556666674722,
+          "sample_std": 0.07365788848396634,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.00233100859904,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 101.0,
+          "sample_std": 7.211102550927978,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 659.0,
+          "sample_std": 7.211102550927978,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 54.0,
+          "sample_std": 1.0000000000000024,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.333333333333,
+          "sample_std": 1.1547005383792515,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 225.3595238095238,
+          "sample_std": 2.2446204775942356,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.8333333333333334,
+          "sample_std": 0.14433756729740643,
+          "runs": 3
+        }
+      },
+      "proposal_tree_prefetch_cheap_reward": {
+        "online_wall_seconds": {
+          "mean": 2.0641278000002785,
+          "sample_std": 0.05657660521317044,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.0033189857536,
+          "sample_std": 9.262285824e-06,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 143.66666666666666,
+          "sample_std": 8.082903768654761,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 939.3333333333334,
+          "sample_std": 7.505553499465135,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 56.32142857142857,
+          "sample_std": 3.778125817634657,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.0,
+          "sample_std": 1.7320508075688772,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 227.90065476190475,
+          "sample_std": 3.8352636421120714,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.8333333333333334,
+          "sample_std": 0.14433756729740643,
+          "runs": 3
+        }
+      },
+      "ordinary_mh_delayed_reward": {
+        "online_wall_seconds": {
+          "mean": 3.2749157333334247,
+          "sample_std": 0.07464593114828856,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.00233100859904,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 113.0,
+          "sample_std": 7.0,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 647.0,
+          "sample_std": 7.0,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 45.41919191919192,
+          "sample_std": 4.9061926380247245,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.0,
+          "sample_std": 1.7320508075688772,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 213.07795454545453,
+          "sample_std": 4.070550979772348,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.9166666666666666,
+          "sample_std": 0.14433756729740643,
+          "runs": 3
+        }
+      },
+      "proposal_tree_prefetch_delayed_reward": {
+        "online_wall_seconds": {
+          "mean": 2.676479699999618,
+          "sample_std": 0.02282695451047761,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.0029536400349866668,
+          "sample_std": 1.5229923669028148e-05,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 182.33333333333334,
+          "sample_std": 16.802777548171413,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 782.3333333333334,
+          "sample_std": 12.055427546683417,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 52.46296296296296,
+          "sample_std": 5.804471810950175,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.333333333333,
+          "sample_std": 1.1547005383792515,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 213.52196296296296,
+          "sample_std": 4.520978704723108,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.9166666666666666,
+          "sample_std": 0.14433756729740643,
+          "runs": 3
+        }
+      }
+    },
+    "mh_delayed_acceptance_arms": {
+      "ordinary_mh_expensive_reward": {
+        "online_wall_seconds": {
+          "mean": 4.657219866666613,
+          "sample_std": 0.4446608652857834,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.004195815478272,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 146.0,
+          "sample_std": 18.734993995195193,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 1222.0,
+          "sample_std": 18.734993995195193,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 30.72312091503268,
+          "sample_std": 5.550047324011146,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.333333333333,
+          "sample_std": 1.1547005383792515,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 204.4040179738562,
+          "sample_std": 1.9026547889901662,
+          "runs": 3
+        },
+        "exact_reward_evaluations": {
+          "mean": 9.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "surrogate_reward_evaluations": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "early_rejections": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.5,
+          "sample_std": 0.33071891388307384,
+          "runs": 3
+        }
+      },
+      "delayed_acceptance_exact": {
+        "online_wall_seconds": {
+          "mean": 3.832194966666672,
+          "sample_std": 0.42338847986071254,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.004195815478272,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 146.0,
+          "sample_std": 18.734993995195193,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 1222.0,
+          "sample_std": 18.734993995195193,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 43.271794871794874,
+          "sample_std": 4.344249639577182,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.0,
+          "sample_std": 1.7320508075688772,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 208.14068376068377,
+          "sample_std": 7.0501888305612255,
+          "runs": 3
+        },
+        "exact_reward_evaluations": {
+          "mean": 5.0,
+          "sample_std": 2.6457513110645907,
+          "runs": 3
+        },
+        "surrogate_reward_evaluations": {
+          "mean": 9.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "early_rejections": {
+          "mean": 4.0,
+          "sample_std": 2.6457513110645907,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.5,
+          "sample_std": 0.33071891388307384,
+          "runs": 3
+        }
+      }
+    },
+    "mh_replay_proposal_arms": {
+      "base_suffix_proposal": {
+        "online_wall_seconds": {
+          "mean": 12.363294333333519,
+          "sample_std": 0.42758894231741734,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.016783261913088,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 650.0,
+          "sample_std": 18.35755975068582,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 4822.0,
+          "sample_std": 18.35755975068582,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 56.30477246330905,
+          "sample_std": 0.9418852557918619,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.333333333333,
+          "sample_std": 1.1547005383792515,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 230.40583949248582,
+          "sample_std": 2.587505160017951,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.625,
+          "sample_std": 0.0625,
+          "runs": 3
+        },
+        "history_proposal_fraction": {
+          "mean": 0.0,
+          "sample_std": 0.0,
+          "runs": 3
+        }
+      },
+      "frozen_replay_mixture_proposal": {
+        "online_wall_seconds": {
+          "mean": 6.600962633333135,
+          "sample_std": 0.9387775466474357,
+          "runs": 3
+        },
+        "online_pflops": {
+          "mean": 0.0168264859136,
+          "sample_std": 1.113188215547875e-05,
+          "runs": 3
+        },
+        "generated_tokens": {
+          "mean": 328.6666666666667,
+          "sample_std": 51.013070220614374,
+          "runs": 3
+        },
+        "scored_tokens": {
+          "mean": 321.3333333333333,
+          "sample_std": 56.1456439390745,
+          "runs": 3
+        },
+        "prefill_tokens": {
+          "mean": 3015.3333333333335,
+          "sample_std": 498.99331992856713,
+          "runs": 3
+        },
+        "cache_build_seconds": {
+          "mean": 0.6392624666665748,
+          "sample_std": 0.015623044264946033,
+          "runs": 3
+        },
+        "cache_build_pflops": {
+          "mean": 0.001136173727744,
+          "sample_std": 0.0,
+          "runs": 3
+        },
+        "mean_gpu_utilization_percent": {
+          "mean": 58.86897846623247,
+          "sample_std": 1.6100465194873659,
+          "runs": 3
+        },
+        "maximum_gpu_memory_used_mib": {
+          "mean": 5636.333333333333,
+          "sample_std": 1.1547005383792515,
+          "runs": 3
+        },
+        "mean_gpu_power_watts": {
+          "mean": 237.5392017250484,
+          "sample_std": 2.7601047605348272,
+          "runs": 3
+        },
+        "acceptance_rate": {
+          "mean": 0.5833333333333334,
+          "sample_std": 0.16036254498271513,
+          "runs": 3
+        },
+        "history_proposal_fraction": {
+          "mean": 0.3541666666666667,
+          "sample_std": 0.09547032697824667,
+          "runs": 3
+        }
+      }
+    }
+  },
+  "comparisons": {
+    "partial_resume_over_discard": {
+      "wall_time_factor": {
+        "mean": 0.7928145343225105,
+        "sample_std": 0.08000392327012025,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 3.3457943925233646,
+        "sample_std": 0.0,
+        "runs": 3
+      },
+      "generated_token_factor": {
+        "mean": 0.7692307692307693,
+        "sample_std": 0.0,
+        "runs": 3
+      },
+      "prefill_token_factor": {
+        "mean": 7.7,
+        "sample_std": 0.0,
+        "runs": 3
+      }
+    },
+    "streaming_cheap_over_wait": {
+      "wall_time_factor": {
+        "mean": 1.0272260782372726,
+        "sample_std": 0.04006160088775989,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0,
+        "sample_std": 0.0,
+        "runs": 3
+      },
+      "first_update_time_factor": {
+        "mean": 0.2692314239526195,
+        "sample_std": 0.006124626344961619,
+        "runs": 3
+      }
+    },
+    "streaming_delayed_over_wait": {
+      "wall_time_factor": {
+        "mean": 0.671061821430067,
+        "sample_std": 0.008221713261449815,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0,
+        "sample_std": 0.0,
+        "runs": 3
+      },
+      "first_update_time_factor": {
+        "mean": 0.36698053330524455,
+        "sample_std": 0.0024799848705892797,
+        "runs": 3
+      }
+    },
+    "deterministic_draft_over_no_draft": {
+      "wall_time_factor": {
+        "mean": 0.9808343333718574,
+        "sample_std": 0.0640841551218241,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0359744990892532,
+        "sample_std": 0.0056876120203992585,
+        "runs": 3
+      }
+    },
+    "stochastic_draft_over_no_draft": {
+      "wall_time_factor": {
+        "mean": 0.9816377911016445,
+        "sample_std": 0.07493812333997817,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0332422586520946,
+        "sample_std": 0.003943649379710467,
+        "runs": 3
+      }
+    },
+    "prefetch_cheap_over_ordinary": {
+      "wall_time_factor": {
+        "mean": 1.0495477027281774,
+        "sample_std": 0.04044912710091334,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.423841059602649,
+        "sample_std": 0.003973509933774877,
+        "runs": 3
+      }
+    },
+    "prefetch_delayed_over_ordinary": {
+      "wall_time_factor": {
+        "mean": 0.8174875015719274,
+        "sample_std": 0.01555332524139795,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.2671081677704195,
+        "sample_std": 0.00653361968518708,
+        "runs": 3
+      }
+    },
+    "delayed_acceptance_over_ordinary": {
+      "wall_time_factor": {
+        "mean": 0.8273144366812988,
+        "sample_std": 0.11083015497137963,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0,
+        "sample_std": 0.0,
+        "runs": 3
+      },
+      "exact_reward_call_factor": {
+        "mean": 0.5555555555555556,
+        "sample_std": 0.2939723678960656,
+        "runs": 3
+      }
+    },
+    "replay_proposal_over_base": {
+      "wall_time_factor": {
+        "mean": 0.5341916858848144,
+        "sample_std": 0.07813494765928779,
+        "runs": 3
+      },
+      "main_model_flops_factor": {
+        "mean": 1.0025754231052244,
+        "sample_std": 0.0006632728615643818,
+        "runs": 3
+      },
+      "cold_wall_time_factor": {
+        "mean": 0.5859103093039176,
+        "sample_std": 0.07839201070275563,
+        "runs": 3
+      },
+      "cold_main_model_flops_factor": {
+        "mean": 1.0702722590139808,
+        "sample_std": 0.0006632728615643818,
+        "runs": 3
+      }
+    }
+  },
+  "source_files": [
+    "results\\infra\\rtx3090_transformers_is_mh_seed20260812.json",
+    "results\\infra\\rtx3090_transformers_is_mh_seed20260813.json",
+    "results\\infra\\rtx3090_transformers_is_mh_seed20260814.json"
+  ]
+}

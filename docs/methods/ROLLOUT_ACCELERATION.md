@@ -1,4 +1,4 @@
-# rollout 生成与复用的五层优化
+# rollout 生成、复用与验证优化
 
 这套实现把算法层和执行层分开：算法决定哪些样本可以进入估计量，执行层只负责更快地产生和验证这些
 样本。两者必须分开记账，否则很容易把同一条历史轨迹既当作新的统计样本，又当作推测解码草稿，造成
@@ -11,10 +11,16 @@
                             │
                             └──> draft token tree ──> base 模型逐 token 验证
 
+过量提交的 rollout ──> completion broker ──> 完整样本 / 可续跑部分前缀
+
 base 候选 ──> pilot rollout ──> 冻结 evaluation 预算 ──> 独立 evaluation rollout
                                                        │
                                                        ├──> 条件 IS 选择
                                                        └──> SMC block 权重与后缀森林
+
+当前 MH 状态 ──┬──> 普通 / replay 混合后缀 proposal
+               ├──> accept/reject 下一状态 proposal 预取
+               └──> surrogate 早拒绝 ──> 精确奖励校正
 ```
 
 draft tree 中的数据不进入最终权重；因此它可以来自已经消费过的 replay、旧策略或后台预生成。进入
@@ -23,13 +29,15 @@ replay estimator 的记录则必须保存真实 behavior probability，并遵守
 ## 历史 rollout token tree
 
 `RolloutTokenTree` 在 CPU 上保存“最近若干 token → 下一个 token”的有界计数表。生成时从最长匹配
-后缀开始查找，沿最高频分支给出最多 $K$ 个草稿 token；base 模型一次前向验证整段草稿，只接受与
-base 抽样结果一致的前缀。第一个不一致 token 之后的草稿全部丢弃。
+后缀开始查找，并给出最多 $K$ 个草稿 token。确定性模式沿最高频分支前进；随机模式从完整经验条件
+分布抽样，并把每一步的 proposal 概率一并交给 verifier。
 
-这一步不改变 base 的抽样分布，因为 token tree 只提出猜测，接受与拒绝均由 base logits 和原请求的
-随机数流决定。Transformers 实现会把验证后的 `DynamicCache` 裁到已接受位置，从该 KV 状态继续生成，
-避免拒绝后重新 prefill。vLLM 实现使用原生 global suffix proposer 和 target verifier，并直接读取
-drafted / accepted token 计数器。
+确定性模式通过“target 抽样 token 是否与草稿相同”决定接受。随机模式使用
+`min(1, p(token)/q(token))`，拒绝后从归一化的 `(p-q)_+` 残差抽样，因此同样保持请求所定义的 target
+分布，不把历史经验分布冒充 base。Transformers 会把验证后的 `DynamicCache` 裁到已接受位置，从该
+KV 状态继续生成，避免拒绝后重新 prefill。vLLM 使用原生 global suffix proposer 和 target verifier，
+并直接读取 drafted / accepted token 计数器；任意外部经验分布的随机残差校正目前不注入 vLLM 原生
+suffix cache。
 
 在 BF16 下，不同 batch 形状可能经过不同数值 kernel，因而不能要求两条运行逐 token 完全相等；应把
 正确性表述为草稿不改变定义的抽样规则，并用 FP32 有限状态测试检查固定随机流。真实硬件报告同时保留
@@ -51,6 +59,7 @@ tree_max_context_tokens = 24
 tree_max_contexts = 100000
 vllm_max_cached_requests = 10000
 dynamic_vllm = false
+stochastic_tree = false
 ```
 
 其中每一项为 `[最大 active batch, K]`。Transformers 在每批请求进入 verifier 前查询该表；设置
@@ -63,6 +72,17 @@ proposer 还要求运行时 $K$ 固定；动态模式因此加载仓库内的
 
 配置中的通用默认值不是硬件最优值。3090 消融发现历史树接受率偏低时，只在 `batch=1` 开启草稿能够
 保护吞吐，而始终使用 $K=8$ 明显变慢；部署前应在自己的模型、prompt 分布和 batch 曲线上重新标定。
+
+## 部分 rollout broker
+
+`AsyncRolloutBroker` 把一个长请求拆成有界 token chunk。当过量提交的 batch 已达到所需 completion 数时，
+未完成请求不会被丢弃，而是保存原请求、已生成 token、逐 token 行为概率、参考概率、优先级和分段数。
+下一轮先调度这些部分轨迹，并从“原 prefix + 已生成 token”继续。
+
+broker 只在 EOS 或完整 token 预算完成后触发 completion callback；部分状态不能保存成 `ReplayRecord`，
+也不能进入 IS 估计。它在 Transformers 与 vLLM 上都可用，但保存的是可序列化 token 状态，不承诺跨
+权重版本保留引擎 KV。Transformers 恢复时需要重新 prefill；vLLM 若 Automatic Prefix Caching 仍持有
+相同 block，则可命中引擎缓存。报告因此同时记录保存/丢弃 token、恢复 prefill、墙钟和主模型 FLOPs。
 
 ## pilot 与 evaluation 分离的预算分配
 
@@ -96,11 +116,16 @@ pilot 的真实 token cost 将每候选 evaluation 条数换成冻结成本，�
 候选数有限时，归一化权重和最终选择概率由连续映射定理同时收敛。这里的论证依赖 pilot 与 evaluation
 独立；若把 pilot 值再次并入最终均值，就需要额外处理数据依赖，当前实现明确不这样做。
 
-## 流式奖励和低优先级 run-ahead
+## 流式 frozen-design IS 与低优先级 run-ahead
 
 异步后端在每条序列完成时触发 callback，`StreamingRewardEvaluator` 立即把该序列交给 CPU reward
 线程池，不必等待同批最长序列完成。GPU 生成结束后若 reward future 尚未完成，空出的时间可提交少量
 run-ahead 请求。
+
+`FrozenStreamingISEstimator` 在 fresh 生成前冻结每个候选允许进入估计量的 request id。历史贡献可以
+在冻结前立即加入；冻结后，fresh completion 无论以何种顺序完成，都只按固定 id 进入一次。最终 log
+energy、ESS 和选择概率只由这组固定贡献决定，因此流式完成改变的是等待与排队，不是统计样本集合。
+估计器内部使用线程安全更新，可直接接收并行 verifier 的完成回调。
 
 `LowPriorityRunAheadBackend` 遵守三条规则：
 
@@ -110,6 +135,38 @@ run-ahead 请求。
 
 因此 run-ahead 不是免费计算。若 reward 几乎没有 CPU 尾部，后台工作反而会增加争用；默认值
 `run_ahead_rollouts_per_candidate = 0`，只有测到稳定的 reward / KV 空泡后才开启。
+
+## 奖励目标 MH 的三种执行优化
+
+### Proposal-tree 预取
+
+普通 reward MH 先生成本步 proposal，再等待精确奖励，然后才知道下一状态。预取版在等待奖励期间，
+分别以“本步拒绝”和“本步接受”为下一状态，一次 batch 生成下一步两个 proposal。普通 Hastings 判断
+完成后只消费对应分支；另一分支明确计为 unused prefetch。proposal seed、cut 和接受随机数沿用普通链
+的命名，因此有限状态后端上可以逐字段核对两条路径。
+
+它没有减少算法更新数，并且除最后一步外每步多生成一个最终不用的 proposal。只有精确奖励足够慢、
+额外 proposal batch 能被该延迟覆盖时，墙钟才可能下降。
+
+### Delayed acceptance
+
+第一阶段用固定的便宜 surrogate reward 构造完整 proposal 接受比。若第一阶段拒绝，就不调用精确奖励；
+若通过，再用“精确奖励差减 surrogate 奖励差”做第二阶段判断。两阶段相乘恢复普通精确目标的接受概率，
+因此 surrogate 只影响计算发生的位置，不改变最终 target。实现不裁剪任何接受比，并分别记录 surrogate、
+精确奖励和 early rejection 数量。
+
+### 冻结 replay 混合 proposal
+
+`FrozenReplaySuffixProposal` 对每个“保留前缀、后缀长度”使用
+
+```text
+(1 - beta) * base suffix probability + beta * frozen empirical probability.
+```
+
+`beta < 1` 保留 base 的完整支持集。抽到历史后缀时仍由 base 模型精确评分；每次 MH 更新对新后缀和旧
+后缀都计算同一个混合 proposal 概率，把正反向概率放入 Hastings ratio。历史库在链开始前冻结，链内
+不能边看接受结果边改变 proposal。历史命中可以把自回归生成变成 teacher-forced 评分，但不保证减少
+逻辑 FLOPs。
 
 ## SMC rollout forest
 
@@ -145,18 +202,22 @@ reservoir 命中率和 fresh top-up；只看复用率可能掩盖粒子退化。
 
 | 优化 | Transformers | vLLM |
 | --- | --- | --- |
-| 历史 token tree | CPU 后缀表 + 显式 target 验证 | 原生 global suffix proposer |
+| 历史 token tree | 确定性/随机经验 proposal + 显式 target 验证 | 原生 global suffix proposer |
 | 拒绝后的 KV 续算 | 裁剪 `DynamicCache` 后继续 | 引擎内部 verifier / cache 管理 |
 | active-batch 调度 | 每次 `sample_batch` 查询 $K(b)$ | 动态 batch table + suffix 兼容适配层 |
 | 序列完成回调 | batch fallback；按返回顺序触发 | 常驻 `AsyncLLM` 请求完成即回调 |
-| progressive / streaming / SMC | 后端无关算法层 | 后端无关算法层 |
+| 部分 rollout 续跑 | token 状态恢复并重新 prefill | token 状态恢复；前缀可由 APC 命中 |
+| streaming IS / progressive / SMC | 后端无关算法层 | 后端无关算法层 |
+| MH 预取 / delayed acceptance | 后端无关调度与接受判断 | 后端无关调度与接受判断 |
+| replay 混合 proposal | 生成或 teacher-forced 精确评分 | 需要配置可精确评分的后端 |
 | 原生 draft 指标 | 仓库计数 | vLLM metrics drafted / accepted counters |
 
 vLLM 的 global suffix 与动态调度由引擎内部管理，因此 Python 侧不会默认再构建一份
 `RolloutTokenTree`；历史请求通过常驻引擎自然进入原生 cache。Transformers 路径显式暴露 token tree，
 便于验证概率、KV 与 FLOPs 账本。vLLM 0.25 没有把任意外部 token 序列直接插入原生 suffix cache 的
 公开接口：同一 base 引擎已经完成的历史请求可以用于草稿，来自另一模型且从未经过 base 引擎的离线
-off-policy 序列仍可进入带概率修正的 replay estimator，但不会被误写成已有的 vLLM 草稿加速。
+off-policy 序列仍可进入带概率修正的 replay estimator 或冻结 MH 混合 proposal，但不会被误写成已有
+的 vLLM 原生草稿加速。
 
 ## 复现实测
 
@@ -168,6 +229,15 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\benchmark_rollout_infra.py `
   --backend transformers --dtype bfloat16 --section all `
   --output results\infra\rtx3090_transformers.json
+```
+
+新增的 IS/MH 复用消融使用独立入口：
+
+```powershell
+$env:PYTHONPATH = "src;."
+.\.venv\Scripts\python experiments\benchmark_is_mh_reuse.py `
+  --backend transformers --dtype bfloat16 --section all `
+  --output results\infra\rtx3090_transformers_is_mh.json
 ```
 
 ```bash

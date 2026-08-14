@@ -9,6 +9,17 @@
 | `base-replay` | `alg:main-replay-is` | 候选仍是 base 样本；replay 只用于估计条件能量 |
 | `dynamic-is` | `alg:main-dynamic-is` | 辅助候选必须乘外层 base/proposal 概率比 |
 
+算法目标之外的执行优化不另设新的输出目标：
+
+| 实现入口 | 服务对象 | 保持不变的性质 |
+| --- | --- | --- |
+| `AsyncRolloutBroker` | IS / replay 生成 | 只有完整 trajectory 进入估计；部分 token 只作为续跑状态 |
+| `FrozenStreamingISEstimator` | on/off-policy IS | fresh request id 在数值揭示前冻结，完成顺序不改变最终统计量 |
+| 随机 `RolloutTokenTree` | base rollout 解码 | 使用显式经验 proposal 和 residual correction，输出仍服从 target |
+| `run_reward_mh_chain_prefetched` | 奖励目标 MH | 只预先生成两个可能分支，普通 Hastings 判断决定消费哪一个 |
+| `run_reward_mh_chain_delayed` | 昂贵 verifier 的 MH | 第二阶段补回 surrogate 误差，最终 target 不变 |
+| `FrozenReplaySuffixProposal` | 历史后缀 MH proposal | 历史库冻结，正反向混合概率都进入 Hastings ratio |
+
 replay 算法严格实现文档规定的数据生命周期：
 
 1. design data 可以用于选择策略、方差估计和整数预算；

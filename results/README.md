@@ -38,6 +38,11 @@
 单题 reward 对方法质量排序。对应文字与图表见
 [`RTX 3090 推理基础设施优化汇总`](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 
+三份 `rtx3090_transformers_is_mh_seed*.json` 记录部分 rollout broker、流式 frozen-design IS、随机
+历史草稿、MH proposal-tree 预取、delayed acceptance 和 replay 混合 proposal；
+`rtx3090_transformers_is_mh_summary.json` 保存经过 workload 完整性检查的三 seed 聚合。受控 0.2 s
+verifier 只用于验证延迟隐藏与早拒绝，不是方法质量结果。
+
 ## 训练摘要
 
 目录：[`training/`](training/)
