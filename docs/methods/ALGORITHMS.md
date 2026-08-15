@@ -327,7 +327,7 @@ if importance_log_ratio_clip is not None:
 log_weight = reward / reward_temperature + applied_log_ratio
 ```
 
-截断 $`\operatorname{clip}(\log p/q,-c,c)`$ 将式 (9) 改为有偏估计。报告记录 raw ratio、applied ratio、
+截断 $`\mathrm{clip}(\log p/q,-c,c)`$ 将式 (9) 改为有偏估计。报告记录 raw ratio、applied ratio、
 截断次数和 effective sample size（ESS）。
 
 <a id="alg-proposal-energy"></a>
@@ -513,7 +513,7 @@ n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
 候选生成少量 pilot rollout，估计
 
 ```math
-\widehat\sigma_i=\operatorname{Std}
+\widehat\sigma_i=\mathrm{Std}
 \left[\exp\{\ell_{ik}-\max_{j,k}\ell_{jk}\}\right],
 \qquad
 \ell_{ik}=r_{ik}/\tau+\log p(u_{ik})-\log q(u_{ik}),
