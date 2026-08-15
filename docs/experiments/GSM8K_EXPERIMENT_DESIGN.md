@@ -129,6 +129,17 @@ $env:PYTHONPATH = "src"
   --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json
 
+.\.venv\Scripts\python experiments\gsm8k_is_passk.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --limit 32 `
+  --draws 8 `
+  --workers 8 `
+  --methods conditional_is_small_proposal_uncorrected `
+  --tag is-uncorrected-validated `
+  --output results\gsm8k_3090\gsm8k_3090_aligned_is_uncorrected_validated.json
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_is_rescoring.py
+
 .\.venv\Scripts\python experiments\summarize_gsm8k_passk.py `
   results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json `
   results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json `
@@ -174,6 +185,7 @@ KL 系数之间仍有明确关系。低成本 rollout proposal 为 `Qwen/Qwen2.5
 | `mh` | 固定长度、EOS 吸收状态下针对 \(p^4\) 的后缀重采样 MH | Base 与 RL sample |
 | `conditional_is` | base 候选、base rollout 与累积 self-consistency 奖励 | Best-of-N 与 RL greedy |
 | `conditional_is_small_proposal` | 相同候选和决策预算；用 1.5B/0.5B 后缀概率比修正 0.5B rollout | 标准 `conditional_is` |
+| `conditional_is_small_proposal_uncorrected` | 相同候选和 rollout 预算；完全跳过 1.5B 后缀重评分，权重只含奖励项 | 重评分成本与目标偏差消融；不作为 off-policy IS |
 | `rl_sample` | 从 GRPO checkpoint 进行一次温度 1 采样 | MH |
 | `rl_greedy` | GRPO checkpoint 的贪心输出 | 条件 IS |
 | `verifier_mh` | 针对 `base * exp(exact reward / beta)` 的完整序列后缀 MH | 与 GRPO 共享目标的比较 |
@@ -209,6 +221,11 @@ $M=15,K=3,I=4$。两者的幂分布 MH 都采用目标幂次 α=4、16 个递增
 有限偏差；结果记录同时报告原始修正、实际修正和截断次数。关闭
 `importance_log_ratio_clip` 时恢复不截断的重要性权重。因而报告会把该方法称为截断的有限 rollout
 近似，而不会把它写成有限样本下严格无偏。
+
+`conditional_is_small_proposal_uncorrected` 进一步关闭 `apply_importance_correction`。该设置不计算也不
+缓存 1.5B rollout 概率，运行账本中的 base `score_calls` 和 `scored_tokens` 必须为 0。它估计 proposal
+分布下的 continuation energy，不能用于验证 Base 目标的 off-policy 收敛性；该路径只用于测量删除重
+评分后的质量与成本变化。
 
 ## GRPO 训练与计算量摊销
 
@@ -332,8 +349,8 @@ replay 中每条历史记录最多使用一次。性能 benchmark 重复同一�
   输出哈希多样性。每个任务块只含同一道题的不同 draw；Base/GRPO 合并独立生成，MH 在相同阶段和
   更新编号向量化独立链。每个固定任务块单独保存实际 padded token slots、估算 FLOPs 与墙钟，不能
   把异步吞吐收益写成算法计算量下降。
-- 标准条件 IS、0.5B proposal 截断 off-policy 条件 IS 与相同 proposal 的不截断精确权重版本，在
-  同一题目和 draw 网格上的 pass@k 与多样性。三种方法保持候选、rollout、长度和 worker 预算相同；
+- 标准条件 IS、0.5B proposal 截断 off-policy 条件 IS、相同 proposal 的不截断精确权重版本，以及
+  完全删除重评分的 proposal-energy 消融，在同一题目和 draw 网格上的 pass@k 与多样性。四种方法保持候选、rollout、长度和 worker 预算相同；
   每个 draw 独立，连续批处理只改变调度。小 proposal 版本将两个模型的 token slots 分别乘各自参数
   量后再相加；每个成本比值的字段名直接写明分子和分母，只有比值大于 1 才表示分母方法的成本下降。
 

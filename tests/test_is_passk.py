@@ -283,3 +283,22 @@ def test_is_passk_unclipped_method_changes_only_the_clip_override() -> None:
     assert _uses_small_proposal("conditional_is_small_proposal")
     assert _uses_small_proposal("conditional_is_small_proposal_unclipped")
     assert not _uses_small_proposal("conditional_is")
+
+
+def test_is_passk_uncorrected_method_disables_rescoring_and_clipping() -> None:
+    config = {
+        "conditional_is": {
+            "importance_log_ratio_clip": 10.0,
+            "candidate_count": 8,
+        }
+    }
+    method, effective = _execution_method_and_config(
+        "conditional_is_small_proposal_uncorrected", config
+    )
+    assert method == "conditional_is_small_proposal"
+    assert effective["conditional_is"]["importance_log_ratio_clip"] is None
+    assert effective["conditional_is"]["apply_importance_correction"] is False
+    assert effective["conditional_is"]["candidate_count"] == 8
+    assert config["conditional_is"]["importance_log_ratio_clip"] == 10.0
+    assert "apply_importance_correction" not in config["conditional_is"]
+    assert _uses_small_proposal("conditional_is_small_proposal_uncorrected")

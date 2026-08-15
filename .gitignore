@@ -33,3 +33,8 @@ results/infra/*
 !results/infra/rtx3090_transformers_is_mh_seed20260813.json
 !results/infra/rtx3090_transformers_is_mh_seed20260814.json
 !results/infra/rtx3090_transformers_is_mh_summary.json
+results/gsm8k_3090/*.chunks.jsonl
+results/gsm8k_3090/*.chunks.manifest.json
+results/validation/*.chunks.jsonl
+results/validation/*.chunks.manifest.json
+results/validation/gsm8k_*smoke*.json

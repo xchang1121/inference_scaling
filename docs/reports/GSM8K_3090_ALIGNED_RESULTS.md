@@ -51,6 +51,7 @@
 | 幂分布 MH | 对完整序列执行后缀提议与接受，目标为 `p_base(y∣x)^4` | 基模概率锐化 | [Metropolis–Hastings，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97) |
 | 标准条件 IS | Base 候选与 Base rollout；累积 self-consistency 奖励形成候选权重 | 免训练条件重加权 | [重要性采样，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303)；[Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
 | 0.5B proposal 条件 IS | Base 候选与 0.5B rollout；后缀权重乘精确 `p_base/q` | off-policy rollout | [Off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
+| 0.5B rollout 无重评分 | Base 候选与 0.5B rollout；候选权重不乘 `p_base/q` | 重评分消融；估计 0.5B 而非 Base 的后续能量，不属于 Base 目标的 off-policy IS | 与上一行直接配对的有偏消融 |
 | GRPO | 正确性奖励与 KL 正则训练后的策略 | 训练式强化学习基线 | [DeepSeekMath，Shao et al., 2024](https://arxiv.org/abs/2402.03300) |
 | verifier-MH / verifier-IS | 统一目标 `p_base(y∣x) exp(exact_reward(y)/0.04)` | 相同奖励下的算法比较 | [GSM8K verifier，Cobbe et al., 2021](https://arxiv.org/abs/2110.14168)；[Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
 
@@ -67,6 +68,7 @@
 | 条件 IS | `M=8` 个候选；每候选 `K=3` 条 rollout；`S=4` 个引导阶段 |
 | 幂分布 MH | `α=4`；16 个递增长度阶段；每阶段 3 次更新；共 48 次后缀更新 |
 | 0.5B proposal 权重 | 后缀 log 重要性比默认截到 `[-10,10]`；另设无截断对照 |
+| 无重评分消融 | 0.5B rollout 权重只保留 `exp(reward/τ)`；不提交 1.5B rollout 评分请求 |
 | pass@k | 每题 8 个独立 draw；draw 之间无候选、rollout 或 replay 共享 |
 
 各主要方法使用相同题目、prompt、最大长度和请求级随机种子。主质量表中的候选均由 1.5B Base 生成；
@@ -90,7 +92,7 @@ proposal、重复 prompt 和重评分。缓存、连续批处理、吞吐与冷�
 | --- | --- | --- |
 | 单次与多次采样质量 | Base、Beam-8、自一致性投票-8、幂分布 MH、条件 IS、GRPO | 比较最终 GSM8K 准确率与推理预算；各方法目标允许不同 |
 | 共享奖励目标 | verifier-MH、verifier-IS、GRPO | 比较相同显式奖励下的准确率和经验答案分布 |
-| off-policy 与 rollout 复用 | 0.5B proposal、动态候选、warm replay、方差—成本分配 | 比较准确率、ESS、复用率与选择稳定性 |
+| off-policy 与 rollout 复用 | 0.5B proposal、无重评分消融、动态候选、warm replay、方差—成本分配 | 比较准确率、ESS、复用率与选择稳定性 |
 
 oracle 实验读取 test split 的标准答案，结论限于算法诊断。部署方法对应 self-consistency、模型置信度或
 测试时可用 verifier。
@@ -127,7 +129,9 @@ oracle 实验读取 test split 的标准答案，结论限于算法诊断。部�
 每种方法在相同 32 道题上独立采样 8 次，共生成 256 条序列。draw 之间保持统计独立，连续批处理仅改变
 物理执行方式。
 
-![GSM8K 六种方法的 pass@k 与题目级不确定性](../assets/gsm8k_3090_aligned_passk.svg)
+![GSM8K 既有六种方法的 pass@k 与题目级不确定性](../assets/gsm8k_3090_aligned_passk.svg)
+
+图中保留既有六种方法的统一比较；下表另加入本次无重评分消融。
 
 | 方法 | pass@1 | pass@2 | pass@4 | pass@8 | 8 draw 推理 PFLOPs |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -137,11 +141,39 @@ oracle 实验读取 test split 的标准答案，结论限于算法诊断。部�
 | 标准条件 IS | 58.203% | 63.728% | 68.929% | 75.000% | 11.0284 |
 | 0.5B proposal IS（截断） | 46.484% | 53.125% | 58.705% | 62.500% | 19.4781 |
 | 0.5B proposal IS（无截断） | 46.484% | 53.348% | 59.509% | 65.625% | 19.2690 |
+| 0.5B rollout（无重评分） | 45.313% | 52.009% | 58.839% | 65.625% | 4.6542 |
 
 标准条件 IS 相对 GRPO 的 pass@1 差为 -0.781 个百分点，区间为 [-6.250, 4.297]；pass@8 差为
 -6.250 个百分点，区间为 [-15.625, 0]。两者的单次成功率接近，GRPO 在较大采样预算下得到更高覆盖率。
 两个 0.5B proposal 版本的 pass@1 均比标准 IS 低 11.719 个百分点。移除权重截断后，pass@8 由
 62.500% 升至 65.625%；proposal 与 base 的有限重叠仍形成较高的重要性权重方差。
+
+### 1.5B 重评分消融
+
+经过重评分的 0.5B rollout 估计
+
+`E_{u~q_0.5B}[p_1.5B(u|s) / q_0.5B(u|s) × exp(r(s,u)/τ)]`。
+
+消融版本删除概率比与全部 1.5B rollout 评分请求，实际估计变为
+
+`E_{u~q_0.5B}[exp(r(s,u)/τ)]`。
+
+因此该消融改变了候选选择目标，而不是对同一 off-policy IS 估计器进行低成本近似。候选仍全部来自
+1.5B Base，只有后续能量改由 0.5B rollout 分布定义。
+
+相对截断重评分版本，无重评分版本的 pass@1 低 1.172 个百分点，题目级配对 bootstrap 95% 区间为
+[-3.906, 1.172]；当前 32 题网格没有分辨出稳定的 pass@1 下降。pass@2 差为 -1.116 个百分点，
+pass@4 差为 +0.134 个百分点，pass@8 差为 +3.125 个百分点；相应区间均包含 0。相对标准 1.5B
+rollout IS，无重评分版本的 pass@1 低 12.891 个百分点，配对区间为 [-20.313, -6.250]，下降明确。
+
+无重评分版本总计 4.6542 PFLOPs，其中 1.5B 候选生成 1.5749 PFLOPs、0.5B rollout 生成 3.0794
+PFLOPs，两个后端的 `score_calls` 与 `scored_tokens` 均为 0。截断重评分版本需要 19.4781 PFLOPs，
+即其 FLOPs 为无重评分版本的 4.185 倍；标准 IS 的 FLOPs 为无重评分版本的 2.370 倍。
+
+FLOPs 减少没有转化为本组 Transformers 运行的墙钟加速。完整网格的无重评分运行耗时 4064.3 秒，
+已有截断重评分运行耗时 2842.9 秒；二者在不同日期执行，不能作为受控加速比。同一会话的 2 题 × 1
+draw 检查分别耗时 36.5 秒和 30.3 秒；无重评分路径在该小样本中生成了更多自回归 token。批量序列
+评分具有较高并行度，而候选和 rollout 解码受最长序列约束，因此减少稠密 FLOPs 不保证降低墙钟。
 
 幂分布 MH 相对 Base 的 pass@1 差异较小，每题不同数值答案数由 4.56 降至 3.25。其主要观测效应为
 生成多样性收缩。
@@ -258,8 +290,9 @@ sampling temperature 为 0.7、1.0、1.5 时，标准 IS 分别得到 4/8、6/8�
 
 1. 标准条件 IS 的单次生成准确率与本地 GRPO 接近，并高于 Base；其推理 FLOPs 约为已训练 GRPO 的
    54 倍。该方法适用于训练成本需要规避或查询量较小的场景。
-2. 当前 0.5B off-policy proposal 相对标准 IS 同时降低准确率并增加 FLOPs。主模型精确重评分和有限样本
-   重要性权重方差构成主要成本。
+2. 当前 0.5B off-policy proposal 相对标准 IS 同时降低准确率并增加 FLOPs。删除主模型重评分后，
+   pass@1 相对截断版本变化 -1.172 个百分点且配对区间覆盖 0，FLOPs 降至 23.9%；该版本改为估计
+   0.5B continuation energy，不再保持 Base 目标的 off-policy IS 解释。
 3. warm replay、动态候选固定组和方差—成本组的配对区间均覆盖 0；当前样本规模对稳定质量差异和质量
    等价的统计分辨率有限。
 4. 方差—成本分配复用 5.707% evaluation rollout，平均最终 ESS 为 3.315，低于动态固定组的 3.424。

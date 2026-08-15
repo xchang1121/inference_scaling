@@ -77,6 +77,7 @@ IS_PASSK_METHODS = (
     "conditional_is",
     "conditional_is_small_proposal",
     "conditional_is_small_proposal_unclipped",
+    "conditional_is_small_proposal_uncorrected",
 )
 IS_PASSK_IMPLEMENTATION_FILES = tuple(
     dict.fromkeys((*PASSK_IMPLEMENTATION_FILES, "experiments/gsm8k_is_passk.py"))
@@ -97,10 +98,16 @@ def _uses_small_proposal(method: str) -> bool:
 def _execution_method_and_config(
     method: str, config: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
-    if method != "conditional_is_small_proposal_unclipped":
+    if method not in {
+        "conditional_is_small_proposal_unclipped",
+        "conditional_is_small_proposal_uncorrected",
+    }:
         return method, config
     effective = copy.deepcopy(config)
     effective["conditional_is"]["importance_log_ratio_clip"] = None
+    effective["conditional_is"]["apply_importance_correction"] = (
+        method != "conditional_is_small_proposal_uncorrected"
+    )
     return "conditional_is_small_proposal", effective
 
 
@@ -522,6 +529,13 @@ def main() -> None:
                 "candidate_model": "base",
                 "rollout_model": "proposal",
                 "importance_log_ratio_clip": None,
+                "apply_importance_correction": True,
+            },
+            "conditional_is_small_proposal_uncorrected": {
+                "candidate_model": "base",
+                "rollout_model": "proposal",
+                "importance_log_ratio_clip": None,
+                "apply_importance_correction": False,
             },
         }
     }
@@ -630,6 +644,22 @@ def main() -> None:
                 standard,
                 unclipped,
             )
+        if "conditional_is_small_proposal_uncorrected" in table:
+            uncorrected = table["conditional_is_small_proposal_uncorrected"]
+            comparisons["uncorrected_small_proposal_minus_standard_pass_at_k"] = (
+                _paired_pass_at_k_difference(
+                    standard,
+                    uncorrected,
+                    draws=args.draws,
+                    seed=SeedStream(int(config["run"]["seed"])).derive(
+                        "is-passk-paired-uncorrected-standard"
+                    ),
+                )
+            )
+            comparisons["standard_over_uncorrected_small_proposal_cost"] = _cost_ratio(
+                standard,
+                uncorrected,
+            )
     if {
         "conditional_is_small_proposal",
         "conditional_is_small_proposal_unclipped",
@@ -648,6 +678,25 @@ def main() -> None:
         )
         comparisons["unclipped_over_clipped_cost"] = _cost_ratio(
             unclipped, clipped
+        )
+    if {
+        "conditional_is_small_proposal",
+        "conditional_is_small_proposal_uncorrected",
+    }.issubset(table):
+        clipped = table["conditional_is_small_proposal"]
+        uncorrected = table["conditional_is_small_proposal_uncorrected"]
+        comparisons["uncorrected_minus_clipped_pass_at_k"] = (
+            _paired_pass_at_k_difference(
+                clipped,
+                uncorrected,
+                draws=args.draws,
+                seed=SeedStream(int(config["run"]["seed"])).derive(
+                    "is-passk-paired-uncorrected-clipped"
+                ),
+            )
+        )
+        comparisons["clipped_over_uncorrected_cost"] = _cost_ratio(
+            clipped, uncorrected
         )
 
     report = {
@@ -675,10 +724,12 @@ def main() -> None:
             "between draws."
         ),
         "limitations": (
-            "Eight draws estimate pass@k only through k=8. All three methods use the "
+            "Eight draws estimate pass@k only through k=8. All four methods use the "
             "same problem grid and candidate/rollout budgets. Finite importance-weight "
             "variance affects both small-proposal methods; the clipped variant adds "
-            "finite bias, while the unclipped variant can have higher variance."
+            "finite bias, while the unclipped variant can have higher variance. The "
+            "uncorrected variant removes weight variance but targets proposal-model "
+            "rather than base-model continuation energy."
         ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)

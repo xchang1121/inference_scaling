@@ -1,0 +1,491 @@
+{
+  "benchmark": "OpenAI GSM8K official test split",
+  "comparisons": {
+    "conditional_is_over_uncorrected_observed_cost": {
+      "interpretation": "The named reference method is the numerator and the named candidate method is the denominator. A ratio above one means the candidate used less wall time or FLOPs.",
+      "reference_over_candidate_flops": 2.369542630356707,
+      "reference_over_candidate_wall_time": 0.6550737730293098
+    },
+    "conditional_is_small_proposal_over_uncorrected_observed_cost": {
+      "interpretation": "The named reference method is the numerator and the named candidate method is the denominator. A ratio above one means the candidate used less wall time or FLOPs.",
+      "reference_over_candidate_flops": 4.1850315877273,
+      "reference_over_candidate_wall_time": 0.6994809285257807
+    },
+    "conditional_is_small_proposal_unclipped_over_uncorrected_observed_cost": {
+      "interpretation": "The named reference method is the numerator and the named candidate method is the denominator. A ratio above one means the candidate used less wall time or FLOPs.",
+      "reference_over_candidate_flops": 4.140106694282749,
+      "reference_over_candidate_wall_time": 0.6924435956059634
+    },
+    "uncorrected_minus_conditional_is_pass_at_k": {
+      "1": {
+        "candidate_minus_reference": -0.12890625,
+        "paired_problem_bootstrap_95": [
+          -0.203125,
+          -0.0625
+        ]
+      },
+      "2": {
+        "candidate_minus_reference": -0.1171875,
+        "paired_problem_bootstrap_95": [
+          -0.19308035714285715,
+          -0.052455357142857144
+        ]
+      },
+      "4": {
+        "candidate_minus_reference": -0.10089285714285715,
+        "paired_problem_bootstrap_95": [
+          -0.17767857142857144,
+          -0.037946428571428575
+        ]
+      },
+      "8": {
+        "candidate_minus_reference": -0.09375,
+        "paired_problem_bootstrap_95": [
+          -0.21875,
+          0.0
+        ]
+      }
+    },
+    "uncorrected_minus_conditional_is_small_proposal_pass_at_k": {
+      "1": {
+        "candidate_minus_reference": -0.01171875,
+        "paired_problem_bootstrap_95": [
+          -0.0390625,
+          0.01171875
+        ]
+      },
+      "2": {
+        "candidate_minus_reference": -0.011160714285714288,
+        "paired_problem_bootstrap_95": [
+          -0.037946428571428575,
+          0.015624999999999997
+        ]
+      },
+      "4": {
+        "candidate_minus_reference": 0.0013392857142857165,
+        "paired_problem_bootstrap_95": [
+          -0.03169642857142857,
+          0.04151785714285715
+        ]
+      },
+      "8": {
+        "candidate_minus_reference": 0.03125,
+        "paired_problem_bootstrap_95": [
+          0.0,
+          0.09375
+        ]
+      }
+    },
+    "uncorrected_minus_conditional_is_small_proposal_unclipped_pass_at_k": {
+      "1": {
+        "candidate_minus_reference": -0.01171875,
+        "paired_problem_bootstrap_95": [
+          -0.046875,
+          0.0234375
+        ]
+      },
+      "2": {
+        "candidate_minus_reference": -0.013392857142857144,
+        "paired_problem_bootstrap_95": [
+          -0.052455357142857144,
+          0.025669642857142853
+        ]
+      },
+      "4": {
+        "candidate_minus_reference": -0.006696428571428572,
+        "paired_problem_bootstrap_95": [
+          -0.058928571428571434,
+          0.04598214285714286
+        ]
+      },
+      "8": {
+        "candidate_minus_reference": 0.0,
+        "paired_problem_bootstrap_95": [
+          -0.09375,
+          0.09375
+        ]
+      }
+    }
+  },
+  "cost_interpretation": "FLOPs use identical model-specific token-slot accounting. Full-grid wall times came from separate runs on the same RTX 3090 and are reported only as observations, not as a controlled speedup estimate.",
+  "draws_per_problem": 8,
+  "methods": {
+    "conditional_is": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 11028393785491456,
+          "estimated_dense_forward_petaflops": 11.028393785491456,
+          "generated_tokens": 1761643,
+          "generation_forward_token_slots": 3572032,
+          "prefill_tokens": 1593087,
+          "sample_calls": 1083,
+          "sampled_sequences": 24548,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 3393190,
+          "total_forward_token_slots": 3572032
+        },
+        "proposal": null
+      },
+      "estimated_dense_forward_flops": 11028393785491456,
+      "estimated_dense_forward_petaflops": 11.028393785491456,
+      "estimated_pass_at_k": {
+        "1": 0.58203125,
+        "2": 0.6372767857142857,
+        "4": 0.6892857142857143,
+        "8": 0.75
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.4296875,
+          0.734375
+        ],
+        "2": [
+          0.4799107142857143,
+          0.7845982142857143
+        ],
+        "4": [
+          0.5334821428571429,
+          0.8321428571428572
+        ],
+        "8": [
+          0.59375,
+          0.90625
+        ]
+      },
+      "generated_answers": 256,
+      "seconds_excluding_model_load": 2662.4246867999755,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is_small_proposal": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 16407506414351360,
+          "estimated_dense_forward_petaflops": 16.40750641435136,
+          "generated_tokens": 340164,
+          "generation_forward_token_slots": 495998,
+          "prefill_tokens": 153830,
+          "sample_calls": 768,
+          "sampled_sequences": 7464,
+          "score_calls": 702,
+          "score_forward_token_slots": 4818297,
+          "scored_tokens": 1395420,
+          "shared_prefill_tokens_saved": 1227010,
+          "total_forward_token_slots": 5314295
+        },
+        "proposal": {
+          "estimated_dense_forward_flops": 3070588540719872,
+          "estimated_dense_forward_petaflops": 3.070588540719872,
+          "generated_tokens": 1429471,
+          "generation_forward_token_slots": 3107677,
+          "prefill_tokens": 1507804,
+          "sample_calls": 699,
+          "sampled_sequences": 16344,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1930766,
+          "total_forward_token_slots": 3107677
+        }
+      },
+      "estimated_dense_forward_flops": 19478094955071232,
+      "estimated_dense_forward_petaflops": 19.47809495507123,
+      "estimated_pass_at_k": {
+        "1": 0.46484375,
+        "2": 0.53125,
+        "4": 0.5870535714285714,
+        "8": 0.625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.31640625,
+          0.61328125
+        ],
+        "2": [
+          0.37276785714285715,
+          0.6852678571428571
+        ],
+        "4": [
+          0.42410714285714285,
+          0.7455357142857143
+        ],
+        "8": [
+          0.46875,
+          0.78125
+        ]
+      },
+      "generated_answers": 256,
+      "seconds_excluding_model_load": 2842.9092550000205,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is_small_proposal_unclipped": {
+      "compute_by_model": {
+        "base": {
+          "estimated_dense_forward_flops": 16210228988585984,
+          "estimated_dense_forward_petaflops": 16.210228988585985,
+          "generated_tokens": 336022,
+          "generation_forward_token_slots": 490384,
+          "prefill_tokens": 151768,
+          "sample_calls": 759,
+          "sampled_sequences": 7400,
+          "score_calls": 696,
+          "score_forward_token_slots": 4760014,
+          "scored_tokens": 1381248,
+          "shared_prefill_tokens_saved": 1212576,
+          "total_forward_token_slots": 5250398
+        },
+        "proposal": {
+          "estimated_dense_forward_flops": 3058775229171456,
+          "estimated_dense_forward_petaflops": 3.058775229171456,
+          "generated_tokens": 1416243,
+          "generation_forward_token_slots": 3095721,
+          "prefill_tokens": 1508136,
+          "sample_calls": 693,
+          "sampled_sequences": 16179,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1889628,
+          "total_forward_token_slots": 3095721
+        }
+      },
+      "estimated_dense_forward_flops": 19269004217757440,
+      "estimated_dense_forward_petaflops": 19.26900421775744,
+      "estimated_pass_at_k": {
+        "1": 0.46484375,
+        "2": 0.5334821428571429,
+        "4": 0.5950892857142858,
+        "8": 0.65625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.31640625,
+          0.6171875
+        ],
+        "2": [
+          0.3783482142857143,
+          0.6875
+        ],
+        "4": [
+          0.4388392857142857,
+          0.7504464285714286
+        ],
+        "8": [
+          0.5,
+          0.8125
+        ]
+      },
+      "generated_answers": 256,
+      "seconds_excluding_model_load": 2814.307333099976,
+      "unparseable_fraction": 0.0
+    },
+    "conditional_is_small_proposal_uncorrected": {
+      "compute_by_model": {
+        "base": {
+          "draft_tokens_accepted": 0,
+          "draft_tokens_proposed": 0,
+          "estimated_dense_forward_flops": 1574863371226112,
+          "estimated_dense_forward_petaflops": 1.574863371226112,
+          "generated_tokens": 348891,
+          "generation_forward_token_slots": 510089,
+          "prefill_tokens": 158985,
+          "sample_calls": 787,
+          "sampled_sequences": 7648,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1263095,
+          "speculative_hits": 0,
+          "speculative_requests": 0,
+          "speculative_verification_forward_token_slots": 0,
+          "total_forward_token_slots": 510089
+        },
+        "proposal": {
+          "draft_tokens_accepted": 0,
+          "draft_tokens_proposed": 0,
+          "estimated_dense_forward_flops": 3079365526876160,
+          "estimated_dense_forward_petaflops": 3.07936552687616,
+          "generated_tokens": 1456268,
+          "generation_forward_token_slots": 3116560,
+          "prefill_tokens": 1481467,
+          "sample_calls": 716,
+          "sampled_sequences": 16827,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 2068298,
+          "speculative_hits": 0,
+          "speculative_requests": 0,
+          "speculative_verification_forward_token_slots": 0,
+          "total_forward_token_slots": 3116560
+        }
+      },
+      "estimated_dense_forward_flops": 4654228898102272,
+      "estimated_dense_forward_petaflops": 4.654228898102272,
+      "estimated_pass_at_k": {
+        "1": 0.453125,
+        "2": 0.5200892857142857,
+        "4": 0.5883928571428572,
+        "8": 0.65625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.3046875,
+          0.60546875
+        ],
+        "2": [
+          0.3671875,
+          0.671875
+        ],
+        "4": [
+          0.43214285714285716,
+          0.7383928571428572
+        ],
+        "8": [
+          0.5,
+          0.8125
+        ]
+      },
+      "generated_answers": 256,
+      "seconds_excluding_model_load": 4064.3127482999553,
+      "unparseable_fraction": 0.0
+    }
+  },
+  "problem_indices": [
+    55,
+    68,
+    69,
+    115,
+    174,
+    213,
+    222,
+    236,
+    258,
+    276,
+    421,
+    485,
+    497,
+    599,
+    704,
+    735,
+    776,
+    846,
+    895,
+    935,
+    951,
+    1016,
+    1018,
+    1104,
+    1116,
+    1152,
+    1215,
+    1256,
+    1269,
+    1289,
+    1311,
+    1314
+  ],
+  "profile": "gsm8k-3090-aligned",
+  "quality_interpretation": "Paired intervals resample the 32 problems. The uncorrected method changes the continuation-energy target from the base model to the proposal model; it is not off-policy IS for the base target.",
+  "schema_version": 1,
+  "short_wall_time_diagnostic": {
+    "draws_per_problem": 1,
+    "interpretation": "Same-session two-problem diagnostic only. Different candidate selections change generated lengths, so this is not a fixed-token-trace kernel timing.",
+    "problem_indices": [
+      1104,
+      1311
+    ],
+    "uncorrected_compute_by_model": {
+      "base": {
+        "draft_tokens_accepted": 0,
+        "draft_tokens_proposed": 0,
+        "estimated_dense_forward_flops": 11633430994944,
+        "estimated_dense_forward_petaflops": 0.011633430994944,
+        "generated_tokens": 2313,
+        "generation_forward_token_slots": 3768,
+        "prefill_tokens": 1136,
+        "sample_calls": 7,
+        "sampled_sequences": 56,
+        "score_calls": 0,
+        "score_forward_token_slots": 0,
+        "scored_tokens": 0,
+        "shared_prefill_tokens_saved": 7952,
+        "speculative_hits": 0,
+        "speculative_requests": 0,
+        "speculative_verification_forward_token_slots": 0,
+        "total_forward_token_slots": 3768
+      },
+      "proposal": {
+        "draft_tokens_accepted": 0,
+        "draft_tokens_proposed": 0,
+        "estimated_dense_forward_flops": 23502126839296,
+        "estimated_dense_forward_petaflops": 0.023502126839296,
+        "generated_tokens": 8659,
+        "generation_forward_token_slots": 23786,
+        "prefill_tokens": 11648,
+        "sample_calls": 6,
+        "sampled_sequences": 126,
+        "score_calls": 0,
+        "score_forward_token_slots": 0,
+        "scored_tokens": 0,
+        "shared_prefill_tokens_saved": 12256,
+        "speculative_hits": 0,
+        "speculative_requests": 0,
+        "speculative_verification_forward_token_slots": 0,
+        "total_forward_token_slots": 23786
+      }
+    },
+    "uncorrected_over_weighted_wall_time": 1.2033945549938831,
+    "uncorrected_seconds_excluding_model_load": 36.456538999998884,
+    "weighted_compute_by_model": {
+      "base": {
+        "draft_tokens_accepted": 0,
+        "draft_tokens_proposed": 0,
+        "estimated_dense_forward_flops": 76259486617600,
+        "estimated_dense_forward_petaflops": 0.0762594866176,
+        "generated_tokens": 1839,
+        "generation_forward_token_slots": 2572,
+        "prefill_tokens": 724,
+        "sample_calls": 5,
+        "sampled_sequences": 40,
+        "score_calls": 4,
+        "score_forward_token_slots": 22128,
+        "scored_tokens": 6556,
+        "shared_prefill_tokens_saved": 5068,
+        "speculative_hits": 0,
+        "speculative_requests": 0,
+        "speculative_verification_forward_token_slots": 0,
+        "total_forward_token_slots": 24700
+      },
+      "proposal": {
+        "draft_tokens_accepted": 0,
+        "draft_tokens_proposed": 0,
+        "estimated_dense_forward_flops": 13197591364352,
+        "estimated_dense_forward_petaflops": 0.013197591364352,
+        "generated_tokens": 6556,
+        "generation_forward_token_slots": 13357,
+        "prefill_tokens": 4408,
+        "sample_calls": 4,
+        "sampled_sequences": 75,
+        "score_calls": 0,
+        "score_forward_token_slots": 0,
+        "scored_tokens": 0,
+        "shared_prefill_tokens_saved": 8816,
+        "speculative_hits": 0,
+        "speculative_requests": 0,
+        "speculative_verification_forward_token_slots": 0,
+        "total_forward_token_slots": 13357
+      }
+    },
+    "weighted_seconds_excluding_model_load": 30.294751500005077,
+    "workers": 2
+  },
+  "source_files": {
+    "results/gsm8k_3090/gsm8k_3090_aligned_is_passk_validated.json": "b3ae583a9193e8906355549e1b32fa73a641358f3c2e93bf21259783bb1641a3",
+    "results/gsm8k_3090/gsm8k_3090_aligned_is_uncorrected_validated.json": "3de38cd8df68e26e7176baebbf99c1b0594c95fef0f7e54ebbe56f107ea63ce3",
+    "results/validation/gsm8k_clipped_smoke_paired.json": "f497398d86bca3f4d5484d941be0149fb4b7baeb7a574d210fe8ec4113b1caad",
+    "results/validation/gsm8k_uncorrected_smoke.json": "56b4e63afafff65e98ce8dcf9c711f11dac342644a4d47554ddf60a856abb5be"
+  },
+  "workers": 8
+}

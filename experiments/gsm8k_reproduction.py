@@ -345,11 +345,14 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
             rollout_count += len(weights)
             rewards.extend(rollout.reward for rollout in candidate.rollouts)
             raw_corrections.extend(
-                rollout.raw_log_importance_ratio for rollout in candidate.rollouts
+                rollout.raw_log_importance_ratio
+                for rollout in candidate.rollouts
+                if rollout.raw_log_importance_ratio is not None
             )
             applied_corrections.extend(
                 rollout.applied_log_importance_ratio
                 for rollout in candidate.rollouts
+                if rollout.applied_log_importance_ratio is not None
             )
     return {
         "guidance_steps": len(result.steps),
@@ -376,6 +379,8 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
                 strict=True,
             )
         ),
+        "importance_corrected_rollout_evaluations": len(raw_corrections),
+        "uncorrected_rollout_evaluations": rollout_count - len(raw_corrections),
     }
 
 
@@ -570,8 +575,12 @@ def _run_method(
                 importance_log_ratio_clip=(
                     float(conditional["importance_log_ratio_clip"])
                     if method.endswith("small_proposal")
+                    and bool(conditional.get("apply_importance_correction", True))
                     and conditional.get("importance_log_ratio_clip") is not None
                     else None
+                ),
+                apply_importance_correction=bool(
+                    conditional.get("apply_importance_correction", True)
                 ),
             ),
             exact_reward if use_exact_reward else None,
@@ -600,7 +609,14 @@ def _run_method(
         target_description = (
             f"base_probability_times_exp_{reward_target_name}_over_temperature"
         )
-        if (
+        if method.endswith("small_proposal") and not bool(
+            conditional.get("apply_importance_correction", True)
+        ):
+            target_description = (
+                "base_candidates_reweighted_by_proposal_expected_exp_"
+                f"{reward_target_name}_over_temperature"
+            )
+        elif (
             method.endswith("small_proposal")
             and conditional.get("importance_log_ratio_clip") is not None
         ):
@@ -616,8 +632,12 @@ def _run_method(
         diagnostics["importance_log_ratio_clip"] = (
             float(conditional["importance_log_ratio_clip"])
             if method.endswith("small_proposal")
+            and bool(conditional.get("apply_importance_correction", True))
             and conditional.get("importance_log_ratio_clip") is not None
             else None
+        )
+        diagnostics["apply_importance_correction"] = bool(
+            conditional.get("apply_importance_correction", True)
         )
         diagnostics["sampling_temperature"] = target_sampling_temperature
         diagnostics["uses_test_gold_oracle"] = reward_source == "exact"

@@ -1,0 +1,425 @@
+{
+  "benchmark": "OpenAI GSM8K official test split",
+  "comparisons": null,
+  "compute_definition": "2 * each model's parameter count * that model's observed padded forward token slots, summed across base and proposal models; model loading and warmup are excluded from wall time",
+  "draws_per_problem": 8,
+  "implementation_sha256": {
+    "experiments/gsm8k_is_passk.py": "c274f302ae4f09344ed93cf8d9418b946b5b748e69737fe1f674a3a39acebc40",
+    "experiments/gsm8k_passk.py": "cc788fc2cd85c8b11d38209d515f224d224ccbbae4cc518156f16f8e82c7cdd6",
+    "experiments/gsm8k_reproduction.py": "fc7f4620e08dfc79df22d6b531924979c0f8d7db0829dfb1e02ac60e6cffd81f",
+    "src/inference_scaling/algorithms/conditional_energy.py": "7025c0437d1434762c749642f1d1b8e37284f2723c75226118035c5ef09cb693",
+    "src/inference_scaling/algorithms/mh.py": "a9b861c0fd2136861fe078bbfbfe5bd9b532a278ff22f09d4b29566e9c6063ea",
+    "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
+    "src/inference_scaling/backends/batching.py": "46e59726b496853094136e6326692526322de9df9333bc6982d6b26857dca615",
+    "src/inference_scaling/backends/cache.py": "296caa7857d1a12d59af53999641a0fc3475924fc5886ee00659d5c75adbe89e",
+    "src/inference_scaling/backends/loader.py": "b288e6a8d5f825574d38371d6f990c976d9fad9e8b5428e2e49ba6431a9dbfda",
+    "src/inference_scaling/backends/transformers_backend.py": "9150cabbc8e93180c9898ded757df1d8877565782e59fed96f9a8eb5ba94f7a5",
+    "src/inference_scaling/backends/vllm_backend.py": "1bd201fa05d27e17fc529da2de39648609e52f8d4547eb79420b8e66d260e327",
+    "src/inference_scaling/config.py": "b0f3200097fddedc6efc15b4af740b5f9ae72abd14e6e0f6f9dbdf487c27a053",
+    "src/inference_scaling/evaluation/consensus.py": "e8a3ff9effd25552bb910db53c256fca9584ebaccf50f1d36af6a6a1fc635772",
+    "src/inference_scaling/evaluation/gsm8k.py": "2b7fcb57f685e550d0d718a298db948adb11d61637fe5126441c7c0a0b53bf91",
+    "src/inference_scaling/types.py": "59836039990883025a7dd54eafe5b8054d1ef2e66fd06ac43e77f18cc75e6588"
+  },
+  "independence_definition": "Each draw has a separate deterministic random stream. Continuous batching merges physical model calls but does not share candidate or rollout samples between draws.",
+  "input_weight_sha256": {
+    "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+    "proposal": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+  },
+  "limitations": "Eight draws estimate pass@k only through k=8. All four methods use the same problem grid and candidate/rollout budgets. Finite importance-weight variance affects both small-proposal methods; the clipped variant adds finite bias, while the unclipped variant can have higher variance. The uncorrected variant removes weight variance but targets proposal-model rather than base-model continuation energy.",
+  "manifest_fingerprint": "b941a972e1e0e1961408c8ed44d342995e5b40d0119251ce2ba93c026773caa7",
+  "method_definitions": {
+    "conditional_is": {
+      "candidate_model": "base",
+      "importance_log_ratio_clip": null,
+      "rollout_model": "base"
+    },
+    "conditional_is_small_proposal": {
+      "candidate_model": "base",
+      "importance_log_ratio_clip": 10.0,
+      "rollout_model": "proposal"
+    },
+    "conditional_is_small_proposal_unclipped": {
+      "apply_importance_correction": true,
+      "candidate_model": "base",
+      "importance_log_ratio_clip": null,
+      "rollout_model": "proposal"
+    },
+    "conditional_is_small_proposal_uncorrected": {
+      "apply_importance_correction": false,
+      "candidate_model": "base",
+      "importance_log_ratio_clip": null,
+      "rollout_model": "proposal"
+    }
+  },
+  "methods": {
+    "conditional_is_small_proposal_uncorrected": {
+      "compute_by_model": {
+        "base": {
+          "draft_tokens_accepted": 0,
+          "draft_tokens_proposed": 0,
+          "estimated_dense_forward_flops": 1574863371226112,
+          "estimated_dense_forward_petaflops": 1.574863371226112,
+          "generated_tokens": 348891,
+          "generation_forward_token_slots": 510089,
+          "prefill_tokens": 158985,
+          "sample_calls": 787,
+          "sampled_sequences": 7648,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 1263095,
+          "speculative_hits": 0,
+          "speculative_requests": 0,
+          "speculative_verification_forward_token_slots": 0,
+          "total_forward_token_slots": 510089
+        },
+        "proposal": {
+          "draft_tokens_accepted": 0,
+          "draft_tokens_proposed": 0,
+          "estimated_dense_forward_flops": 3079365526876160,
+          "estimated_dense_forward_petaflops": 3.07936552687616,
+          "generated_tokens": 1456268,
+          "generation_forward_token_slots": 3116560,
+          "prefill_tokens": 1481467,
+          "sample_calls": 716,
+          "sampled_sequences": 16827,
+          "score_calls": 0,
+          "score_forward_token_slots": 0,
+          "scored_tokens": 0,
+          "shared_prefill_tokens_saved": 2068298,
+          "speculative_hits": 0,
+          "speculative_requests": 0,
+          "speculative_verification_forward_token_slots": 0,
+          "total_forward_token_slots": 3116560
+        }
+      },
+      "continuous_batching": {
+        "maximum_sample_batch": 24,
+        "maximum_score_batch": 0,
+        "sample_batches": 1503,
+        "sample_requests": 24475,
+        "score_batches": 0,
+        "score_sequences": 0
+      },
+      "continuous_batching_by_model": {
+        "base": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 0,
+          "sample_batches": 787,
+          "sample_requests": 7648,
+          "score_batches": 0,
+          "score_sequences": 0
+        },
+        "proposal": {
+          "maximum_sample_batch": 24,
+          "maximum_score_batch": 0,
+          "sample_batches": 716,
+          "sample_requests": 16827,
+          "score_batches": 0,
+          "score_sequences": 0
+        }
+      },
+      "draws_per_example": 8,
+      "estimated_dense_flops_per_generated_answer": 18180581633212.0,
+      "estimated_dense_forward_flops": 4654228898102272,
+      "estimated_dense_forward_petaflops": 4.654228898102272,
+      "estimated_pass_at_k": {
+        "1": 0.453125,
+        "2": 0.5200892857142857,
+        "4": 0.5883928571428572,
+        "8": 0.65625
+      },
+      "estimated_pass_at_k_problem_bootstrap_95": {
+        "1": [
+          0.3046875,
+          0.60546875
+        ],
+        "2": [
+          0.3671875,
+          0.671875
+        ],
+        "4": [
+          0.43214285714285716,
+          0.7383928571428572
+        ],
+        "8": [
+          0.5,
+          0.8125
+        ]
+      },
+      "examples": 32,
+      "generated_answers": 256,
+      "mean_unique_full_outputs_across_all_draws": 8.0,
+      "mean_unique_parsed_answers_across_all_draws": 2.9375,
+      "per_problem": [
+        {
+          "correct_draws": 8,
+          "problem_index": 55,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 2,
+          "problem_index": 68,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 69,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 115,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 1,
+          "problem_index": 174,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 6,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 6,
+          "problem_index": 213,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 2,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 222,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 236,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 258,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 276,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 5,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 421,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 485,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 1,
+          "problem_index": 497,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 4,
+          "problem_index": 599,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 6,
+          "problem_index": 704,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 1,
+          "problem_index": 735,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 5,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 776,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 846,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 895,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 935,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 7,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 951,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 1016,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 7,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 7,
+          "problem_index": 1018,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 2,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 1104,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 8,
+          "problem_index": 1116,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 1,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 2,
+          "problem_index": 1152,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 1215,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 1256,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 1269,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 3,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 2,
+          "problem_index": 1289,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 4,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 4,
+          "problem_index": 1311,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 2,
+          "unparseable_draws": 0
+        },
+        {
+          "correct_draws": 0,
+          "problem_index": 1314,
+          "unique_full_outputs": 8,
+          "unique_parsed_answers": 2,
+          "unparseable_draws": 0
+        }
+      ],
+      "seconds_excluding_model_load": 4064.3127482999553,
+      "seconds_per_generated_answer": 15.8762216730467,
+      "single_draw_accuracy": 0.453125,
+      "total_forward_token_slots": 3626649,
+      "unparseable_fraction": 0.0
+    }
+  },
+  "problem_indices": [
+    55,
+    68,
+    69,
+    115,
+    174,
+    213,
+    222,
+    236,
+    258,
+    276,
+    421,
+    485,
+    497,
+    599,
+    704,
+    735,
+    776,
+    846,
+    895,
+    935,
+    951,
+    1016,
+    1018,
+    1104,
+    1116,
+    1152,
+    1215,
+    1256,
+    1269,
+    1289,
+    1311,
+    1314
+  ],
+  "profile": "gsm8k-3090-aligned",
+  "raw_chunks_sha256": "b2e3968b117ebb801d48bdd30efc6a162f0f3b317aed76a2d198ae10f2b67e1c",
+  "schema_version": 1,
+  "workers": 8
+}

@@ -83,6 +83,7 @@ class ConditionalEnergyConfig:
     total_length: int = 128
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
+    apply_importance_correction: bool = True
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -92,6 +93,10 @@ class ConditionalEnergyConfig:
             _positive(
                 "importance_log_ratio_clip",
                 self.importance_log_ratio_clip,
+            )
+        if not self.apply_importance_correction and self.importance_log_ratio_clip is not None:
+            raise ValueError(
+                "importance_log_ratio_clip requires apply_importance_correction=True"
             )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")

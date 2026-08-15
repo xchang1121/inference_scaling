@@ -161,6 +161,50 @@ def test_optional_log_ratio_clipping_is_explicit_in_rollout_record() -> None:
         )
 
 
+def test_uncorrected_off_policy_rollouts_skip_base_rescoring() -> None:
+    class NoScoreBackend(TabularAutoregressiveBackend):
+        def score_batch(self, requests):
+            raise AssertionError("uncorrected proposal rollouts must not be rescored")
+
+    base = NoScoreBackend({}, fallback=[0.6, 0.4], model_id="base")
+    proposal = TabularAutoregressiveBackend(
+        {}, fallback=[0.2, 0.8], model_id="proposal"
+    )
+    step = conditional_is_step(
+        base_backend=base,
+        rollout_backend=proposal,
+        prompt=(),
+        generated_prefix=(),
+        config=ConditionalEnergyConfig(
+            candidate_count=3,
+            rollout_count=2,
+            block_size=1,
+            total_length=2,
+            apply_importance_correction=False,
+        ),
+        base_sampling=SamplingConfig(),
+        rollout_sampling=SamplingConfig(),
+        reward=_reward,
+        seeds=SeedStream(394),
+        step_index=0,
+    )
+    rollouts = [
+        rollout for candidate in step.candidates for rollout in candidate.rollouts
+    ]
+    assert all(item.base_logprob is None for item in rollouts)
+    assert all(item.raw_log_importance_ratio is None for item in rollouts)
+    assert all(item.applied_log_importance_ratio is None for item in rollouts)
+    assert all(item.log_weight == pytest.approx(item.reward) for item in rollouts)
+
+
+def test_uncorrected_rollouts_reject_irrelevant_ratio_clipping() -> None:
+    with pytest.raises(ValueError, match="importance_log_ratio_clip requires"):
+        ConditionalEnergyConfig(
+            importance_log_ratio_clip=1.0,
+            apply_importance_correction=False,
+        )
+
+
 def test_rollout_budget_subtracts_candidate_block() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
     step = conditional_is_step(

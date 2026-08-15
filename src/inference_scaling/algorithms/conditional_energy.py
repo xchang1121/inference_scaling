@@ -6,7 +6,9 @@ Only the completion suffix receives the ``p_base / q`` correction.  This is the
 finite-candidate, finite-rollout sampling-importance-resampling algorithm used as
 the foundation for the replay extensions.  Optional symmetric clipping of the
 sequence log-ratio is recorded explicitly; it is a biased variance-control
-setting, while the default ``None`` retains the exact importance ratio.
+setting, while the default ``None`` retains the exact importance ratio.  An
+explicit uncorrected ablation skips target-model rescoring and instead estimates
+each candidate's future energy under the rollout proposal itself.
 """
 
 from __future__ import annotations
@@ -37,10 +39,10 @@ RewardBatchFunction = Callable[
 class RolloutEvaluation:
     token_ids: TokenSequence
     reward: float
-    base_logprob: float
+    base_logprob: float | None
     proposal_logprob: float
-    raw_log_importance_ratio: float
-    applied_log_importance_ratio: float
+    raw_log_importance_ratio: float | None
+    applied_log_importance_ratio: float | None
     log_weight: float
     proposal_model_id: str
     proposal_policy_id: str
@@ -164,6 +166,7 @@ def estimate_conditional_energies(
     rollout_sampling: SamplingConfig,
     reward_temperature: float,
     importance_log_ratio_clip: float | None,
+    apply_importance_correction: bool,
     reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
@@ -229,8 +232,8 @@ def estimate_conditional_energies(
         and rollout_sampling == base_sampling
     )
     if rollout_is_base_policy:
-        base_totals = [sample.logprob for sample in samples]
-    else:
+        base_totals: list[float | None] = [sample.logprob for sample in samples]
+    elif apply_importance_correction:
         base_totals = (
             _score_samples(
                 base_backend,
@@ -241,6 +244,11 @@ def estimate_conditional_energies(
             if samples
             else []
         )
+    else:
+        # This is a deliberate biased ablation, not an IS estimate of the base
+        # continuation distribution.  Keep the score absent so diagnostics and
+        # backend accounting cannot mistake it for an evaluated zero log-ratio.
+        base_totals = [None for _ in samples]
 
     pending_by_candidate: list[
         list[tuple[TokenSequence, float, float, str, str, TokenSequence]]
@@ -291,13 +299,19 @@ def estimate_conditional_energies(
         for token_ids, base_logprob, proposal_logprob, model_id, policy_id, _ in group:
             reward_value = rewards[reward_index]
             reward_index += 1
-            raw_log_ratio = base_logprob - proposal_logprob
-            applied_log_ratio = raw_log_ratio
-            if importance_log_ratio_clip is not None:
-                applied_log_ratio = max(
-                    -importance_log_ratio_clip,
-                    min(importance_log_ratio_clip, raw_log_ratio),
-                )
+            if base_logprob is None:
+                raw_log_ratio = None
+                applied_log_ratio = None
+                log_weight = reward_value / reward_temperature
+            else:
+                raw_log_ratio = base_logprob - proposal_logprob
+                applied_log_ratio = raw_log_ratio
+                if importance_log_ratio_clip is not None:
+                    applied_log_ratio = max(
+                        -importance_log_ratio_clip,
+                        min(importance_log_ratio_clip, raw_log_ratio),
+                    )
+                log_weight = reward_value / reward_temperature + applied_log_ratio
             by_candidate[candidate_index].append(
                 RolloutEvaluation(
                     token_ids=token_ids,
@@ -306,10 +320,7 @@ def estimate_conditional_energies(
                     proposal_logprob=proposal_logprob,
                     raw_log_importance_ratio=raw_log_ratio,
                     applied_log_importance_ratio=applied_log_ratio,
-                    log_weight=(
-                        reward_value / reward_temperature
-                        + applied_log_ratio
-                    ),
+                    log_weight=log_weight,
                     proposal_model_id=model_id,
                     proposal_policy_id=policy_id,
                 )
@@ -371,6 +382,7 @@ def conditional_is_step(
         rollout_sampling=rollout_sampling,
         reward_temperature=config.reward_temperature,
         importance_log_ratio_clip=config.importance_log_ratio_clip,
+        apply_importance_correction=config.apply_importance_correction,
         reward=reward,
         seeds=seeds,
         step_index=step_index,
