@@ -23,6 +23,12 @@ DEFAULT_INPUT = (
     / "gsm8k_3090"
     / "gsm8k_3090_aligned_comparison_validated.json"
 )
+DEFAULT_RESCORING_INPUT = (
+    ROOT
+    / "results"
+    / "gsm8k_3090"
+    / "gsm8k_3090_aligned_verifier_rescoring_ablation_validated.json"
+)
 DEFAULT_OUTPUT = ROOT / "docs" / "assets" / "gsm8k_3090_aligned_quality_compute.svg"
 
 WIDTH = 1280
@@ -77,11 +83,19 @@ STYLE = {
         "end",
     ),
     "verifier_conditional_is_small_proposal": (
-        "0.5B proposal verifier-IS",
+        "0.5B 补全 + 1.5B 重评分",
         "#7e22ce",
         "diamond",
         -10,
         20,
+        "end",
+    ),
+    "verifier_small_rollout_no_rescore": (
+        "0.5B 补全（无重评分）",
+        "#0f766e",
+        "square",
+        -10,
+        -17,
         "end",
     ),
 }
@@ -112,13 +126,34 @@ def _point(row: dict[str, object], *, matched: bool = False) -> Point:
     )
 
 
-def load_points(path: Path) -> tuple[list[Point], list[Point]]:
+def _rescoring_point(path: Path) -> Point:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    row = payload["methods"]["small_rollout_without_base_rescoring"]
+    method = "verifier_small_rollout_no_rescore"
+    label, color, shape, dx, dy, anchor = STYLE[method]
+    interval = row["accuracy_wilson_95"]
+    return Point(
+        method=method,
+        label=label,
+        accuracy=float(row["accuracy"]),
+        interval=(float(interval[0]), float(interval[1])),
+        pflops=float(row["compute"]["total_petaflops"]),
+        color=color,
+        shape=shape,
+        dx=dx,
+        dy=dy,
+        anchor=anchor,
+    )
+
+
+def load_points(path: Path, rescoring_path: Path) -> tuple[list[Point], list[Point]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     main = [_point(row) for row in payload["table"]]
     oracle = [_point(row, matched=True) for row in payload["matched_target_comparison"]["table"]]
 
     rl_row = next(row for row in payload["table"] if row["method"] == "rl_sample")
     oracle.append(_point(rl_row))
+    oracle.append(_rescoring_point(rescoring_path))
     return main, oracle
 
 
@@ -232,8 +267,8 @@ def render(main: list[Point], oracle: list[Point]) -> str:
         _panel(
             oracle,
             PANEL_LEFTS[1],
-            "共享精确奖励目标诊断",
-            "verifier 方法读取标准答案，仅用于检验算法关系",
+            "精确奖励目标与重评分消融",
+            "读取标准答案；无重评分点不再对应完整 1.5B 目标",
         )
     )
     y_mid = (PLOT_TOP + PLOT_BOTTOM) / 2
@@ -250,13 +285,16 @@ def render(main: list[Point], oracle: list[Point]) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument(
+        "--rescoring-input", type=Path, default=DEFAULT_RESCORING_INPUT
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    main_points, oracle_points = load_points(args.input)
+    main_points, oracle_points = load_points(args.input, args.rescoring_input)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(render(main_points, oracle_points), encoding="utf-8")
     print(args.output)
