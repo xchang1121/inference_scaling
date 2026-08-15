@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Literal
 
-from inference_scaling.types import (
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,

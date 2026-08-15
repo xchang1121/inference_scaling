@@ -1,4 +1,4 @@
-"""Inference scaling for autoregressive and diffusion language models."""
+"""Autoregressive language-model algorithms and execution backends."""
 
 from inference_scaling.arllm.config import (
     BaseReplayConfig,
@@ -7,11 +7,9 @@ from inference_scaling.arllm.config import (
     MHConfig,
     ProgressiveISConfig,
     RewardMHConfig,
-    RuntimeConfig,
     SMCForestConfig,
     SamplingConfig,
 )
-from inference_scaling.shared.config import RuntimeConfig
 
 __all__ = [
     "BaseReplayConfig",
@@ -20,9 +18,6 @@ __all__ = [
     "MHConfig",
     "ProgressiveISConfig",
     "RewardMHConfig",
-    "RuntimeConfig",
     "SMCForestConfig",
     "SamplingConfig",
 ]
-
-__version__ = "0.1.0"

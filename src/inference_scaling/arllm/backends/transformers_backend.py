@@ -13,17 +13,17 @@ from typing import Any
 
 import numpy as np
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
     DraftProposal,
     RolloutTokenTree,
     RolloutTokenTreeSnapshot,
     SampleCompletionCallback,
 )
-from inference_scaling.config import SamplingConfig
-from inference_scaling.compute import dense_forward_flops
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import (
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.shared.compute import dense_forward_flops
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import (
     GenerationRequest,
     ScoreRequest,
     SequenceSample,

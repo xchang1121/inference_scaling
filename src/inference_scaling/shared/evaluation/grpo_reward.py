@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from inference_scaling.evaluation.gsm8k import extract_numeric_answer
+from inference_scaling.shared.evaluation.gsm8k import extract_numeric_answer
 
 
 def _completion_text(completion: Any) -> str:

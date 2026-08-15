@@ -24,15 +24,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
     RolloutTokenTree,
     RolloutTokenTreeSnapshot,
     SampleCompletionCallback,
 )
-from inference_scaling.compute import dense_forward_flops
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import (
+from inference_scaling.shared.compute import dense_forward_flops
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,

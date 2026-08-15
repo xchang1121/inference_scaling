@@ -16,7 +16,7 @@ from math import isfinite, log
 
 import numpy as np
 
-from inference_scaling.algorithms.mh import (
+from inference_scaling.arllm.algorithms.mh import (
     RewardMHChainResult,
     RewardMHStep,
     _is_base_proposal,
@@ -25,9 +25,9 @@ from inference_scaling.algorithms.mh import (
     _score_one,
     _validate_proposal,
 )
-from inference_scaling.config import RewardMHConfig, SamplingConfig
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import AutoregressiveBackend, TokenSequence
+from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 
 
 RewardFunction = Callable[[TokenSequence, TokenSequence], float]

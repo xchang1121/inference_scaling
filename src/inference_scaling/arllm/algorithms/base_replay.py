@@ -8,15 +8,15 @@ from math import exp, isfinite, log, log1p
 
 import numpy as np
 
-from inference_scaling.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardFunction,
     _logmeanexp,
     _sample_candidates,
     _validate_base_sampling,
 )
-from inference_scaling.config import BaseReplayConfig, SamplingConfig
-from inference_scaling.metrics import importance_effective_sample_size
-from inference_scaling.replay import (
+from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
+from inference_scaling.shared.metrics import importance_effective_sample_size
+from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
     FrozenReplayClaim,
@@ -28,8 +28,8 @@ from inference_scaling.replay import (
     sample_replay_records,
     validate_record_probabilities,
 )
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)

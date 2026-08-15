@@ -1,41 +1,16 @@
-"""Public benchmark loading and deterministic answer evaluation."""
+"""Compatibility aliases for :mod:`inference_scaling.shared.evaluation`."""
 
-from inference_scaling.evaluation.consensus import (
-    CumulativeConsensusReward,
-    consensus_index,
-    modal_answer,
-)
-from inference_scaling.evaluation.gsm8k import (
-    GSM8KProblem,
-    GSM8K_PROMPT_SUFFIX,
-    GSM8K_TEST_SHA256,
-    GSM8K_TEST_URL,
-    GSM8K_TRAIN_SHA256,
-    GSM8K_TRAIN_URL,
-    accuracy,
-    download_gsm8k,
-    extract_numeric_answer,
-    gsm8k_prompt,
-    load_gsm8k,
-    select_problems,
-)
-from inference_scaling.evaluation.grpo_reward import ExactNumericReward
+from __future__ import annotations
 
-__all__ = [
-    "GSM8KProblem",
-    "GSM8K_PROMPT_SUFFIX",
-    "GSM8K_TEST_SHA256",
-    "GSM8K_TEST_URL",
-    "GSM8K_TRAIN_SHA256",
-    "GSM8K_TRAIN_URL",
-    "CumulativeConsensusReward",
-    "ExactNumericReward",
-    "accuracy",
-    "consensus_index",
-    "download_gsm8k",
-    "extract_numeric_answer",
-    "gsm8k_prompt",
-    "load_gsm8k",
-    "modal_answer",
-    "select_problems",
-]
+import importlib
+import sys
+
+_MODULES = ("consensus", "grpo_reward", "gsm8k")
+
+for _name in _MODULES:
+    _module = importlib.import_module(f"inference_scaling.shared.evaluation.{_name}")
+    globals()[_name] = _module
+    sys.modules[f"{__name__}.{_name}"] = _module
+
+from inference_scaling.shared.evaluation import *  # noqa: E402,F401,F403
+from inference_scaling.shared.evaluation import __all__  # noqa: E402,F401

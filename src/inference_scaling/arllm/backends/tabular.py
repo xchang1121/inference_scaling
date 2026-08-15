@@ -11,8 +11,8 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 
 
 def _normalize(values: np.ndarray) -> np.ndarray:

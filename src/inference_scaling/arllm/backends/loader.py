@@ -6,12 +6,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
     SpeculationTier,
 )
-from inference_scaling.backends.transformers_backend import TransformersBackend
-from inference_scaling.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
+from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
 
 BACKEND_CHOICES = ("transformers", "vllm", "vllm-sync")
 

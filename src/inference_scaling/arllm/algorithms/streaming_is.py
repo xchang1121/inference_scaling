@@ -15,7 +15,7 @@ from math import exp, isfinite, log
 
 import numpy as np
 
-from inference_scaling.rng import SeedStream
+from inference_scaling.shared.rng import SeedStream
 
 
 def ordinary_importance_log_weight(

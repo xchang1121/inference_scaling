@@ -22,16 +22,16 @@ from math import isfinite
 
 import numpy as np
 
-from inference_scaling.acceleration import StreamingRewardEvaluator
-from inference_scaling.algorithms.conditional_energy import (
+from inference_scaling.arllm.acceleration import StreamingRewardEvaluator
+from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardBatchFunction,
     RewardFunction,
     _logmeanexp,
     _validate_base_sampling,
 )
-from inference_scaling.config import SMCForestConfig, SamplingConfig
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import (
+from inference_scaling.arllm.config import SMCForestConfig, SamplingConfig
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     SequenceSample,

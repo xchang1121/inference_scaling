@@ -14,11 +14,11 @@ from math import exp, isfinite, log
 
 import numpy as np
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     StreamingRewardEvaluator,
     StreamingRewardSnapshot,
 )
-from inference_scaling.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardBatchFunction,
     RewardFunction,
     RolloutEvaluation,
@@ -28,13 +28,13 @@ from inference_scaling.algorithms.conditional_energy import (
     _validate_base_sampling,
     _validate_rollout_sampling,
 )
-from inference_scaling.algorithms.dynamic_is import (
+from inference_scaling.arllm.algorithms.dynamic_is import (
     VarianceCostEstimate,
     allocate_variance_cost_budget,
 )
-from inference_scaling.config import ProgressiveISConfig, SamplingConfig
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import (
+from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     SequenceSample,

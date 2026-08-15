@@ -14,18 +14,18 @@ from math import exp, isfinite, log, sqrt
 
 import numpy as np
 
-from inference_scaling.algorithms.base_replay import (
+from inference_scaling.arllm.algorithms.base_replay import (
     ReplayEnergyEstimate,
     build_fresh_replay_requests,
     estimate_replay_energy,
     write_reserve_records,
 )
-from inference_scaling.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardFunction,
     _validate_base_sampling,
 )
-from inference_scaling.config import DynamicISConfig, SamplingConfig
-from inference_scaling.replay import (
+from inference_scaling.arllm.config import DynamicISConfig, SamplingConfig
+from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,
@@ -36,8 +36,8 @@ from inference_scaling.replay import (
     sample_replay_records,
     validate_record_probabilities,
 )
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import (
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,

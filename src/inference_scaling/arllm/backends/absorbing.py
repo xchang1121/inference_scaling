@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import (
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,

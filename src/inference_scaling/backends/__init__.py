@@ -1,57 +1,25 @@
-"""Inference backends."""
+"""Compatibility aliases for :mod:`inference_scaling.arllm.backends`."""
 
-from inference_scaling.acceleration import (
-    ActiveBatchSpeculationConfig,
-    LowPriorityRunAheadBackend,
-    RolloutTokenTree,
-    SpeculationTier,
-    StreamingRewardEvaluator,
-)
-from inference_scaling.backends.absorbing import AbsorbingEOSBackend
-from inference_scaling.backends.batching import BatchingSnapshot, ContinuousBatchingBackend
-from inference_scaling.backends.cache import ScoreCacheSnapshot, ScoreCachingBackend
-from inference_scaling.backends.candidate_cache import CachedCandidateBackend
-from inference_scaling.backends.loader import (
-    BACKEND_CHOICES,
-    close_backend,
-    configured_backend,
-    load_backend_from_config,
-    set_backend_override,
-)
-from inference_scaling.backends.tabular import TabularAutoregressiveBackend
-from inference_scaling.backends.transformers_backend import (
-    SequenceScoreStatistics,
-    TransformersBackend,
-    TransformersBackendSnapshot,
-)
-from inference_scaling.backends.vllm_backend import (
-    AsyncVLLMBackend,
-    VLLMBackend,
-    VLLMBackendSnapshot,
+from __future__ import annotations
+
+import importlib
+import sys
+
+_MODULES = (
+    "absorbing",
+    "batching",
+    "cache",
+    "candidate_cache",
+    "loader",
+    "tabular",
+    "transformers_backend",
+    "vllm_backend",
 )
 
-__all__ = [
-    "AbsorbingEOSBackend",
-    "ActiveBatchSpeculationConfig",
-    "AsyncVLLMBackend",
-    "BACKEND_CHOICES",
-    "BatchingSnapshot",
-    "CachedCandidateBackend",
-    "ContinuousBatchingBackend",
-    "LowPriorityRunAheadBackend",
-    "RolloutTokenTree",
-    "ScoreCacheSnapshot",
-    "ScoreCachingBackend",
-    "SequenceScoreStatistics",
-    "SpeculationTier",
-    "StreamingRewardEvaluator",
-    "TabularAutoregressiveBackend",
-    "TransformersBackend",
-    "TransformersBackendSnapshot",
-    "VLLMBackend",
-    "VLLMBackendSnapshot",
-    "close_backend",
-    "configured_backend",
-    "load_backend_from_config",
-    "set_backend_override",
-]
+for _name in _MODULES:
+    _module = importlib.import_module(f"inference_scaling.arllm.backends.{_name}")
+    globals()[_name] = _module
+    sys.modules[f"{__name__}.{_name}"] = _module
+
+from inference_scaling.arllm.backends import *  # noqa: E402,F401,F403
+from inference_scaling.arllm.backends import __all__  # noqa: E402,F401

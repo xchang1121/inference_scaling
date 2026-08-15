@@ -19,9 +19,9 @@ from math import exp, isfinite, log
 
 import numpy as np
 
-from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import (
+from inference_scaling.arllm.config import ConditionalEnergyConfig, SamplingConfig
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     ScoreRequest,
