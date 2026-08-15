@@ -5,7 +5,7 @@
 
 ## 推荐阅读顺序
 
-1. [GSM8K 方法效果与准确率](reports/GSM8K_3090_ALIGNED_RESULTS.md)：方法 setting、准确率、pass@k、
+1. [GSM8K 方法质量与计算量实验](reports/GSM8K_3090_ALIGNED_RESULTS.md)：实验设置、准确率、pass@k、
    共享奖励目标与质量消融。
 2. [RTX 3090 推理基础设施优化汇总](reports/RTX3090_ROLLOUT_INFRA.md)：连续批处理、rollout/replay
    复用、流式 IS 和 MH 执行优化的墙钟、FLOPs 与适用条件。
@@ -22,7 +22,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [GSM8K 方法效果与准确率](reports/GSM8K_3090_ALIGNED_RESULTS.md) | 32 题主比较、共享目标、pass@k、off-policy/replay 质量与消融 |
+| [GSM8K 方法质量与计算量实验](reports/GSM8K_3090_ALIGNED_RESULTS.md) | 32 题主比较、共享目标、pass@k、off-policy/replay 质量与消融 |
 | [RTX 3090 推理基础设施优化汇总](reports/RTX3090_ROLLOUT_INFRA.md) | 术语定义、论文依据、成对墙钟/FLOPs、复用和冷启动成本 |
 
 正式报告引用的机器可读 JSON 位于 [`results/gsm8k_3090/`](../results/gsm8k_3090/) 与

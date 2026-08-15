@@ -1,7 +1,7 @@
 # GSM8K quick 集成检查
 
 > 这是工程验证记录，不是当前主实验报告。正式比较见
-> [GSM8K 方法效果与准确率](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
+> [GSM8K 方法质量与计算量实验](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
 ## 范围
 

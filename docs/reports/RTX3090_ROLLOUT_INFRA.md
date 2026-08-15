@@ -2,16 +2,14 @@
 
 本报告分析重要性采样、Metropolis–Hastings 采样及其 rollout 复用方法的执行效率。主要指标包括墙钟时间、
 主模型浮点运算量、历史样本复用率和缓存摊销成本。准确率、pass@k 和共享奖励目标的比较见
-[GSM8K 方法效果与准确率](GSM8K_3090_ALIGNED_RESULTS.md)。单题实验用于隔离基础设施变量，方法质量排序
+[GSM8K 方法质量与计算量实验](GSM8K_3090_ALIGNED_RESULTS.md)。单题实验用于隔离基础设施变量，方法质量排序
 以完整 GSM8K 实验为准。
 
 ## 术语与计量对象
 
 | 术语 | 全称 | 本报告中的含义 |
 | --- | --- | --- |
-| LLM | Large Language Model，大语言模型 | 自回归生成 token 序列的主模型或辅助模型 |
 | rollout | — | 从给定前缀生成至终止符或长度上限的一条完整轨迹；记录 token、生成概率和奖励 |
-| base model | 基模型 | 定义目标生成分布并承担最终概率计算的 LLM |
 | proposal | 提议分布或提议样本 | 为 IS 提供候选，或为 MH 提供状态转移候选的分布及其样本 |
 | verifier | 验证器 | 根据完整生成序列计算奖励、约束或正确性信号的函数或模型 |
 | IS | Importance Sampling，重要性采样 | 用目标概率与行为概率之比修正非同分布样本的蒙特卡洛方法 |
@@ -28,13 +26,9 @@
 | KV cache | Key–Value cache，键值缓存 | Transformer 注意力层保存的历史 key/value 状态 |
 | APC | Automatic Prefix Caching，自动前缀缓存 | vLLM 对重复前缀 KV 状态的自动复用机制 |
 | ESS | Effective Sample Size，有效样本量 | 由归一化重要性权重衡量样本权重集中程度的指标 |
-| pass@k | pass at k | 独立采样 `k` 次时至少一次成功的概率 |
-| FLOPs | Floating-Point Operations，浮点运算次数 | 本报告估计主模型计算量的统一单位 |
-| PFLOPs | Peta Floating-Point Operations，千万亿次浮点运算 | `1 PFLOP = 10^15 FLOPs` |
 | GRPO | Group Relative Policy Optimization，组相对策略优化 | GSM8K 主实验采用的训练式强化学习基线 |
 | SAO | Single-Rollout Asynchronous Optimization，单 rollout 异步优化 | 将单条 rollout 的生成和消费解耦的强化学习方法 |
 | IMPALA | Importance Weighted Actor-Learner Architecture | 以重要性加权修正异步数据生成端与参数更新端策略差异的方法 |
-| BF16 / FP32 | bfloat16 / 32-bit floating point | 模型执行采用的 16 位和 32 位浮点格式 |
 
 ## 推理执行阶段
 
@@ -197,12 +191,12 @@ forward 计算 base 概率，替代逐 token 自回归生成。在线墙钟因�
 | 方法 | 同步墙钟 | 连续批处理墙钟 | 墙钟因子 | FLOPs 因子 | 数值答案一致 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Base | 95.4 s | 19.7 s | 0.206× | 1.177× | 32/32 |
-| Best-of-8 | 136.9 s | 67.9 s | 0.496× | 1.021× | 30/32 |
+| 自一致性投票-8 | 136.9 s | 67.9 s | 0.496× | 1.021× | 30/32 |
 | 标准条件 IS | 427.1 s | 370.0 s | 0.866× | 1.008× | 32/32 |
 | 0.5B proposal 条件 IS | 419.5 s | 399.5 s | 0.952× | 1.003× | 32/32 |
 
 Base 请求最容易形成密集 batch，墙钟收益最大。IS 包含多个依赖阶段，可跨 prompt 合并的串行段较少。
-padding 和 batch 分叉增加了部分逻辑 slots；因此连续批处理主要改善 GPU 利用率。Best-of-8 的两道题
+padding 和 batch 分叉增加了部分逻辑 slots；因此连续批处理主要改善 GPU 利用率。自一致性投票-8 的两道题
 出现数值答案分叉，该行仅用于相同配置 workload 的吞吐比较。
 
 ### Warm rollout replay

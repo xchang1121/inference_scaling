@@ -54,7 +54,7 @@ class Point:
 STYLE = {
     "base": ("Base", "#4b5563", "circle", 10, 18, "start"),
     "beam": ("Beam-8", "#2563eb", "square", 10, -12, "start"),
-    "best_of_n": ("Best-of-8", "#0891b2", "diamond", -10, -11, "end"),
+    "best_of_n": ("自一致性-8", "#0891b2", "diamond", -10, -11, "end"),
     "mh": ("幂分布 MH", "#ea580c", "triangle", -10, 19, "end"),
     "conditional_is": ("标准条件 IS", "#15803d", "circle", -10, -12, "end"),
     "conditional_is_small_proposal": (
@@ -202,7 +202,7 @@ def _panel(points: Iterable[Point], panel_left: int, title: str, subtitle: str) 
 def render(main: list[Point], oracle: list[Point]) -> str:
     lines = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-labelledby="title desc">',
-        '<title id="title">GSM8K 单次回答准确率与推理计算量</title>',
+        '<title id="title">GSM8K 单次生成准确率与推理计算量</title>',
         '<desc id="desc">左图比较可部署或不读取标准答案的方法；右图比较读取标准答案的共享目标诊断。点为 32 道题准确率，误差线为 Wilson 95% 区间，横轴为对数尺度 PFLOPs。</desc>',
         "<style>",
         "text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fill: #172033; }",
@@ -218,13 +218,13 @@ def render(main: list[Point], oracle: list[Point]) -> str:
         ".error { stroke-width: 1.5; opacity: 0.72; }",
         ".note { font-size: 13px; fill: #536078; }",
         "</style>",
-        '<text id="main-title" class="title" x="82" y="43">质量—计算量：同一 32 题上的当前结果</text>',
+        '<text id="main-title" class="title" x="82" y="43">GSM8K 质量—计算量比较（32 题）</text>',
     ]
     lines.extend(
         _panel(
             main,
             PANEL_LEFTS[0],
-            "可部署与自一致性比较",
+            "无需标准答案的方法",
             "不读取测试集标准答案；不同方法的目标并不完全相同",
         )
     )
@@ -239,7 +239,7 @@ def render(main: list[Point], oracle: list[Point]) -> str:
     y_mid = (PLOT_TOP + PLOT_BOTTOM) / 2
     lines.extend(
         [
-            f'<text class="axis-title" x="22" y="{y_mid:.1f}" text-anchor="middle" transform="rotate(-90 22 {y_mid:.1f})">单次回答准确率</text>',
+            f'<text class="axis-title" x="22" y="{y_mid:.1f}" text-anchor="middle" transform="rotate(-90 22 {y_mid:.1f})">单次生成准确率</text>',
             '<text class="note" x="82" y="681">点：准确率；竖线：Wilson 95% 区间。FLOPs = 2 × 模型参数量 × 实际 forward token slots；不等同于墙钟时间。</text>',
             "</svg>",
         ]

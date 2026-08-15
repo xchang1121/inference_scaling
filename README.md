@@ -3,16 +3,16 @@
 本仓库研究如何在不修改或少量修改语言模型参数的情况下，直接控制推理时输出分布，并统一比较
 Metropolis--Hastings（MH）、重要性采样（IS）、off-policy rollout replay 与 GRPO 的质量和计算量。
 
-实测结论分为两份互补报告：[GSM8K 方法效果与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)
-只负责方法质量，[RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)只负责墙钟、
+实测结论分为两份互补报告：[GSM8K 方法质量与计算量实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)
+侧重方法质量与算法预算，[RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)侧重墙钟、
 FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证已分别归档。
 
 ## 从哪里开始
 
 | 目的 | 入口 |
 | --- | --- |
-| 比较方法准确率、pass@k 和共享目标 | [GSM8K 方法效果与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
-| 比较 infra 优化的墙钟、FLOPs 与复用影响 | [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
+| 比较方法准确率、pass@k 和共享目标 | [GSM8K 方法质量与计算量实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
+| 比较基础设施优化的墙钟、FLOPs 与复用影响 | [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
 | 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |

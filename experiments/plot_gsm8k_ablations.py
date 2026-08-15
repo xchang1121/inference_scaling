@@ -50,7 +50,7 @@ class Series:
 SERIES_STYLE = {
     "base": ("Base", "#4b5563", "circle"),
     "beam": ("Beam-8", "#2563eb", "square"),
-    "best_of_n": ("Best-of-8", "#0891b2", "diamond"),
+    "best_of_n": ("自一致性-8", "#0891b2", "diamond"),
     "conditional_is": ("标准条件 IS", "#15803d", "circle"),
     "conditional_is_small_proposal": (
         "0.5B proposal 条件 IS",
@@ -408,7 +408,7 @@ def render(payload: dict[str, Any]) -> str:
     lines.extend(_length_panel(length, PANEL_LEFTS[1], ROW_TOPS[1]))
     lines.extend(
         [
-            '<text class="axis-title" x="22" y="510" text-anchor="middle" transform="rotate(-90 22 510)">单次回答准确率</text>',
+            '<text class="axis-title" x="22" y="510" text-anchor="middle" transform="rotate(-90 22 510)">单次生成准确率</text>',
             '<text class="note" x="82" y="980">所有点均为同一组 8 道固定题；竖线为 Wilson 95% 区间，区间重叠较大。FLOPs 使用 2 × 参数量 × 实际 forward token slots 的线性主导项估算。</text>',
             "</svg>",
         ]

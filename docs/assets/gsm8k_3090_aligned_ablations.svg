@@ -221,7 +221,7 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <rect x="868.7" y="561.0" width="10" height="10" fill="#2563eb" stroke="#ffffff" stroke-width="1.4"/>
 <text class="legend" x="885.7" y="570.0">Beam-8</text>
 <polygon points="1040.3,559.0 1047.3,566.0 1040.3,573.0 1033.3,566.0" fill="#0891b2" stroke="#ffffff" stroke-width="1.4"/>
-<text class="legend" x="1052.3" y="570.0">Best-of-8</text>
+<text class="legend" x="1052.3" y="570.0">自一致性-8</text>
 <circle cx="707.0" cy="587.0" r="6" fill="#15803d" stroke="#ffffff" stroke-width="1.4"/>
 <text class="legend" x="719.0" y="591.0">标准条件 IS</text>
 <polygon points="873.7,580.0 880.7,587.0 873.7,594.0 866.7,587.0" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
@@ -261,15 +261,15 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <rect x="1147.0" y="662.5" width="10" height="10" fill="#2563eb" stroke="#ffffff" stroke-width="1.4"/>
 </g>
 <polyline class="series" points="748.0,768.8 950.0,633.8 1152.0,667.5" stroke="#0891b2"/>
-<g aria-label="Best-of-8，最大生成 128 token，准确率 37.5%">
+<g aria-label="自一致性-8，最大生成 128 token，准确率 37.5%">
 <line class="error light" x1="748.0" y1="682.6" x2="748.0" y2="833.1" stroke="#0891b2"/>
 <polygon points="748.0,761.8 755.0,768.8 748.0,775.8 741.0,768.8" fill="#0891b2" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="Best-of-8，最大生成 256 token，准确率 87.5%">
+<g aria-label="自一致性-8，最大生成 256 token，准确率 87.5%">
 <line class="error light" x1="950.0" y1="606.1" x2="950.0" y2="727.1" stroke="#0891b2"/>
 <polygon points="950.0,626.8 957.0,633.8 950.0,640.8 943.0,633.8" fill="#0891b2" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="Best-of-8，最大生成 512 token，准确率 75.0%">
+<g aria-label="自一致性-8，最大生成 512 token，准确率 75.0%">
 <line class="error light" x1="1152.0" y1="619.3" x2="1152.0" y2="759.5" stroke="#0891b2"/>
 <polygon points="1152.0,660.5 1159.0,667.5 1152.0,674.5 1145.0,667.5" fill="#0891b2" stroke="#ffffff" stroke-width="1.4"/>
 </g>
@@ -313,6 +313,6 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <rect x="1147.0" y="662.5" width="10" height="10" fill="#be123c" stroke="#ffffff" stroke-width="1.4"/>
 </g>
 <text class="axis-title" x="950.0" y="922" text-anchor="middle">最大新生成 token 数</text>
-<text class="axis-title" x="22" y="510" text-anchor="middle" transform="rotate(-90 22 510)">单次回答准确率</text>
+<text class="axis-title" x="22" y="510" text-anchor="middle" transform="rotate(-90 22 510)">单次生成准确率</text>
 <text class="note" x="82" y="980">所有点均为同一组 8 道固定题；竖线为 Wilson 95% 区间，区间重叠较大。FLOPs 使用 2 × 参数量 × 实际 forward token slots 的线性主导项估算。</text>
 </svg>

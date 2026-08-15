@@ -1,106 +1,131 @@
-# GSM8K 方法效果与准确率
+# GSM8K 方法质量与计算量实验
+
+本报告比较训练式强化学习、Metropolis–Hastings 采样、重要性采样和 rollout 复用方法在 GSM8K 上的
+生成质量与计算成本。质量指标包括单次生成准确率、pass@k、共享目标下的准确率与经验答案分布距离。
+墙钟、批处理、缓存和 rollout 执行优化见
+[RTX 3090 推理执行与 rollout 复用实验](RTX3090_ROLLOUT_INFRA.md)。
+
+## 术语与统计量
+
+| 术语 | 全称或定义 | 本报告中的用途 |
+| --- | --- | --- |
+| IS | Importance Sampling，重要性采样 | 用目标概率与行为概率之比修正异分布 rollout |
+| MH | Metropolis–Hastings | 通过提议与接受步骤产生目标分布样本 |
+| GRPO | Group Relative Policy Optimization，组相对策略优化 | 使用组内相对优势更新模型参数的训练基线 |
+| self-consistency | 自一致性 | 独立采样多条推理路径，并按最终数值答案的众数选择 |
+| off-policy | 异策略 | rollout 的生成分布与目标分布存在差异 |
+| replay | 经验回放 | 保存历史 rollout，并在后续估计中按真实行为概率复用 |
+| ESS | Effective Sample Size，有效样本量 | 衡量重要性权重集中程度；数值越高表示权重越均匀 |
+| pass@k | `k` 次采样至少一次成功的概率 | 衡量多次独立采样的覆盖率 |
+| oracle | 预言机诊断 | 读取测试集标准答案构造奖励，仅用于检验算法关系 |
+| TV / JS | Total Variation / Jensen–Shannon | 比较经验答案分布的总变差距离与 Jensen–Shannon 散度 |
+| defensive mixture | 防御混合分布 | proposal 中保留 base 分量，以覆盖目标分布的支持集 |
 
 ## 实验设置
 
-### 数据、模型与硬件
+### 数据、模型与训练
 
-- **数据**：GRPO 训练只使用官方 GSM8K train split 的 7,473 条样本；准确率均来自 test split。
-  主实验固定 32 道题，消融固定另一组 8 道题，答案分布审计固定 4 道题并为每种方法独立采样 8 次。
-- **主模型**：`Qwen/Qwen2.5-1.5B-Instruct`，revision
+- **数据集**：[GSM8K](https://arxiv.org/abs/2110.14168) 的 train split 包含 7,473 条样本，test split
+  包含 1,319 条样本。GRPO 训练使用完整 train split。主实验固定 32 道 test 题，消融使用另一组
+  8 道题，答案分布审计使用 4 道题并为每种方法独立采样 8 次。
+- **主模型**：[`Qwen/Qwen2.5-1.5B-Instruct`](https://arxiv.org/abs/2412.15115)，revision
   `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`。
 - **rollout proposal**：`Qwen/Qwen2.5-0.5B-Instruct`，revision
   `7ae557604adf67be50417f59c2c2f167def9a775`。
-- **训练对照**：从同一 1.5B checkpoint 出发训练的 GRPO LoRA，共 205 个优化步，每个 prompt
-  生成 4 条 completion，奖励为最终数值答案是否正确。
-- **硬件与精度**：单张 RTX 3090 24 GiB；主结果使用 FP32，以避免低精度和不同 batch 形状造成的
-  概率与重评分偏差。
+- **训练基线**：从同一 1.5B checkpoint 出发执行 GRPO；参数更新采用
+  [Low-Rank Adaptation（LoRA）](https://openreview.net/pdf?id=nZeVKeeFYf9)，共 205 个优化步。每个
+  prompt 生成 4 条序列，奖励为最终数值答案的正确性。
+- **硬件与精度**：单张 RTX 3090 24 GiB。主结果使用 FP32，以控制低精度及 batch 形状变化导致的
+  生成概率与重评分偏差。
 
-### 方法、目标与主要比较对象
+### 方法、目标与文献依据
 
-| 方法 | 目标或决策规则 | 主要比较目的 |
-| --- | --- | --- |
-| Base | 从 `p_base(y∣x)` 采样一次 | 单次生成基线 |
-| Beam-8 | 8-beam 确定性搜索 | 搜索基线 |
-| Best-of-8 | 8 条独立 Base 回答，以数值答案众数选择 | 并行采样基线 |
-| 幂分布 MH | 后缀重采样，目标为 `p_base(y∣x)^4` | 检验直接概率锐化 |
-| 标准条件 IS | Base 候选与 Base rollout，以累积 self-consistency 选择 | training-free 质量主方法 |
-| 小 proposal 条件 IS | Base 候选、0.5B rollout，并乘精确 `p_base/q` 后缀权重 | 检验 off-policy rollout |
-| GRPO | 正确性奖励加 KL 正则的训练后策略 | 训练方法对照 |
-| verifier-MH / verifier-IS | 统一目标 `p_base × exp(exact_reward/0.04)` | 排除奖励不同造成的混淆 |
+文献列给出母方法或设计原则。标准条件 IS、分块引导、历史 rollout 修正和动态候选属于本仓库的组合
+实现，其效果由后续成对实验直接评估。
 
-主表中的标准 IS、幂分布 MH 与 GRPO 分别优化 self-consistency、基模概率幂和正确性奖励，所以主表只
-比较任务质量和成本。共享目标实验直接读取测试集答案，并单独报告准确率与经验答案分布距离。
+| 方法 | 候选与决策规则 | 目标或比较对象 | 文献依据 |
+| --- | --- | --- | --- |
+| Base | 从 `p_base(y∣x)` 采样一次 | 单次随机采样基线 | [Qwen2.5，Yang et al., 2024](https://arxiv.org/abs/2412.15115) |
+| Beam-8 | 保留累计对数概率最高的 8 条部分序列并确定性扩展 | 近似最大概率搜索基线 | [Beam Search Strategies，Freitag and Al-Onaizan, 2017](https://aclanthology.org/W17-3207/) |
+| 自一致性投票-8 | 独立采样 8 条推理路径，按数值答案众数选择 | 并行采样与答案边缘化基线 | [Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
+| 幂分布 MH | 对完整序列执行后缀提议与接受，目标为 `p_base(y∣x)^4` | 基模概率锐化 | [Metropolis–Hastings，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97) |
+| 标准条件 IS | Base 候选与 Base rollout；累积 self-consistency 奖励形成候选权重 | 免训练条件重加权 | [重要性采样，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303)；[Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
+| 0.5B proposal 条件 IS | Base 候选与 0.5B rollout；后缀权重乘精确 `p_base/q` | off-policy rollout | [Off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
+| GRPO | 正确性奖励与 KL 正则训练后的策略 | 训练式强化学习基线 | [DeepSeekMath，Shao et al., 2024](https://arxiv.org/abs/2402.03300) |
+| verifier-MH / verifier-IS | 统一目标 `p_base(y∣x) exp(exact_reward(y)/0.04)` | 相同奖励下的算法比较 | [GSM8K verifier，Cobbe et al., 2021](https://arxiv.org/abs/2110.14168)；[Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
+
+主表中的标准条件 IS、幂分布 MH 与 GRPO 分别对应 self-consistency、基模概率幂和正确性奖励。主表比较
+最终任务质量与成本；共享目标实验进一步控制奖励差异，并报告经验答案分布距离。
 
 ### 推理预算与公平性约束
 
 | 项目 | 主实验设置 |
 | --- | --- |
 | 最大新生成长度 | 192 token |
-| Base 与采样温度 | temperature 1.0；不使用 top-k/top-p 硬截断 |
-| Beam / Best-of-N | 8 beams / 8 samples |
-| 条件 IS | `M=8` 个候选，每候选 `K=3` 条 rollout，`S=4` 个引导阶段 |
-| 幂分布 MH | `α=4`，16 个递增长度阶段，每阶段 3 次更新，共 48 次后缀更新 |
-| 小 proposal 权重 | 后缀 log 重要性比默认截到 `[-10,10]`；另运行非截断对照 |
-| pass@k | 每题 8 个独立 draw；不同 draw 不共享候选、rollout 或 replay |
+| Base 采样 | temperature 1.0；无 top-k/top-p 硬截断 |
+| Beam / 自一致性投票 | 8 beams / 8 samples |
+| 条件 IS | `M=8` 个候选；每候选 `K=3` 条 rollout；`S=4` 个引导阶段 |
+| 幂分布 MH | `α=4`；16 个递增长度阶段；每阶段 3 次更新；共 48 次后缀更新 |
+| 0.5B proposal 权重 | 后缀 log 重要性比默认截到 `[-10,10]`；另设无截断对照 |
+| pass@k | 每题 8 个独立 draw；draw 之间无候选、rollout 或 replay 共享 |
 
-所有主要方法使用相同题目、prompt、最大长度和请求级随机种子。主质量表中的候选均来自 1.5B Base；
-小 proposal 只替换 rollout 生成器。动态候选实验在后文单独使用 base/0.5B defensive mixture，并以精确
-候选层概率比修正。replay 比较固定候选数和每候选 rollout 总预算。连续批处理只合并物理模型调用，
-不改变算法预算。
+各主要方法使用相同题目、prompt、最大长度和请求级随机种子。主质量表中的候选均由 1.5B Base 生成；
+0.5B proposal 仅替换 rollout 生成器。动态候选实验单独采用 base/0.5B defensive mixture，并以精确
+候选层概率比校正。replay 实验固定候选数和每候选 rollout 总预算。连续批处理仅改变物理执行调度。
 
-### 指标与统计
+### 指标与统计方法
 
-主指标为单次最终回答准确率。多次采样报告标准 pass@k 估计；点估计的不确定性使用 Wilson 区间或
-题目级 bootstrap，方法差异使用逐题配对 bootstrap。表中的计算量仅用于解释质量—预算关系，采用
-`2 × 参数量 × 实际 forward token slots` 的稠密矩阵主导项估算，分别计入主模型、proposal、重复
-prompt 和重评分。缓存、连续批处理、吞吐、冷启动和新增 rollout 加速栈的完整分析统一见
-[推理基础设施优化汇总](RTX3090_ROLLOUT_INFRA.md)。
+主指标为单次生成的最终数值答案准确率。pass@k 使用
+[Chen et al. (2021)](https://arxiv.org/abs/2107.03374) 的无偏估计形式。单方法准确率区间采用
+[Wilson (1927)](https://doi.org/10.1080/01621459.1927.10502953) 区间；方法差异采用题目级配对
+[bootstrap](https://doi.org/10.1214/aos/1176344552)。JS 散度采用
+[Lin (1991)](https://doi.org/10.1109/18.61115) 的定义，以 bit 为单位。
 
-## 比较目标
+计算量采用 `2 × 参数量 × 实际 forward token slots` 的稠密矩阵主导项估算，分别计入主模型、
+proposal、重复 prompt 和重评分。缓存、连续批处理、吞吐与冷启动成本在基础设施报告中单列。
 
-实验围绕三个质量问题展开：
+## 实验目标与比较关系
 
-1. **最终回答质量**：不更新模型参数的幂分布 MH 和条件 IS，能否相对 Base、Beam 与 Best-of-N 提高
-   GSM8K 准确率，并达到本地 GRPO 的水平？
-2. **目标分布的影响**：幂分布 MH、self-consistency IS 与正确性奖励 GRPO 的目标不同。把 MH、IS
-   和 GRPO 统一到 `p_base × exp(reward / beta)` 后，它们能否得到接近的准确率和答案分布？
-3. **off-policy 与 rollout 复用的质量影响**：小 proposal、候选层与 rollout 层重要性权重、历史
-   replay 以及方差—成本分配能否在复用计算的同时保持任务准确率、有效样本量和选择行为？
+| 实验目标 | 比较方法 | 结论范围 |
+| --- | --- | --- |
+| 单次与多次采样质量 | Base、Beam-8、自一致性投票-8、幂分布 MH、条件 IS、GRPO | 比较最终 GSM8K 准确率与推理预算；各方法目标允许不同 |
+| 共享奖励目标 | verifier-MH、verifier-IS、GRPO | 比较相同显式奖励下的准确率和经验答案分布 |
+| off-policy 与 rollout 复用 | 0.5B proposal、动态候选、warm replay、方差—成本分配 | 比较准确率、ESS、复用率与选择稳定性 |
 
-第一个问题比较实际可用方法的最终任务质量，不要求目标分布相同；第二个问题才用于检验不同算法对同一
-显式目标的近似。使用测试集答案的结果统一标记为 oracle，不与可部署方法混合。
+oracle 实验读取 test split 的标准答案，结论限于算法诊断。部署方法对应 self-consistency、模型置信度或
+测试时可用 verifier。
 
-## 主结果
+## 单次生成结果
 
 | 方法 | 正确数 / 32 | 准确率 | 推理 PFLOPs | 相对 Base FLOPs | 墙钟 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Base | 13 | 40.625% | 0.0279 | 1.00× | 91.1 s |
 | Beam-8 | 12 | 37.500% | 0.2306 | 8.27× | 130.6 s |
-| Best-of-8 | 14 | 43.750% | 0.1621 | 5.81× | 136.8 s |
+| 自一致性投票-8 | 14 | 43.750% | 0.1621 | 5.81× | 136.8 s |
 | 幂分布 MH | 12 | 37.500% | 1.3077 | 46.88× | 1485.3 s |
 | 标准条件 IS | 21 | 65.625% | 1.3706 | 49.13× | 422.1 s |
 | 0.5B proposal 条件 IS | 15 | 46.875% | 2.4724 | 88.63× | 422.8 s |
 | GRPO 随机采样 | 22 | 68.750% | 0.0254 | 0.91× | 124.9 s |
 | GRPO 贪心 | 18 | 56.250% | 0.0263 | 0.94× | 127.2 s |
 
-![GSM8K 单次回答准确率与推理计算量](../assets/gsm8k_3090_aligned_quality_compute.svg)
+![GSM8K 单次生成准确率与推理计算量](../assets/gsm8k_3090_aligned_quality_compute.svg)
 
-标准条件 IS 与 GRPO 随机采样相差 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
-[-12.500, 6.250]；相对 Base 提高 25 个百分点。两者的奖励不同，因此该结果只说明单次回答质量
-接近，不表示它们生成相同分布。标准条件 IS 的推理 FLOPs 是 GRPO 随机采样的约 54 倍；在已经完成
-训练的场景下，GRPO 推理明显更便宜。
+标准条件 IS 与 GRPO 随机采样的准确率差为 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
+[-12.500, 6.250]；标准条件 IS 相对 Base 提高 25 个百分点。两者采用不同奖励，因此该结果支持单次
+任务准确率接近，分布关系由共享目标实验单独评估。标准条件 IS 的推理 FLOPs 约为 GRPO 随机采样的
+54 倍；完成训练后，GRPO 具有更低的单次推理成本。
 
-0.5B proposal 条件 IS 比标准版本低 18.75 个百分点，区间为 [-34.375, -6.250]，同时使用标准版本
-`1.804×` 的 FLOPs 和 `1.002×` 的墙钟。当前实现仍需由 1.5B 模型精确重评分 off-policy rollout，
-因此小 proposal 没有带来相对标准条件 IS 的计算或墙钟加速。
+0.5B proposal 条件 IS 相对标准版本低 18.75 个百分点，区间为 [-34.375, -6.250]；FLOPs 因子为
+`1.804×`，墙钟因子为 `1.002×`。当前路径仍由 1.5B 模型精确重评分 off-policy rollout，小 proposal
+的生成成本优势尚未转化为端到端计算收益。
 
-幂分布 MH 的目标是 `p_base(y|x)^4`，而不是正确性奖励目标。它在本轮得到 12/32，说明概率锐化
-本身没有提高 GSM8K 正确率；该结果不能直接用于判断共享奖励目标下的 MH。
+幂分布 MH 的目标为 `p_base(y|x)^4`。该方法得到 12/32，与 Base 的点估计接近；本组结果表明基模概率
+锐化未改善当前 GSM8K 子集的正确率。正确性奖励下的 MH 结果见共享目标实验。
 
-## 多次采样
+## 多次采样结果
 
-每种方法在相同 32 道题上独立采样 8 次，共生成 256 条回答。不同 draw 不共享候选、rollout 或
-replay 数据；连续批处理只改变物理执行方式。
+每种方法在相同 32 道题上独立采样 8 次，共生成 256 条序列。draw 之间保持统计独立，连续批处理仅改变
+物理执行方式。
 
 ![GSM8K 六种方法的 pass@k 与题目级不确定性](../assets/gsm8k_3090_aligned_passk.svg)
 
@@ -110,26 +135,25 @@ replay 数据；连续批处理只改变物理执行方式。
 | 幂分布 MH | 38.281% | 47.098% | 53.571% | 59.375% | 13.2872 |
 | GRPO 随机采样 | 58.984% | 68.638% | 75.536% | 81.250% | 0.1516 |
 | 标准条件 IS | 58.203% | 63.728% | 68.929% | 75.000% | 11.0284 |
-| 小 proposal IS（截断） | 46.484% | 53.125% | 58.705% | 62.500% | 19.4781 |
-| 小 proposal IS（非截断） | 46.484% | 53.348% | 59.509% | 65.625% | 19.2690 |
+| 0.5B proposal IS（截断） | 46.484% | 53.125% | 58.705% | 62.500% | 19.4781 |
+| 0.5B proposal IS（无截断） | 46.484% | 53.348% | 59.509% | 65.625% | 19.2690 |
 
-标准条件 IS 相对 GRPO 的 pass@1 差异为 -0.781 个百分点，区间为 [-6.250, 4.297]；pass@8 差异
-为 -6.250 个百分点，区间为 [-15.625, 0]。因此标准 IS 的单次成功率与 GRPO 接近，但 GRPO 在较大
-采样预算下保持更高的覆盖率。两个小 proposal 版本的 pass@1 均比标准 IS 低 11.719 个百分点；去掉
-截断只把 pass@8 从 62.500% 提高到 65.625%，没有消除 proposal 与 base 重叠不足造成的有限样本
-方差。
+标准条件 IS 相对 GRPO 的 pass@1 差为 -0.781 个百分点，区间为 [-6.250, 4.297]；pass@8 差为
+-6.250 个百分点，区间为 [-15.625, 0]。两者的单次成功率接近，GRPO 在较大采样预算下得到更高覆盖率。
+两个 0.5B proposal 版本的 pass@1 均比标准 IS 低 11.719 个百分点。移除权重截断后，pass@8 由
+62.500% 升至 65.625%；proposal 与 base 的有限重叠仍形成较高的重要性权重方差。
 
-幂分布 MH 相对 Base 没有提高 pass@1，并把每题不同数值答案从 4.56 降到 3.25。其主要效果是压缩
-多样性，而不是提高当前任务的成功率。
+幂分布 MH 相对 Base 的 pass@1 差异较小，每题不同数值答案数由 4.56 降至 3.25。其主要观测效应为
+生成多样性收缩。
 
 ## 共享奖励目标
 
-为区分“算法差异”和“奖励差异”，受控实验统一使用
+受控实验统一采用
 
 `p_target(y|x) ∝ p_base(y|x) × exp(exact_reward(y) / 0.04)`。
 
-精确奖励读取测试集答案，因此这些结果只用于算法诊断，不能作为可部署方法。verifier-MH 的状态和
-候选都是完整序列；每次保留前缀后，proposal 后缀仍生成到 EOS，再计算终局奖励和接受率。
+精确奖励读取 test split 标准答案，属于 oracle 诊断。verifier-MH 的状态和 proposal 均为完整序列；
+每次保留前缀后，proposal 后缀生成至 EOS，再计算终局奖励与接受率。
 
 | 方法 | 正确数 / 32 | 准确率 | 推理 PFLOPs | 墙钟 |
 | --- | ---: | ---: | ---: | ---: |
@@ -138,13 +162,15 @@ replay 数据；连续批处理只改变物理执行方式。
 | 0.5B proposal verifier-IS | 20 | 62.500% | 2.2077 | 374.5 s |
 | GRPO 随机采样 | 22 | 68.750% | 0.0254 | 124.9 s |
 
-verifier-MH 与标准 verifier-IS 相差 3.125 个百分点，区间为 [-9.375, 15.625]；二者与 GRPO 的
-差异分别为 +9.375 和 +6.250 个百分点。在相同奖励目标下，直接采样方法能够达到与本地 GRPO 相近
-或更高的点估计，但 32 题不足以证明完整序列分布一致。小 proposal verifier-IS 比标准版本低
-12.5 个百分点；它相对标准版本有 `1.174×` 墙钟吞吐提升，却使用 `1.488×` FLOPs，且质量更低，
-因此不能称为相同效果下的加速。
+verifier-MH 与标准 verifier-IS 的准确率差为 3.125 个百分点，区间为 [-9.375, 15.625]；二者相对
+GRPO 分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种直接采样方法达到与本地 GRPO 接近或
+更高的点估计。32 题样本对完整序列分布一致性的统计分辨率有限。
 
-在 4 道固定题、每题 8 次采样的答案分布审计中，相对 GRPO 的结果为：
+0.5B proposal verifier-IS 相对标准版本低 12.5 个百分点。其墙钟因子为 `0.852×`，即相对标准版本
+具有 `1.174×` 吞吐提升；FLOPs 因子为 `1.488×`。该路径同时改变质量与计算量，因而归类为质量—成本
+权衡，而非质量匹配条件下的加速。
+
+4 道固定题、每题 8 次采样的答案分布审计以 GRPO 为参考：
 
 | 方法 | 平均 TV | 平均 JS（bit） |
 | --- | ---: | ---: |
@@ -153,13 +179,14 @@ verifier-MH 与标准 verifier-IS 相差 3.125 个百分点，区间为 [-9.375,
 | 标准 verifier-IS | 0.2500 | 0.1423 |
 | 0.5B proposal verifier-IS | 0.2500 | 0.1423 |
 
-三种直接采样方法的答案级距离点估计均小于 Base，但其 TV bootstrap 区间上界为 0.4063，样本规模
-不足以支持稳定的分布等价结论。
+三种直接采样方法的答案级距离点估计均低于 Base。TV bootstrap 区间上界为 0.4063；该样本规模提供
+趋势性结果，分布等价检验需要更大的题目与采样网格。
 
-## rollout 复用与动态候选的质量影响
+## rollout replay 与动态候选
 
-固定 replay 比较使用 8 个 base 候选和每候选 3 条总 rollout。warm 路径最多读取 2 条已评分历史
-rollout，并始终保留 1 条 fresh base rollout：
+经验回放的母方法见 [Lin (1992)](https://doi.org/10.1007/BF00992699)，off-policy 修正采用真实行为
+概率的重要性比。固定 replay 实验使用 8 个 base 候选和每候选 3 条总 rollout。warm 路径最多读取
+2 条已评分历史 rollout，并保留 1 条 fresh base rollout。
 
 | 路径 | 正确数 / 32 | 准确率 |
 | --- | ---: | ---: |
@@ -167,80 +194,99 @@ rollout，并始终保留 1 条 fresh base rollout：
 | warm replay | 22 | 68.750% |
 
 warm replay 相对 fresh-only 的准确率差为 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
-[-12.500, 6.250]。当前 32 题没有检测到稳定质量差异，但区间仍不足以证明两条路径质量等价。
+[-12.500, 6.250]。区间覆盖 0；当前样本对稳定质量差异与质量等价均缺乏充分分辨率。
 
-### 动态候选与方差—成本分配的质量诊断
+### 动态候选与方差—成本分配
 
-这组实验单独检验两个增量机制，不与前面的可部署 self-consistency 主表混合。它在同一组 32 道题上
-直接用 GSM8K 正确答案评价 rollout，因此是 oracle 算法诊断。主模型与 proposal 的采样温度均为 1.0；
-奖励温度为 0.1，历史权重截断阈值为 8.0。三组都使用 8 个候选、48-token block、最长 192 token 和
-每个非终止候选 3 条估计用 rollout：
+该实验检验动态 proposal、外层 IS、rollout replay 和预算分配。奖励直接读取 GSM8K 标准答案，因此
+属于 oracle 诊断。主模型与 proposal 的采样温度均为 1.0，奖励温度为 0.1，历史权重截断阈值为 8.0。
+三组均使用 8 个候选、48-token block、最长 192 token 和每个非终止候选 3 条 evaluation rollout。
 
-1. `base_candidate_fixed` 只从 1.5B base 抽候选，不建缓存，每个候选使用 3 条 fresh rollout；
-2. `replay_aware_fixed` 从 `0.5 × base + 0.5 × 0.5B proposal` 抽候选，乘精确外层 `p_base/q`，
-   并为辅助候选预先保存 2 条 evaluation rollout；库存允许时使用 2 条历史加 1 条 fresh；
-3. `replay_aware_optimal` 保持相同 defensive proposal 和缓存规则，在读取 evaluation 值以前，另为每个
-   候选生成 2 条 base design rollout，并为命中候选生成 2 条 proposal design rollout，再按估计方差
-   与单样本成本分配固定版本在相同候选元数据上对应的代理成本预算。
+1. `base_candidate_fixed`：候选来自 1.5B base；无历史库；每候选使用 3 条 fresh rollout。
+2. `replay_aware_fixed`：候选来自 `0.5 × base + 0.5 × 0.5B proposal`，并乘精确外层 `p_base/q`；
+   辅助候选预存 2 条 evaluation rollout；库存充足时使用 2 条历史与 1 条 fresh rollout。
+3. `replay_aware_optimal`：沿用相同 defensive proposal 与缓存规则；读取 evaluation 值前，为每个候选
+   生成 2 条 base design rollout，并为命中候选生成 2 条 proposal design rollout；随后根据方差与
+   单样本成本冻结 evaluation 预算。分配原则来自
+   [Neyman (1934)](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x) 与
+   [Étoré and Jourdain (2010)](https://doi.org/10.1007/s11009-008-9108-0)。
 
-重复候选共享同一个一次性 evaluation 库存；库存不足的槽由 fresh 补齐，所以固定组始终保持每个
-非终止候选恰好 3 条 rollout，历史记录不会重复消费。预算代理把历史重评分记为 1，把 fresh 生成加
-0.5B 重评分记为 1.3200；最终成本仍按实际 forward token slots 与各模型参数量计算。
+重复候选共享一次性 evaluation 库存。库存缺口由 fresh rollout 补齐，固定组的每个非终止候选保持
+3 条 rollout，历史记录按一次观测消费。预算代理将历史重评分成本记为 1，将 fresh 生成与 0.5B
+重评分成本记为 1.3200；最终计算量仍按实际 forward token slots 与各模型参数量统计。
 
-| 方法 | 正确数 / 32 | 准确率 | 辅助候选占比 | 实际 rollout 复用率 | 平均外层 ESS | 平均最终 ESS |
+| 方法 | 正确数 / 32 | 准确率 | 辅助候选占比 | rollout 复用率 | 平均外层 ESS | 平均最终 ESS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | base 候选 + 固定 fresh | 23 | 71.875% | 0% | 0% | 8.000 | 6.323 |
 | 动态候选 + 固定 replay | 21 | 65.625% | 51.282% | 34.943% | 4.365 | 3.424 |
 | 动态候选 + 方差—成本分配 | 23 | 71.875% | 51.282% | 5.707% | 4.382 | 3.315 |
 
 动态固定组相对 base 固定组的准确率差为 -6.25 个百分点，逐题配对 bootstrap 95% 区间为
-[-21.875, 9.375]；它逐题赢 2、输 4、平 26。方差—成本版本相对动态固定组为 +6.25 个百分点，
-区间为 [-6.250, 18.750]；逐题赢 3、输 1、平 28。两个区间都跨 0，因而 32 题只支持“没有检测到
-稳定质量差异”，不支持质量不变或完整版本更优。完整版本与 base 固定组的点估计同为 23/32；但其
-平均最终 ESS 没有提高，因此当前结果也不支持方差—成本版本具有更稳定的选择权重。
+[-21.875, 9.375]；逐题赢 2、输 4、平 26。方差—成本版本相对动态固定组为 +6.25 个百分点，区间为
+[-6.250, 18.750]；逐题赢 3、输 1、平 28。两个区间均覆盖 0。完整版本与 base 固定组的点估计同为
+23/32，平均最终 ESS 为 3.315；当前 design 样本量尚未形成更稳定权重的证据。
 
-replay 的在线/冷启动成本、动态候选的分阶段 FLOPs、缓存利用率和连续批处理成对结果均移至
-[推理基础设施优化汇总](RTX3090_ROLLOUT_INFRA.md)，避免把质量结论与硬件吞吐混成同一比较。
+replay 在线与冷启动成本、动态候选的分阶段 FLOPs、缓存利用率及连续批处理结果见基础设施报告。
 
 ## 质量与预算消融
 
-所有消融点使用同一组 8 道题；每题只贡献 0 或 1，因此准确率的最小变化为 12.5%。图中误差线为
-Wilson 95% 区间。
+各消融点使用同一组 8 道题；单题贡献为 0 或 1，准确率最小变化为 12.5%。图中误差线为 Wilson 95%
+区间。
 
-![GSM8K 候选、引导阶段、MH 更新次数和生成长度消融](../assets/gsm8k_3090_aligned_ablations.svg)
+![GSM8K 候选数、引导阶段、MH 更新次数和生成长度消融](../assets/gsm8k_3090_aligned_ablations.svg)
 
-| 维度 | 设置与正确数 | 8 题合计 PFLOPs | 结论 |
+| 维度 | 设置与正确数 | 8 题合计 PFLOPs | 观测结果 |
 | --- | --- | --- | --- |
-| 标准 IS 候选数 `M`，`K=3` | `3/5/8/10 → 6/6/6/5` | `0.1281/0.2064/0.3068/0.3861` | `M=3` 已在本轮达到最高点估计 |
-| 小 proposal IS 候选数 `M` | `3/5/8/10 → 3/5/4/5` | `0.2299/0.3602/0.5730/0.6755` | 未进入观测到的质量—FLOPs 前沿 |
-| 标准 IS rollout 数 `K`，`M=10` | `1/3/5 → 5/5/6` | `0.2319/0.3861/0.6063` | `K=5` 多答对一题，但成本明显增加 |
-| 引导阶段数 `S` | `2/4/8/16 → 5/6/6/6` | `0.1293/0.3068/0.7426/1.8104` | `S=4` 后点估计不再提高 |
-| MH 幂次 `α` | `1/2/4/8 → 3/4/6/3` | `0.2895/0.3067/0.3108/0.3148` | `α=4` 只在当前小样本上最好 |
-| MH 每阶段更新数 `U` | `1/2/5/10 → 3/5/6/7` | `0.1526/0.2266/0.4726/0.8569` | 更多更新改善有限链结果，但边际成本上升 |
-| 小 proposal 权重 | `截断/非截断 → 4/5` | `0.5730/0.5253` | 单次消融差一题；32×8 网格的 pass@1 相同 |
-| 最大生成长度 | 标准 IS：`128/256/512 → 4/7/6` | `0.2669/0.3151/0.2381` | 256 token 最适合当前模型与题目 |
+| 标准 IS 候选数 `M`，`K=3` | `3/5/8/10 → 6/6/6/5` | `0.1281/0.2064/0.3068/0.3861` | `M=3` 达到本组最高点估计 |
+| 0.5B proposal IS 候选数 `M` | `3/5/8/10 → 3/5/4/5` | `0.2299/0.3602/0.5730/0.6755` | 各点位于标准 IS 的质量—FLOPs 前沿下方 |
+| 标准 IS rollout 数 `K`，`M=10` | `1/3/5 → 5/5/6` | `0.2319/0.3861/0.6063` | `K=5` 增加一题正确，同时增加计算成本 |
+| 引导阶段数 `S` | `2/4/8/16 → 5/6/6/6` | `0.1293/0.3068/0.7426/1.8104` | `S=4` 后点估计保持 6/8 |
+| MH 幂次 `α` | `1/2/4/8 → 3/4/6/3` | `0.2895/0.3067/0.3108/0.3148` | `α=4` 在本组得到最高点估计 |
+| MH 每阶段更新数 `U` | `1/2/5/10 → 3/5/6/7` | `0.1526/0.2266/0.4726/0.8569` | 更新数增加改善有限链结果，边际成本同步上升 |
+| 0.5B proposal 权重 | `截断/无截断 → 4/5` | `0.5730/0.5253` | 单次消融相差一题；32×8 网格的 pass@1 相同 |
+| 最大生成长度 | 标准 IS：`128/256/512 → 4/7/6` | `0.2669/0.3151/0.2381` | 256 token 在本组取得最高点估计 |
 
-在奖励消融中，标准 IS 的 self-consistency 得到 6/8；平均 token 对数概率、平均负熵和自确定性分别
-得到 4/8、5/8、5/8，却各使用约 0.9 PFLOPs，明显高于 self-consistency 的 0.3068 PFLOPs。使用
-测试集答案的 oracle 为 Best-of-8 和标准 IS 得到 8/8，说明候选池经常已经包含正确答案，主要瓶颈是
-可部署的选择信号。sampling temperature 为 0.7、1.0、1.5 时，标准 IS 分别得到 4/8、6/8、1/8；
-该模型在 1.5 下更容易生成无法解析或未完成的回答。
+奖励消融中，标准 IS 的 self-consistency 得到 6/8；平均 token 对数概率、平均负熵和自确定性分别得到
+4/8、5/8、5/8，各使用约 0.9 PFLOPs，高于 self-consistency 的 0.3068 PFLOPs。使用 test split 标准
+答案作为选择信号时，oracle Best-of-8 与 oracle 标准 IS 均得到 8/8，表明多数题目的候选池已经包含
+正确数值答案，主要误差来源为部署可用的选择信号。
+
+sampling temperature 为 0.7、1.0、1.5 时，标准 IS 分别得到 4/8、6/8、1/8。temperature 1.5 条件下，
+无法解析或达到长度上限的生成序列比例上升。
 
 ## 结论与适用范围
 
-1. 标准条件 IS 在单次回答上达到与本地 GRPO 接近的准确率，并显著高于 Base，但推理计算量远高于
-   已训练策略；它适合避免训练或查询量较少的场景，不适合直接替代高频部署中的 GRPO 推理。
-2. 当前 0.5B off-policy proposal 没有相对标准 IS 提升质量或降低 FLOPs；精确主模型重评分与有限
-   样本重要性权重方差抵消了小模型生成的收益。
-3. warm replay 相对 fresh-only 的准确率差异区间跨 0；动态候选固定组与方差—成本组的配对区间也
-   都跨 0。有限样本只支持“未检测到稳定差异”，不支持直接宣称质量等价。
-4. 当前方差—成本分配只复用了 5.7% 的估计用 rollout，平均最终 ESS 也没有提高，因此本轮没有显示
-   出更稳定的候选选择。
-5. 幂分布 MH 只实现概率锐化，没有提高本轮正确率；在共享奖励目标的 oracle 诊断中，MH 与标准 IS
-   能达到相近质量，但都需要对完整候选计算终局奖励。
+1. 标准条件 IS 的单次生成准确率与本地 GRPO 接近，并高于 Base；其推理 FLOPs 约为已训练 GRPO 的
+   54 倍。该方法适用于训练成本需要规避或查询量较小的场景。
+2. 当前 0.5B off-policy proposal 相对标准 IS 同时降低准确率并增加 FLOPs。主模型精确重评分和有限样本
+   重要性权重方差构成主要成本。
+3. warm replay、动态候选固定组和方差—成本组的配对区间均覆盖 0；当前样本规模对稳定质量差异和质量
+   等价的统计分辨率有限。
+4. 方差—成本分配复用 5.707% evaluation rollout，平均最终 ESS 为 3.315，低于动态固定组的 3.424。
+   本组实验尚未观测到权重稳定性收益。
+5. 幂分布 MH 的主要效应为基模概率锐化和多样性收缩。共享正确性奖励下，verifier-MH 与标准
+   verifier-IS 得到接近的准确率点估计。
 
-这些结论来自 32 道固定题和单张 RTX 3090，不能替代完整 1,319 题评测。FLOPs 估算不包含二次
-attention、逐元素 kernel、tokenization 和主机调度。实现优化的独立汇总见
-[推理基础设施优化汇总](RTX3090_ROLLOUT_INFRA.md)。正式机器可读
-结果保存在 `results/gsm8k_3090/gsm8k_3090_aligned_*_validated.json`，图表均由相应汇总 JSON
-确定性生成。各文件用途见 [`results/README.md`](../../results/README.md)。
+结果范围为固定 32 道 test 题和单张 RTX 3090。完整 1,319 题评测可进一步缩小准确率与分布距离区间。
+FLOPs 估算范围排除二次 attention、逐元素 kernel、tokenization 和主机调度。机器可读结果位于
+`results/gsm8k_3090/gsm8k_3090_aligned_*_validated.json`，图表由相应汇总 JSON 确定性生成；文件索引见
+[`results/README.md`](../../results/README.md)。
+
+## 参考文献
+
+1. Cobbe, K., et al. (2021). [Training Verifiers to Solve Math Word Problems](https://arxiv.org/abs/2110.14168). arXiv:2110.14168.
+2. Yang, A., et al. (2024). [Qwen2.5 Technical Report](https://arxiv.org/abs/2412.15115). arXiv:2412.15115.
+3. Hu, E. J., et al. (2022). [LoRA: Low-Rank Adaptation of Large Language Models](https://openreview.net/pdf?id=nZeVKeeFYf9). ICLR 2022.
+4. Freitag, M., and Al-Onaizan, Y. (2017). [Beam Search Strategies for Neural Machine Translation](https://aclanthology.org/W17-3207/). NGT 2017, 56–60.
+5. Wang, X., et al. (2023). [Self-Consistency Improves Chain of Thought Reasoning in Language Models](https://openreview.net/pdf?id=1PL1NIMMrw). ICLR 2023.
+6. Hastings, W. K. (1970). [Monte Carlo Sampling Methods Using Markov Chains and Their Applications](https://doi.org/10.1093/biomet/57.1.97). Biometrika, 57(1), 97–109.
+7. Hesterberg, T. (1995). [Weighted Average Importance Sampling and Defensive Mixture Distributions](https://doi.org/10.1080/00401706.1995.10484303). Technometrics, 37(2), 185–194.
+8. Precup, D., Sutton, R. S., and Singh, S. (2000). [Eligibility Traces for Off-Policy Policy Evaluation](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf). ICML 2000, 759–766.
+9. Shao, Z., et al. (2024). [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300). arXiv:2402.03300.
+10. Lin, L.-J. (1992). [Self-Improving Reactive Agents Based on Reinforcement Learning, Planning and Teaching](https://doi.org/10.1007/BF00992699). Machine Learning, 8, 293–321.
+11. Neyman, J. (1934). [On the Two Different Aspects of the Representative Method](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x). Journal of the Royal Statistical Society, 97, 558–606.
+12. Étoré, P., and Jourdain, B. (2010). [Adaptive Optimal Allocation in Stratified Sampling Methods](https://doi.org/10.1007/s11009-008-9108-0). Methodology and Computing in Applied Probability, 12, 335–360.
+13. Chen, M., et al. (2021). [Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374). arXiv:2107.03374.
+14. Wilson, E. B. (1927). [Probable Inference, the Law of Succession, and Statistical Inference](https://doi.org/10.1080/01621459.1927.10502953). Journal of the American Statistical Association, 22(158), 209–212.
+15. Efron, B. (1979). [Bootstrap Methods: Another Look at the Jackknife](https://doi.org/10.1214/aos/1176344552). The Annals of Statistics, 7(1), 1–26.
+16. Lin, J. (1991). [Divergence Measures Based on the Shannon Entropy](https://doi.org/10.1109/18.61115). IEEE Transactions on Information Theory, 37(1), 145–151.
