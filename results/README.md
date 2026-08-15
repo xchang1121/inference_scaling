@@ -36,7 +36,7 @@
 | `infra/rtx3090_transformers_algorithms_*.json` | progressive 与 SMC 的单 seed 记录 |
 | `infra/rtx3090_transformers_is_mh_seed*.json` | IS/MH 复用实验的单 seed 记录 |
 
-执行机制和成本分母见[推理基础设施实现](../docs/methods/INFRASTRUCTURE.md)，文字结果见
+执行机制和成本分母见[推理扩展算法：基础、原理与实现](../docs/methods/ALGORITHMS.md)，文字结果见
 [RTX 3090 推理执行与 rollout 复用实验](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 
 ## 训练与验证

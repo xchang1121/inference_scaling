@@ -1,8 +1,7 @@
 # GSM8K 统一实验设计
 
-本文件固定数据、模型、方法、预算、统计量、成本分母和复现流程。算法定义见
-[推理算法实现](../methods/ALGORITHMS.md)，执行与计量见
-[推理基础设施实现](../methods/INFRASTRUCTURE.md)。
+本文件固定数据、模型、方法、预算、统计量、成本分母和复现流程。算法原理、实现、执行优化与计量口径见
+[推理扩展算法：基础、原理与实现](../methods/ALGORITHMS.md)。
 
 ## 数据与配置
 
@@ -85,13 +84,13 @@ token-slot/FLOPs。
 
 proposal-energy 设置 `apply_importance_correction=false`，候选权重为
 
-$$
+```math
 w_m=\frac1K\sum_{k=1}^K
 \exp\!\left(\frac{r(z_m,u_{mk})}{\tau}\right),
 \qquad
 z_m\sim p_{\mathrm{1.5B}},\quad
 u_{mk}\sim q_{\mathrm{0.5B}}(\cdot\mid z_m).
-$$
+```
 
 该路径的 base `score_calls`、`scored_tokens` 和评分 slots 为 0。
 
@@ -108,9 +107,9 @@ $$
 
 模型 $`j`$ 的推理主干 FLOPs 估计为
 
-$$
+```math
 \widehat F_j=2N_jS_j,
-$$
+```
 
 其中 $`N_j`$ 为参数量，$`S_j`$ 为实际 forward token slots。1.5B 与 0.5B 分别计算后求和。计数覆盖
 prefill、decode、完整序列评分和 target speculative verification；墙钟排除模型与数据加载。
@@ -121,17 +120,17 @@ update。gradient checkpointing 的 policy 路径按 forward、backward 与重�
 
 共享奖励目标为
 
-$$
+```math
 \max_\pi\ \mathbb E_\pi[R]-\beta D_{\mathrm{KL}}(\pi\|p_{\mathrm{base}}),
-$$
+```
 
 其无参数限制闭式解正比于 $`p_{\mathrm{base}}\exp(R/\beta)`$。累计成本比较为
 
-$$
+```math
 F_{\mathrm{GRPO\ train}}+QF_{\mathrm{GRPO\ infer}}
 \quad\text{与}\quad
 QF_{\mathrm{training\text{-}free}}.
-$$
+```
 
 准确率匹配的临界查询数要求配对准确率差落入预设容差；联合匹配还要求答案分布 TV/JS 通过阈值。
 
@@ -166,9 +165,9 @@ $$
 重复候选共享同一 replay key 的 evaluation 库存。预算代理将一条历史样本记为 1 个 base 重评分等价，
 一条 fresh 样本记为
 
-$$
+```math
 1+\frac{P_{\mathrm{0.5B}}}{P_{\mathrm{1.5B}}}=1.3200.
-$$
+```
 
 最终成本采用实际 forward token slots 与参数量。配额冻结使用候选、策略版本、库存数量和 design
 统计量；evaluation reward 在领取后进入最终估计。
