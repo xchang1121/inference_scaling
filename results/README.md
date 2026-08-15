@@ -7,6 +7,9 @@
 
 目录：[`gsm8k_3090/`](gsm8k_3090/)
 
+机器可读结果使用的组合标签逐项定义在
+[报告中的组合名称](../docs/methods/ALGORITHMS.md#alg-report-labels)。
+
 | 结果族 | 方法定义 |
 | --- | --- |
 | Base、搜索、GRPO | [生成与训练基线](../docs/methods/ALGORITHMS.md#alg-baselines) |
@@ -31,6 +34,9 @@
 [`GSM8K 方法效果与准确率`](../docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
 ## 推理基础设施优化结果
+
+实验臂名称中的执行机制、workload 后缀与成本口径见
+[报告中的实验臂名称](../docs/methods/INFRASTRUCTURE.md#infra-report-labels)。
 
 早期完整 GSM8K 网格中可分离的 infra 汇总仍位于 [`gsm8k_3090/`](gsm8k_3090/)：
 

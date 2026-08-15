@@ -4,6 +4,8 @@
 计算量分母见[推理基础设施实现](../methods/INFRASTRUCTURE.md)；IS、replay 与 MH 的数学定义见
 [推理算法实现](../methods/ALGORITHMS.md)；准确率和 pass@k 见
 [GSM8K 方法质量与计算量实验](GSM8K_3090_ALIGNED_RESULTS.md)。
+实验臂名称中的机制、workload 后缀和成本口径见
+[报告中的实验臂名称](../methods/INFRASTRUCTURE.md#infra-report-labels)。
 
 ## 报告范围与固定设置
 
@@ -27,15 +29,15 @@ CPU token tree、tokenization、奖励解析和调度成本；这些成本由墙
 
 | 优化路径 | 对照路径 | 墙钟因子 | 主模型 FLOPs 因子 | 直接观测 |
 | --- | --- | ---: | ---: | --- |
-| 部分 rollout 续跑 | 丢弃部分 token 后从头生成 | 0.793 ± 0.080× | 3.346 ± 0.000× | 有效生成 token 因子 0.769×；保存 96 token |
-| 流式 IS，便宜 verifier | 完整 batch 结束后提交 verifier | 1.027 ± 0.040× | 1.000 ± 0.000× | verifier 队列接近零成本 |
-| 流式 IS，0.2 s verifier | 完整 batch 结束后提交 verifier | 0.671 ± 0.008× | 1.000 ± 0.000× | 首次估计更新时间因子 0.367 ± 0.002× |
-| 确定性历史草稿 | 普通自回归解码 | 0.981 ± 0.064× | 1.036 ± 0.006× | 草稿接受率 17.7% ± 13.0% |
-| 精确随机历史草稿 | 普通自回归解码 | 0.982 ± 0.075× | 1.033 ± 0.004× | 草稿接受率 24.0% ± 9.0% |
-| MH proposal-tree 预取，便宜奖励 | 普通 MH | 1.050 ± 0.040× | 1.424 ± 0.004× | 额外分支缺少可重叠延迟 |
-| MH proposal-tree 预取，0.2 s 奖励 | 普通 MH | 0.817 ± 0.016× | 1.267 ± 0.007× | 每步预取两个分支并消费一个分支 |
-| delayed acceptance，0.2 s 精确奖励 | 普通 MH | 0.827 ± 0.111× | 1.000 ± 0.000× | 精确奖励调用因子 0.556 ± 0.294× |
-| 冻结 replay 混合 proposal，在线 | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
+| [部分 rollout 续跑](../methods/INFRASTRUCTURE.md#infra-report-labels) | 丢弃部分 token 后从头生成 | 0.793 ± 0.080× | 3.346 ± 0.000× | 有效生成 token 因子 0.769×；保存 96 token |
+| [流式 IS，便宜 verifier](../methods/INFRASTRUCTURE.md#infra-report-labels) | 完整 batch 结束后提交 verifier | 1.027 ± 0.040× | 1.000 ± 0.000× | verifier 队列接近零成本 |
+| [流式 IS，0.2 s verifier](../methods/INFRASTRUCTURE.md#infra-report-labels) | 完整 batch 结束后提交 verifier | 0.671 ± 0.008× | 1.000 ± 0.000× | 首次估计更新时间因子 0.367 ± 0.002× |
+| [确定性历史草稿](../methods/INFRASTRUCTURE.md#infra-report-labels) | 普通自回归解码 | 0.981 ± 0.064× | 1.036 ± 0.006× | 草稿接受率 17.7% ± 13.0% |
+| [精确随机历史草稿](../methods/INFRASTRUCTURE.md#infra-report-labels) | 普通自回归解码 | 0.982 ± 0.075× | 1.033 ± 0.004× | 草稿接受率 24.0% ± 9.0% |
+| [MH proposal-tree 预取，便宜奖励](../methods/INFRASTRUCTURE.md#infra-report-labels) | 普通 MH | 1.050 ± 0.040× | 1.424 ± 0.004× | 额外分支缺少可重叠延迟 |
+| [MH proposal-tree 预取，0.2 s 奖励](../methods/INFRASTRUCTURE.md#infra-report-labels) | 普通 MH | 0.817 ± 0.016× | 1.267 ± 0.007× | 每步预取两个分支并消费一个分支 |
+| [delayed acceptance，0.2 s 精确奖励](../methods/INFRASTRUCTURE.md#infra-report-labels) | 普通 MH | 0.827 ± 0.111× | 1.000 ± 0.000× | 精确奖励调用因子 0.556 ± 0.294× |
+| [冻结 replay 混合 proposal，在线](../methods/INFRASTRUCTURE.md#infra-report-labels) | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
 
 <a id="infra-report-broker"></a>
 ### rollout token 续跑
@@ -93,10 +95,10 @@ CPU 分布处理成本。
 
 | 方法 | 同步墙钟 | 连续批处理墙钟 | 墙钟因子 | FLOPs 因子 | 数值答案一致 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Base | 95.4 s | 19.7 s | 0.206× | 1.177× | 32/32 |
-| 自一致性投票-8 | 136.9 s | 67.9 s | 0.496× | 1.021× | 30/32 |
-| 标准条件 IS | 427.1 s | 370.0 s | 0.866× | 1.008× | 32/32 |
-| 0.5B proposal 条件 IS | 419.5 s | 399.5 s | 0.952× | 1.003× | 32/32 |
+| [Base](../methods/ALGORITHMS.md#alg-report-labels) | 95.4 s | 19.7 s | 0.206× | 1.177× | 32/32 |
+| [自一致性投票-8](../methods/ALGORITHMS.md#alg-report-labels) | 136.9 s | 67.9 s | 0.496× | 1.021× | 30/32 |
+| [标准条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 427.1 s | 370.0 s | 0.866× | 1.008× | 32/32 |
+| [0.5B proposal 条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 419.5 s | 399.5 s | 0.952× | 1.003× | 32/32 |
 
 Base 请求最容易形成密集 batch，墙钟收益最大。IS 包含多个依赖阶段，可跨 prompt 合并的串行段较少。
 padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收益是 GPU 利用率。自一致性投票-8 有两道题
@@ -110,9 +112,9 @@ padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收�
 
 | 路径 | 推理 PFLOPs | 墙钟 | 相对 fresh-only FLOPs | 相对 fresh-only 墙钟 |
 | --- | ---: | ---: | ---: | ---: |
-| fresh-only | 1.3483 | 422.5 s | 1.000× | 1.000× |
-| warm cache 在线阶段 | 1.0326 | 362.9 s | 0.766× | 0.859× |
-| cache build + 首次 warm 查询 | 3.1563 | 763.4 s | 2.341× | 1.807× |
+| [fresh-only](../methods/ALGORITHMS.md#alg-report-labels) | 1.3483 | 422.5 s | 1.000× | 1.000× |
+| [warm cache 在线阶段](../methods/INFRASTRUCTURE.md#infra-report-labels) | 1.0326 | 362.9 s | 0.766× | 0.859× |
+| [cache build + 首次 warm 查询](../methods/INFRASTRUCTURE.md#infra-report-labels) | 3.1563 | 763.4 s | 2.341× | 1.807× |
 
 在线阶段的 FLOPs 降低 23.4%，墙钟降低 14.1%。完整计入历史库构建后，同一 replay key 需要重复查询
 7 次，累计 FLOPs 和累计墙钟才同时低于 fresh-only。准确率差及配对区间见
@@ -125,9 +127,9 @@ padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收�
 
 | 路径 | 实际复用率 | 稳态 PFLOPs | 稳态墙钟 | 一次性总 PFLOPs | 一次性总墙钟 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| base 候选 + 固定 fresh | 0% | 2.0973 | 705.7 s | 2.0973 | 705.7 s |
-| 动态候选 + 固定 replay | 34.943% | 1.9312 | 704.0 s | 4.8764 | 1,401.5 s |
-| 动态候选 + 方差—成本分配 | 5.707% | 2.3172 | 706.6 s | 7.2951 | 2,186.2 s |
+| [base 候选 + 固定 fresh](../methods/ALGORITHMS.md#alg-report-labels) | 0% | 2.0973 | 705.7 s | 2.0973 | 705.7 s |
+| [动态候选 + 固定 replay](../methods/ALGORITHMS.md#alg-report-labels) | 34.943% | 1.9312 | 704.0 s | 4.8764 | 1,401.5 s |
+| [动态候选 + 方差—成本分配](../methods/ALGORITHMS.md#alg-report-labels) | 5.707% | 2.3172 | 706.6 s | 7.2951 | 2,186.2 s |
 
 动态固定组相对 base 固定组的稳态 FLOPs 因子为 `0.921×`，墙钟因子为 `0.998×`。方差—成本组相对
 动态固定组为 `1.200×` FLOPs 和 `1.004×` 墙钟。每来源 2 条 design rollout 形成较高的方差估计噪声，
@@ -136,7 +138,7 @@ padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收�
 ### GRPO 训练与免训练推理的累计计算量
 
 本地 GRPO 一次训练消耗 15.646 PFLOPs、5,007,660 个前向等价 token slots 和 9,545.2 秒。仅按累计
-FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B proposal verifier-IS 与“训练 + GRPO 推理”的
+FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B proposal verifier-IS 与“训练 + GRPO 随机采样”的
 交点分别为 392、344 和 230 次查询。这些方法与 GRPO 的准确率绝对差超过预设阈值，因此交点只表示
 计算账本，不表示质量匹配所需查询数。
 
@@ -154,8 +156,8 @@ FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B proposal verifier-IS
 | 路径 | 在线墙钟（s） | 输出 token/s | 主模型 PFLOPs | cache build（s） | 草稿接受率 | 墙钟因子 | FLOPs 因子 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 普通自回归解码 | 3.838 ± 0.059 | 116.8 ± 1.8 | 0.00247 ± 0.00000 | 0.000 ± 0.000 | 0.0% | 1.000× | 1.000× |
-| 历史树，始终草稿 | 8.297 ± 0.075 | 54.0 ± 0.5 | 0.00411 ± 0.00001 | 1.280 ± 0.027 | 13.1% | 2.162× | 1.660× |
-| 历史树，负载感知 | 3.783 ± 0.067 | 118.5 ± 2.1 | 0.00249 ± 0.00001 | 1.335 ± 0.058 | 37.5% | 0.986× | 1.006× |
+| [历史树，始终草稿](../methods/INFRASTRUCTURE.md#infra-report-labels) | 8.297 ± 0.075 | 54.0 ± 0.5 | 0.00411 ± 0.00001 | 1.280 ± 0.027 | 13.1% | 2.162× | 1.660× |
+| [历史树，负载感知](../methods/INFRASTRUCTURE.md#infra-report-labels) | 3.783 ± 0.067 | 118.5 ± 2.1 | 0.00249 ± 0.00001 | 1.335 ± 0.058 | 37.5% | 0.986× | 1.006× |
 
 始终草稿路径验证了较多随后被拒绝的 token。batch 1 长尾门控将墙钟因子恢复至 `0.986×`，其三 seed
 波动范围覆盖 1；该门控在本组中的作用是限制低接受率草稿造成的吞吐退化。
@@ -167,11 +169,11 @@ FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B proposal verifier-IS
 
 | 路径 | 在线墙钟（s） | 在线主模型 PFLOPs | cache build（s） | 后台 drain（s） | fresh / reused rollout |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 固定 rollout 条件 IS | 3.442 ± 0.162 | 0.00809 ± 0.00067 | 1.248 ± 0.057 | 0.000 ± 0.000 | 0.0 / 0.0 |
-| pilot/evaluation 分离 | 5.313 ± 0.231 | 0.01250 ± 0.00000 | 1.269 ± 0.100 | 0.000 ± 0.000 | 0.0 / 0.0 |
-| 流式奖励 + run-ahead | 5.605 ± 0.958 | 0.01261 ± 0.00192 | 1.256 ± 0.068 | 7.763 ± 1.927 | 0.0 / 0.0 |
-| SMC forest，fresh-only | 2.985 ± 0.260 | 0.01271 ± 0.00038 | 1.250 ± 0.080 | 0.000 ± 0.000 | 35.3 / 0.0 |
-| SMC forest，条件后缀复用 | 2.571 ± 0.510 | 0.01226 ± 0.00206 | 1.263 ± 0.042 | 0.000 ± 0.000 | 24.7 / 13.3 |
+| [固定 rollout 条件 IS](../methods/INFRASTRUCTURE.md#infra-report-labels) | 3.442 ± 0.162 | 0.00809 ± 0.00067 | 1.248 ± 0.057 | 0.000 ± 0.000 | 0.0 / 0.0 |
+| [pilot/evaluation 分离](../methods/INFRASTRUCTURE.md#infra-report-labels) | 5.313 ± 0.231 | 0.01250 ± 0.00000 | 1.269 ± 0.100 | 0.000 ± 0.000 | 0.0 / 0.0 |
+| [流式奖励 + run-ahead](../methods/INFRASTRUCTURE.md#infra-report-labels) | 5.605 ± 0.958 | 0.01261 ± 0.00192 | 1.256 ± 0.068 | 7.763 ± 1.927 | 0.0 / 0.0 |
+| [SMC forest，fresh-only](../methods/INFRASTRUCTURE.md#infra-report-labels) | 2.985 ± 0.260 | 0.01271 ± 0.00038 | 1.250 ± 0.080 | 0.000 ± 0.000 | 35.3 / 0.0 |
+| [SMC forest，条件后缀复用](../methods/INFRASTRUCTURE.md#infra-report-labels) | 2.571 ± 0.510 | 0.01226 ± 0.00206 | 1.263 ± 0.042 | 0.000 ± 0.000 | 24.7 / 13.3 |
 
 pilot/evaluation 分离相对固定 rollout 的墙钟因子为 `1.544×`，FLOPs 因子为 `1.553×`。候选成本接近
 同质时，额外 pilot 增加在线开销。run-ahead 组只使用低成本数值解析，在线墙钟为 progressive 组的

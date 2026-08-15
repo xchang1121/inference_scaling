@@ -40,7 +40,7 @@ p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{<t}).
 
 下文中，MH 指 Metropolis--Hastings，IS 指 Importance Sampling（重要性采样），SIR 指
 Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指 Sequential Monte Carlo
-（序贯蒙特卡洛）。
+（序贯蒙特卡洛），GRPO 指 Group Relative Policy Optimization（组相对策略优化）。
 
 除专门标注的消融外，重要性修正要求 proposal 在目标有正概率的位置也具有正概率。硬 top-k/top-p 截断可能破坏
 这一条件；权重截断会保留有限方差但引入偏差。
@@ -86,6 +86,58 @@ Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指
 条件能量的分块执行、fresh-tail replay 恒等式、动态候选与冻结 evaluation 生命周期是上述方法在本仓库中的
 组合实现；其有限预算性质以下文公式和测试为准。
 
+<a id="alg-report-labels"></a>
+### 报告中的组合名称
+
+报告中的名称由多个彼此独立的维度组成：
+
+\[
+(\text{参数来源},\ \text{奖励或目标},\ \text{候选来源},\
+ \text{rollout 来源},\ \text{概率修正},\ \text{最终解码规则}).
+\]
+
+名称中的“GRPO”只表示使用 GRPO 训练后的参数；“贪心”或“随机采样”才表示推理规则。名称中的
+“verifier”只表示使用终局正确性奖励；当前 GSM8K 实验的 verifier 是读取标准答案的确定性数值检查器，
+不是另一个经过训练的模型。未写出的维度沿用所在实验的固定设置，不由名称中的某个前缀暗示。
+
+#### 直接生成与训练基线
+
+| 报告名称 | 使用的参数 | 推理时的实际操作 |
+| --- | --- | --- |
+| Base | 原始 1.5B 基础模型 \(\theta_0\) | 每步按 \(p_{\theta_0}(\cdot\mid x,y_{<t})\) 随机抽取一个 token；主实验温度为 1 |
+| Beam-8 | 原始 1.5B 基础模型 \(\theta_0\) | 保留累计 log-probability 最高的 8 条前缀，最终返回最高分序列 |
+| 自一致性投票-8 | 原始 1.5B 基础模型 \(\theta_0\) | 独立随机生成 8 条序列，返回数值答案众数对应的序列 |
+| GRPO 随机采样 | GRPO 训练后的 1.5B 参数 \(\theta_{\mathrm{GRPO}}\) | 每步执行 \(y_t\sim p_{\theta_{\mathrm{GRPO}}}(\cdot\mid x,y_{<t})\)，温度为 1 |
+| GRPO 贪心 | 与上一行完全相同的 \(\theta_{\mathrm{GRPO}}\) | 每步执行 \(y_t=\arg\max_v p_{\theta_{\mathrm{GRPO}}}(v\mid x,y_{<t})\) |
+
+因此，“GRPO 贪心”不是新的训练算法，也不是在 GRPO 中采用贪心 rollout；它只是对同一个已训练
+checkpoint 使用确定性 argmax 解码。这里的 argmax 逐 token 执行，并不求解整条序列的全局最大概率。
+完整拆解为“参数来源 = GRPO checkpoint；推理规则 = 逐 token argmax；推理时不再运行奖励、候选筛选、
+rollout 或 IS 修正”。两条 GRPO 结果之间的差异只来自推理时解码规则。
+
+#### MH、条件 IS 与 replay 标签
+
+| 报告名称 | 候选或状态 | rollout / proposal | 奖励与概率修正 |
+| --- | --- | --- | --- |
+| 幂分布 MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 目标为 \(p_{\theta_0}(y\mid x)^\alpha\) |
+| verifier-MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 使用终局正确性奖励，目标为式 (1) |
+| 标准条件 IS | 候选 block 来自 1.5B 基础模型 | 每个候选后的 rollout 也来自 1.5B 基础模型 | 主质量表以当前 rollout 数值众数为一致答案，匹配时取 \(r=1\)，否则取 0；不读取标准答案，也无需 \(p/q\) |
+| 0.5B proposal 条件 IS | 候选 block 仍来自 1.5B 基础模型 | 只有候选后的 rollout 来自 0.5B 模型 \(q\) | 乘 \(p_{\theta_0}/q\)；无后缀注明时使用 log-ratio 截断 |
+| 0.5B proposal IS（无截断） | 与上一行相同 | 与上一行相同 | 使用未经截断的 \(p_{\theta_0}/q\) |
+| 0.5B rollout（无重评分） | 候选 block 仍来自 1.5B 基础模型 | rollout 来自 0.5B 模型 | 完全删除 \(p_{\theta_0}/q\)，目标改为式 (12) |
+| 标准 verifier-IS | 候选和 rollout 都来自 1.5B 基础模型 | 1.5B on-policy rollout | 用终局正确性奖励估计式 (7) |
+| 0.5B proposal verifier-IS | 候选 block 来自 1.5B 基础模型 | 0.5B rollout | 用终局正确性奖励并乘 \(p_{\theta_0}/q\) |
+| 0.5B rollout verifier-energy | 候选 block 来自 1.5B 基础模型 | 0.5B rollout | 用终局正确性奖励但删除 \(p_{\theta_0}/q\)，对应式 (12) |
+| fresh-only | 候选来自 1.5B 基础模型 | 本轮所需 rollout 全部重新生成 | 不读取历史库 |
+| warm replay | 候选来自 1.5B 基础模型 | 消费已建库 history，并生成独立 fresh tail | 按式 (14) 修正 history；`warm` 表示历史库已存在 |
+| base 候选 + 固定 fresh | 候选只来自 1.5B 基础模型 | 每个候选使用固定数量 fresh rollout | 动态候选实验的无 replay 对照 |
+| 动态候选 + 固定 replay | 候选来自式 (15) 的 base/辅助模型 mixture | 命中时使用固定 history/fresh 数量 | 候选层乘式 (16)，rollout 层使用式 (14) |
+| 动态候选 + 方差--成本分配 | 与上一行相同 | history/fresh 数量由独立 design 数据决定 | 最终 evaluation 预算按式 (19) 冻结 |
+
+这里“0.5B proposal 条件 IS”中的 `proposal` 是 **rollout proposal**，并不表示最终候选 block 来自
+0.5B 模型；只有名称明确写作“动态候选”时，辅助模型才参与候选 block 的生成。`verifier-energy` 用于
+标记无重评分后的不同目标，避免将其误写为 off-policy IS。
+
 <a id="alg-baselines"></a>
 ## 3. 生成与训练基线
 
@@ -109,6 +161,10 @@ Best-of-\(N\) 先独立生成 \(y_1,\ldots,y_N\sim p\)，再按奖励或 self-co
 本仓库中的 GRPO 使用同一基础模型和 GSM8K 数值正确性奖励进行参数训练。若忽略参数化限制，一个带 KL
 正则的理想策略优化问题具有式 (1) 的形式；实际 GRPO 只通过有限 rollout、组内相对优势和有限梯度更新去近似
 该目标。报告因此分别列出训练 FLOPs 与训练后采样 FLOPs；单次推理成本不包含一次性训练成本。
+
+训练结束后得到一个固定策略 \(p_{\theta_{\mathrm{GRPO}}}\)。报告中的“GRPO 随机采样”和“GRPO 贪心”
+都读取这一份参数：前者从该策略的 categorical distribution 抽样，后者逐 token 取 argmax。训练过程、
+奖励和 checkpoint 完全相同，区别只在推理解码。
 
 训练入口为 [`experiments/train_gsm8k_grpo.py`](../../experiments/train_gsm8k_grpo.py)，精确数值奖励实现为
 [`evaluation/grpo_reward.py`](../../src/inference_scaling/evaluation/grpo_reward.py)。

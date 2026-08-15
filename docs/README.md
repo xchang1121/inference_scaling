@@ -10,7 +10,8 @@
 2. [RTX 3090 推理基础设施优化汇总](reports/RTX3090_ROLLOUT_INFRA.md)：连续批处理、rollout/replay
    复用、流式 IS 和 MH 执行优化的墙钟、FLOPs 与适用条件。
 3. [推理算法实现](methods/ALGORITHMS.md)：统一说明所有已实现算法的目标分布、估计量、数学性质、
-   数据生命周期和关键代码。
+   数据生命周期和关键代码；[组合名称](methods/ALGORITHMS.md#alg-report-labels)逐项区分训练参数、
+   奖励、候选与 rollout 来源、概率修正和解码规则。
 4. [推理基础设施实现](methods/INFRASTRUCTURE.md)：统一说明调度、KV、评分、speculation、异步执行、
    Transformers/vLLM 后端和计算量分母。
 5. [GSM8K 统一实验设计](experiments/GSM8K_EXPERIMENT_DESIGN.md)：数据版本、公平性约束、计算量

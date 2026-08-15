@@ -75,6 +75,37 @@
 replay 的统计校正、动态候选和 SMC 数学来源列在[算法文档的方法来源](ALGORITHMS.md#alg-sources)；
 本文件只扩展它们的执行路径与成本账本。
 
+<a id="infra-report-labels"></a>
+### 报告中的实验臂名称
+
+infra 报告中的逗号前是被启用的机制，逗号后是 workload 条件或成本口径。例如，“流式 IS，0.2 s
+verifier”表示启用流式完成回调，并将每条 verifier 的受控耗时设为 0.2 s；它不是一种新的 IS
+权重。“在线”表示只计已经建库后的调用，不含 cache build。
+
+| 报告名称 | 启用的机制 | 与相邻对照的唯一主要差异 |
+| --- | --- | --- |
+| 部分 rollout 续跑 | `AsyncRolloutBroker` 保存未完成 token 并从保存前缀继续 | 对照丢弃部分轨迹并从原始前缀重生成 |
+| 流式 IS，便宜 verifier | 完成一条 rollout 后立即提交奖励 worker | verifier 几乎没有受控延迟 |
+| 流式 IS，0.2 s verifier | 与上一行相同 | 每条相同 verifier 额外加入 0.2 s 延迟 |
+| 确定性历史草稿 | token tree 每步提出最高频 token | target 仍逐位置验证草稿 |
+| 精确随机历史草稿 | 从完整经验分布 \(q_t\) 随机提出 token，并执行式 (5)--(6) | “精确”表示输出仍服从 target，而非草稿一定正确 |
+| MH proposal-tree 预取，便宜奖励 | 为接受与拒绝两种下一状态各预取一个 proposal | reward 几乎没有受控延迟 |
+| MH proposal-tree 预取，0.2 s 奖励 | 与上一行相同 | 每次相同 reward 额外加入 0.2 s 延迟 |
+| delayed acceptance，0.2 s 精确奖励 | surrogate 第一阶段早拒绝，精确奖励执行第二阶段 | 对照对每个 proposal 直接调用带 0.2 s 延迟的精确奖励 |
+| 冻结 replay 混合 proposal，在线 | MH proposal 为 base 与冻结历史后缀的 mixture | “在线”排除历史库构建；含 build 的成本另列 |
+| warm cache 在线阶段 | IS 读取已经评分的 replay 记录 | 排除历史生成和评分成本 |
+| cache build + 首次 warm 查询 | 与上一行相同 | 将历史生成、评分和第一次在线查询全部计入 |
+| 历史树，始终草稿 | 所有 active batch 大小都启用固定草稿长度 | 无负载门控 |
+| 历史树，负载感知 | 只在 active batch 足够小时启用草稿 | 当前实验在长尾 batch 1 启用 |
+| 固定 rollout 条件 IS | 每个候选直接使用固定 evaluation rollout 数 | progressive/SMC 对照 |
+| pilot/evaluation 分离 | pilot 只估计方差和成本，另生成 evaluation | pilot 不进入最终 IS 权重 |
+| 流式奖励 + run-ahead | progressive IS 加完成回调和低优先级后台草稿 | 报告同时计在线路径与最终 background drain |
+| SMC forest，fresh-only | SMC 每个 branch 的 lookahead 全部重新生成 | 禁用条件后缀 reservoir 继承 |
+| SMC forest，条件后缀复用 | 所选 block 匹配时继承并一次性消费条件后缀 | 其余粒子使用 fresh top-up |
+
+算法层的 `Base`、`GRPO 贪心`、`0.5B proposal 条件 IS`、`verifier-MH` 和动态候选等名称见
+[报告组合名称](ALGORITHMS.md#alg-report-labels)。
+
 <a id="infra-request-contract"></a>
 ## 3. 后端协议、随机数与数值一致性
 

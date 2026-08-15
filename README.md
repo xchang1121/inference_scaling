@@ -14,6 +14,7 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 | 比较方法准确率、pass@k 和共享目标 | [GSM8K 方法质量与计算量实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
 | 比较基础设施优化的墙钟、FLOPs 与复用影响 | [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
 | 查看全部算法的数学定义与关键实现 | [推理算法实现](docs/methods/ALGORITHMS.md) |
+| 拆解结果表中的组合方法名称 | [报告中的组合名称](docs/methods/ALGORITHMS.md#alg-report-labels) |
 | 查看全部执行优化、后端与计量方式 | [推理基础设施实现](docs/methods/INFRASTRUCTURE.md) |
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
 | 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
@@ -39,18 +40,20 @@ replay 数据生命周期与代码入口统一收录在[推理算法实现](docs
 
 以下数据来自 32 道固定 GSM8K 测试题、`Qwen2.5-1.5B-Instruct` 和单张 RTX 3090。各方法的奖励目标
 并不完全相同，因此这里只比较单次生成的任务准确率；共享奖励目标的受控比较见完整报告。
+方法名称中的参数来源、候选来源、rollout 来源、奖励和解码规则分别定义在
+[报告中的组合名称](docs/methods/ALGORITHMS.md#alg-report-labels)。
 
 | 方法 | 正确数 / 32 | pass@1 |
 | --- | ---: | ---: |
-| Base | 13 | 40.625% |
-| 幂分布 MH | 12 | 37.500% |
-| 标准条件 IS | 21 | 65.625% |
-| 0.5B proposal 条件 IS | 15 | 46.875% |
-| GRPO 随机采样 | 22 | 68.750% |
+| [Base](docs/methods/ALGORITHMS.md#alg-report-labels) | 13 | 40.625% |
+| [幂分布 MH](docs/methods/ALGORITHMS.md#alg-report-labels) | 12 | 37.500% |
+| [标准条件 IS](docs/methods/ALGORITHMS.md#alg-report-labels) | 21 | 65.625% |
+| [0.5B proposal 条件 IS](docs/methods/ALGORITHMS.md#alg-report-labels) | 15 | 46.875% |
+| [GRPO 随机采样](docs/methods/ALGORITHMS.md#alg-report-labels) | 22 | 68.750% |
 
 结论可以概括为：
 
-- 标准条件 IS 与本地 GRPO 相差 -3.125 个百分点，配对区间跨 0；当前样本只支持二者准确率接近，
+- 标准条件 IS 与 GRPO 随机采样相差 -3.125 个百分点，配对区间跨 0；当前样本只支持二者准确率接近，
   不支持完整输出分布相同。
 - 0.5B off-policy proposal 条件 IS 比标准版本低 18.75 个百分点，当前实现没有保持质量。
 - 幂分布 MH 没有相对 Base 提升 GSM8K 准确率；在统一正确性奖励的 oracle 诊断中，MH 与标准 IS
@@ -67,6 +70,7 @@ replay 数据生命周期与代码入口统一收录在[推理算法实现](docs
 下表统一使用“优化路径 / 对照路径”；小于 1 表示减少。不同实验组的绝对时间不能横比，完整 setting、
 冷启动成本和误差线见 [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)，
 每项机制的原理、关键代码和正确分母见[推理基础设施实现](docs/methods/INFRASTRUCTURE.md)。
+表中 workload 后缀的含义见[实验臂名称](docs/methods/INFRASTRUCTURE.md#infra-report-labels)。
 
 | 优化 | 对照 | 墙钟因子 | 逻辑 FLOPs 因子 | 当前结论 |
 | --- | --- | ---: | ---: | --- |

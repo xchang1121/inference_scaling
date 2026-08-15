@@ -3,6 +3,10 @@
 > 这是工程验证记录，不是当前主实验报告。正式比较见
 > [GSM8K 方法质量与计算量实验](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
+表中的组合名称沿用统一定义；参数来源、候选与 rollout 来源、奖励、概率修正和解码规则见
+[报告中的组合名称](../methods/ALGORITHMS.md#alg-report-labels)。例如，“GRPO 贪心”只表示对同一份
+GRPO 训练参数逐 token 取 argmax，不表示另一种训练方法。
+
 ## 范围
 
 本记录使用 `configs/gsm8k_quick.toml` 和 tag `validated`。主方法、共同目标诊断与 replay 使用官方

@@ -4,6 +4,8 @@
 [推理算法实现](../methods/ALGORITHMS.md)；完整数据版本、模型 revision、运行命令和统计定义见
 [GSM8K 统一实验设计](../experiments/GSM8K_EXPERIMENT_DESIGN.md)；执行层消融见
 [RTX 3090 推理执行与 rollout 复用实验](RTX3090_ROLLOUT_INFRA.md)。
+表中由多个限定词组成的方法名称，均可在[报告中的组合名称](../methods/ALGORITHMS.md#alg-report-labels)
+中查到各部分的独立含义。
 
 ## 报告范围与固定设置
 
@@ -24,14 +26,14 @@
 
 | 方法 | 正确数 / 32 | 准确率 | 推理 PFLOPs | 相对 Base FLOPs | 墙钟 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Base | 13 | 40.625% | 0.0279 | 1.00× | 91.1 s |
-| Beam-8 | 12 | 37.500% | 0.2306 | 8.27× | 130.6 s |
-| 自一致性投票-8 | 14 | 43.750% | 0.1621 | 5.81× | 136.8 s |
-| 幂分布 MH | 12 | 37.500% | 1.3077 | 46.88× | 1485.3 s |
-| 标准条件 IS | 21 | 65.625% | 1.3706 | 49.13× | 422.1 s |
-| 0.5B proposal 条件 IS | 15 | 46.875% | 2.4724 | 88.63× | 422.8 s |
-| GRPO 随机采样 | 22 | 68.750% | 0.0254 | 0.91× | 124.9 s |
-| GRPO 贪心 | 18 | 56.250% | 0.0263 | 0.94× | 127.2 s |
+| [Base](../methods/ALGORITHMS.md#alg-report-labels) | 13 | 40.625% | 0.0279 | 1.00× | 91.1 s |
+| [Beam-8](../methods/ALGORITHMS.md#alg-report-labels) | 12 | 37.500% | 0.2306 | 8.27× | 130.6 s |
+| [自一致性投票-8](../methods/ALGORITHMS.md#alg-report-labels) | 14 | 43.750% | 0.1621 | 5.81× | 136.8 s |
+| [幂分布 MH](../methods/ALGORITHMS.md#alg-report-labels) | 12 | 37.500% | 1.3077 | 46.88× | 1485.3 s |
+| [标准条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 21 | 65.625% | 1.3706 | 49.13× | 422.1 s |
+| [0.5B proposal 条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 15 | 46.875% | 2.4724 | 88.63× | 422.8 s |
+| [GRPO 随机采样](../methods/ALGORITHMS.md#alg-report-labels) | 22 | 68.750% | 0.0254 | 0.91× | 124.9 s |
+| [GRPO 贪心](../methods/ALGORITHMS.md#alg-report-labels) | 18 | 56.250% | 0.0263 | 0.94× | 127.2 s |
 
 ![GSM8K 单次生成准确率与推理计算量](../assets/gsm8k_3090_aligned_quality_compute.svg)
 
@@ -54,15 +56,15 @@
 
 | 方法 | pass@1 | pass@2 | pass@4 | pass@8 | 8 draw 推理 PFLOPs |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Base | 39.844% | 52.009% | 61.518% | 68.750% | 0.1613 |
-| 幂分布 MH | 38.281% | 47.098% | 53.571% | 59.375% | 13.2872 |
-| GRPO 随机采样 | 58.984% | 68.638% | 75.536% | 81.250% | 0.1516 |
-| 标准条件 IS | 58.203% | 63.728% | 68.929% | 75.000% | 11.0284 |
-| 0.5B proposal IS（截断） | 46.484% | 53.125% | 58.705% | 62.500% | 19.4781 |
-| 0.5B proposal IS（无截断） | 46.484% | 53.348% | 59.509% | 65.625% | 19.2690 |
-| 0.5B rollout（无重评分） | 45.313% | 52.009% | 58.839% | 65.625% | 4.6542 |
+| [Base](../methods/ALGORITHMS.md#alg-report-labels) | 39.844% | 52.009% | 61.518% | 68.750% | 0.1613 |
+| [幂分布 MH](../methods/ALGORITHMS.md#alg-report-labels) | 38.281% | 47.098% | 53.571% | 59.375% | 13.2872 |
+| [GRPO 随机采样](../methods/ALGORITHMS.md#alg-report-labels) | 58.984% | 68.638% | 75.536% | 81.250% | 0.1516 |
+| [标准条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 58.203% | 63.728% | 68.929% | 75.000% | 11.0284 |
+| [0.5B proposal IS（截断）](../methods/ALGORITHMS.md#alg-report-labels) | 46.484% | 53.125% | 58.705% | 62.500% | 19.4781 |
+| [0.5B proposal IS（无截断）](../methods/ALGORITHMS.md#alg-report-labels) | 46.484% | 53.348% | 59.509% | 65.625% | 19.2690 |
+| [0.5B rollout（无重评分）](../methods/ALGORITHMS.md#alg-report-labels) | 45.313% | 52.009% | 58.839% | 65.625% | 4.6542 |
 
-标准条件 IS 相对 GRPO 的 pass@1 差为 -0.781 个百分点，区间为 [-6.250, 4.297]；pass@8 差为
+标准条件 IS 相对 GRPO 随机采样的 pass@1 差为 -0.781 个百分点，区间为 [-6.250, 4.297]；pass@8 差为
 -6.250 个百分点，区间为 [-15.625, 0]。两者的单次成功率接近，GRPO 在较大采样预算下得到更高覆盖率。
 两个 0.5B proposal 版本的 pass@1 均比标准 IS 低 11.719 个百分点。移除权重截断后，pass@8 由
 62.500% 升至 65.625%，说明当前 proposal 与 base 的重叠仍造成较高的重要性权重方差。
@@ -96,15 +98,15 @@ PFLOPs，两个后端的 `score_calls` 与 `scored_tokens` 均为 0。截断重�
 
 | 方法 | 正确数 / 32 | 准确率 | 推理 PFLOPs | 墙钟 |
 | --- | ---: | ---: | ---: | ---: |
-| verifier-MH | 25 | 78.125% | 1.3028 | 2319.7 s |
-| 标准 verifier-IS | 24 | 75.000% | 1.4839 | 439.7 s |
-| 0.5B proposal verifier-IS（1.5B 重评分） | 20 | 62.500% | 2.2077 | 476.5 s |
-| 0.5B rollout verifier-energy（无重评分） | 20 | 62.500% | 0.5740 | 556.2 s |
-| GRPO 随机采样 | 22 | 68.750% | 0.0254 | 124.9 s |
+| [verifier-MH](../methods/ALGORITHMS.md#alg-report-labels) | 25 | 78.125% | 1.3028 | 2319.7 s |
+| [标准 verifier-IS](../methods/ALGORITHMS.md#alg-report-labels) | 24 | 75.000% | 1.4839 | 439.7 s |
+| [0.5B proposal verifier-IS（1.5B 重评分）](../methods/ALGORITHMS.md#alg-report-labels) | 20 | 62.500% | 2.2077 | 476.5 s |
+| [0.5B rollout verifier-energy（无重评分）](../methods/ALGORITHMS.md#alg-report-labels) | 20 | 62.500% | 0.5740 | 556.2 s |
+| [GRPO 随机采样](../methods/ALGORITHMS.md#alg-report-labels) | 22 | 68.750% | 0.0254 | 124.9 s |
 
 verifier-MH 与标准 verifier-IS 的准确率差为 3.125 个百分点，区间为 [-9.375, 15.625]；二者相对
-GRPO 分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种直接采样方法达到与本地 GRPO 接近或
-更高的点估计；32 题样本不足以判断完整序列分布等价。
+GRPO 随机采样分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种直接采样方法达到与本地
+GRPO 随机采样接近或更高的点估计；32 题样本不足以判断完整序列分布等价。
 
 经过 1.5B 重评分的 0.5B proposal verifier-IS 相对标准版本低 12.5 个百分点，配对 bootstrap 95%
 区间为 [-28.125, 0]，FLOPs 为标准版本的 `1.488×`。标准版本与该行来自不同运行批次，墙钟不作
@@ -135,10 +137,10 @@ GRPO 分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种�
 
 | 方法 | 平均 TV | 平均 JS（bit） |
 | --- | ---: | ---: |
-| Base | 0.4375 | 0.3267 |
-| verifier-MH | 0.2500 | 0.1423 |
-| 标准 verifier-IS | 0.2500 | 0.1423 |
-| 0.5B proposal verifier-IS | 0.2500 | 0.1423 |
+| [Base](../methods/ALGORITHMS.md#alg-report-labels) | 0.4375 | 0.3267 |
+| [verifier-MH](../methods/ALGORITHMS.md#alg-report-labels) | 0.2500 | 0.1423 |
+| [标准 verifier-IS](../methods/ALGORITHMS.md#alg-report-labels) | 0.2500 | 0.1423 |
+| [0.5B proposal verifier-IS](../methods/ALGORITHMS.md#alg-report-labels) | 0.2500 | 0.1423 |
 
 三种直接采样方法的答案级距离点估计均低于 Base。TV bootstrap 区间上界为 0.4063；该样本规模只提供
 趋势性证据。
@@ -152,8 +154,8 @@ rollout，并保留 1 条 fresh base rollout；统计修正见
 
 | 路径 | 正确数 / 32 | 准确率 |
 | --- | ---: | ---: |
-| fresh-only | 23 | 71.875% |
-| warm replay | 22 | 68.750% |
+| [fresh-only](../methods/ALGORITHMS.md#alg-report-labels) | 23 | 71.875% |
+| [warm replay](../methods/ALGORITHMS.md#alg-report-labels) | 22 | 68.750% |
 
 warm replay 相对 fresh-only 的准确率差为 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
 [-12.500, 6.250]。当前样本对稳定质量差异与质量等价均缺乏充分分辨率。
@@ -166,18 +168,18 @@ evaluation rollout；主模型与 proposal 温度为 1.0，奖励温度为 0.1�
 
 | 实验臂 | 候选与 rollout 设置 |
 | --- | --- |
-| base 候选 + 固定 fresh | 候选来自 1.5B base；每候选 3 条 fresh rollout |
-| 动态候选 + 固定 replay | 候选来自 `0.5 × base + 0.5 × 0.5B proposal`；库存充足时使用 2 条历史与 1 条 fresh |
-| 动态候选 + 方差—成本分配 | 沿用相同候选 proposal；独立 design 样本决定冻结后的 evaluation 配额 |
+| [base 候选 + 固定 fresh](../methods/ALGORITHMS.md#alg-report-labels) | 候选来自 1.5B base；每候选 3 条 fresh rollout |
+| [动态候选 + 固定 replay](../methods/ALGORITHMS.md#alg-report-labels) | 候选来自 `0.5 × base + 0.5 × 0.5B proposal`；库存充足时使用 2 条历史与 1 条 fresh |
+| [动态候选 + 方差—成本分配](../methods/ALGORITHMS.md#alg-report-labels) | 沿用相同候选 proposal；独立 design 样本决定冻结后的 evaluation 配额 |
 
 算法定义见[动态候选与外层 IS](../methods/ALGORITHMS.md#alg-dynamic-is)和
 [方差—成本预算分配](../methods/ALGORITHMS.md#alg-budget-allocation)。
 
 | 方法 | 正确数 / 32 | 准确率 | 辅助候选占比 | rollout 复用率 | 平均外层 ESS | 平均最终 ESS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| base 候选 + 固定 fresh | 23 | 71.875% | 0% | 0% | 8.000 | 6.323 |
-| 动态候选 + 固定 replay | 21 | 65.625% | 51.282% | 34.943% | 4.365 | 3.424 |
-| 动态候选 + 方差—成本分配 | 23 | 71.875% | 51.282% | 5.707% | 4.382 | 3.315 |
+| [base 候选 + 固定 fresh](../methods/ALGORITHMS.md#alg-report-labels) | 23 | 71.875% | 0% | 0% | 8.000 | 6.323 |
+| [动态候选 + 固定 replay](../methods/ALGORITHMS.md#alg-report-labels) | 21 | 65.625% | 51.282% | 34.943% | 4.365 | 3.424 |
+| [动态候选 + 方差—成本分配](../methods/ALGORITHMS.md#alg-report-labels) | 23 | 71.875% | 51.282% | 5.707% | 4.382 | 3.315 |
 
 动态固定组相对 base 固定组的准确率差为 -6.25 个百分点，逐题配对 bootstrap 95% 区间为
 [-21.875, 9.375]；逐题赢 2、输 4、平 26。方差—成本版本相对动态固定组为 +6.25 个百分点，区间为
@@ -194,13 +196,13 @@ evaluation rollout；主模型与 proposal 温度为 1.0，奖励温度为 0.1�
 
 | 维度 | 设置与正确数 | 8 题合计 PFLOPs | 观测结果 |
 | --- | --- | --- | --- |
-| 标准 IS 候选数 `M`，`K=3` | `3/5/8/10 → 6/6/6/5` | `0.1281/0.2064/0.3068/0.3861` | `M=3` 达到本组最高点估计 |
-| 0.5B proposal IS 候选数 `M` | `3/5/8/10 → 3/5/4/5` | `0.2299/0.3602/0.5730/0.6755` | 各点位于标准 IS 的质量—FLOPs 前沿下方 |
-| 标准 IS rollout 数 `K`，`M=10` | `1/3/5 → 5/5/6` | `0.2319/0.3861/0.6063` | `K=5` 增加一题正确，同时增加计算成本 |
+| [标准 IS](../methods/ALGORITHMS.md#alg-report-labels) 候选数 `M`，`K=3` | `3/5/8/10 → 6/6/6/5` | `0.1281/0.2064/0.3068/0.3861` | `M=3` 达到本组最高点估计 |
+| [0.5B proposal IS](../methods/ALGORITHMS.md#alg-report-labels) 候选数 `M` | `3/5/8/10 → 3/5/4/5` | `0.2299/0.3602/0.5730/0.6755` | 各点位于标准 IS 的质量—FLOPs 前沿下方 |
+| [标准 IS](../methods/ALGORITHMS.md#alg-report-labels) rollout 数 `K`，`M=10` | `1/3/5 → 5/5/6` | `0.2319/0.3861/0.6063` | `K=5` 增加一题正确，同时增加计算成本 |
 | 引导阶段数 `S` | `2/4/8/16 → 5/6/6/6` | `0.1293/0.3068/0.7426/1.8104` | `S=4` 后点估计保持 6/8 |
-| MH 幂次 `α` | `1/2/4/8 → 3/4/6/3` | `0.2895/0.3067/0.3108/0.3148` | `α=4` 在本组得到最高点估计 |
-| MH 每阶段更新数 `U` | `1/2/5/10 → 3/5/6/7` | `0.1526/0.2266/0.4726/0.8569` | 更新数增加改善有限链结果，边际成本同步上升 |
-| 0.5B proposal 权重 | `截断/无截断 → 4/5` | `0.5730/0.5253` | 单次消融相差一题；32×8 网格的 pass@1 相同 |
+| [MH](../methods/ALGORITHMS.md#alg-report-labels) 幂次 `α` | `1/2/4/8 → 3/4/6/3` | `0.2895/0.3067/0.3108/0.3148` | `α=4` 在本组得到最高点估计 |
+| [MH](../methods/ALGORITHMS.md#alg-report-labels) 每阶段更新数 `U` | `1/2/5/10 → 3/5/6/7` | `0.1526/0.2266/0.4726/0.8569` | 更新数增加改善有限链结果，边际成本同步上升 |
+| [0.5B proposal](../methods/ALGORITHMS.md#alg-report-labels) 权重 | `截断/无截断 → 4/5` | `0.5730/0.5253` | 单次消融相差一题；32×8 网格的 pass@1 相同 |
 | 最大生成长度 | 标准 IS：`128/256/512 → 4/7/6` | `0.2669/0.3151/0.2381` | 256 token 在本组取得最高点估计 |
 
 奖励消融中，标准 IS 的 self-consistency 得到 6/8；平均 token 对数概率、平均负熵和 self-certainty
