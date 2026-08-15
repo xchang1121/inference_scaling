@@ -121,6 +121,36 @@ class DiffusionMHConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DiffusionPowerMHConfig:
+    """Finite-step sharpening of an exact reverse-trajectory policy."""
+
+    total_length: int = 128
+    updates: int = 8
+    alpha: float = 2.0
+
+    def __post_init__(self) -> None:
+        _positive("total_length", self.total_length)
+        _positive("updates", self.updates)
+        _positive("alpha", self.alpha)
+
+
+@dataclass(frozen=True, slots=True)
+class DiffusionBlockBeamConfig:
+    """Sampled block search used as the SDAR counterpart of token beam search."""
+
+    total_length: int = 128
+    decision_block_size: int = 32
+    width: int = 8
+    branching_factor: int = 2
+
+    def __post_init__(self) -> None:
+        for name in ("total_length", "decision_block_size", "width", "branching_factor"):
+            _positive(name, getattr(self, name))
+        if self.total_length % self.decision_block_size:
+            raise ValueError("total_length must be divisible by decision_block_size")
+
+
+@dataclass(frozen=True, slots=True)
 class VRPOSamplingConfig:
     """Monte Carlo layout for the masked-diffusion ELBO estimator."""
 
@@ -138,8 +168,10 @@ class VRPOSamplingConfig:
 
 
 __all__ = [
+    "DiffusionBlockBeamConfig",
     "DiffusionISConfig",
     "DiffusionMHConfig",
+    "DiffusionPowerMHConfig",
     "DiffusionSamplingConfig",
     "RemaskingStrategy",
     "VRPOSamplingConfig",

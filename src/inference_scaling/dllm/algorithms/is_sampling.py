@@ -227,15 +227,16 @@ def run_conditional_diffusion_is(
     and proposal kernels.
     """
 
-    if base_sampling.block_length != config.block_size:
-        raise ValueError("base_sampling.block_length must equal config.block_size")
+    # ``config.block_size`` is the conditional-IS decision interval.  SDAR has
+    # a smaller model-native diffusion block (four tokens in the released
+    # checkpoint), so one decision may contain several completed SDAR blocks.
     base_sampling.validate_generation_length(config.block_size)
     rollout_backend = rollout_backend or base_backend
     rollout_sampling = rollout_sampling or base_sampling
     target_rollout_backend = target_rollout_backend or base_backend
     target_rollout_sampling = target_rollout_sampling or base_sampling
-    if rollout_sampling.block_length != config.block_size:
-        raise ValueError("rollout_sampling.block_length must equal config.block_size")
+    rollout_sampling.validate_generation_length(config.block_size)
+    rollout_sampling.validate_generation_length(config.total_length)
 
     needs_correction = _needs_trajectory_correction(
         rollout_backend=rollout_backend,

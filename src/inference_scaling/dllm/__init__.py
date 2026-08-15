@@ -1,8 +1,10 @@
 """Diffusion language-model sampling, weighting, and alignment utilities."""
 
 from inference_scaling.dllm.config import (
+    DiffusionBlockBeamConfig,
     DiffusionISConfig,
     DiffusionMHConfig,
+    DiffusionPowerMHConfig,
     DiffusionSamplingConfig,
     VRPOSamplingConfig,
 )
@@ -24,9 +26,11 @@ from inference_scaling.dllm.vrpo import (
 
 __all__ = [
     "DiffusionBackend",
+    "DiffusionBlockBeamConfig",
     "DiffusionGenerationRequest",
     "DiffusionISConfig",
     "DiffusionMHConfig",
+    "DiffusionPowerMHConfig",
     "DiffusionSample",
     "DiffusionSamplingConfig",
     "DiffusionTraceStep",

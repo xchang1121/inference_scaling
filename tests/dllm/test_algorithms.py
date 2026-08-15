@@ -90,6 +90,61 @@ def test_conditional_is_applies_same_trajectory_off_policy_ratio():
     assert all(rollout.target_trajectory_logprob is not None for rollout in first_rollouts)
 
 
+def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
+    base = _backend((0.0, 0.5, 1.0, -2.0), "base")
+    sampling = DiffusionSamplingConfig(
+        block_length=2,
+        steps_per_block=2,
+        temperature=1.0,
+        remasking="random",
+    )
+
+    result = run_conditional_diffusion_is(
+        base_backend=base,
+        prompt=(0,),
+        config=DiffusionISConfig(
+            candidate_count=2,
+            rollout_count=1,
+            block_size=4,
+            total_length=8,
+            reward_temperature=1.0,
+        ),
+        base_sampling=sampling,
+        reward=lambda _prompt, continuation: float(sum(continuation)),
+        seed=17,
+    )
+
+    assert len(result.steps) == 2
+    assert all(len(candidate.token_ids) == 4 for step in result.steps for candidate in step.candidates)
+    assert len(result.token_ids) == 8
+
+
+def test_conditional_is_rejects_decision_block_that_splits_native_block():
+    base = _backend((0.0, 0.5, 1.0, -2.0), "base")
+    sampling = DiffusionSamplingConfig(
+        block_length=4,
+        steps_per_block=4,
+        temperature=1.0,
+        remasking="random",
+    )
+
+    with pytest.raises(ValueError, match="divisible by block_length"):
+        run_conditional_diffusion_is(
+            base_backend=base,
+            prompt=(0,),
+            config=DiffusionISConfig(
+                candidate_count=2,
+                rollout_count=1,
+                block_size=6,
+                total_length=12,
+                reward_temperature=1.0,
+            ),
+            base_sampling=sampling,
+            reward=lambda _prompt, continuation: float(sum(continuation)),
+            seed=17,
+        )
+
+
 def _empty_sample(value: int, request_id: str) -> DiffusionSample:
     return DiffusionSample(
         prefix=(),
