@@ -7,10 +7,12 @@ import hashlib
 import os
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download as huggingface_snapshot_download
 
 MODEL_ID = "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
 REVISION = "783d3467f108d28ac0a78d3e41af16ab05cabd8d"
+MODELSCOPE_ID = "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
+MODELSCOPE_REVISION = "master"
 WEIGHTS = (
     (
         "model-00001-of-00003.safetensors",
@@ -72,6 +74,24 @@ def main() -> None:
         help="Optional Hugging Face-compatible endpoint; the official SHA is always checked.",
     )
     parser.add_argument(
+        "--source",
+        choices=("huggingface", "modelscope"),
+        default="huggingface",
+        help="Download transport. Both sources are accepted only after official SHA validation.",
+    )
+    parser.add_argument(
+        "--modelscope-workers",
+        type=int,
+        default=8,
+        help="Range streams within one ModelScope weight shard.",
+    )
+    parser.add_argument(
+        "--modelscope-part-mb",
+        type=int,
+        default=32,
+        help="Recoverable ModelScope byte-range size in MiB.",
+    )
+    parser.add_argument(
         "--metadata-only",
         action="store_true",
         help="Download code/tokenizer/config but omit the 14.7 GB weight shards.",
@@ -93,17 +113,41 @@ def main() -> None:
         ]
         if not args.metadata_only:
             patterns.append("*.safetensors")
-        snapshot_download(
-            MODEL_ID,
-            revision=REVISION,
-            local_dir=args.output,
-            allow_patterns=patterns,
-        )
+        if args.source == "huggingface":
+            huggingface_snapshot_download(
+                MODEL_ID,
+                revision=REVISION,
+                local_dir=args.output,
+                allow_patterns=patterns,
+            )
+        else:
+            if args.modelscope_workers <= 0 or args.modelscope_part_mb <= 0:
+                raise ValueError("ModelScope worker count and part size must be positive")
+            os.environ["MODELSCOPE_DOWNLOAD_PARALLEL_WORKERS"] = str(
+                args.modelscope_workers
+            )
+            os.environ["MODELSCOPE_DOWNLOAD_PART_SIZE_MB"] = str(
+                args.modelscope_part_mb
+            )
+            os.environ["MODELSCOPE_DOWNLOAD_MAX_RETRIES"] = "20"
+            os.environ["MODELSCOPE_DOWNLOAD_TIMEOUT"] = "120"
+            from modelscope.hub.snapshot_download import (
+                snapshot_download as modelscope_snapshot_download,
+            )
+
+            modelscope_snapshot_download(
+                MODELSCOPE_ID,
+                revision=MODELSCOPE_REVISION,
+                local_dir=str(args.output),
+                allow_patterns=patterns,
+                max_workers=1,
+            )
     if args.metadata_only:
         print(
             {
                 "model_id": MODEL_ID,
                 "revision": REVISION,
+                "download_source": args.source,
                 "path": str(args.output.resolve()),
                 "weights": "not requested",
             }
