@@ -10,7 +10,7 @@
 给定 token 化提示 $`x`$，记基础模型的完整生成分布为
 
 ```math
-p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{<t}).
+p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{\lt t}).
 ```
 
 在已经生成前缀 $`g`$ 时，下一段候选记为 $`z`$，候选后的补全记为 $`u`$。奖励写作
@@ -30,7 +30,7 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 ```math
 \pi_\alpha(y\mid x)
 =\frac{p(y\mid x)^\alpha}{\sum_{y'}p(y'\mid x)^\alpha},
-\qquad \alpha>0.
+\qquad \alpha\gt 0.
 
 ```
 
@@ -169,8 +169,8 @@ $`q_s(\cdot\mid x,y_{\lt s})`$ 生成新后缀 $`v`$。接受概率为
 A(y\to y')=
 \min\left\{1,
 \exp\left[
-\alpha\bigl(\log p(v\mid x,y_{<s})-\log p(y_{\ge s}\mid x,y_{<s})\bigr)
-+\log q_s(y_{\ge s}\mid x,y_{<s})-\log q_s(v\mid x,y_{<s})
+\alpha\bigl(\log p(v\mid x,y_{\lt s})-\log p(y_{\ge s}\mid x,y_{\lt s})\bigr)
++\log q_s(y_{\ge s}\mid x,y_{\lt s})-\log q_s(v\mid x,y_{\lt s})
 \right]\right\}.
 
 ```
@@ -185,7 +185,7 @@ A(y\to y')=
 固定长度空间上处处为正，转移矩阵任意两行都有正重叠。写
 
 ```math
-\delta(K)=1-\min_{y,y'}\sum_v\min\{K(y,v),K(y',v)\}<1,
+\delta(K)=1-\min_{y,y'}\sum_v\min\{K(y,v),K(y',v)\}\lt 1,
 ```
 
 则最终长度的核满足
@@ -222,9 +222,9 @@ EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/backends/absorbing.p
 ```math
 A_r(y\to y')=\min\left\{1,
 \exp\left[
-\log\frac{p(y'_{\ge s}\mid x,y_{<s})}{p(y_{\ge s}\mid x,y_{<s})}
+\log\frac{p(y'_{\ge s}\mid x,y_{\lt s})}{p(y_{\ge s}\mid x,y_{\lt s})}
 +\frac{r(y')-r(y)}{\tau}
-+\log\frac{q_s(y_{\ge s}\mid x,y_{<s})}{q_s(y'_{\ge s}\mid x,y_{<s})}
++\log\frac{q_s(y_{\ge s}\mid x,y_{\lt s})}{q_s(y'_{\ge s}\mid x,y_{\lt s})}
 \right]\right\}.
 
 ```
@@ -437,7 +437,7 @@ store.add_evaluation(independent_reserve_record)
 
 ```math
 q_c(z\mid x,g)=(1-\lambda)p(z\mid x,g)+\lambda a(z\mid x,g),
-\qquad 0\le\lambda<1,
+\qquad 0\le\lambda\lt 1,
 
 ```
 
@@ -622,9 +622,9 @@ if log(u1) <= stage_one:
 冻结历史后缀经验分布 $`h_{\mathrm{emp}}`$，并与基础模型组成混合 proposal
 
 ```math
-q_s(v\mid x,y_{<s})=(1-\lambda)p(v\mid x,y_{<s})
-+\lambda h_{\mathrm{emp}}(v\mid x,y_{<s}),
-\qquad 0\le\lambda<1.
+q_s(v\mid x,y_{\lt s})=(1-\lambda)p(v\mid x,y_{\lt s})
++\lambda h_{\mathrm{emp}}(v\mid x,y_{\lt s}),
+\qquad 0\le\lambda\lt 1.
 
 ```
 
