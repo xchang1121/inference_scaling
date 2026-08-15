@@ -255,14 +255,14 @@ def _svg(summary: dict[str, Any], path: Path) -> None:
         "smc_reuse",
     ]
     labels = {
-        "baseline": "无草稿",
+        "baseline": "普通解码",
         "history_tree_static": "静态草稿",
         "history_tree_load_aware": "负载感知",
         "conditional_fixed": "固定条件 IS",
         "progressive": "Pilot/Eval",
         "progressive_streaming_runahead": "流式+预生成",
-        "smc_no_reuse": "SMC 不复用",
-        "smc_reuse": "SMC 复用",
+        "smc_no_reuse": "SMC fresh-only",
+        "smc_reuse": "SMC 后缀复用",
     }
     width, height = 1480, 650
     margin_x, top = 90, 105
@@ -321,12 +321,12 @@ def _svg(summary: dict[str, Any], path: Path) -> None:
     panel(margin_x + panel_width + gap, algorithm_order, summary["algorithm"], "算法层")
     parts.extend(
         [
-            '<text x="90" y="610" class="sub">注意：静态草稿的分母是无草稿；SMC 复用的直接分母是 SMC 不复用。cache build 与后台 drain 未并入柱高。</text>',
+            '<text x="90" y="610" class="sub">计量范围：静态草稿以普通解码为分母；SMC 条件后缀复用以 fresh-only SMC 为分母；柱高仅含在线墙钟。</text>',
             "</svg>",
         ]
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(parts), encoding="utf-8")
+    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
 
 
 def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
@@ -338,19 +338,19 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
         "",
         "## 实验设置",
         "",
-        "该实验只回答基础设施成本问题，不把单道题的准确率当作方法效果结论。三次运行使用固定的 Qwen2.5-1.5B-Instruct、BF16、公开且校验过哈希的 GSM8K test 第 1311 题、64 token 上限、16 token block，以及相同请求级随机数构造；仅改变被消融的基础设施。解码层依次提交 active batch 4、2、1，模拟 rollout 尾部逐渐变稀。算法层使用 3 个候选、每候选 2 条总 rollout 预算；SMC 使用 3 个粒子、每粒子 2 个分支。",
+        "本实验测量基础设施成本。三次运行使用固定的 Qwen2.5-1.5B-Instruct、BF16、公开且校验过哈希的 GSM8K test 第 1311 题、64 token 上限、16 token block 和相同请求级随机数；实验变量为被消融的基础设施。解码层依次提交 active batch 4、2、1，模拟 rollout 尾部逐渐变稀。算法层使用 3 个候选、每候选 2 条总 rollout 预算；Sequential Monte Carlo（SMC，序贯蒙特卡洛）使用 3 个粒子、每粒子 2 个分支。单题结果用于基础设施消融，方法质量排序见完整 GSM8K 实验。",
         "",
-        "主模型计算量按 `2 × 参数量 × 实际 target forward token slots` 估算；它覆盖 prefill、decode、评分以及被拒绝草稿的 target 验证，未包含 attention 的长度二次项、CPU token tree、采样和奖励解析。cache build、在线路径和后台 drain 分开报告。奖励使用标准答案 verifier 仅为稳定诊断算法关系，不能视为可部署 setting。",
+        "主模型计算量按 `2 × 参数量 × 实际 target forward token slots` 估算；它覆盖 prefill、decode、评分以及被拒绝草稿的 target 验证。attention 的长度二次项、CPU token tree、采样和奖励解析位于估算范围之外。cache build、在线路径和后台 drain 分开报告。标准答案 verifier 用于受控算法诊断，部署实验需采用测试时可用的 verifier。",
         "",
         f"![RTX 3090 rollout 基础设施消融]({svg_path.as_posix()})",
         "",
         "## 解码层结果",
         "",
-        "| 路径 | 在线墙钟时间（s） | 输出 token/s | 主模型 PFLOPs | cache build（s） | 草稿接受率 | 相对无草稿墙钟 |",
+        "| 路径 | 在线墙钟时间（s） | 输出 token/s | 主模型 PFLOPs | cache build（s） | 草稿接受率 | 相对普通解码墙钟 |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     decode_labels = {
-        "baseline": "无草稿",
+        "baseline": "普通自回归解码",
         "history_tree_static": "历史树，始终草稿",
         "history_tree_load_aware": "历史树，负载感知",
     }
@@ -371,7 +371,7 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
     lines.extend(
         [
             "",
-            "静态草稿相对无草稿更慢，因为低接受率会让 target 一次验证多个随后丢弃的 token；这条对照说明不能把 speculative decoding 默认当作加速。KV 裁剪避免拒绝后重新 prefill，而负载策略在 batch 4 和 2 保留普通批处理、只在 batch 1 长尾启用草稿。其平均在线时间基本回到无草稿基线，同时只增加很少的 target FLOPs。BF16 下单请求验证与批量基线的数值路径不同，因此 token trace 不要求逐条完全相等；理论分布不因草稿改变，FP32 有限状态测试另外验证固定随机流的一致性。",
+            "静态草稿的低接受率增加了 target 验证 slots，在线时间高于普通自回归解码。KV 裁剪保留拒绝位置之前的缓存；负载策略在 batch 4 和 2 使用普通批处理，在 batch 1 长尾启用草稿。该策略的平均在线时间接近普通解码基线，target FLOPs 略有增加。BF16 下单请求验证与批量基线采用不同数值 kernel，可能形成不同 token trace；分布正确性由 FP32 有限状态测试和固定随机流测试验证。",
             "",
             "## 算法层结果",
             "",
@@ -383,8 +383,8 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
         "conditional_fixed": "固定 rollout 条件 IS",
         "progressive": "pilot/evaluation 分离",
         "progressive_streaming_runahead": "流式奖励 + run-ahead",
-        "smc_no_reuse": "SMC forest，不复用",
-        "smc_reuse": "SMC forest，复用",
+        "smc_no_reuse": "SMC forest，fresh-only",
+        "smc_reuse": "SMC forest，条件后缀复用",
     }
     for name in (
         "conditional_fixed",
@@ -411,15 +411,15 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
     lines.extend(
         [
             "",
-            f"pilot/evaluation 分离相对一次性固定 rollout 的在线墙钟因子为 `{progressive['wall_time_factor']['mean']:.3f}×`，FLOPs 因子为 `{progressive['main_model_flops_factor']['mean']:.3f}×`。两阶段必须先完成 pilot 再冻结预算，因此在候选成本近似相同、奖励解析很便宜的这个小 workload 上没有速度收益；它保留的价值是避免自适应预算直接读取 evaluation 值，并在异质 proposal、变长 rollout 或 replay 成本差异明显时重新分配预算。",
+            f"pilot/evaluation 分离相对一次性固定 rollout 的在线墙钟因子为 `{progressive['wall_time_factor']['mean']:.3f}×`，FLOPs 因子为 `{progressive['main_model_flops_factor']['mean']:.3f}×`。两阶段先完成 pilot 再冻结预算；当前候选成本接近同质，额外 pilot 增加在线成本。该设计支持异质 proposal、变长 rollout 或 replay 成本差异条件下的预算分配。",
             "",
-            f"流式奖励 + run-ahead 相对纯 progressive 的在线墙钟因子为 `{runahead['wall_time_factor']['mean']:.3f}×`。本实验的正则数值 verifier 几乎没有 CPU 尾部，后台工作没有足够空泡可隐藏；其 drain 已单列，因此不能把预生成 token 写成免费。默认配置保持 run-ahead 关闭，只有实测 reward/KV 空泡足够大时才开启。",
+            f"流式奖励 + run-ahead 相对纯 progressive 的在线墙钟因子为 `{runahead['wall_time_factor']['mean']:.3f}×`。本实验的正则数值 verifier 的 CPU 尾部接近零，可重叠空隙有限；后台 drain 已单列。run-ahead 适用于实测 reward 或 KV 调度空隙足够大的 workload。",
             "",
-            f"SMC rollout forest 的复用版相对不复用版墙钟因子为 `{smc['wall_time_factor']['mean']:.3f}×`，主模型 FLOPs 因子为 `{smc['main_model_flops_factor']['mean']:.3f}×`。这是直接同算法、同粒子和分支 setting 的加速比较；复用来自上一层 lookahead 中与所选子 block 匹配的条件后缀，缺少的粒子仍用 fresh base rollout 补齐。",
+            f"SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `{smc['wall_time_factor']['mean']:.3f}×`，主模型 FLOPs 因子为 `{smc['main_model_flops_factor']['mean']:.3f}×`。两条路径使用相同算法、粒子数和分支数；复用来源为上一层 lookahead 中与所选子 block 匹配的条件后缀，缺少的粒子由 fresh base rollout 补齐。",
             "",
             "## vLLM 复现实验状态",
             "",
-            "同一入口支持 `--backend vllm`：常驻 `AsyncLLM` 使用原生 global suffix tree，并从 vLLM 原生计数器读取 drafted/accepted token，把被拒绝的验证 token 加回主模型 FLOPs。active-batch 动态表只在专门的 load-aware arm 中显式启用；算法层默认使用静态 suffix，避免把 vLLM 0.25 的实验性动态调度开销混入算法比较。当前 RTX 3090 位于 Windows 主机，未安装 WSL；vLLM 不原生支持 Windows，因此这里没有伪造 vLLM 数值。安装 WSL2/Linux 环境后可用下方命令生成同 schema 的结果，再交给同一汇总器：",
+            "同一入口支持 `--backend vllm`：常驻 `AsyncLLM` 使用原生 global suffix tree，并从 vLLM 原生计数器读取 drafted/accepted token；被拒绝的验证 token 计入主模型 FLOPs。active-batch 动态表在 load-aware arm 中显式启用，算法层使用静态 suffix。本机 RTX 3090 位于 Windows 环境且未安装 WSL；vLLM 数值留待 WSL2/Linux 环境按下方命令生成：",
             "",
             "```bash",
             "export PYTHONPATH=src",
@@ -430,10 +430,10 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
             "",
             "## 结论边界",
             "",
-            "- 历史序列进入 draft tree 不等于再次进入统计 estimator；base 会验证每个草稿 token。",
-            "- pilot 只冻结 evaluation 预算，pilot reward 不进入最终条件能量均值。",
-            "- 墙钟更短不一定意味着 FLOPs 更少：SMC 的大 batch 就可能以更高并行度换取较低墙钟。",
-            "- 单题三 seed 的结果用于 infra 消融，不支持质量排序；方法质量仍应读取完整 GSM8K 对照实验。",
+            "- 历史序列进入 draft tree 后作为执行草稿；统计 estimator 仍按独立 rollout 计数。",
+            "- pilot 用于冻结 evaluation 预算；最终条件能量均值仅使用独立 evaluation reward。",
+            "- 墙钟和 FLOPs 分别计量执行效率与逻辑计算量；SMC 大 batch 可通过并行度降低墙钟。",
+            "- 单题三 seed 结果用于基础设施消融；方法质量排序读取完整 GSM8K 对照实验。",
             "",
         ]
     )

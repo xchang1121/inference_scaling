@@ -23,7 +23,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | [GSM8K 方法效果与准确率](reports/GSM8K_3090_ALIGNED_RESULTS.md) | 32 题主比较、共享目标、pass@k、off-policy/replay 质量与消融 |
-| [RTX 3090 推理基础设施优化汇总](reports/RTX3090_ROLLOUT_INFRA.md) | 各项执行优化的直观原理、成对墙钟/FLOPs、复用和冷启动边界 |
+| [RTX 3090 推理基础设施优化汇总](reports/RTX3090_ROLLOUT_INFRA.md) | 术语定义、论文依据、成对墙钟/FLOPs、复用和冷启动成本 |
 
 正式报告引用的机器可读 JSON 位于 [`results/gsm8k_3090/`](../results/gsm8k_3090/) 与
 [`results/infra/`](../results/infra/)，图表位于 [`docs/assets/`](assets/)。

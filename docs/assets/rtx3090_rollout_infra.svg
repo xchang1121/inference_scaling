@@ -19,7 +19,7 @@
 <line x1="191.7" y1="339.8" x2="191.7" y2="344.5" stroke="#14213d" stroke-width="2"/>
 <line x1="183.7" y1="339.8" x2="199.7" y2="339.8" stroke="#14213d" stroke-width="2"/>
 <text x="191.7" y="330.8" text-anchor="middle" class="value">3.84s</text>
-<text x="191.7" y="523" text-anchor="middle" class="axis">无草稿</text>
+<text x="191.7" y="523" text-anchor="middle" class="axis">普通解码</text>
 <rect x="356.0" y="164.5" width="78.0" height="330.5" rx="5" fill="#ef8354" opacity="0.9"/>
 <line x1="395.0" y1="161.5" x2="395.0" y2="167.5" stroke="#14213d" stroke-width="2"/>
 <line x1="387.0" y1="161.5" x2="403.0" y2="161.5" stroke="#14213d" stroke-width="2"/>
@@ -61,11 +61,11 @@
 <line x1="1232.0" y1="303.6" x2="1232.0" y2="334.3" stroke="#14213d" stroke-width="2"/>
 <line x1="1224.0" y1="303.6" x2="1240.0" y2="303.6" stroke="#14213d" stroke-width="2"/>
 <text x="1232.0" y="294.6" text-anchor="middle" class="value">2.99s</text>
-<text x="1232.0" y="523" text-anchor="middle" class="axis">SMC 不复用</text>
+<text x="1232.0" y="523" text-anchor="middle" class="axis">SMC fresh-only</text>
 <rect x="1319.8" y="343.4" width="68.3" height="151.6" rx="5" fill="#2563eb" opacity="0.9"/>
 <line x1="1354.0" y1="313.3" x2="1354.0" y2="373.5" stroke="#14213d" stroke-width="2"/>
 <line x1="1346.0" y1="313.3" x2="1362.0" y2="313.3" stroke="#14213d" stroke-width="2"/>
 <text x="1354.0" y="304.3" text-anchor="middle" class="value">2.57s</text>
-<text x="1354.0" y="523" text-anchor="middle" class="axis">SMC 复用</text>
-<text x="90" y="610" class="sub">注意：静态草稿的分母是无草稿；SMC 复用的直接分母是 SMC 不复用。cache build 与后台 drain 未并入柱高。</text>
+<text x="1354.0" y="523" text-anchor="middle" class="axis">SMC 后缀复用</text>
+<text x="90" y="610" class="sub">计量范围：静态草稿以普通解码为分母；SMC 条件后缀复用以 fresh-only SMC 为分母；柱高仅含在线墙钟。</text>
 </svg>

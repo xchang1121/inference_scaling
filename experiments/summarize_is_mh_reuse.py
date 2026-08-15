@@ -365,7 +365,7 @@ def _svg(summary: dict[str, Any], path: Path) -> None:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#fbfdff"/>',
         '<style>text{font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#14213d}.title{font-size:25px;font-weight:700}.sub{font-size:15px;fill:#52617a}.label{font-size:15px}.value{font-size:14px;font-weight:700}.axis{font-size:13px;fill:#64748b}</style>',
-        '<text x="70" y="46" class="title">IS / MH rollout 复用：墙钟与主模型 FLOPs 不能混为一谈</text>',
+        '<text x="70" y="46" class="title">IS / MH rollout 复用的墙钟与主模型 FLOPs</text>',
         '<text x="70" y="75" class="sub">3 个独立 seed 的成对因子均值；分母是每行对应的未优化路径，虚线为 1.0×</text>',
         f'<text x="{left + panel_width / 2}" y="105" text-anchor="middle" class="title">墙钟因子</text>',
         f'<text x="{left + panel_width + gap + panel_width / 2}" y="105" text-anchor="middle" class="title">主模型 FLOPs 因子</text>',
@@ -397,7 +397,7 @@ def _svg(summary: dict[str, Any], path: Path) -> None:
             parts.append(f'<text x="{x0 + bar + 9:.1f}" y="{y + 20}" class="value">{value:.3f}×</text>')
     parts.append('</svg>')
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(parts), encoding="utf-8")
+    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
 
 
 def main() -> None:
