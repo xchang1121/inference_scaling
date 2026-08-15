@@ -35,11 +35,11 @@ request id 对应的 draw，用于固定随机性的消融。
 ## KV 与向量化
 
 Transformers 对一个 batch 内的重复前缀执行一次 prefill，再复制 KV、末位置 logits 和 attention
-状态。若第 \(i\) 个前缀长度为 \(L_i\)、重复 \(K_i\) 次，节省的非 padding prefill slots 为
+状态。若第 $`i`$ 个前缀长度为 $`L_i`$、重复 $`K_i`$ 次，节省的非 padding prefill slots 为
 
-\[
+$$
 \sum_i (K_i-1)L_i.
-\]
+$$
 
 条件 IS、replay 和动态预算将跨候选 rollout 展平为异构 batch。多条 MH 链按 stage 和 update 锁步，
 每条链独立抽取 cut、proposal seed 与 acceptance uniform。账本分别记录物理 batch、forward slots
@@ -65,11 +65,11 @@ Transformers 对一个 batch 内的重复前缀执行一次 prefill，再复制 
 
 主模型计算量按
 
-\[
+$$
 \widehat F=2\sum_j N_jS_j
-\]
+$$
 
-估算，其中 \(N_j\) 为模型参数量，\(S_j\) 为实际 forward token slots。prefill、decode、完整评分和
+估算，其中 $`N_j`$ 为模型参数量，$`S_j`$ 为实际 forward token slots。prefill、decode、完整评分和
 speculative verification 分别计数。墙钟、显存和吞吐描述硬件执行；FLOPs 描述逻辑主干计算。
 
 各优化的精确定义、分母和 RTX 3090 结果见

@@ -145,9 +145,9 @@ Automatic Prefix Caching（APC）复用共同 prompt、候选前缀、重复 rol
 global suffix proposer 用同一常驻引擎处理过的请求提出草稿，每个草稿 token 由 target verifier 验证。
 drafted、accepted 和 rejected slots 来自 vLLM metrics，并进入主模型逻辑 FLOPs。
 
-`tiers` 定义 active batch 对应的草稿长度。`dynamic_vllm=false` 使用表中最大 \(K\)；
-`dynamic_vllm=true` 使用 `DynamicSuffixDecodingProposer` 将调度器选择的 \(K\) 传给官方 suffix
-proposer。固定 \(K\) 与动态 \(K\) 分别测量。相关上游接口见
+`tiers` 定义 active batch 对应的草稿长度。`dynamic_vllm=false` 使用表中最大 $`K`$；
+`dynamic_vllm=true` 使用 `DynamicSuffixDecodingProposer` 将调度器选择的 $`K`$ 传给官方 suffix
+proposer。固定 $`K`$ 与动态 $`K`$ 分别测量。相关上游接口见
 [suffix proposer 源码](https://github.com/vllm-project/vllm/blob/v0.25.0/vllm/v1/spec_decode/suffix_decoding.py)
 和[吞吐问题 #49548](https://github.com/vllm-project/vllm/issues/49548)。
 

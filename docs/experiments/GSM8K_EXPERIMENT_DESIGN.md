@@ -27,11 +27,11 @@ RTX 3090 对齐配置：
 | 质量网格 dtype | FP32 |
 | 最大生成长度 | 192 token |
 | 条件 IS | 8 个候选；每候选 3 条 rollout；4 个引导阶段 |
-| 幂分布 MH | \(\alpha=4\)；16 个长度阶段；每阶段 3 次更新 |
+| 幂分布 MH | $`\alpha=4`$；16 个长度阶段；每阶段 3 次更新 |
 | pass@k | 每题 8 个独立 draw |
 
-`standard` 使用 256 token、20 beams、Best-of-20、\(M=15,K=3,I=4\)；`full` 使用 512 token、
-20 beams、Best-of-30、\(M=15,K=3,I=4\)。两者的 MH 每阶段更新 10 次。
+`standard` 使用 256 token、20 beams、Best-of-20、$`M=15,K=3,I=4`$；`full` 使用 512 token、
+20 beams、Best-of-30、$`M=15,K=3,I=4`$。两者的 MH 每阶段更新 10 次。
 
 ## 方法与目标
 
@@ -40,7 +40,7 @@ RTX 3090 对齐配置：
 | `base` | 1.5B base | — | — | base 分布 | 温度 1 |
 | `beam` | 1.5B base | beam 前缀 | — | 累计 log-probability | beam search |
 | `best_of_n` | 1.5B base | 独立完整生成 | — | 数值众数 | 选择 |
-| `mh` | 完整序列 | — | 1.5B 后缀 | \(p_{\mathrm{base}}^4\) | Hastings 比 |
+| `mh` | 完整序列 | — | 1.5B 后缀 | $`p_{\mathrm{base}}^4`$ | Hastings 比 |
 | `conditional_is` | 1.5B base | 1.5B block | 1.5B completion | cumulative self-consistency | on-policy |
 | `conditional_is_small_proposal` | 1.5B base | 1.5B block | 0.5B completion | cumulative self-consistency | 1.5B/0.5B 后缀比 |
 | `conditional_is_small_proposal_uncorrected` | 1.5B base | 1.5B block | 0.5B completion | proposal-energy | [式 (12)](../methods/ALGORITHMS.md#alg-proposal-energy) |
@@ -70,7 +70,7 @@ self-consistency 或模型置信度。
 | cumulative self-consistency | 按已评估数值累计众数，匹配取 1 | 无 |
 | 平均 token log-probability | 完整生成的平均选中 token log-probability | 无 |
 | 平均负熵 | 完整生成的逐 token 负熵均值 | 无 |
-| self-certainty | 逐 token \(D_{\mathrm{KL}}(U\|p_{\mathrm{base}})\) 均值 | 无 |
+| self-certainty | 逐 token $`D_{\mathrm{KL}}(U\|p_{\mathrm{base}})`$ 均值 | 无 |
 
 后三种置信度奖励在每次候选决策内执行 min-max 归一化；常数信号统一置零。完整词表评分计入
 token-slot/FLOPs。
@@ -85,13 +85,13 @@ token-slot/FLOPs。
 
 proposal-energy 设置 `apply_importance_correction=false`，候选权重为
 
-\[
+$$
 w_m=\frac1K\sum_{k=1}^K
 \exp\!\left(\frac{r(z_m,u_{mk})}{\tau}\right),
 \qquad
 z_m\sim p_{\mathrm{1.5B}},\quad
 u_{mk}\sim q_{\mathrm{0.5B}}(\cdot\mid z_m).
-\]
+$$
 
 该路径的 base `score_calls`、`scored_tokens` 和评分 slots 为 0。
 
@@ -106,13 +106,13 @@ u_{mk}\sim q_{\mathrm{0.5B}}(\cdot\mid z_m).
 
 ## 计算量
 
-模型 \(j\) 的推理主干 FLOPs 估计为
+模型 $`j`$ 的推理主干 FLOPs 估计为
 
-\[
+$$
 \widehat F_j=2N_jS_j,
-\]
+$$
 
-其中 \(N_j\) 为参数量，\(S_j\) 为实际 forward token slots。1.5B 与 0.5B 分别计算后求和。计数覆盖
+其中 $`N_j`$ 为参数量，$`S_j`$ 为实际 forward token slots。1.5B 与 0.5B 分别计算后求和。计数覆盖
 prefill、decode、完整序列评分和 target speculative verification；墙钟排除模型与数据加载。
 
 GRPO 成本分为 rollout generation、reference scoring、policy forward/backward 和 AdamW adapter
@@ -121,17 +121,17 @@ update。gradient checkpointing 的 policy 路径按 forward、backward 与重�
 
 共享奖励目标为
 
-\[
+$$
 \max_\pi\ \mathbb E_\pi[R]-\beta D_{\mathrm{KL}}(\pi\|p_{\mathrm{base}}),
-\]
+$$
 
-其无参数限制闭式解正比于 \(p_{\mathrm{base}}\exp(R/\beta)\)。累计成本比较为
+其无参数限制闭式解正比于 $`p_{\mathrm{base}}\exp(R/\beta)`$。累计成本比较为
 
-\[
+$$
 F_{\mathrm{GRPO\ train}}+QF_{\mathrm{GRPO\ infer}}
 \quad\text{与}\quad
 QF_{\mathrm{training\text{-}free}}.
-\]
+$$
 
 准确率匹配的临界查询数要求配对准确率差落入预设容差；联合匹配还要求答案分布 TV/JS 通过阈值。
 
@@ -144,7 +144,7 @@ QF_{\mathrm{training\text{-}free}}.
 | `runtime_multiple_vs_base` | 方法墙钟 / Base 墙钟 | 样本、硬件 |
 | 连续批处理加速 | 逐 prompt 墙钟 / 批处理墙钟 | 方法、请求、seed |
 | repeated-prefix KV | 逐 rollout prefill / 唯一前缀 prefill | 同一生成 batch |
-| warm replay 在线因子 | fresh-only / warm online | 候选、\(H+F\)、block |
+| warm replay 在线因子 | fresh-only / warm online | 候选、$`H+F`$、block |
 | warm replay 首次查询 | fresh-only / (cache build + warm online) | 同上 |
 | 动态候选在线因子 | base candidate fixed / replay-aware fixed | evaluation 成本预算 |
 | 最优预算在线因子 | replay-aware fixed / replay-aware optimal | candidate proposal、成本预算 |
@@ -166,9 +166,9 @@ QF_{\mathrm{training\text{-}free}}.
 重复候选共享同一 replay key 的 evaluation 库存。预算代理将一条历史样本记为 1 个 base 重评分等价，
 一条 fresh 样本记为
 
-\[
+$$
 1+\frac{P_{\mathrm{0.5B}}}{P_{\mathrm{1.5B}}}=1.3200.
-\]
+$$
 
 最终成本采用实际 forward token slots 与参数量。配额冻结使用候选、策略版本、库存数量和 design
 统计量；evaluation reward 在领取后进入最终估计。
@@ -305,12 +305,12 @@ $env:PYTHONPATH = "src"
 
 ## 消融矩阵
 
-- MH：\(\alpha\in\{1,2,4,8\}\)，每 block 更新数 \(\{1,2,5,10\}\)。
-- 条件 IS：候选数 \(M\)、rollout 数 \(K\)、引导阶段数 \(I\)。
-- 搜索：Beam、Best-of-\(N\) 与条件 IS 的质量—计算曲线。
+- MH：$`\alpha\in\{1,2,4,8\}`$，每 block 更新数 $`\{1,2,5,10\}`$。
+- 条件 IS：候选数 $`M`$、rollout 数 $`K`$、引导阶段数 $`I`$。
+- 搜索：Beam、Best-of-$`N`$ 与条件 IS 的质量—计算曲线。
 - 奖励：平均 token log-probability、平均负熵、self-certainty、self-consistency、oracle correctness。
 - off-policy：截断、未截断与 proposal-energy。
-- 生成：温度 \(\{0.7,1.0,1.5\}\)，最大长度 \(\{128,256,512\}\)。
+- 生成：温度 $`\{0.7,1.0,1.5\}`$，最大长度 $`\{128,256,512\}`$。
 - 执行：逐 prompt、连续批处理、fresh-only、warm replay。
 - 动态候选：base fixed、replay-aware fixed、variance-cost allocation。
 - 多次采样：Base、MH、GRPO 与三种条件 IS 的 8 draw pass@k。

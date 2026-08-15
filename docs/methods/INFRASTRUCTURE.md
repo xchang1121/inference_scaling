@@ -17,17 +17,17 @@
 
 下文的 FLOPs 指 floating-point operations（浮点运算次数）。仓库的主模型计算量采用稠密矩阵主导项
 
-\[
+$$
 \widehat F_{\mathrm{forward}}=2N\,S,
 \tag{1}
-\]
+$$
 
-其中 \(N\) 为模型参数量，\(S\) 为实际 forward token slots。多个模型分别计算后求和：
+其中 $`N`$ 为模型参数量，$`S`$ 为实际 forward token slots。多个模型分别计算后求和：
 
-\[
+$$
 \widehat F_{\mathrm{total}}=\sum_j2N_jS_j.
 \tag{2}
-\]
+$$
 
 该估计计入 prefill、decode、完整序列评分和 target speculative verification。未计项为 attention
 长度二次项、逐元素 kernel、tokenization、CPU 调度与通信。墙钟衡量硬件执行效率，式 (1) 衡量逻辑主干
@@ -85,7 +85,7 @@ replay 的统计校正、动态候选和 SMC 数学来源列在[算法文档的�
 | 流式 IS，便宜 verifier | 完成一条 rollout 后立即提交奖励 worker | 受控 verifier 延迟为 0 |
 | 流式 IS，0.2 s verifier | 与上一行相同 | 每条相同 verifier 额外加入 0.2 s 延迟 |
 | 确定性历史草稿 | token tree 每步提出最高频 token | target 仍逐位置验证草稿 |
-| 精确随机历史草稿 | 从完整经验分布 \(q_t\) 随机提出 token，并执行式 (5)--(6) | 输出分布保持为 target |
+| 精确随机历史草稿 | 从完整经验分布 $`q_t`$ 随机提出 token，并执行式 (5)--(6) | 输出分布保持为 target |
 | MH proposal-tree 预取，便宜奖励 | 为接受与拒绝两种下一状态各预取一个 proposal | 受控 reward 延迟为 0 |
 | MH proposal-tree 预取，0.2 s 奖励 | 与上一行相同 | 每次相同 reward 额外加入 0.2 s 延迟 |
 | delayed acceptance，0.2 s 精确奖励 | surrogate 第一阶段早拒绝，精确奖励执行第二阶段 | 对照对每个 proposal 直接调用带 0.2 s 延迟的精确奖励 |
@@ -170,16 +170,16 @@ forward slots 与墙钟。
 <a id="infra-prefix-kv"></a>
 ## 6. Transformers 重复前缀 KV 复用
 
-若 \(M\) 个候选各有 \(K\) 条 rollout，同一候选的 \(K\) 条请求共享 `prompt + generated + candidate`
-前缀。朴素实现对每条请求重复 prefill；当前实现先对 \(M\) 个唯一前缀执行一次 prefill，再把每组 KV、最后
-位置 logits 和 attention mask 复制 \(K\) 次，继续执行一个 \(MK\) 行 decode batch。
+若 $`M`$ 个候选各有 $`K`$ 条 rollout，同一候选的 $`K`$ 条请求共享 `prompt + generated + candidate`
+前缀。朴素实现对每条请求重复 prefill；当前实现先对 $`M`$ 个唯一前缀执行一次 prefill，再把每组 KV、最后
+位置 logits 和 attention mask 复制 $`K`$ 次，继续执行一个 $`MK`$ 行 decode batch。
 
-若第 \(i\) 个唯一前缀长度为 \(L_i\)，理想情况下保存的非 padding prefill slots 为
+若第 $`i`$ 个唯一前缀长度为 $`L_i`$，理想情况下保存的非 padding prefill slots 为
 
-\[
+$$
 S_{\mathrm{saved}}=\sum_{i=1}^{M}(K_i-1)L_i.
 \tag{3}
-\]
+$$
 
 ```python
 unique_outputs = model(unique_input_ids, use_cache=True, logits_to_keep=1)
@@ -214,10 +214,10 @@ SequenceSample(
 
 `ScoreCachingBackend` 只缓存确定性的 continuation 分数，key 为
 
-\[
+$$
 (\text{完整 SamplingConfig},\ \text{prefix},\ \text{continuation}).
 \tag{4}
-\]
+$$
 
 cache 与单个模型实例绑定；不同温度、截断策略或模型版本使用不同 cache key。miss 会按
 `(policy, prefix)` 重新分组为批量评分，完成后写入有界 LRU。随机生成从不被透明缓存。
@@ -242,28 +242,28 @@ Transformer body 处理完整上下文；该优化减少输出投影与 logits �
 ## 8. 历史 token tree 与精确 speculative verification
 
 `RolloutTokenTree` 在 CPU 上保存有界的“后缀 context → 下一 token 计数”。查询从最长匹配 context 开始，
-最多提出 \(K\) 个 draft token。历史轨迹作为执行草稿；IS 权重由算法层样本计算。
+最多提出 $`K`$ 个 draft token。历史轨迹作为执行草稿；IS 权重由算法层样本计算。
 
-确定性模式沿最高频 token 前进。target verifier 对每个位置按真实目标 \(p_t\) 使用请求自己的 uniform 抽样；
+确定性模式沿最高频 token 前进。target verifier 对每个位置按真实目标 $`p_t`$ 使用请求自己的 uniform 抽样；
 若抽样 token 等于 draft 就继续验证，否则保留 target 抽样 token 并停止草稿路径。因此输出仍是逐 token target
 抽样。
 
-随机模式从经验 proposal \(q_t\) 抽 draft \(a\)，接受概率为
+随机模式从经验 proposal $`q_t`$ 抽 draft $`a`$，接受概率为
 
-\[
+$$
 \Pr(\text{accept }a)=\min\left\{1,\frac{p_t(a)}{q_t(a)}\right\}.
 \tag{5}
-\]
+$$
 
 拒绝后从归一化残差
 
-\[
+$$
 \frac{(p_t(v)-q_t(v))_+}{\sum_w(p_t(w)-q_t(w))_+}
 \tag{6}
-\]
+$$
 
-抽取替代 token。某 token 由接受路径产生的概率为 \(\min(p_t,q_t)\)，由拒绝路径产生的概率为
-\(p_t-\min(p_t,q_t)\)，两者之和为 \(p_t\)。
+抽取替代 token。某 token 由接受路径产生的概率为 $`\min(p_t,q_t)`$，由拒绝路径产生的概率为
+$`p_t-\min(p_t,q_t)`$，两者之和为 $`p_t`$。
 
 Transformers 一次前向验证 `prefix + K drafts`。若中途拒绝，会把 `DynamicCache` 裁到已接受 draft 末端，
 再把 target 抽出的 mismatch token 写入并继续 decode：
@@ -280,7 +280,7 @@ wall time；高命中但低接受率仍可能减速。
 ## 9. active-batch 草稿长度
 
 大 batch 下普通解码已有较高算力利用率，错误草稿会扩大无效验证工作；长尾只剩少量请求时，减少串行 decode
-轮次更有价值。实现令草稿长度为分段函数 \(K(b)\)，其中 \(b\) 是当前 active batch：
+轮次更有价值。实现令草稿长度为分段函数 $`K(b)`$，其中 $`b`$ 是当前 active batch：
 
 ```toml
 [acceleration.speculation]
@@ -297,8 +297,8 @@ stochastic_tree = false
 每个 tier 表示 `[最大 active batch, K]`。Transformers 每次调用直接查询该表。vLLM 可将其转换为
 `[起始 batch, 结束 batch, K]`，并在 `dynamic_vllm=true` 时加载
 [`DynamicSuffixDecodingProposer`](../../src/inference_scaling/vllm_suffix_proposer.py)。该适配器仍委托官方 suffix
-cache 和 target verifier，只在一次加锁的 `propose` 调用内临时采用 scheduler 选定的 \(K\)。动态 vLLM
-固定最大 \(K\) 与动态 \(K(b)\) 分别测量。
+cache 和 target verifier，只在一次加锁的 `propose` 调用内临时采用 scheduler 选定的 $`K`$。动态 vLLM
+固定最大 $`K`$ 与动态 $`K(b)`$ 分别测量。
 
 <a id="infra-rollout-broker"></a>
 ## 10. 部分 rollout broker
@@ -377,12 +377,12 @@ uniform 沿用普通链命名，有限状态测试可逐步核对所消费分支
 [Delayed-acceptance MH](ALGORITHMS.md#alg-delayed-mh) 用便宜 surrogate 早拒绝 proposal，只对第一阶段通过项
 调用精确 verifier。基础设施收益应写成
 
-\[
+$$
 \text{精确奖励调用因子}
 =\frac{\text{delayed 路径精确调用数}}
        {\text{普通 MH 精确调用数}},
 \tag{7}
-\]
+$$
 
 proposal 生成与基础模型评分通常保持不变。执行报告列出 surrogate calls、exact calls、early
 rejection、wall time 和主模型 FLOPs；目标校正见算法文档。
@@ -400,15 +400,15 @@ rollout replay 包含两类复用：
 
 报告区分：
 
-\[
+$$
 C_{\mathrm{first}}=C_{\mathrm{build}}+C_{\mathrm{online}},
 \qquad
 C_{R}=C_{\mathrm{build}}+R\,C_{\mathrm{online}}.
 \tag{8}
-\]
+$$
 
 累计 replay 成本低于 fresh-only 的条件为
-\(C_{\mathrm{build}}+R C_{\mathrm{online}}<R C_{\mathrm{fresh}}\)。成本比较采用实际 token/FLOPs；
+$`C_{\mathrm{build}}+R C_{\mathrm{online}}<R C_{\mathrm{fresh}}`$。成本比较采用实际 token/FLOPs；
 cache hit rate 作为复用诊断。
 
 replay-mixture MH 的历史命中则把自回归 suffix 生成改为 teacher-forced 批量评分。它可能显著降低墙钟，因为评分

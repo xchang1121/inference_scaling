@@ -31,26 +31,26 @@ MH 状态 ──┬──> base / replay-mixture 后缀 proposal
 ## 历史 token tree
 
 `RolloutTokenTree` 保存“后缀 context → 下一 token 计数”。确定性模式提出最高频 token；随机模式从
-经验分布 \(q_t\) 提出 token \(a\)，接受概率为
+经验分布 $`q_t`$ 提出 token $`a`$，接受概率为
 
-\[
+$$
 \min\left\{1,\frac{p_t(a)}{q_t(a)}\right\}.
-\]
+$$
 
 拒绝后从
 
-\[
+$$
 \frac{(p_t(v)-q_t(v))_+}{\sum_w(p_t(w)-q_t(w))_+}
-\]
+$$
 
-抽取替代 token。接受路径贡献 \(\min(p_t,q_t)\)，拒绝路径贡献
-\(p_t-\min(p_t,q_t)\)，输出分布为 target \(p_t\)。
+抽取替代 token。接受路径贡献 $`\min(p_t,q_t)`$，拒绝路径贡献
+$`p_t-\min(p_t,q_t)`$，输出分布为 target $`p_t`$。
 
 Transformers 一次验证 `prefix + drafts`，裁剪 `DynamicCache` 至已接受位置后继续生成。vLLM 使用
 global suffix proposer 和原生 target verifier。报告记录 tree hit、draft acceptance、target
 verification slots、墙钟与 cache build。
 
-草稿长度可写成 active batch \(b\) 的分段函数 \(K(b)\)：
+草稿长度可写成 active batch $`b`$ 的分段函数 $`K(b)`$：
 
 ```toml
 [acceleration.speculation]
@@ -64,7 +64,7 @@ dynamic_vllm = false
 stochastic_tree = false
 ```
 
-每个 tier 为 `[最大 active batch, K]`。固定 \(K\) 与动态 \(K(b)\) 分别构成实验臂。RTX 3090 结果中，
+每个 tier 为 `[最大 active batch, K]`。固定 $`K`$ 与动态 $`K(b)`$ 分别构成实验臂。RTX 3090 结果中，
 `batch=1` 门控用于限制低接受率草稿在大 batch 下的验证成本。
 
 ## 部分 rollout broker
@@ -81,21 +81,21 @@ stochastic_tree = false
 
 ## pilot、evaluation 与流式执行
 
-对候选前缀 \(s_i\)，条件能量为
+对候选前缀 $`s_i`$，条件能量为
 
-\[
+$$
 h(s_i)=\mathbb E_{z\sim p(\cdot\mid s_i)}
 \left[\exp\!\left(\frac{r(s_i,z)}{\tau}\right)\right].
-\]
+$$
 
-pilot 估计单样本方差和成本；冻结 evaluation 数量 \(m_i\) 后，最终估计使用独立样本：
+pilot 估计单样本方差和成本；冻结 evaluation 数量 $`m_i`$ 后，最终估计使用独立样本：
 
-\[
+$$
 \widehat h_i=\frac1{m_i}\sum_{j=1}^{m_i}
 \exp\!\left(\frac{r(s_i,z_{ij})}{\tau}\right).
-\]
+$$
 
-当 \(m_i\to\infty\) 时，\(\widehat h_i\xrightarrow{p}h(s_i)\)。候选数有限时，归一化权重由连续映射
+当 $`m_i\to\infty`$ 时，$`\widehat h_i\xrightarrow{p}h(s_i)`$。候选数有限时，归一化权重由连续映射
 定理收敛。
 
 `FrozenStreamingISEstimator` 在生成前冻结 fresh request id。completion 以任意顺序到达，每个 id
@@ -118,19 +118,19 @@ replay-mixture 将历史命中的自回归生成替换为 teacher-forced 批量�
 
 ## SMC rollout forest
 
-粒子 \(s\) 生成 block \(a\) 后使用增量权重
+粒子 $`s`$ 生成 block $`a`$ 后使用增量权重
 
-\[
+$$
 G(s,a)=\frac{\widehat h(sa)}{\widehat h(s)}.
-\]
+$$
 
 路径乘积满足
 
-\[
+$$
 \prod_tG(s_{t-1},a_t)=\widehat h(s_T).
-\]
+$$
 
-父 rollout 以 block \(a\) 开头时，其余后缀是子前缀 \(sa\) 下的条件 rollout。重采样产生多个相同
+父 rollout 以 block $`a`$ 开头时，其余后缀是子前缀 $`sa`$ 下的条件 rollout。重采样产生多个相同
 branch 时，reservoir 在副本间分桶，缺口由 fresh rollout 补足。有限粒子、branch factor 和 rollout
 数形成 SMC 近似误差；诊断字段为 ESS、fresh/reused rollout 和 reservoir 命中。
 
@@ -140,7 +140,7 @@ branch 时，reservoir 在副本间分桶，缺口由 fresh rollout 补足。有
 | --- | --- | --- |
 | 历史草稿 | 确定性/随机 token tree | global suffix proposer |
 | KV 续算 | `DynamicCache` crop | 引擎内部 verifier/cache |
-| active-batch \(K(b)\) | 每批查询 | 动态 suffix 适配层 |
+| active-batch $`K(b)`$ | 每批查询 | 动态 suffix 适配层 |
 | 完成回调 | batch 返回后触发 | `AsyncLLM` 完成即触发 |
 | broker 恢复 | token 状态 + prefill | token 状态 + APC |
 | replay-mixture 评分 | Transformers 精确评分 | 原生或委托精确评分 |
