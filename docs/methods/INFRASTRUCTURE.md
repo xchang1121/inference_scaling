@@ -59,6 +59,22 @@
 
 下文相对源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
+<a id="infra-sources"></a>
+### 设计来源
+
+| 机制族 | 主要文献 | 本仓库中的关系 |
+| --- | --- | --- |
+| 迭代级连续调度 | [Orca，Yu et al. (2022)](https://www.usenix.org/conference/osdi22/presentation/yu) | 跨 prompt 汇合生成与评分请求 |
+| KV block 与前缀复用 | [PagedAttention，Kwon et al. (2023)](https://doi.org/10.1145/3600006.3613165)、[SGLang，Zheng et al. (2024)](https://proceedings.neurips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf) | 重复前缀 prefill、APC 与恢复前缀复用 |
+| speculative decoding | [Leviathan, Kalman, and Matias (2023)](https://proceedings.mlr.press/v202/leviathan23a.html) | target 接受率与拒绝后的残差校正 |
+| 检索式 token tree | [REST，He et al. (2024)](https://aclanthology.org/2024.naacl-long.88/)、[SpecInfer，Miao et al. (2024)](https://doi.org/10.1145/3620666.3651335) | 历史 rollout 构成多 token 草稿 |
+| 异步生成与消费 | [IMPALA，Espeholt et al. (2018)](https://proceedings.mlr.press/v80/espeholt18a.html)、[SAO，Hou et al. (2026)](https://arxiv.org/abs/2607.07508) | completion callback、部分 rollout 和低优先级 run-ahead 的调度来源 |
+| MCMC prefetch | [Brockwell (2006)](https://doi.org/10.1198/106186006X100579) | 奖励等待期间预取接受/拒绝两条 proposal 分支 |
+| delayed-acceptance MCMC | [Christen and Fox (2005)](https://doi.org/10.1198/106186005X76983) | surrogate 早拒绝与精确第二阶段 |
+
+replay 的统计校正、动态候选和 SMC 数学来源列在[算法文档的方法来源](ALGORITHMS.md#alg-sources)；
+本文件只扩展它们的执行路径与成本账本。
+
 <a id="infra-request-contract"></a>
 ## 3. 后端协议、随机数与数值一致性
 
@@ -532,6 +548,24 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\benchmark_is_mh_reuse.py `
   --backend transformers --dtype bfloat16 --section all `
   --output results\infra\rtx3090_transformers_is_mh.json
+```
+
+正式三 seed IS/MH 消融与汇总：
+
+```powershell
+$env:PYTHONPATH = "src;."
+foreach ($seed in 20260812, 20260813, 20260814) {
+  .\.venv\Scripts\python experiments\benchmark_is_mh_reuse.py `
+    --backend transformers --dtype bfloat16 --section all --seed $seed `
+    --output "results\infra\rtx3090_transformers_is_mh_seed$seed.json"
+}
+
+.\.venv\Scripts\python experiments\summarize_is_mh_reuse.py `
+  --inputs results\infra\rtx3090_transformers_is_mh_seed20260812.json `
+           results\infra\rtx3090_transformers_is_mh_seed20260813.json `
+           results\infra\rtx3090_transformers_is_mh_seed20260814.json `
+  --output results\infra\rtx3090_transformers_is_mh_summary.json `
+  --svg docs\assets\rtx3090_is_mh_reuse.svg
 ```
 
 vLLM 对应入口：
