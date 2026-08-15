@@ -4,6 +4,9 @@
 主模型浮点运算量、历史样本复用率和缓存摊销成本。准确率、pass@k 和共享奖励目标的比较见
 [GSM8K 方法质量与计算量实验](GSM8K_3090_ALIGNED_RESULTS.md)。单题实验用于隔离基础设施变量，方法质量排序
 以完整 GSM8K 实验为准。
+各机制的执行流程、关键代码、计算量分母和后端能力边界见
+[推理基础设施实现](../methods/INFRASTRUCTURE.md)；涉及 IS 权重、replay 恒等式和 MH 接受率的数学定义见
+[推理算法实现](../methods/ALGORITHMS.md)。
 
 ## 术语与计量对象
 
@@ -51,19 +54,19 @@ broker、历史后缀提议和条件后缀库存等实现；具体变体由本�
 
 | 方法 | 本仓库实现 | 效率来源 | 成本边界 | 文献依据 |
 | --- | --- | --- | --- | --- |
-| 连续批处理 | 汇合不同 prompt 在相近时刻提交的生成与评分请求 | 增大有效 batch，提高 GPU 利用率 | 逻辑 token 数和算法 FLOPs 通常保持不变 | [Orca：迭代级调度，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu) |
-| 重复前缀 KV 复用 | 相同候选前缀只执行一次 prefill，并复制或共享 KV 状态 | 消除 rollout 之间的重复前缀计算 | 各 completion 的后续 decode 仍独立执行 | [PagedAttention，Kwon et al., 2023](https://doi.org/10.1145/3600006.3613165)；[RadixAttention，Zheng et al., 2024](https://proceedings.neurips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf) |
-| warm rollout replay | 读取历史 completion、奖励和真实行为概率，并补充固定数量的 fresh rollout | 历史样本替代在线生成与评分 | 冷启动阶段包含历史库构建成本 | [经验回放，Lin, 1992](https://doi.org/10.1007/BF00992699)；[off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
-| 部分 rollout broker | 保存未完成请求的 token、行为概率和剩余预算，并从保存前缀继续执行 | 保留过量提交批次中已经完成的 decode 工作 | token 级恢复仍产生前缀 prefill；KV 句柄恢复可进一步消除该项 | [Orca 的细粒度调度，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu)；[SAO 的单 rollout 异步处理，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
-| 历史 token tree | 从历史序列构造多 token 草稿，由主模型并行验证 | 草稿命中时减少串行 decode 轮次 | 被拒绝的草稿仍占用主模型验证 slots | [Speculative Decoding，Leviathan et al., 2023](https://proceedings.mlr.press/v202/leviathan23a.html)；[Retrieval-Based Speculative Decoding（REST），He et al., 2024](https://aclanthology.org/2024.naacl-long.88/)；[SpecInfer，Miao et al., 2024](https://doi.org/10.1145/3620666.3651335) |
-| active-batch 草稿门控 | 密集 batch 使用普通解码，稀疏长尾启用历史草稿 | 保留批量解码效率并限制低接受率草稿的验证成本 | 该门控属于本仓库的负载调度策略 | [Speculative Decoding，Leviathan et al., 2023](https://proceedings.mlr.press/v202/leviathan23a.html)；[Orca，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu) |
-| 流式 frozen-design IS | 生成前冻结 request id；rollout 完成后立即提交 verifier 和 IS 累积器 | 将有限 worker 的 verifier 队列与后续 GPU decode 重叠 | 便宜 verifier 和最长请求主导的 workload 提供较少重叠空间 | [off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf)；[IMPALA，Espeholt et al., 2018](https://proceedings.mlr.press/v80/espeholt18a.html)；[SAO，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
-| 低优先级 run-ahead | verifier、通信或调度空隙中预生成未来草稿 | 将 GPU 空闲区间转换为后续可用草稿 | GPU 饱和时产生资源竞争和后台排空成本 | [IMPALA，Espeholt et al., 2018](https://proceedings.mlr.press/v80/espeholt18a.html)；[SAO，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
-| MH proposal-tree 预取 | 当前状态评分期间，同时生成接受分支和拒绝分支的下一 proposal | 将下一步 proposal 生成与当前奖励延迟重叠 | 每次更新丢弃一个未选分支，主模型 FLOPs 随之增加 | [MCMC prefetch，Brockwell, 2006](https://doi.org/10.1198/106186006X100579) |
-| delayed acceptance | 便宜 surrogate 执行第一阶段筛选；通过后计算精确奖励并执行第二阶段校正 | 减少高成本 verifier 调用 | proposal 生成量和主模型 FLOPs 保持不变 | [Delayed-acceptance MCMC，Christen and Fox, 2005](https://doi.org/10.1198/106186005X76983) |
-| replay-aware MH proposal | 从 base proposal 与冻结历史后缀的混合分布采样，并计算正反向提议概率 | 历史命中时以并行评分替代串行生成 | 历史库构建、评分和 Hastings 校正均计入成本 | [一般 MH 提议，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[防御混合分布，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
-| pilot / evaluation 分离 | pilot 估计成本与方差；随后冻结独立 evaluation 数量 | 依据方差和单样本成本配置预算 | 成本同质时，pilot 主要体现为额外开销 | [最优分层分配，Neyman, 1934](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)；[自适应最优分配，Étoré and Jourdain, 2010](https://doi.org/10.1007/s11009-008-9108-0) |
-| SMC rollout forest | 所选 block 与历史 rollout 前缀匹配时，继承其条件后缀库存 | 在粒子传播阶段复用仍满足当前条件的 rollout | 未匹配粒子由 fresh rollout 补齐；有限库存按一次性观测消费 | [SMC samplers，Del Moral et al., 2006](https://doi.org/10.1111/j.1467-9868.2006.00553.x)；[LLM 的 SMC steering，Lew et al., 2023](https://arxiv.org/abs/2306.03081) |
+| [连续批处理](../methods/INFRASTRUCTURE.md#infra-continuous-batching) | 汇合不同 prompt 在相近时刻提交的生成与评分请求 | 增大有效 batch，提高 GPU 利用率 | 逻辑 token 数和算法 FLOPs 通常保持不变 | [Orca：迭代级调度，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu) |
+| [重复前缀 KV 复用](../methods/INFRASTRUCTURE.md#infra-prefix-kv) | 相同候选前缀只执行一次 prefill，并复制或共享 KV 状态 | 消除 rollout 之间的重复前缀计算 | 各 completion 的后续 decode 仍独立执行 | [PagedAttention，Kwon et al., 2023](https://doi.org/10.1145/3600006.3613165)；[RadixAttention，Zheng et al., 2024](https://proceedings.neurips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf) |
+| [warm rollout replay](../methods/INFRASTRUCTURE.md#infra-replay-execution) | 读取历史 completion、奖励和真实行为概率，并补充固定数量的 fresh rollout | 历史样本替代在线生成与评分 | 冷启动阶段包含历史库构建成本 | [经验回放，Lin, 1992](https://doi.org/10.1007/BF00992699)；[off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
+| [部分 rollout broker](../methods/INFRASTRUCTURE.md#infra-rollout-broker) | 保存未完成请求的 token、行为概率和剩余预算，并从保存前缀继续执行 | 保留过量提交批次中已经完成的 decode 工作 | token 级恢复仍产生前缀 prefill；KV 句柄恢复可进一步消除该项 | [Orca 的细粒度调度，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu)；[SAO 的单 rollout 异步处理，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
+| [历史 token tree](../methods/INFRASTRUCTURE.md#infra-speculation) | 从历史序列构造多 token 草稿，由主模型并行验证 | 草稿命中时减少串行 decode 轮次 | 被拒绝的草稿仍占用主模型验证 slots | [Speculative Decoding，Leviathan et al., 2023](https://proceedings.mlr.press/v202/leviathan23a.html)；[Retrieval-Based Speculative Decoding（REST），He et al., 2024](https://aclanthology.org/2024.naacl-long.88/)；[SpecInfer，Miao et al., 2024](https://doi.org/10.1145/3620666.3651335) |
+| [active-batch 草稿门控](../methods/INFRASTRUCTURE.md#infra-active-batch) | 密集 batch 使用普通解码，稀疏长尾启用历史草稿 | 保留批量解码效率并限制低接受率草稿的验证成本 | 该门控属于本仓库的负载调度策略 | [Speculative Decoding，Leviathan et al., 2023](https://proceedings.mlr.press/v202/leviathan23a.html)；[Orca，Yu et al., 2022](https://www.usenix.org/conference/osdi22/presentation/yu) |
+| [流式 frozen-design IS](../methods/INFRASTRUCTURE.md#infra-streaming-reward) | 生成前冻结 request id；rollout 完成后立即提交 verifier 和 IS 累积器 | 将有限 worker 的 verifier 队列与后续 GPU decode 重叠 | 便宜 verifier 和最长请求主导的 workload 提供较少重叠空间 | [off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf)；[IMPALA，Espeholt et al., 2018](https://proceedings.mlr.press/v80/espeholt18a.html)；[SAO，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
+| [低优先级 run-ahead](../methods/INFRASTRUCTURE.md#infra-runahead) | verifier、通信或调度空隙中预生成未来草稿 | 将 GPU 空闲区间转换为后续可用草稿 | GPU 饱和时产生资源竞争和后台排空成本 | [IMPALA，Espeholt et al., 2018](https://proceedings.mlr.press/v80/espeholt18a.html)；[SAO，Hou et al., 2026](https://arxiv.org/abs/2607.07508) |
+| [MH proposal-tree 预取](../methods/INFRASTRUCTURE.md#infra-mh-prefetch) | 当前状态评分期间，同时生成接受分支和拒绝分支的下一 proposal | 将下一步 proposal 生成与当前奖励延迟重叠 | 每次更新丢弃一个未选分支，主模型 FLOPs 随之增加 | [MCMC prefetch，Brockwell, 2006](https://doi.org/10.1198/106186006X100579) |
+| [delayed acceptance](../methods/INFRASTRUCTURE.md#infra-delayed-reward) | 便宜 surrogate 执行第一阶段筛选；通过后计算精确奖励并执行第二阶段校正 | 减少高成本 verifier 调用 | proposal 生成量和主模型 FLOPs 保持不变 | [Delayed-acceptance MCMC，Christen and Fox, 2005](https://doi.org/10.1198/106186005X76983) |
+| [replay-aware MH proposal](../methods/ALGORITHMS.md#alg-replay-mh) | 从 base proposal 与冻结历史后缀的混合分布采样，并计算正反向提议概率 | 历史命中时以并行评分替代串行生成 | 历史库构建、评分和 Hastings 校正均计入成本 | [一般 MH 提议，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[防御混合分布，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
+| [pilot / evaluation 分离](../methods/ALGORITHMS.md#alg-progressive-is) | pilot 估计成本与方差；随后冻结独立 evaluation 数量 | 依据方差和单样本成本配置预算 | 成本同质时，pilot 主要体现为额外开销 | [最优分层分配，Neyman, 1934](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)；[自适应最优分配，Étoré and Jourdain, 2010](https://doi.org/10.1007/s11009-008-9108-0) |
+| [SMC rollout forest](../methods/INFRASTRUCTURE.md#infra-smc-reuse) | 所选 block 与历史 rollout 前缀匹配时，继承其条件后缀库存 | 在粒子传播阶段复用仍满足当前条件的 rollout | 未匹配粒子由 fresh rollout 补齐；有限库存按一次性观测消费 | [SMC samplers，Del Moral et al., 2006](https://doi.org/10.1111/j.1467-9868.2006.00553.x)；[LLM 的 SMC steering，Lew et al., 2023](https://arxiv.org/abs/2306.03081) |
 
 ## 统计复用与执行复用
 
@@ -123,6 +126,7 @@ verification。估算范围未包含 attention 的长度二次项、逐元素 ke
 | delayed acceptance，0.2 s 精确奖励 | 普通 MH | 0.827 ± 0.111× | 1.000 ± 0.000× | 精确奖励调用因子 0.556 ± 0.294× |
 | 冻结 replay 混合 proposal，在线 | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
 
+<a id="infra-report-broker"></a>
 ### rollout token 续跑
 
 对照路径与续跑路径均产生 8 条完整 rollout，共包含 320 个有效 completion token。首轮过量提交批次中的
@@ -133,6 +137,7 @@ token 数为对照的 `7.700×`，主模型 FLOPs 因子为 `3.346×`。墙钟�
 批量 prefill 相对重复串行 decode 的执行效率。结合 vLLM APC 或可复用 KV 句柄后，token 续跑可进一步
 降低恢复 prefill 成本。
 
+<a id="infra-report-streaming"></a>
 ### 流式 IS 的 verifier 重叠
 
 实验固定 12 条 rollout 和 2 个 verifier worker。最终 IS request id 在生成前完成冻结，两条路径包含
@@ -140,6 +145,7 @@ token 数为对照的 `7.700×`，主模型 FLOPs 因子为 `3.346×`。墙钟�
 完成后立即占用 CPU worker，verifier 队列与剩余 GPU decode 重叠，墙钟因子降至 `0.671×`，首次估计
 更新时间因子降至 `0.367×`。两条路径的主模型 workload 相同，FLOPs 因子为 1。
 
+<a id="infra-report-speculation"></a>
 ### 历史草稿的接受率
 
 确定性草稿选择历史树中的最高频 token。精确随机草稿按完整经验分布抽样，并在拒绝位置执行残差校正；
@@ -149,6 +155,7 @@ token 数为对照的 `7.700×`，主模型 FLOPs 因子为 `3.346×`。墙钟�
 24.0%。两种草稿的墙钟区间均覆盖 1，主模型 FLOPs 增加约 3%–4%。当前 8 条历史和 4 条单请求解码的
 规模下，接受率增量尚未覆盖验证与 CPU 分布处理成本。
 
+<a id="infra-report-mh-prefetch"></a>
 ### MH proposal-tree 预取
 
 该实现将 [Brockwell (2006)](https://doi.org/10.1198/106186006X100579) 的 MCMC prefetch 思路应用于
@@ -160,6 +167,7 @@ token 数为对照的 `7.700×`，主模型 FLOPs 因子为 `3.346×`。墙钟�
 有限状态后端中，预取路径与普通 MH 在相同随机流下逐字段一致。BF16 真实模型的双分支 batch 和单分支
 batch 可能形成不同 token trace；本组数据表示相同更新预算下的吞吐比较。
 
+<a id="infra-report-delayed-acceptance"></a>
 ### Delayed acceptance
 
 [Christen and Fox (2005)](https://doi.org/10.1198/106186005X76983) 提出的 delayed-acceptance MCMC 使用
@@ -168,6 +176,7 @@ token 谓词，并移除 0.2 s 延迟。第一阶段拒绝的 proposal 省略精
 校正。三个 seed 的精确调用因子均值为 0.556，墙钟因子为 0.827，主模型 FLOPs 因子为 1。收益方差由
 各随机流中的第一阶段拒绝比例产生。
 
+<a id="infra-report-replay-mh"></a>
 ### 冻结 replay 混合 proposal
 
 一般 MH 接受率允许状态相关的非对称 proposal，并通过正反向 proposal 概率完成校正
@@ -182,6 +191,7 @@ forward 计算 base 概率，替代逐 token 自回归生成。在线墙钟因�
 
 ## GSM8K 完整网格的执行优化
 
+<a id="infra-report-batching"></a>
 ### 连续批处理
 
 连续批处理采用 [Orca](https://www.usenix.org/conference/osdi22/presentation/yu) 的迭代级调度原则。
@@ -199,6 +209,7 @@ Base 请求最容易形成密集 batch，墙钟收益最大。IS 包含多个依
 padding 和 batch 分叉增加了部分逻辑 slots；因此连续批处理主要改善 GPU 利用率。自一致性投票-8 的两道题
 出现数值答案分叉，该行仅用于相同配置 workload 的吞吐比较。
 
+<a id="infra-report-warm-replay"></a>
 ### Warm rollout replay
 
 经验回放由 [Lin (1992)](https://doi.org/10.1007/BF00992699) 系统化用于强化学习；off-policy 数据的
@@ -215,6 +226,7 @@ padding 和 batch 分叉增加了部分逻辑 slots；因此连续批处理主�
 在线阶段的 FLOPs 降低 23.4%，墙钟降低 14.1%。完整计入历史库构建后，同一 replay key 需要重复查询
 7 次，累计 FLOPs 和累计墙钟才同时低于 fresh-only。准确率差及配对区间见质量报告。
 
+<a id="infra-report-dynamic"></a>
 ### 动态候选与方差—成本预算
 
 预算分配采用 pilot/evaluation 数据分离。方差与单样本成本的分配原则来自最优分层抽样
@@ -246,6 +258,7 @@ verifier-IS 和 0.5B proposal verifier-IS 与“训练 + GRPO 推理”的交点
 
 ![RTX 3090 rollout 基础设施消融](../assets/rtx3090_rollout_infra.svg)
 
+<a id="infra-report-token-tree"></a>
 ### 历史 token tree 与负载门控
 
 历史树延续检索式 speculative decoding 的执行结构
@@ -262,6 +275,7 @@ verifier-IS 和 0.5B proposal verifier-IS 与“训练 + GRPO 推理”的交点
 始终草稿路径验证了较多随后被拒绝的 token。batch 1 长尾门控将墙钟因子恢复至 `0.986×`，其三 seed
 波动范围覆盖 1。该门控在本组实验中的作用是限制低接受率草稿造成的吞吐退化。
 
+<a id="infra-report-progressive-smc"></a>
 ### Progressive、run-ahead 与 SMC rollout forest
 
 SMC 的全称为 Sequential Monte Carlo（序贯蒙特卡洛）。标准 SMC 以粒子传播、重要性加权和重采样
@@ -310,6 +324,7 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 5. 当前 RTX 3090 结果支持 replay-aware MH 和高延迟 verifier 下的流式 IS；历史草稿与方差—成本分配
    尚未形成稳定的默认加速。
 
+<a id="infra-report-vllm"></a>
 ## vLLM 后端与复现
 
 rollout broker、流式 frozen-design IS、proposal-tree 调度、delayed acceptance 和 replay-aware MH

@@ -13,10 +13,9 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 | --- | --- |
 | 比较方法准确率、pass@k 和共享目标 | [GSM8K 方法质量与计算量实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) |
 | 比较基础设施优化的墙钟、FLOPs 与复用影响 | [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md) |
+| 查看全部算法的数学定义与关键实现 | [推理算法实现](docs/methods/ALGORITHMS.md) |
+| 查看全部执行优化、后端与计量方式 | [推理基础设施实现](docs/methods/INFRASTRUCTURE.md) |
 | 复现实验或核对公平性约束 | [GSM8K 统一实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) |
-| 对照数学对象与代码入口 | [算法映射](docs/methods/ALGORITHM_MAP.md) |
-| 查看批处理、KV 复用和计量方式 | [推理性能设计](docs/methods/PERFORMANCE_DESIGN.md) |
-| 查看 rollout 生成、复用与验证优化 | [rollout 生成与复用](docs/methods/ROLLOUT_ACCELERATION.md) |
 | 使用或成对测量 vLLM | [vLLM 推理运行时](docs/methods/VLLM_RUNTIME.md) |
 | 查找全部文档 | [文档导航](docs/README.md) |
 | 查找机器可读结果 | [结果索引](results/README.md) |
@@ -33,7 +32,8 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 | `smc-forest` | 基座模型粒子 | 可继承的条件后缀 reservoir | 逐 block 重采样并复用仍满足条件分布的 rollout 后缀 |
 
 这些路径共享后端、请求级随机数、概率评分、token/FLOPs 账本和诊断接口。算法实现位于
-`src/inference_scaling/algorithms/`；GSM8K 对照实现位于 `experiments/`。
+`src/inference_scaling/algorithms/`；GSM8K 对照实现位于 `experiments/`。各方法的公式、有限预算误差、
+replay 数据生命周期与代码入口统一收录在[推理算法实现](docs/methods/ALGORITHMS.md)。
 
 ## 方法效果概览
 
@@ -65,7 +65,8 @@ FLOPs、吞吐和复用影响。实验协议、机器可读结果和工程验证
 ## Infra 优化概览
 
 下表统一使用“优化路径 / 对照路径”；小于 1 表示减少。不同实验组的绝对时间不能横比，完整 setting、
-冷启动成本和误差线见 [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+冷启动成本和误差线见 [RTX 3090 推理基础设施优化汇总](docs/reports/RTX3090_ROLLOUT_INFRA.md)，
+每项机制的原理、关键代码和正确分母见[推理基础设施实现](docs/methods/INFRASTRUCTURE.md)。
 
 | 优化 | 对照 | 墙钟因子 | 逻辑 FLOPs 因子 | 当前结论 |
 | --- | --- | ---: | ---: | --- |

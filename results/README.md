@@ -7,6 +7,14 @@
 
 目录：[`gsm8k_3090/`](gsm8k_3090/)
 
+| 结果族 | 方法定义 |
+| --- | --- |
+| Base、搜索、GRPO | [生成与训练基线](../docs/methods/ALGORITHMS.md#alg-baselines) |
+| 幂分布与 verifier MH | [幂分布 MH](../docs/methods/ALGORITHMS.md#alg-power-mh)、[奖励目标 MH](../docs/methods/ALGORITHMS.md#alg-reward-mh) |
+| 标准与 off-policy 条件 IS | [条件能量 IS](../docs/methods/ALGORITHMS.md#alg-conditional-is)、[主模型重评分](../docs/methods/ALGORITHMS.md#alg-offpolicy-is) |
+| 无重评分小模型补全 | [proposal-energy 目标](../docs/methods/ALGORITHMS.md#alg-proposal-energy) |
+| warm replay、动态候选和预算分配 | [rollout replay](../docs/methods/ALGORITHMS.md#alg-base-replay)、[动态候选](../docs/methods/ALGORITHMS.md#alg-dynamic-is)、[方差—成本分配](../docs/methods/ALGORITHMS.md#alg-budget-allocation) |
+
 | 文件 | 内容 |
 | --- | --- |
 | `gsm8k_3090_aligned_comparison_validated.json` | Base、搜索、MH、条件 IS 与 GRPO 的 pass@1、成本背景和配对区间 |
@@ -25,6 +33,15 @@
 ## 推理基础设施优化结果
 
 早期完整 GSM8K 网格中可分离的 infra 汇总仍位于 [`gsm8k_3090/`](gsm8k_3090/)：
+
+| 结果族 | 方法定义与计量分母 |
+| --- | --- |
+| 连续批处理与重复前缀 | [连续批处理](../docs/methods/INFRASTRUCTURE.md#infra-continuous-batching)、[KV 复用](../docs/methods/INFRASTRUCTURE.md#infra-prefix-kv) |
+| warm replay 与动态执行 | [replay 在线/冷启动成本](../docs/methods/INFRASTRUCTURE.md#infra-replay-execution)、[rollout 展平](../docs/methods/INFRASTRUCTURE.md#infra-flattening) |
+| 部分 rollout 与流式 verifier | [rollout broker](../docs/methods/INFRASTRUCTURE.md#infra-rollout-broker)、[流式奖励](../docs/methods/INFRASTRUCTURE.md#infra-streaming-reward) |
+| 历史草稿与负载门控 | [精确 speculation](../docs/methods/INFRASTRUCTURE.md#infra-speculation)、[active-batch 调度](../docs/methods/INFRASTRUCTURE.md#infra-active-batch) |
+| MH 执行复用 | [proposal-tree 预取](../docs/methods/INFRASTRUCTURE.md#infra-mh-prefetch)、[精确奖励削减](../docs/methods/INFRASTRUCTURE.md#infra-delayed-reward)、[replay 执行成本](../docs/methods/INFRASTRUCTURE.md#infra-replay-execution) |
+| progressive、run-ahead 与 SMC | [progressive IS](../docs/methods/ALGORITHMS.md#alg-progressive-is)、[run-ahead](../docs/methods/INFRASTRUCTURE.md#infra-runahead)、[SMC 复用](../docs/methods/INFRASTRUCTURE.md#infra-smc-reuse) |
 
 | 文件 | Infra 内容 |
 | --- | --- |

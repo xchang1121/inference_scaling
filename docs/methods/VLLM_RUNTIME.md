@@ -1,5 +1,8 @@
 # vLLM 推理运行时
 
+本页说明安装、配置和成对测速。vLLM、Transformers 与其他 infra 机制的统一实现说明见
+[推理基础设施实现](INFRASTRUCTURE.md#infra-vllm)，算法概率目标见[推理算法实现](ALGORITHMS.md)。
+
 仓库现在可以在不改动 MH、条件 IS、rollout replay、渐进预算和 SMC forest 算法代码的情况下，把模型
 执行层从 Transformers 切换为 vLLM。默认的 `vllm` 模式使用一个常驻 `AsyncLLM`：不同题目、候选和
 rollout 产生的请求都进入同一个连续调度器；算法仍通过同步的 `sample_batch` / `score_batch` 接口取回

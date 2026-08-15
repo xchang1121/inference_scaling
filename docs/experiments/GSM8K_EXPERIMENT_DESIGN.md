@@ -1,5 +1,9 @@
 # GSM8K 统一实验设计
 
+本文件固定实验输入、公平性约束与复现流程。方法公式和实现边界见
+[推理算法实现](../methods/ALGORITHMS.md)，批处理、缓存、后端和 token/FLOPs 计量见
+[推理基础设施实现](../methods/INFRASTRUCTURE.md)。
+
 ## 实验范围
 
 实验统一使用公开且可自动评分的 OpenAI GSM8K。GRPO 只使用 7,473 条官方训练样本；所有准确率

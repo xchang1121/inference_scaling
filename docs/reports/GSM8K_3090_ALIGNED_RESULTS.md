@@ -4,6 +4,8 @@
 生成质量与计算成本。质量指标包括单次生成准确率、pass@k、共享目标下的准确率与经验答案分布距离。
 墙钟、批处理、缓存和 rollout 执行优化见
 [RTX 3090 推理执行与 rollout 复用实验](RTX3090_ROLLOUT_INFRA.md)。
+各方法的目标分布、有限预算估计量、正确性边界和关键实现见
+[推理算法实现](../methods/ALGORITHMS.md)；本报告只保留实验设置、数据与结论。
 
 ## 术语与统计量
 
@@ -45,15 +47,15 @@
 
 | 方法 | 候选与决策规则 | 目标或比较对象 | 文献依据 |
 | --- | --- | --- | --- |
-| Base | 从 `p_base(y∣x)` 采样一次 | 单次随机采样基线 | [Qwen2.5，Yang et al., 2024](https://arxiv.org/abs/2412.15115) |
-| Beam-8 | 保留累计对数概率最高的 8 条部分序列并确定性扩展 | 近似最大概率搜索基线 | [Beam Search Strategies，Freitag and Al-Onaizan, 2017](https://aclanthology.org/W17-3207/) |
-| 自一致性投票-8 | 独立采样 8 条推理路径，按数值答案众数选择 | 并行采样与答案边缘化基线 | [Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
-| 幂分布 MH | 对完整序列执行后缀提议与接受，目标为 `p_base(y∣x)^4` | 基模概率锐化 | [Metropolis–Hastings，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97) |
-| 标准条件 IS | Base 候选与 Base rollout；累积 self-consistency 奖励形成候选权重 | 免训练条件重加权 | [重要性采样，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303)；[Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
-| 0.5B proposal 条件 IS | Base 候选与 0.5B rollout；后缀权重乘精确 `p_base/q` | off-policy rollout | [Off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
-| 0.5B rollout 无重评分（proposal-energy） | Base 候选与 0.5B rollout；用 rollout 奖励直接重加权 Base 候选，不乘 `p_base/q` | 有偏小模型前瞻；估计 0.5B 而非 Base 的后续能量，不属于 Base 目标的 off-policy IS | 与上一行直接配对的消融 |
-| GRPO | 正确性奖励与 KL 正则训练后的策略 | 训练式强化学习基线 | [DeepSeekMath，Shao et al., 2024](https://arxiv.org/abs/2402.03300) |
-| verifier-MH / verifier-IS | 统一目标 `p_base(y∣x) exp(exact_reward(y)/0.04)` | 相同奖励下的算法比较 | [GSM8K verifier，Cobbe et al., 2021](https://arxiv.org/abs/2110.14168)；[Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
+| [Base](../methods/ALGORITHMS.md#alg-baselines) | 从 `p_base(y∣x)` 采样一次 | 单次随机采样基线 | [Qwen2.5，Yang et al., 2024](https://arxiv.org/abs/2412.15115) |
+| [Beam-8](../methods/ALGORITHMS.md#alg-baselines) | 保留累计对数概率最高的 8 条部分序列并确定性扩展 | 近似最大概率搜索基线 | [Beam Search Strategies，Freitag and Al-Onaizan, 2017](https://aclanthology.org/W17-3207/) |
+| [自一致性投票-8](../methods/ALGORITHMS.md#alg-baselines) | 独立采样 8 条推理路径，按数值答案众数选择 | 并行采样与答案边缘化基线 | [Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
+| [幂分布 MH](../methods/ALGORITHMS.md#alg-power-mh) | 对完整序列执行后缀提议与接受，目标为 `p_base(y∣x)^4` | 基模概率锐化 | [Metropolis–Hastings，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97) |
+| [标准条件 IS](../methods/ALGORITHMS.md#alg-conditional-is) | Base 候选与 Base rollout；累积 self-consistency 奖励形成候选权重 | 免训练条件重加权 | [重要性采样，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303)；[Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
+| [0.5B proposal 条件 IS](../methods/ALGORITHMS.md#alg-offpolicy-is) | Base 候选与 0.5B rollout；后缀权重乘精确 `p_base/q` | off-policy rollout | [Off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
+| [0.5B rollout 无重评分（proposal-energy）](../methods/ALGORITHMS.md#alg-proposal-energy) | Base 候选与 0.5B rollout；用 rollout 奖励直接重加权 Base 候选，不乘 `p_base/q` | 有偏小模型前瞻；估计 0.5B 而非 Base 的后续能量，不属于 Base 目标的 off-policy IS | 与上一行直接配对的消融 |
+| [GRPO](../methods/ALGORITHMS.md#alg-baselines) | 正确性奖励与 KL 正则训练后的策略 | 训练式强化学习基线 | [DeepSeekMath，Shao et al., 2024](https://arxiv.org/abs/2402.03300) |
+| [verifier-MH](../methods/ALGORITHMS.md#alg-reward-mh) / [verifier-IS](../methods/ALGORITHMS.md#alg-conditional-is) | 统一目标 `p_base(y∣x) exp(exact_reward(y)/0.04)` | 相同奖励下的算法比较 | [GSM8K verifier，Cobbe et al., 2021](https://arxiv.org/abs/2110.14168)；[Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
 
 主表中的标准条件 IS、幂分布 MH 与 GRPO 分别对应 self-consistency、基模概率幂和正确性奖励。主表比较
 最终任务质量与成本；共享目标实验进一步控制奖励差异，并报告经验答案分布距离。
@@ -148,6 +150,7 @@ oracle 实验读取 test split 的标准答案，结论限于算法诊断。部�
 两个 0.5B proposal 版本的 pass@1 均比标准 IS 低 11.719 个百分点。移除权重截断后，pass@8 由
 62.500% 升至 65.625%；proposal 与 base 的有限重叠仍形成较高的重要性权重方差。
 
+<a id="15b-rescoring-ablation"></a>
 ### 1.5B 重评分消融
 
 经过重评分的 0.5B rollout 估计
@@ -203,6 +206,7 @@ GRPO 分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种�
 区间为 [-28.125, 0]，FLOPs 为标准版本的 `1.488×`。标准版本与该行的墙钟来自不同运行批次，不能据此
 计算受控吞吐比。该路径同时改变质量与计算量，因而归类为质量—成本权衡，而非质量匹配条件下的加速。
 
+<a id="verifier-rescoring-ablation"></a>
 ### 精确奖励下的小模型补全消融
 
 无重评分路径先由 1.5B 模型生成候选块 `z_1, …, z_M`，再由 0.5B 模型从每个候选块补全
@@ -244,11 +248,13 @@ token 增加 12.2%，最终序列平均长度增加 15.9%。1.5B 重评分是并
 三种直接采样方法的答案级距离点估计均低于 Base。TV bootstrap 区间上界为 0.4063；该样本规模提供
 趋势性结果，分布等价检验需要更大的题目与采样网格。
 
+<a id="quality-replay-dynamic"></a>
 ## rollout replay 与动态候选
 
 经验回放的母方法见 [Lin (1992)](https://doi.org/10.1007/BF00992699)，off-policy 修正采用真实行为
 概率的重要性比。固定 replay 实验使用 8 个 base 候选和每候选 3 条总 rollout。warm 路径最多读取
-2 条已评分历史 rollout，并保留 1 条 fresh base rollout。
+2 条已评分历史 rollout，并保留 1 条 fresh base rollout。所用 history + fresh-tail 恒等式及数据生命周期见
+[base 候选 rollout replay](../methods/ALGORITHMS.md#alg-base-replay)。
 
 | 路径 | 正确数 / 32 | 准确率 |
 | --- | ---: | ---: |
@@ -258,11 +264,14 @@ token 增加 12.2%，最终序列平均长度增加 15.9%。1.5B 重评分是并
 warm replay 相对 fresh-only 的准确率差为 -3.125 个百分点，逐题配对 bootstrap 95% 区间为
 [-12.500, 6.250]。区间覆盖 0；当前样本对稳定质量差异与质量等价均缺乏充分分辨率。
 
+<a id="quality-dynamic-is"></a>
 ### 动态候选与方差—成本分配
 
 该实验检验动态 proposal、外层 IS、rollout replay 和预算分配。奖励直接读取 GSM8K 标准答案，因此
 属于 oracle 诊断。主模型与 proposal 的采样温度均为 1.0，奖励温度为 0.1，历史权重截断阈值为 8.0。
 三组均使用 8 个候选、48-token block、最长 192 token 和每个非终止候选 3 条 evaluation rollout。
+算法定义分别见[动态候选与外层 IS](../methods/ALGORITHMS.md#alg-dynamic-is)和
+[方差—成本预算分配](../methods/ALGORITHMS.md#alg-budget-allocation)。
 
 1. `base_candidate_fixed`：候选来自 1.5B base；无历史库；每候选使用 3 条 fresh rollout。
 2. `replay_aware_fixed`：候选来自 `0.5 × base + 0.5 × 0.5B proposal`，并乘精确外层 `p_base/q`；

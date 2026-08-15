@@ -1,5 +1,8 @@
 # 推理性能设计
 
+本页保留早期性能设计说明。全部已实现 infra 机制、关键代码、后端差异与实验分母统一见
+[推理基础设施实现](INFRASTRUCTURE.md)；会改变统计目标的部分见[推理算法实现](ALGORITHMS.md)。
+
 实现采用大 batch、KV cache 和跨 prompt 连续批处理。独立算法 worker 把同步调用提交给共享
 后端，后台 dispatcher 将时间上相邻且采样策略、生成长度、重复前缀数兼容的调用组进行合并。一次
 `sample_batch` 或 `score_batch` 的请求不会被拆成零散单条再与其他 prompt 混排；超过预算的 rollout
