@@ -47,8 +47,8 @@ class LLaDATransformersBackend:
     are predicted in parallel and each reverse step commits a fixed number of
     positions.  ``low_confidence`` commits the most confident predictions.
     ``random`` commits a uniform subset independent of sampled token values;
-    this second policy has a tractable trajectory probability and is therefore
-    the supported policy for off-policy IS.
+    ``sequential`` commits the leftmost still-masked positions.  The latter two
+    policies have tractable trajectory probabilities and support off-policy IS.
     """
 
     def __init__(
@@ -285,6 +285,27 @@ class LLaDATransformersBackend:
         # ordinary vocabulary tokens only.
         logits = logits.clone()
         logits[..., mask_token_id] = -self._torch.inf
+        return self._filter_logits(logits, sampling)
+
+    def _filter_logits(self, logits: Any, sampling: DiffusionSamplingConfig) -> Any:
+        """Apply the normalized top-k/top-p policy used for sampling and scoring."""
+
+        if sampling.top_k > 0:
+            kept = min(sampling.top_k, logits.shape[-1])
+            threshold = self._torch.topk(logits, kept, dim=-1).values[..., -1, None]
+            logits = logits.masked_fill(logits < threshold, -self._torch.inf)
+        if sampling.top_p < 1:
+            sorted_logits, sorted_indices = self._torch.sort(logits, descending=True, dim=-1)
+            cumulative = self._torch.cumsum(
+                self._torch.softmax(sorted_logits.float(), dim=-1), dim=-1
+            )
+            sorted_remove = cumulative > sampling.top_p
+            sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
+            sorted_remove[..., 0] = False
+            remove = self._torch.zeros_like(sorted_remove).scatter(
+                -1, sorted_indices, sorted_remove
+            )
+            logits = logits.masked_fill(remove, -self._torch.inf)
         return logits
 
     def _draw_tokens(
@@ -328,6 +349,8 @@ class LLaDATransformersBackend:
         prompt_length = len(first.prefix)
         generation_length = first.generation_length
         sampling = first.sampling
+        if sampling.remasking == "low_confidence_dynamic":
+            raise ValueError("LLaDA backend does not implement dynamic-threshold remasking")
         mask_token_id = self._resolve_mask_token_id(sampling)
         batch_size = len(requests)
         tokens = self._torch.full(
@@ -365,7 +388,7 @@ class LLaDATransformersBackend:
                 sampled_tokens, sampled_logprobs = self._draw_tokens(
                     logits, temperature=sampling.temperature, generators=generators
                 )
-                if sampling.remasking == "low_confidence":
+                if sampling.remasking in {"low_confidence", "low_confidence_static"}:
                     chosen_logits = self._torch.gather(
                         logits.float(), dim=-1, index=sampled_tokens.unsqueeze(-1)
                     ).squeeze(-1)
@@ -387,6 +410,10 @@ class LLaDATransformersBackend:
                         priorities = self._torch.rand(
                             available, device=self._device, generator=generator
                         )
+                    elif sampling.remasking == "sequential":
+                        priorities = -self._torch.arange(
+                            available, device=self._device, dtype=self._torch.float32
+                        )
                     else:
                         assert confidence is not None
                         priorities = confidence[row, masked_absolute]
@@ -404,7 +431,12 @@ class LLaDATransformersBackend:
                     step_logprob: float | None = None
                     if exact:
                         assert sampled_logprobs is not None
-                        step_logprob = self._subset_logprob(available, transfer_count) + float(
+                        subset_logprob = (
+                            self._subset_logprob(available, transfer_count)
+                            if sampling.remasking == "random"
+                            else 0.0
+                        )
+                        step_logprob = subset_logprob + float(
                             sampled_logprobs[row, selected_absolute].sum().item()
                         )
                         trajectory_logprobs[row] += step_logprob
@@ -442,7 +474,9 @@ class LLaDATransformersBackend:
         generation_length = len(first.sample.token_ids)
         sampling = first.sampling
         if not sampling.has_exact_trajectory_density:
-            raise ValueError("trajectory scoring requires random remasking and positive temperature")
+            raise ValueError(
+                "trajectory scoring requires random or sequential remasking and positive temperature"
+            )
         sampling.validate_generation_length(generation_length)
         mask_token_id = self._resolve_mask_token_id(sampling)
         expected_steps = sampling.total_steps(generation_length)
@@ -507,9 +541,12 @@ class LLaDATransformersBackend:
                 selected_logprobs = selected_logits - log_normalizers[
                     row, absolute_positions
                 ]
-                totals[row] += self._subset_logprob(available, len(step.positions)) + float(
-                    selected_logprobs.sum().item()
+                subset_logprob = (
+                    self._subset_logprob(available, len(step.positions))
+                    if sampling.remasking == "random"
+                    else 0.0
                 )
+                totals[row] += subset_logprob + float(selected_logprobs.sum().item())
                 tokens[row, absolute_positions] = selected_tokens
 
         for row, request in enumerate(requests):

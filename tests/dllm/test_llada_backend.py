@@ -82,7 +82,7 @@ def test_low_confidence_generation_is_not_mislabeled_as_exact_density():
 
     assert sample.token_ids == (2, 2)
     assert sample.trajectory_logprob is None
-    with pytest.raises(ValueError, match="random remasking"):
+    with pytest.raises(ValueError, match="random or sequential remasking"):
         backend.score_trajectories([DiffusionTrajectoryScoreRequest(sample, sampling)])
 
 
