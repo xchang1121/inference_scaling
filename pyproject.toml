@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "inference-scaling"
 version = "0.1.0"
-description = "A unified, theory-aligned experiment framework for MH and conditional-energy inference scaling."
+description = "Theory-aligned inference scaling for autoregressive and diffusion language models."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,6 +18,11 @@ dev = [
   "pytest-cov>=5",
 ]
 gpu = [
+  "accelerate>=1.14,<2",
+  "safetensors>=0.8,<1",
+  "transformers>=5.14,<6",
+]
+dllm = [
   "accelerate>=1.14,<2",
   "safetensors>=0.8,<1",
   "transformers>=5.14,<6",
