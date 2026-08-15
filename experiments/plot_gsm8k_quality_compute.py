@@ -64,15 +64,15 @@ STYLE = {
     "mh": ("幂分布 MH", "#ea580c", "triangle", -10, 19, "end"),
     "conditional_is": ("标准条件 IS", "#15803d", "circle", -10, -12, "end"),
     "conditional_is_small_proposal": (
-        "0.5B proposal 条件 IS",
+        "0.5B rollout proposal 条件 IS",
         "#7e22ce",
         "diamond",
         -10,
         20,
         "end",
     ),
-    "rl_sample": ("GRPO 随机采样", "#be123c", "triangle", 10, -10, "start"),
-    "rl_greedy": ("GRPO 贪心", "#db2777", "square", 10, -10, "start"),
+    "rl_sample": ("GRPO 参数 + 随机采样", "#be123c", "triangle", 10, -10, "start"),
+    "rl_greedy": ("GRPO 参数 + 贪心解码", "#db2777", "square", 10, -10, "start"),
     "verifier_mh": ("verifier-MH", "#ea580c", "triangle", -10, -12, "end"),
     "verifier_conditional_is": (
         "标准 verifier-IS",
@@ -83,7 +83,7 @@ STYLE = {
         "end",
     ),
     "verifier_conditional_is_small_proposal": (
-        "0.5B 补全 + 1.5B 重评分",
+        "0.5B rollout off-policy IS",
         "#7e22ce",
         "diamond",
         -10,
@@ -91,7 +91,7 @@ STYLE = {
         "end",
     ),
     "verifier_small_rollout_no_rescore": (
-        "0.5B 补全（无重评分）",
+        "0.5B rollout proposal-energy",
         "#0f766e",
         "square",
         -10,
@@ -238,7 +238,7 @@ def render(main: list[Point], oracle: list[Point]) -> str:
     lines = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-labelledby="title desc">',
         '<title id="title">GSM8K 单次生成准确率与推理计算量</title>',
-        '<desc id="desc">左图比较可部署或不读取标准答案的方法；右图比较读取标准答案的共享目标诊断。点为 32 道题准确率，误差线为 Wilson 95% 区间，横轴为对数尺度 PFLOPs。</desc>',
+        '<desc id="desc">左图比较使用部署奖励的方法；右图比较使用标准答案奖励的共享目标。点为 32 道题准确率，误差线为 Wilson 95% 区间，横轴为对数尺度 PFLOPs。</desc>',
         "<style>",
         "text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fill: #172033; }",
         ".title { font-size: 25px; font-weight: 600; }",
@@ -259,8 +259,8 @@ def render(main: list[Point], oracle: list[Point]) -> str:
         _panel(
             main,
             PANEL_LEFTS[0],
-            "无需标准答案的方法",
-            "不读取测试集标准答案；不同方法的目标并不完全相同",
+            "部署奖励方法",
+            "奖励来自生成结果；各方法目标不同",
         )
     )
     lines.extend(
@@ -268,14 +268,14 @@ def render(main: list[Point], oracle: list[Point]) -> str:
             oracle,
             PANEL_LEFTS[1],
             "精确奖励目标与重评分消融",
-            "读取标准答案；无重评分点不再对应完整 1.5B 目标",
+            "使用标准答案；proposal-energy 省去 1.5B 重评分",
         )
     )
     y_mid = (PLOT_TOP + PLOT_BOTTOM) / 2
     lines.extend(
         [
             f'<text class="axis-title" x="22" y="{y_mid:.1f}" text-anchor="middle" transform="rotate(-90 22 {y_mid:.1f})">单次生成准确率</text>',
-            '<text class="note" x="82" y="681">点：准确率；竖线：Wilson 95% 区间。FLOPs = 2 × 模型参数量 × 实际 forward token slots；不等同于墙钟时间。</text>',
+            '<text class="note" x="82" y="681">点：准确率；竖线：Wilson 95% 区间。FLOPs = 2 × 模型参数量 × 实际 forward token slots；墙钟单独计量。</text>',
             "</svg>",
         ]
     )

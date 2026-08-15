@@ -53,12 +53,12 @@ SERIES_STYLE = {
     "best_of_n": ("自一致性-8", "#0891b2", "diamond"),
     "conditional_is": ("标准条件 IS", "#15803d", "circle"),
     "conditional_is_small_proposal": (
-        "0.5B proposal 条件 IS",
+        "0.5B rollout proposal 条件 IS",
         "#7e22ce",
         "diamond",
     ),
     "mh": ("幂分布 MH", "#ea580c", "triangle"),
-    "rl_greedy": ("GRPO 贪心", "#be123c", "square"),
+    "rl_greedy": ("GRPO 参数 + 贪心解码", "#be123c", "square"),
 }
 
 
@@ -376,7 +376,7 @@ def render(payload: dict[str, Any]) -> str:
         ".point-label { font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }",
         ".note { font-size: 13px; fill: #536078; }",
         "</style>",
-        '<text class="title" x="82" y="43">消融结果：增加预算何时真正改善质量</text>',
+        '<text class="title" x="82" y="43">GSM8K 质量—预算消融（8 题）</text>',
     ]
     lines.extend(
         _log_panel(
@@ -393,7 +393,7 @@ def render(payload: dict[str, Any]) -> str:
             PANEL_LEFTS[1],
             ROW_TOPS[0],
             "标准条件 IS 的引导阶段数 S",
-            "S=4 后点估计不再提高，计算量继续增加",
+            "S=4/8/16 均为 6/8，计算量继续增加",
         )
     )
     lines.extend(

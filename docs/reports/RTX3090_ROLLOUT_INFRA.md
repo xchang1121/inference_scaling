@@ -1,11 +1,10 @@
 # RTX 3090 推理执行与 rollout 复用实验
 
-本报告仅汇总基础设施实验的设置、结果与结果解读。各机制的执行流程、论文来源、关键代码、概率边界和
+本报告汇总基础设施实验的设置、结果与统计解释。各机制的流程、来源、实现和
 计算量分母见[推理基础设施实现](../methods/INFRASTRUCTURE.md)；IS、replay 与 MH 的数学定义见
 [推理算法实现](../methods/ALGORITHMS.md)；准确率和 pass@k 见
 [GSM8K 方法质量与计算量实验](GSM8K_3090_ALIGNED_RESULTS.md)。
-实验臂名称中的机制、workload 后缀和成本口径见
-[报告中的实验臂名称](../methods/INFRASTRUCTURE.md#infra-report-labels)。
+实验臂设置见[执行标签定义](../methods/INFRASTRUCTURE.md#infra-report-labels)。
 
 ## 报告范围与固定设置
 
@@ -18,8 +17,8 @@
 | rollout 加速栈 | 历史树、负载门控、progressive、run-ahead 和 SMC forest | 固定公开 test 第 1311 题；1.5B 模型；BF16；最长 64 token | 3 个独立 seed |
 | IS / MH 复用诊断 | 部分续跑、流式 IS、随机草稿、预取、delayed acceptance 和 replay proposal | 同一公开题与模型；16-token chunk；指定实验加入 0.2 s verifier 延迟 | 3 个独立 seed；replay 每 seed 4 条链 |
 
-后两组用于隔离执行变量，不用于方法质量排序。FLOPs 估算不含 attention 长度二次项、逐元素 kernel、
-CPU token tree、tokenization、奖励解析和调度成本；这些成本由墙钟补充。
+后两组用于隔离执行变量；质量排序使用 GSM8K 完整网格。FLOPs 未计项为 attention 长度二次项、逐元素
+kernel、CPU token tree、tokenization、奖励解析和调度；墙钟包含这些执行影响。
 
 ## IS 与 MH rollout 复用结果
 
@@ -59,8 +58,7 @@ CPU token tree、tokenization、奖励解析和调度成本；这些成本由墙
 ### 历史草稿的接受率
 
 随机历史草稿相对确定性草稿将平均接受率由 17.7% 提高到 24.0%。两种草稿的墙钟区间均覆盖 1，
-主模型 FLOPs 增加约 3%–4%。当前 8 条历史和 4 条单请求解码的规模下，接受率增量尚未覆盖验证与
-CPU 分布处理成本。
+主模型 FLOPs 增加约 3%–4%；验证与 CPU 分布处理成本高于该规模下的接受率收益。
 
 <a id="infra-report-mh-prefetch"></a>
 ### MH proposal-tree 预取
@@ -98,7 +96,7 @@ CPU 分布处理成本。
 | [Base](../methods/ALGORITHMS.md#alg-report-labels) | 95.4 s | 19.7 s | 0.206× | 1.177× | 32/32 |
 | [自一致性投票-8](../methods/ALGORITHMS.md#alg-report-labels) | 136.9 s | 67.9 s | 0.496× | 1.021× | 30/32 |
 | [标准条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 427.1 s | 370.0 s | 0.866× | 1.008× | 32/32 |
-| [0.5B proposal 条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 419.5 s | 399.5 s | 0.952× | 1.003× | 32/32 |
+| [0.5B rollout proposal 条件 IS](../methods/ALGORITHMS.md#alg-report-labels) | 419.5 s | 399.5 s | 0.952× | 1.003× | 32/32 |
 
 Base 请求最容易形成密集 batch，墙钟收益最大。IS 包含多个依赖阶段，可跨 prompt 合并的串行段较少。
 padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收益是 GPU 利用率。自一致性投票-8 有两道题
@@ -133,12 +131,13 @@ padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收�
 
 动态固定组相对 base 固定组的稳态 FLOPs 因子为 `0.921×`，墙钟因子为 `0.998×`。方差—成本组相对
 动态固定组为 `1.200×` FLOPs 和 `1.004×` 墙钟。每来源 2 条 design rollout 形成较高的方差估计噪声，
-最终只复用 5.707% rollout；本组尚未观测到预算分配的效率增益。
+最终复用率为 5.707%；相对动态固定组的 FLOPs 因子为 `1.200×`。
 
 ### GRPO 训练与免训练推理的累计计算量
 
 本地 GRPO 一次训练消耗 15.646 PFLOPs、5,007,660 个前向等价 token slots 和 9,545.2 秒。仅按累计
-FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B proposal verifier-IS 与“训练 + GRPO 随机采样”的
+FLOPs 计算时，verifier-MH、标准 verifier-IS 和 0.5B rollout proposal verifier-IS 与
+“GRPO 训练 + 参数随机采样”的
 交点分别为 392、344 和 230 次查询。这些方法与 GRPO 的准确率绝对差超过预设阈值，因此交点只表示
 计算账本，不表示质量匹配所需查询数。
 
@@ -200,14 +199,13 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 1. warm replay 与 SMC 条件后缀 forest 减少 fresh rollout；完整成本包含历史库构建和条件匹配。
 2. 流式 IS、MH 预取和 delayed acceptance 可缩短 verifier 关键路径；收益随 verifier 延迟和拒绝比例变化。
 3. speculative draft 与 token 级续跑可能降低墙钟并增加逻辑 FLOPs，两个指标需要并列报告。
-4. 当前 RTX 3090 结果支持 replay-aware MH 和高延迟 verifier 下的流式 IS；历史草稿与方差—成本分配
-   尚未形成稳定的默认加速。
+4. replay-aware MH 和高延迟 verifier 下的流式 IS 墙钟因子低于 1；历史草稿和方差—成本分配的
+   对应因子接近或高于 1。
 
 <a id="infra-report-vllm"></a>
-## 未测项目与机器可读结果
+## 后端范围与机器可读结果
 
-本轮 RTX 3090 实测全部来自 Transformers 后端。本机 Windows 环境未配置用于成对实验的 Linux/WSL2
-vLLM 运行环境，因此本报告不列 vLLM 加速数字。vLLM 的实现、能力边界和复现入口见
+本报告的 RTX 3090 数值对应 Transformers 后端。vLLM 的实现、能力边界和成对复现入口见
 [vLLM 后端](../methods/INFRASTRUCTURE.md#infra-vllm)。
 
 机器可读结果包括：

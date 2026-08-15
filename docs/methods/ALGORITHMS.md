@@ -1,7 +1,6 @@
 # 推理算法实现：目标分布、估计量与数据复用
 
-本文档集中说明仓库中已经实现的算法。内容按“目标分布—有限预算估计量—代码路径—正确性边界”组织；
-批处理、KV cache、异步回调和运行时调度等不改变统计目标的机制见
+本文档按目标分布、有限预算估计量、实现和误差来源说明已实现算法。执行机制见
 [推理基础设施实现](INFRASTRUCTURE.md)。实验数值见
 [GSM8K 方法质量与计算量实验](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
 
@@ -32,34 +31,34 @@ p(y\mid x)=\prod_{t=1}^{|y|}p(y_t\mid x,y_{<t}).
 \tag{2}
 \]
 
-以下三种“精确性”需要区分：
+本文使用三类性质：
 
 - **平稳分布精确**：MH 转移核保持指定目标不变；有限更新轮次仍有链的收敛误差。
 - **估计量无偏**：普通 IS 或 replay 恒等式对条件能量给出无偏估计；有限候选数下的归一化重采样仍是近似。
-- **执行等价**：批处理、流式完成和预取只改变执行顺序，不改变随机请求或统计量。
+- **执行等价**：批处理、流式完成和预取保持随机请求与统计量固定。
 
 下文中，MH 指 Metropolis--Hastings，IS 指 Importance Sampling（重要性采样），SIR 指
 Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指 Sequential Monte Carlo
 （序贯蒙特卡洛），GRPO 指 Group Relative Policy Optimization（组相对策略优化）。
 
-除专门标注的消融外，重要性修正要求 proposal 在目标有正概率的位置也具有正概率。硬 top-k/top-p 截断可能破坏
-这一条件；权重截断会保留有限方差但引入偏差。
+重要性修正要求 \(p(y)>0\Rightarrow q(y)>0\)。硬 top-k/top-p 可能破坏该条件；权重截断以偏差换取
+有限权重范围。
 
 <a id="alg-overview"></a>
 ## 2. 方法总览
 
 | 方法 | 采样或估计对象 | 有限预算下的性质 | 主要实现 |
 | --- | --- | --- | --- |
-| Base / greedy / beam / Best-of-\(N\) | 基础模型或搜索基线 | 不是式 (1) 的通用采样器 | `experiments/gsm8k_reproduction.py` |
+| Base / greedy / beam / Best-of-\(N\) | 基础模型采样或确定性搜索 | 基线分布或奖励最大化 | `experiments/gsm8k_reproduction.py` |
 | 幂分布 MH | 式 (2) | 转移核精确；有限更新存在收敛误差 | `algorithms/mh.py::run_mh_chain` |
 | 奖励目标 MH | 式 (1) | 转移核精确；每次 proposal 通常需完整奖励 | `algorithms/mh.py::run_reward_mh_chain` |
 | 条件能量 IS | 式 (1) 的逐 block SIR | \(K,M\to\infty\) 时趋近目标 | `algorithms/conditional_energy.py` |
 | off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对能量无偏 | `algorithms/conditional_energy.py` |
-| 无重评分补全 | \(p(z)\,\mathbb E_q[e^{r/\tau}\mid z]\) | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
+| proposal-energy | \(p(z)\,\mathbb E_q[e^{r/\tau}\mid z]\) | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | base 候选 rollout replay | 式 (1) 的逐 block SIR | history + fresh-tail 能量估计无偏 | `algorithms/base_replay.py` |
 | 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 \(p/q_c\) | `algorithms/dynamic_is.py` |
-| progressive IS | pilot 分配预算，独立 evaluation 估计 | pilot 不进入最终估计 | `algorithms/progressive_is.py` |
-| frozen streaming IS | 固定设计的异步到达版本 | 到达顺序不改变最终统计量 | `algorithms/streaming_is.py` |
+| progressive IS | pilot 分配预算，独立 evaluation 估计 | 最终估计仅使用 evaluation | `algorithms/progressive_is.py` |
+| frozen streaming IS | 固定设计的异步到达版本 | 固定样本集合上的顺序不变性 | `algorithms/streaming_is.py` |
 | SMC rollout forest | block 级粒子近似 | 有限粒子、有限 lookahead 的 SMC 近似 | `algorithms/smc_forest.py` |
 | delayed-acceptance MH | 式 (1) | 两阶段接受率保持目标不变 | `algorithms/mh_acceleration.py` |
 | replay-mixture MH | 式 (1) | 冻结混合 proposal 的正反概率均进入 Hastings 比 | `algorithms/mh_acceleration.py` |
@@ -83,22 +82,13 @@ Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指
 | SMC | [Del Moral, Doucet, and Jasra (2006)](https://doi.org/10.1111/j.1467-9868.2006.00553.x)、[Lew et al. (2023)](https://arxiv.org/abs/2306.03081) | 用于逐 block 粒子传播和条件后缀 reservoir |
 | delayed-acceptance MCMC | [Christen and Fox (2005)](https://doi.org/10.1198/106186005X76983) | 通过两阶段接受率减少精确奖励调用 |
 
-条件能量的分块执行、fresh-tail replay 恒等式、动态候选与冻结 evaluation 生命周期是上述方法在本仓库中的
-组合实现；其有限预算性质以下文公式和测试为准。
+下文给出分块条件能量、fresh-tail replay、动态候选和冻结 evaluation 的公式与实现。
 
 <a id="alg-report-labels"></a>
-### 报告中的组合名称
+### 实验标签定义
 
-报告中的名称由多个彼此独立的维度组成：
-
-\[
-(\text{参数来源},\ \text{奖励或目标},\ \text{候选来源},\
- \text{rollout 来源},\ \text{概率修正},\ \text{最终解码规则}).
-\]
-
-名称中的“GRPO”只表示使用 GRPO 训练后的参数；“贪心”或“随机采样”才表示推理规则。名称中的
-“verifier”只表示使用终局正确性奖励；当前 GSM8K 实验的 verifier 是读取标准答案的确定性数值检查器，
-不是另一个经过训练的模型。未写出的维度沿用所在实验的固定设置，不由名称中的某个前缀暗示。
+标签按参数、目标、候选、rollout、概率修正和输出规则定义。`verifier` 表示 GSM8K 标准答案的确定性
+数值检查器。
 
 #### 直接生成与训练基线
 
@@ -107,13 +97,8 @@ Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指
 | Base | 原始 1.5B 基础模型 \(\theta_0\) | 每步按 \(p_{\theta_0}(\cdot\mid x,y_{<t})\) 随机抽取一个 token；主实验温度为 1 |
 | Beam-8 | 原始 1.5B 基础模型 \(\theta_0\) | 保留累计 log-probability 最高的 8 条前缀，最终返回最高分序列 |
 | 自一致性投票-8 | 原始 1.5B 基础模型 \(\theta_0\) | 独立随机生成 8 条序列，返回数值答案众数对应的序列 |
-| GRPO 随机采样 | GRPO 训练后的 1.5B 参数 \(\theta_{\mathrm{GRPO}}\) | 每步执行 \(y_t\sim p_{\theta_{\mathrm{GRPO}}}(\cdot\mid x,y_{<t})\)，温度为 1 |
-| GRPO 贪心 | 与上一行完全相同的 \(\theta_{\mathrm{GRPO}}\) | 每步执行 \(y_t=\arg\max_v p_{\theta_{\mathrm{GRPO}}}(v\mid x,y_{<t})\) |
-
-因此，“GRPO 贪心”不是新的训练算法，也不是在 GRPO 中采用贪心 rollout；它只是对同一个已训练
-checkpoint 使用确定性 argmax 解码。这里的 argmax 逐 token 执行，并不求解整条序列的全局最大概率。
-完整拆解为“参数来源 = GRPO checkpoint；推理规则 = 逐 token argmax；推理时不再运行奖励、候选筛选、
-rollout 或 IS 修正”。两条 GRPO 结果之间的差异只来自推理时解码规则。
+| GRPO 参数 + 随机采样 | GRPO 训练后的 1.5B 参数 \(\theta_{\mathrm{GRPO}}\) | \(y_t\sim p_{\theta_{\mathrm{GRPO}}}(\cdot\mid x,y_{<t})\)，温度为 1 |
+| GRPO 参数 + 贪心解码 | GRPO 训练后的 1.5B 参数 \(\theta_{\mathrm{GRPO}}\) | \(y_t=\arg\max_v p_{\theta_{\mathrm{GRPO}}}(v\mid x,y_{<t})\) |
 
 #### MH、条件 IS 与 replay 标签
 
@@ -121,30 +106,26 @@ rollout 或 IS 修正”。两条 GRPO 结果之间的差异只来自推理时�
 | --- | --- | --- | --- |
 | 幂分布 MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 目标为 \(p_{\theta_0}(y\mid x)^\alpha\) |
 | verifier-MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 使用终局正确性奖励，目标为式 (1) |
-| 标准条件 IS | 候选 block 来自 1.5B 基础模型 | 每个候选后的 rollout 也来自 1.5B 基础模型 | 主质量表以当前 rollout 数值众数为一致答案，匹配时取 \(r=1\)，否则取 0；不读取标准答案，也无需 \(p/q\) |
-| 0.5B proposal 条件 IS | 候选 block 仍来自 1.5B 基础模型 | 只有候选后的 rollout 来自 0.5B 模型 \(q\) | 乘 \(p_{\theta_0}/q\)；无后缀注明时使用 log-ratio 截断 |
-| 0.5B proposal IS（无截断） | 与上一行相同 | 与上一行相同 | 使用未经截断的 \(p_{\theta_0}/q\) |
-| 0.5B rollout（无重评分） | 候选 block 仍来自 1.5B 基础模型 | rollout 来自 0.5B 模型 | 完全删除 \(p_{\theta_0}/q\)，目标改为式 (12) |
-| 标准 verifier-IS | 候选和 rollout 都来自 1.5B 基础模型 | 1.5B on-policy rollout | 用终局正确性奖励估计式 (7) |
-| 0.5B proposal verifier-IS | 候选 block 来自 1.5B 基础模型 | 0.5B rollout | 用终局正确性奖励并乘 \(p_{\theta_0}/q\) |
-| 0.5B rollout verifier-energy | 候选 block 来自 1.5B 基础模型 | 0.5B rollout | 用终局正确性奖励但删除 \(p_{\theta_0}/q\)，对应式 (12) |
-| fresh-only | 候选来自 1.5B 基础模型 | 本轮所需 rollout 全部重新生成 | 不读取历史库 |
+| 标准条件 IS | 候选 block 来自 1.5B base | rollout 来自 1.5B base | 数值众数奖励；修正因子为 1 |
+| 0.5B rollout proposal 条件 IS | 候选 block 来自 1.5B base | rollout 来自 0.5B 模型 \(q\) | 数值众数奖励；乘 \(p_{\theta_0}/q\)；默认截断 log-ratio |
+| 0.5B rollout proposal IS（无截断） | 与上一行相同 | 与上一行相同 | 使用未经截断的 \(p_{\theta_0}/q\) |
+| 0.5B rollout 奖励重加权 | 候选 block 来自 1.5B base | rollout 来自 0.5B 模型 | 数值众数奖励；目标为式 (12) |
+| 标准 verifier-IS | 候选和 rollout 都来自 1.5B base | 1.5B on-policy rollout | 数值正确性奖励；估计式 (7) |
+| 0.5B rollout proposal verifier-IS | 候选 block 来自 1.5B base | 0.5B rollout | 数值正确性奖励；乘 \(p_{\theta_0}/q\) |
+| 0.5B rollout verifier 奖励重加权 | 候选 block 来自 1.5B base | 0.5B rollout | 数值正确性奖励；目标为式 (12) |
+| fresh-only | 候选来自 1.5B base | 本轮 rollout 全部新生成 | history 数为 0 |
 | warm replay | 候选来自 1.5B 基础模型 | 消费已建库 history，并生成独立 fresh tail | 按式 (14) 修正 history；`warm` 表示历史库已存在 |
-| base 候选 + 固定 fresh | 候选只来自 1.5B 基础模型 | 每个候选使用固定数量 fresh rollout | 动态候选实验的无 replay 对照 |
+| base 候选 + 固定 fresh | 候选来自 1.5B base | 每个候选使用固定数量 fresh rollout | 动态候选实验的基线 |
 | 动态候选 + 固定 replay | 候选来自式 (15) 的 base/辅助模型 mixture | 命中时使用固定 history/fresh 数量 | 候选层乘式 (16)，rollout 层使用式 (14) |
 | 动态候选 + 方差--成本分配 | 与上一行相同 | history/fresh 数量由独立 design 数据决定 | 最终 evaluation 预算按式 (19) 冻结 |
-
-这里“0.5B proposal 条件 IS”中的 `proposal` 是 **rollout proposal**，并不表示最终候选 block 来自
-0.5B 模型；只有名称明确写作“动态候选”时，辅助模型才参与候选 block 的生成。`verifier-energy` 用于
-标记无重评分后的不同目标，避免将其误写为 off-policy IS。
 
 <a id="alg-baselines"></a>
 ## 3. 生成与训练基线
 
 ### 3.1 Base、greedy、beam 与 Best-of-\(N\)
 
-`base` 按配置温度直接从基础模型抽样；`greedy` 逐 token 取最大概率项；beam search 保留累计对数概率最高的
-若干前缀。它们分别表示随机生成和确定性搜索，不应解释为式 (1) 的通用采样器。
+`base` 按配置温度从基础模型抽样；`greedy` 逐 token 取最大概率项；beam search 保留累计对数概率最高的
+若干前缀。
 
 Best-of-\(N\) 先独立生成 \(y_1,\ldots,y_N\sim p\)，再按奖励或 self-consistency 规则选择一个序列：
 
@@ -153,18 +134,15 @@ Best-of-\(N\) 先独立生成 \(y_1,\ldots,y_N\sim p\)，再按奖励或 self-co
 \tag{3}
 \]
 
-式 (3) 随 \(N\) 增大趋向奖励最大化，而不是按 \(p(y)e^{r(y)/\tau}\) 保留完整随机性。实验实现还提供
-数值答案众数相同时按模型 log-probability 打破平局的确定性选择。
+式 (3) 随 \(N\) 增大趋向奖励最大化。数值答案众数相同时，实验按模型 log-probability 确定性破同票。
 
 ### 3.2 GRPO 对照
 
 本仓库中的 GRPO 使用同一基础模型和 GSM8K 数值正确性奖励进行参数训练。若忽略参数化限制，一个带 KL
 正则的理想策略优化问题具有式 (1) 的形式；实际 GRPO 只通过有限 rollout、组内相对优势和有限梯度更新去近似
-该目标。报告因此分别列出训练 FLOPs 与训练后采样 FLOPs；单次推理成本不包含一次性训练成本。
+该目标。报告分别列出训练 FLOPs 与训练后采样 FLOPs；单次推理成本指训练完成后的生成成本。
 
-训练结束后得到一个固定策略 \(p_{\theta_{\mathrm{GRPO}}}\)。报告中的“GRPO 随机采样”和“GRPO 贪心”
-都读取这一份参数：前者从该策略的 categorical distribution 抽样，后者逐 token 取 argmax。训练过程、
-奖励和 checkpoint 完全相同，区别只在推理解码。
+训练得到固定策略 \(p_{\theta_{\mathrm{GRPO}}}\)。实验分别采用温度 1 随机采样和逐 token argmax 解码。
 
 训练入口为 [`experiments/train_gsm8k_grpo.py`](../../experiments/train_gsm8k_grpo.py)，精确数值奖励实现为
 [`evaluation/grpo_reward.py`](../../src/inference_scaling/evaluation/grpo_reward.py)。
@@ -186,8 +164,8 @@ A(y\to y')=
 \tag{4}
 \]
 
-候选前缀相同、切点选择概率正反相同，所以式 (4) 就是完整 Hastings 比。温度 proposal 的逐前缀归一化
-常数不会被误当作全序列幂分布的一部分；它们通过 \(q_s\) 的正反概率自动校正。
+候选前缀相同，切点选择概率正反相同，因此式 (4) 为完整 Hastings 比。温度 proposal 的逐前缀归一化
+常数进入 \(q_s\) 的正反概率。
 
 实现按 `block_size` 逐步扩展到 \(L\)，并在每个长度执行 `steps_per_block` 次后缀更新。最终长度上的有限更新
 结果仍含 MCMC 误差。由于切点 \(s=0\) 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、
@@ -205,7 +183,7 @@ A(y\to y')=
 \tag{5}
 \]
 
-真实模型上不显式构造 \(K\)，因此报告更新轮次、接受率和输出诊断，而不伪造不可计算的收缩常数。
+真实模型实验报告更新轮次、接受率和输出诊断；收缩常数需要显式转移矩阵 \(K\)。
 
 代码中的接受率与式 (4) 一一对应：
 
@@ -219,7 +197,7 @@ accepted = log(uniform) <= log_acceptance
 ```
 
 EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/backends/absorbing.py) 转换为固定长度吸收状态；
-生成到 EOS 后的占位 token 条件概率为 1，同时不会把提示中的同 token 误判为终止。
+终止判断作用于生成区间，EOS 后占位 token 的条件概率为 1。
 
 <a id="alg-reward-mh"></a>
 ## 5. 奖励目标后缀 MH
@@ -268,7 +246,7 @@ h(g,z)=\mathbb E_{u\sim p(\cdot\mid x,g,z)}
    \]
 4. 以 \(\widehat h_m/\sum_j\widehat h_j\) 的概率选择候选并追加到 \(g\)，随后进入下一 block。
 
-候选本身已经从 \(p\) 抽样，所以候选选择时只乘条件能量，不再重复乘 \(p(z_m\mid x,g)\)。当
+候选来自 \(p\)，因此 SIR 选择权重为条件能量 \(\widehat h_m\)。当
 \(K\to\infty\) 时式 (8) 收敛到 \(h\)；当候选数 \(M\to\infty\) 时，sampling-importance-resampling
 输出趋近式 (7)。有限 \(K,M\) 以及逐 block 重复选择共同构成实际近似误差。
 
@@ -322,11 +300,11 @@ if importance_log_ratio_clip is not None:
 log_weight = reward / reward_temperature + applied_log_ratio
 ```
 
-若使用截断 \(\operatorname{clip}(\log p/q,-c,c)\)，估计量不再严格等于式 (9)。报告会分别记录 raw ratio、
-applied ratio、截断次数和 effective sample size（ESS），避免把稳定化消融写成精确 IS。
+截断 \(\operatorname{clip}(\log p/q,-c,c)\) 将式 (9) 改为有偏估计。报告记录 raw ratio、applied ratio、
+截断次数和 effective sample size（ESS）。
 
 <a id="alg-proposal-energy"></a>
-### 7.1 删除主模型重评分的目标
+### 7.1 proposal-energy 目标
 
 设置 `apply_importance_correction=False` 时，权重仅为 \(e^{r/\tau}\)：
 
@@ -336,7 +314,7 @@ applied ratio、截断次数和 effective sample size（ESS），避免把稳定
 \tag{11}
 \]
 
-此时逐 block 目标变为
+此时逐 block 目标为
 
 \[
 p(z\mid x,g)\,
@@ -344,9 +322,8 @@ p(z\mid x,g)\,
 \tag{12}
 \]
 
-而不是式 (7)。它实现“主模型写候选、小模型补全并取得奖励、再按奖励调整主模型候选权重”，完全删除
-rollout 阶段的主模型重评分成本；其目标由式 (7) 变为式 (12)，因此不构成基础模型完整补全分布的
-off-policy 修正。两种路径的质量与
+式 (12) 使用 1.5B 候选、0.5B 补全和奖励权重，主模型重评分成本为 0。该路径记为 proposal-energy
+目标。两种路径的质量与
 分模型 FLOPs 见[1.5B 重评分消融](../reports/GSM8K_3090_ALIGNED_RESULTS.md#15b-rescoring-ablation)。
 
 <a id="alg-base-replay"></a>
@@ -368,7 +345,7 @@ w(u)=\frac{p(u\mid x,g,z)}{b(u\mid x,g,z)},
 \tag{13}
 \]
 
-证明只需逐点相加。当 \(w\le c\) 时，左边第一项在统一求和测度下贡献 \(pA\)，第二项为 0；当
+逐点验证式 (13)：当 \(w\le c\) 时，左边第一项在同一离散样本空间上贡献 \(pA\)，第二项为 0；当
 \(w>c\) 时，两项分别贡献 \(cbA\) 与 \((p-cb)A\)。因此，使用 \(H\) 条 history 与 \(F\) 条独立 fresh
 base rollout 的估计量
 
@@ -391,17 +368,17 @@ else:
 log_energy = logaddexp(logmeanexp(history_terms), logmeanexp(fresh_terms))
 ```
 
-如果没有 history，算法直接使用 fresh base rollout 的式 (8)。历史中存在多个 behavior 版本时，\(b\)
+当 \(H=0\) 时，算法使用 fresh base rollout 的式 (8)。历史中存在多个 behavior 版本时，\(b\)
 按本轮冻结 claim 中各 behavior 的条数构成显式 mixture；每条保存概率还会重新评分校验。
 
 <a id="alg-replay-lifecycle"></a>
 ### 8.1 replay 数据生命周期
 
-为避免根据 evaluation reward 决定是否使用同一条数据，实现将记录分为三个集合：
+实现将记录分为三个集合：
 
-1. `design`：已经消费的记录，仅用于估计方差和成本，不再进入最终估计；
+1. `design`：已经消费的记录，用于估计方差和成本；
 2. `evaluation`：仅暴露 key、behavior id 和数量；在设计冻结后最多消费一次；
-3. `reserved`：已经从 evaluation 中原子取出、尚未揭示数值的 claim。
+3. `reserved`：已从 evaluation 中原子取出、数值保持隐藏的 claim。
 
 当前选择所用的 fresh rollout 在本轮结束后进入 `design`。只有候选选择完成后，针对新前缀独立生成的
 reserve rollout 才写入未来的 `evaluation`。关键代码约束如下：
@@ -411,7 +388,7 @@ claim = store.freeze_claims([key], history_count)[0]  # 只返回数量与 behav
 history = store.reveal_and_consume(claim)             # 一次性揭示并转入 design
 for record in current_fresh:
     store.add_design(record)
-# 选择完成以后：
+# 选择完成后，独立 reserve 才进入 evaluation：
 store.add_evaluation(independent_reserve_record)
 ```
 
@@ -421,7 +398,7 @@ store.add_evaluation(independent_reserve_record)
 <a id="alg-dynamic-is"></a>
 ## 9. 动态候选 proposal 与外层 IS
 
-基础候选不一定覆盖所有高价值区域。动态版本从 defensive mixture 抽取候选：
+动态版本从含基础模型分量的混合 proposal（defensive mixture）抽取候选：
 
 \[
 q_c(z\mid x,g)=(1-\lambda)p(z\mid x,g)+\lambda a(z\mid x,g),
@@ -429,8 +406,8 @@ q_c(z\mid x,g)=(1-\lambda)p(z\mid x,g)+\lambda a(z\mid x,g),
 \tag{15}
 \]
 
-其中 \(a\) 可以是辅助模型或依赖先前候选的 proposal。基础分量保证只要 \(p(z)>0\)，就有
-\(q_c(z)>0\)。每个候选使用其实际 proposal 计算外层比值
+其中 \(a\) 可以是辅助模型或依赖先前候选的 proposal。基础分量给出
+\(p(z)>0\Rightarrow q_c(z)>0\)。每个候选使用其实际 proposal 计算外层比值
 
 \[
 \rho(z)=\frac{p(z\mid x,g)}{q_c(z\mid x,g)}.
@@ -482,7 +459,7 @@ n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
 
 代码先按式 (19) 求连续解，再施加逐候选 history 上限、相同 replay key 的共享容量、每个非终止候选的
 最少 fresh 数量，最后执行确定性的 floor + largest-remainder 舍入。方差与成本只能来自 `design`；
-`rollout_budget_provider` 的输入仅包含候选、终止标记和库存数量，不包含 evaluation completion 或 reward。
+`rollout_budget_provider` 的输入为候选、终止标记、库存数量和 design 统计量。
 
 <a id="alg-progressive-is"></a>
 ## 10. progressive pilot / evaluation IS
@@ -508,21 +485,21 @@ n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
 \tag{21}
 \]
 
-pilot 可作为 speculative draft 的历史材料，但不会成为第二个统计样本。若 pilot 也进入式 (21)，预算选择与
-数值估计会发生依赖，当前实现明确禁止这种做法。终止候选的能量是确定值，可复用其唯一一次奖励计算。
+pilot 可作为 speculative draft 的历史材料；式 (21) 仅使用独立 evaluation。终止候选的能量为确定值，
+复用一次奖励计算。
 
 <a id="alg-streaming-is"></a>
 ## 11. frozen-design streaming IS
 
-streaming IS 不改变式 (10)、(14) 或 (21)，只允许已冻结的 fresh 样本按任意完成顺序到达。估计器状态机为：
+streaming IS 使用式 (10)、(14) 或 (21)，并允许已冻结的 fresh 样本按任意完成顺序到达。状态机为：
 
 1. 冻结前加入允许的 history contribution；
 2. `freeze` 一次性声明每个候选的 fresh sample id；
 3. `consume_fresh` 可按任意顺序提交，但拒绝未知 id、重复 id 和候选错配；
-4. 所有声明样本到齐前，`select` 不返回最终选择。
+4. 所有声明样本到齐后，`select` 返回最终选择。
 
-由于每个候选最终计算的是固定 multiset 上的 `logmeanexp`，到达顺序不改变数值。该机制使 GPU 生成完成回调
-可以立即启动 CPU verifier，同时保留算法设计与 evaluation 值的隔离。实现见
+每个候选在固定 multiset 上计算 `logmeanexp`，因此结果与到达顺序无关。GPU 完成回调可立即启动 CPU
+verifier。实现见
 [`streaming_is.py`](../../src/inference_scaling/algorithms/streaming_is.py)，墙钟重叠见
 [流式奖励计算](INFRASTRUCTURE.md#infra-streaming-reward)。
 
@@ -550,11 +527,11 @@ h(s)=\mathbb E_{u\sim p(\cdot\mid x,s)}[e^{r(s,u)/\tau}].
 resampling。增量在路径上望远镜相消；在精确 lookahead、足够粒子与完整长度下对应式 (1) 的序贯构造。
 
 若父粒子的某条历史完整补全以新 block \(z\) 开头，删掉该 block 后的剩余后缀仍是 \(p(\cdot\mid x,s,z)\)
-下的有效条件 rollout，可以继承到子 branch。一个 branch 被复制为多个粒子时，reservoir 会分桶而不是整库复制，
-随后用 fresh rollout 补足；同一条随机轨迹因此不会被伪装为多个独立样本。
+下的有效条件 rollout，可以继承到子 branch。一个 branch 对应多个粒子时，reservoir 在粒子间分桶，
+随后用 fresh rollout 补足。
 
-有限粒子数、有限 branch factor 和有限 rollout reservoir 都会产生 SMC 近似误差。实现同时报告 ESS、fresh
-与 reused rollout 数，避免只用缓存命中率代表统计效率。
+有限粒子数、有限 branch factor 和有限 rollout reservoir 产生 SMC 近似误差。实现同时报告 ESS、fresh
+与 reused rollout 数。
 
 <a id="alg-delayed-mh"></a>
 ## 13. 两阶段 delayed-acceptance MH
@@ -571,8 +548,7 @@ A_2(y\to y')=
 \tag{24}
 \]
 
-两阶段乘积满足对式 (1) 的详细平衡，因此早拒绝只减少精确 verifier 调用，不改变最终目标。surrogate 必须在
-运行期间固定；若根据当前精确 evaluation 值在线修改且不纳入状态，详细平衡不再自动成立。
+两阶段乘积满足式 (1) 的详细平衡。surrogate 在链运行期间固定；自适应 surrogate 需要扩展状态或额外校正。
 
 ```python
 stage_one = min(0.0, proposal_and_base_terms + surrogate_delta / tau)
@@ -582,13 +558,13 @@ if log(u1) <= stage_one:
     accepted = log(u2) <= stage_two
 ```
 
-该路径减少的是奖励调用，不减少 proposal 生成 FLOPs；对应消融见
+该路径减少精确奖励调用，proposal 生成 FLOPs 保持不变；对应消融见
 [Delayed acceptance](../reports/RTX3090_ROLLOUT_INFRA.md#infra-report-delayed-acceptance)。
 
 <a id="alg-replay-mh"></a>
 ## 14. replay-mixture MH proposal
 
-冻结历史后缀经验分布 \(h_{\mathrm{emp}}\)，并与基础模型组成 defensive proposal
+冻结历史后缀经验分布 \(h_{\mathrm{emp}}\)，并与基础模型组成混合 proposal
 
 \[
 q_s(v\mid x,y_{<s})=(1-\lambda)p(v\mid x,y_{<s})
@@ -598,7 +574,7 @@ q_s(v\mid x,y_{<s})=(1-\lambda)p(v\mid x,y_{<s})
 \]
 
 历史命中时可读取现成 suffix，并通过一次并行评分获得 \(p(v)\)；未命中时从基础模型生成。无论来源如何，
-式 (6) 都使用旧后缀与新后缀在混合分布 (25) 下的精确概率。基础分量保证 full support，经验库在链开始前
+式 (6) 都使用旧后缀与新后缀在混合分布 (25) 下的精确概率。基础分量保证完整支持集，经验库在链开始前
 冻结，因而该 proposal 仍定义普通 MH 转移核。
 
 ```python
@@ -621,29 +597,29 @@ log_acceptance = min(
 | 奖励 | 定义或实现 | 作用范围 |
 | --- | --- | --- |
 | 数值正确性 verifier | 解析最终数值，与标准答案比较，取 0/1 | 共享目标诊断；会读取标准答案 |
-| cumulative self-consistency | 按已经评估的数值结果累计众数，匹配众数取 1 | 可部署质量实验，不读取标准答案 |
+| cumulative self-consistency | 按已经评估的数值结果累计众数，匹配众数取 1 | 部署质量实验；奖励来源为生成结果 |
 | 平均 token log-probability | 选中 token 的平均 log-probability | 置信度消融 |
 | 平均负熵 | \(\lvert y\rvert^{-1}\sum_t\sum_v p_t(v)\log p_t(v)\) | 置信度消融 |
 | self-certainty | \(-\lvert y\rvert^{-1}\sum_t \lvert V\rvert^{-1}\sum_v[\log\lvert V\rvert+\log p_t(v)]\) | 置信度消融 |
 
-后三类在每个 guidance step 内对全部 candidate rollout 做 min-max 归一化。它们需要全词表概率；vLLM
-selected-token log-probability 不足以计算熵，因此会委托精确 Transformers scoring backend。self-consistency
+后三类在每个 guidance step 内对全部 candidate rollout 做 min-max 归一化。熵类奖励需要全词表概率，
+由精确 Transformers scoring backend 计算。self-consistency
 实现见 [`evaluation/consensus.py`](../../src/inference_scaling/evaluation/consensus.py)。
 
 <a id="alg-correctness-matrix"></a>
 ## 16. 正确性与近似来源
 
-| 设置变化 | 是否仍指向原目标 | 需要记录的诊断 |
+| 设置 | 统计性质 | 诊断 |
 | --- | --- | --- |
-| 增加 MH 更新轮次 | 是；减小 MCMC 收敛误差 | 更新数、接受率、链间结果 |
-| 增加条件 IS 的 \(M,K\) | 是；减小有限候选/rollout 误差 | 每候选 rollout、ESS、FLOPs |
-| off-policy 补全 + 未截断 \(p/q\) | 是；条件能量无偏 | 两侧 log-probability、ESS、support |
-| 截断 log importance ratio | 否；稳定化近似 | raw/applied ratio 与截断次数 |
-| 删除补全的主模型重评分 | 否；目标改为式 (12) | `score_calls=0`、分模型 FLOPs |
-| replay 恒等式 + 独立 fresh tail | 是；能量估计无偏 | behavior 版本、claim、fresh/history 数 |
-| 动态候选 + 外层 \(p/q_c\) | 是；有限 SIR 近似仍在 | 候选来源、outer ratio、共享容量 |
-| pilot 决定 evaluation 数量 | 是，前提是 pilot 不进入最终估计 | pilot/evaluation 分离与冻结预算 |
-| 流式到达、连续批处理、预取 | 是；只改变执行 | 请求 id、seed、token/FLOPs、废弃工作 |
+| 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
+| 增加条件 IS 的 \(M,K\) | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、FLOPs |
+| off-policy 补全 + 未截断 \(p/q\) | 式 (7) 的条件能量无偏 | 两侧 log-probability、ESS、support |
+| 截断 log importance ratio | 有偏稳定化估计 | raw/applied ratio、截断次数 |
+| proposal-energy | 目标为式 (12) | `score_calls=0`、分模型 FLOPs |
+| replay 恒等式 + 独立 fresh tail | 式 (7) 的条件能量无偏 | behavior 版本、claim、fresh/history 数 |
+| 动态候选 + 外层 \(p/q_c\) | 候选来源已校正；保留有限 SIR 误差 | 候选来源、outer ratio、共享容量 |
+| pilot 决定 evaluation 数量 | 最终估计仅使用独立 evaluation | pilot/evaluation 分离、冻结预算 |
+| 流式到达、连续批处理、预取 | 统计量固定，执行顺序变化 | 请求 id、seed、token/FLOPs、废弃工作 |
 
 <a id="alg-code-index"></a>
 ## 17. 代码与验证入口
@@ -660,5 +636,5 @@ selected-token log-probability 不足以计算熵，因此会委托精确 Transf
 | delayed/prefetch/replay MH | [`mh_acceleration.py`](../../src/inference_scaling/algorithms/mh_acceleration.py) | `tests/test_mh_acceleration.py` |
 | 有限状态快速检查 | [`experiments/toy_mh.py`](../../experiments/toy_mh.py)、[`toy_conditional_is.py`](../../experiments/toy_conditional_is.py)、[`toy_base_replay.py`](../../experiments/toy_base_replay.py)、[`toy_dynamic_is.py`](../../experiments/toy_dynamic_is.py) | 全量 `pytest` |
 
-有限状态测试能够核对转移概率、权重恒等式和批处理前后随机流；真实模型实验进一步核对模型概率、token 轨迹、
-分模型 FLOPs 和墙钟。实验结论及适用范围以两份正式报告为准，而不是以单元测试通过代替统计结论。
+有限状态测试核对转移概率、权重恒等式和批处理随机流；真实模型实验核对模型概率、token 轨迹、分模型
+FLOPs 和墙钟。两份正式报告给出统计结论及适用范围。

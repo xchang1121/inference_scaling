@@ -31,6 +31,6 @@ def test_ablation_svg_loads_formal_report_and_is_valid_xml() -> None:
     svg = render(payload)
     root = ET.fromstring(svg)
     assert root.tag.endswith("svg")
-    for label in ("M=3", "S=16", "U=10", "GRPO 贪心"):
+    for label in ("M=3", "S=16", "U=10", "GRPO 参数 + 贪心解码"):
         assert label in svg
     assert svg.count('class="series"') == 10

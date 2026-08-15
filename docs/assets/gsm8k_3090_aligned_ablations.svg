@@ -18,7 +18,7 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 .point-label { font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; }
 .note { font-size: 13px; fill: #536078; }
 </style>
-<text class="title" x="82" y="43">消融结果：增加预算何时真正改善质量</text>
+<text class="title" x="82" y="43">GSM8K 质量—预算消融（8 题）</text>
 <text class="panel-title" x="82" y="72">候选数 M（每个候选 3 条 rollout）</text>
 <text class="panel-subtitle" x="82" y="93">标准 rollout 与 0.5B off-policy rollout 的直接比较</text>
 <rect class="frame" x="82" y="150" width="500" height="270"/>
@@ -41,7 +41,7 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <circle cx="89.0" cy="118.0" r="6" fill="#15803d" stroke="#ffffff" stroke-width="1.4"/>
 <text class="legend" x="101.0" y="122.0">标准条件 IS</text>
 <polygon points="339.0,111.0 346.0,118.0 339.0,125.0 332.0,118.0" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
-<text class="legend" x="351.0" y="122.0">0.5B proposal 条件 IS</text>
+<text class="legend" x="351.0" y="122.0">0.5B rollout proposal 条件 IS</text>
 <polyline class="series" points="142.0,217.5 251.0,217.5 341.6,217.5 394.1,251.2" stroke="#15803d"/>
 <g aria-label="标准条件 IS，M=3，准确率 75.0%，95% 区间 40.9%–92.9%，8 题合计 0.1281 PFLOPs">
 <line class="error" x1="142.0" y1="169.3" x2="142.0" y2="309.5" stroke="#15803d"/>
@@ -72,28 +72,28 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <text class="point-label" x="394.1" y="241.2" text-anchor="middle">M=10</text>
 </g>
 <polyline class="series" points="275.7,318.8 378.3,251.2 484.4,285.0 522.0,251.2" stroke="#7e22ce"/>
-<g aria-label="0.5B proposal 条件 IS，M=3，准确率 37.5%，95% 区间 13.7%–69.4%，8 题合计 0.2299 PFLOPs">
+<g aria-label="0.5B rollout proposal 条件 IS，M=3，准确率 37.5%，95% 区间 13.7%–69.4%，8 题合计 0.2299 PFLOPs">
 <line class="error" x1="275.7" y1="232.6" x2="275.7" y2="383.1" stroke="#7e22ce"/>
 <line class="error" x1="271.7" y1="232.6" x2="279.7" y2="232.6" stroke="#7e22ce"/>
 <line class="error" x1="271.7" y1="383.1" x2="279.7" y2="383.1" stroke="#7e22ce"/>
 <polygon points="275.7,311.8 282.7,318.8 275.7,325.8 268.7,318.8" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 <text class="point-label" x="275.7" y="337.8" text-anchor="middle">M=3</text>
 </g>
-<g aria-label="0.5B proposal 条件 IS，M=5，准确率 62.5%，95% 区间 30.6%–86.3%，8 题合计 0.3602 PFLOPs">
+<g aria-label="0.5B rollout proposal 条件 IS，M=5，准确率 62.5%，95% 区间 30.6%–86.3%，8 题合计 0.3602 PFLOPs">
 <line class="error" x1="378.3" y1="186.9" x2="378.3" y2="337.4" stroke="#7e22ce"/>
 <line class="error" x1="374.3" y1="186.9" x2="382.3" y2="186.9" stroke="#7e22ce"/>
 <line class="error" x1="374.3" y1="337.4" x2="382.3" y2="337.4" stroke="#7e22ce"/>
 <polygon points="378.3,244.2 385.3,251.2 378.3,258.2 371.3,251.2" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 <text class="point-label" x="378.3" y="270.2" text-anchor="middle">M=5</text>
 </g>
-<g aria-label="0.5B proposal 条件 IS，M=8，准确率 50.0%，95% 区间 21.5%–78.5%，8 题合计 0.5730 PFLOPs">
+<g aria-label="0.5B rollout proposal 条件 IS，M=8，准确率 50.0%，95% 区间 21.5%–78.5%，8 题合计 0.5730 PFLOPs">
 <line class="error" x1="484.4" y1="208.1" x2="484.4" y2="361.9" stroke="#7e22ce"/>
 <line class="error" x1="480.4" y1="208.1" x2="488.4" y2="208.1" stroke="#7e22ce"/>
 <line class="error" x1="480.4" y1="361.9" x2="488.4" y2="361.9" stroke="#7e22ce"/>
 <polygon points="484.4,278.0 491.4,285.0 484.4,292.0 477.4,285.0" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 <text class="point-label" x="484.4" y="304.0" text-anchor="middle">M=8</text>
 </g>
-<g aria-label="0.5B proposal 条件 IS，M=10，准确率 62.5%，95% 区间 30.6%–86.3%，8 题合计 0.6755 PFLOPs">
+<g aria-label="0.5B rollout proposal 条件 IS，M=10，准确率 62.5%，95% 区间 30.6%–86.3%，8 题合计 0.6755 PFLOPs">
 <line class="error" x1="522.0" y1="186.9" x2="522.0" y2="337.4" stroke="#7e22ce"/>
 <line class="error" x1="518.0" y1="186.9" x2="526.0" y2="186.9" stroke="#7e22ce"/>
 <line class="error" x1="518.0" y1="337.4" x2="526.0" y2="337.4" stroke="#7e22ce"/>
@@ -102,7 +102,7 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 </g>
 <text class="axis-title" x="332.0" y="472" text-anchor="middle">8 题合计估算稠密前向计算量（PFLOPs，对数轴）</text>
 <text class="panel-title" x="700" y="72">标准条件 IS 的引导阶段数 S</text>
-<text class="panel-subtitle" x="700" y="93">S=4 后点估计不再提高，计算量继续增加</text>
+<text class="panel-subtitle" x="700" y="93">S=4/8/16 均为 6/8，计算量继续增加</text>
 <rect class="frame" x="700" y="150" width="500" height="270"/>
 <line class="grid" x1="700" y1="420.0" x2="1200" y2="420.0"/>
 <text class="tick" x="690" y="424.0" text-anchor="end">0%</text>
@@ -225,9 +225,9 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <circle cx="707.0" cy="587.0" r="6" fill="#15803d" stroke="#ffffff" stroke-width="1.4"/>
 <text class="legend" x="719.0" y="591.0">标准条件 IS</text>
 <polygon points="873.7,580.0 880.7,587.0 873.7,594.0 866.7,587.0" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
-<text class="legend" x="885.7" y="591.0">0.5B proposal 条件 IS</text>
+<text class="legend" x="885.7" y="591.0">0.5B rollout proposal 条件 IS</text>
 <rect x="1035.3" y="582.0" width="10" height="10" fill="#be123c" stroke="#ffffff" stroke-width="1.4"/>
-<text class="legend" x="1052.3" y="591.0">GRPO 贪心</text>
+<text class="legend" x="1052.3" y="591.0">GRPO 参数 + 贪心解码</text>
 <line class="grid vertical" x1="748.0" y1="600" x2="748.0" y2="870"/>
 <text class="tick" x="748.0" y="891" text-anchor="middle">128</text>
 <line class="grid vertical" x1="950.0" y1="600" x2="950.0" y2="870"/>
@@ -287,28 +287,28 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <circle cx="1152.0" cy="667.5" r="6" fill="#15803d" stroke="#ffffff" stroke-width="1.4"/>
 </g>
 <polyline class="series" points="748.0,802.5 950.0,701.2 1152.0,667.5" stroke="#7e22ce"/>
-<g aria-label="0.5B proposal 条件 IS，最大生成 128 token，准确率 25.0%">
+<g aria-label="0.5B rollout proposal 条件 IS，最大生成 128 token，准确率 25.0%">
 <line class="error light" x1="748.0" y1="710.5" x2="748.0" y2="850.7" stroke="#7e22ce"/>
 <polygon points="748.0,795.5 755.0,802.5 748.0,809.5 741.0,802.5" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="0.5B proposal 条件 IS，最大生成 256 token，准确率 62.5%">
+<g aria-label="0.5B rollout proposal 条件 IS，最大生成 256 token，准确率 62.5%">
 <line class="error light" x1="950.0" y1="636.9" x2="950.0" y2="787.4" stroke="#7e22ce"/>
 <polygon points="950.0,694.2 957.0,701.2 950.0,708.2 943.0,701.2" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="0.5B proposal 条件 IS，最大生成 512 token，准确率 75.0%">
+<g aria-label="0.5B rollout proposal 条件 IS，最大生成 512 token，准确率 75.0%">
 <line class="error light" x1="1152.0" y1="619.3" x2="1152.0" y2="759.5" stroke="#7e22ce"/>
 <polygon points="1152.0,660.5 1159.0,667.5 1152.0,674.5 1145.0,667.5" fill="#7e22ce" stroke="#ffffff" stroke-width="1.4"/>
 </g>
 <polyline class="series" points="748.0,735.0 950.0,667.5 1152.0,667.5" stroke="#be123c"/>
-<g aria-label="GRPO 贪心，最大生成 128 token，准确率 50.0%">
+<g aria-label="GRPO 参数 + 贪心解码，最大生成 128 token，准确率 50.0%">
 <line class="error light" x1="748.0" y1="658.1" x2="748.0" y2="811.9" stroke="#be123c"/>
 <rect x="743.0" y="730.0" width="10" height="10" fill="#be123c" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="GRPO 贪心，最大生成 256 token，准确率 75.0%">
+<g aria-label="GRPO 参数 + 贪心解码，最大生成 256 token，准确率 75.0%">
 <line class="error light" x1="950.0" y1="619.3" x2="950.0" y2="759.5" stroke="#be123c"/>
 <rect x="945.0" y="662.5" width="10" height="10" fill="#be123c" stroke="#ffffff" stroke-width="1.4"/>
 </g>
-<g aria-label="GRPO 贪心，最大生成 512 token，准确率 75.0%">
+<g aria-label="GRPO 参数 + 贪心解码，最大生成 512 token，准确率 75.0%">
 <line class="error light" x1="1152.0" y1="619.3" x2="1152.0" y2="759.5" stroke="#be123c"/>
 <rect x="1147.0" y="662.5" width="10" height="10" fill="#be123c" stroke="#ffffff" stroke-width="1.4"/>
 </g>

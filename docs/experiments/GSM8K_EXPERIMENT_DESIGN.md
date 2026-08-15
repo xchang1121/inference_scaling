@@ -1,73 +1,184 @@
 # GSM8K 统一实验设计
 
-本文件固定实验输入、公平性约束与复现流程。方法公式和实现边界见
-[推理算法实现](../methods/ALGORITHMS.md)，批处理、缓存、后端和 token/FLOPs 计量见
+本文件固定数据、模型、方法、预算、统计量、成本分母和复现流程。算法定义见
+[推理算法实现](../methods/ALGORITHMS.md)，执行与计量见
 [推理基础设施实现](../methods/INFRASTRUCTURE.md)。
 
-## 实验范围
+## 数据与配置
 
-实验统一使用公开且可自动评分的 [GSM8K](https://arxiv.org/abs/2110.14168)。GRPO 只使用 7,473 条官方训练样本；所有准确率
-样本都来自 1,319 条官方测试 split，`full` 使用全部样本，
-`quick`、`standard` 与消融使用预先固定的子集。两个文件都固定字节级校验和，训练入口还会验证
-训练集与测试集没有完全相同的问题。评测中不包含人工编造的问题。
+实验使用公开 [GSM8K](https://arxiv.org/abs/2110.14168)。训练集含 7,473 题，仅供 GRPO 训练；测试集含
+1,319 题，用于准确率和分布评测。数据文件固定字节级校验和，训练入口检查 train/test 问题重合。
 
-实验比较单次最终生成（pass@1）、质量—成本曲线、明确分母的加速指标及主要算法消融。仓库中的
-`quick`、`gsm8k_3090_aligned.toml`、`standard` 和 `full` 配置分别对应
-8 条样本的集成检查、32 条固定题的单卡对齐实验、128 条固定题的较大预算实验，以及完整公开测试集。
+| profile | 样本 | 用途 |
+| --- | ---: | --- |
+| `quick` | 8 | 集成检查 |
+| `gsm8k_3090_aligned` | 32 | 单卡正式实验 |
+| `standard` | 128 | 较大样本实验 |
+| `full` | 1,319 | 完整测试集 |
 
-3090 对齐配置不删减方法、目标对照或消融维度，只把最大长度改为 192、Beam/Best-of-N 改为 8、
-候选数改为 8，并把 16 个 MH 长度阶段的每阶段更新数改为 3。所有差异均由 manifest 固定，结果不会
-与 `standard` 或 `full` 的更大预算混用。
-
-“对齐”实验覆盖以下相同问题：条件能量方法相对 Base、Beam Search 和 Best-of-N 的
-质量—计算关系，小 proposal 相对标准条件采样的速度与复用收益，连续批处理相对逐请求执行的
-wall-time 收益，以及候选数、rollout 数、引导轮数、奖励、温度和输出长度等因素的影响。幂分布 MH
-和本地 GRPO 是额外的统一对照，用来检验 training-free 重分配与训练方法能否得到相近效果，并比较
-达到相近效果所需的 token slot 与 FLOPs。
-
-## RTX 3090 对齐设置
+RTX 3090 对齐配置：
 
 | 项目 | 固定值 |
 | --- | --- |
-| 数据 | [GSM8K](https://arxiv.org/abs/2110.14168) 官方 train 7,473 条、test 1,319 条；主实验固定 32 道 test 题 |
 | 基础模型 | [`Qwen/Qwen2.5-1.5B-Instruct`](https://arxiv.org/abs/2412.15115)，revision `989aa7980e4cf806f80c7fef2b1adb7bc71aa306` |
 | rollout proposal | `Qwen/Qwen2.5-0.5B-Instruct`，revision `7ae557604adf67be50417f59c2c2f167def9a775` |
-| GRPO | 同一 1.5B checkpoint 的 [LoRA](https://openreview.net/pdf?id=nZeVKeeFYf9)；205 个优化步；每个 prompt 4 条 rollout |
-| 推理硬件 | 单张 RTX 3090 24 GiB；主质量网格使用 FP32 |
-| 统一长度 | 最多生成 192 token |
-| 条件 IS | 8 个候选、每候选 3 条 rollout、4 个引导阶段 |
-| 幂分布 MH | 幂次 4；16 个递增长度阶段；每阶段 3 次更新 |
-| pass@k | 每题 8 个独立 draw；draw 之间不共享候选、rollout 或 replay |
+| GRPO | 同一 1.5B checkpoint 的 [LoRA](https://openreview.net/pdf?id=nZeVKeeFYf9)；205 步；每个 prompt 4 条 rollout |
+| 硬件 | 单张 RTX 3090 24 GiB |
+| 质量网格 dtype | FP32 |
+| 最大生成长度 | 192 token |
+| 条件 IS | 8 个候选；每候选 3 条 rollout；4 个引导阶段 |
+| 幂分布 MH | \(\alpha=4\)；16 个长度阶段；每阶段 3 次更新 |
+| pass@k | 每题 8 个独立 draw |
 
-主要比较分成三组：
+`standard` 使用 256 token、20 beams、Best-of-20、\(M=15,K=3,I=4\)；`full` 使用 512 token、
+20 beams、Best-of-30、\(M=15,K=3,I=4\)。两者的 MH 每阶段更新 10 次。
 
-| 比较目标 | 方法 | 解释范围 |
+## 方法与目标
+
+| 标识 | 参数或状态 | 候选 | rollout / proposal | 奖励或目标 | 概率修正 |
+| --- | --- | --- | --- | --- | --- |
+| `base` | 1.5B base | — | — | base 分布 | 温度 1 |
+| `beam` | 1.5B base | beam 前缀 | — | 累计 log-probability | beam search |
+| `best_of_n` | 1.5B base | 独立完整生成 | — | 数值众数 | 选择 |
+| `mh` | 完整序列 | — | 1.5B 后缀 | \(p_{\mathrm{base}}^4\) | Hastings 比 |
+| `conditional_is` | 1.5B base | 1.5B block | 1.5B completion | cumulative self-consistency | on-policy |
+| `conditional_is_small_proposal` | 1.5B base | 1.5B block | 0.5B completion | cumulative self-consistency | 1.5B/0.5B 后缀比 |
+| `conditional_is_small_proposal_uncorrected` | 1.5B base | 1.5B block | 0.5B completion | proposal-energy | [式 (12)](../methods/ALGORITHMS.md#alg-proposal-energy) |
+| `rl_sample` | GRPO 参数 | — | — | 训练后策略 | 温度 1 |
+| `rl_greedy` | GRPO 参数 | — | — | 训练后策略 | 逐 token argmax |
+| `verifier_mh` | 完整序列 | — | 1.5B 后缀 | 数值正确性 | Hastings 比 |
+| `verifier_conditional_is` | 1.5B base | 1.5B block | 1.5B completion | 数值正确性 | on-policy |
+| `verifier_conditional_is_small_proposal` | 1.5B base | 1.5B block | 0.5B completion | 数值正确性 | 1.5B/0.5B 后缀比 |
+
+主要比较：
+
+| 比较 | 方法 | 统计范围 |
 | --- | --- | --- |
-| 最终任务质量 | Base、搜索、自一致性、幂分布 MH、条件 IS、GRPO | 允许各方法采用不同目标，只比较准确率与预算 |
-| 共享显式奖励 | verifier-MH、verifier-IS、GRPO | 比较相同奖励目标下的准确率与经验答案分布 |
-| off-policy 与复用 | 0.5B proposal、无重评分、warm replay、动态候选与预算分配 | 比较准确率、ESS、复用率和分模型计算量 |
+| 最终任务质量 | Base、搜索、自一致性、幂分布 MH、条件 IS、GRPO | 准确率与计算量 |
+| 共享奖励 | verifier-MH、verifier-IS、GRPO | 准确率与经验答案分布 |
+| off-policy | 标准 IS、0.5B rollout proposal IS、proposal-energy | 准确率、ESS、分模型 FLOPs |
+| replay 与动态候选 | fresh、warm、动态 proposal、方差—成本分配 | 准确率、ESS、复用率、冷启动/在线成本 |
 
-共享奖励和动态候选实验读取 test split 标准答案，属于 oracle 诊断；部署实验使用 self-consistency、
-模型置信度或测试时可用 verifier。
+共享奖励和动态候选使用 test gold 数值，标记为 oracle 诊断。部署质量实验使用 cumulative
+self-consistency 或模型置信度。
 
-## 指标与统计方法
+## 奖励
 
-- 单次生成质量以最终数值答案准确率计；pass@k 使用
-  [Chen et al. (2021)](https://arxiv.org/abs/2107.03374) 的无偏估计形式。
-- 单方法准确率区间采用 [Wilson (1927)](https://doi.org/10.1080/01621459.1927.10502953) 区间；
-  方法差异采用题目级配对 [bootstrap](https://doi.org/10.1214/aos/1176344552)。
+| 奖励 | 定义 | gold access |
+| --- | --- | --- |
+| 数值正确性 | 解析最终数值，与标准答案比较，取 0/1 | 是 |
+| cumulative self-consistency | 按已评估数值累计众数，匹配取 1 | 无 |
+| 平均 token log-probability | 完整生成的平均选中 token log-probability | 无 |
+| 平均负熵 | 完整生成的逐 token 负熵均值 | 无 |
+| self-certainty | 逐 token \(D_{\mathrm{KL}}(U\|p_{\mathrm{base}})\) 均值 | 无 |
+
+后三种置信度奖励在每次候选决策内执行 min-max 归一化；常数信号统一置零。完整词表评分计入
+token-slot/FLOPs。
+
+## 概率设置
+
+候选和 on-policy rollout 使用同一参考 sampling policy。非单位温度时，温度缩放后的完整支持策略定义
+本轮参考分布；off-policy 后缀比在相同温度下计算。
+
+0.5B rollout proposal 的默认 log 比值截断区间为 `[-10,10]`。原始比值、应用比值、截断次数和 ESS
+进入结果。`importance_log_ratio_clip = null` 使用普通未截断重要性权重。
+
+proposal-energy 设置 `apply_importance_correction=false`，候选权重为
+
+\[
+w_m=\frac1K\sum_{k=1}^K
+\exp\!\left(\frac{r(z_m,u_{mk})}{\tau}\right),
+\qquad
+z_m\sim p_{\mathrm{1.5B}},\quad
+u_{mk}\sim q_{\mathrm{0.5B}}(\cdot\mid z_m).
+\]
+
+该路径的 base `score_calls`、`scored_tokens` 和评分 slots 为 0。
+
+## 统计量
+
+- pass@k 使用 [Chen et al. (2021)](https://arxiv.org/abs/2107.03374) 的无偏估计式。
+- 单方法准确率区间使用 [Wilson (1927)](https://doi.org/10.1080/01621459.1927.10502953) 区间。
+- 方法差异使用题目级配对 [bootstrap](https://doi.org/10.1214/aos/1176344552)。
 - 经验答案分布使用 total variation（TV）和
-  [Jensen--Shannon 散度](https://doi.org/10.1109/18.61115)；JS 以 bit 为单位。
-- 推理计算量按 `2 × 模型参数量 × 实际 forward token slots` 估算，主模型与 proposal 分开计算后求和。
-  墙钟排除模型和数据加载；缓存构建、在线执行与后台 drain 分开报告。
+  [Jensen--Shannon 散度](https://doi.org/10.1109/18.61115)，JS 单位为 bit。
+- 每个 pass@k draw 使用独立候选、rollout 和 replay 状态。
 
-## 复现流程与产物
+## 计算量
 
-以下命令均从仓库根目录运行。原始逐题记录写入 `results/gsm8k/<profile>/`，该目录默认不提交；只有
-完成网格和一致性检查后的汇总才写入 `results/gsm8k_3090/`。同一命令可以按 manifest fingerprint
-恢复，不会把不同配置或实现版本的记录混在一起。
+模型 \(j\) 的推理主干 FLOPs 估计为
 
-### 1. 准备数据、模型与训练对照
+\[
+\widehat F_j=2N_jS_j,
+\]
+
+其中 \(N_j\) 为参数量，\(S_j\) 为实际 forward token slots。1.5B 与 0.5B 分别计算后求和。计数覆盖
+prefill、decode、完整序列评分和 target speculative verification；墙钟排除模型与数据加载。
+
+GRPO 成本分为 rollout generation、reference scoring、policy forward/backward 和 AdamW adapter
+update。gradient checkpointing 的 policy 路径按 forward、backward 与重算三个前向等价过程计量。
+训练 manifest 保存样本、权重、版本、LoRA 参数量、completion、token、显存、墙钟和功率积分。
+
+共享奖励目标为
+
+\[
+\max_\pi\ \mathbb E_\pi[R]-\beta D_{\mathrm{KL}}(\pi\|p_{\mathrm{base}}),
+\]
+
+其无参数限制闭式解正比于 \(p_{\mathrm{base}}\exp(R/\beta)\)。累计成本比较为
+
+\[
+F_{\mathrm{GRPO\ train}}+QF_{\mathrm{GRPO\ infer}}
+\quad\text{与}\quad
+QF_{\mathrm{training\text{-}free}}.
+\]
+
+准确率匹配的临界查询数要求配对准确率差落入预设容差；联合匹配还要求答案分布 TV/JS 通过阈值。
+
+## 成本分母
+
+| 指标 | 分子 / 分母 | 固定项 |
+| --- | --- | --- |
+| `compute_multiple_vs_base` | 方法 FLOPs / Base FLOPs | 样本、长度 |
+| 小 proposal FLOPs 因子 | 标准条件 IS / 0.5B rollout proposal IS | 候选、rollout、block、seed、长度 |
+| `runtime_multiple_vs_base` | 方法墙钟 / Base 墙钟 | 样本、硬件 |
+| 连续批处理加速 | 逐 prompt 墙钟 / 批处理墙钟 | 方法、请求、seed |
+| repeated-prefix KV | 逐 rollout prefill / 唯一前缀 prefill | 同一生成 batch |
+| warm replay 在线因子 | fresh-only / warm online | 候选、\(H+F\)、block |
+| warm replay 首次查询 | fresh-only / (cache build + warm online) | 同上 |
+| 动态候选在线因子 | base candidate fixed / replay-aware fixed | evaluation 成本预算 |
+| 最优预算在线因子 | replay-aware fixed / replay-aware optimal | candidate proposal、成本预算 |
+| vLLM 加速 | Transformers / vLLM | 模型、dtype、GPU、数据、workload |
+
+连续批处理结果同时保存 token 匹配、数值答案匹配、共同前缀和分叉题号。cache build、design、online
+与 background drain 分列。
+
+## replay 与动态候选
+
+每条 evaluation 历史记录原子消费一次。benchmark 使用重复公开 prompt 与候选 seed 形成可控 replay key。
+
+| 实验臂 | 候选 | history | fresh | design |
+| --- | --- | --- | --- | --- |
+| `base_candidate_fixed` | 1.5B base | 0 | 每个非终止候选 3 条 | 0 |
+| `replay_aware_fixed` | `0.5 × base + 0.5 × proposal` | 命中时最多 2 条 | 补足至 3 条 | 0 |
+| `replay_aware_optimal` | 同上 | 方差—成本配额 | 方差—成本配额 | 每来源 2 条 |
+
+重复候选共享同一 replay key 的 evaluation 库存。预算代理将一条历史样本记为 1 个 base 重评分等价，
+一条 fresh 样本记为
+
+\[
+1+\frac{P_{\mathrm{0.5B}}}{P_{\mathrm{1.5B}}}=1.3200.
+\]
+
+最终成本采用实际 forward token slots 与参数量。配额冻结使用候选、策略版本、库存数量和 design
+统计量；evaluation reward 在领取后进入最终估计。
+
+## 复现
+
+以下命令从仓库根目录运行。原始逐题记录位于 `results/gsm8k/<profile>/`；正式汇总位于
+`results/gsm8k_3090/`。
+
+### 准备与训练
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -77,10 +188,9 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\train_gsm8k_grpo.py --resume auto
 ```
 
-训练是可选步骤：若已有与 `configs/gsm8k_grpo.toml` 和固定基座 revision 匹配的 adapter，可以直接
-使用。训练摘要保存到 `results/training/gsm8k_grpo_training_summary.json`。
+已有匹配 `configs/gsm8k_grpo.toml` 与 base revision 的 adapter 时，可直接进入推理实验。
 
-### 2. 运行主网格、replay、动态候选与批处理实验
+### 主网格
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -98,13 +208,10 @@ $env:PYTHONPATH = "src"
   --ablation-limit 8
 ```
 
-主方法、共享目标、replay 与动态候选对照使用同一组 32 道固定题；其余消融使用另一组 8 道题。
-动态候选的额外设置固定在 `configs/gsm8k_3090_dynamic_is.toml`。`--summary-root` 控制 replay、动态
-候选和连续批处理的汇总位置，逐题可恢复记录仍由各运行器写入 `results/gsm8k/`。
+动态候选设置位于 `configs/gsm8k_3090_dynamic_is.toml`。vLLM 套件在 Linux/WSL2 上增加
+`--backend vllm`。
 
-vLLM 是可选的执行后端，不改变方法设置。Linux/WSL2 环境可在套件命令中加入 `--backend vllm`；该值
-会进入 manifest fingerprint 并传给所有子实验。后端吞吐比较使用独立的成对入口，避免把上面的
-Transformers 批处理数字误写成 vLLM 加速：
+### vLLM 成对测速
 
 ```bash
 export PYTHONPATH=src
@@ -115,11 +222,9 @@ python experiments/run_vllm_backend_benchmark.py \
   --tag rtx3090
 ```
 
-汇总器要求两侧具有相同数据哈希与题号、权重、算法参数、dtype、worker 数、环境和代码哈希，并拒绝
-量化、额外评分模型或不同 GPU 数混入单卡 backend 比较。指标的精确定义和概率评分限制见
-[vLLM 推理运行时](../methods/VLLM_RUNTIME.md)。
+汇总器核对数据、题号、权重、算法参数、dtype、worker、环境、代码哈希与 GPU 数。
 
-### 3. 生成主表、计算量、分布审计与消融汇总
+### 汇总与重评分消融
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -130,8 +235,7 @@ $env:PYTHONPATH = "src"
 
 .\.venv\Scripts\python experiments\gsm8k_distribution_audit.py `
   --config configs\gsm8k_3090_aligned.toml `
-  --problem-count 4 `
-  --draws 8 `
+  --problem-count 4 --draws 8 `
   --output results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json
 
 .\.venv\Scripts\python experiments\summarize_gsm8k_compute.py `
@@ -149,49 +253,34 @@ $env:PYTHONPATH = "src;."
 .\.venv\Scripts\python experiments\gsm8k_reproduction.py `
   --config configs\gsm8k_3090_aligned.toml `
   --method verifier_conditional_is_small_proposal `
-  --tag with-rescore-paired-validated `
-  --limit 32
+  --tag with-rescore-paired-validated --limit 32
 
 .\.venv\Scripts\python experiments\gsm8k_reproduction.py `
   --config configs\gsm8k_3090_aligned.toml `
   --method verifier_conditional_is_small_proposal `
-  --tag no-rescore-validated `
-  --limit 32 `
+  --tag no-rescore-validated --limit 32 `
   --disable-importance-correction
 
 .\.venv\Scripts\python experiments\summarize_gsm8k_verifier_rescoring.py
 ```
 
-这些后处理器只读取完成的原始记录，并核对题目网格、manifest 与输入文件哈希。失败时不会生成带
-`validated` 后缀的正式汇总。最后三条命令构成精确 verifier 奖励下的配对重评分消融：两次运行保持
-候选、rollout、题目、seed 和长度预算一致，并在同一会话中依次执行；汇总器另外检查无重评分运行的
-1.5B `score_calls`、`scored_tokens` 和评分 token slots 均为 0。
-
-### 4. 运行独立 draw 的 pass@k 比较
+### pass@k
 
 ```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\gsm8k_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 `
-  --draws 8 `
-  --workers 8 `
-  --tag validated `
+  --limit 32 --draws 8 --workers 8 --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json
 
 .\.venv\Scripts\python experiments\gsm8k_is_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 `
-  --draws 8 `
-  --workers 8 `
-  --tag validated `
+  --limit 32 --draws 8 --workers 8 --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json
 
 .\.venv\Scripts\python experiments\gsm8k_is_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 `
-  --draws 8 `
-  --workers 8 `
+  --limit 32 --draws 8 --workers 8 `
   --methods conditional_is_small_proposal_uncorrected `
   --tag is-uncorrected-validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_is_uncorrected_validated.json
@@ -205,10 +294,7 @@ $env:PYTHONPATH = "src"
   --output results\gsm8k_3090\gsm8k_3090_aligned_passk_comparison_validated.json
 ```
 
-不同 draw 不共享候选、rollout 或 replay。raw chunks 用于恢复和诊断，正式汇总记录其 SHA-256；raw
-文件本身不提交。
-
-### 5. 从正式 JSON 生成图表
+### 图表
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -217,210 +303,20 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\plot_gsm8k_ablations.py
 ```
 
-三个绘图脚本默认读取 `results/gsm8k_3090/`，并确定性写入 `docs/assets/`。正式产物的逐文件用途见
-[`results/README.md`](../../results/README.md)。
+## 消融矩阵
 
-## 固定比较约定
+- MH：\(\alpha\in\{1,2,4,8\}\)，每 block 更新数 \(\{1,2,5,10\}\)。
+- 条件 IS：候选数 \(M\)、rollout 数 \(K\)、引导阶段数 \(I\)。
+- 搜索：Beam、Best-of-\(N\) 与条件 IS 的质量—计算曲线。
+- 奖励：平均 token log-probability、平均负熵、self-certainty、self-consistency、oracle correctness。
+- off-policy：截断、未截断与 proposal-energy。
+- 生成：温度 \(\{0.7,1.0,1.5\}\)，最大长度 \(\{128,256,512\}\)。
+- 执行：逐 prompt、连续批处理、fresh-only、warm replay。
+- 动态候选：base fixed、replay-aware fixed、variance-cost allocation。
+- 多次采样：Base、MH、GRPO 与三种条件 IS 的 8 draw pass@k。
 
-主模型为 `Qwen/Qwen2.5-1.5B-Instruct`。RL 对照是在同一个冻结 checkpoint 上训练得到的本地 GRPO
-LoRA，唯一奖励与评测时使用的精确数值正确性函数相同。奖励标准差缩放被关闭，使原始奖励尺度与
-KL 系数之间仍有明确关系。低成本 rollout proposal 为 `Qwen/Qwen2.5-0.5B-Instruct`。两个下载的
-权重文件都使用固定 SHA-256 核验；全部 GRPO 设置固定在 `configs/gsm8k_grpo.toml` 中。
+## 完整性
 
-在同一个实验配置下，所有主要方法都使用：
-
-- 预先按固定 seed 选定的完全相同 GSM8K 行号；
-- 完全相同的任务 prompt 与数值解析器；
-- 完全相同的最大新增 token 数；
-- 由公开样本行号派生的请求级随机 seed；
-- 排除模型和数据加载、且在起止处同步 CUDA 的推理计时。
-
-| 方法标识 | 分布或决策规则 | 主要比较对象 |
-| --- | --- | --- |
-| `base` | 温度 1 的一次主模型采样 | 单次推理基线 |
-| `beam` | 确定性 beam search | 条件能量方案中的搜索基线 |
-| `best_of_n` | 独立 base 采样，选择众数数值答案 | 并行采样基线 |
-| `mh` | 固定长度、EOS 吸收状态下针对 \(p^4\) 的后缀重采样 MH | Base 与 RL sample |
-| `conditional_is` | base 候选、base rollout 与累积 self-consistency 奖励 | Best-of-N 与 RL greedy |
-| `conditional_is_small_proposal` | 相同候选和决策预算；用 1.5B/0.5B 后缀概率比修正 0.5B rollout | 标准 `conditional_is` |
-| `conditional_is_small_proposal_uncorrected` | 相同候选和 rollout 预算；完全跳过 1.5B 后缀重评分，权重只含奖励项 | 重评分成本与目标偏差消融；不作为 off-policy IS |
-| `rl_sample` | 从 GRPO checkpoint 进行一次温度 1 采样 | MH |
-| `rl_greedy` | GRPO checkpoint 的贪心输出 | 条件 IS |
-| `verifier_mh` | 针对 `base * exp(exact reward / beta)` 的完整序列后缀 MH | 与 GRPO 共享目标的比较 |
-| `verifier_conditional_is` | 使用精确奖励与 GRPO beta 的条件 IS | 与 `rl_sample` 共享目标的比较 |
-| `verifier_conditional_is_small_proposal` | 对上一目标使用经过修正的 0.5B rollout | 与 `rl_sample` 的 off-policy 比较 |
-| `verifier_conditional_is_small_proposal`（关闭重要性修正） | 1.5B 生成候选，0.5B 补全并取得精确奖励；奖励能量直接重加权候选，不计算后缀概率比 | 小模型前瞻的质量与重评分成本消融；不作为 off-policy IS |
-
-GRPO 与推理时采样对应两个相关但不同的问题。第一张表只检验它们能否在公开基准上达到相近准确率，
-不声称 self-consistency IS 与正确性奖励训练的 GRPO 定义了相同的序列分布。涉及分布匹配的比较必须
-使用同一个显式奖励，并报告经验答案分布诊断；结果报告会保留这一区别。
-
-三个 `verifier_*` 方法在这个受控实验里直接读取测试集 gold answer，因而是“共享目标的 oracle
-诊断”，不是可部署的无监督方法。其用途限于比较 GRPO、MH 和 IS 在同一个显式奖励目标下的
-计算需求；实际可部署的 training-free 主表仍使用 self-consistency 奖励。
-
-奖励消融比较五类信号：完整生成的平均 token 对数概率、逐 token 预测分布的平均
-负熵、自确定性、自一致性和正确答案。前三者都由主模型在完整生成上重新评分，并在每次候选决策的
-全部生成内做 min-max 归一化；若所有值相同，则统一置零，因为相同的加性奖励不会改变该次选择。
-自确定性按每个位置的 (D_{\mathrm{KL}}(U\|p_{\mathrm{base}})) 计算，其中 (U) 是词表上的均匀分布。
-这些额外评分全部进入 token-slot/FLOPs 账本。正确答案仍只作为显式 oracle。
-
-`verifier_mh` 从一条完整的 base 序列初始化。每次更新都在所有可能的后缀起点中均匀抽取一个，使用
-具有完整 support 的 base policy 提议新后缀，并计算完整的目标/proposal 比。该转移核保持上述完整
-序列目标不变；block size 只控制每轮的更新次数，不会排除任何后缀起点。
-
-`standard` 主表使用 20 beams、Best-of-20，以及 $M=15,K=3,I=4$ 的条件采样；最大生成长度缩短为
-256 token，以便在单张 RTX 3090 上重复运行。`full` 使用 512 token、20 beams、Best-of-30 和
-$M=15,K=3,I=4$。两者的幂分布 MH 都采用目标幂次 α=4、16 个递增长度阶段及每阶段 10 次更新；
-这里的 α 是 (p_{\mathrm{base}}^\alpha) 中的幂次。主表的条件采样温度设为 1，使目标中的 `base` 就是
-未经温度修改的基座分布；温度 0.7、1.0 和 1.5 另作消融。对任意非 1 温度，代码把温度缩放后的完整
-支持采样策略明确视为参考分布，并在小 proposal 权重中使用相同温度下的精确后缀概率比。
-
-小 proposal 的默认稳定化配置先精确计算后缀 log 概率比，再把它截到 `[-10,10]`。该截断会引入
-有限偏差；结果记录同时报告原始修正、实际修正和截断次数。关闭
-`importance_log_ratio_clip` 时恢复不截断的重要性权重。因而报告会把该方法称为截断的有限 rollout
-近似，而不会把它写成有限样本下严格无偏。
-
-`conditional_is_small_proposal_uncorrected` 和命令行开关 `--disable-importance-correction` 都会关闭
-`apply_importance_correction`；前者用于固定 pass@k 方法网格，后者也可直接作用于
-`verifier_conditional_is_small_proposal`。该设置不计算也不缓存 1.5B rollout 概率，运行账本中的 base
-`score_calls`、`scored_tokens` 和评分 token slots 必须为 0。若候选块满足
-`z_m ~ p_1.5B`，补全满足 `u_mk ~ q_0.5B(· | z_m)`，则候选权重为
-
-`w_m = (1/K) × sum_k exp(r(z_m, u_mk) / τ)`。
-
-该路径估计 0.5B 补全分布下的 continuation energy；其结果不用于验证 Base 目标的 off-policy 收敛性，
-它只用于测量“大模型生成候选、小模型补全取得奖励、奖励重加权大模型候选”在删除 1.5B 后缀重评分
-后的质量、计算量与墙钟变化。
-
-## GRPO 训练与计算量摊销
-
-在共享目标的受控比较中，每个 prompt 的参考目标是
-
-`maximize_pi E_pi[R] - beta * KL(pi || p_base)`。
-
-不受参数化限制时，其最优解正比于 `p_base * exp(R / beta)`。GRPO 是这一目标的有限步、有裁剪的随机
-优化，因此只近似该解；verifier-MH 以上述分布为平稳分布；verifier-IS 则用有限候选和有限 rollout
-近似它的条件因子。因此报告同时测量准确率和经验答案分布距离，不会直接宣称有限计算下三者相同。
-
-GRPO 进行 205 个优化步，并每 25 步保存可恢复 checkpoint。manifest 记录选中的公开训练行、基座权重哈希、软件包
-版本、LoRA 参数量、生成 completion 数及 token 数，以及 trainer 实际观察到的 prompt+completion
-token。峰值 CUDA 显存、同步 wall time、GPU 功率采样与积分能耗只作为硬件相关诊断。测试集仅用于
-哈希与重合检查，从不传给 `GRPOTrainer`。
-
-主要计算单位为 forward token slot 和估算的主导稠密矩阵 FLOPs。一个 forward token slot 表示一次
-实际提交给模型的输入位置；重复的 prompt 或完整序列概率评分会再次计数。推理时，每个模型分别贡献
-
-`2 * model parameter count * observed forward token slots`
-
-FLOPs，1.5B 与 0.5B 的贡献分别计算后相加。GRPO 的计算拆为 rollout 生成、参考模型评分及策略
-前向/反向。启用 gradient checkpointing 时，策略更新计为三个前向等价过程：前向、反向与重算。
-每步累计 token、平均 completion 长度和 microbatch 最大 completion 长度共同重建实际 padded token
-slot；AdamW 的小额开销只计到可训练 LoRA 参数。二次 attention、逐元素 kernel、tokenization、采样
-与主机工作被明确列为未计项，不会用耗时代理冒充。
-
-因此，MH 和两种条件 IS 与 GRPO 的主要摊销比较为
-
-`GRPO training FLOPs + query count * GRPO inference FLOPs`
-
-对比
-
-`query count * training-free inference FLOPs`。
-
-报告也给出原始 token-slot 临界点；但使用 0.5B proposal 时，FLOPs 更能体现不同模型大小。只有当
-实测准确率差落在预设容差内时，才报告“准确率匹配”的临界查询数；若提供重复采样的答案分布审计，
-还要同时通过 total variation 与 Jensen--Shannon divergence 阈值，才报告联合匹配临界点。有限答案
-样本量不足以证明完整 token 序列分布相同。wall time、显存和实测训练能耗仅作补充；不会由 wall time
-虚构推理能耗。
-
-MH adapter 把 EOS 视为吸收 token。解码后的生成内容保持不变，但状态空间成为固定长度，当前后缀与提议
-后缀都有显式概率，从而消除在固定长度 MH 证明里嵌入变长生成的歧义。
-
-## 计算量与计时分母
-
-每个计算缩减或 wall-time 加速都明确说明分母：
-
-- `compute_multiple_vs_base`：某方法的估算稠密 FLOPs 除以完全相同样本上单次 Base 的估算稠密
-  FLOPs。
-- `standard_over_small_proposal_flop_factor`：标准 on-policy 条件 IS 的 FLOPs 除以小 proposal
-  off-policy 条件 IS 的 FLOPs；候选、rollout、block、prompt、seed 和输出预算全部固定。大于 1
-  才表示计算量下降，小于 1 表示为了精确重要性修正反而增加了 FLOPs。
-- `runtime_multiple_vs_base`：某方法 wall time 除以相同样本上的 `base` wall time。它是硬件相关的
-  补充成本倍数，不是计算量指标。
-- 小 proposal wall-time 加速：标准 on-policy 条件 IS 耗时除以小 proposal off-policy 条件 IS
-  耗时。只有 rollout 生成器和精确重要性修正发生变化；该比值大于 1 才称为加速。
-- 异步加速：分别对 Base、Best-of-N、条件 IS 和小 proposal 条件 IS，以逐 prompt 同步耗时除以
-  相同请求和 seed 的连续批处理耗时。四种方法统一使用这一调度方式；它衡量硬件利用率，不宣称减少
-  算法 FLOPs。请求级 seed 固定随机流，但不同 CUDA batch 形状仍可能造成轻微 logits 差异；因此同时
-  报告精确 token 匹配率、最终答案匹配率、共同前缀比例和分叉题号。输出不完全相同时，wall-time
-  speedup 只表示真实 workload 对比，而不是固定 token trace 的严格成对计时。
-- 重复前缀 KV 复用：分母是同一个生成 batch 对每条 rollout 分别重算完整 prefill 的前缀 token；
-  分子只对每个不同的“prompt + 候选”前缀计算一次，再复制 KV 状态。结果直接报告没有重复处理的
-  非 padding 前缀 token 数，并与连续批处理的 wall-time 收益分别报告。
-- replay 在线 FLOPs 缩减：fresh-only 使用 `H+F` 条新 base rollout 的 FLOPs，除以 warm replay 已有
-  `H` 条 off-policy rollout、只生成 `F` 条 fresh base rollout 的在线 FLOPs。候选来源、候选数、
-  block size 和 `H+F` 都固定。历史 completion 的 base/behavior 概率在 cache 构建时一次性验证并
-  保存；在线账本仍包含 fresh rollout 所需的 behavior 概率计算。该比值大于 1 才表示在线计算下降。
-- replay 单次端到端 FLOPs 缩减：分母包括 cache 构建与 warm 决策。在线 warm-cache 收益不会冒充
-  第一次查询即可获得的收益；cache 构建账本包含历史生成及上述 base/behavior 评分，wall-time 比率
-  使用完全相同的两种分母。若该比值小于 1，就明确表示第一次查询的总成本更高。
-- 动态候选在线因子：`base_candidate_fixed` 的稳定在线 FLOPs 除以 `replay_aware_fixed` 的稳定在线
-  FLOPs。分母包括辅助候选采样、两种候选概率评分、外层 IS、实际领取的历史记录和 fresh 校正，但
-  不包括已经完成的 cache 构建；只有比值大于 1 才表示动态候选在线计算下降。
-- 最优预算在线因子：`replay_aware_fixed` 除以 `replay_aware_optimal`。两者逐步使用相同代理成本预算；
-  稳定在线口径排除独立 design pool 构建，冷启动口径则把 design 与 cache 全部加回。任一比值小于 1
-  都明确表示完整扩展在相应口径下更贵。
-
-replay 中每条历史记录最多使用一次。性能 benchmark 重复同一个公开 prompt 与候选 seed，保证历史
-缓存中确实存在相同候选 key；因此它测量重复查询缓存，不代表跨无关 prompt 复用。该独立性能实验
-把 GSM8K gold answer 当作固定 verifier，其准确率不混入 self-consistency 主表。
-
-动态候选扩展另做三组受控比较：
-
-1. `base_candidate_fixed` 只从 1.5B base 抽候选，不构建 replay cache；每个非终止候选使用 3 条
-   fresh rollout。
-2. `replay_aware_fixed` 先由 0.5B proposal 生成候选块及每块 2 条隐藏历史 rollout，再从
-   `0.5 × base + 0.5 × proposal` 抽候选，并乘精确候选层 `p_base/q`。命中时固定使用 2 条历史加
-   1 条 fresh，未命中时使用 3 条 fresh。若相同候选块在一批中重复出现，这些槽共享同一个一次性
-   evaluation 库存；按候选顺序领取可用历史后，其余槽用 fresh 补足，保证每个非终止候选仍恰好使用
-   3 条 rollout，且同一历史记录不会被重复计算。
-3. `replay_aware_optimal` 保持相同候选 proposal、缓存和每步成本预算；在读取 evaluation rollout 前，
-   每个候选分别生成 2 条独立 base design rollout，命中候选再生成 2 条 proposal design rollout，
-   用它们估计历史项与 fresh 项标准差后进行方差—成本分配。
-
-预算代理把一条历史样本成本记为 1 个 base 重评分等价，把一条 fresh 样本成本记为
-`1 + P_0.5B/P_1.5B = 1.3200`。它只用于冻结整数配额；最终比较仍以真实 forward token slots 和
-`2 × 参数量 × token slots` 为准。报告将 cache 构建、独立 design 构建、稳定在线决策和冷启动总成本
-分开。候选及配额冻结时只能读取候选、策略版本和缓存数量；evaluation completion 与 reward 仍保持
-隐藏且每条最多消费一次。
-
-## 消融实验
-
-实验入口包含以下定性检查：
-
-- MH 目标幂次 1、2、4、8；
-- 每个 MH block 更新 1、2、5、10 次；
-- 固定 (K=3) 时取 (M=3,5,10,15)，并固定 (M=10) 比较 (K=1,3,5)；
-- 固定总长度时取 2、4、8、16 个条件引导步；
-- Beam Search、Best-of-N、条件 IS 和小 proposal 条件 IS 的质量—计算曲线；
-- 平均 token 对数概率、平均负熵、自确定性、self-consistency 与测试集正确答案五种奖励；oracle
-  结果单独标记，绝不作为可部署结果；
-- 小 proposal 的不截断理论权重与 `[-10,10]` 实用截断；
-- 采样温度 0.7、1.0、1.5，以及 Base、Beam Search、Best-of-N、两种条件方法和 GRPO 的最大生成
-  长度 128、256、512；
-- Base、Best-of-N、条件 IS 和小 proposal 条件 IS 的同步执行与连续批处理；
-- fresh-only 与 warm off-policy rollout replay；base 固定候选、动态候选加外层 IS、以及再加入方差—
-  成本预算分配的三组对照。
-- Base、MH 与 GRPO 在 8 个独立 draw 下的标准 pass@k、题目 bootstrap 区间，以及解析答案和完整
-  输出哈希多样性。每个任务块只含同一道题的不同 draw；Base/GRPO 合并独立生成，MH 在相同阶段和
-  更新编号向量化独立链。每个固定任务块单独保存实际 padded token slots、估算 FLOPs 与墙钟；异步
-  吞吐收益与算法计算量分别报告。
-- 标准条件 IS、0.5B proposal 截断 off-policy 条件 IS、相同 proposal 的不截断精确权重版本，以及
-  完全删除重评分的 proposal-energy 消融，在同一题目和 draw 网格上的 pass@k 与多样性。四种方法保持候选、rollout、长度和 worker 预算相同；
-  每个 draw 独立，连续批处理只改变调度。小 proposal 版本将两个模型的 token slots 分别乘各自参数
-  量后再相加；每个成本比值的字段名直接写明分子和分母，只有比值大于 1 才表示分母方法的成本下降。
-
-每条原始结果只追加写入 JSONL。分布审计也按“方法 × draw × 题目”逐样本落盘，不等待整个方法结束。
-manifest 会对有效配置和选中的 GSM8K 行号取 fingerprint，因此恢复
-运行时不会把另一组实验结果静默追加到当前目录。fingerprint 还包含实际输入权重与关键实现文件的
-SHA-256；算法或后端代码改变后必须使用新 tag 重新运行，旧记录不再满足当前 fingerprint。
+原始 JSONL 按 manifest fingerprint 追加。fingerprint 包含有效配置、GSM8K 行号、模型权重和关键实现
+文件 SHA-256。后处理器核对题目网格、manifest 和输入哈希后生成 `validated` 汇总。代码或配置变更使用
+新 tag。

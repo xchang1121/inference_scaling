@@ -1,93 +1,76 @@
 # 推理性能设计
 
-本页保留早期性能设计说明。全部已实现 infra 机制、关键代码、后端差异与实验分母统一见
-[推理基础设施实现](INFRASTRUCTURE.md)；会改变统计目标的部分见[推理算法实现](ALGORITHMS.md)。
+本文汇总批处理、评分、缓存和计算账本的设计选择。实现细节见
+[推理基础设施实现](INFRASTRUCTURE.md)，统计目标见[推理算法实现](ALGORITHMS.md)。
 
-实现采用大 batch、KV cache 和跨 prompt 连续批处理。独立算法 worker 把同步调用提交给共享
-后端，后台 dispatcher 将时间上相邻且采样策略、生成长度、重复前缀数兼容的调用组进行合并。一次
-`sample_batch` 或 `score_batch` 的请求不会被拆成零散单条再与其他 prompt 混排；超过预算的 rollout
-组优先沿候选前缀的完整重复组切分。例如 15 个候选各 3 条 rollout 在 32 行上限下切成 30+15，而
-不是 32+13。这样既保留跨 prompt 组批，也让 Transformers 后端仍能识别每个候选的重复 prefix 并
-复制 KV。每个生成请求拥有自己的 seed，因此改变调度顺序不会改变该请求的随机数流；评分结果会按
-原请求顺序拆回。GPU 浮点 kernel 仍可能因 batch 形状不同产生
-轻微 logits 差异。为避免大词表上的 FP32 累加误差把固定随机阈值推过 token 边界，inverse-CDF 使用
-FP64 累加和比较，但 token log-prob 仍来自同一个实际采样策略。异步 benchmark 还会逐方法检查同步与
-异步 token 输出是否完全一致；这是每次运行都要验证的实现性质，而不是仅凭请求级 seed 假定成立。
-长条件生成仍可能因不同 CUDA batch 形状下的轻微 logits 差异而分叉，因此报告还包含精确 token
-匹配率、最终数值答案匹配率、共同前缀比例和分叉题号。若输出不完全一致，wall-time 比率只解释为
-相同配置与 seed 下的真实 workload 对比，不解释为固定 token trace 的严格成对计时。
+## 请求与批处理
 
-异步 vLLM 路径不使用上述 Python dispatcher。每个模型拥有一个常驻 `AsyncLLM` 和事件循环，不同
-算法 worker 的请求直接交给 vLLM 的连续 scheduler；仓库 wrapper 只保留同步接口、请求顺序、统计和
-生命周期。Automatic Prefix Caching 会在不同调用之间复用共同 prefix，实际命中的
-`num_cached_tokens` 会从 prefill token slot 中扣除。生成概率、prompt 评分的适用边界、角色级显存
-划分以及与 Transformers 成对测速的固定分母见 [vLLM 推理运行时](VLLM_RUNTIME.md)。正式结果必须明确
-区分“同一 Transformers 后端的逐 prompt / 连续批处理比”与“Transformers / vLLM 后端比”。
+| 设计 | 实现 | 记录量 |
+| --- | --- | --- |
+| 跨 prompt 连续批处理 | 兼容的 `sample_batch` / `score_batch` 调用在等待窗口内合并 | batch 形状、padding、墙钟 |
+| rollout 组切分 | 优先沿相同 prefix、policy 和长度的完整组切分 | sequence 数、token 上限 |
+| 请求级随机流 | 每个请求保存 seed 和固定 uniform stream | token、共同前缀、数值结果 |
+| 结果还原 | 物理 batch 结束后按调用方索引拆分 | 请求顺序 |
 
-每个精确评分缓存 wrapper 只绑定一个模型；其内部 key 包含完整采样配置、prefix 与 continuation。这对 replay 尤其重要：
-同一条历史 completion 往往要在 base 模型及多个 behavior policy 下重评分，而某一温度或截断策略的
-分数绝不能复用于另一策略。普通随机生成结果不会被评分缓存透明复用；动态候选实验中的候选 replay
-是算法显式管理的数据：先按辅助分布抽样并冻结 request id，后续读取同一候选块，同时仍重新计算精确
-的 base/辅助概率。它不会把一个随机请求的输出冒充为另一个请求。
+例如，15 个候选各 3 条 rollout 在 32 行上限下切分为 30+15，使同一候选的三条 rollout 保持相邻。
+Transformers 使用 FP64 累积概率执行 inverse-CDF；CUDA batch 形状引起的 logits 差异通过 token
+匹配率、共同前缀和最终数值结果记录。
 
-on-policy 条件 rollout 会直接携带生成时得到的精确 base-policy log-probability，因此后端不会再进行
-冗余的完整序列评分。off-policy rollout 仍显式计算主模型分数。长评分请求会拆成有界 microbatch，
-避免 `[batch, length, vocabulary]` logits 张量耗尽 24 GB GPU；该处理不改变概率与请求顺序。
-幂分布 MH 的温度 proposal 与目标概率来自同一个主模型。后端因此会在每个生成位置对同一份 logits
-同时计算实际 proposal 概率和温度 1 的基模概率，并把两者随 token 一起返回；MH 接受率直接使用这两组
-概率，不再为同一后缀增加一次模型前向，从而减少 forward token slot，但不改变四项接受比。
+vLLM 路径使用常驻 `AsyncLLM` 的原生调度器。仓库适配层负责请求顺序、生命周期和计量；后端比较采用
+同模型、dtype、GPU 数、数据和 workload。
 
-多次采样实验进一步把同一道题的独立 MH 链按阶段和更新编号同步推进。每条链分别抽取后缀起点、
-proposal seed 与接受随机数，只把该步所有不同长度的生成请求放进同一个物理 batch；因此它等价于逐链
-执行相同随机流，而不是让链共享状态。有限状态测试逐字段比较向量化与逐链结果，真实模型 smoke 也检查
-已有逐链 draw 0 的完整输出哈希。变长后缀会增加 padding，报告同时保留实际 forward token slots 与
-墙钟：只有墙钟下降时才称为吞吐加速，不能把物理 batch 数减少直接写成 FLOPs 减少。
+## 概率与评分
 
-对支持 `logits_to_keep` 的 Qwen 模型，生成 prefill 只计算最后一个位置的 vocabulary logits，评分也
-只保留覆盖 continuation 所需的尾部 logits；Transformer body 仍处理完整上下文，但不会为未使用的
-prompt 位置反复执行大词表输出投影。
+| 路径 | 评分策略 | 计算影响 |
+| --- | --- | --- |
+| on-policy rollout | 复用生成时保存的 base-policy log-probability | 省去整段重评分 |
+| MH 温度 proposal | 同一 logits 同时计算 proposal 与温度 1 base 概率 | 省去 proposal 重评分 |
+| off-policy rollout | proposal 生成概率 + base 批量评分 | 提供精确 `p/q` |
+| 长序列评分 | 有界 microbatch + `logits_to_keep` | 限制 logits 显存 |
+| 确定性评分复用 | `ScoreCachingBackend` 按模型、policy、prefix、continuation 缓存 | 将重复评分移至首次 miss |
 
-replay 生成也会跨候选展平：候选拥有不同 fresh 数量时，仍只发出一个异构生成 batch；选择后的
-reserve completion 使用同一路径。这消除了逐候选同步点，同时保持 replay key、seed 和 behavior
-log-probability 不变。
-对于固定基模与固定 behavior 版本，历史 completion 的两侧概率在 cache 构建时完成验证并进入精确
-评分缓存。重复查询的在线阶段只读取这些不可变分数；fresh base rollout 在 behavior 下的概率仍在
-在线阶段计算并进入 token/FLOPs 账本。端到端口径则把历史生成、base 评分和 behavior 评分全部计入
-cache 构建成本，因此预评分只移动计算发生的时间，不会凭空删掉第一次查询的成本。
+评分 cache 与模型实例绑定；sampling policy、prefix 和 continuation 共同构成 key。显式候选缓存保存同一
+request id 对应的 draw，用于固定随机性的消融。
 
-Transformers 后端不仅会对完全相同的候选 prefix 执行一次 prefill，还会识别同一 batch 中的多组
-重复 prefix。例如 (M) 个候选各有 (K) 条 rollout 时，只对 (M) 个不同的“prompt + 候选”前缀
-做 prefill，再把每组 KV 状态复制 (K) 次，并继续用一个 (M K) 大 batch 解码。这样既避免了
-重复候选前缀计算，也不牺牲 rollout 的并行度；请求级 seed、真实 log-probability 和输出顺序保持
-不变。静态动态候选 proposal 按真实 sampling policy 分组，每个 policy 只生成一个 batch，并分别在
-base 与辅助 policy 下批量评分。若 proposal factory 显式依赖先前候选，则该部分在算法上必须保持
-串行。结果中的 `shared_prefill_tokens_saved` 明确以“同一个物理 batch 对每条序列都重新做完整
-prefill”为分母，记录因 KV 复制而没有再次处理的非 padding 前缀 token 数。
+## KV 与向量化
 
-方差—成本分配的 design 阶段也不会逐候选同步。候选全部确定后，独立 base design rollout 与命中
-缓存所需的 behavior design rollout 分别组成异构 batch；两侧概率评分再按模型各提交一个跨候选
-batch。所有 design 数据完成后才读取冻结的统计量并分配 evaluation 记录。账本把这部分单列为
-`design`，稳定在线口径可以表示已有 design pool 的重复查询，冷启动口径仍把它完整加回。
+Transformers 对一个 batch 内的重复前缀执行一次 prefill，再复制 KV、末位置 logits 和 attention
+状态。若第 \(i\) 个前缀长度为 \(L_i\)、重复 \(K_i\) 次，节省的非 padding prefill slots 为
 
-计算量以实际 forward token slot 和估算 FLOPs 为主，而不是 wall time。后端对生成 prefill、KV decode
-和完整序列评分分别计数；不同模型按 `2 * parameter_count * forward_token_slots` 分别计算后相加。
-连续批处理的主要收益是提高硬件利用率，通常不会降低算法 FLOPs；replay 和小 proposal 是否降低
-计算量则由上述 token/FLOPs 计数直接判断。耗时、显存和能耗只作为硬件相关补充。
+\[
+\sum_i (K_i-1)L_i.
+\]
 
-新增执行路径已经覆盖 CPU 奖励与 GPU 工作重叠、部分 rollout token 续跑、流式 frozen-design IS、
-MH accept/reject proposal-tree 预取、delayed acceptance，以及冻结 replay 混合 proposal。它们分别把
-完成回调、无效分支、精确奖励调用和正反向 proposal 概率写入账本；详细分母见
-[rollout 生成、复用与验证优化](ROLLOUT_ACCELERATION.md)。
+条件 IS、replay 和动态预算将跨候选 rollout 展平为异构 batch。多条 MH 链按 stage 和 update 锁步，
+每条链独立抽取 cut、proposal seed 与 acceptance uniform。账本分别记录物理 batch、forward slots
+和墙钟。
 
-仍可继续加入、且不改变分布的优化包括：
+## replay 与动态预算
 
-1. Transformers 路径在连续 MH 后缀 proposal 或 broker chunk 之间保留可直接寻址的 KV 状态；vLLM
-   已能通过 APC 复用完整匹配的 prefix block，但尚未把链状态作为显式 cache handle 传递；
-2. 对变长请求做在线长度预测与分桶，同时保持请求级 seed 和真实采样概率；
-3. 已消费 replay record 留在 design pool，用于改善方差和成本估计，但其数值不泄漏给未来 evaluation
-   决策；
-4. 根据实测 verifier 延迟、proposal batch 成本和历史前缀命中率，自动选择 streaming、MH 预取、
-   delayed acceptance 或普通路径。
+历史 completion 的 base/behavior 概率在 cache build 阶段验证并缓存。在线阶段包含 fresh rollout 的
+生成、奖励和概率计算；端到端成本包含历史生成与全部预评分。
 
-硬截断 proposal、未记录的 sampling transform，以及依赖当前 evaluation rollout 数值的数据复用会
-改变估计器或 support，因此明确排除。
+动态预算流程为：
+
+1. 生成并冻结全部候选；
+2. 跨候选批量生成独立 design rollout；
+3. 按模型批量计算两侧概率；
+4. 从 design 数据估计方差与单样本成本；
+5. 冻结 evaluation 配额；
+6. 生成或领取 evaluation rollout。
+
+账本将 `cache_build`、`design`、`online` 和 `background_drain` 分列。
+
+## 计量
+
+主模型计算量按
+
+\[
+\widehat F=2\sum_j N_jS_j
+\]
+
+估算，其中 \(N_j\) 为模型参数量，\(S_j\) 为实际 forward token slots。prefill、decode、完整评分和
+speculative verification 分别计数。墙钟、显存和吞吐描述硬件执行；FLOPs 描述逻辑主干计算。
+
+各优化的精确定义、分母和 RTX 3090 结果见
+[推理执行与 rollout 复用实验](../reports/RTX3090_ROLLOUT_INFRA.md)。
