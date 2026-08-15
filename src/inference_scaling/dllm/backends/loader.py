@@ -25,6 +25,7 @@ def load_llada_backend(
         "device": str(runtime.get("device", "cuda")),
         "dtype": str(runtime.get("dtype", "bfloat16")),
         "mask_token_id": int(model.get("mask_token_id", 156895)),
+        "max_batch_size": int(runtime.get("max_batch_size", 8)),
     }
     attention = runtime.get("attention")
     if attention:

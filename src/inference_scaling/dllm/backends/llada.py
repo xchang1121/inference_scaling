@@ -71,6 +71,7 @@ class LLaDATransformersBackend:
         mask_token_id: int | None = None,
         active_parameters: int | None = None,
         layer_limit: int | None = None,
+        max_batch_size: int | None = None,
         execution_lock: RLock | None = None,
     ) -> None:
         try:
@@ -86,6 +87,9 @@ class LLaDATransformersBackend:
         self._mask_token_id = self._infer_mask_token_id(mask_token_id)
         self._device = self._infer_device()
         self._layer_limit = layer_limit
+        if max_batch_size is not None and max_batch_size <= 0:
+            raise ValueError("max_batch_size must be positive when provided")
+        self._max_batch_size = max_batch_size
         self._execution_lock = execution_lock or RLock()
         self._layer_parent, self._layer_attribute, self._full_layers = (
             self._resolve_decoder_layers()
@@ -132,6 +136,7 @@ class LLaDATransformersBackend:
         trust_remote_code: bool = True,
         mask_token_id: int | None = None,
         active_parameters: int | None = None,
+        max_batch_size: int | None = None,
         **model_kwargs: Any,
     ) -> "LLaDATransformersBackend":
         try:
@@ -163,6 +168,7 @@ class LLaDATransformersBackend:
             model_id=model_name_or_path,
             mask_token_id=mask_token_id,
             active_parameters=active_parameters,
+            max_batch_size=max_batch_size,
         )
 
     @property
@@ -182,7 +188,15 @@ class LLaDATransformersBackend:
             model_id=f"{self.model_id}#prefix-layers={layer_count}",
             mask_token_id=self.mask_token_id,
             layer_limit=layer_count,
+            max_batch_size=self._max_batch_size,
             execution_lock=self._execution_lock,
+        )
+
+    def _request_chunks(self, group: Sequence[Any]) -> Sequence[Sequence[Any]]:
+        chunk_size = self._max_batch_size or len(group)
+        return tuple(
+            group[start : start + chunk_size]
+            for start in range(0, len(group), chunk_size)
         )
 
     def encode_chat(
@@ -247,10 +261,11 @@ class LLaDATransformersBackend:
         outputs: list[DiffusionSample | None] = [None] * len(requests)
         with self._torch.inference_mode():
             for group in groups.values():
-                indices = [item[0] for item in group]
-                samples = self._sample_group([item[1] for item in group])
-                for index, sample in zip(indices, samples, strict=True):
-                    outputs[index] = sample
+                for chunk in self._request_chunks(group):
+                    indices = [item[0] for item in chunk]
+                    samples = self._sample_group([item[1] for item in chunk])
+                    for index, sample in zip(indices, samples, strict=True):
+                        outputs[index] = sample
         elapsed = perf_counter() - started
         with self._lock:
             self._sample_requests += len(requests)
@@ -279,10 +294,11 @@ class LLaDATransformersBackend:
         outputs: list[float | None] = [None] * len(requests)
         with self._torch.inference_mode():
             for group in groups.values():
-                indices = [item[0] for item in group]
-                scores = self._score_group([item[1] for item in group])
-                for index, score in zip(indices, scores, strict=True):
-                    outputs[index] = score
+                for chunk in self._request_chunks(group):
+                    indices = [item[0] for item in chunk]
+                    scores = self._score_group([item[1] for item in chunk])
+                    for index, score in zip(indices, scores, strict=True):
+                        outputs[index] = score
         elapsed = perf_counter() - started
         with self._lock:
             self._score_requests += len(requests)

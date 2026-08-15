@@ -12,7 +12,7 @@ def _config(tmp_path: Path):
         "model": {"path": str(tmp_path / "base")},
         "proposal": {"kind": "shared_prefix_layers", "layers": 8},
         "alignment": {"adapter": str(tmp_path / "adapter")},
-        "runtime": {"device": "cpu", "dtype": "float32"},
+        "runtime": {"device": "cpu", "dtype": "float32", "max_batch_size": 3},
     }
 
 
@@ -43,6 +43,7 @@ def test_base_and_proposal_roles_share_the_loaded_model(monkeypatch, tmp_path):
         "device": "cpu",
         "dtype": "float32",
         "mask_token_id": 156895,
+        "max_batch_size": 3,
     }
     assert calls[1] == ("prefix", 8)
     assert proposal == "proposal"

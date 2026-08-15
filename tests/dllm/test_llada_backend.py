@@ -19,9 +19,11 @@ class TinyMaskedModel(torch.nn.Module):
         super().__init__()
         self.bias = torch.nn.Parameter(torch.tensor(bias, dtype=torch.float32))
         self.config = SimpleNamespace(_name_or_path=name, mask_token_id=3)
+        self.batch_sizes: list[int] = []
 
     def forward(self, token_ids):
         batch, length = token_ids.shape
+        self.batch_sizes.append(batch)
         logits = self.bias.view(1, 1, -1).expand(batch, length, -1).clone()
         return SimpleNamespace(logits=logits)
 
@@ -34,8 +36,12 @@ class TinyTokenizer:
         return " ".join(str(token_id) for token_id in token_ids)
 
 
-def _backend(bias=(0.0, 0.5, 1.0, -2.0), name="tiny"):
-    return LLaDATransformersBackend(TinyMaskedModel(bias, name), TinyTokenizer())
+def _backend(bias=(0.0, 0.5, 1.0, -2.0), name="tiny", max_batch_size=None):
+    return LLaDATransformersBackend(
+        TinyMaskedModel(bias, name),
+        TinyTokenizer(),
+        max_batch_size=max_batch_size,
+    )
 
 
 class TinyExpertLayer(torch.nn.Module):
@@ -172,3 +178,42 @@ def test_shared_prefix_layer_proposal_reuses_weights_and_counts_active_moe_param
     assert proposal_snapshot.total_parameters == 10
     assert proposal_snapshot.active_parameters == 8
     assert proposal_snapshot.resident_parameters == base_snapshot.resident_parameters == 16
+
+
+def test_batch_limit_chunks_sampling_and_scoring_without_changing_results():
+    sampling = DiffusionSamplingConfig(
+        block_length=2,
+        steps_per_block=1,
+        temperature=0.8,
+        remasking="random",
+    )
+    requests = [
+        DiffusionGenerationRequest((0,), 2, sampling, seed, f"sample-{seed}")
+        for seed in range(5)
+    ]
+    limited = _backend(max_batch_size=2)
+    unlimited = _backend()
+
+    limited_samples = limited.sample_batch(requests)
+    unlimited_samples = unlimited.sample_batch(requests)
+    assert [sample.token_ids for sample in limited_samples] == [
+        sample.token_ids for sample in unlimited_samples
+    ]
+    assert [sample.trajectory_logprob for sample in limited_samples] == pytest.approx(
+        [sample.trajectory_logprob for sample in unlimited_samples]
+    )
+
+    limited_scores = limited.score_trajectories(
+        [DiffusionTrajectoryScoreRequest(sample, sampling) for sample in limited_samples]
+    )
+    unlimited_scores = unlimited.score_trajectories(
+        [DiffusionTrajectoryScoreRequest(sample, sampling) for sample in unlimited_samples]
+    )
+    assert limited_scores == pytest.approx(unlimited_scores)
+    assert limited.model.batch_sizes == [2, 2, 1, 2, 2, 1]
+    assert limited.snapshot().forward_calls == 6
+
+
+def test_batch_limit_must_be_positive():
+    with pytest.raises(ValueError, match="max_batch_size"):
+        _backend(max_batch_size=0)
