@@ -241,9 +241,6 @@ def run_conditional_diffusion_is(
         decision_block_size=config.block_size,
         sampling=base_sampling,
     )
-    if rollout_sampling.block_alignment != base_sampling.block_alignment:
-        raise ValueError("candidate and rollout policies must use the same block alignment")
-
     needs_correction = _needs_trajectory_correction(
         rollout_backend=rollout_backend,
         rollout_sampling=rollout_sampling,
@@ -259,8 +256,6 @@ def run_conditional_diffusion_is(
         if (
             rollout_sampling.block_length != target_rollout_sampling.block_length
             or rollout_sampling.steps_per_block != target_rollout_sampling.steps_per_block
-            or rollout_sampling.block_alignment
-            != target_rollout_sampling.block_alignment
         ):
             raise ValueError("proposal and target trajectory schedules must match")
 

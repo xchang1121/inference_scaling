@@ -4,13 +4,11 @@ from inference_scaling.dllm.backends.llada import (
     LLaDABackendSnapshot,
     LLaDATransformersBackend,
 )
-from inference_scaling.dllm.backends.sdar import SDARTransformersBackend
-from inference_scaling.dllm.backends.loader import SDARRole, load_sdar_backend
+from inference_scaling.dllm.backends.loader import LLaDARole, load_llada_backend
 
 __all__ = [
     "LLaDABackendSnapshot",
+    "LLaDARole",
     "LLaDATransformersBackend",
-    "SDARRole",
-    "SDARTransformersBackend",
-    "load_sdar_backend",
+    "load_llada_backend",
 ]

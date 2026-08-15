@@ -1,7 +1,6 @@
 """Diffusion language-model sampling, weighting, and alignment utilities."""
 
 from inference_scaling.dllm.config import (
-    BlockAlignment,
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
     DiffusionMHConfig,
@@ -17,6 +16,15 @@ from inference_scaling.dllm.types import (
     DiffusionTraceStep,
     DiffusionTrajectoryScoreRequest,
 )
+from inference_scaling.dllm.replay import (
+    DiffusionReplayCandidate,
+    DiffusionReplayEnergyEstimate,
+    DiffusionReplayHistory,
+    DiffusionReplayRecord,
+    DiffusionReplaySelection,
+    build_diffusion_replay_history,
+    select_diffusion_candidates_with_replay,
+)
 from inference_scaling.dllm.vrpo import (
     VRPOMaskPlan,
     VRPOMaskSample,
@@ -27,13 +35,17 @@ from inference_scaling.dllm.vrpo import (
 )
 
 __all__ = [
-    "BlockAlignment",
     "DiffusionBackend",
     "DiffusionBlockBeamConfig",
     "DiffusionGenerationRequest",
     "DiffusionISConfig",
     "DiffusionMHConfig",
     "DiffusionPowerMHConfig",
+    "DiffusionReplayCandidate",
+    "DiffusionReplayEnergyEstimate",
+    "DiffusionReplayHistory",
+    "DiffusionReplayRecord",
+    "DiffusionReplaySelection",
     "DiffusionSample",
     "DiffusionSamplingConfig",
     "DiffusionTraceStep",
@@ -45,5 +57,7 @@ __all__ = [
     "estimate_masked_elbo",
     "estimate_vrpo_preference_loss",
     "diffusion_decision_stage_lengths",
+    "build_diffusion_replay_history",
     "sample_vrpo_mask_plan",
+    "select_diffusion_candidates_with_replay",
 ]

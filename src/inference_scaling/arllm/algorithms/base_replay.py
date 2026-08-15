@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import exp, isfinite, log, log1p
+from math import isfinite
 
 import numpy as np
 
@@ -16,6 +16,10 @@ from inference_scaling.arllm.algorithms.conditional_energy import (
 )
 from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
 from inference_scaling.shared.metrics import importance_effective_sample_size
+from inference_scaling.shared.importance import (
+    ProbabilityObservation,
+    corrected_replay_log_energy,
+)
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
@@ -30,13 +34,6 @@ from inference_scaling.arllm.replay import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
-
-
-@dataclass(frozen=True, slots=True)
-class ProbabilityObservation:
-    base_logprob: float
-    mixture_logprob: float
-    reward: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,57 +86,6 @@ class BaseReplayResult:
     token_ids: TokenSequence
     steps: tuple[BaseReplayStep, ...]
     reserve_records_written: int
-
-
-def _logsum_pair(left: float, right: float) -> float:
-    return float(np.logaddexp(left, right))
-
-
-def corrected_replay_log_energy(
-    history: Sequence[ProbabilityObservation],
-    fresh: Sequence[ProbabilityObservation],
-    *,
-    truncation: float,
-    reward_temperature: float,
-) -> tuple[float, tuple[float, ...], tuple[float, ...]]:
-    """Evaluate the document's truncated-history plus fresh-tail identity."""
-
-    if not history:
-        raise ValueError("corrected replay requires at least one history observation")
-    if not fresh:
-        raise ValueError("corrected replay requires at least one fresh observation")
-    if truncation <= 0 or reward_temperature <= 0:
-        raise ValueError("truncation and reward_temperature must be positive")
-    log_tau = log(truncation)
-    history_terms: list[float] = []
-    for observation in history:
-        log_ratio = observation.base_logprob - observation.mixture_logprob
-        if not isfinite(log_ratio):
-            raise ValueError("selected history behavior must assign mass only inside base support")
-        history_terms.append(
-            min(log_tau, log_ratio) + observation.reward / reward_temperature
-        )
-
-    fresh_terms: list[float] = []
-    for observation in fresh:
-        if observation.mixture_logprob == float("-inf"):
-            log_tail = 0.0
-        else:
-            log_ratio = observation.base_logprob - observation.mixture_logprob
-            if log_ratio <= log_tau:
-                log_tail = float("-inf")
-            else:
-                log_tail = log1p(-exp(log_tau - log_ratio))
-        fresh_terms.append(log_tail + observation.reward / reward_temperature)
-
-    history_mean = _logmeanexp(history_terms)
-    finite_fresh = [value for value in fresh_terms if value != float("-inf")]
-    fresh_mean = (
-        _logmeanexp(finite_fresh) + log(len(finite_fresh) / len(fresh_terms))
-        if finite_fresh
-        else float("-inf")
-    )
-    return _logsum_pair(history_mean, fresh_mean), tuple(history_terms), tuple(fresh_terms)
 
 
 def _score_base(

@@ -27,9 +27,9 @@ def _literal_assignment(path: str, name: str):
     raise AssertionError(f"{name} was not found in {path}")
 
 
-def test_sdar_protocol_covers_every_declared_ar_experiment_family():
+def test_llada_protocol_covers_every_declared_ar_experiment_family():
     module = _module()
-    _, sections = module.load_pairing(Path("configs/gsm8k_sdar_3090.toml"))
+    _, sections = module.load_pairing(Path("configs/gsm8k_llada_moe_3090.toml"))
 
     assert set(sections) == set(module.EXPECTED_SETS)
     assert {pair.ar for pair in sections["main_pairs"]} == module.AR_MAIN_METHODS
@@ -38,7 +38,7 @@ def test_sdar_protocol_covers_every_declared_ar_experiment_family():
 
 def test_main_pairing_marks_exact_and_adapted_relations_explicitly():
     module = _module()
-    _, sections = module.load_pairing(Path("configs/gsm8k_sdar_3090.toml"))
+    _, sections = module.load_pairing(Path("configs/gsm8k_llada_moe_3090.toml"))
     relations = {pair.relation for pair in sections["main_pairs"]}
 
     assert relations == {"exact_rule", "matched_role", "adapted"}

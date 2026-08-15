@@ -92,15 +92,10 @@ def _split_diffusion_sample_into_blocks(
     """Turn one exact suffix sample into independently scoreable model blocks."""
 
     _exact_logprob(sample)
-    prefix_length = len(sample.prefix)
     offset = 0
     blocks: list[DiffusionSample] = []
     while offset < len(sample.token_ids):
-        if sampling.block_alignment == "absolute":
-            remainder = (prefix_length + offset) % sampling.block_length
-            length = sampling.block_length - remainder if remainder else sampling.block_length
-        else:
-            length = sampling.block_length
+        length = sampling.block_length
         length = min(length, len(sample.token_ids) - offset)
         block_index = len(blocks)
         trace = tuple(
@@ -192,12 +187,12 @@ def run_diffusion_trajectory_power_mh(
 ) -> DiffusionPowerMHResult:
     """Target ``p(trace | prompt)^alpha`` by aligned suffix resampling.
 
-    SDAR exposes the probability of a committed reverse trajectory, while the
-    marginal probability of the final token sequence is generally intractable.
-    Cuts are restricted to true SDAR model-block boundaries, so the forward and
-    reverse suffix proposal probabilities are both exact.  Staged growth and a
-    tempered proposal mirror the ARLLM experiment without splitting a jointly
-    denoised block.
+    The reverse trajectory has a tractable probability, while the marginal
+    probability of the final token sequence is generally intractable. Cuts are
+    restricted to complete diffusion blocks, so the forward and reverse suffix
+    proposal probabilities are both exact. Staged growth and a tempered
+    proposal mirror the ARLLM experiment without splitting a jointly denoised
+    block.
     """
 
     if not sampling.has_exact_trajectory_density:
@@ -216,14 +211,12 @@ def run_diffusion_trajectory_power_mh(
         sampling.block_length,
         sampling.steps_per_block,
         sampling.remasking,
-        sampling.block_alignment,
         sampling.mask_token_id,
     )
     proposal_schedule = (
         proposal_sampling.block_length,
         proposal_sampling.steps_per_block,
         proposal_sampling.remasking,
-        proposal_sampling.block_alignment,
         proposal_sampling.mask_token_id,
     )
     if schedule != proposal_schedule:

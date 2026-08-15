@@ -1,56 +1,66 @@
 [run]
-name = "gsm8k-sdar-3090-paired"
+name = "gsm8k-llada-moe-a1b-3090-paired"
 ar_reference_config = "configs/gsm8k_3090_aligned.toml"
 sample_count = 32
 subset_seed = 20260808
 seed = 20260808
 
 [model]
-path = "models/SDAR-1.7B-Chat-14fcc4b7"
-source = "JetLM/SDAR-1.7B-Chat"
-revision = "14fcc4b796f05b9a11aa565b2353199af757d079"
-weight_sha256 = "1737775176591d7c7f39b884b98d620d87646f8220b9b6b39431b6f6467e3e0f"
-architecture = "block_diffusion"
-parameter_scale = "1.7B"
-block_length = 4
+path = "models/LLaDA-MoE-7B-A1B-Instruct-783d3467"
+source = "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
+revision = "783d3467f108d28ac0a78d3e41af16ab05cabd8d"
+architecture = "masked_diffusion_moe"
+total_parameter_scale = "7B"
+active_parameter_scale = "1.4B"
+active_parameters = 1400000000
+mask_token_id = 156895
+weight_files = [
+  "model-00001-of-00003.safetensors",
+  "model-00002-of-00003.safetensors",
+  "model-00003-of-00003.safetensors",
+]
+weight_bytes = [4999258928, 4997188984, 4717712520]
+weight_sha256 = [
+  "84a7f34af2f3f14d767b0106b8fa7f0d7f9b95a0eeac74f2ab3f21bd69a03908",
+  "2ddb9174a03003263250c789942372382e2ce97f115377e28cb749c082f0b2d7",
+  "b1998424a021938681487ece097838f7131324eb4f776b8b0ce0c515526b31f4",
+]
 
 [proposal]
-kind = "prefix_layers"
+kind = "shared_prefix_layers"
 layers = 8
-sampling_steps = 4
-purpose = "lower-compute proposal with the same tokenizer and exact trajectory support"
+purpose = "shared-weight early-exit proposal with the same tokenizer and exact trajectory support"
 
 [alignment]
 method = "vrpo"
-adapter = "models/SDAR-1.7B-Chat-VRPO-GSM8K"
-reference = "models/SDAR-1.7B-Chat-14fcc4b7"
+adapter = "models/LLaDA-MoE-7B-A1B-Instruct-VRPO-GSM8K"
+reference = "models/LLaDA-MoE-7B-A1B-Instruct-783d3467"
 
 [runtime]
 device = "cuda"
 dtype = "bfloat16"
-transformers = "4.52.4"
+transformers = "4.53.2"
 attention = "sdpa"
-max_batch_size = 16
+max_batch_size = 8
 
 [generation]
 max_new_tokens = 192
-block_length = 4
-denoising_steps = 4
+block_length = 48
+denoising_steps = 12
 temperature = 1.0
 top_k = 0
 top_p = 1.0
-remasking = "low_confidence_dynamic"
-confidence_threshold = 0.85
-block_alignment = "absolute"
+remasking = "low_confidence"
+mask_token_id = 156895
 
 [exact_policy]
-block_length = 4
-denoising_steps = 4
+block_length = 48
+denoising_steps = 12
 temperature = 1.0
 top_k = 0
 top_p = 1.0
 remasking = "random"
-block_alignment = "absolute"
+mask_token_id = 156895
 
 [search]
 width = 8
@@ -62,8 +72,8 @@ samples = 8
 
 [mh]
 alpha = 4.0
-decision_block_size = 12
-updates_per_stage = 3
+decision_block_size = 48
+updates_per_stage = 12
 updates = 48
 reward_temperature = 0.04
 
@@ -291,7 +301,7 @@ dllm = "block_smc_rollout_forest"
 
 [[infra_pairs]]
 ar = "vllm_backend"
-dllm = "sdar_server_backend"
+dllm = "llada_batched_transformers_backend"
 
 [[training_pairs]]
 ar = "grpo"

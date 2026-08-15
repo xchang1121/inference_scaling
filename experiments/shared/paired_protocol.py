@@ -118,8 +118,8 @@ def validate_pairing(config: dict[str, Any]) -> dict[str, tuple[MethodPair, ...]
         raise ValueError("paired quality protocol must retain the 32-problem main split")
     if int(config.get("passk", {}).get("draws", 0)) != 8:
         raise ValueError("paired pass@k protocol must retain eight independent draws")
-    if config.get("model", {}).get("architecture") != "block_diffusion":
-        raise ValueError("the dLLM counterpart must identify its block-diffusion architecture")
+    if config.get("model", {}).get("architecture") != "masked_diffusion_moe":
+        raise ValueError("the dLLM counterpart must identify its masked-diffusion MoE architecture")
     return parsed
 
 
@@ -134,7 +134,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/gsm8k_sdar_3090.toml"),
+        default=Path("configs/gsm8k_llada_moe_3090.toml"),
     )
     args = parser.parse_args()
     _, sections = load_pairing(args.config)

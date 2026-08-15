@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from math import lgamma
-from threading import Lock
+import re
+from threading import Lock, RLock
 from time import perf_counter
 from typing import Any, Literal
 
@@ -30,6 +32,7 @@ class LLaDABackendSnapshot:
     elapsed_seconds: float
     total_parameters: int
     active_parameters: int
+    resident_parameters: int
     sample_forward_calls: int
     score_forward_calls: int
     sample_model_sequences: int
@@ -67,6 +70,8 @@ class LLaDATransformersBackend:
         model_id: str | None = None,
         mask_token_id: int | None = None,
         active_parameters: int | None = None,
+        layer_limit: int | None = None,
+        execution_lock: RLock | None = None,
     ) -> None:
         try:
             import torch
@@ -80,8 +85,24 @@ class LLaDATransformersBackend:
         self._model_id = model_id or configured_name or model.__class__.__name__
         self._mask_token_id = self._infer_mask_token_id(mask_token_id)
         self._device = self._infer_device()
-        self._total_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
-        self._active_parameters = int(active_parameters or self._total_parameters)
+        self._layer_limit = layer_limit
+        self._execution_lock = execution_lock or RLock()
+        self._layer_parent, self._layer_attribute, self._full_layers = (
+            self._resolve_decoder_layers()
+        )
+        if self._layer_limit is not None:
+            if self._full_layers is None:
+                raise ValueError("layer_limit requires a model with decoder layers")
+            if not 0 < self._layer_limit <= len(self._full_layers):
+                raise ValueError("layer_limit must lie within the decoder layer count")
+        self._resident_parameters = int(
+            sum(parameter.numel() for parameter in model.parameters())
+        )
+        inferred_total, inferred_active = self._effective_parameter_counts()
+        self._total_parameters = inferred_total
+        self._active_parameters = int(
+            active_parameters if active_parameters is not None else inferred_active
+        )
         if self._active_parameters <= 0 or self._active_parameters > self._total_parameters:
             raise ValueError("active_parameters must lie in (0, total_parameters]")
         self._lock = Lock()
@@ -152,6 +173,18 @@ class LLaDATransformersBackend:
     def mask_token_id(self) -> int:
         return self._mask_token_id
 
+    def with_prefix_layers(self, layer_count: int) -> "LLaDATransformersBackend":
+        """Create a lower-compute early-exit backend that shares resident weights."""
+
+        return type(self)(
+            self.model,
+            self.tokenizer,
+            model_id=f"{self.model_id}#prefix-layers={layer_count}",
+            mask_token_id=self.mask_token_id,
+            layer_limit=layer_count,
+            execution_lock=self._execution_lock,
+        )
+
     def encode_chat(
         self,
         user_text: str,
@@ -187,6 +220,7 @@ class LLaDATransformersBackend:
                 elapsed_seconds=self._elapsed_seconds,
                 total_parameters=self._total_parameters,
                 active_parameters=self._active_parameters,
+                resident_parameters=self._resident_parameters,
                 sample_forward_calls=self._sample_forward_calls,
                 score_forward_calls=self._score_forward_calls,
                 sample_model_sequences=self._sample_model_sequences,
@@ -268,12 +302,77 @@ class LLaDATransformersBackend:
         candidates = (
             explicit,
             getattr(self.tokenizer, "mask_token_id", None),
+            getattr(self.tokenizer, "gmask_token_id", None),
             getattr(getattr(self.model, "config", None), "mask_token_id", None),
         )
         for candidate in candidates:
             if isinstance(candidate, int) and candidate >= 0:
                 return candidate
+        converter = getattr(self.tokenizer, "convert_tokens_to_ids", None)
+        if callable(converter):
+            candidate = converter("[MASK]")
+            if isinstance(candidate, int) and candidate >= 0:
+                return candidate
         raise ValueError("mask_token_id is absent from the model and tokenizer; provide it explicitly")
+
+    def _resolve_decoder_layers(self) -> tuple[Any | None, str | None, Any | None]:
+        candidates = (
+            self.model,
+            getattr(self.model, "model", None),
+            getattr(getattr(self.model, "model", None), "model", None),
+        )
+        for parent in candidates:
+            if parent is not None and hasattr(parent, "layers"):
+                layers = getattr(parent, "layers")
+                if hasattr(layers, "__len__") and hasattr(layers, "__getitem__"):
+                    return parent, "layers", layers
+        return None, None, None
+
+    def _effective_parameter_counts(self) -> tuple[int, int]:
+        config = getattr(self.model, "config", None)
+        expert_count = int(getattr(config, "num_experts", 0) or 0)
+        active_experts = int(getattr(config, "num_experts_per_tok", 0) or 0)
+        expert_fraction = (
+            active_experts / expert_count
+            if 0 < active_experts <= expert_count
+            else 1.0
+        )
+        total = 0
+        active = 0.0
+        layer_pattern = re.compile(r"(?:^|\.)layers\.(\d+)\.")
+        for name, parameter in self.model.named_parameters():
+            match = layer_pattern.search(name)
+            if (
+                self._layer_limit is not None
+                and match is not None
+                and int(match.group(1)) >= self._layer_limit
+            ):
+                continue
+            count = int(parameter.numel())
+            total += count
+            active += count * expert_fraction if ".experts." in name else count
+        return total, int(round(active))
+
+    @contextmanager
+    def _selected_decoder_layers(self):
+        with self._execution_lock:
+            if self._layer_limit is None:
+                yield
+                return
+            assert self._layer_parent is not None
+            assert self._layer_attribute is not None
+            assert self._full_layers is not None
+            current = getattr(self._layer_parent, self._layer_attribute)
+            if current is not self._full_layers:
+                raise RuntimeError("shared LLaDA decoder layers were modified concurrently")
+            limited = self._torch.nn.ModuleList(
+                list(self._full_layers[: self._layer_limit])
+            )
+            setattr(self._layer_parent, self._layer_attribute, limited)
+            try:
+                yield
+            finally:
+                setattr(self._layer_parent, self._layer_attribute, self._full_layers)
 
     def _resolve_mask_token_id(self, sampling: DiffusionSamplingConfig) -> int:
         return sampling.mask_token_id if sampling.mask_token_id is not None else self._mask_token_id
@@ -308,22 +407,23 @@ class LLaDATransformersBackend:
         mask_token_id: int,
         phase: Literal["sample", "score"],
     ) -> Any:
-        if sampling.cfg_scale > 0:
-            unconditional = tokens.clone()
-            unconditional[:, :prompt_length] = mask_token_id
-            model_input = self._torch.cat((tokens, unconditional), dim=0)
-            output = self.model(model_input)
-            self._record_forward(
-                model_input.shape[0], model_input.shape[1], phase=phase
-            )
-            logits, unconditional_logits = self._torch.chunk(output.logits, 2, dim=0)
-            logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (
-                logits - unconditional_logits
-            )
-        else:
-            output = self.model(tokens)
-            self._record_forward(tokens.shape[0], tokens.shape[1], phase=phase)
-            logits = output.logits
+        with self._selected_decoder_layers():
+            if sampling.cfg_scale > 0:
+                unconditional = tokens.clone()
+                unconditional[:, :prompt_length] = mask_token_id
+                model_input = self._torch.cat((tokens, unconditional), dim=0)
+                output = self.model(model_input)
+                self._record_forward(
+                    model_input.shape[0], model_input.shape[1], phase=phase
+                )
+                logits, unconditional_logits = self._torch.chunk(output.logits, 2, dim=0)
+                logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (
+                    logits - unconditional_logits
+                )
+            else:
+                output = self.model(tokens)
+                self._record_forward(tokens.shape[0], tokens.shape[1], phase=phase)
+                logits = output.logits
         # A committed mask would leave the state unchanged and violate the fixed
         # transfer schedule.  The reverse policy is therefore normalized over
         # ordinary vocabulary tokens only.
@@ -393,8 +493,6 @@ class LLaDATransformersBackend:
         prompt_length = len(first.prefix)
         generation_length = first.generation_length
         sampling = first.sampling
-        if sampling.block_alignment != "continuation":
-            raise ValueError("LLaDA uses continuation-relative diffusion blocks")
         if sampling.remasking == "low_confidence_dynamic":
             raise ValueError("LLaDA backend does not implement dynamic-threshold remasking")
         mask_token_id = self._resolve_mask_token_id(sampling)
@@ -520,8 +618,6 @@ class LLaDATransformersBackend:
         prompt_length = len(first.sample.prefix)
         generation_length = len(first.sample.token_ids)
         sampling = first.sampling
-        if sampling.block_alignment != "continuation":
-            raise ValueError("LLaDA uses continuation-relative diffusion blocks")
         if not sampling.has_exact_trajectory_density:
             raise ValueError(
                 "trajectory scoring requires random or sequential remasking and positive temperature"

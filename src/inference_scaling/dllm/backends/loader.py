@@ -1,20 +1,22 @@
-"""Role-aware SDAR backend construction for paired experiments."""
+"""Role-aware LLaDA backend construction for paired experiments."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
-from inference_scaling.dllm.backends.sdar import SDARTransformersBackend
+from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 
-SDARRole = Literal["base", "proposal", "aligned"]
+LLaDARole = Literal["base", "proposal", "aligned"]
 
 
-def load_sdar_backend(
+def load_llada_backend(
     config: Mapping[str, Any],
-    role: SDARRole,
-) -> SDARTransformersBackend:
-    """Load the full, reduced-layer proposal, or aligned SDAR checkpoint."""
+    role: LLaDARole,
+    *,
+    base_backend: LLaDATransformersBackend | None = None,
+) -> LLaDATransformersBackend:
+    """Load the full model, shared early-exit proposal, or aligned adapter."""
 
     model = config["model"]
     runtime = config["runtime"]
@@ -22,39 +24,40 @@ def load_sdar_backend(
     common = {
         "device": str(runtime.get("device", "cuda")),
         "dtype": str(runtime.get("dtype", "bfloat16")),
+        "mask_token_id": int(model.get("mask_token_id", 156895)),
     }
+    attention = runtime.get("attention")
+    if attention:
+        common["attn_implementation"] = str(attention)
     if role == "base":
-        return SDARTransformersBackend.from_pretrained(base_path, **common)
+        return LLaDATransformersBackend.from_pretrained(base_path, **common)
 
     if role == "proposal":
         proposal = config["proposal"]
-        if str(proposal.get("kind")) != "prefix_layers":
-            raise ValueError("only the frozen prefix-layer SDAR proposal is supported")
+        if str(proposal.get("kind")) != "shared_prefix_layers":
+            raise ValueError("only the shared prefix-layer LLaDA proposal is supported")
         layers = int(proposal["layers"])
         if layers <= 0:
             raise ValueError("proposal.layers must be positive")
-        return SDARTransformersBackend.from_pretrained(
-            base_path,
-            model_id=f"{base_path}#prefix-layers={layers}",
-            num_hidden_layers=layers,
-            max_window_layers=layers,
-            **common,
+        shared_base = base_backend or LLaDATransformersBackend.from_pretrained(
+            base_path, **common
         )
+        return shared_base.with_prefix_layers(layers)
 
     if role != "aligned":
-        raise ValueError(f"unknown SDAR role {role!r}")
+        raise ValueError(f"unknown LLaDA role {role!r}")
     adapter_path = Path(str(config["alignment"]["adapter"]))
     if not adapter_path.is_dir():
         raise FileNotFoundError(
-            f"aligned SDAR adapter is absent: {adapter_path}; run the VRPO stage first"
+            f"aligned LLaDA adapter is absent: {adapter_path}; run the VRPO stage first"
         )
     try:
         from peft import PeftModel
     except ImportError as exc:  # pragma: no cover - optional training dependency
-        raise RuntimeError("loading the aligned SDAR adapter requires PEFT") from exc
-    base = SDARTransformersBackend.from_pretrained(base_path, **common)
+        raise RuntimeError("loading the aligned LLaDA adapter requires PEFT") from exc
+    base = LLaDATransformersBackend.from_pretrained(base_path, **common)
     aligned_model = PeftModel.from_pretrained(base.model, adapter_path).eval()
-    return SDARTransformersBackend(
+    return LLaDATransformersBackend(
         aligned_model,
         base.tokenizer,
         model_id=str(adapter_path),
@@ -62,4 +65,4 @@ def load_sdar_backend(
     )
 
 
-__all__ = ["SDARRole", "load_sdar_backend"]
+__all__ = ["LLaDARole", "load_llada_backend"]

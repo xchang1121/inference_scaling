@@ -8,7 +8,7 @@ import pytest
 
 from experiments.dllm.gsm8k_reproduction import (
     METHODS,
-    _capped_absolute_generation_length,
+    _capped_generation_length,
     run_method,
 )
 from experiments.shared.paired_protocol import load_pairing
@@ -86,8 +86,7 @@ def _config():
             "block_length": 1,
             "denoising_steps": 1,
             "temperature": 1.0,
-            "remasking": "low_confidence_dynamic",
-            "confidence_threshold": 0.85,
+            "remasking": "low_confidence",
         },
         "exact_policy": {
             "block_length": 1,
@@ -174,20 +173,22 @@ def test_reduced_layer_variants_separate_clipped_exact_and_uncorrected_weights()
     assert uncorrected["apply_importance_correction"] is False
 
 
-def test_sdar_generation_cap_ends_at_an_absolute_model_block():
+def test_llada_generation_cap_retains_complete_diffusion_blocks():
     sampling = DiffusionSamplingConfig(
         block_length=4,
         steps_per_block=4,
-        block_alignment="absolute",
     )
 
-    assert _capped_absolute_generation_length(
+    assert _capped_generation_length(
         prompt_length=5, maximum=192, sampling=sampling
-    ) == 191
+    ) == 192
+    assert _capped_generation_length(
+        prompt_length=5, maximum=190, sampling=sampling
+    ) == 188
 
 
 def test_every_configured_quality_and_passk_counterpart_is_executable():
-    _, sections = load_pairing(Path("configs/gsm8k_sdar_3090.toml"))
+    _, sections = load_pairing(Path("configs/gsm8k_llada_moe_3090.toml"))
     configured = {
         pair.dllm
         for section in ("main_pairs", "passk_pairs", "distribution_pairs")

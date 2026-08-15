@@ -1,4 +1,4 @@
-"""Run the paired SDAR GSM8K quality methods with resumable records."""
+"""Run the paired LLaDA GSM8K quality methods with resumable records."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from inference_scaling.dllm.algorithms import (
     run_diffusion_reward_mh,
     run_diffusion_trajectory_power_mh,
 )
-from inference_scaling.dllm.backends import load_sdar_backend
+from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.config import (
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
@@ -65,7 +65,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/algorithms/mh.py",
     "src/inference_scaling/dllm/algorithms/search.py",
     "src/inference_scaling/dllm/backends/llada.py",
-    "src/inference_scaling/dllm/backends/sdar.py",
     "src/inference_scaling/dllm/backends/loader.py",
     "src/inference_scaling/dllm/config.py",
 )
@@ -99,24 +98,22 @@ def _sampling(section: dict[str, Any]) -> DiffusionSamplingConfig:
             if section.get("mask_token_id") is not None
             else None
         ),
-        block_alignment=str(section.get("block_alignment", "continuation")),
     )
 
 
-def _capped_absolute_generation_length(
+def _capped_generation_length(
     *,
     prompt_length: int,
     maximum: int,
     sampling: DiffusionSamplingConfig,
 ) -> int:
-    """Use at most the AR budget and end at a complete SDAR model block."""
+    """Use at most the AR budget and retain complete diffusion blocks."""
 
-    if sampling.block_alignment != "absolute":
-        return maximum
-    remainder = (prompt_length + maximum) % sampling.block_length
+    del prompt_length
+    remainder = maximum % sampling.block_length
     length = maximum - remainder
     if length <= 0:
-        raise ValueError("generation budget is too small to complete an SDAR block")
+        raise ValueError("generation budget is too small to complete a diffusion block")
     return length
 
 
@@ -141,7 +138,7 @@ def _sample_one(
         ]
     )
     if len(samples) != 1:
-        raise RuntimeError("backend returned an invalid number of SDAR samples")
+        raise RuntimeError("backend returned an invalid number of LLaDA samples")
     return samples[0].token_ids
 
 
@@ -246,17 +243,15 @@ def run_method(
     proposal_backend: Any | None = None,
 ) -> tuple[TokenSequence, dict[str, Any]]:
     if method not in METHODS:
-        raise ValueError(f"unknown SDAR method {method!r}")
+        raise ValueError(f"unknown LLaDA method {method!r}")
     generation_budget = int(config["generation"]["max_new_tokens"])
     generation_sampling = _sampling(config["generation"])
     exact_sampling = _sampling(config["exact_policy"])
-    generation_length = _capped_absolute_generation_length(
+    generation_length = _capped_generation_length(
         prompt_length=len(prompt),
         maximum=generation_budget,
         sampling=generation_sampling,
     )
-    if exact_sampling.block_alignment != generation_sampling.block_alignment:
-        raise ValueError("generation and exact policies must use the same block alignment")
     seeds = SeedStream(seed)
 
     if method in {"base", "vrpo_sample", "vrpo_greedy"}:
@@ -402,9 +397,9 @@ def run_method(
     diagnostics = _conditional_diagnostics(result)
     diagnostics.update(
         {
-            "candidate_source": "full_sdar",
+            "candidate_source": "full_llada_moe",
             "rollout_source": (
-                "reduced_layer_sdar" if reduced else "full_sdar"
+                "shared_prefix_layer_llada" if reduced else "full_llada_moe"
             ),
             "reward_source": "exact_verifier" if verifier else "self_consistency",
             "uses_test_gold_oracle": verifier,
@@ -452,7 +447,7 @@ def _wilson(correct: int, count: int, z: float = 1.959963984540054) -> list[floa
 
 def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not records:
-        raise ValueError("cannot summarize an empty SDAR experiment")
+        raise ValueError("cannot summarize an empty LLaDA experiment")
     correct = sum(bool(record["correct"]) for record in records)
 
     def total(role: str, field: str) -> float:
@@ -485,8 +480,8 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "total_estimated_active_petaflops": (main_flops + proposal_flops) / 1e15,
         "compute_definition": (
             "2 * active model parameters * model-input token slots; generation and "
-            "exact trajectory rescoring are recorded separately for the full SDAR "
-            "model and the reduced-layer proposal"
+            "exact trajectory rescoring are recorded separately for the full LLaDA-MoE "
+            "model and the shared early-exit proposal"
         ),
     }
 
@@ -534,7 +529,7 @@ def _synchronize_cuda(device: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", type=Path, default=Path("configs/gsm8k_sdar_3090.toml")
+        "--config", type=Path, default=Path("configs/gsm8k_llada_moe_3090.toml")
     )
     parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
@@ -560,14 +555,27 @@ def main() -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
 
-    weight = Path(str(config["model"]["path"])) / "model.safetensors"
-    if not weight.is_file():
-        raise FileNotFoundError(
-            f"pinned SDAR weights are absent: {weight}; run experiments/dllm/download_sdar.py"
-        )
-    actual_hash = _file_sha256(weight)
-    if actual_hash != str(config["model"]["weight_sha256"]):
-        raise ValueError("SDAR model weight hash does not match the paired configuration")
+    model_dir = Path(str(config["model"]["path"]))
+    weight_files = tuple(str(value) for value in config["model"]["weight_files"])
+    expected_hashes = tuple(str(value) for value in config["model"]["weight_sha256"])
+    expected_sizes = tuple(int(value) for value in config["model"]["weight_bytes"])
+    if not (len(weight_files) == len(expected_hashes) == len(expected_sizes)):
+        raise ValueError("LLaDA weight manifest columns have different lengths")
+    actual_hashes: dict[str, str] = {}
+    for name, expected_hash, expected_size in zip(
+        weight_files, expected_hashes, expected_sizes, strict=True
+    ):
+        weight = model_dir / name
+        if not weight.is_file():
+            raise FileNotFoundError(
+                f"pinned LLaDA weight is absent: {weight}; run experiments/dllm/download_llada.py"
+            )
+        if weight.stat().st_size != expected_size:
+            raise ValueError(f"LLaDA weight size does not match the manifest: {weight}")
+        actual_hash = _file_sha256(weight)
+        if actual_hash != expected_hash:
+            raise ValueError(f"LLaDA weight hash does not match the manifest: {weight}")
+        actual_hashes[name] = actual_hash
     problems = select_problems(
         load_gsm8k(args.data),
         int(config["run"]["sample_count"]),
@@ -578,7 +586,7 @@ def main() -> None:
         "method": args.method,
         "tag": args.tag,
         "draw_index": args.draw_index,
-        "model_weight_sha256": actual_hash,
+        "model_weight_sha256": actual_hashes,
         "problem_indices": [problem.index for problem in problems],
         "implementation_sha256": {
             path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
@@ -601,9 +609,9 @@ def main() -> None:
         )
 
     role = "aligned" if args.method.startswith("vrpo_") else "base"
-    backend = load_sdar_backend(config, role)
+    backend = load_llada_backend(config, role)
     proposal_backend = (
-        load_sdar_backend(config, "proposal")
+        load_llada_backend(config, "proposal", base_backend=backend)
         if "reduced_layer_proposal" in args.method
         else None
     )

@@ -12,7 +12,6 @@ RemaskingStrategy = Literal[
     "random",
     "sequential",
 ]
-BlockAlignment = Literal["continuation", "absolute"]
 
 
 def _positive(name: str, value: int | float) -> None:
@@ -38,7 +37,6 @@ class DiffusionSamplingConfig:
     remasking: RemaskingStrategy = "low_confidence"
     confidence_threshold: float = 0.85
     mask_token_id: int | None = None
-    block_alignment: BlockAlignment = "continuation"
 
     def __post_init__(self) -> None:
         _positive("block_length", self.block_length)
@@ -65,8 +63,6 @@ class DiffusionSamplingConfig:
             raise ValueError("confidence_threshold must lie in (0, 1]")
         if self.mask_token_id is not None and self.mask_token_id < 0:
             raise ValueError("mask_token_id must be non-negative")
-        if self.block_alignment not in {"continuation", "absolute"}:
-            raise ValueError(f"unsupported block alignment {self.block_alignment!r}")
 
     @property
     def policy_id(self) -> str:
@@ -74,8 +70,7 @@ class DiffusionSamplingConfig:
             f"block={self.block_length};steps={self.steps_per_block};"
             f"temperature={self.temperature:g};top_k={self.top_k};top_p={self.top_p:g};"
             f"cfg={self.cfg_scale:g};remasking={self.remasking};"
-            f"threshold={self.confidence_threshold:g};mask={self.mask_token_id};"
-            f"alignment={self.block_alignment}"
+            f"threshold={self.confidence_threshold:g};mask={self.mask_token_id}"
         )
 
     @property
@@ -91,18 +86,10 @@ class DiffusionSamplingConfig:
         prefix_length: int | None = None,
     ) -> None:
         _positive("generation_length", generation_length)
-        if self.block_alignment == "continuation":
-            aligned_length = generation_length
-            description = "generation_length"
-        elif prefix_length is None:
-            return
-        else:
-            if prefix_length < 0:
-                raise ValueError("prefix_length must be non-negative")
-            aligned_length = prefix_length + generation_length
-            description = "prefix_length + generation_length"
-        if aligned_length % self.block_length:
-            raise ValueError(f"{description} must be divisible by block_length")
+        if prefix_length is not None and prefix_length < 0:
+            raise ValueError("prefix_length must be non-negative")
+        if generation_length % self.block_length:
+            raise ValueError("generation_length must be divisible by block_length")
 
     def total_steps(
         self,
@@ -113,21 +100,7 @@ class DiffusionSamplingConfig:
         self.validate_generation_length(
             generation_length, prefix_length=prefix_length
         )
-        if self.block_alignment == "continuation":
-            return generation_length // self.block_length * self.steps_per_block
-        start = prefix_length
-        end = prefix_length + generation_length
-        first_block = start // self.block_length
-        final_block = (end - 1) // self.block_length
-        steps = 0
-        for block_index in range(first_block, final_block + 1):
-            block_start = block_index * self.block_length
-            available = max(
-                0,
-                min(end, block_start + self.block_length) - max(start, block_start),
-            )
-            steps += min(available, self.steps_per_block)
-        return steps
+        return generation_length // self.block_length * self.steps_per_block
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +153,7 @@ class DiffusionPowerMHConfig:
 
 @dataclass(frozen=True, slots=True)
 class DiffusionBlockBeamConfig:
-    """Sampled block search used as the SDAR counterpart of token beam search."""
+    """Sampled diffusion-block search used as the counterpart of token beam search."""
 
     total_length: int = 128
     decision_block_size: int = 32
@@ -201,7 +174,7 @@ def diffusion_decision_stage_lengths(
     decision_block_size: int,
     sampling: DiffusionSamplingConfig,
 ) -> tuple[int, ...]:
-    """Partition a continuation without splitting an SDAR absolute block."""
+    """Partition a continuation without splitting a diffusion block."""
 
     for name, value in (
         ("total_length", total_length),
@@ -211,19 +184,10 @@ def diffusion_decision_stage_lengths(
     if decision_block_size > total_length:
         raise ValueError("decision_block_size cannot exceed total_length")
     sampling.validate_generation_length(total_length, prefix_length=prompt_length)
-    if sampling.block_alignment == "absolute":
-        if decision_block_size % sampling.block_length:
-            raise ValueError(
-                "an absolute-aligned decision block must contain whole diffusion blocks"
-            )
-        prefix_remainder = prompt_length % sampling.block_length
-        first = (
-            decision_block_size - prefix_remainder
-            if prefix_remainder
-            else decision_block_size
-        )
-    else:
-        first = decision_block_size
+    if prompt_length < 0:
+        raise ValueError("prompt_length must be non-negative")
+    sampling.validate_generation_length(decision_block_size)
+    first = decision_block_size
     lengths: list[int] = []
     remaining = total_length
     next_length = first
@@ -260,7 +224,6 @@ class VRPOSamplingConfig:
 
 
 __all__ = [
-    "BlockAlignment",
     "DiffusionBlockBeamConfig",
     "DiffusionISConfig",
     "DiffusionMHConfig",

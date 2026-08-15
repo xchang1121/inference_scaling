@@ -38,6 +38,35 @@ def _backend(bias=(0.0, 0.5, 1.0, -2.0), name="tiny"):
     return LLaDATransformersBackend(TinyMaskedModel(bias, name), TinyTokenizer())
 
 
+class TinyExpertLayer(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.experts = torch.nn.ModuleList(
+            [torch.nn.Linear(1, 1, bias=False) for _ in range(2)]
+        )
+        self.dense = torch.nn.Parameter(torch.ones(1))
+
+
+class TinyLayeredModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bias = torch.nn.Parameter(torch.tensor((0.0, 0.5, 1.0, -2.0)))
+        self.layers = torch.nn.ModuleList([TinyExpertLayer() for _ in range(4)])
+        self.config = SimpleNamespace(
+            _name_or_path="tiny-moe",
+            mask_token_id=3,
+            num_experts=2,
+            num_experts_per_tok=1,
+        )
+        self.executed_layer_counts: list[int] = []
+
+    def forward(self, token_ids):
+        self.executed_layer_counts.append(len(self.layers))
+        batch, length = token_ids.shape
+        logits = self.bias.view(1, 1, -1).expand(batch, length, -1).clone()
+        return SimpleNamespace(logits=logits)
+
+
 def test_random_remasking_trace_rescores_to_its_recorded_probability():
     backend = _backend()
     sampling = DiffusionSamplingConfig(
@@ -117,3 +146,29 @@ def test_target_temperature_changes_the_same_trajectory_score():
     )[0]
 
     assert target_score != pytest.approx(sample.trajectory_logprob)
+
+
+def test_shared_prefix_layer_proposal_reuses_weights_and_counts_active_moe_parameters():
+    model = TinyLayeredModel()
+    base = LLaDATransformersBackend(model, TinyTokenizer())
+    proposal = base.with_prefix_layers(2)
+    sampling = DiffusionSamplingConfig(
+        block_length=1,
+        steps_per_block=1,
+        temperature=1.0,
+        remasking="random",
+    )
+
+    proposal.sample_batch(
+        [DiffusionGenerationRequest((0,), 1, sampling, 7, "early-exit")]
+    )
+
+    assert model.executed_layer_counts == [2]
+    assert len(model.layers) == 4
+    base_snapshot = base.snapshot()
+    proposal_snapshot = proposal.snapshot()
+    assert base_snapshot.total_parameters == 16
+    assert base_snapshot.active_parameters == 12
+    assert proposal_snapshot.total_parameters == 10
+    assert proposal_snapshot.active_parameters == 8
+    assert proposal_snapshot.resident_parameters == base_snapshot.resident_parameters == 16
