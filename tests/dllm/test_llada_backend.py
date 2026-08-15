@@ -66,6 +66,14 @@ def test_random_remasking_trace_rescores_to_its_recorded_probability():
     assert snapshot.score_requests == 3
     assert snapshot.generated_tokens == 12
     assert snapshot.model_token_slots > 0
+    assert snapshot.sample_model_token_slots > 0
+    assert snapshot.score_model_token_slots > 0
+    assert snapshot.model_token_slots == (
+        snapshot.sample_model_token_slots + snapshot.score_model_token_slots
+    )
+    assert snapshot.forward_calls == (
+        snapshot.sample_forward_calls + snapshot.score_forward_calls
+    )
 
 
 def test_low_confidence_generation_is_not_mislabeled_as_exact_density():

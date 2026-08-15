@@ -41,6 +41,7 @@ top_k = 0
 top_p = 1.0
 remasking = "low_confidence_dynamic"
 confidence_threshold = 0.85
+block_alignment = "absolute"
 
 [exact_policy]
 block_length = 4
@@ -49,6 +50,7 @@ temperature = 1.0
 top_k = 0
 top_p = 1.0
 remasking = "random"
+block_alignment = "absolute"
 
 [search]
 width = 8
@@ -60,6 +62,8 @@ samples = 8
 
 [mh]
 alpha = 4.0
+decision_block_size = 12
+updates_per_stage = 3
 updates = 48
 reward_temperature = 0.04
 
@@ -94,8 +98,8 @@ comparison = "width-eight likelihood search over token prefixes or reverse-diffu
 [[main_pairs]]
 ar = "best_of_n"
 dllm = "best_of_n"
-relation = "exact_rule"
-comparison = "eight independent samples followed by the same selector"
+relation = "matched_role"
+comparison = "eight independent samples followed by numeric self-consistency selection"
 
 [[main_pairs]]
 ar = "mh"

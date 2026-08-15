@@ -12,6 +12,7 @@ RemaskingStrategy = Literal[
     "random",
     "sequential",
 ]
+BlockAlignment = Literal["continuation", "absolute"]
 
 
 def _positive(name: str, value: int | float) -> None:
@@ -37,6 +38,7 @@ class DiffusionSamplingConfig:
     remasking: RemaskingStrategy = "low_confidence"
     confidence_threshold: float = 0.85
     mask_token_id: int | None = None
+    block_alignment: BlockAlignment = "continuation"
 
     def __post_init__(self) -> None:
         _positive("block_length", self.block_length)
@@ -63,6 +65,8 @@ class DiffusionSamplingConfig:
             raise ValueError("confidence_threshold must lie in (0, 1]")
         if self.mask_token_id is not None and self.mask_token_id < 0:
             raise ValueError("mask_token_id must be non-negative")
+        if self.block_alignment not in {"continuation", "absolute"}:
+            raise ValueError(f"unsupported block alignment {self.block_alignment!r}")
 
     @property
     def policy_id(self) -> str:
@@ -70,7 +74,8 @@ class DiffusionSamplingConfig:
             f"block={self.block_length};steps={self.steps_per_block};"
             f"temperature={self.temperature:g};top_k={self.top_k};top_p={self.top_p:g};"
             f"cfg={self.cfg_scale:g};remasking={self.remasking};"
-            f"threshold={self.confidence_threshold:g};mask={self.mask_token_id}"
+            f"threshold={self.confidence_threshold:g};mask={self.mask_token_id};"
+            f"alignment={self.block_alignment}"
         )
 
     @property
@@ -79,14 +84,50 @@ class DiffusionSamplingConfig:
 
         return self.temperature > 0 and self.remasking in {"random", "sequential"}
 
-    def validate_generation_length(self, generation_length: int) -> None:
+    def validate_generation_length(
+        self,
+        generation_length: int,
+        *,
+        prefix_length: int | None = None,
+    ) -> None:
         _positive("generation_length", generation_length)
-        if generation_length % self.block_length:
-            raise ValueError("generation_length must be divisible by block_length")
+        if self.block_alignment == "continuation":
+            aligned_length = generation_length
+            description = "generation_length"
+        elif prefix_length is None:
+            return
+        else:
+            if prefix_length < 0:
+                raise ValueError("prefix_length must be non-negative")
+            aligned_length = prefix_length + generation_length
+            description = "prefix_length + generation_length"
+        if aligned_length % self.block_length:
+            raise ValueError(f"{description} must be divisible by block_length")
 
-    def total_steps(self, generation_length: int) -> int:
-        self.validate_generation_length(generation_length)
-        return generation_length // self.block_length * self.steps_per_block
+    def total_steps(
+        self,
+        generation_length: int,
+        *,
+        prefix_length: int = 0,
+    ) -> int:
+        self.validate_generation_length(
+            generation_length, prefix_length=prefix_length
+        )
+        if self.block_alignment == "continuation":
+            return generation_length // self.block_length * self.steps_per_block
+        start = prefix_length
+        end = prefix_length + generation_length
+        first_block = start // self.block_length
+        final_block = (end - 1) // self.block_length
+        steps = 0
+        for block_index in range(first_block, final_block + 1):
+            block_start = block_index * self.block_length
+            available = max(
+                0,
+                min(end, block_start + self.block_length) - max(start, block_start),
+            )
+            steps += min(available, self.steps_per_block)
+        return steps
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +143,8 @@ class DiffusionISConfig:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             _positive(name, getattr(self, name))
         _positive("reward_temperature", self.reward_temperature)
-        if self.total_length % self.block_size:
-            raise ValueError("total_length must be divisible by block_size")
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
         if self.importance_log_ratio_clip is not None:
             _positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
 
@@ -125,12 +166,15 @@ class DiffusionPowerMHConfig:
     """Finite-step sharpening of an exact reverse-trajectory policy."""
 
     total_length: int = 128
-    updates: int = 8
+    decision_block_size: int = 32
+    updates_per_stage: int = 2
     alpha: float = 2.0
 
     def __post_init__(self) -> None:
-        _positive("total_length", self.total_length)
-        _positive("updates", self.updates)
+        for name in ("total_length", "decision_block_size", "updates_per_stage"):
+            _positive(name, getattr(self, name))
+        if self.decision_block_size > self.total_length:
+            raise ValueError("decision_block_size cannot exceed total_length")
         _positive("alpha", self.alpha)
 
 
@@ -146,8 +190,56 @@ class DiffusionBlockBeamConfig:
     def __post_init__(self) -> None:
         for name in ("total_length", "decision_block_size", "width", "branching_factor"):
             _positive(name, getattr(self, name))
-        if self.total_length % self.decision_block_size:
-            raise ValueError("total_length must be divisible by decision_block_size")
+        if self.decision_block_size > self.total_length:
+            raise ValueError("decision_block_size cannot exceed total_length")
+
+
+def diffusion_decision_stage_lengths(
+    *,
+    prompt_length: int,
+    total_length: int,
+    decision_block_size: int,
+    sampling: DiffusionSamplingConfig,
+) -> tuple[int, ...]:
+    """Partition a continuation without splitting an SDAR absolute block."""
+
+    for name, value in (
+        ("total_length", total_length),
+        ("decision_block_size", decision_block_size),
+    ):
+        _positive(name, value)
+    if decision_block_size > total_length:
+        raise ValueError("decision_block_size cannot exceed total_length")
+    sampling.validate_generation_length(total_length, prefix_length=prompt_length)
+    if sampling.block_alignment == "absolute":
+        if decision_block_size % sampling.block_length:
+            raise ValueError(
+                "an absolute-aligned decision block must contain whole diffusion blocks"
+            )
+        prefix_remainder = prompt_length % sampling.block_length
+        first = (
+            decision_block_size - prefix_remainder
+            if prefix_remainder
+            else decision_block_size
+        )
+    else:
+        first = decision_block_size
+    lengths: list[int] = []
+    remaining = total_length
+    next_length = first
+    while remaining:
+        length = min(next_length, remaining)
+        lengths.append(length)
+        remaining -= length
+        next_length = decision_block_size
+    offset = 0
+    for length in lengths:
+        sampling.validate_generation_length(
+            length,
+            prefix_length=prompt_length + offset,
+        )
+        offset += length
+    return tuple(lengths)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +260,7 @@ class VRPOSamplingConfig:
 
 
 __all__ = [
+    "BlockAlignment",
     "DiffusionBlockBeamConfig",
     "DiffusionISConfig",
     "DiffusionMHConfig",
@@ -175,4 +268,5 @@ __all__ = [
     "DiffusionSamplingConfig",
     "RemaskingStrategy",
     "VRPOSamplingConfig",
+    "diffusion_decision_stage_lengths",
 ]

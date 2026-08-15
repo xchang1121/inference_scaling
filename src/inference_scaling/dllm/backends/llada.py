@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import lgamma
 from threading import Lock
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import (
@@ -30,6 +30,14 @@ class LLaDABackendSnapshot:
     elapsed_seconds: float
     total_parameters: int
     active_parameters: int
+    sample_forward_calls: int
+    score_forward_calls: int
+    sample_model_sequences: int
+    score_model_sequences: int
+    sample_model_token_slots: int
+    score_model_token_slots: int
+    sample_elapsed_seconds: float
+    score_elapsed_seconds: float
 
     @property
     def estimated_active_flops(self) -> float:
@@ -84,6 +92,14 @@ class LLaDATransformersBackend:
         self._model_token_slots = 0
         self._generated_tokens = 0
         self._elapsed_seconds = 0.0
+        self._sample_forward_calls = 0
+        self._score_forward_calls = 0
+        self._sample_model_sequences = 0
+        self._score_model_sequences = 0
+        self._sample_model_token_slots = 0
+        self._score_model_token_slots = 0
+        self._sample_elapsed_seconds = 0.0
+        self._score_elapsed_seconds = 0.0
 
     @classmethod
     def from_pretrained(
@@ -171,6 +187,14 @@ class LLaDATransformersBackend:
                 elapsed_seconds=self._elapsed_seconds,
                 total_parameters=self._total_parameters,
                 active_parameters=self._active_parameters,
+                sample_forward_calls=self._sample_forward_calls,
+                score_forward_calls=self._score_forward_calls,
+                sample_model_sequences=self._sample_model_sequences,
+                score_model_sequences=self._score_model_sequences,
+                sample_model_token_slots=self._sample_model_token_slots,
+                score_model_token_slots=self._score_model_token_slots,
+                sample_elapsed_seconds=self._sample_elapsed_seconds,
+                score_elapsed_seconds=self._score_elapsed_seconds,
             )
 
     def sample_batch(
@@ -198,6 +222,7 @@ class LLaDATransformersBackend:
             self._sample_requests += len(requests)
             self._generated_tokens += sum(request.generation_length for request in requests)
             self._elapsed_seconds += elapsed
+            self._sample_elapsed_seconds += elapsed
         if any(output is None for output in outputs):
             raise RuntimeError("internal dLLM batch reordering failure")
         return [output for output in outputs if output is not None]
@@ -228,6 +253,7 @@ class LLaDATransformersBackend:
         with self._lock:
             self._score_requests += len(requests)
             self._elapsed_seconds += elapsed
+            self._score_elapsed_seconds += elapsed
         if any(output is None for output in outputs):
             raise RuntimeError("internal dLLM score reordering failure")
         return [float(output) for output in outputs if output is not None]
@@ -252,11 +278,26 @@ class LLaDATransformersBackend:
     def _resolve_mask_token_id(self, sampling: DiffusionSamplingConfig) -> int:
         return sampling.mask_token_id if sampling.mask_token_id is not None else self._mask_token_id
 
-    def _record_forward(self, batch_size: int, sequence_length: int) -> None:
+    def _record_forward(
+        self,
+        batch_size: int,
+        sequence_length: int,
+        *,
+        phase: Literal["sample", "score"],
+    ) -> None:
+        token_slots = batch_size * sequence_length
         with self._lock:
             self._forward_calls += 1
             self._model_sequences += batch_size
-            self._model_token_slots += batch_size * sequence_length
+            self._model_token_slots += token_slots
+            if phase == "sample":
+                self._sample_forward_calls += 1
+                self._sample_model_sequences += batch_size
+                self._sample_model_token_slots += token_slots
+            else:
+                self._score_forward_calls += 1
+                self._score_model_sequences += batch_size
+                self._score_model_token_slots += token_slots
 
     def _model_logits(
         self,
@@ -265,20 +306,23 @@ class LLaDATransformersBackend:
         prompt_length: int,
         sampling: DiffusionSamplingConfig,
         mask_token_id: int,
+        phase: Literal["sample", "score"],
     ) -> Any:
         if sampling.cfg_scale > 0:
             unconditional = tokens.clone()
             unconditional[:, :prompt_length] = mask_token_id
             model_input = self._torch.cat((tokens, unconditional), dim=0)
             output = self.model(model_input)
-            self._record_forward(model_input.shape[0], model_input.shape[1])
+            self._record_forward(
+                model_input.shape[0], model_input.shape[1], phase=phase
+            )
             logits, unconditional_logits = self._torch.chunk(output.logits, 2, dim=0)
             logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (
                 logits - unconditional_logits
             )
         else:
             output = self.model(tokens)
-            self._record_forward(tokens.shape[0], tokens.shape[1])
+            self._record_forward(tokens.shape[0], tokens.shape[1], phase=phase)
             logits = output.logits
         # A committed mask would leave the state unchanged and violate the fixed
         # transfer schedule.  The reverse policy is therefore normalized over
@@ -349,6 +393,8 @@ class LLaDATransformersBackend:
         prompt_length = len(first.prefix)
         generation_length = first.generation_length
         sampling = first.sampling
+        if sampling.block_alignment != "continuation":
+            raise ValueError("LLaDA uses continuation-relative diffusion blocks")
         if sampling.remasking == "low_confidence_dynamic":
             raise ValueError("LLaDA backend does not implement dynamic-threshold remasking")
         mask_token_id = self._resolve_mask_token_id(sampling)
@@ -384,6 +430,7 @@ class LLaDATransformersBackend:
                     prompt_length=prompt_length,
                     sampling=sampling,
                     mask_token_id=mask_token_id,
+                    phase="sample",
                 )
                 sampled_tokens, sampled_logprobs = self._draw_tokens(
                     logits, temperature=sampling.temperature, generators=generators
@@ -473,11 +520,16 @@ class LLaDATransformersBackend:
         prompt_length = len(first.sample.prefix)
         generation_length = len(first.sample.token_ids)
         sampling = first.sampling
+        if sampling.block_alignment != "continuation":
+            raise ValueError("LLaDA uses continuation-relative diffusion blocks")
         if not sampling.has_exact_trajectory_density:
             raise ValueError(
                 "trajectory scoring requires random or sequential remasking and positive temperature"
             )
-        sampling.validate_generation_length(generation_length)
+        sampling.validate_generation_length(
+            generation_length,
+            prefix_length=prompt_length,
+        )
         mask_token_id = self._resolve_mask_token_id(sampling)
         expected_steps = sampling.total_steps(generation_length)
         for request in requests:
@@ -502,6 +554,7 @@ class LLaDATransformersBackend:
                 prompt_length=prompt_length,
                 sampling=sampling,
                 mask_token_id=mask_token_id,
+                phase="score",
             ).float()
             scaled = logits / sampling.temperature
             log_normalizers = self._torch.logsumexp(scaled, dim=-1)

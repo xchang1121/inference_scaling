@@ -19,7 +19,10 @@ class DiffusionGenerationRequest:
     request_id: str
 
     def __post_init__(self) -> None:
-        self.sampling.validate_generation_length(self.generation_length)
+        self.sampling.validate_generation_length(
+            self.generation_length,
+            prefix_length=len(self.prefix),
+        )
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
 

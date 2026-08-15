@@ -7,7 +7,7 @@ import importlib.util
 from importlib.machinery import ModuleSpec
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal
 
 from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
@@ -121,6 +121,8 @@ class SDARTransformersBackend(LLaDATransformersBackend):
         dtype: str = "bfloat16",
         trust_remote_code: bool = True,
         mask_token_id: int | None = None,
+        model_id: str | None = None,
+        active_parameters: int | None = None,
         **model_kwargs: Any,
     ) -> "SDARTransformersBackend":
         try:
@@ -152,8 +154,9 @@ class SDARTransformersBackend(LLaDATransformersBackend):
         return cls(
             model,
             tokenizer,
-            model_id=model_name_or_path,
+            model_id=model_id or model_name_or_path,
             mask_token_id=mask_token_id,
+            active_parameters=active_parameters,
         )
 
     @staticmethod
@@ -208,6 +211,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
         sampling: DiffusionSamplingConfig,
         mask_token_id: int,
         store_kv: bool,
+        phase: Literal["sample", "score"],
     ) -> Any:
         output = self.model(
             current,
@@ -217,7 +221,9 @@ class SDARTransformersBackend(LLaDATransformersBackend):
             use_cache=True,
             store_kv=store_kv,
         )
-        self._record_forward(current.shape[0], current.shape[1])
+        self._record_forward(
+            current.shape[0], current.shape[1], phase=phase
+        )
         logits = output.logits.clone()
         logits[..., mask_token_id] = -self._torch.inf
         return self._filter_logits(logits, sampling)
@@ -225,6 +231,8 @@ class SDARTransformersBackend(LLaDATransformersBackend):
     def _initialize_group(
         self,
         requests: Sequence[DiffusionGenerationRequest],
+        *,
+        phase: Literal["sample", "score"],
     ) -> tuple[Any, Any, Any, Any, int, int, int, int, int]:
         first = requests[0]
         prefix_length = len(first.prefix)
@@ -259,6 +267,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
                 sampling=sampling,
                 mask_token_id=mask_token_id,
                 store_kv=True,
+                phase=phase,
             )
         return (
             tokens,
@@ -289,7 +298,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
             first_block,
             block_count,
             mask_token_id,
-        ) = self._initialize_group(requests)
+        ) = self._initialize_group(requests, phase="sample")
         generators = [
             self._torch.Generator(device=self._device).manual_seed(request.seed)
             for request in requests
@@ -329,6 +338,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
                     sampling=sampling,
                     mask_token_id=mask_token_id,
                     store_kv=False,
+                    phase="sample",
                 )
                 sampled, sampled_logprobs = self._draw_tokens(
                     logits,
@@ -433,6 +443,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
                     sampling=sampling,
                     mask_token_id=mask_token_id,
                     store_kv=True,
+                    phase="sample",
                 )
 
         outputs: list[DiffusionSample] = []
@@ -494,7 +505,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
             first_block,
             block_count,
             mask_token_id,
-        ) = self._initialize_group(generation_requests)
+        ) = self._initialize_group(generation_requests, phase="score")
         block_length = sampling.block_length
         target_end = prefix_length + generation_length
         totals = [0.0 for _ in requests]
@@ -523,6 +534,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
                     sampling=sampling,
                     mask_token_id=mask_token_id,
                     store_kv=False,
+                    phase="score",
                 ).float()
                 scaled = logits / sampling.temperature
                 log_normalizers = self._torch.logsumexp(scaled, dim=-1)
@@ -595,6 +607,7 @@ class SDARTransformersBackend(LLaDATransformersBackend):
                     sampling=sampling,
                     mask_token_id=mask_token_id,
                     store_kv=True,
+                    phase="score",
                 )
 
         for row, request in enumerate(requests):

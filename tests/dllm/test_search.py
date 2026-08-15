@@ -68,7 +68,12 @@ def test_trajectory_power_mh_sharpens_the_exact_trajectory_distribution():
         result = run_diffusion_trajectory_power_mh(
             backend=BinaryTrajectoryBackend(),
             prompt=(),
-            config=DiffusionPowerMHConfig(total_length=1, updates=8, alpha=2.0),
+            config=DiffusionPowerMHConfig(
+                total_length=1,
+                decision_block_size=1,
+                updates_per_stage=8,
+                alpha=2.0,
+            ),
             sampling=EXACT,
             seed=seed,
         )
@@ -111,7 +116,12 @@ def test_search_algorithms_reject_intractable_remasking_policy():
         run_diffusion_trajectory_power_mh(
             backend=BinaryTrajectoryBackend(),
             prompt=(),
-            config=DiffusionPowerMHConfig(total_length=1, updates=2, alpha=2.0),
+            config=DiffusionPowerMHConfig(
+                total_length=1,
+                decision_block_size=1,
+                updates_per_stage=2,
+                alpha=2.0,
+            ),
             sampling=inexact,
         )
     with pytest.raises(ValueError, match="exact diffusion policy"):

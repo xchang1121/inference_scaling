@@ -7,7 +7,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from inference_scaling.dllm.backends import SDARTransformersBackend
-from inference_scaling.dllm.config import DiffusionSamplingConfig
+from inference_scaling.dllm.algorithms import run_diffusion_trajectory_power_mh
+from inference_scaling.dllm.config import (
+    DiffusionPowerMHConfig,
+    DiffusionSamplingConfig,
+)
 from inference_scaling.dllm.types import (
     DiffusionGenerationRequest,
     DiffusionTrajectoryScoreRequest,
@@ -76,6 +80,11 @@ def test_random_sdar_trajectory_rescores_with_partial_boundary_blocks():
     assert snapshot.sample_requests == 2
     assert snapshot.score_requests == 2
     assert snapshot.generated_tokens == 16
+    assert snapshot.sample_model_token_slots > 0
+    assert snapshot.score_model_token_slots > 0
+    assert snapshot.model_token_slots == (
+        snapshot.sample_model_token_slots + snapshot.score_model_token_slots
+    )
 
 
 def test_dynamic_threshold_can_commit_multiple_sdar_tokens_per_step():
@@ -118,3 +127,56 @@ def test_sequential_sdar_policy_has_an_exact_trajectory_density():
     assert score == pytest.approx(sample.trajectory_logprob, abs=1e-6)
     assert sample.trace[0].positions == (0, 1)
     assert sample.trace[1].positions == (2, 3)
+
+
+def test_absolute_alignment_matches_official_prompt_block_boundaries():
+    backend = _backend()
+    sampling = DiffusionSamplingConfig(
+        block_length=4,
+        steps_per_block=4,
+        temperature=1.0,
+        remasking="random",
+        block_alignment="absolute",
+    )
+    sample = backend.sample_batch(
+        [DiffusionGenerationRequest((0, 1, 2, 0, 1), 7, sampling, 13, "absolute")]
+    )[0]
+
+    score = backend.score_trajectories(
+        [DiffusionTrajectoryScoreRequest(sample, sampling)]
+    )[0]
+
+    assert len(sample.trace) == 7
+    assert score == pytest.approx(sample.trajectory_logprob, abs=1e-6)
+
+
+def test_sdar_power_mh_resamples_only_complete_absolute_block_suffixes():
+    backend = _backend()
+    prompt = (0, 1, 2, 0, 1)
+    sampling = DiffusionSamplingConfig(
+        block_length=4,
+        steps_per_block=4,
+        temperature=1.0,
+        remasking="random",
+        block_alignment="absolute",
+    )
+
+    result = run_diffusion_trajectory_power_mh(
+        backend=backend,
+        prompt=prompt,
+        config=DiffusionPowerMHConfig(
+            total_length=7,
+            decision_block_size=4,
+            updates_per_stage=1,
+            alpha=2.0,
+        ),
+        sampling=sampling,
+        seed=29,
+    )
+
+    assert len(result.final.token_ids) == 7
+    assert len(result.steps) == 2
+    assert all(
+        step.cut == 0 or (len(prompt) + step.cut) % sampling.block_length == 0
+        for step in result.steps
+    )

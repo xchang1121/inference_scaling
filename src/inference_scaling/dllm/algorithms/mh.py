@@ -62,7 +62,10 @@ def run_diffusion_reward_mh(
 
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
-    sampling.validate_generation_length(config.total_length)
+    sampling.validate_generation_length(
+        config.total_length,
+        prefix_length=len(prompt),
+    )
     seeds = SeedStream(seed)
     requests = [
         DiffusionGenerationRequest(

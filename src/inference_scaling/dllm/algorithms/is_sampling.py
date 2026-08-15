@@ -8,7 +8,11 @@ from math import exp, log
 
 import numpy as np
 
-from inference_scaling.dllm.config import DiffusionISConfig, DiffusionSamplingConfig
+from inference_scaling.dllm.config import (
+    DiffusionISConfig,
+    DiffusionSamplingConfig,
+    diffusion_decision_stage_lengths,
+)
 from inference_scaling.dllm.types import (
     DiffusionBackend,
     DiffusionGenerationRequest,
@@ -227,16 +231,18 @@ def run_conditional_diffusion_is(
     and proposal kernels.
     """
 
-    # ``config.block_size`` is the conditional-IS decision interval.  SDAR has
-    # a smaller model-native diffusion block (four tokens in the released
-    # checkpoint), so one decision may contain several completed SDAR blocks.
-    base_sampling.validate_generation_length(config.block_size)
     rollout_backend = rollout_backend or base_backend
     rollout_sampling = rollout_sampling or base_sampling
     target_rollout_backend = target_rollout_backend or base_backend
     target_rollout_sampling = target_rollout_sampling or base_sampling
-    rollout_sampling.validate_generation_length(config.block_size)
-    rollout_sampling.validate_generation_length(config.total_length)
+    stage_lengths = diffusion_decision_stage_lengths(
+        prompt_length=len(prompt),
+        total_length=config.total_length,
+        decision_block_size=config.block_size,
+        sampling=base_sampling,
+    )
+    if rollout_sampling.block_alignment != base_sampling.block_alignment:
+        raise ValueError("candidate and rollout policies must use the same block alignment")
 
     needs_correction = _needs_trajectory_correction(
         rollout_backend=rollout_backend,
@@ -253,18 +259,21 @@ def run_conditional_diffusion_is(
         if (
             rollout_sampling.block_length != target_rollout_sampling.block_length
             or rollout_sampling.steps_per_block != target_rollout_sampling.steps_per_block
+            or rollout_sampling.block_alignment
+            != target_rollout_sampling.block_alignment
         ):
             raise ValueError("proposal and target trajectory schedules must match")
 
     seeds = SeedStream(seed)
     generated: TokenSequence = ()
     steps: list[DiffusionConditionalISStep] = []
-    for step_index, offset in enumerate(range(0, config.total_length, config.block_size)):
+    offset = 0
+    for step_index, candidate_length in enumerate(stage_lengths):
         prefix = prompt + generated
         candidate_requests = [
             DiffusionGenerationRequest(
                 prefix=prefix,
-                generation_length=config.block_size,
+                generation_length=candidate_length,
                 sampling=base_sampling,
                 seed=seeds.derive("dllm-is", step_index, "candidate", candidate_index),
                 request_id=f"dllm-is:step:{step_index}:candidate:{candidate_index}",
@@ -275,7 +284,7 @@ def run_conditional_diffusion_is(
         if len(candidate_samples) != config.candidate_count:
             raise RuntimeError("backend returned an invalid number of dLLM candidates")
 
-        remaining = config.total_length - offset - config.block_size
+        remaining = config.total_length - offset - candidate_length
         candidate_evaluations: list[list[DiffusionRolloutEvaluation]] = [
             [] for _ in candidate_samples
         ]
@@ -399,6 +408,7 @@ def run_conditional_diffusion_is(
             )
         )
         generated += candidates[selected_index].token_ids
+        offset += candidate_length
 
     return DiffusionConditionalISResult(prompt=prompt, token_ids=generated, steps=tuple(steps))
 
