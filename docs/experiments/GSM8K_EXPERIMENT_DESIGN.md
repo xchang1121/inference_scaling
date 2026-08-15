@@ -104,10 +104,28 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python experiments\summarize_gsm8k_ablations.py `
   --config configs\gsm8k_3090_aligned.toml `
   --output results\gsm8k_3090\gsm8k_3090_aligned_ablations_validated.json
+
+$env:PYTHONPATH = "src;."
+.\.venv\Scripts\python experiments\gsm8k_reproduction.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --method verifier_conditional_is_small_proposal `
+  --tag with-rescore-paired-validated `
+  --limit 32
+
+.\.venv\Scripts\python experiments\gsm8k_reproduction.py `
+  --config configs\gsm8k_3090_aligned.toml `
+  --method verifier_conditional_is_small_proposal `
+  --tag no-rescore-validated `
+  --limit 32 `
+  --disable-importance-correction
+
+.\.venv\Scripts\python experiments\summarize_gsm8k_verifier_rescoring.py
 ```
 
 这些后处理器只读取完成的原始记录，并核对题目网格、manifest 与输入文件哈希。失败时不会生成带
-`validated` 后缀的正式汇总。
+`validated` 后缀的正式汇总。最后三条命令构成精确 verifier 奖励下的配对重评分消融：两次运行保持
+候选、rollout、题目、seed 和长度预算一致，并在同一会话中依次执行；汇总器另外检查无重评分运行的
+1.5B `score_calls`、`scored_tokens` 和评分 token slots 均为 0。
 
 ### 4. 运行独立 draw 的 pass@k 比较
 
@@ -191,6 +209,7 @@ KL 系数之间仍有明确关系。低成本 rollout proposal 为 `Qwen/Qwen2.5
 | `verifier_mh` | 针对 `base * exp(exact reward / beta)` 的完整序列后缀 MH | 与 GRPO 共享目标的比较 |
 | `verifier_conditional_is` | 使用精确奖励与 GRPO beta 的条件 IS | 与 `rl_sample` 共享目标的比较 |
 | `verifier_conditional_is_small_proposal` | 对上一目标使用经过修正的 0.5B rollout | 与 `rl_sample` 的 off-policy 比较 |
+| `verifier_conditional_is_small_proposal`（关闭重要性修正） | 1.5B 生成候选，0.5B 补全并取得精确奖励；奖励能量直接重加权候选，不计算后缀概率比 | 小模型前瞻的质量与重评分成本消融；不作为 off-policy IS |
 
 GRPO 与推理时采样对应两个相关但不同的问题。第一张表只检验它们能否在公开基准上达到相近准确率，
 不声称 self-consistency IS 与正确性奖励训练的 GRPO 定义了相同的序列分布。涉及分布匹配的比较必须
@@ -222,10 +241,17 @@ $M=15,K=3,I=4$。两者的幂分布 MH 都采用目标幂次 α=4、16 个递增
 `importance_log_ratio_clip` 时恢复不截断的重要性权重。因而报告会把该方法称为截断的有限 rollout
 近似，而不会把它写成有限样本下严格无偏。
 
-`conditional_is_small_proposal_uncorrected` 进一步关闭 `apply_importance_correction`。该设置不计算也不
-缓存 1.5B rollout 概率，运行账本中的 base `score_calls` 和 `scored_tokens` 必须为 0。它估计 proposal
-分布下的 continuation energy，不能用于验证 Base 目标的 off-policy 收敛性；该路径只用于测量删除重
-评分后的质量与成本变化。
+`conditional_is_small_proposal_uncorrected` 和命令行开关 `--disable-importance-correction` 都会关闭
+`apply_importance_correction`；前者用于固定 pass@k 方法网格，后者也可直接作用于
+`verifier_conditional_is_small_proposal`。该设置不计算也不缓存 1.5B rollout 概率，运行账本中的 base
+`score_calls`、`scored_tokens` 和评分 token slots 必须为 0。若候选块满足
+`z_m ~ p_1.5B`，补全满足 `u_mk ~ q_0.5B(· | z_m)`，则候选权重为
+
+`w_m = (1/K) × sum_k exp(r(z_m, u_mk) / τ)`。
+
+该路径估计 0.5B 补全分布下的 continuation energy，不能用于验证 Base 目标的 off-policy 收敛性；
+它只用于测量“大模型生成候选、小模型补全取得奖励、奖励重加权大模型候选”在删除 1.5B 后缀重评分
+后的质量、计算量与墙钟变化。
 
 ## GRPO 训练与计算量摊销
 

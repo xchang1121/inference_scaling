@@ -51,7 +51,7 @@
 | 幂分布 MH | 对完整序列执行后缀提议与接受，目标为 `p_base(y∣x)^4` | 基模概率锐化 | [Metropolis–Hastings，Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97) |
 | 标准条件 IS | Base 候选与 Base rollout；累积 self-consistency 奖励形成候选权重 | 免训练条件重加权 | [重要性采样，Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303)；[Self-Consistency，Wang et al., 2023](https://openreview.net/pdf?id=1PL1NIMMrw) |
 | 0.5B proposal 条件 IS | Base 候选与 0.5B rollout；后缀权重乘精确 `p_base/q` | off-policy rollout | [Off-policy IS，Precup et al., 2000](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) |
-| 0.5B rollout 无重评分 | Base 候选与 0.5B rollout；候选权重不乘 `p_base/q` | 重评分消融；估计 0.5B 而非 Base 的后续能量，不属于 Base 目标的 off-policy IS | 与上一行直接配对的有偏消融 |
+| 0.5B rollout 无重评分（proposal-energy） | Base 候选与 0.5B rollout；用 rollout 奖励直接重加权 Base 候选，不乘 `p_base/q` | 有偏小模型前瞻；估计 0.5B 而非 Base 的后续能量，不属于 Base 目标的 off-policy IS | 与上一行直接配对的消融 |
 | GRPO | 正确性奖励与 KL 正则训练后的策略 | 训练式强化学习基线 | [DeepSeekMath，Shao et al., 2024](https://arxiv.org/abs/2402.03300) |
 | verifier-MH / verifier-IS | 统一目标 `p_base(y∣x) exp(exact_reward(y)/0.04)` | 相同奖励下的算法比较 | [GSM8K verifier，Cobbe et al., 2021](https://arxiv.org/abs/2110.14168)；[Hastings, 1970](https://doi.org/10.1093/biomet/57.1.97)；[Hesterberg, 1995](https://doi.org/10.1080/00401706.1995.10484303) |
 
@@ -191,16 +191,46 @@ draw 检查分别耗时 36.5 秒和 30.3 秒；无重评分路径在该小样本
 | --- | ---: | ---: | ---: | ---: |
 | verifier-MH | 25 | 78.125% | 1.3028 | 2319.7 s |
 | 标准 verifier-IS | 24 | 75.000% | 1.4839 | 439.7 s |
-| 0.5B proposal verifier-IS | 20 | 62.500% | 2.2077 | 374.5 s |
+| 0.5B proposal verifier-IS（1.5B 重评分） | 20 | 62.500% | 2.2077 | 476.5 s |
+| 0.5B rollout verifier-energy（无重评分） | 20 | 62.500% | 0.5740 | 556.2 s |
 | GRPO 随机采样 | 22 | 68.750% | 0.0254 | 124.9 s |
 
 verifier-MH 与标准 verifier-IS 的准确率差为 3.125 个百分点，区间为 [-9.375, 15.625]；二者相对
 GRPO 分别为 +9.375 和 +6.250 个百分点。共享奖励条件下，两种直接采样方法达到与本地 GRPO 接近或
 更高的点估计。32 题样本对完整序列分布一致性的统计分辨率有限。
 
-0.5B proposal verifier-IS 相对标准版本低 12.5 个百分点。其墙钟因子为 `0.852×`，即相对标准版本
-具有 `1.174×` 吞吐提升；FLOPs 因子为 `1.488×`。该路径同时改变质量与计算量，因而归类为质量—成本
-权衡，而非质量匹配条件下的加速。
+经过 1.5B 重评分的 0.5B proposal verifier-IS 相对标准版本低 12.5 个百分点，配对 bootstrap 95%
+区间为 [-28.125, 0]，FLOPs 为标准版本的 `1.488×`。标准版本与该行的墙钟来自不同运行批次，不能据此
+计算受控吞吐比。该路径同时改变质量与计算量，因而归类为质量—成本权衡，而非质量匹配条件下的加速。
+
+### 精确奖励下的小模型补全消融
+
+无重评分路径先由 1.5B 模型生成候选块 `z_1, …, z_M`，再由 0.5B 模型从每个候选块补全
+`u_m1, …, u_mK` 并读取终局 verifier 奖励。补全序列只用于计算
+
+`w_m = (1/K) × sum_k exp(r(z_m, u_mk) / τ)`，
+
+随后在同一批 1.5B 候选之间按归一化的 `w_m` 选择下一块；0.5B 补全不会进入最终生成序列，也不会再
+送入 1.5B 模型计算 `p_1.5B/q_0.5B`。因此该实现对应“大模型生成备选、小模型补全取得奖励、奖励再
+调整大模型备选权重”。它近似的后续能量由 0.5B 补全分布定义，不是完整 1.5B 目标的严格 off-policy
+IS；`verifier-energy` 名称用于保留这一区别。
+
+两条路径在相同代码版本、硬件、32 道题、随机种子、候选数、rollout 数和长度预算下连续重跑。无重
+评分与重评分版本均为 20/32，逐题准确率差为 0，配对 bootstrap 95% 区间为 [-9.375, 9.375] 个百分点。
+两者各自多答对 1 题、30 题正确性相同；解析后的数值结果有 26/32 相同，完整生成序列只有 6/32
+相同。当前样本没有观察到准确率下降，但区间不足以证明两种目标或算法等价。无重评分版本相对标准
+verifier-IS 低 12.5 个百分点，配对区间为 [-28.125, 0]。
+
+无重评分版本的 0.5740 PFLOPs 由 1.5B 候选生成 0.2014 PFLOPs 和 0.5B 补全 0.3726 PFLOPs 组成，
+1.5B 评分成本为 0。重评分版本包含 1.5B 候选生成 0.1730 PFLOPs、1.5B 后缀评分 1.6882 PFLOPs
+和 0.5B 补全 0.3465 PFLOPs，共 2.2077 PFLOPs。删除重评分使估算 FLOPs 降低 74.0%，重评分版本
+的计算量是无重评分版本的 `3.846×`。
+
+本组 Transformers 实验没有得到墙钟加速：无重评分版本耗时 556.2 秒，重评分版本耗时 476.5 秒，
+前者增加 16.7%。无重评分路径选择了更长的生成轨迹，1.5B 候选生成 token 增加 16.0%，0.5B 补全
+token 增加 12.2%，最终序列平均长度增加 15.9%。1.5B 重评分是并行度较高的批量前向计算，0.5B
+补全则是串行依赖更强的自回归解码；减少评分 FLOPs 并不自动缩短该后端的端到端时间。进一步的墙钟
+优化应作用于 0.5B 补全阶段，例如连续批处理、异步调度、可靠的提前终止与 rollout 复用。
 
 4 道固定题、每题 8 次采样的答案分布审计以 GRPO 为参考：
 

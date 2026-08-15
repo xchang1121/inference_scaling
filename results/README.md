@@ -15,6 +15,7 @@
 | `gsm8k_3090_aligned_is_passk_validated.json` | 标准、截断 off-policy 与非截断 off-policy IS 的独立 draw 汇总 |
 | `gsm8k_3090_aligned_is_uncorrected_validated.json` | 0.5B rollout 无重评分消融的独立 draw、分模型 token 与 FLOPs 汇总 |
 | `gsm8k_3090_aligned_is_rescoring_ablation_validated.json` | 无重评分与三种 IS 的题目级配对区间及成本比 |
+| `gsm8k_3090_aligned_verifier_rescoring_ablation_validated.json` | 精确 verifier 奖励下，0.5B 补全有无 1.5B 重评分的 32 题配对质量、分模型 FLOPs 与受控墙钟比较 |
 | `gsm8k_3090_aligned_passk_comparison_validated.json` | 六种方法的统一 pass@k、配对区间与权重诊断 |
 | `gsm8k_3090_aligned_ablations_validated.json` | 候选、rollout、引导阶段、奖励、温度和长度消融 |
 

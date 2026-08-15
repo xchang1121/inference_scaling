@@ -794,6 +794,13 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         if parsed_clip is not None and parsed_clip <= 0:
             raise ValueError("importance log-ratio clip must be positive or 'none'")
         config["conditional_is"]["importance_log_ratio_clip"] = parsed_clip
+    if args.disable_importance_correction:
+        if not args.method.endswith("small_proposal"):
+            raise ValueError(
+                "--disable-importance-correction requires a small-proposal method"
+            )
+        config["conditional_is"]["apply_importance_correction"] = False
+        config["conditional_is"]["importance_log_ratio_clip"] = None
     if args.mh_alpha is not None:
         config["mh"]["alpha"] = args.mh_alpha
     if args.mh_steps is not None:
@@ -855,6 +862,14 @@ def main() -> None:
     parser.add_argument(
         "--importance-log-ratio-clip",
         help="positive symmetric clip or 'none' for exact untruncated weights",
+    )
+    parser.add_argument(
+        "--disable-importance-correction",
+        action="store_true",
+        help=(
+            "skip base-model rescoring of small-model rollouts and use proposal-model "
+            "continuation energy as a biased lookahead signal"
+        ),
     )
     parser.add_argument("--mh-alpha", type=float)
     parser.add_argument("--mh-steps", type=int)

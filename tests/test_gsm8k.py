@@ -1,9 +1,14 @@
 import json
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
 
-from experiments.gsm8k_reproduction import _answer_counts, _minmax_rewards
+from experiments.gsm8k_reproduction import (
+    _answer_counts,
+    _apply_overrides,
+    _minmax_rewards,
+)
 from inference_scaling.evaluation import (
     CumulativeConsensusReward,
     ExactNumericReward,
@@ -88,9 +93,43 @@ def test_best_of_n_answer_counts_are_json_stable_with_unparseable_outputs() -> N
     }
 
 
-def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
-    from types import SimpleNamespace
+def test_cli_can_disable_small_proposal_importance_correction() -> None:
+    args = SimpleNamespace(
+        backend=None,
+        limit=None,
+        max_new_tokens=None,
+        sampling_temperature=None,
+        num_beams=None,
+        best_of_n_samples=None,
+        conditional_reward=None,
+        reward_temperature=None,
+        importance_log_ratio_clip=None,
+        disable_importance_correction=True,
+        method="verifier_conditional_is_small_proposal",
+        mh_alpha=None,
+        mh_steps=None,
+        candidate_count=None,
+        rollout_count=None,
+        block_size=None,
+    )
+    config = {
+        "conditional_is": {
+            "apply_importance_correction": True,
+            "importance_log_ratio_clip": 10.0,
+        }
+    }
 
+    _apply_overrides(config, args)
+
+    assert config["conditional_is"]["apply_importance_correction"] is False
+    assert config["conditional_is"]["importance_log_ratio_clip"] is None
+
+    args.method = "verifier_conditional_is"
+    with pytest.raises(ValueError, match="requires a small-proposal method"):
+        _apply_overrides(config, args)
+
+
+def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
     from experiments.gsm8k_async_benchmark import _output_agreement
 
     class Backend:
