@@ -559,7 +559,7 @@ def main() -> None:
     unsupported = sorted(set(components) - set(IMPLEMENTED_COMPONENTS))
     if unsupported:
         raise ValueError(
-            "dLLM components are not implemented yet: " + ", ".join(unsupported)
+            "components unsupported by the dLLM suite: " + ", ".join(unsupported)
         )
     args.components = tuple(components)
 

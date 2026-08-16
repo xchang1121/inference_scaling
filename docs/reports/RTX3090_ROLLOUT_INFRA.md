@@ -1,23 +1,13 @@
 # RTX 3090 推理执行与 rollout 复用实验
 
-本报告汇总基础设施实验的设置、结果与统计解释。各机制的数学定义、执行流程、实现和计算量分母见
+本报告只保留执行实验结果与统计解释。各机制的数学定义、执行流程、实现和计算量分母见
 [推理扩展算法：基础、原理与实现](../methods/ALGORITHMS.md)；准确率和 pass@k 见
 [GSM8K 方法质量与计算量实验](GSM8K_3090_ALIGNED_RESULTS.md)。
 实验臂设置见[执行标签定义](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels)。
 
-## 报告范围与固定设置
-
 成对因子统一定义为“优化路径 / 对照路径”。小于 1 表示相应指标下降，大于 1 表示相应指标上升。
-墙钟排除模型和数据加载；主模型 FLOPs 按 `2 × 参数量 × 实际 forward token slots` 估算。
-
-| 实验组 | 研究对象 | 固定设置 | 重复方式 |
-| --- | --- | --- | --- |
-| GSM8K 完整网格 | 连续批处理、warm replay、动态候选和累计训练成本 | 32 道固定 test 题；1.5B 模型；FP32；最长 192 token | 固定请求级随机数 |
-| rollout 加速栈 | 历史树、负载门控、progressive、run-ahead 和 SMC forest | 固定公开 test 第 1311 题；1.5B 模型；BF16；最长 64 token | 3 个独立 seed |
-| IS / MH 复用诊断 | 部分续跑、流式 IS、随机草稿、预取、delayed acceptance 和 replay proposal | 同一公开题与模型；16-token chunk；指定实验加入 0.2 s verifier 延迟 | 3 个独立 seed；replay 每 seed 4 条链 |
-
-后两组用于隔离执行变量；质量排序使用 GSM8K 完整网格。FLOPs 未计项为 attention 长度二次项、逐元素
-kernel、CPU token tree、tokenization、奖励解析和调度；墙钟包含这些执行影响。
+墙钟排除模型与数据加载；主模型 FLOPs 按 `2 × 参数量 × 实际 forward token slots` 估算。完整网格使用
+32 题 FP32；隔离执行变量的 BF16 诊断使用 3 个 seed。详细固定项与未计项见实验设计。
 
 ## IS 与 MH rollout 复用结果
 

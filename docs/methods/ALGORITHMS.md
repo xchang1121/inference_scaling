@@ -284,7 +284,7 @@ probabilities = softmax(log_candidate_weights)
 selected_index = rng.choice(len(candidates), p=probabilities)
 ```
 
-AR 条件 IS 适配位于 [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/)，候选与所有 rollout
+AR 条件 IS 适配位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有 rollout
 都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
 <a id="alg-offpolicy-is"></a>

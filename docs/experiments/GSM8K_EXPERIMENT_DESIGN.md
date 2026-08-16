@@ -117,7 +117,8 @@ u_{mk}\sim q_{\mathrm{0.5B}}(\cdot\mid z_m).
 ```
 
 其中 $`N_j`$ 为参数量，$`S_j`$ 为实际 forward token slots。1.5B 与 0.5B 分别计算后求和。计数覆盖
-prefill、decode、完整序列评分和 target speculative verification；墙钟排除模型与数据加载。
+prefill、decode、完整序列评分和 target speculative verification；墙钟排除模型与数据加载。该主干估算不计
+attention 的长度二次项、逐元素 kernel、tokenization、CPU 奖励解析与调度；墙钟仍包含后四项的执行影响。
 
 GRPO 成本分为 rollout generation、reference scoring、policy forward/backward 和 AdamW adapter
 update。gradient checkpointing 的 policy 路径按 forward、backward 与重算三个前向等价过程计量。
@@ -200,133 +201,63 @@ cache build。所有因子均在表中明确分子与分母。
 
 ## 复现
 
-以下命令从仓库根目录运行。原始逐题记录位于 `results/gsm8k/<profile>/`；正式汇总位于
-`results/gsm8k_3090/`。
+以下命令均从仓库根目录运行。统一入口负责准备数据与模型、续跑 RL 训练、执行所选实验组件、写入命令清单
+并记录每个已完成子任务。AR 与 dLLM 可以使用不同 Python 解释器。
 
-### 准备与训练
-
-```powershell
-$env:PYTHONPATH = "src"
-python experiments\prepare_gsm8k.py `
-  --config configs\gsm8k_3090_aligned.toml
-
-python experiments\train_gsm8k_grpo.py --resume auto
-```
-
-已有匹配 `configs/gsm8k_grpo.toml` 与 base revision 的 adapter 时，可直接进入推理实验。
-
-### 主网格
+### 成对完整复现
 
 ```powershell
-$env:PYTHONPATH = "src"
-python experiments\run_gsm8k_suite.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --tag validated `
-  --summary-root results\gsm8k_3090 `
-  --with-matched-target `
-  --with-replay `
-  --with-dynamic-is `
-  --with-async `
-  --with-ablations `
-  --with-budget-curve `
-  --with-length-ablation `
-  --ablation-limit 8
+$env:AR_PYTHON = "C:\path\to\ar-python.exe"
+$env:DLLM_PYTHON = "C:\path\to\dllm-python.exe"
+
+python experiments\run_reproduction.py `
+  --family both --stage all --profile full --tag full-reproduction
 ```
 
-动态候选设置位于 `configs/gsm8k_3090_dynamic_is.toml`。vLLM 套件在 Linux/WSL2 上增加
-`--backend vllm`。
+`full` 默认运行两侧全部公共组件；AR 额外支持 `vllm`。`smoke` 使用一题、缩短生成预算、一次 GRPO 更新和
+CPU VRPO 反向传播预检，用途限于实现检查。
 
-### vLLM 成对测速
-
-```bash
-export PYTHONPATH=src
-python experiments/run_vllm_backend_benchmark.py \
-  --config configs/gsm8k_3090_aligned.toml \
-  --limit 32 \
-  --workers 8 \
-  --tag rtx3090
-```
-
-汇总器核对数据、题号、权重、算法参数、dtype、worker、环境、代码哈希与 GPU 数。
-
-### 汇总与重评分消融
+### 单侧与组件选择
 
 ```powershell
-$env:PYTHONPATH = "src"
-python experiments\summarize_gsm8k.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --tag validated `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_comparison_validated.json
+python experiments\run_reproduction.py `
+  --family arllm --stage inference --profile full --tag ar-full `
+  --components quality replay dynamic_is async passk infra vllm
 
-python experiments\gsm8k_distribution_audit.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --problem-count 4 --draws 8 `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json
-
-python experiments\summarize_gsm8k_compute.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --tag validated `
-  --training-cost models\Qwen2.5-1.5B-Instruct-GRPO-GSM8K\training_cost.json `
-  --distribution-audit results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_compute_validated.json
-
-python experiments\summarize_gsm8k_ablations.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_ablations_validated.json
-
-$env:PYTHONPATH = "src;."
-python experiments\gsm8k_reproduction.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --method verifier_conditional_is_small_proposal `
-  --tag with-rescore-paired-validated --limit 32
-
-python experiments\gsm8k_reproduction.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --method verifier_conditional_is_small_proposal `
-  --tag no-rescore-validated --limit 32 `
-  --disable-importance-correction
-
-python experiments\summarize_gsm8k_verifier_rescoring.py
+python experiments\run_reproduction.py `
+  --family dllm --stage inference --profile full --tag dllm-full `
+  --components quality replay dynamic_is async passk infra
 ```
 
-### pass@k
+| 组件 | 统计对象 |
+| --- | --- |
+| `quality`、`matched_target` | 主质量网格与共享奖励诊断 |
+| `replay`、`dynamic_is` | fresh/warm replay、动态候选与预算分配 |
+| `async`、`infra` | 批处理、部分续跑、流式奖励、MH 预取与 SMC |
+| `passk`、`distribution` | 独立 draw 的 pass@$`k`$ 与答案分布 |
+| `ablations`、`budget_curve`、`length_ablation` | 算法参数、计算预算与长度消融 |
+| `vllm` | AR-LLM 的 Transformers/vLLM 成对执行检查 |
 
-```powershell
-$env:PYTHONPATH = "src"
-python experiments\gsm8k_passk.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 --draws 8 --workers 8 --tag validated `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json
+`--ar-methods` 与 `--dllm-methods` 选择具体方法；成对标识由
+[`gsm8k_llada_moe_3090.toml`](../../configs/gsm8k_llada_moe_3090.toml)固定。`--dry-run` 只写命令清单，
+适合在目标机器上检查解释器、路径和实验范围。
 
-python experiments\gsm8k_is_passk.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 --draws 8 --workers 8 --tag validated `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json
+### 运行产物
 
-python experiments\gsm8k_is_passk.py `
-  --config configs\gsm8k_3090_aligned.toml `
-  --limit 32 --draws 8 --workers 8 `
-  --methods conditional_is_small_proposal_uncorrected `
-  --tag is-uncorrected-validated `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_is_uncorrected_validated.json
+| 模型族 | 原始记录与清单 | 正式汇总 |
+| --- | --- | --- |
+| AR-LLM | `results/gsm8k/<profile>/` 与所选 `summary-root` | `results/gsm8k_3090/` |
+| dLLM | `results/reproduction/dllm/<tag>/` | 各组件目录中的 `summary.json` 或聚合 JSON |
+| 成对调度 | `results/reproduction/<tag>/manifest.json` | 两侧子清单及已完成命令数 |
 
-python experiments\summarize_gsm8k_is_rescoring.py
+逐题 JSONL 按 fingerprint 续写；pass@$`k`$ 使用独立 chunks；汇总器核对数据行号、模型 revision、有效配置、
+实现哈希、dtype、worker 与 GPU 数。图表由已验证汇总生成，结果文件索引见
+[`results/README.md`](../../results/README.md)。
 
-python experiments\summarize_gsm8k_passk.py `
-  results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json `
-  results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json `
-  --is-raw-chunks results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl `
-  --output results\gsm8k_3090\gsm8k_3090_aligned_passk_comparison_validated.json
-```
+### 直接调用底层脚本
 
-### 图表
-
-```powershell
-$env:PYTHONPATH = "src"
-python experiments\plot_gsm8k_quality_compute.py
-python experiments\plot_gsm8k_passk.py
-python experiments\plot_gsm8k_ablations.py
-```
+单实验脚本保留用于调试与定点重跑，其参数由两侧 suite 入口生成。正式复现优先使用统一入口，避免手工遗漏
+汇总、fingerprint 或配对参数。具体下一层命令可通过 `--dry-run` 查看，无需在文档中维护第二份命令清单。
 
 ## 消融矩阵
 

@@ -61,12 +61,14 @@ try:
         file_sha256 as _file_sha256,
         json_fingerprint as _fingerprint,
     )
+    from experiments.shared.statistics import wilson_interval
 except ModuleNotFoundError:  # direct execution from experiments/
     from shared.artifacts import (
         dataclass_snapshot_delta as _snapshot_delta,
         file_sha256 as _file_sha256,
         json_fingerprint as _fingerprint,
     )
+    from shared.statistics import wilson_interval
 
 METHODS = (
     "base",
@@ -639,20 +641,10 @@ def _run_method(
     raise ValueError(f"unknown method {method!r}")
 
 
-def _wilson(correct: int, count: int, z: float = 1.959963984540054) -> tuple[float, float]:
-    proportion = correct / count
-    denominator = 1 + z * z / count
-    center = (proportion + z * z / (2 * count)) / denominator
-    radius = z * math.sqrt(
-        proportion * (1 - proportion) / count + z * z / (4 * count * count)
-    ) / denominator
-    return center - radius, center + radius
-
-
 def _summary(records: Sequence[dict[str, Any]], manifest: dict[str, Any]) -> dict[str, Any]:
     count = len(records)
     correct = sum(bool(record["correct"]) for record in records)
-    low, high = _wilson(correct, count)
+    low, high = wilson_interval(correct, count)
     elapsed = [float(record["elapsed_seconds"]) for record in records]
     output_lengths = [int(record["output_tokens"]) for record in records]
     generated = sum(int(record["backend_delta"].get("generated_tokens", 0)) for record in records)

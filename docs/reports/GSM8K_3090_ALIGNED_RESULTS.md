@@ -1,25 +1,13 @@
 # GSM8K 方法质量与计算量实验
 
-本报告汇总实验设置、结果与统计解释。算法定义见
-[推理算法实现](../methods/ALGORITHMS.md)；完整数据版本、模型 revision、运行命令和统计定义见
+本报告只保留结果与统计解释。算法定义见
+[推理算法实现](../methods/ALGORITHMS.md)；数据版本、模型 revision、预算、运行命令和统计定义见
 [GSM8K 统一实验设计](../experiments/GSM8K_EXPERIMENT_DESIGN.md)；执行层消融见
 [RTX 3090 推理执行与 rollout 复用实验](RTX3090_ROLLOUT_INFRA.md)。
 方法标签见[方法与目标](../experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
 
-## 报告范围与固定设置
-
-| 项目 | 本报告采用的设置 |
-| --- | --- |
-| 数据 | 主结果固定 32 道 GSM8K test 题；预算消融使用另一组 8 题；答案分布审计使用 4 题 × 8 draw |
-| 模型 | 1.5B 基础模型；0.5B rollout proposal；同一 1.5B checkpoint 上训练的 GRPO LoRA |
-| 硬件 | 单张 RTX 3090 24 GiB；主质量网格为 FP32 |
-| 生成预算 | 最长 192 token；条件 IS 为 8 个候选、每候选 3 条 rollout、4 个引导阶段 |
-| MH 预算 | 幂次 4；16 个递增长度阶段；每阶段 3 次更新 |
-| pass@k | 每题 8 个独立 draw；draw 之间不共享候选、rollout 或 replay |
-| 统计 | 准确率使用 Wilson 95% 区间；方法差异使用题目级配对 bootstrap；FLOPs 按实际 forward token slots 估算 |
-
-主质量比较允许不同方法采用不同目标，只比较最终 GSM8K 质量与预算。共享奖励实验统一使用显式正确性奖励；
-该实验与动态候选实验会读取 test split 标准答案，因此属于 oracle 诊断。
+结果范围为单张 RTX 3090 上的 32 道固定 GSM8K test 题；pass@$`k`$ 使用每题 8 个独立 draw，分布审计使用
+4 题 × 8 draw。主质量比较允许不同奖励；共享奖励与动态候选实验读取 test gold，属于 oracle 诊断。
 
 ## 单次生成结果
 

@@ -20,7 +20,7 @@ Variance-Reduced Preference Optimization（VRPO）。两侧共享 GSM8K 数据�
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散 block，再按 Hastings 比接受或拒绝 | proposal 的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
-| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件奖励权重后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
+| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件奖励权重后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) 与[动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 复用历史 completion，并按方差和成本分配 fresh rollout | behavior 概率、fresh-tail 校正和外层 $`p/q_c`$ | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
@@ -59,7 +59,7 @@ AR-LLM 的 32 题实验中，标准条件 IS 为 65.625%，GRPO 参数随机采�
 verifier-MH 与 verifier-IS 分别为 78.125% 和 75.000%。这些数值只概括已完成的 Qwen/RTX 3090
 实验，完整设置、区间和成本见[质量报告](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。批处理、流式奖励、
 replay、MH 预取与 SMC 的墙钟、FLOPs 和复用率见[执行报告](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
-dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`，当前仓库不以预检数据代替正式结果。
+dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`；状态表分别记录预检与正式结果。
 
 ## 安装
 
@@ -170,16 +170,16 @@ python experiments\run_reproduction.py `
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印下一层命令，不启动训练或推理 |
 
-AR-LLM 的 `quality` 组件覆盖 base、beam、Best-of-$`N`$、MH、两种条件 IS、三种 verifier
-方法以及 GRPO 随机/贪心解码；其余组件覆盖 replay、动态 IS、异步执行、pass@$`k`$、消融、分布审计、
-infra 和 vLLM。dLLM 入口覆盖对应的 base、block beam、Best-of-$`N`$、trajectory-MH、条件 IS、
-低层 proposal 的截断/无截断/无校正版本、verifier-MH/IS、VRPO 随机/贪心解码及 trajectory replay。
+两侧的公共组件为 `quality`、`matched_target`、`replay`、`dynamic_is`、`async`、`passk`、
+`ablations`、`budget_curve`、`length_ablation`、`distribution` 和 `infra`。dLLM 使用 block beam、反向轨迹
+MH、低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token 级方法；`vllm` 组件仅用于 AR。
+方法标识、配对关系与各组件统计量见[实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
 
 两侧也可独立启动：
 
 ```powershell
 & $env:AR_PYTHON experiments\arllm\run_arllm_suite.py `
-  --stage all --profile full --components quality replay dynamic_is async passk infra
+  --stage all --profile full --tag full-ar
 
 & $env:DLLM_PYTHON experiments\dllm\run_llada_suite.py `
   --profile full --vrpo train --tag full-dllm
@@ -203,10 +203,11 @@ python -m pytest
 | `src/inference_scaling/dllm/` | LLaDA-MoE 的 block 生成、MH、IS、replay 与 VRPO |
 | `src/inference_scaling/shared/` | 两侧共用的逐步生成、IS/replay 权重、MH 接受核、数据评测、随机数和计算账本 |
 | `configs/` | 模型、数据与预算配置 |
-| `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与 dLLM 训练脚本 |
+| `experiments/shared/` | 两侧共用的组件清单、统计量、产物指纹和可续跑调度 |
+| `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
 | `tests/` | 分布、实现一致性和结果处理测试 |
 | `docs/` | 算法与实现、实验协议、报告和验证记录 |
 | `results/` | 纳入版本控制的机器可读汇总 |
 
-顶层旧模块名保留为 AR-LLM 兼容导出，原有导入路径和单实验脚本无需修改；新增代码使用上述三类目录。
+公共算法接口位于 `inference_scaling.shared`；模型特定代码只负责生成状态、proposal 与概率评分。

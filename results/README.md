@@ -3,6 +3,13 @@
 本目录保存可由脚本读取的汇总结果。逐题 JSONL、pass@k chunks、checkpoint 和运行日志由
 `.gitignore` 管理。
 
+## 成对复现产物
+
+统一入口将调度清单写入 `results/reproduction/<tag>/manifest.json`。AR 原始记录沿用
+`results/gsm8k/<profile>/`；dLLM 的质量、replay、动态候选、pass@$`k`$、分布、消融和执行结果写入
+`results/reproduction/dllm/<tag>/components/`。大显存机器完成正式 LLaDA 运行后，可按本页现有
+`validated` 规则选择需要纳入版本控制的聚合 JSON；正式结果区只收录完整运行的聚合结果。
+
 ## GSM8K 质量结果
 
 目录：[`gsm8k_3090/`](gsm8k_3090/)

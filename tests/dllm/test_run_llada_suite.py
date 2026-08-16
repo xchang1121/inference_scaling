@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from experiments.dllm.run_llada_suite import main
+from experiments.shared.components import FULL_COMPONENTS
 
 
 def _arguments(output: Path) -> list[str]:
@@ -150,3 +151,39 @@ def test_llada_suite_coalesces_async_and_infra_into_one_full_benchmark(
     assert len(commands) == 1
     assert "--section all" in commands[0]
     assert "--limit 2" in commands[0]
+
+
+def test_llada_suite_full_profile_defaults_to_every_common_component(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llada_suite.py",
+            "--config",
+            "configs/gsm8k_llada_moe_3090.toml",
+            "--profile",
+            "full",
+            "--tag",
+            "full-unit",
+            "--output-root",
+            str(tmp_path),
+            "--vrpo",
+            "train",
+            "--dry-run",
+        ],
+    )
+    main()
+
+    manifest = json.loads(
+        (tmp_path / "full-unit" / "suite_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["components"] == list(FULL_COMPONENTS)
+    commands = manifest["commands"]
+    assert sum("benchmark_infra.py" in command for command in commands) == 1
+    assert any("gsm8k_replay_benchmark.py" in command for command in commands)
+    assert any("--kind passk" in command for command in commands)
+    assert any("--kind distribution" in command for command in commands)

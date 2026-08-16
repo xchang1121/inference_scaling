@@ -1,25 +1,13 @@
-# 文档导航
+# 文档索引
 
-## 方法
-
-[算法基础、原理与实现](methods/ALGORITHMS.md)是唯一的方法说明文档，依次覆盖统一记号、目标分布、MH、IS、
-off-policy 修正、rollout replay、动态候选、SMC、异步执行、KV/评分复用、vLLM 和计算量口径。每个算法的
-原理、步骤、关键代码与误差来源位于同一节。
-
-## 实验
-
-| 文档 | 内容 |
+| 文档 | 唯一职责 |
 | --- | --- |
-| [GSM8K 实验设计](experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据、模型、预算、指标、成本分母、命令和产物 |
-| [方法质量与计算量](reports/GSM8K_3090_ALIGNED_RESULTS.md) | 准确率、pass@k、共享奖励、off-policy、replay 与消融 |
-| [推理执行与 rollout 复用](reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
+| [算法基础、原理与实现](methods/ALGORITHMS.md) | 目标分布、算法、证明要点、公共接口与模型适配 |
+| [GSM8K 实验设计](experiments/GSM8K_EXPERIMENT_DESIGN.md) | 方法标签、模型、预算、指标、成本分母与复现入口 |
+| [方法质量与计算量](reports/GSM8K_3090_ALIGNED_RESULTS.md) | 准确率、pass@$`k`$、off-policy、replay 与消融结果 |
+| [推理执行与 rollout 复用](reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存与复用率结果 |
+| [GSM8K 集成检查](validation/GSM8K_QUICK_VALIDATION.md) | 小规模端到端工程检查 |
+| [RTX 3090 复现记录](validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分与后端工程检查 |
+| [机器可读结果](../results/README.md) | 已纳入版本控制的汇总文件索引 |
 
-## 验证与结果
-
-| 文档 | 内容 | 统计范围 |
-| --- | --- | --- |
-| [GSM8K 集成检查](validation/GSM8K_QUICK_VALIDATION.md) | 8 题端到端路径和 32 题批处理检查 | 工程验证 |
-| [RTX 3090 复现记录](validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分、KV、MH、IS 与 replay 检查 | 工程验证 |
-| [机器可读结果](../results/README.md) | 正式汇总、训练摘要和验证产物 | 实验数据 |
-
-图表位于 [`assets/`](assets/)。
+图表位于 [`assets/`](assets/)；原理只在算法文档定义，实验设置只在实验设计定义，报告只记录结果与解读。

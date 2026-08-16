@@ -82,7 +82,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         )
         if unsupported and getattr(args, "components_explicit", False):
             raise ValueError(
-                "requested dLLM components are not implemented yet: "
+                "components unsupported by the dLLM suite: "
                 + ", ".join(unsupported)
             )
         dllm_config = str(args.dllm_config)

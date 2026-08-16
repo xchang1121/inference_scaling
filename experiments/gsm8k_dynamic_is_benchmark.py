@@ -61,6 +61,7 @@ from inference_scaling.backends import (
 )
 from inference_scaling.config import DynamicISConfig, SamplingConfig
 from inference_scaling.evaluation import extract_numeric_answer, load_gsm8k, select_problems
+from inference_scaling.metrics import importance_effective_sample_size
 from inference_scaling.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
@@ -145,15 +146,6 @@ def _compute_fields(
         )
         + int(proposal_delta["estimated_dense_forward_flops"]),
     }
-
-
-def _ess(log_weights: Sequence[float]) -> float:
-    if not log_weights:
-        return 0.0
-    values = np.asarray(log_weights, dtype=np.float64)
-    weights = np.exp(values - float(np.max(values)))
-    denominator = float(np.dot(weights, weights))
-    return float(weights.sum() ** 2 / denominator) if denominator else 0.0
 
 
 @dataclass(slots=True)
@@ -822,10 +814,12 @@ def _run_method(
         candidates_using_history += sum(
             candidate.allocation.history_count > 0 for candidate in step.candidates
         )
-        outer_ess = _ess(
+        outer_ess = importance_effective_sample_size(
             [candidate.draw.outer_log_ratio for candidate in step.candidates]
         )
-        final_ess = _ess([candidate.log_weight for candidate in step.candidates])
+        final_ess = importance_effective_sample_size(
+            [candidate.log_weight for candidate in step.candidates]
+        )
         outer_weight_ess_sum += outer_ess
         final_weight_ess_sum += final_ess
         step_diagnostics.append(
