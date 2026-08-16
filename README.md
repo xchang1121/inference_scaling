@@ -7,7 +7,26 @@ Variance-Reduced Preference Optimization（VRPO）。两侧共享 GSM8K 数据�
 
 ## 目标分布与方法
 
-给定提示 $`x`$、基础模型分布 $`p(y\mid x)`$、序列奖励 $`r(y)`$ 和奖励温度 $`\tau`$，主要目标为：
+给定提示 $`x`$、基础模型分布 $`p(y\mid x)`$、序列奖励 $`r(y)`$ 和奖励温度 $`\tau`$，考虑在完整
+序列分布上求解 KL 正则化目标：
+
+```math
+\max_{\pi(\cdot\mid x)}
+\left\{
+\sum_y \pi(y\mid x)r(y)
+-\tau D_{\mathrm{KL}}\!\left(\pi(\cdot\mid x)\,\|\,p(\cdot\mid x)\right)
+\right\},
+\qquad \sum_y\pi(y\mid x)=1.
+```
+
+第一项提高期望序列奖励，第二项限制新分布偏离基础模型；$`\tau`$ 是两者的权衡系数。对归一化约束加入
+拉格朗日乘子后，一阶条件为
+
+```math
+r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
+```
+
+因此 $`\pi(y\mid x)\propto p(y\mid x)\exp\{r(y)/\tau\}`$，归一化后得到仓库采用的主要目标分布：
 
 ```math
 \pi_r(y\mid x)
@@ -15,7 +34,8 @@ Variance-Reduced Preference Optimization（VRPO）。两侧共享 GSM8K 数据�
        {\sum_{y'}p(y'\mid x)\exp\{r(y')/\tau\}}.
 ```
 
-该目标只改变完整序列的相对权重。仓库实现三条主要路径：
+该闭式解表明，KL 正则化训练本质上按照奖励重新分配基础模型已有完整序列的概率质量。仓库直接对这一
+分布进行采样或近似，主要实现三条路径：
 
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
