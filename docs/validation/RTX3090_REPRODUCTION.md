@@ -19,8 +19,7 @@ PyTorch wheel 提供 CUDA 13.0 运行时。系统 `nvcc` 指向 Toolkit 11.8；�
 ## 命令与产物
 
 ```powershell
-$env:PYTHONPATH = "src"
-python experiments\arllm\rtx3090_reproduction.py `
+python -m experiments.arllm.rtx3090_reproduction `
   --model models\Qwen2.5-0.5B-Instruct `
   --dtype float32 `
   --output results\validation\rtx3090_reproduction.json

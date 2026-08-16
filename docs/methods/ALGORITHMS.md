@@ -871,12 +871,11 @@ CPU 委托不占用 vLLM 的 GPU 显存；GPU 委托需要相应降低各引擎�
 native/delegated sequences、token slots 与 FLOPs。单方法和成对后端测速入口为：
 
 ```bash
-export PYTHONPATH=src
-python experiments/arllm/gsm8k_reproduction.py \
+python -m experiments.arllm.gsm8k_reproduction \
   --config configs/gsm8k_3090_aligned.toml \
   --backend vllm --method conditional_is --tag vllm-smoke --limit 8
 
-python experiments/arllm/run_vllm_backend_benchmark.py \
+python -m experiments.arllm.run_vllm_backend_benchmark \
   --config configs/gsm8k_3090_aligned.toml \
   --limit 32 --workers 8 --tag rtx3090
 ```

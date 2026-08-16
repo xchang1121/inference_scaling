@@ -104,7 +104,7 @@ LLaDA-MoE 与 VRPO 依赖应安装到另一个 Python，或在只运行 dLLM 时
 python -m pip install --upgrade pip
 python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
 python -m pip install -e ".[dev,dllm,dllm-training]"
-python experiments\dllm\download_llada.py `
+python -m experiments.dllm.download_llada `
   --config configs\gsm8k_llada_moe_3090.toml --source modelscope
 ```
 
@@ -114,7 +114,7 @@ python experiments\dllm\download_llada.py `
 
 ```powershell
 .\.venv\Scripts\python -m pip install -e ".[dev,dllm,dllm-training]"
-.\.venv\Scripts\python experiments\dllm\run_llada_suite.py --profile smoke
+.\.venv\Scripts\python -m experiments.dllm.run_llada_suite --profile smoke
 .\.venv\Scripts\python -m pytest
 ```
 
@@ -201,10 +201,10 @@ MH、低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token �
 两侧也可独立启动：
 
 ```powershell
-& $env:AR_PYTHON experiments\arllm\run_arllm_suite.py `
+& $env:AR_PYTHON -m experiments.arllm.run_arllm_suite `
   --stage all --profile full --tag full-ar
 
-& $env:DLLM_PYTHON experiments\dllm\run_llada_suite.py `
+& $env:DLLM_PYTHON -m experiments.dllm.run_llada_suite `
   --profile full --vrpo train --tag full-dllm
 ```
 
