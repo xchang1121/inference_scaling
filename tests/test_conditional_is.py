@@ -3,9 +3,9 @@ from math import exp
 
 import pytest
 
-from inference_scaling.algorithms.conditional_energy import conditional_is_step, run_conditional_is
+from inference_scaling.algorithms.conditional_is import conditional_is_step, run_conditional_is
 from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
+from inference_scaling.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.metrics import total_variation
 from inference_scaling.rng import SeedStream
 from inference_scaling.types import ScoreRequest
@@ -29,23 +29,23 @@ def _reward(_prompt, generated) -> float:
 def _exact_first_token_target() -> dict[int, float]:
     base_first = (0.7, 0.3)
     completion = ((0.9, 0.1), (0.2, 0.8))
-    energies = []
+    weights = []
     for candidate in (0, 1):
-        energy = sum(
+        weight = sum(
             completion[candidate][token]
             * exp(_reward((), (candidate, token)))
             for token in (0, 1)
         )
-        energies.append(energy)
-    weights = [base_first[index] * energies[index] for index in (0, 1)]
+        weights.append(weight)
+    weights = [base_first[index] * weights[index] for index in (0, 1)]
     total = sum(weights)
     return {index: weights[index] / total for index in (0, 1)}
 
 
 @pytest.mark.parametrize("off_policy", [False, True])
-def test_first_candidate_approaches_exact_conditional_energy_target(off_policy) -> None:
+def test_first_candidate_approaches_exact_conditional_is_target(off_policy) -> None:
     backend = _backend()
-    config = ConditionalEnergyConfig(
+    config = ConditionalISConfig(
         candidate_count=12,
         rollout_count=8,
         block_size=1,
@@ -79,7 +79,7 @@ def test_off_policy_ratio_scores_only_rollout_suffix() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(
+        config=ConditionalISConfig(
             candidate_count=2, rollout_count=2, block_size=1, total_length=2
         ),
         base_sampling=SamplingConfig(),
@@ -104,7 +104,7 @@ def test_temperature_scaled_base_policy_is_used_in_off_policy_ratio() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(
+        config=ConditionalISConfig(
             candidate_count=2, rollout_count=2, block_size=1, total_length=2
         ),
         base_sampling=base_sampling,
@@ -134,7 +134,7 @@ def test_optional_log_ratio_clipping_is_explicit_in_rollout_record() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(
+        config=ConditionalISConfig(
             candidate_count=4,
             rollout_count=4,
             block_size=1,
@@ -175,7 +175,7 @@ def test_uncorrected_off_policy_rollouts_skip_base_rescoring() -> None:
         rollout_backend=proposal,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(
+        config=ConditionalISConfig(
             candidate_count=3,
             rollout_count=2,
             block_size=1,
@@ -199,7 +199,7 @@ def test_uncorrected_off_policy_rollouts_skip_base_rescoring() -> None:
 
 def test_uncorrected_rollouts_reject_irrelevant_ratio_clipping() -> None:
     with pytest.raises(ValueError, match="importance_log_ratio_clip requires"):
-        ConditionalEnergyConfig(
+        ConditionalISConfig(
             importance_log_ratio_clip=1.0,
             apply_importance_correction=False,
         )
@@ -212,7 +212,7 @@ def test_rollout_budget_subtracts_candidate_block() -> None:
         rollout_backend=backend,
         prompt=(),
         generated_prefix=(),
-        config=ConditionalEnergyConfig(
+        config=ConditionalISConfig(
             candidate_count=3, rollout_count=2, block_size=2, total_length=5
         ),
         base_sampling=SamplingConfig(),
@@ -234,7 +234,7 @@ def test_conditional_is_never_exceeds_total_length() -> None:
     result = run_conditional_is(
         backend,
         (),
-        ConditionalEnergyConfig(candidate_count=2, rollout_count=2, block_size=2, total_length=5),
+        ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=2, total_length=5),
         lambda _prompt, generated: float(sum(generated)),
         SeedStream(17),
     )
@@ -258,7 +258,7 @@ def test_conditional_is_rejects_sampling_policies_that_break_the_weight_formula(
         run_conditional_is(
             _backend(),
             (),
-            ConditionalEnergyConfig(
+            ConditionalISConfig(
                 candidate_count=2, rollout_count=2, block_size=1, total_length=2
             ),
             _reward,
@@ -279,7 +279,7 @@ def test_conditional_is_accepts_one_joint_batch_reward() -> None:
     result = run_conditional_is(
         backend,
         (),
-        ConditionalEnergyConfig(
+        ConditionalISConfig(
             candidate_count=2,
             rollout_count=2,
             block_size=1,

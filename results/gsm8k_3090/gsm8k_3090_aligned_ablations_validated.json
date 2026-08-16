@@ -1,6 +1,6 @@
 {
   "algorithm_implementation_sha256": {
-    "src/inference_scaling/algorithms/conditional_energy.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
+    "src/inference_scaling/algorithms/conditional_is.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
     "src/inference_scaling/algorithms/mh.py": "a9b861c0fd2136861fe078bbfbfe5bd9b532a278ff22f09d4b29566e9c6063ea",
     "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
     "src/inference_scaling/backends/cache.py": "296caa7857d1a12d59af53999641a0fc3475924fc5886ee00659d5c75adbe89e",
@@ -27,7 +27,7 @@
       "Beam Search",
       "Best-of-N self-consistency",
       "power-distribution suffix MH",
-      "conditional energy importance sampling",
+      "conditional importance sampling",
       "small-proposal off-policy conditional importance sampling",
       "GRPO"
     ]

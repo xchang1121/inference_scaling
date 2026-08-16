@@ -1,4 +1,4 @@
-"""Exact trajectory replay for block-diffusion rollout energies."""
+"""Exact trajectory replay for block-diffusion rollout weights."""
 
 from __future__ import annotations
 
@@ -17,22 +17,18 @@ from inference_scaling.dllm.types import (
 )
 from inference_scaling.shared.importance import (
     ProbabilityObservation,
+    ReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
-    corrected_replay_log_energy,
+    corrected_replay_log_weight,
     logmeanexp,
 )
-from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import normalize_log_energies
+from inference_scaling.shared.stepwise import normalize_log_weights
 from inference_scaling.shared.types import TokenSequence
 
 DiffusionReplayRewardBatch = Callable[
     [TokenSequence, Sequence[TokenSequence]], Sequence[float]
 ]
-
-
-def _normalized(log_weights: Sequence[float]) -> tuple[float, ...]:
-    return normalize_log_energies(log_weights)
 
 
 def _validate_exact_pair(
@@ -93,33 +89,9 @@ class DiffusionReplayHistory:
 
 
 @dataclass(frozen=True, slots=True)
-class DiffusionReplayEnergyEstimate:
-    log_energy: float
-    history_log_terms: tuple[float, ...]
-    fresh_log_terms: tuple[float, ...]
-
-    @property
-    def history_count(self) -> int:
-        return len(self.history_log_terms)
-
-    @property
-    def fresh_count(self) -> int:
-        return len(self.fresh_log_terms)
-
-    @property
-    def history_ess(self) -> float:
-        return importance_effective_sample_size(self.history_log_terms)
-
-    @property
-    def fresh_ess(self) -> float:
-        finite = [value for value in self.fresh_log_terms if isfinite(value)]
-        return importance_effective_sample_size(finite)
-
-
-@dataclass(frozen=True, slots=True)
 class DiffusionReplayCandidate:
     sample: DiffusionSample
-    estimate: DiffusionReplayEnergyEstimate
+    estimate: ReplayWeightEstimate
     outer_log_ratio: float = 0.0
 
 
@@ -232,7 +204,7 @@ def select_diffusion_candidates_with_replay(
     seed: int,
     candidate_log_ratios: Sequence[float] | None = None,
 ) -> DiffusionReplaySelection:
-    """Estimate each rollout energy from fresh data or corrected replay plus a fresh tail."""
+    """Estimate each rollout weight from fresh data or corrected replay plus a fresh tail."""
 
     if not candidates:
         raise ValueError("at least one candidate is required")
@@ -269,7 +241,7 @@ def select_diffusion_candidates_with_replay(
         replay_candidates = tuple(
             DiffusionReplayCandidate(
                 sample=candidate,
-                estimate=DiffusionReplayEnergyEstimate(
+                estimate=ReplayWeightEstimate(
                     reward / reward_temperature,
                     (),
                     (reward / reward_temperature,),
@@ -280,9 +252,9 @@ def select_diffusion_candidates_with_replay(
                 candidates, rewards, outer_log_ratios, strict=True
             )
         )
-        probabilities = _normalized(
+        probabilities = normalize_log_weights(
             [
-                candidate.estimate.log_energy + candidate.outer_log_ratio
+                candidate.estimate.log_weight + candidate.outer_log_ratio
                 for candidate in replay_candidates
             ]
         )
@@ -365,7 +337,7 @@ def select_diffusion_candidates_with_replay(
                 [record.observation for record in history.records],
                 [record.observation for record in fresh_records],
             )
-            log_energy = shared_estimate.log_energy
+            log_weight = shared_estimate.log_weight
             history_terms = shared_estimate.history_log_terms
             fresh_terms = shared_estimate.fresh_log_terms
         else:
@@ -373,21 +345,21 @@ def select_diffusion_candidates_with_replay(
                 record.reward / reward_temperature for record in fresh_records
             )
             history_terms = ()
-            log_energy = logmeanexp(fresh_terms)
+            log_weight = logmeanexp(fresh_terms)
         replay_candidates.append(
             DiffusionReplayCandidate(
                 sample=candidate,
-                estimate=DiffusionReplayEnergyEstimate(
-                    log_energy,
+                estimate=ReplayWeightEstimate(
+                    log_weight,
                     tuple(history_terms),
                     tuple(fresh_terms),
                 ),
                 outer_log_ratio=outer_log_ratio,
             )
         )
-    probabilities = _normalized(
+    probabilities = normalize_log_weights(
         [
-            candidate.estimate.log_energy + candidate.outer_log_ratio
+            candidate.estimate.log_weight + candidate.outer_log_ratio
             for candidate in replay_candidates
         ]
     )
@@ -406,7 +378,6 @@ def select_diffusion_candidates_with_replay(
 
 __all__ = [
     "DiffusionReplayCandidate",
-    "DiffusionReplayEnergyEstimate",
     "DiffusionReplayHistory",
     "DiffusionReplayRecord",
     "DiffusionReplayRewardBatch",

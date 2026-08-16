@@ -20,7 +20,7 @@ Variance-Reduced Preference Optimization（VRPO）。两侧共享 GSM8K 数据�
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散 block，再按 Hastings 比接受或拒绝 | proposal 的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
-| [条件能量 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件能量后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_energy.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
+| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件奖励权重后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) 与[动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 复用历史 completion，并按方差和成本分配 fresh rollout | behavior 概率、fresh-tail 校正和外层 $`p/q_c`$ | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
@@ -47,34 +47,19 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 | [RTX 3090 复现记录](docs/validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分、KV、MH、IS 与 replay 检查 |
 | [机器可读结果](results/README.md) | 正式汇总、训练摘要和验证产物索引 |
 
-## 主要结果
+## 实现与结果状态
 
-质量实验使用 32 道固定 GSM8K test 题、`Qwen2.5-1.5B-Instruct` 和单张 RTX 3090。主表中的方法
-可能使用不同奖励；统一正确性奖励的比较见[共享奖励实验](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md#共享奖励目标)。
+| 模型族 | 模型与训练对照 | 推理组件 | 状态 |
+| --- | --- | --- | --- |
+| AR-LLM | Qwen2.5-1.5B / 0.5B，GRPO | 全部公共组件及 vLLM | RTX 3090 正式结果已纳入版本控制 |
+| dLLM | LLaDA-MoE-7B-A1B，VRPO | 全部公共组件；批量 Transformers 扩散后端 | 单元测试与低显存预检完成；正式结果入口供大显存机器运行 |
+| 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算账本 | AR/dLLM 共用同一实现 |
 
-| 方法 | 正确数 / 32 | pass@1 | 推理 PFLOPs |
-| --- | ---: | ---: | ---: |
-| Base | 13 | 40.625% | 0.0279 |
-| 幂分布 MH | 12 | 37.500% | 1.3077 |
-| 标准条件 IS | 21 | 65.625% | 1.3706 |
-| 0.5B rollout proposal 条件 IS | 15 | 46.875% | 2.4724 |
-| GRPO 参数 + 随机采样 | 22 | 68.750% | 0.0254 |
-
-标准条件 IS 与 GRPO 参数随机采样相差 -3.125 个百分点，题目级配对 95% 区间为
-`[-12.500, 6.250]`。精确奖励实验中，verifier-MH 与标准 verifier-IS 分别得到 78.125% 和
-75.000%。完整统计解释见[质量报告](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。
-
-执行层因子定义为“优化路径 / 对照路径”；小于 1 表示相应成本下降。
-
-| 优化路径 | 对照路径 | 墙钟因子 | 主模型 FLOPs 因子 |
-| --- | --- | ---: | ---: |
-| 连续批处理 | 同方法逐 prompt | 0.206×–0.952× | 1.003×–1.177× |
-| warm replay 在线阶段 | fresh-only | 0.859× | 0.766× |
-| 流式 IS，0.2 s verifier | 整批完成后提交 verifier | 0.671× | 1.000× |
-| MH proposal-tree 预取，0.2 s 奖励 | 普通 MH | 0.817× | 1.267× |
-| delayed acceptance，0.2 s 奖励 | 普通 MH | 0.827× | 1.000× |
-| replay 混合 MH proposal，在线 | base suffix proposal | 0.534× | 1.003× |
-| SMC 条件后缀复用 | 相同 SMC 的 fresh-only 路径 | 0.856× | 0.963× |
+AR-LLM 的 32 题实验中，标准条件 IS 为 65.625%，GRPO 参数随机采样为 68.750%；共享正确性奖励下，
+verifier-MH 与 verifier-IS 分别为 78.125% 和 75.000%。这些数值只概括已完成的 Qwen/RTX 3090
+实验，完整设置、区间和成本见[质量报告](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。批处理、流式奖励、
+replay、MH 预取与 SMC 的墙钟、FLOPs 和复用率见[执行报告](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
+dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`，当前仓库不以预检数据代替正式结果。
 
 ## 安装
 

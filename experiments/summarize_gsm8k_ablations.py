@@ -184,7 +184,7 @@ def main() -> None:
                 "Beam Search",
                 "Best-of-N self-consistency",
                 "power-distribution suffix MH",
-                "conditional energy importance sampling",
+                "conditional importance sampling",
                 "small-proposal off-policy conditional importance sampling",
                 "GRPO",
             ],

@@ -6,18 +6,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_is import (
     RewardFunction,
-    _logmeanexp,
     _sample_candidates,
     _validate_base_sampling,
 )
 from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
-from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.importance import (
     ProbabilityObservation,
+    ReplayWeightEstimate as SharedReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
-    corrected_replay_log_energy,
+    corrected_replay_log_weight,
+    logmeanexp,
 )
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
@@ -32,41 +32,21 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import normalize_log_energies
+from inference_scaling.shared.stepwise import normalize_log_weights
 from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)
-class ReplayEnergyEstimate:
-    log_energy: float
-    history_log_terms: tuple[float, ...]
-    fresh_log_terms: tuple[float, ...]
+class ReplayWeightEstimate(SharedReplayWeightEstimate):
     history_record_ids: tuple[str, ...]
     behavior_counts: tuple[tuple[str, int], ...]
-
-    @property
-    def history_count(self) -> int:
-        return len(self.history_log_terms)
-
-    @property
-    def fresh_count(self) -> int:
-        return len(self.fresh_log_terms)
-
-    @property
-    def history_ess(self) -> float:
-        return importance_effective_sample_size(self.history_log_terms)
-
-    @property
-    def fresh_ess(self) -> float:
-        finite = [value for value in self.fresh_log_terms if value != float("-inf")]
-        return importance_effective_sample_size(finite)
 
 
 @dataclass(frozen=True, slots=True)
 class BaseReplayCandidate:
     token_ids: TokenSequence
     base_token_logprobs: tuple[float, ...]
-    estimate: ReplayEnergyEstimate
+    estimate: ReplayWeightEstimate
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +142,7 @@ def _fresh_records(
     )
 
 
-def estimate_replay_energy(
+def estimate_replay_weight(
     *,
     base_backend: AutoregressiveBackend,
     base_policy: BehaviorPolicy,
@@ -178,7 +158,7 @@ def estimate_replay_energy(
     step_index: int,
     candidate_index: int,
     precomputed_fresh_records: Sequence[ReplayRecord] | None = None,
-) -> ReplayEnergyEstimate:
+) -> ReplayWeightEstimate:
     if precomputed_fresh_records is None:
         fresh_records = _fresh_records(
             base_policy=base_policy,
@@ -206,8 +186,8 @@ def estimate_replay_energy(
         for record in fresh_records:
             store.add_design(record)
         log_terms = tuple(record.reward / reward_temperature for record in fresh_records)
-        return ReplayEnergyEstimate(
-            log_energy=_logmeanexp(log_terms),
+        return ReplayWeightEstimate(
+            log_weight=logmeanexp(log_terms),
             history_log_terms=(),
             fresh_log_terms=log_terms,
             history_record_ids=(),
@@ -256,8 +236,8 @@ def estimate_replay_energy(
     )
     for record in fresh_records:
         store.add_design(record)
-    return ReplayEnergyEstimate(
-        log_energy=shared_estimate.log_energy,
+    return ReplayWeightEstimate(
+        log_weight=shared_estimate.log_weight,
         history_log_terms=shared_estimate.history_log_terms,
         fresh_log_terms=shared_estimate.fresh_log_terms,
         history_record_ids=tuple(record.record_id for record in history_records),
@@ -341,8 +321,8 @@ def base_replay_step(
     ):
         if claim is None:
             terminal_reward = float(reward(prompt, generated_prefix + candidate.token_ids))
-            estimate = ReplayEnergyEstimate(
-                log_energy=terminal_reward / config.reward_temperature,
+            estimate = ReplayWeightEstimate(
+                log_weight=terminal_reward / config.reward_temperature,
                 history_log_terms=(),
                 fresh_log_terms=(terminal_reward / config.reward_temperature,),
                 history_record_ids=(),
@@ -350,7 +330,7 @@ def base_replay_step(
             )
         else:
             assert fresh_range is not None
-            estimate = estimate_replay_energy(
+            estimate = estimate_replay_weight(
                 base_backend=base_backend,
                 base_policy=base_policy,
                 registry=registry,
@@ -372,8 +352,8 @@ def base_replay_step(
             BaseReplayCandidate(candidate.token_ids, candidate.token_logprobs, estimate)
         )
 
-    probabilities = normalize_log_energies(
-        [candidate.estimate.log_energy for candidate in candidates]
+    probabilities = normalize_log_weights(
+        [candidate.estimate.log_weight for candidate in candidates]
     )
     selected_index = int(
         seeds.generator("base_replay", step_index, "select").choice(

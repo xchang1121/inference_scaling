@@ -201,10 +201,10 @@ def main() -> None:
     training_seconds = float(
         training.get("cumulative_training_wall_seconds", training["training_wall_seconds"])
     )
-    energy_wh = float(
+    power_integral_wh = float(
         training.get(
-            "cumulative_gpu_energy_wh",
-            training["gpu_monitor"].get("gpu_energy_wh", 0.0),
+            "cumulative_gpu_power_integral_wh",
+            training["gpu_monitor"].get("gpu_power_integral_wh", 0.0),
         )
     )
     trainer_state_path = args.trainer_state or (
@@ -264,7 +264,7 @@ def main() -> None:
             "primary_compute": training_compute,
             "trainer_state_used": str(trainer_state_path) if log_history else None,
             "wall_seconds": training_seconds,
-            "gpu_energy_wh": energy_wh,
+            "gpu_power_integral_wh": power_integral_wh,
             "global_step": int(training["global_step"]),
             "generated_completion_tokens": int(
                 training["rollouts"]["generated_completion_tokens"]
@@ -336,7 +336,7 @@ def main() -> None:
             "the stated tolerance. A joint empirical match additionally requires the "
             "optional parsed-answer distribution audit to pass both TV and JS thresholds; "
             "this finite audit does not prove equality of full token-sequence distributions. "
-            "Wall time, memory, and measured training energy are hardware-dependent supplements."
+            "Wall time, memory, and measured power integral are hardware-dependent supplements."
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -274,7 +274,7 @@ def build_report(
         "interpretation": {
             "target": (
                 "The uncorrected method keeps base-model candidate blocks but estimates "
-                "their future verifier energy under 0.5B continuations. It is a biased "
+                "their future verifier reward under 0.5B continuations. It is a biased "
                 "small-model lookahead method, not off-policy IS for the full base target."
             ),
             "timing": (

@@ -7,7 +7,7 @@ import sys
 
 _MODULES = (
     "base_replay",
-    "conditional_energy",
+    "conditional_is",
     "dynamic_is",
     "mh",
     "mh_acceleration",

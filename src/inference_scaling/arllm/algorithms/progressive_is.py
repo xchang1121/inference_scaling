@@ -1,7 +1,7 @@
 """Progressive conditional IS with an independent pilot/evaluation split.
 
 Pilot rollouts estimate variance and relative compute cost, then the allocation is
-frozen.  Only newly drawn evaluation rollouts enter the conditional-energy
+frozen.  Only newly drawn evaluation rollouts enter the conditional-weight
 estimator.  Pilot trajectories remain useful as verified draft-cache material,
 but never become a second statistical observation.
 """
@@ -18,11 +18,10 @@ from inference_scaling.arllm.acceleration import (
     StreamingRewardEvaluator,
     StreamingRewardSnapshot,
 )
-from inference_scaling.arllm.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_is import (
     RewardBatchFunction,
     RewardFunction,
     RolloutEvaluation,
-    _logmeanexp,
     _sample_candidates,
     _score_samples,
     _validate_base_sampling,
@@ -30,6 +29,7 @@ from inference_scaling.arllm.algorithms.conditional_energy import (
 )
 from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
 from inference_scaling.shared.budget import allocate_fresh_rollout_budget
+from inference_scaling.shared.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
@@ -54,7 +54,7 @@ class ProgressiveCandidate:
     pilot: PilotSummary
     evaluation_rollouts: tuple[RolloutEvaluation, ...]
     evaluation_count: int
-    log_energy: float
+    log_weight: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,11 +449,11 @@ def progressive_is_step(
     for index, candidate in enumerate(candidates):
         evaluations = evaluation[index]
         if terminal[index]:
-            # Terminal energy is deterministic; the pilot call already evaluated
+            # The terminal weight is deterministic; the pilot call already evaluated
             # it once, while no generated rollout is counted against the budget.
             evaluations = pilot[index]
         if not evaluations:
-            raise RuntimeError("each candidate needs an independent energy estimate")
+            raise RuntimeError("each candidate needs an independent weight estimate")
         progressive.append(
             ProgressiveCandidate(
                 token_ids=candidate.token_ids,
@@ -466,11 +466,11 @@ def progressive_is_step(
                 ),
                 evaluation_rollouts=tuple(evaluations),
                 evaluation_count=(1 if terminal[index] else evaluation_counts[index]),
-                log_energy=_logmeanexp([item.log_weight for item in evaluations]),
+                log_weight=logmeanexp([item.log_weight for item in evaluations]),
             )
         )
-    log_energies = np.asarray([item.log_energy for item in progressive], dtype=np.float64)
-    weights = np.exp(log_energies - float(np.max(log_energies)))
+    log_weights = np.asarray([item.log_weight for item in progressive], dtype=np.float64)
+    weights = np.exp(log_weights - float(np.max(log_weights)))
     probabilities = weights / weights.sum()
     selected = int(
         seeds.generator("progressive_is", step_index, "select").choice(

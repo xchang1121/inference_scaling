@@ -18,7 +18,7 @@ from inference_scaling.shared.smc import (
 )
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
-    normalize_log_energies,
+    normalize_log_weights,
     run_stepwise_generation,
 )
 
@@ -60,8 +60,8 @@ def test_common_stepwise_driver_is_state_and_model_agnostic():
     assert all(sum(step.probabilities) == pytest.approx(1.0) for step in first.steps)
 
 
-def test_log_energy_normalization_matches_softmax():
-    probabilities = normalize_log_energies((0.0, log(3.0)))
+def test_log_weight_normalization_matches_softmax():
+    probabilities = normalize_log_weights((0.0, log(3.0)))
     assert probabilities == pytest.approx((0.25, 0.75))
 
 
@@ -99,7 +99,7 @@ def test_replay_provider_exposes_history_and_fresh_terms():
 
     assert len(estimate.history_log_terms) == 1
     assert len(estimate.fresh_log_terms) == 1
-    assert estimate.log_energy > estimate.history_log_terms[0]
+    assert estimate.log_weight > estimate.history_log_terms[0]
 
 
 def test_common_smc_primitives_normalize_resample_and_split_without_copying():

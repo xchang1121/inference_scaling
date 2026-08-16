@@ -2,7 +2,7 @@
 
 from inference_scaling.arllm.config import (
     BaseReplayConfig,
-    ConditionalEnergyConfig,
+    ConditionalISConfig,
     DynamicISConfig,
     MHConfig,
     ProgressiveISConfig,
@@ -13,7 +13,7 @@ from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
 
 __all__ = [
     "BaseReplayConfig",
-    "ConditionalEnergyConfig",
+    "ConditionalISConfig",
     "DynamicISConfig",
     "MHConfig",
     "ProgressiveISConfig",

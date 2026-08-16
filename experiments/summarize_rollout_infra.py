@@ -431,7 +431,7 @@ def _markdown(summary: dict[str, Any], svg_path: Path) -> str:
             "## 结论边界",
             "",
             "- 历史序列进入 draft tree 后作为执行草稿；统计 estimator 仍按独立 rollout 计数。",
-            "- pilot 用于冻结 evaluation 预算；最终条件能量均值仅使用独立 evaluation reward。",
+            "- pilot 用于冻结 evaluation 预算；最终条件奖励权重仅使用独立 evaluation reward。",
             "- 墙钟和 FLOPs 分别计量执行效率与逻辑计算量；SMC 大 batch 可通过并行度降低墙钟。",
             "- 单题三 seed 结果用于基础设施消融；方法质量排序读取完整 GSM8K 对照实验。",
             "",

@@ -21,14 +21,14 @@ from dataclasses import dataclass
 from math import isfinite
 
 from inference_scaling.arllm.acceleration import StreamingRewardEvaluator
-from inference_scaling.arllm.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_is import (
     RewardBatchFunction,
     RewardFunction,
-    _logmeanexp,
     _validate_base_sampling,
 )
 from inference_scaling.arllm.config import SMCForestConfig, SamplingConfig
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.importance import logmeanexp
 from inference_scaling.shared.smc import (
     normalize_smc_log_weights,
     partition_resampled_reservoirs,
@@ -284,7 +284,7 @@ def _evaluate_branches(
     ):
         if not reservoir:
             raise RuntimeError("each SMC branch needs a positive lookahead estimate")
-        log_lookahead = _logmeanexp(
+        log_lookahead = logmeanexp(
             [item.reward / config.reward_temperature for item in reservoir]
         )
         inherited_count = min(len(inherited[branch_index]), len(reservoir))

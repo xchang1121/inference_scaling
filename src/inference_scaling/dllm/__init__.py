@@ -18,7 +18,6 @@ from inference_scaling.dllm.types import (
 )
 from inference_scaling.dllm.replay import (
     DiffusionReplayCandidate,
-    DiffusionReplayEnergyEstimate,
     DiffusionReplayHistory,
     DiffusionReplayRecord,
     DiffusionReplaySelection,
@@ -49,7 +48,6 @@ __all__ = [
     "DiffusionMHConfig",
     "DiffusionPowerMHConfig",
     "DiffusionReplayCandidate",
-    "DiffusionReplayEnergyEstimate",
     "DiffusionReplayHistory",
     "DiffusionReplayRecord",
     "DiffusionReplaySelection",

@@ -91,7 +91,7 @@ STYLE = {
         "end",
     ),
     "verifier_small_rollout_no_rescore": (
-        "0.5B rollout proposal-energy",
+        "0.5B rollout 未校正加权",
         "#0f766e",
         "square",
         -10,
@@ -268,7 +268,7 @@ def render(main: list[Point], oracle: list[Point]) -> str:
             oracle,
             PANEL_LEFTS[1],
             "精确奖励目标与重评分消融",
-            "使用标准答案；proposal-energy 省去 1.5B 重评分",
+            "使用标准答案；未校正加权省去 1.5B 重评分",
         )
     )
     y_mid = (PLOT_TOP + PLOT_BOTTOM) / 2

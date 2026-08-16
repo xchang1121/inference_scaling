@@ -9,7 +9,7 @@
     "weighted_over_uncorrected_flops": 3.8463423674252373
   },
   "interpretation": {
-    "target": "The uncorrected method keeps base-model candidate blocks but estimates their future verifier energy under 0.5B continuations. It is a biased small-model lookahead method, not off-policy IS for the full base target.",
+    "target": "The uncorrected method keeps base-model candidate blocks but estimates their future verifier reward under 0.5B continuations. It is a biased small-model lookahead method, not off-policy IS for the full base target.",
     "timing": "Weighted and uncorrected rows were rerun sequentially in the same session with identical code, hardware, problem rows, seeds, and budgets. Their selected paths and generated lengths may differ."
   },
   "methods": {

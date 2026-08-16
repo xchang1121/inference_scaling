@@ -9,6 +9,8 @@ from typing import Generic, Literal, TypeVar
 
 import numpy as np
 
+from inference_scaling.shared.metrics import importance_effective_sample_size
+
 PayloadT = TypeVar("PayloadT")
 
 
@@ -41,8 +43,8 @@ class WeightedRollout(Generic[PayloadT]):
 
 
 @dataclass(frozen=True, slots=True)
-class MonteCarloEnergyEstimate(Generic[PayloadT]):
-    log_energy: float
+class MonteCarloWeightEstimate(Generic[PayloadT]):
+    log_weight: float
     rollouts: tuple[WeightedRollout[PayloadT], ...]
 
 
@@ -100,12 +102,12 @@ class MonteCarloRolloutWeightProvider(Generic[PayloadT]):
 
     def estimate(
         self, observations: Sequence[RolloutObservation[PayloadT]]
-    ) -> MonteCarloEnergyEstimate[PayloadT]:
+    ) -> MonteCarloWeightEstimate[PayloadT]:
         weighted = tuple(self.weight(observation) for observation in observations)
         if not weighted:
-            raise ValueError("at least one rollout is required to estimate an energy")
-        return MonteCarloEnergyEstimate(
-            log_energy=logmeanexp([rollout.log_weight for rollout in weighted]),
+            raise ValueError("at least one rollout is required to estimate a conditional weight")
+        return MonteCarloWeightEstimate(
+            log_weight=logmeanexp([rollout.log_weight for rollout in weighted]),
             rollouts=weighted,
         )
 
@@ -138,7 +140,7 @@ def logmeanexp(values: Sequence[float]) -> float:
     return maximum + log(sum(exp(value - maximum) for value in values)) - log(len(values))
 
 
-def corrected_replay_log_energy(
+def corrected_replay_log_weight(
     history: Sequence[ProbabilityObservation],
     fresh: Sequence[ProbabilityObservation],
     *,
@@ -191,10 +193,27 @@ def corrected_replay_log_energy(
 
 
 @dataclass(frozen=True, slots=True)
-class ReplayEnergyEstimate:
-    log_energy: float
+class ReplayWeightEstimate:
+    log_weight: float
     history_log_terms: tuple[float, ...]
     fresh_log_terms: tuple[float, ...]
+
+    @property
+    def history_count(self) -> int:
+        return len(self.history_log_terms)
+
+    @property
+    def fresh_count(self) -> int:
+        return len(self.fresh_log_terms)
+
+    @property
+    def history_ess(self) -> float:
+        return importance_effective_sample_size(self.history_log_terms)
+
+    @property
+    def fresh_ess(self) -> float:
+        finite = tuple(value for value in self.fresh_log_terms if isfinite(value))
+        return importance_effective_sample_size(finite)
 
 
 class TruncatedReplayRolloutWeightProvider:
@@ -210,24 +229,24 @@ class TruncatedReplayRolloutWeightProvider:
         self,
         history: Sequence[ProbabilityObservation],
         fresh: Sequence[ProbabilityObservation],
-    ) -> ReplayEnergyEstimate:
-        log_energy, history_terms, fresh_terms = corrected_replay_log_energy(
+    ) -> ReplayWeightEstimate:
+        log_weight, history_terms, fresh_terms = corrected_replay_log_weight(
             history,
             fresh,
             truncation=self.truncation,
             reward_temperature=self.reward_temperature,
         )
-        return ReplayEnergyEstimate(log_energy, history_terms, fresh_terms)
+        return ReplayWeightEstimate(log_weight, history_terms, fresh_terms)
 
 
 __all__ = [
-    "MonteCarloEnergyEstimate",
+    "MonteCarloWeightEstimate",
     "MonteCarloRolloutWeightProvider",
     "ProbabilityObservation",
-    "ReplayEnergyEstimate",
+    "ReplayWeightEstimate",
     "RolloutObservation",
     "TruncatedReplayRolloutWeightProvider",
     "WeightedRollout",
-    "corrected_replay_log_energy",
+    "corrected_replay_log_weight",
     "logmeanexp",
 ]

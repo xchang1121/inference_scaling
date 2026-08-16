@@ -39,7 +39,7 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 本文使用三类性质：
 
 - **平稳分布精确**：MH 转移核保持指定目标不变；有限更新轮次仍有链的收敛误差。
-- **估计量无偏**：普通 IS 或 replay 恒等式对条件能量给出无偏估计；有限候选数下的归一化重采样仍是近似。
+- **估计量无偏**：普通 IS 或 replay 恒等式对条件奖励权重给出无偏估计；有限候选数下的归一化重采样仍是近似。
 - **执行等价**：批处理、流式完成和预取保持随机请求与统计量固定。
 
 下文中，MH 指 Metropolis--Hastings，IS 指 Importance Sampling（重要性采样），SIR 指
@@ -56,10 +56,12 @@ AR-LLM 与 dLLM 的生成状态不同：前者追加 token 后缀，后者更新
 
 | 共享对象 | 算法层操作 | AR-LLM 适配 | dLLM 适配 |
 | --- | --- | --- | --- |
-| `StepwiseGenerationBackend` | 生成候选、估计条件能量、归一化、重采样、提交候选 | token block 与自回归补全 | 掩码 block 与扩散补全 |
+| `StepwiseGenerationBackend` | 生成候选、估计条件奖励权重、归一化、重采样、提交候选 | token block 与自回归补全 | 掩码 block 与扩散补全 |
 | `MonteCarloRolloutWeightProvider` | 汇总 on-policy、off-policy 或不校正的 rollout 权重 | token 条件概率比 | 轨迹或 block 条件概率比 |
 | `TruncatedReplayRolloutWeightProvider` | 合并历史样本与独立 fresh tail | 历史 token 补全 | 历史扩散轨迹 |
 | `MetropolisHastingsProposal` | 根据目标密度与正反 proposal 概率执行接受或拒绝 | 随机后缀 proposal | block、轨迹或整段 proposal |
+| `allocate_variance_cost_budget` | 按方差与单样本成本冻结 evaluation 配额 | token rollout 配额 | 扩散 trajectory 配额 |
+| SMC 公共核 | 归一化 log-weight、systematic resampling、拆分条件 reservoir | token 后缀粒子 | block 轨迹粒子 |
 
 对任意逐步生成模型，MH 适配层为当前状态 $`y`$ 和 proposal $`y'`$ 提供四个标量：
 $`\log\widetilde\pi(y)`$、$`\log\widetilde\pi(y')`$、$`\log q(y'\mid y)`$ 与
@@ -80,20 +82,20 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 
 | 方法 | 采样或估计对象 | 有限预算下的性质 | 主要实现 |
 | --- | --- | --- | --- |
-| Base / greedy / beam / Best-of-$`N`$ | 基础模型采样或确定性搜索 | 基线分布或奖励最大化 | `experiments/gsm8k_reproduction.py` |
-| 幂分布 MH | 式 (2) | 转移核精确；有限更新存在收敛误差 | `algorithms/mh.py::run_mh_chain` |
-| 奖励目标 MH | 式 (1) | 转移核精确；每次 proposal 通常需完整奖励 | `algorithms/mh.py::run_reward_mh_chain` |
-| 条件能量 IS | 式 (1) 的逐 block SIR | $`K,M\to\infty`$ 时趋近目标 | `algorithms/conditional_energy.py` |
-| off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对能量无偏 | `algorithms/conditional_energy.py` |
-| proposal-energy | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
-| base 候选 rollout replay | 式 (1) 的逐 block SIR | history + fresh-tail 能量估计无偏 | `algorithms/base_replay.py` |
-| 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 $`p/q_c`$ | `algorithms/dynamic_is.py` |
-| progressive IS | pilot 分配预算，独立 evaluation 估计 | 最终估计仅使用 evaluation | `algorithms/progressive_is.py` |
+| Base / greedy / beam / Best-of-$`N`$ | 基础模型采样或确定性搜索 | 基线分布或奖励最大化 | `experiments/run_reproduction.py` |
+| 幂分布 MH | 式 (2) | 转移核精确；有限更新存在收敛误差 | `shared/mh.py` + 两侧 proposal 适配 |
+| 奖励目标 MH | 式 (1) | 转移核精确；每次 proposal 通常需完整奖励 | `shared/mh.py` + 两侧目标评分 |
+| 条件 IS | 式 (1) 的逐 block SIR | $`K,M\to\infty`$ 时趋近目标 | `shared/stepwise.py` + 两侧生成适配 |
+| off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对条件奖励权重无偏 | `shared/importance.py` + 两侧轨迹评分 |
+| 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
+| base 候选 rollout replay | 式 (1) 的逐 block SIR | history + fresh-tail 条件权重估计无偏 | `shared/importance.py` + 两侧 replay store |
+| 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 $`p/q_c`$ | `shared/budget.py` + 两侧候选适配 |
+| progressive IS | pilot 分配预算，独立 evaluation 估计 | 最终估计仅使用 evaluation | `shared/budget.py` + 两侧 rollout 适配 |
 | frozen streaming IS | 固定设计的异步到达版本 | 固定样本集合上的顺序不变性 | `algorithms/streaming_is.py` |
-| SMC rollout forest | block 级粒子近似 | 有限粒子、有限 lookahead 的 SMC 近似 | `algorithms/smc_forest.py` |
-| delayed-acceptance MH | 式 (1) | 两阶段接受率保持目标不变 | `algorithms/mh_acceleration.py` |
-| replay-mixture MH | 式 (1) | 冻结混合 proposal 的正反概率均进入 Hastings 比 | `algorithms/mh_acceleration.py` |
-| GRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `experiments/train_gsm8k_grpo.py` |
+| SMC rollout forest | block 级粒子近似 | 有限粒子、有限 lookahead 的 SMC 近似 | `shared/smc.py` + 两侧粒子状态 |
+| delayed-acceptance MH | 式 (1) | 两阶段接受率保持目标不变 | 公共接受核 + 两侧 surrogate/exact 评分 |
+| replay-mixture MH | 式 (1) | 冻结混合 proposal 的正反概率均进入 Hastings 比 | 公共接受核 + 两侧历史 proposal |
+| GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | AR token likelihood / dLLM masked ELBO |
 
 表中的相对源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
@@ -105,9 +107,9 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 | beam search | [Freitag and Al-Onaizan (2017)](https://aclanthology.org/W17-3207/) | 作为确定性搜索基线 |
 | self-consistency | [Wang et al. (2023)](https://openreview.net/pdf?id=1PL1NIMMrw) | 作为并行采样基线与可部署奖励信号 |
 | Metropolis--Hastings | [Hastings (1970)](https://doi.org/10.1093/biomet/57.1.97) | 用于幂分布和显式奖励目标的后缀转移 |
-| 重要性采样与 defensive mixture | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件能量、外层候选修正和完整支持集 proposal |
+| 重要性采样与 defensive mixture | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件奖励权重、外层候选修正和完整支持集 proposal |
 | off-policy 修正 | [Precup, Sutton, and Singh (2000)](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) | 用真实 behavior 概率修正异分布 rollout |
-| 经验回放 | [Lin (1992)](https://doi.org/10.1007/BF00992699) | 历史 completion 经式 (13) 校正后进入条件能量估计 |
+| 经验回放 | [Lin (1992)](https://doi.org/10.1007/BF00992699) | 历史 completion 经式 (13) 校正后进入条件奖励权重估计 |
 | GRPO | [Shao et al. (2024)](https://arxiv.org/abs/2402.03300) | 使用同一基础模型训练的参数更新基线 |
 | 最优分层分配 | [Neyman (1934)](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)、[Étoré and Jourdain (2010)](https://doi.org/10.1007/s11009-008-9108-0) | 推导式 (19) 的方差--成本预算规则 |
 | SMC | [Del Moral, Doucet, and Jasra (2006)](https://doi.org/10.1111/j.1467-9868.2006.00553.x)、[Lew et al. (2023)](https://arxiv.org/abs/2306.03081) | 用于逐 block 粒子传播和条件后缀 reservoir |
@@ -117,42 +119,7 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 | 异步生成与消费 | [IMPALA，Espeholt et al. (2018)](https://proceedings.mlr.press/v80/espeholt18a.html)、[SAO，Hou et al. (2026)](https://arxiv.org/abs/2607.07508) | completion callback、部分 rollout 和低优先级 run-ahead |
 | MCMC prefetch | [Brockwell (2006)](https://doi.org/10.1198/106186006X100579) | 奖励等待期间预取接受和拒绝分支 |
 
-下文给出分块条件能量、fresh-tail replay、动态候选和冻结 evaluation 的公式与实现。
-
-<a id="alg-report-labels"></a>
-### 实验标签定义
-
-标签按参数、目标、候选、rollout、概率修正和输出规则定义。`verifier` 表示 GSM8K 标准答案的确定性
-数值检查器。
-
-#### 直接生成与训练基线
-
-| 报告名称 | 使用的参数 | 推理时的实际操作 |
-| --- | --- | --- |
-| Base | 原始 1.5B 基础模型 $`\theta_0`$ | 每步按 $`p_{\theta_0}(\cdot\mid x,y_{\lt t})`$ 随机抽取一个 token；主实验温度为 1 |
-| Beam-8 | 原始 1.5B 基础模型 $`\theta_0`$ | 保留累计 log-probability 最高的 8 条前缀，最终返回最高分序列 |
-| 自一致性投票-8 | 原始 1.5B 基础模型 $`\theta_0`$ | 独立随机生成 8 条序列，返回数值答案众数对应的序列 |
-| GRPO 参数 + 随机采样 | GRPO 训练后的 1.5B 参数 $`\theta_{\mathrm{GRPO}}`$ | $`y_t\sim p_{\theta_{\mathrm{GRPO}}}(\cdot\mid x,y_{\lt t})`$，温度为 1 |
-| GRPO 参数 + 贪心解码 | GRPO 训练后的 1.5B 参数 $`\theta_{\mathrm{GRPO}}`$ | $`y_t=\arg\max_v p_{\theta_{\mathrm{GRPO}}}(v\mid x,y_{\lt t})`$ |
-
-#### MH、条件 IS 与 replay 标签
-
-| 报告名称 | 候选或状态 | rollout / proposal | 奖励与概率修正 |
-| --- | --- | --- | --- |
-| 幂分布 MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 目标为 $`p_{\theta_0}(y\mid x)^\alpha`$ |
-| verifier-MH | 当前完整序列 | 1.5B 基础模型生成后缀 proposal | 使用终局正确性奖励，目标为式 (1) |
-| 标准条件 IS | 候选 block 来自 1.5B base | rollout 来自 1.5B base | 数值众数奖励；修正因子为 1 |
-| 0.5B rollout proposal 条件 IS | 候选 block 来自 1.5B base | rollout 来自 0.5B 模型 $`q`$ | 数值众数奖励；乘 $`p_{\theta_0}/q`$；默认截断 log-ratio |
-| 0.5B rollout proposal IS（无截断） | 与上一行相同 | 与上一行相同 | 使用未经截断的 $`p_{\theta_0}/q`$ |
-| 0.5B rollout 奖励重加权 | 候选 block 来自 1.5B base | rollout 来自 0.5B 模型 | 数值众数奖励；目标为式 (12) |
-| 标准 verifier-IS | 候选和 rollout 都来自 1.5B base | 1.5B on-policy rollout | 数值正确性奖励；估计式 (7) |
-| 0.5B rollout proposal verifier-IS | 候选 block 来自 1.5B base | 0.5B rollout | 数值正确性奖励；乘 $`p_{\theta_0}/q`$ |
-| 0.5B rollout verifier 奖励重加权 | 候选 block 来自 1.5B base | 0.5B rollout | 数值正确性奖励；目标为式 (12) |
-| fresh-only | 候选来自 1.5B base | 本轮 rollout 全部新生成 | history 数为 0 |
-| warm replay | 候选来自 1.5B 基础模型 | 消费已建库 history，并生成独立 fresh tail | 按式 (14) 修正 history；`warm` 表示历史库已存在 |
-| base 候选 + 固定 fresh | 候选来自 1.5B base | 每个候选使用固定数量 fresh rollout | 动态候选实验的基线 |
-| 动态候选 + 固定 replay | 候选来自式 (15) 的 base/辅助模型 mixture | 命中时使用固定 history/fresh 数量 | 候选层乘式 (16)，rollout 层使用式 (14) |
-| 动态候选 + 方差--成本分配 | 与上一行相同 | history/fresh 数量由独立 design 数据决定 | 最终 evaluation 预算按式 (19) 冻结 |
+下文给出分块条件 IS、fresh-tail replay、动态候选和冻结 evaluation 的公式与实现。
 
 <a id="alg-baselines"></a>
 ## 3. 生成与训练基线
@@ -273,7 +240,7 @@ MH 更新都要完成整段后缀并调用奖励；降低这部分成本的方�
 [两阶段 MH](#alg-delayed-mh)与[proposal-tree 预取](#infra-mh-prefetch)。
 
 <a id="alg-conditional-is"></a>
-## 6. 条件能量 IS
+## 6. 条件 IS
 
 在已生成前缀 $`g`$ 之后，式 (1) 对下一 block $`z`$ 的条件分布可写为
 
@@ -302,21 +269,23 @@ h(g,z)=\mathbb E_{u\sim p(\cdot\mid x,g,z)}
 
 4. 以 $`\widehat h_m/\sum_j\widehat h_j`$ 的概率选择候选并追加到 $`g`$，随后进入下一 block。
 
-候选来自 $`p`$，因此 SIR 选择权重为条件能量 $`\widehat h_m`$。当
+候选来自 $`p`$，因此 SIR 直接使用条件奖励权重 $`\widehat h_m`$。当
 $`K\to\infty`$ 时式 (8) 收敛到 $`h`$；当候选数 $`M\to\infty`$ 时，sampling-importance-resampling
 输出趋近式 (7)。有限 $`K,M`$ 以及逐 block 重复选择共同构成实际近似误差。
 
 关键实现直接在 log 域求均值并重采样：
 
 ```python
-log_energy = logmeanexp(rollout.log_weight for rollout in evaluations)
-probabilities = softmax([candidate.log_energy for candidate in candidates])
+log_candidate_weights = [
+    logmeanexp(rollout.log_weight for rollout in evaluations)
+    for evaluations in candidate_rollouts
+]
+probabilities = softmax(log_candidate_weights)
 selected_index = rng.choice(len(candidates), p=probabilities)
 ```
 
-实现入口为
-[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_energy.py)，候选与所有 rollout 都按
-异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
+AR 条件 IS 适配位于 [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/)，候选与所有 rollout
+都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
 <a id="alg-offpolicy-is"></a>
 ## 7. off-policy 补全与主模型重评分
@@ -363,8 +332,8 @@ log_weight = reward / reward_temperature + applied_log_ratio
 截断 $`\mathrm{clip}(\log p/q,-c,c)`$ 将式 (9) 改为有偏估计。报告记录 raw ratio、applied ratio、
 截断次数和 effective sample size（ESS）。
 
-<a id="alg-proposal-energy"></a>
-### 7.1 proposal-energy 目标
+<a id="alg-uncorrected-rollout"></a>
+### 7.1 未校正 rollout 加权
 
 设置 `apply_importance_correction=False` 时，权重仅为 $`e^{r/\tau}`$：
 
@@ -386,8 +355,8 @@ p(z\mid x,g)\,
 
 <p align="right">式 (12)</p>
 
-式 (12) 使用 1.5B 候选、0.5B 补全和奖励权重，主模型重评分成本为 0。该路径记为 proposal-energy
-目标。两种路径的质量与
+式 (12) 使用 1.5B 候选、0.5B 补全和奖励权重，主模型重评分成本为 0。该路径记为“未校正 rollout
+加权”。两种路径的质量与
 分模型 FLOPs 见[1.5B 重评分消融](../reports/GSM8K_3090_ALIGNED_RESULTS.md#15b-rescoring-ablation)。
 
 <a id="alg-base-replay"></a>
@@ -425,7 +394,7 @@ base rollout 的估计量
 
 <p align="right">式 (14)</p>
 
-对式 (7) 的条件能量无偏。`corrected_replay_log_energy` 在 log 域分别计算两项均值，再执行 `logaddexp`：
+对式 (7) 的条件奖励权重无偏。实现先在 log 域分别计算两项均值，再执行 `logaddexp`：
 
 ```python
 history_term = min(log(c), log_p - log_b) + reward / tau
@@ -433,7 +402,7 @@ if log_p - log_b <= log(c):
     fresh_term = float("-inf")
 else:
     fresh_term = log1p(-exp(log(c) + log_b - log_p)) + reward / tau
-log_energy = logaddexp(logmeanexp(history_terms), logmeanexp(fresh_terms))
+log_candidate_weight = logaddexp(logmeanexp(history_terms), logmeanexp(fresh_terms))
 ```
 
 当 $`H=0`$ 时，算法使用 fresh base rollout 的式 (8)。历史中存在多个 behavior 版本时，$`b`$
@@ -504,7 +473,7 @@ proposal_logprob = logaddexp(
     log(mixture) + auxiliary_logprob,
 )
 outer_log_ratio = base_logprob - proposal_logprob
-candidate_log_weight = outer_log_ratio + replay_estimate.log_energy
+candidate_log_weight = outer_log_ratio + replay_log_weight
 ```
 
 有限候选下仍是 self-normalized SIR 近似。外层比值只修正候选来源；补全层仍需单独执行
@@ -556,7 +525,7 @@ n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
 <p align="right">式 (20)</p>
 
 并用生成 token 数乘 proposal/base 参数量估计相对成本。随后按式 (19) 冻结 evaluation 数量，再独立生成
-新的 evaluation rollout。最终能量只使用 evaluation：
+新的 evaluation rollout。最终条件权重只使用 evaluation：
 
 ```math
 \widehat h_i^{\mathrm{final}}
@@ -567,7 +536,7 @@ n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
 
 <p align="right">式 (21)</p>
 
-pilot 可作为 speculative draft 的历史材料；式 (21) 仅使用独立 evaluation。终止候选的能量为确定值，
+pilot 可作为 speculative draft 的历史材料；式 (21) 仅使用独立 evaluation。终止候选的条件权重为确定值，
 复用一次奖励计算。
 
 <a id="alg-streaming-is"></a>
@@ -676,7 +645,7 @@ log_acceptance = min(
 )
 ```
 
-这里的 replay 改变 proposal、再由 Hastings 比校正；它与式 (14) 中直接复用 rollout 估计条件能量是两种
+这里的 replay 改变 proposal、再由 Hastings 比校正；它与式 (14) 中直接复用 rollout 估计条件奖励权重是两种
 不同机制。
 
 <a id="alg-rewards"></a>
@@ -703,10 +672,10 @@ log_acceptance = min(
 | --- | --- | --- |
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、FLOPs |
-| off-policy 补全 + 未截断 $`p/q`$ | 式 (7) 的条件能量无偏 | 两侧 log-probability、ESS、support |
+| off-policy 补全 + 未截断 $`p/q`$ | 式 (7) 的条件奖励权重无偏 | 两侧 log-probability、ESS、support |
 | 截断 log importance ratio | 有偏稳定化估计 | raw/applied ratio、截断次数 |
-| proposal-energy | 目标为式 (12) | `score_calls=0`、分模型 FLOPs |
-| replay 恒等式 + 独立 fresh tail | 式 (7) 的条件能量无偏 | behavior 版本、claim、fresh/history 数 |
+| 未校正 rollout 加权 | 目标为式 (12) | `score_calls=0`、分模型 FLOPs |
+| replay 恒等式 + 独立 fresh tail | 式 (7) 的条件奖励权重无偏 | behavior 版本、claim、fresh/history 数 |
 | 动态候选 + 外层 $`p/q_c`$ | 候选来源已校正；保留有限 SIR 误差 | 候选来源、outer ratio、共享容量 |
 | pilot 决定 evaluation 数量 | 最终估计仅使用独立 evaluation | pilot/evaluation 分离、冻结预算 |
 | 流式到达、连续批处理、预取 | 统计量固定，执行顺序变化 | 请求 id、seed、token/FLOPs、废弃工作 |
@@ -816,10 +785,30 @@ multiset。`LowPriorityRunAheadBackend` 在奖励等待空泡中按有界 chunk 
 预取用额外 proposal 隐藏奖励延迟；delayed acceptance 减少精确奖励调用；replay-mixture 将历史命中的
 自回归生成替换为 teacher-forced 批量评分。报告同时列出作废分支、精确调用、cache build、FLOPs 和墙钟。
 
-<a id="infra-vllm"></a>
-### 17.6 Transformers 与 vLLM
+### 17.6 dLLM 的 block 执行
 
-`runtime.backend` 和命令行 `--backend` 使用同一组标识：
+dLLM 适配层把“一个反向扩散 block”实现为公共算法层的一次状态转移。算法层只接收候选、奖励、目标轨迹
+概率和 behavior 轨迹概率；掩码日程、remasking、并行去噪和模型调用留在 LLaDA 后端。
+
+| 机制 | dLLM 实现 | 保持的统计对象 |
+| --- | --- | --- |
+| block 批处理 | 同一步的候选与 rollout 合并为一个模型 batch | 每个 request 的 seed、轨迹和 log-probability |
+| 已提交 block 续跑 | 保存已确定 token 与剩余掩码，从该状态继续 | 与原请求相同的条件反向过程 |
+| 轨迹缓存 | 保存 prefix、扩散日程、policy 标识和逐步概率 | replay 与 MH 所需的完整正反 proposal 密度 |
+| progressive IS | pilot 只决定 fresh evaluation 数；最终权重来自独立 evaluation | 公共方差--成本分配规则 |
+| SMC rollout forest | block 传播后使用公共 systematic resampling | 粒子权重与一次性条件 reservoir |
+| MH 批量预取 | 并行产生候选；delayed acceptance 与冻结 replay mixture 分别减少奖励调用或新轨迹生成 | 公共 Hastings 接受核 |
+
+LLaDA 批量后端位于
+[`llada.py`](../../src/inference_scaling/dllm/backends/llada.py)，上述 IS、SMC 与 MH 适配分别位于
+[`algorithms/`](../../src/inference_scaling/dllm/algorithms/)；实验执行与统一计算快照位于
+[`benchmark_infra.py`](../../experiments/dllm/benchmark_infra.py)和
+[`runtime.py`](../../experiments/dllm/runtime.py)。
+
+<a id="infra-vllm"></a>
+### 17.7 AR-LLM 的 Transformers 与 vLLM
+
+AR-LLM 的 `runtime.backend` 和命令行 `--backend` 使用同一组标识：
 
 | 标识 | 引擎 | 适用路径 |
 | --- | --- | --- |
@@ -835,6 +824,9 @@ multiset。`LowPriorityRunAheadBackend` 在奖励等待空泡中按有界 chunk 
 | continuation 评分 | 任意可表示 sampling policy | 温度 1 原生；其余委托 exact Transformers backend |
 | 历史草稿 | 确定性或随机 token tree | global suffix proposer |
 | broker 恢复 | token 状态 + prefill | token 状态 + APC |
+
+当前 vLLM 后端用于 AR-LLM。dLLM 需要暴露反向扩散轨迹、每一步 transition log-probability 与可提交
+block 状态，因此使用第 17.6 节的批量 Transformers 后端；公共算法接口和计算账本不随执行引擎变化。
 
 24 GiB 单卡同时驻留 1.5B base 和 0.5B rollout proposal 的配置为：
 
@@ -893,30 +885,6 @@ python experiments/run_vllm_backend_benchmark.py \
 slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 安装命令见仓库
 [README](../../README.md#安装)。
 
-<a id="infra-report-labels"></a>
-### 17.7 执行标签定义
-
-| 报告名称 | 启用的机制 | 对照路径 |
-| --- | --- | --- |
-| 部分 rollout 续跑 | 保存未完成 token 并从保存前缀继续 | 丢弃部分轨迹并从原始前缀重生成 |
-| 流式 IS，便宜 verifier | rollout 完成后立即提交奖励 worker | 整批完成后提交；verifier 延迟为 0 |
-| 流式 IS，0.2 s verifier | 同上，每次 verifier 加入 0.2 s 延迟 | 相同 verifier 延迟的整批提交 |
-| 确定性历史草稿 | token tree 提出最高频 token | 普通自回归解码 |
-| 精确随机历史草稿 | 经验 proposal + target 残差校正 | 普通自回归解码 |
-| MH proposal-tree 预取，便宜奖励 | 为接受和拒绝状态各预取下一 proposal | 普通 MH；reward 延迟为 0 |
-| MH proposal-tree 预取，0.2 s 奖励 | 同上，每次 reward 加入 0.2 s 延迟 | 相同奖励延迟的普通 MH |
-| delayed acceptance，0.2 s 精确奖励 | surrogate 早拒绝，精确奖励第二阶段 | 每个 proposal 直接调用精确奖励 |
-| 冻结 replay 混合 proposal，在线 | base 与冻结历史后缀的 mixture | base suffix proposal；排除 cache build |
-| warm cache 在线阶段 | 读取已经评分的 replay 记录 | fresh-only；排除历史生成与评分 |
-| cache build + 首次 warm 查询 | 历史生成、评分和首次在线查询 | fresh-only |
-| 历史树，始终草稿 | 所有 active batch 启用固定草稿长度 | 普通自回归解码 |
-| 历史树，负载感知 | 只在小 active batch 启用草稿 | 普通自回归解码 |
-| 固定 rollout 条件 IS | 每候选使用固定 evaluation rollout 数 | progressive/SMC 对照 |
-| pilot/evaluation 分离 | pilot 估计预算，独立 evaluation 计算最终权重 | 固定 rollout 条件 IS |
-| 流式奖励 + run-ahead | progressive IS 加完成回调和低优先级草稿 | pilot/evaluation 分离 |
-| SMC forest，fresh-only | branch lookahead 全部新生成 | 条件后缀复用对照 |
-| SMC forest，条件后缀复用 | 匹配时继承并一次性消费条件后缀 | 相同 SMC 的 fresh-only 路径 |
-
 ### 17.8 公平比较与复现
 
 | 优化 | 固定分母 |
@@ -931,41 +899,22 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 | SMC reuse | 相同 SMC 的 fresh-only 路径 |
 | vLLM | 同模型、dtype、GPU 数与 workload 的 Transformers |
 
-执行层入口：
-
-```powershell
-$env:PYTHONPATH = "src;."
-python experiments\benchmark_rollout_infra.py `
-  --backend transformers --dtype bfloat16 --section all `
-  --output results\infra\rtx3090_transformers.json
-
-python experiments\benchmark_is_mh_reuse.py `
-  --backend transformers --dtype bfloat16 --section all `
-  --output results\infra\rtx3090_transformers_is_mh.json
-```
+成对复现命令、组件名与报告标签集中列在
+[GSM8K 统一实验设计](../experiments/GSM8K_EXPERIMENT_DESIGN.md#复现)；本节只定义机制及其公平比较分母。
 
 <a id="alg-code-index"></a>
 ## 18. 代码与验证入口
 
-| 内容 | 代码 | 主要测试 |
-| --- | --- | --- |
-| 模型无关逐步生成与重采样 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py) | `tests/test_stepwise.py` |
-| 模型无关 MH 接受核 | [`mh.py`](../../src/inference_scaling/shared/mh.py) | `tests/test_shared_mh.py` |
-| 通用 rollout 权重与 replay 汇总 | [`importance.py`](../../src/inference_scaling/shared/importance.py) | `tests/test_conditional_energy.py`、`tests/test_replay.py` |
-| 幂分布与奖励 MH | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py) | `tests/test_mh.py` |
-| 条件 IS 与 off-policy 修正 | [`conditional_energy.py`](../../src/inference_scaling/arllm/algorithms/conditional_energy.py) | `tests/test_conditional_energy.py` |
-| replay 恒等式与 fresh/reserve | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | `tests/test_replay.py` |
-| 动态候选和预算分配 | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py) | `tests/test_dynamic_is.py` |
-| progressive pilot/evaluation | [`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | `tests/test_progressive_is.py` |
-| frozen streaming estimator | [`streaming_is.py`](../../src/inference_scaling/arllm/algorithms/streaming_is.py) | `tests/test_streaming_is.py` |
-| SMC rollout forest | [`smc_forest.py`](../../src/inference_scaling/arllm/algorithms/smc_forest.py) | `tests/test_smc_forest.py` |
-| delayed/prefetch/replay MH | [`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | `tests/test_mh_acceleration.py` |
-| 连续批处理与评分缓存 | [`batching.py`](../../src/inference_scaling/arllm/backends/batching.py)、[`cache.py`](../../src/inference_scaling/arllm/backends/cache.py) | `tests/test_batching_backend.py`、`tests/test_score_cache.py` |
-| Transformers 后端 | [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py) | `tests/test_transformers_backend.py` |
-| vLLM 后端与动态 suffix | [`vllm_backend.py`](../../src/inference_scaling/arllm/backends/vllm_backend.py)、[`vllm_suffix_proposer.py`](../../src/inference_scaling/arllm/vllm_suffix_proposer.py) | `tests/test_vllm_backend.py`、`tests/test_vllm_suffix_proposer.py` |
-| token tree、streaming、run-ahead | [`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | `tests/test_acceleration.py` |
-| 部分 rollout broker | [`rollout_broker.py`](../../src/inference_scaling/arllm/rollout_broker.py) | `tests/test_rollout_broker.py` |
-| token/FLOPs 账本 | [`compute.py`](../../src/inference_scaling/shared/compute.py) | `tests/test_compute_accounting.py` |
+| 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
+| --- | --- | --- | --- | --- |
+| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`dllm/test_algorithms.py` |
+| replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
+| 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
+| MH | [`mh.py`](../../src/inference_scaling/shared/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
+| SMC | [`smc.py`](../../src/inference_scaling/shared/smc.py) | [`smc_forest.py`](../../src/inference_scaling/arllm/algorithms/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
+| 生成后端 | 公共请求、随机数和账本位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
+| RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
+| 实验调度与产物 | [`experiments/shared/`](../../experiments/shared/) | [`run_arllm_suite.py`](../../experiments/arllm/run_arllm_suite.py) | [`run_llada_suite.py`](../../experiments/dllm/run_llada_suite.py) | `test_reproduction_entrypoints.py`、`dllm/test_run_llada_suite.py` |
 
 有限状态测试核对转移概率、权重恒等式、样本生命周期和批处理随机流；真实模型实验核对模型概率、token
 轨迹、分模型 FLOPs 和墙钟。

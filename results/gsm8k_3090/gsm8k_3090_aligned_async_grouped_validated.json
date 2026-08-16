@@ -22,7 +22,7 @@
   "implementation_sha256": {
     "experiments/gsm8k_async_benchmark.py": "f6c9ae28d07a741a16fc271a279aeb8ba38cab98dedf2133e096bd2b72a0f0de",
     "experiments/gsm8k_reproduction.py": "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
-    "src/inference_scaling/algorithms/conditional_energy.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
+    "src/inference_scaling/algorithms/conditional_is.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
     "src/inference_scaling/algorithms/mh.py": "30aee50781a6b556dc7b50d6a2ea8f3004a79767b17319d028e7979fd881f6b7",
     "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
     "src/inference_scaling/backends/batching.py": "989982adaa8c2d43fd172f7a41d2ab51e0404d1bdfee1829f815520d79d73cbf",

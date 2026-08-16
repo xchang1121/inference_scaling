@@ -7,7 +7,7 @@
     "experiments/gsm8k_is_passk.py": "c274f302ae4f09344ed93cf8d9418b946b5b748e69737fe1f674a3a39acebc40",
     "experiments/gsm8k_passk.py": "cc788fc2cd85c8b11d38209d515f224d224ccbbae4cc518156f16f8e82c7cdd6",
     "experiments/gsm8k_reproduction.py": "fc7f4620e08dfc79df22d6b531924979c0f8d7db0829dfb1e02ac60e6cffd81f",
-    "src/inference_scaling/algorithms/conditional_energy.py": "7025c0437d1434762c749642f1d1b8e37284f2723c75226118035c5ef09cb693",
+    "src/inference_scaling/algorithms/conditional_is.py": "7025c0437d1434762c749642f1d1b8e37284f2723c75226118035c5ef09cb693",
     "src/inference_scaling/algorithms/mh.py": "a9b861c0fd2136861fe078bbfbfe5bd9b532a278ff22f09d4b29566e9c6063ea",
     "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
     "src/inference_scaling/backends/batching.py": "46e59726b496853094136e6326692526322de9df9333bc6982d6b26857dca615",
@@ -25,7 +25,7 @@
     "base": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
     "proposal": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
   },
-  "limitations": "Eight draws estimate pass@k only through k=8. All four methods use the same problem grid and candidate/rollout budgets. Finite importance-weight variance affects both small-proposal methods; the clipped variant adds finite bias, while the unclipped variant can have higher variance. The uncorrected variant removes weight variance but targets proposal-model rather than base-model continuation energy.",
+  "limitations": "Eight draws estimate pass@k only through k=8. All four methods use the same problem grid and candidate/rollout budgets. Finite importance-weight variance affects both small-proposal methods; the clipped variant adds finite bias, while the unclipped variant can have higher variance. The uncorrected variant removes weight variance but targets proposal-model rather than base-model continuation weighting.",
   "manifest_fingerprint": "b941a972e1e0e1961408c8ed44d342995e5b40d0119251ce2ba93c026773caa7",
   "method_definitions": {
     "conditional_is": {

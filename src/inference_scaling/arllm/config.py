@@ -78,7 +78,7 @@ class RewardMHConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class ConditionalEnergyConfig:
+class ConditionalISConfig:
     candidate_count: int = 4
     rollout_count: int = 4
     block_size: int = 16
@@ -106,7 +106,7 @@ class ConditionalEnergyConfig:
 
 @dataclass(frozen=True, slots=True)
 class ProgressiveISConfig:
-    """Pilot/evaluation split for cost-aware conditional-energy estimation."""
+    """Pilot/evaluation split for cost-aware conditional-weight estimation."""
 
     candidate_count: int = 4
     pilot_rollouts_per_candidate: int = 2

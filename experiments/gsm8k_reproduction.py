@@ -36,7 +36,7 @@ from inference_scaling.backends import (
     set_backend_override,
 )
 from inference_scaling.config import (
-    ConditionalEnergyConfig,
+    ConditionalISConfig,
     MHConfig,
     RewardMHConfig,
     SamplingConfig,
@@ -90,17 +90,17 @@ REWARD_SOURCES = (
 )
 IMPLEMENTATION_FILES = (
     "experiments/gsm8k_reproduction.py",
-    "src/inference_scaling/algorithms/conditional_energy.py",
-    "src/inference_scaling/algorithms/mh.py",
-    "src/inference_scaling/backends/absorbing.py",
-    "src/inference_scaling/backends/cache.py",
-    "src/inference_scaling/backends/transformers_backend.py",
-    "src/inference_scaling/backends/vllm_backend.py",
-    "src/inference_scaling/backends/loader.py",
-    "src/inference_scaling/evaluation/consensus.py",
-    "src/inference_scaling/evaluation/gsm8k.py",
-    "src/inference_scaling/config.py",
-    "src/inference_scaling/types.py",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py",
+    "src/inference_scaling/arllm/algorithms/mh.py",
+    "src/inference_scaling/arllm/backends/absorbing.py",
+    "src/inference_scaling/arllm/backends/cache.py",
+    "src/inference_scaling/arllm/backends/transformers_backend.py",
+    "src/inference_scaling/arllm/backends/vllm_backend.py",
+    "src/inference_scaling/arllm/backends/loader.py",
+    "src/inference_scaling/shared/evaluation/consensus.py",
+    "src/inference_scaling/shared/evaluation/gsm8k.py",
+    "src/inference_scaling/arllm/config.py",
+    "src/inference_scaling/arllm/types.py",
 )
 
 
@@ -559,7 +559,7 @@ def _run_method(
         result = run_conditional_is(
             ScoreCachingBackend(backend),
             prompt,
-            ConditionalEnergyConfig(
+            ConditionalISConfig(
                 candidate_count=int(conditional["candidate_count"]),
                 rollout_count=int(conditional["rollout_count"]),
                 block_size=int(conditional["block_size"]),
@@ -861,7 +861,7 @@ def main() -> None:
         action="store_true",
         help=(
             "skip base-model rescoring of small-model rollouts and use proposal-model "
-            "continuation energy as a biased lookahead signal"
+            "continuation reward weighting as a biased lookahead signal"
         ),
     )
     parser.add_argument("--mh-alpha", type=float)

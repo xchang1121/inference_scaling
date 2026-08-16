@@ -729,7 +729,7 @@ def main() -> None:
             "variance affects both small-proposal methods; the clipped variant adds "
             "finite bias, while the unclipped variant can have higher variance. The "
             "uncorrected variant removes weight variance but targets proposal-model "
-            "rather than base-model continuation energy."
+            "rather than base-model continuation weighting."
         ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)

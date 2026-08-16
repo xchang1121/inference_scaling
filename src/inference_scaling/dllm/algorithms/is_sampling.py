@@ -25,7 +25,7 @@ from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
-    normalize_log_energies,
+    normalize_log_weights,
     run_stepwise_generation,
 )
 from inference_scaling.shared.types import TokenSequence
@@ -112,7 +112,7 @@ def resample_diffusion_candidates(
         )
 
     log_weights = [item.log_weight for item in items]
-    probabilities = normalize_log_energies(log_weights)
+    probabilities = normalize_log_weights(log_weights)
     selected_index = int(rng.choice(len(items), p=probabilities))
     return DiffusionSIRResult(
         items=tuple(items),
@@ -139,7 +139,7 @@ class DiffusionRolloutEvaluation:
 class DiffusionConditionalCandidate:
     token_ids: TokenSequence
     rollouts: tuple[DiffusionRolloutEvaluation, ...]
-    log_energy: float
+    log_weight: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,9 +442,9 @@ class DiffusionStepwiseAdapter:
             candidate = DiffusionConditionalCandidate(
                 token_ids=proposal.token_ids,
                 rollouts=rollouts,
-                log_energy=estimate.log_energy,
+                log_weight=estimate.log_weight,
             )
-            evaluated.append(StepwiseCandidate(candidate, estimate.log_energy))
+            evaluated.append(StepwiseCandidate(candidate, estimate.log_weight))
         return tuple(evaluated)
 
     def advance(
@@ -472,7 +472,7 @@ def run_conditional_diffusion_is(
     apply_importance_correction: bool = True,
     reward_batch: DiffusionRewardBatchFunction | None = None,
 ) -> DiffusionConditionalISResult:
-    """Blockwise conditional-energy IS using complete dLLM rollouts.
+    """Blockwise conditional IS using complete dLLM rollouts.
 
     Base candidates always come from ``base_backend``.  When rollout generation
     uses another model or transition policy, the optional correction is the

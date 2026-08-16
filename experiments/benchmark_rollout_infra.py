@@ -40,7 +40,7 @@ from inference_scaling.backends import (
     load_backend_from_config,
 )
 from inference_scaling.config import (
-    ConditionalEnergyConfig,
+    ConditionalISConfig,
     ProgressiveISConfig,
     SMCForestConfig,
     SamplingConfig,
@@ -530,7 +530,7 @@ def _algorithm_arm(
                     result = run_conditional_is(
                         backend,
                         prompt,
-                        ConditionalEnergyConfig(
+                        ConditionalISConfig(
                             candidate_count=candidate_count,
                             rollout_count=rollout_count,
                             block_size=block_size,

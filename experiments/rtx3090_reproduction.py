@@ -25,7 +25,7 @@ import torch
 import transformers
 
 from inference_scaling.algorithms.base_replay import base_replay_step
-from inference_scaling.algorithms.conditional_energy import run_conditional_is
+from inference_scaling.algorithms.conditional_is import run_conditional_is
 from inference_scaling.algorithms.dynamic_is import CandidateProposal, run_dynamic_is
 from inference_scaling.algorithms.mh import run_mh_chains
 from inference_scaling.backends import (
@@ -35,7 +35,7 @@ from inference_scaling.backends import (
 )
 from inference_scaling.config import (
     BaseReplayConfig,
-    ConditionalEnergyConfig,
+    ConditionalISConfig,
     DynamicISConfig,
     MHConfig,
     SamplingConfig,
@@ -324,7 +324,7 @@ def run_conditional_checks(
 ) -> dict[str, Any]:
     eos = backend.tokenizer.eos_token_id
     base_sampling = SamplingConfig(eos_token_id=eos)
-    config = ConditionalEnergyConfig(
+    config = ConditionalISConfig(
         candidate_count=4,
         rollout_count=4,
         block_size=8,

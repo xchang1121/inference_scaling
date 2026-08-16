@@ -10,7 +10,7 @@ import numpy as np
 
 from inference_scaling.algorithms.base_replay import (
     ProbabilityObservation,
-    corrected_replay_log_energy,
+    corrected_replay_log_weight,
 )
 
 
@@ -28,7 +28,7 @@ def main() -> None:
     for index in range(args.trials):
         history_token = int(rng.choice(2, p=behavior))
         fresh_token = int(rng.choice(2, p=base))
-        log_energy, _, _ = corrected_replay_log_energy(
+        log_weight, _, _ = corrected_replay_log_weight(
             [
                 ProbabilityObservation(
                     log(base[history_token]),
@@ -46,12 +46,12 @@ def main() -> None:
             truncation=truncation,
             reward_temperature=1.0,
         )
-        estimates[index] = exp(log_energy)
+        estimates[index] = exp(log_weight)
 
     exact = float(np.dot(base, np.exp(rewards)))
     report = {
         "absolute_error": abs(float(estimates.mean()) - exact),
-        "exact_energy": exact,
+        "exact_weight": exact,
         "mean_corrected_estimate": float(estimates.mean()),
         "standard_error": float(estimates.std(ddof=1) / np.sqrt(args.trials)),
         "trials": args.trials,

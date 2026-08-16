@@ -186,7 +186,7 @@ def build_report(
         "short_wall_time_diagnostic": short_diagnostic,
         "quality_interpretation": (
             "Paired intervals resample the 32 problems. The uncorrected method "
-            "changes the continuation-energy target from the base model to the "
+            "changes the continuation-weight target from the base model to the "
             "proposal model; it is not off-policy IS for the base target."
         ),
         "cost_interpretation": (

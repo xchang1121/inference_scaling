@@ -2,7 +2,7 @@
 
 The script deliberately uses the same prompt builder and numeric parser as the
 inference benchmarks.  It also records wall time, generated rollout tokens,
-peak CUDA memory, and sampled GPU energy so training can be compared with the
+peak CUDA memory, and sampled GPU power integral so training can be compared with the
 per-query cost of MH and conditional importance sampling.
 """
 
@@ -111,16 +111,16 @@ class NvidiaPowerMonitor:
         if self._thread is not None:
             self._thread.join(timeout=self.interval_seconds + 2.0)
         self._sample()
-        energy_wh = 0.0
+        power_integral_wh = 0.0
         for left, right in zip(self.samples, self.samples[1:]):
             duration_hours = (right["seconds"] - left["seconds"]) / 3600.0
-            energy_wh += duration_hours * (
+            power_integral_wh += duration_hours * (
                 left["power_watts"] + right["power_watts"]
             ) / 2.0
         return {
             "sample_interval_seconds": self.interval_seconds,
             "samples": len(self.samples),
-            "gpu_energy_wh": energy_wh,
+            "gpu_power_integral_wh": power_integral_wh,
             "mean_power_watts": (
                 sum(sample["power_watts"] for sample in self.samples) / len(self.samples)
                 if self.samples
@@ -469,11 +469,11 @@ def main() -> None:
         if previous_cost
         else 0.0
     )
-    previous_energy_wh = (
+    previous_power_integral_wh = (
         float(
             previous_cost.get(
-                "cumulative_gpu_energy_wh",
-                previous_cost.get("gpu_monitor", {}).get("gpu_energy_wh", 0.0),
+                "cumulative_gpu_power_integral_wh",
+                previous_cost.get("gpu_monitor", {}).get("gpu_power_integral_wh", 0.0),
             )
         )
         if previous_cost
@@ -523,8 +523,8 @@ def main() -> None:
         "initialization_seconds_excluded_from_training_cost": initialization_seconds,
         "training_wall_seconds": training_seconds,
         "cumulative_training_wall_seconds": previous_wall_seconds + training_seconds,
-        "cumulative_gpu_energy_wh": previous_energy_wh
-        + float(power.get("gpu_energy_wh", 0.0)),
+        "cumulative_gpu_power_integral_wh": previous_power_integral_wh
+        + float(power.get("gpu_power_integral_wh", 0.0)),
         "global_step": state.global_step,
         "epoch": state.epoch,
         "trainable_parameters": trainable_parameters,

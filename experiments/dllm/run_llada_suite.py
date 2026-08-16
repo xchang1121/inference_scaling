@@ -14,7 +14,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import DYNAMIC_METHODS, METHODS
 from experiments.dllm.profiles import apply_execution_profile
-from experiments.shared.components import COMPONENTS
+from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.paired_protocol import MethodPair, load_pairing
 from experiments.shared.suite_runner import run_manifested_commands
 
@@ -24,19 +24,7 @@ DEFAULT_METHODS = tuple(
     if not method.startswith("vrpo_") and method not in DYNAMIC_METHODS
 )
 ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
-IMPLEMENTED_COMPONENTS = (
-    "quality",
-    "matched_target",
-    "replay",
-    "dynamic_is",
-    "async",
-    "passk",
-    "ablations",
-    "budget_curve",
-    "length_ablation",
-    "distribution",
-    "infra",
-)
+IMPLEMENTED_COMPONENTS = FULL_COMPONENTS
 
 
 def _paired_methods(
@@ -560,7 +548,10 @@ def main() -> None:
 
     config, pairing = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
-    components = list(args.components or ("quality", "replay"))
+    components = list(
+        args.components
+        or (("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS)
+    )
     if args.with_replay is True and "replay" not in components:
         components.append("replay")
     elif args.with_replay is False:

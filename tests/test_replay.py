@@ -6,7 +6,7 @@ import pytest
 from inference_scaling.algorithms.base_replay import (
     ProbabilityObservation,
     base_replay_step,
-    corrected_replay_log_energy,
+    corrected_replay_log_weight,
     run_base_replay,
 )
 from inference_scaling.backends import TabularAutoregressiveBackend
@@ -54,7 +54,7 @@ def test_truncated_history_and_fresh_tail_are_exact_in_expectation() -> None:
     expected_estimator = 0.0
     for history_token in (0, 1):
         for fresh_token in (0, 1):
-            log_energy, _, _ = corrected_replay_log_energy(
+            log_weight, _, _ = corrected_replay_log_weight(
                 [
                     ProbabilityObservation(
                         log(p[history_token]), log(q[history_token]), rewards[history_token]
@@ -68,9 +68,9 @@ def test_truncated_history_and_fresh_tail_are_exact_in_expectation() -> None:
                 truncation=truncation,
                 reward_temperature=1.0,
             )
-            expected_estimator += q[history_token] * p[fresh_token] * exp(log_energy)
-    exact_energy = float(np.dot(p, np.exp(rewards)))
-    assert expected_estimator == pytest.approx(exact_energy)
+            expected_estimator += q[history_token] * p[fresh_token] * exp(log_weight)
+    exact_weight = float(np.dot(p, np.exp(rewards)))
+    assert expected_estimator == pytest.approx(exact_weight)
 
 
 def test_evaluation_claims_are_metadata_only_disjoint_and_single_use() -> None:

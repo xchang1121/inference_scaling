@@ -22,7 +22,7 @@ def reward(_prompt, generated) -> float:
 def exact_target() -> dict[int, float]:
     first = (0.7, 0.3)
     second = ((0.9, 0.1), (0.2, 0.8))
-    energies = {
+    conditional_weights = {
         candidate: sum(
             second[candidate][completion]
             * exp(reward((), (candidate, completion)))
@@ -31,7 +31,8 @@ def exact_target() -> dict[int, float]:
         for candidate in (0, 1)
     }
     weights = {
-        candidate: first[candidate] * energies[candidate] for candidate in (0, 1)
+        candidate: first[candidate] * conditional_weights[candidate]
+        for candidate in (0, 1)
     }
     normalizer = sum(weights.values())
     return {candidate: weight / normalizer for candidate, weight in weights.items()}

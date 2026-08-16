@@ -124,7 +124,7 @@
   "profile": "gsm8k-quick",
   "public_dataset": "OpenAI GSM8K official test split",
   "schema_version": 3,
-  "scope_note": "The three training-free methods use the same exact-numeric reward and reward temperature as GRPO's KL-regularized objective. The small-proposal method uses the configured explicit log-ratio clipping and is therefore a biased, variance-stabilized finite-rollout approximation. Token slots and estimated dominant-matmul FLOPs are the primary compute metrics. Any break-even is reported as accuracy-matched only when the observed accuracy gap is within the stated tolerance. A joint empirical match additionally requires the optional parsed-answer distribution audit to pass both TV and JS thresholds; this finite audit does not prove equality of full token-sequence distributions. Wall time, memory, and measured training energy are hardware-dependent supplements.",
+  "scope_note": "The three training-free methods use the same exact-numeric reward and reward temperature as GRPO's KL-regularized objective. The small-proposal method uses the configured explicit log-ratio clipping and is therefore a biased, variance-stabilized finite-rollout approximation. Token slots and estimated dominant-matmul FLOPs are the primary compute metrics. Any break-even is reported as accuracy-matched only when the observed accuracy gap is within the stated tolerance. A joint empirical match additionally requires the optional parsed-answer distribution audit to pass both TV and JS thresholds; this finite audit does not prove equality of full token-sequence distributions. Wall time, memory, and measured training power integral are hardware-dependent supplements.",
   "tag": "validated",
   "training": {
     "base_model": {
@@ -138,7 +138,7 @@
     },
     "generated_completion_tokens": 552849,
     "global_step": 205,
-    "gpu_energy_wh": 445.9864026389339,
+    "gpu_power_integral_wh": 445.9864026389339,
     "peak_cuda_allocated_bytes": 5427094528,
     "primary_compute": {
       "accounting_basis": "padded forward token slots reconstructed per optimizer step from cumulative num_tokens, mean completion length, and microbatch maximum completion length",

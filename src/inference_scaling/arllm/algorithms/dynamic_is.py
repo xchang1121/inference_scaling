@@ -1,4 +1,4 @@
-"""Dynamic candidate proposals with replay-corrected conditional energies.
+"""Dynamic candidate proposals with replay-corrected conditional weights.
 
 This module adds three independent mechanisms to ``base_replay``: a defensive
 candidate mixture, an outer base/proposal probability ratio, and a frozen
@@ -15,12 +15,12 @@ from math import exp, isfinite, log
 import numpy as np
 
 from inference_scaling.arllm.algorithms.base_replay import (
-    ReplayEnergyEstimate,
+    ReplayWeightEstimate,
     build_fresh_replay_requests,
-    estimate_replay_energy,
+    estimate_replay_weight,
     write_reserve_records,
 )
-from inference_scaling.arllm.algorithms.conditional_energy import (
+from inference_scaling.arllm.algorithms.conditional_is import (
     RewardFunction,
     _validate_base_sampling,
 )
@@ -233,7 +233,7 @@ def empirical_design_statistics(context: DesignStatisticsContext) -> VarianceCos
 class DynamicCandidate:
     draw: DynamicCandidateDraw
     allocation: BudgetAllocation
-    estimate: ReplayEnergyEstimate
+    estimate: ReplayWeightEstimate
     log_weight: float
 
     @property
@@ -664,8 +664,8 @@ def dynamic_is_step(
     ):
         if is_terminal:
             reward_value = float(reward(prompt, generated_prefix + draw.token_ids))
-            estimate = ReplayEnergyEstimate(
-                log_energy=reward_value / config.reward_temperature,
+            estimate = ReplayWeightEstimate(
+                log_weight=reward_value / config.reward_temperature,
                 history_log_terms=(),
                 fresh_log_terms=(reward_value / config.reward_temperature,),
                 history_record_ids=(),
@@ -674,7 +674,7 @@ def dynamic_is_step(
         else:
             assert claim is not None
             assert fresh_range is not None
-            estimate = estimate_replay_energy(
+            estimate = estimate_replay_weight(
                 base_backend=base_backend,
                 base_policy=base_policy,
                 registry=registry,
@@ -697,7 +697,7 @@ def dynamic_is_step(
                 draw=draw,
                 allocation=allocation,
                 estimate=estimate,
-                log_weight=draw.outer_log_ratio + estimate.log_energy,
+                log_weight=draw.outer_log_ratio + estimate.log_weight,
             )
         )
 

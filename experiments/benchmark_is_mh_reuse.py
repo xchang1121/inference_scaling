@@ -73,7 +73,7 @@ def _zero_cost() -> dict[str, Any]:
     return {"telemetry": {"wall_seconds": 0.0}, "main_model": {}}
 
 
-def _energy_reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
+def _sequence_reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
     if not generated:
         return 0.0
     return float(sum(int(token) % 7 == 0 for token in generated)) / len(generated)
@@ -159,7 +159,7 @@ def _broker_arm(
                 first = sample_replay_records_brokered(
                     policy,
                     requests,
-                    _energy_reward,
+                    _sequence_reward,
                     broker,
                     completion_target=2,
                     on_record=lambda record: _consume_record(
@@ -169,7 +169,7 @@ def _broker_arm(
                 second = sample_replay_records_brokered(
                     policy,
                     first.partial,
-                    _energy_reward,
+                    _sequence_reward,
                     broker,
                     on_record=lambda record: _consume_record(
                         estimator, record, candidate_by_id
@@ -200,13 +200,13 @@ def _broker_arm(
                         request.record_id,
                         request.key,
                         sample.token_ids,
-                        _energy_reward((), sample.token_ids),
+                        _sequence_reward((), sample.token_ids),
                         policy.behavior_id,
                         sample.logprob,
                     )
                     records.append(record)
                     _consume_record(estimator, record, candidate_by_id)
-                restarted = sample_replay_records(policy, requests[2:], _energy_reward)
+                restarted = sample_replay_records(policy, requests[2:], _sequence_reward)
                 records.extend(restarted)
                 for record in restarted:
                     _consume_record(estimator, record, candidate_by_id)
@@ -283,7 +283,7 @@ def _streaming_is_arm(
             if verifier_delay_seconds:
                 time.sleep(verifier_delay_seconds)
             value = ordinary_importance_log_weight(
-                reward=_energy_reward(sample.prefix, sample.token_ids),
+                reward=_sequence_reward(sample.prefix, sample.token_ids),
                 reward_temperature=1.0,
                 target_logprob=sample.logprob,
                 behavior_logprob=sample.logprob,
@@ -432,7 +432,7 @@ def _mh_standard_or_prefetch_arm(
                 calls += 1
             if reward_delay_seconds:
                 time.sleep(reward_delay_seconds)
-            return _energy_reward((), sequence)
+            return _sequence_reward((), sequence)
 
         before = _snapshot(backend)
         if prefetch:

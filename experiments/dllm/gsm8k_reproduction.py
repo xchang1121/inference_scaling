@@ -334,7 +334,7 @@ def run_method(
             for candidate in step.selection.candidates
         )
         return result.token_ids, {
-            "target": "exact_base_reverse_trajectory_times_conditional_rollout_energy",
+            "target": "exact_base_reverse_trajectory_times_conditional_rollout_weight",
             "dynamic_arm": method,
             "candidate_proposal": (
                 "exact_base_reverse_trajectory"
@@ -471,9 +471,9 @@ def run_method(
             "apply_importance_correction": apply_correction,
             "importance_log_ratio_clip": clip,
             "target": (
-                "base_candidates_with_uncorrected_proposal_rollout_energy"
+                "base_candidates_with_uncorrected_proposal_rollout_weight"
                 if uncorrected
-                else "base_candidates_with_target_reverse_trajectory_rollout_energy"
+                else "base_candidates_with_target_reverse_trajectory_rollout_weight"
             ),
         }
     )

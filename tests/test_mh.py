@@ -131,7 +131,7 @@ def test_mh_reuses_reference_scores_emitted_during_proposal_generation() -> None
     assert backend.score_calls == 0
 
 
-def test_reward_mh_approaches_enumerated_base_times_energy_target() -> None:
+def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
     probabilities = (0.7, 0.3)
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
     temperature = 0.8

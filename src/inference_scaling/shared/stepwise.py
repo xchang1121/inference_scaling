@@ -2,7 +2,7 @@
 
 The driver sees an opaque generation state and opaque candidates.  AR and
 diffusion adapters implement state transitions and rollout collection; the
-driver only performs the energy-guided candidate selection shared by both.
+driver only performs the reward-weighted candidate selection shared by both.
 """
 
 from __future__ import annotations
@@ -23,19 +23,19 @@ CandidateT = TypeVar("CandidateT")
 
 @dataclass(frozen=True, slots=True)
 class StepwiseCandidate(Generic[CandidateT]):
-    """One evaluated candidate and its conditional log-energy."""
+    """One evaluated candidate and its conditional log-weight."""
 
     value: CandidateT
-    log_energy: float
+    log_weight: float
 
     def __post_init__(self) -> None:
-        if not isfinite(self.log_energy):
-            raise ValueError("candidate log-energy must be finite")
+        if not isfinite(self.log_weight):
+            raise ValueError("candidate log-weight must be finite")
 
 
 @dataclass(frozen=True, slots=True)
 class StepwiseSelection(Generic[StateT, CandidateT]):
-    """One energy-guided transition selected from a finite candidate set."""
+    """One reward-weighted transition selected from a finite candidate set."""
 
     step_index: int
     state_before: StateT
@@ -66,7 +66,7 @@ class StepwiseGenerationResult(Generic[StateT, CandidateT]):
 
 @runtime_checkable
 class StepwiseGenerationBackend(Protocol[StateT, ProposalT, CandidateT]):
-    """Operations needed by the common energy-guided generation loop.
+    """Operations needed by the common reward-weighted generation loop.
 
     A state may be an AR prefix, a partially denoised sequence, or another
     finite-step generation state.  Implementations retain all model-specific
@@ -101,18 +101,18 @@ class StepwiseGenerationBackend(Protocol[StateT, ProposalT, CandidateT]):
     ) -> StateT: ...
 
 
-def normalize_log_energies(log_energies: Sequence[float]) -> tuple[float, ...]:
-    """Normalize finite log-energies without exposing model-family details."""
+def normalize_log_weights(log_weights: Sequence[float]) -> tuple[float, ...]:
+    """Normalize finite log-weights without exposing model-family details."""
 
-    if not log_energies:
-        raise ValueError("at least one candidate log-energy is required")
-    values = np.asarray(log_energies, dtype=np.float64)
+    if not log_weights:
+        raise ValueError("at least one candidate log-weight is required")
+    values = np.asarray(log_weights, dtype=np.float64)
     if not np.all(np.isfinite(values)):
-        raise ValueError("candidate log-energies must be finite")
+        raise ValueError("candidate log-weights must be finite")
     shifted = np.exp(values - float(np.max(values)))
     total = float(shifted.sum())
     if not isfinite(total) or total <= 0:
-        raise ValueError("candidate energies cannot be normalized")
+        raise ValueError("candidate weights cannot be normalized")
     return tuple(float(value) for value in shifted / total)
 
 
@@ -126,8 +126,8 @@ def select_stepwise_candidate(
     """Perform the common finite-candidate SIR selection step."""
 
     evaluated = tuple(candidates)
-    probabilities = normalize_log_energies(
-        [candidate.log_energy for candidate in evaluated]
+    probabilities = normalize_log_weights(
+        [candidate.log_weight for candidate in evaluated]
     )
     selected_index = int(rng.choice(len(evaluated), p=probabilities))
     return StepwiseSelection(
@@ -171,7 +171,7 @@ def run_stepwise_generation(
     *,
     selection_namespace: Sequence[object] = ("stepwise",),
 ) -> StepwiseGenerationResult[StateT, CandidateT]:
-    """Run energy-guided transitions until the adapter reaches a terminal state."""
+    """Run reward-weighted transitions until the adapter reaches a terminal state."""
 
     state = backend.initial_state
     steps: list[StepwiseSelection[StateT, CandidateT]] = []
@@ -195,7 +195,7 @@ __all__ = [
     "StepwiseGenerationBackend",
     "StepwiseGenerationResult",
     "StepwiseSelection",
-    "normalize_log_energies",
+    "normalize_log_weights",
     "run_stepwise_generation",
     "select_stepwise_candidate",
     "stepwise_generation_step",

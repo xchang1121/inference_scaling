@@ -1,4 +1,4 @@
-"""Conditional-energy importance sampling.
+"""Conditional importance sampling.
 
 Candidate blocks are always sampled from the base model in this module.  A
 completion may be sampled on-policy or from a full-support off-policy proposal.
@@ -8,7 +8,7 @@ the foundation for the replay extensions.  Optional symmetric clipping of the
 sequence log-ratio is recorded explicitly; it is a biased variance-control
 setting, while the default ``None`` retains the exact importance ratio.  An
 explicit uncorrected ablation skips target-model rescoring and instead estimates
-each candidate's future energy under the rollout proposal itself.
+each candidate's future reward weighting under the rollout proposal itself.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.config import ConditionalEnergyConfig, SamplingConfig
+from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.shared.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
@@ -61,7 +61,7 @@ class ConditionalCandidate:
     token_ids: TokenSequence
     base_token_logprobs: tuple[float, ...]
     rollouts: tuple[RolloutEvaluation, ...]
-    log_energy: float
+    log_weight: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,12 +80,6 @@ class ConditionalISResult:
     prompt: TokenSequence
     token_ids: TokenSequence
     steps: tuple[ConditionalISStep, ...]
-
-
-def _logmeanexp(values: Sequence[float]) -> float:
-    """Compatibility wrapper for older replay modules."""
-
-    return logmeanexp(values)
 
 
 def _validate_base_sampling(sampling: SamplingConfig) -> None:
@@ -158,7 +152,7 @@ def _sample_candidates(
     return candidates
 
 
-def estimate_conditional_energies(
+def estimate_conditional_weights(
     *,
     base_backend: AutoregressiveBackend,
     rollout_backend: AutoregressiveBackend,
@@ -177,7 +171,7 @@ def estimate_conditional_energies(
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
-    """Estimate each candidate's conditional energy with on/off-policy rollouts."""
+    """Estimate each candidate's conditional weight with on/off-policy rollouts."""
 
     _validate_rollout_sampling(rollout_sampling)
     if rollout_count <= 0:
@@ -346,13 +340,13 @@ def estimate_conditional_energies(
     for candidate_index, candidate in enumerate(candidates):
         evaluations = by_candidate[candidate_index]
         if not evaluations:
-            raise RuntimeError("each candidate must have at least one energy contribution")
+            raise RuntimeError("each candidate must have at least one weight contribution")
         evaluated.append(
             ConditionalCandidate(
                 token_ids=candidate.token_ids,
                 base_token_logprobs=candidate.token_logprobs,
                 rollouts=tuple(evaluations),
-                log_energy=_logmeanexp([item.log_weight for item in evaluations]),
+                log_weight=logmeanexp([item.log_weight for item in evaluations]),
             )
         )
     return tuple(evaluated)
@@ -367,7 +361,7 @@ class AutoregressiveStepwiseAdapter:
         base_backend: AutoregressiveBackend,
         rollout_backend: AutoregressiveBackend,
         prompt: TokenSequence,
-        config: ConditionalEnergyConfig,
+        config: ConditionalISConfig,
         base_sampling: SamplingConfig,
         rollout_sampling: SamplingConfig,
         reward: RewardFunction | None,
@@ -421,7 +415,7 @@ class AutoregressiveStepwiseAdapter:
     ) -> Sequence[StepwiseCandidate[ConditionalCandidate]]:
         remaining = self.config.total_length - len(state)
         candidate_length = len(proposals[0].token_ids)
-        evaluated = estimate_conditional_energies(
+        evaluated = estimate_conditional_weights(
             base_backend=self.base_backend,
             rollout_backend=self.rollout_backend,
             prompt=self.prompt,
@@ -440,7 +434,7 @@ class AutoregressiveStepwiseAdapter:
             reward_batch=self.reward_batch,
         )
         return tuple(
-            StepwiseCandidate(candidate, candidate.log_energy)
+            StepwiseCandidate(candidate, candidate.log_weight)
             for candidate in evaluated
         )
 
@@ -464,7 +458,7 @@ def conditional_is_step(
     rollout_backend: AutoregressiveBackend,
     prompt: TokenSequence,
     generated_prefix: TokenSequence,
-    config: ConditionalEnergyConfig,
+    config: ConditionalISConfig,
     base_sampling: SamplingConfig,
     rollout_sampling: SamplingConfig,
     reward: RewardFunction | None,
@@ -499,7 +493,7 @@ def conditional_is_step(
 def run_conditional_is(
     base_backend: AutoregressiveBackend,
     prompt: TokenSequence,
-    config: ConditionalEnergyConfig,
+    config: ConditionalISConfig,
     reward: RewardFunction | None,
     seeds: SeedStream,
     *,

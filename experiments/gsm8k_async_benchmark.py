@@ -44,7 +44,7 @@ from inference_scaling.backends import (
     close_backend,
     set_backend_override,
 )
-from inference_scaling.config import ConditionalEnergyConfig, SamplingConfig
+from inference_scaling.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.evaluation import (
     CumulativeConsensusReward,
     consensus_index,
@@ -137,7 +137,7 @@ def _run_one(
     result = run_conditional_is(
         base_backend,
         prompt,
-        ConditionalEnergyConfig(
+        ConditionalISConfig(
             candidate_count=int(section["candidate_count"]),
             rollout_count=int(section["rollout_count"]),
             block_size=int(section["block_size"]),

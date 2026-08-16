@@ -27,7 +27,7 @@ from gsm8k_reproduction import (
     _timed,
 )
 from inference_scaling.algorithms.base_replay import _score_base, base_replay_step
-from inference_scaling.algorithms.conditional_energy import _sample_candidates
+from inference_scaling.algorithms.conditional_is import _sample_candidates
 from inference_scaling.backends import (
     BACKEND_CHOICES,
     ScoreCachingBackend,
@@ -50,15 +50,15 @@ from inference_scaling.types import GenerationRequest
 
 IMPLEMENTATION_FILES = (
     "experiments/gsm8k_replay_benchmark.py",
-    "src/inference_scaling/algorithms/base_replay.py",
-    "src/inference_scaling/algorithms/conditional_energy.py",
-    "src/inference_scaling/backends/cache.py",
-    "src/inference_scaling/backends/loader.py",
-    "src/inference_scaling/backends/transformers_backend.py",
-    "src/inference_scaling/backends/vllm_backend.py",
-    "src/inference_scaling/replay.py",
-    "src/inference_scaling/config.py",
-    "src/inference_scaling/types.py",
+    "src/inference_scaling/arllm/algorithms/base_replay.py",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py",
+    "src/inference_scaling/arllm/backends/cache.py",
+    "src/inference_scaling/arllm/backends/loader.py",
+    "src/inference_scaling/arllm/backends/transformers_backend.py",
+    "src/inference_scaling/arllm/backends/vllm_backend.py",
+    "src/inference_scaling/arllm/replay.py",
+    "src/inference_scaling/arllm/config.py",
+    "src/inference_scaling/arllm/types.py",
 )
 
 

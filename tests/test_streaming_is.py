@@ -31,8 +31,8 @@ def test_streaming_is_is_order_independent_after_the_budget_is_frozen() -> None:
     left = _filled(("fresh-0", "fresh-1a", "fresh-1b"))
     right = _filled(("fresh-1b", "fresh-0", "fresh-1a"))
 
-    assert left.final_log_energies() == pytest.approx(right.final_log_energies())
-    assert left.final_log_energies() == pytest.approx((math.log(3.0), math.log(2.0)))
+    assert left.final_log_weights() == pytest.approx(right.final_log_weights())
+    assert left.final_log_weights() == pytest.approx((math.log(3.0), math.log(2.0)))
     assert left.snapshot().effective_sample_sizes == pytest.approx((1.8, 1.6))
     assert left.select(SeedStream(7), "step") == right.select(SeedStream(7), "step")
 

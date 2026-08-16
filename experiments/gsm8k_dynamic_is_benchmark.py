@@ -75,16 +75,16 @@ from inference_scaling.types import GenerationRequest, ScoreRequest, SequenceSam
 IMPLEMENTATION_FILES = (
     "experiments/gsm8k_dynamic_is_benchmark.py",
     "experiments/summarize_gsm8k_dynamic_is.py",
-    "src/inference_scaling/algorithms/dynamic_is.py",
-    "src/inference_scaling/algorithms/base_replay.py",
-    "src/inference_scaling/backends/candidate_cache.py",
-    "src/inference_scaling/backends/cache.py",
-    "src/inference_scaling/backends/loader.py",
-    "src/inference_scaling/backends/transformers_backend.py",
-    "src/inference_scaling/backends/vllm_backend.py",
-    "src/inference_scaling/replay.py",
-    "src/inference_scaling/config.py",
-    "src/inference_scaling/types.py",
+    "src/inference_scaling/arllm/algorithms/dynamic_is.py",
+    "src/inference_scaling/arllm/algorithms/base_replay.py",
+    "src/inference_scaling/arllm/backends/candidate_cache.py",
+    "src/inference_scaling/arllm/backends/cache.py",
+    "src/inference_scaling/arllm/backends/loader.py",
+    "src/inference_scaling/arllm/backends/transformers_backend.py",
+    "src/inference_scaling/arllm/backends/vllm_backend.py",
+    "src/inference_scaling/arllm/replay.py",
+    "src/inference_scaling/arllm/config.py",
+    "src/inference_scaling/arllm/types.py",
 )
 REWARD_VERSION = "gsm8k-exact-v1"
 

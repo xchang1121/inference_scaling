@@ -67,7 +67,7 @@
     "torch": "2.13.0+cu130",
     "cuda_runtime": "13.0",
     "training_wall_seconds_cumulative": 9545.174915400014,
-    "gpu_energy_wh_cumulative": 445.9864026389339,
+    "gpu_power_integral_wh_cumulative": 445.9864026389339,
     "peak_nvidia_smi_memory_mib_last_segment": 8980.0,
     "peak_power_watts_last_segment": 307.03
   },

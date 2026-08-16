@@ -11,11 +11,13 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from math import exp, isfinite, log
+from math import isfinite
 
 import numpy as np
 
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.importance import logmeanexp
+from inference_scaling.shared.metrics import importance_effective_sample_size
 
 
 def ordinary_importance_log_weight(
@@ -62,28 +64,12 @@ class FrozenISSnapshot:
     expected_fresh: int
     received_fresh: int
     history_count: int
-    log_energies: tuple[float, ...]
+    log_weights: tuple[float, ...]
     effective_sample_sizes: tuple[float, ...]
     contribution_counts: tuple[int, ...]
 
 
 ISUpdateCallback = Callable[[FrozenISSnapshot, ISContribution], None]
-
-
-def _logmeanexp(values: Sequence[float]) -> float:
-    if not values:
-        return float("-inf")
-    maximum = max(values)
-    return maximum + log(sum(exp(value - maximum) for value in values) / len(values))
-
-
-def _ess(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-    maximum = max(values)
-    weights = np.exp(np.asarray(values, dtype=np.float64) - maximum)
-    denominator = float(np.square(weights).sum())
-    return float(weights.sum() ** 2 / denominator) if denominator else 0.0
 
 
 class FrozenStreamingISEstimator:
@@ -192,8 +178,10 @@ class FrozenStreamingISEstimator:
 
     def snapshot(self) -> FrozenISSnapshot:
         with self._lock:
-            log_energies = tuple(
-                _logmeanexp([item.log_weight for item in group])
+            log_weights = tuple(
+                logmeanexp([item.log_weight for item in group])
+                if group
+                else float("-inf")
                 for group in self._contributions
             )
             return FrozenISSnapshot(
@@ -206,25 +194,27 @@ class FrozenStreamingISEstimator:
                     for group in self._contributions
                     for item in group
                 ),
-                log_energies=log_energies,
+                log_weights=log_weights,
                 effective_sample_sizes=tuple(
-                    _ess([item.log_weight for item in group])
+                    importance_effective_sample_size(
+                        [item.log_weight for item in group]
+                    )
                     for group in self._contributions
                 ),
                 contribution_counts=tuple(len(group) for group in self._contributions),
             )
 
-    def final_log_energies(self) -> tuple[float, ...]:
+    def final_log_weights(self) -> tuple[float, ...]:
         with self._lock:
             if not self.complete:
                 raise RuntimeError("fresh IS design is not complete")
-            return self.snapshot().log_energies
+            return self.snapshot().log_weights
 
     def select(self, seeds: SeedStream, *labels: object) -> int:
-        log_energies = np.asarray(self.final_log_energies(), dtype=np.float64)
-        if np.any(~np.isfinite(log_energies)):
+        log_weights = np.asarray(self.final_log_weights(), dtype=np.float64)
+        if np.any(~np.isfinite(log_weights)):
             raise RuntimeError("every candidate needs a finite final IS estimate")
-        weights = np.exp(log_energies - float(np.max(log_energies)))
+        weights = np.exp(log_weights - float(np.max(log_weights)))
         probabilities = weights / weights.sum()
         return int(seeds.generator("frozen-streaming-is", *labels).choice(
             self.candidate_count, p=probabilities

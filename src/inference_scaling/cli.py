@@ -12,10 +12,10 @@ import numpy as np
 
 ALGORITHMS = {
     "arllm-mh": "autoregressive suffix-resampling Metropolis--Hastings",
-    "arllm-conditional-is": "autoregressive conditional-energy importance sampling",
+    "arllm-conditional-is": "autoregressive conditional importance sampling",
     "base-replay": "base-candidate off-policy rollout replay",
     "dynamic-is": "dynamic candidates, outer IS, and variance--cost allocation",
-    "dllm-conditional-is": "masked-diffusion conditional-energy importance sampling",
+    "dllm-conditional-is": "masked-diffusion conditional importance sampling",
     "dllm-mh": "masked-diffusion whole-continuation independence MH",
     "vrpo": "variance-reduced masked-diffusion preference optimization",
 }

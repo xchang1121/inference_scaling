@@ -32,22 +32,27 @@ RTX 3090 对齐配置：
 `standard` 使用 256 token、20 beams、Best-of-20、$`M=15,K=3,I=4`$；`full` 使用 512 token、
 20 beams、Best-of-30、$`M=15,K=3,I=4`$。两者的 MH 每阶段更新 10 次。
 
+<a id="method-labels"></a>
 ## 方法与目标
 
-| 标识 | 参数或状态 | 候选 | rollout / proposal | 奖励或目标 | 概率修正 |
-| --- | --- | --- | --- | --- | --- |
-| `base` | 1.5B base | — | — | base 分布 | 温度 1 |
-| `beam` | 1.5B base | beam 前缀 | — | 累计 log-probability | beam search |
-| `best_of_n` | 1.5B base | 独立完整生成 | — | 数值众数 | 选择 |
-| `mh` | 完整序列 | — | 1.5B 后缀 | $`p_{\mathrm{base}}^4`$ | Hastings 比 |
-| `conditional_is` | 1.5B base | 1.5B block | 1.5B completion | cumulative self-consistency | on-policy |
-| `conditional_is_small_proposal` | 1.5B base | 1.5B block | 0.5B completion | cumulative self-consistency | 1.5B/0.5B 后缀比 |
-| `conditional_is_small_proposal_uncorrected` | 1.5B base | 1.5B block | 0.5B completion | proposal-energy | [式 (12)](../methods/ALGORITHMS.md#alg-proposal-energy) |
-| `rl_sample` | GRPO 参数 | — | — | 训练后策略 | 温度 1 |
-| `rl_greedy` | GRPO 参数 | — | — | 训练后策略 | 逐 token argmax |
-| `verifier_mh` | 完整序列 | — | 1.5B 后缀 | 数值正确性 | Hastings 比 |
-| `verifier_conditional_is` | 1.5B base | 1.5B block | 1.5B completion | 数值正确性 | on-policy |
-| `verifier_conditional_is_small_proposal` | 1.5B base | 1.5B block | 0.5B completion | 数值正确性 | 1.5B/0.5B 后缀比 |
+| 报告名称 | AR-LLM 标识 | dLLM 标识 | 候选或 proposal | 奖励、目标与修正 |
+| --- | --- | --- | --- | --- |
+| Base | `base` | `base` | 基础模型直接采样 | 基础分布，温度 1 |
+| Beam-8 | `beam` | `block_beam` | 累计概率最高的前缀或 block | 确定性 beam search |
+| 自一致性投票-8 | `best_of_n` | `best_of_n` | 8 条独立完整生成 | 返回数值众数对应的序列 |
+| 幂分布 MH | `mh` | `trajectory_power_mh` | AR 后缀或 dLLM 反向轨迹 proposal | 目标为 $`p_{\mathrm{base}}^4`$；使用完整 Hastings 比 |
+| 标准条件 IS | `conditional_is` | `conditional_is` | 主模型候选；主模型 rollout | cumulative self-consistency；on-policy |
+| 低成本 proposal 条件 IS | `conditional_is_small_proposal` | `conditional_is_reduced_layer_proposal` | 主模型候选；0.5B 或低层 rollout | 用主模型概率除以实际 rollout proposal 概率 |
+| 未校正 rollout 加权 | `conditional_is_small_proposal_uncorrected` | `conditional_is_reduced_layer_proposal_uncorrected` | 与上一行相同 | 省略 $`p/q`$；目标为[式 (12)](../methods/ALGORITHMS.md#alg-uncorrected-rollout) |
+| RL 参数随机采样 | `rl_sample` | `vrpo_sample` | GRPO 或 VRPO 训练后的参数 | 温度 1 |
+| RL 参数贪心解码 | `rl_greedy` | `vrpo_greedy` | GRPO 或 VRPO 训练后的参数 | 每一步取最大概率项 |
+| verifier-MH | `verifier_mh` | `verifier_mh` | 完整序列 MH proposal | 数值正确性奖励；完整 Hastings 比 |
+| 标准 verifier-IS | `verifier_conditional_is` | `verifier_conditional_is` | 主模型候选与 rollout | 数值正确性奖励；on-policy |
+| 低成本 proposal verifier-IS | `verifier_conditional_is_small_proposal` | `verifier_conditional_is_reduced_layer_proposal` | 主模型候选；低成本 rollout | 数值正确性奖励；乘 $`p/q`$ |
+
+AR 的“低成本 proposal”指 Qwen2.5-0.5B；dLLM 对应 LLaDA 共享前缀层的低层 proposal。`unclipped`
+后缀表示不截断 log importance ratio；`uncorrected` 后缀表示省略主模型轨迹重评分。replay 与动态候选的
+成对标识列在[对应实验设置](#replay-与动态候选)。
 
 主要比较：
 
@@ -55,7 +60,7 @@ RTX 3090 对齐配置：
 | --- | --- | --- |
 | 最终任务质量 | Base、搜索、自一致性、幂分布 MH、条件 IS、GRPO | 准确率与计算量 |
 | 共享奖励 | verifier-MH、verifier-IS、GRPO | 准确率与经验答案分布 |
-| off-policy | 标准 IS、0.5B rollout proposal IS、proposal-energy | 准确率、ESS、分模型 FLOPs |
+| off-policy | 标准 IS、0.5B rollout proposal IS、未校正 rollout 加权 | 准确率、ESS、分模型 FLOPs |
 | replay 与动态候选 | fresh、warm、动态 proposal、方差—成本分配 | 准确率、ESS、复用率、冷启动/在线成本 |
 
 共享奖励和动态候选使用 test gold 数值，标记为 oracle 诊断。部署质量实验使用 cumulative
@@ -82,7 +87,7 @@ token-slot/FLOPs。
 0.5B rollout proposal 的默认 log 比值截断区间为 `[-10,10]`。原始比值、应用比值、截断次数和 ESS
 进入结果。`importance_log_ratio_clip = null` 使用普通未截断重要性权重。
 
-proposal-energy 设置 `apply_importance_correction=false`，候选权重为
+未校正 rollout 加权设置 `apply_importance_correction=false`，候选权重为
 
 ```math
 w_m=\frac1K\sum_{k=1}^K
@@ -152,6 +157,27 @@ QF_{\mathrm{training\text{-}free}}.
 连续批处理结果同时保存 token 匹配、数值答案匹配、共同前缀和分叉题号。cache build、design、online
 与 background drain 分列。
 
+<a id="infra-labels"></a>
+## 执行实验标签
+
+| 机制 | 优化路径 | 对照路径 | 固定口径 |
+| --- | --- | --- | --- |
+| 批处理 | AR 连续批处理 / dLLM block 批处理 | 同方法逐 prompt | 请求、seed、模型与 token 上限 |
+| 部分续跑 | 保存未完成 token / 已提交 block 后继续 | 从原始前缀重新生成 | 相同最终请求集合 |
+| 流式奖励 | completion 完成后立即提交 verifier | 整批生成后提交 | 相同 verifier 延迟与样本 |
+| 历史草稿 | AR token tree / dLLM 轨迹 cache | 普通生成 | target 校正后的相同生成分布 |
+| MH 预取 | 并行预取接受与拒绝分支 | 普通 MH | 相同更新数与实际消费分支 |
+| delayed acceptance | surrogate 早拒绝后再调用精确奖励 | 每个 proposal 调用精确奖励 | 相同 proposal 和精确目标 |
+| replay-mixture MH | base 与冻结历史 proposal 的 mixture | base proposal | 正反 mixture 概率均进入 Hastings 比；cache build 分列 |
+| warm replay | 已建库 history + fresh tail | fresh-only | 候选、总 rollout 数与在线请求固定 |
+| progressive IS | pilot 冻结配额，独立 evaluation 计算权重 | 每候选固定 rollout 数 | pilot 与 evaluation 分列 |
+| SMC forest | 条件后缀或轨迹 reservoir 复用 | 同一 SMC 的 fresh-only 路径 | 粒子数、lookahead 与 resampling 固定 |
+| 执行后端 | AR vLLM / dLLM 批量 Transformers | AR Transformers / dLLM 逐请求 | 模型、dtype、设备、请求与统计设计固定 |
+
+报告中的“便宜奖励”表示额外奖励延迟为 0；“0.2 s 奖励”表示每次调用加入 0.2 秒固定延迟；“在线”排除
+cache build。所有因子均在表中明确分子与分母。
+
+<a id="replay-labels"></a>
 ## replay 与动态候选
 
 每条 evaluation 历史记录原子消费一次。benchmark 使用重复公开 prompt 与候选 seed 形成可控 replay key。
@@ -308,7 +334,7 @@ python experiments\plot_gsm8k_ablations.py
 - 条件 IS：候选数 $`M`$、rollout 数 $`K`$、引导阶段数 $`I`$。
 - 搜索：Beam、Best-of-$`N`$ 与条件 IS 的质量—计算曲线。
 - 奖励：平均 token log-probability、平均负熵、self-certainty、self-consistency、oracle correctness。
-- off-policy：截断、未截断与 proposal-energy。
+- off-policy：截断、未截断与未校正 rollout 加权。
 - 生成：温度 $`\{0.7,1.0,1.5\}`$，最大长度 $`\{128,256,512\}`$。
 - 执行：逐 prompt、连续批处理、fresh-only、warm replay。
 - 动态候选：base fixed、replay-aware fixed、variance-cost allocation。

@@ -95,7 +95,7 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 </g>
 <text class="axis-title" x="332.0" y="629" text-anchor="middle">估算稠密前向计算量（PFLOPs，对数轴）</text>
 <text class="panel-title" x="700" y="88">精确奖励目标与重评分消融</text>
-<text class="panel-subtitle" x="700" y="109">使用标准答案；proposal-energy 省去 1.5B 重评分</text>
+<text class="panel-subtitle" x="700" y="109">使用标准答案；未校正加权省去 1.5B 重评分</text>
 <rect class="frame" x="700" y="126" width="500" height="448"/>
 <line class="grid" x1="700" y1="574.0" x2="1200" y2="574.0"/>
 <text class="tick" x="690" y="578.0" text-anchor="end">20%</text>
@@ -143,12 +143,12 @@ text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', Arial, sans-serif; fi
 <polygon points="723.6,275.8 730.6,288.8 716.6,288.8" fill="#be123c" stroke="#ffffff" stroke-width="1.5"/>
 <text class="point-label" x="733.6" y="272.8" text-anchor="start">GRPO 参数 + 随机采样  68.8%</text>
 </g>
-<g aria-label="0.5B rollout proposal-energy  62.5%, 0.5740 PFLOPs">
+<g aria-label="0.5B rollout 未校正加权  62.5%, 0.5740 PFLOPs">
 <line class="error" x1="1030.7" y1="233.1" x2="1030.7" y2="423.1" stroke="#0f766e"/>
 <line class="error" x1="1026.7" y1="233.1" x2="1034.7" y2="233.1" stroke="#0f766e"/>
 <line class="error" x1="1026.7" y1="423.1" x2="1034.7" y2="423.1" stroke="#0f766e"/>
 <rect x="1025.7" y="315.1" width="10" height="10" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
-<text class="point-label" x="1020.7" y="303.1" text-anchor="end">0.5B rollout proposal-energy  62.5%</text>
+<text class="point-label" x="1020.7" y="303.1" text-anchor="end">0.5B rollout 未校正加权  62.5%</text>
 </g>
 <text class="axis-title" x="950.0" y="629" text-anchor="middle">估算稠密前向计算量（PFLOPs，对数轴）</text>
 <text class="axis-title" x="22" y="350.0" text-anchor="middle" transform="rotate(-90 22 350.0)">单次生成准确率</text>

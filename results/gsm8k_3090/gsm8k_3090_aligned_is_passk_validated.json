@@ -113,7 +113,7 @@
     "experiments/gsm8k_is_passk.py": "384204dbc2ed74c3a9392d9e9f18a59b9d56598a9ba7bbb5da9751b8d7029c77",
     "experiments/gsm8k_passk.py": "9b606b2545f77e0868b7912e023fb61959fbd2646ac4e3fe8eaafccba28aea4d",
     "experiments/gsm8k_reproduction.py": "257cd25b2cd4bd4e20f8ff96f81e799dfda1f0871b4ca0d320a772975f17fe2f",
-    "src/inference_scaling/algorithms/conditional_energy.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
+    "src/inference_scaling/algorithms/conditional_is.py": "5ee780ee5dba73f90050b5c1fa093968317cd612011aedab0d4c94cb7c32de4d",
     "src/inference_scaling/algorithms/mh.py": "a9b861c0fd2136861fe078bbfbfe5bd9b532a278ff22f09d4b29566e9c6063ea",
     "src/inference_scaling/backends/absorbing.py": "0fd68b7dd7295ce01e6d026f25be3b4fdc0b0ccb5751cb77b15af653c8186aae",
     "src/inference_scaling/backends/batching.py": "989982adaa8c2d43fd172f7a41d2ab51e0404d1bdfee1829f815520d79d73cbf",
