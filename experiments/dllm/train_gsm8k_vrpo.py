@@ -8,8 +8,15 @@ import gc
 import json
 from pathlib import Path
 import random
+import sys
+from tempfile import TemporaryDirectory
 import time
 from typing import Any, Sequence
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from experiments.dllm.gsm8k_reproduction import _file_sha256, _fingerprint
 from experiments.shared.paired_protocol import load_pairing
@@ -56,7 +63,7 @@ def run_tiny_preflight(config: dict[str, Any]) -> dict[str, Any]:
     """Exercise the real LLaDA-MoE class, PEFT, VRPO backward, and AdamW on CPU."""
 
     import torch
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PeftModel, get_peft_model
     from transformers import AutoConfig, AutoModel
 
     model_path = str(config["model"]["path"])
@@ -110,6 +117,16 @@ def run_tiny_preflight(config: dict[str, Any]) -> dict[str, Any]:
     if gradient_l1 <= 0:
         raise RuntimeError("VRPO preflight produced zero LoRA gradients")
     optimizer.step()
+    with TemporaryDirectory(prefix="llada-vrpo-preflight-") as adapter_directory:
+        model.save_pretrained(adapter_directory)
+        reload_base = AutoModel.from_config(
+            _tiny_llada_config(remote_config), trust_remote_code=True
+        ).cpu()
+        reloaded = PeftModel.from_pretrained(reload_base, adapter_directory).eval()
+        with torch.inference_mode():
+            reload_logits = reloaded(torch.tensor([[1, 2, 3]])).logits
+        if not torch.isfinite(reload_logits).all():
+            raise RuntimeError("reloaded VRPO adapter produced non-finite logits")
     result = {
         "status": "ok",
         "device": "cpu",
@@ -121,8 +138,10 @@ def run_tiny_preflight(config: dict[str, Any]) -> dict[str, Any]:
         "lora_tensors_with_finite_gradient": len(gradients),
         "gradient_l1": gradient_l1,
         "loss": float(estimate.loss.detach()),
+        "adapter_reload": "ok",
+        "adapter_reload_logits_shape": list(reload_logits.shape),
     }
-    del optimizer, reference, model, base
+    del reloaded, reload_base, optimizer, reference, model, base
     gc.collect()
     return result
 

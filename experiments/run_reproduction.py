@@ -116,6 +116,15 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                     )
                 )
         else:
+            if args.stage == "all":
+                commands.append(
+                    [
+                        args.dllm_python,
+                        str(root / "experiments" / "dllm" / "download_llada.py"),
+                        "--config",
+                        dllm_config,
+                    ]
+                )
             vrpo = "skip"
             if args.stage == "all":
                 vrpo = "preflight" if args.profile == "smoke" else "train"
@@ -137,6 +146,11 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             ]
             if args.limit is not None:
                 command.extend(("--limit", str(args.limit)))
+            if (
+                any(method.startswith("vrpo_") for method in args.dllm_methods)
+                and vrpo != "train"
+            ):
+                command.append("--with-aligned")
             if "replay" not in args.components:
                 command.append("--no-with-replay")
             if args.dry_run:

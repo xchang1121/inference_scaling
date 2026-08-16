@@ -158,15 +158,16 @@ def _paired_args(**overrides):
 def test_paired_full_entry_routes_grpo_and_vrpo_training():
     commands = build_paired_commands(_paired_args(), Path.cwd())
 
-    assert len(commands) == 2
+    assert len(commands) == 3
     assert commands[0][0] == "python-ar"
     assert commands[1][0] == "python-dllm"
     assert Path(commands[0][1]).name == "run_arllm_suite.py"
     assert "--stage" in commands[0] and "all" in commands[0]
-    assert Path(commands[1][1]).name == "run_llada_suite.py"
-    assert commands[1][commands[1].index("--vrpo") + 1] == "train"
-    assert "--methods" in commands[1]
-    assert "--no-with-replay" not in commands[1]
+    assert Path(commands[1][1]).name == "download_llada.py"
+    assert Path(commands[2][1]).name == "run_llada_suite.py"
+    assert commands[2][commands[2].index("--vrpo") + 1] == "train"
+    assert "--methods" in commands[2]
+    assert "--no-with-replay" not in commands[2]
 
 
 def test_paired_smoke_uses_cpu_vrpo_preflight_instead_of_full_training():
@@ -174,9 +175,25 @@ def test_paired_smoke_uses_cpu_vrpo_preflight_instead_of_full_training():
         _paired_args(family="dllm", profile="smoke"), Path.cwd()
     )
 
+    assert len(commands) == 2
+    assert Path(commands[0][1]).name == "download_llada.py"
+    assert Path(commands[1][1]).name == "run_llada_suite.py"
+    assert commands[1][commands[1].index("--vrpo") + 1] == "preflight"
+
+
+def test_dllm_inference_with_aligned_method_loads_existing_adapter():
+    commands = build_paired_commands(
+        _paired_args(
+            family="dllm",
+            stage="inference",
+            dllm_methods=("vrpo_sample", "vrpo_greedy"),
+        ),
+        Path.cwd(),
+    )
+
     assert len(commands) == 1
-    assert Path(commands[0][1]).name == "run_llada_suite.py"
-    assert commands[0][commands[0].index("--vrpo") + 1] == "preflight"
+    assert "--with-aligned" in commands[0]
+    assert commands[0][commands[0].index("--vrpo") + 1] == "skip"
 
 
 def test_dllm_smoke_training_stage_is_preflight_only():
@@ -211,17 +228,21 @@ def test_interpreter_default_supports_environment_and_current_python(monkeypatch
     assert _default_python("AR_PYTHON") == sys.executable
 
 
-def test_public_entrypoints_do_not_require_pythonpath():
+def test_public_entrypoints_do_not_require_pythonpath(tmp_path):
     root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     for script in (
         root / "experiments" / "run_reproduction.py",
         root / "experiments" / "dllm" / "run_llada_suite.py",
+        root / "experiments" / "dllm" / "gsm8k_reproduction.py",
+        root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py",
+        root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py",
+        root / "experiments" / "dllm" / "train_gsm8k_vrpo.py",
     ):
         completed = subprocess.run(
             [sys.executable, str(script), "--help"],
-            cwd=root,
+            cwd=tmp_path,
             env=environment,
             capture_output=True,
             text=True,

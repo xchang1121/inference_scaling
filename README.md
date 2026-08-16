@@ -137,7 +137,8 @@ python3.12 -m pip install -e ".[dev,vllm]"
 
 [`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理。两个 Python 路径分别
 指向上述解释器。`smoke` 使用 1 题、缩短预算、AR 一次 GRPO 更新和 dLLM 的 CPU VRPO 反向传播预检；
-每个真实 LLaDA 推理子进程结束后释放模型显存。
+VRPO 预检同时保存、重新加载临时 LoRA adapter 并执行前向计算。每个真实 LLaDA 推理子进程结束后释放模型
+显存。
 
 解释器选择顺序为：CLI 的 `--ar-python` / `--dllm-python`、环境变量 `AR_PYTHON` / `DLLM_PYTHON`、
 启动统一入口的当前 Python。单侧运行可省略两个解释器参数：
@@ -158,7 +159,9 @@ python experiments\run_reproduction.py `
 ```
 
 大显存机器上的完整训练和推理使用相同入口。dLLM 阶段依次构造公开训练集偏好对、续跑 VRPO LoRA、加载
-adapter，并运行配置中的推理方法；AR 阶段依次准备数据与权重、续跑 GRPO 和运行所选实验族。
+adapter，并运行配置中的推理方法；`--stage all` 会先下载或校验固定 revision 的 LLaDA 权重。AR 阶段依次
+准备数据与权重、续跑 GRPO 和运行所选实验族。推理阶段显式选择 `vrpo_sample` 或 `vrpo_greedy` 时会加载
+已有 adapter；adapter 不存在时入口在启动模型前报错。
 
 CLI 显式路径会覆盖环境变量：
 

@@ -11,7 +11,13 @@ import time
 import tomllib
 from dataclasses import asdict, replace
 from pathlib import Path
+import sys
 from typing import Any, Sequence
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from experiments.shared.paired_protocol import load_pairing
 from experiments.dllm.profiles import apply_execution_profile

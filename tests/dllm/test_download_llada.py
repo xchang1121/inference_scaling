@@ -61,3 +61,26 @@ def test_cli_reads_output_directory_from_paired_config(monkeypatch, tmp_path, ca
 
     assert observed == [model_dir]
     assert ast.literal_eval(capsys.readouterr().out)["path"] == str(model_dir)
+
+
+def test_cli_reuses_a_valid_local_checkpoint_without_network(
+    monkeypatch, tmp_path, capsys
+):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    expected = {"path": str(model_dir), "status": "valid"}
+    monkeypatch.setattr(download_llada, "validate_checkpoint", lambda path: expected)
+
+    def fail_download(*args, **kwargs):
+        raise AssertionError("a valid local checkpoint must not access the network")
+
+    monkeypatch.setattr(download_llada, "huggingface_snapshot_download", fail_download)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["download_llada.py", "--output", str(model_dir)],
+    )
+
+    download_llada.main()
+
+    assert ast.literal_eval(capsys.readouterr().out) == expected

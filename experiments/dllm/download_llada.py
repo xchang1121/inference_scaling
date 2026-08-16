@@ -113,6 +113,15 @@ def main() -> None:
     if args.endpoint:
         os.environ["HF_ENDPOINT"] = args.endpoint
 
+    if not args.validate_only and not args.metadata_only and args.output.is_dir():
+        try:
+            existing = validate_checkpoint(args.output)
+        except (FileNotFoundError, RuntimeError):
+            pass
+        else:
+            print(existing)
+            return
+
     if not args.validate_only:
         patterns = [
             "*.json",

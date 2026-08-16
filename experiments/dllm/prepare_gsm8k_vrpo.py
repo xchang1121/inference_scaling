@@ -6,8 +6,14 @@ import argparse
 import gc
 import json
 from pathlib import Path
+import sys
 import time
 from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from experiments.dllm.gsm8k_reproduction import (
     _capped_generation_length,
