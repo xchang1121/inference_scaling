@@ -273,7 +273,12 @@ class AsyncRolloutBroker:
             completion_order: list[int] = []
             order_lock = threading.Lock()
 
-            def segment_completed(index: int, _sample: SequenceSample) -> None:
+            def segment_completed(
+                index: int,
+                _sample: SequenceSample,
+                order_lock=order_lock,
+                completion_order=completion_order,
+            ) -> None:
                 with order_lock:
                     completion_order.append(index)
 

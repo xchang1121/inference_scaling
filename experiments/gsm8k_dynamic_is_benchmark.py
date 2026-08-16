@@ -15,15 +15,19 @@ import hashlib
 import json
 import tomllib
 from dataclasses import dataclass, field
-from math import exp, isfinite, log, sqrt
+from math import exp, log, sqrt
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from experiments.arllm.runtime import validate_model_artifacts
+from experiments.shared.artifacts import load_jsonl as _load_records
+
 if __package__:
     from experiments.gsm8k_reproduction import (
         _file_sha256,
+        _implementation_hashes,
         _fingerprint,
         _fraction_text,
         _load_backend,
@@ -35,6 +39,7 @@ if __package__:
 else:
     from gsm8k_reproduction import (
         _file_sha256,
+        _implementation_hashes,
         _fingerprint,
         _fraction_text,
         _load_backend,
@@ -95,12 +100,6 @@ def _correctness_reward(backend, gold):
         return float(extract_numeric_answer(backend.decode(generated)) == gold)
 
     return reward
-
-
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _sum_delta(
@@ -644,7 +643,10 @@ def _run_method(
             cache_seconds = 0.0
         else:
             (cache_samples, generated_count), cache_seconds = _timed(
-                lambda: _prepare_replay_cache(
+                lambda generated_prefix=tuple(generated),
+                block_length=block_length,
+                rollout_length=rollout_length,
+                step_index=step_index: _prepare_replay_cache(
                     cached_base=cached_base,
                     cached_proposal=cached_proposal,
                     base_sampling=base_sampling,
@@ -653,7 +655,7 @@ def _run_method(
                     registry=registry,
                     store=store,
                     prompt=prompt,
-                    generated_prefix=tuple(generated),
+                    generated_prefix=generated_prefix,
                     candidate_count=candidate_count,
                     block_length=block_length,
                     rollout_length=rollout_length,
@@ -734,12 +736,18 @@ def _run_method(
         online_base_before = backend.snapshot()
         online_proposal_before = proposal_backend.snapshot()
         step, seconds = _timed(
-            lambda: dynamic_is_step(
+            lambda generated_prefix=tuple(generated),
+            algorithm=algorithm,
+            step_index=step_index,
+            step_proposal=step_proposal,
+            statistics_provider=statistics_provider,
+            design_prepare=design_prepare,
+            budget=budget: dynamic_is_step(
                 base_backend=cached_base,
                 registry=registry,
                 store=store,
                 prompt=prompt,
-                generated_prefix=tuple(generated),
+                generated_prefix=generated_prefix,
                 config=algorithm,
                 base_sampling=base_sampling,
                 reward=reward,
@@ -1000,14 +1008,9 @@ def main() -> None:
     manifest_path = run_dir / "manifest.json"
     records_path = run_dir / "records.jsonl"
     summary_path = run_dir / "summary.json"
-    base_hash = _file_sha256(Path(config["models"]["base"]) / "model.safetensors")
-    proposal_hash = _file_sha256(
-        Path(config["models"]["proposal"]) / "model.safetensors"
-    )
-    if base_hash != config["models"]["base_weight_sha256"]:
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    if proposal_hash != config["models"]["proposal_weight_sha256"]:
-        raise ValueError("proposal model weight hash does not match the pinned configuration")
+    input_artifacts = validate_model_artifacts(config, {"base", "proposal"})
+    base_hash = input_artifacts["weight_sha256"]["base"]
+    proposal_hash = input_artifacts["weight_sha256"]["proposal"]
     effective = {
         "config": config,
         "tag": args.tag,
@@ -1033,9 +1036,11 @@ def main() -> None:
             "reward": "GSM8K exact numeric verifier (oracle diagnostic)",
         },
         "input_weight_sha256": {"base": base_hash, "proposal": proposal_hash},
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
+        "implementation_sha256": _implementation_hashes(
+            Path(__file__).resolve().parents[1],
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
     }
     fingerprint = _fingerprint(effective)
     manifest = {

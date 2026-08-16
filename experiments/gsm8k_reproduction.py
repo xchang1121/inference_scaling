@@ -58,17 +58,25 @@ from inference_scaling.types import GenerationRequest, ScoreRequest, TokenSequen
 try:
     from experiments.shared.artifacts import (
         dataclass_snapshot_delta as _snapshot_delta,
-        file_sha256 as _file_sha256,
+        file_sha256,
+        implementation_hashes as _implementation_hashes,
         json_fingerprint as _fingerprint,
+        load_jsonl as _load_records,
     )
     from experiments.shared.statistics import wilson_interval
 except ModuleNotFoundError:  # direct execution from experiments/
     from shared.artifacts import (
         dataclass_snapshot_delta as _snapshot_delta,
-        file_sha256 as _file_sha256,
+        file_sha256,
+        implementation_hashes as _implementation_hashes,
         json_fingerprint as _fingerprint,
+        load_jsonl as _load_records,
     )
     from shared.statistics import wilson_interval
+
+_file_sha256 = file_sha256
+
+from experiments.arllm.runtime import validate_model_artifacts
 
 METHODS = (
     "base",
@@ -90,6 +98,7 @@ REWARD_SOURCES = (
     "self_certainty",
     "exact",
 )
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 IMPLEMENTATION_FILES = (
     "experiments/gsm8k_reproduction.py",
     "src/inference_scaling/arllm/algorithms/conditional_is.py",
@@ -744,19 +753,6 @@ def _summary(records: Sequence[dict[str, Any]], manifest: dict[str, Any]) -> dic
     }
 
 
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as error:
-                raise ValueError(f"invalid JSONL at {path}:{line_number}") from error
-    return records
-
-
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     set_backend_override(config, args.backend)
     if args.limit is not None:
@@ -881,36 +877,28 @@ def main() -> None:
         int(config["run"]["sample_count"]),
         seed=int(config["run"]["subset_seed"]),
     )
-    base_weight_path = Path(str(config["models"]["base"])) / "model.safetensors"
-    actual_base_hash = _file_sha256(base_weight_path)
-    if actual_base_hash != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    input_weight_hashes = {"base": actual_base_hash}
-    actual_adapter_hash = None
+    roles = {"base"}
     if args.method.startswith("rl_"):
-        adapter_weight = Path(str(config["models"]["rl"])) / "adapter_model.safetensors"
-        actual_adapter_hash = _file_sha256(adapter_weight)
-        input_weight_hashes["rl_adapter"] = actual_adapter_hash
-    actual_proposal_hash = None
+        roles.add("rl")
     if args.method.endswith("small_proposal"):
-        proposal_weight_path = (
-            Path(str(config["models"]["proposal"])) / "model.safetensors"
-        )
-        actual_proposal_hash = _file_sha256(proposal_weight_path)
-        if actual_proposal_hash != str(config["models"]["proposal_weight_sha256"]):
-            raise ValueError(
-                "proposal model weight hash does not match the pinned configuration"
-            )
-        input_weight_hashes["proposal"] = actual_proposal_hash
+        roles.add("proposal")
+    input_artifacts = validate_model_artifacts(config, roles)
+    input_weight_hashes = input_artifacts["weight_sha256"]
+    actual_base_hash = input_weight_hashes["base"]
+    actual_adapter_hash = input_weight_hashes.get("rl_adapter")
+    actual_proposal_hash = input_weight_hashes.get("proposal")
     effective = {
         "config": config,
         "method": args.method,
         "tag": args.tag,
         "draw_index": args.draw_index,
         "input_weight_sha256": input_weight_hashes,
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
+        "input_adapter_sha256": input_artifacts["adapter_sha256"],
+        "implementation_sha256": _implementation_hashes(
+            REPOSITORY_ROOT,
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
         "problem_indices": [problem.index for problem in problems],
     }
     fingerprint = _fingerprint(effective)
@@ -1026,7 +1014,10 @@ def main() -> None:
             before = backend.snapshot()
             proposal_before = proposal_backend.snapshot() if proposal_backend else None
             (tokens, diagnostics), elapsed = _timed(
-                lambda: _run_method(
+                lambda backend=backend,
+                problem=problem,
+                prompt=prompt,
+                proposal_backend=proposal_backend: _run_method(
                     args.method,
                     backend,
                     problem,
@@ -1080,8 +1071,6 @@ def main() -> None:
 
     close_backend(proposal_backend)
     close_backend(backend)
-    del proposal_backend
-    del backend
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

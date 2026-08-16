@@ -43,11 +43,18 @@ from inference_scaling.evaluation import (
 
 try:
     from experiments.shared.artifacts import (
-        file_sha256 as _sha256,
+        checkpoint_metadata_hashes,
+        cached_file_sha256,
+        implementation_hashes,
         json_fingerprint,
     )
 except ModuleNotFoundError:  # direct execution from experiments/
-    from shared.artifacts import file_sha256 as _sha256, json_fingerprint
+    from shared.artifacts import (
+        checkpoint_metadata_hashes,
+        cached_file_sha256,
+        implementation_hashes,
+        json_fingerprint,
+    )
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -236,12 +243,14 @@ def main() -> None:
 
     base_path = Path(config["model"]["base"])
     weight_path = base_path / "model.safetensors"
-    actual_weight_hash = _sha256(weight_path)
     expected_weight_hash = str(config["model"]["weight_sha256"])
-    if actual_weight_hash != expected_weight_hash:
-        raise ValueError(
-            f"base weight hash mismatch: expected {expected_weight_hash}, got {actual_weight_hash}"
-        )
+    actual_weight_hash = cached_file_sha256(
+        weight_path,
+        cache_directory=Path(__file__).resolve().parents[1]
+        / ".cache"
+        / "artifact_hashes",
+        expected=expected_weight_hash,
+    )
 
     train_path = Path(config["data"]["train"])
     test_path = Path(config["data"]["test"])
@@ -278,6 +287,12 @@ def main() -> None:
         "model": config["model"],
         "training": training,
         "lora": config["lora"],
+        "input_weight_sha256": actual_weight_hash,
+        "input_metadata_sha256": checkpoint_metadata_hashes(base_path),
+        "implementation_sha256": implementation_hashes(
+            Path(__file__).resolve().parents[1],
+            entrypoints=("experiments/train_gsm8k_grpo.py",),
+        ),
     }
     fingerprint = _resume_fingerprint(effective)
     manifest_path = output / "run_manifest.json"

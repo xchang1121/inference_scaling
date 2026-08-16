@@ -123,7 +123,7 @@ def test_delayed_acceptance_skips_some_exact_reward_evaluations():
         sampling=EXACT,
         reward=_reward,
         surrogate_reward=lambda _prompt, tokens: -100.0 * sum(tokens),
-        seed=11,
+        seed=0,
     )
 
     assert result.exact_reward_evaluations < CONFIG.updates + 1

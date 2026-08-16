@@ -8,6 +8,8 @@ import statistics
 from collections import Counter
 from typing import Mapping, Sequence
 
+from inference_scaling.shared.metrics import normalize_counts, total_variation
+
 
 def wilson_interval(
     successes: int,
@@ -74,19 +76,13 @@ def bootstrap_mean_interval(
 
 
 def probability_distribution(counts: Mapping[str, int]) -> dict[str, float]:
-    total = sum(counts.values())
-    if total <= 0:
-        raise ValueError("a distribution requires at least one observation")
-    return {key: count / total for key, count in counts.items()}
+    return normalize_counts(counts)
 
 
 def total_variation_distance(
     left: Mapping[str, float], right: Mapping[str, float]
 ) -> float:
-    support = set(left) | set(right)
-    return 0.5 * sum(
-        abs(left.get(key, 0.0) - right.get(key, 0.0)) for key in support
-    )
+    return total_variation(left, right)
 
 
 def jensen_shannon_bits(
@@ -166,4 +162,3 @@ __all__ = [
     "total_variation_distance",
     "wilson_interval",
 ]
-

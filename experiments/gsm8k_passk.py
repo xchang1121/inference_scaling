@@ -17,11 +17,14 @@ from typing import Any
 
 import torch
 
+from experiments.arllm.runtime import validate_model_artifacts
+
 if __package__:
     from experiments.gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
         _fingerprint,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -35,6 +38,7 @@ else:
         IMPLEMENTATION_FILES,
         _file_sha256,
         _fingerprint,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -60,12 +64,13 @@ from inference_scaling.evaluation import (
 )
 from inference_scaling.rng import SeedStream
 from experiments.shared.statistics import estimated_pass_at_k
+from experiments.shared.artifacts import load_jsonl as _load_jsonl
 
 PASSK_METHODS = ("base", "mh", "rl_sample")
 PASSK_IMPLEMENTATION_FILES = (
     *IMPLEMENTATION_FILES,
     "experiments/gsm8k_passk.py",
-    "src/inference_scaling/backends/batching.py",
+    "src/inference_scaling/arllm/backends/batching.py",
 )
 
 
@@ -90,19 +95,6 @@ class _MethodBackend:
 
     def decode(self, tokens) -> str:
         return self._raw_backend.decode(tokens)
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as error:
-                raise ValueError(f"invalid JSONL at {path}:{line_number}") from error
-    return records
 
 
 _estimated_pass_at_k = estimated_pass_at_k
@@ -140,6 +132,8 @@ def _prepare_manifest(
     input_weight_sha256: dict[str, str],
     implementation_sha256: dict[str, str],
     raw_path: Path,
+    input_metadata_sha256: dict[str, Any] | None = None,
+    input_adapter_sha256: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str, Path]:
     effective = {
         "config": config,
@@ -150,6 +144,8 @@ def _prepare_manifest(
         "workers": workers,
         "problem_indices": list(problem_indices),
         "input_weight_sha256": input_weight_sha256,
+        "input_metadata_sha256": input_metadata_sha256 or {},
+        "input_adapter_sha256": input_adapter_sha256 or {},
         "implementation_sha256": implementation_sha256,
     }
     fingerprint = _fingerprint(effective)
@@ -591,10 +587,15 @@ def main() -> None:
     profile = str(config["run"]["name"])
     output = args.output or Path(f"results/{profile}_{args.tag}.json")
     raw_path = args.raw_output or output.with_suffix(".chunks.jsonl")
-    implementation_sha256 = {
-        path: _file_sha256(Path(path)) for path in PASSK_IMPLEMENTATION_FILES
-    }
-    input_weight_sha256 = _input_weight_hashes(config, methods)
+    implementation_sha256 = _implementation_hashes(
+        Path(__file__).resolve().parents[1],
+        entrypoints=PASSK_IMPLEMENTATION_FILES,
+    )
+    roles = {"base"}
+    if "rl_sample" in methods:
+        roles.add("rl")
+    input_artifacts = validate_model_artifacts(config, roles)
+    input_weight_sha256 = input_artifacts["weight_sha256"]
     _, fingerprint, _ = _prepare_manifest(
         config=config,
         data_path=args.data,
@@ -605,6 +606,8 @@ def main() -> None:
         input_weight_sha256=input_weight_sha256,
         implementation_sha256=implementation_sha256,
         raw_path=raw_path,
+        input_metadata_sha256=input_artifacts["metadata_sha256"],
+        input_adapter_sha256=input_artifacts["adapter_sha256"],
     )
     plan = _chunk_plan(methods, args.draws, problem_indices, args.workers)
     completed = _validate_chunks(_load_jsonl(raw_path), fingerprint, plan)
@@ -655,6 +658,8 @@ def main() -> None:
         "manifest_fingerprint": fingerprint,
         "raw_chunks_sha256": _file_sha256(raw_path),
         "input_weight_sha256": input_weight_sha256,
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
+        "input_adapter_sha256": input_artifacts["adapter_sha256"],
         "implementation_sha256": implementation_sha256,
         "pass_at_k_definition": (
             "for n independent draws with c correct answers, each problem contributes "

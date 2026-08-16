@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isclose
+from math import isclose, isfinite
 from typing import Protocol, Sequence, runtime_checkable
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
@@ -51,6 +51,8 @@ class DiffusionTraceStep:
             raise ValueError("committed positions must be strictly sorted")
         if len(set(self.positions)) != len(self.positions):
             raise ValueError("committed positions must be unique")
+        if self.logprob is not None and not isfinite(self.logprob):
+            raise ValueError("trace log-probability must be finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,10 +77,14 @@ class DiffusionSample:
                 if self.token_ids[position] != token_id:
                     raise ValueError("trace token does not match the final continuation")
                 seen.add(position)
-        if seen and len(seen) != len(self.token_ids):
+        if self.trace and len(seen) != len(self.token_ids):
             raise ValueError("a complete trace must commit every continuation position")
         step_logprobs = [step.logprob for step in self.trace]
         if self.trajectory_logprob is not None:
+            if self.token_ids and not self.trace:
+                raise ValueError("an exact trajectory requires a complete trace")
+            if not isfinite(self.trajectory_logprob):
+                raise ValueError("trajectory_logprob must be finite")
             if any(value is None for value in step_logprobs):
                 raise ValueError("an exact trajectory requires every step probability")
             total = sum(float(value) for value in step_logprobs)

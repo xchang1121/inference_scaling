@@ -145,6 +145,11 @@ def allocate_variance_cost_budget(
     history_caps = np.asarray(history_capacities, dtype=np.int64)
     if np.any(history_caps < 0):
         raise ValueError("history capacities must be non-negative")
+    missing_groups = set(history_groups) - set(group_capacities)
+    if missing_groups:
+        raise ValueError(
+            f"history groups are missing capacities: {sorted(map(repr, missing_groups))}"
+        )
     history_costs = np.asarray(
         [item.history_cost for item in statistics], dtype=np.float64
     )
@@ -227,7 +232,7 @@ def allocate_variance_cost_budget(
                 index for index in active_history if history_groups[index] == group
             ]
             if members and sum(proposed_history[index] for index in members) > (
-                group_remaining.get(group, 0.0) + 1e-12
+                group_remaining[group] + 1e-12
             ):
                 violated_group = group
                 break
@@ -248,7 +253,7 @@ def allocate_variance_cost_budget(
                 dtype=np.float64,
             )
             fixed = _proportional_capped_counts(
-                group_remaining.get(violated_group, 0.0), coefficients, caps
+                group_remaining[violated_group], coefficients, caps
             )
             fixed_cost = sum(
                 value * history_costs[member]
@@ -280,7 +285,7 @@ def allocate_variance_cost_budget(
             remaining_budget -= addition * history_costs[violated_index]
             group = history_groups[violated_index]
             group_remaining[group] = max(
-                0.0, group_remaining.get(group, 0.0) - addition
+                0.0, group_remaining[group] - addition
             )
             active_history.remove(violated_index)
             continue
@@ -321,7 +326,7 @@ def allocate_variance_cost_budget(
             group = history_groups[index]
             if history_integer[index] >= history_caps[index]:
                 continue
-            if group_used.get(group, 0) >= group_capacities.get(group, 0):
+            if group_used.get(group, 0) >= group_capacities[group]:
                 continue
             history_integer[index] += 1
             group_used[group] = group_used.get(group, 0) + 1

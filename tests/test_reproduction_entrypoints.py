@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
 from experiments.run_reproduction import (
     _default_python,
@@ -137,7 +139,7 @@ def _paired_args(**overrides):
         "ar_methods": ("base", "rl_sample"),
         "dllm_methods": ("base", "conditional_is"),
         "components": ("quality", "replay"),
-        "backend": "transformers",
+        "backend": None,
         "ar_python": "python-ar",
         "dllm_python": "python-dllm",
         "limit": 3,
@@ -242,6 +244,14 @@ def test_paired_entry_routes_supported_components_to_dllm_suite():
     ]
     assert command[command.index("--passk-draws") + 1] == "3"
     assert command[command.index("--distribution-draws") + 1] == "5"
+
+
+def test_dllm_only_entry_rejects_ar_backend_option():
+    with pytest.raises(ValueError, match="applies only"):
+        build_paired_commands(
+            _paired_args(family="dllm", backend="transformers"),
+            Path.cwd(),
+        )
 
 
 def test_interpreter_default_supports_environment_and_current_python(monkeypatch):

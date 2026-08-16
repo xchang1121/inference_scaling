@@ -109,6 +109,10 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_standard.toml"))
     parser.add_argument("--results-root", type=Path, default=Path("results/gsm8k"))
     parser.add_argument("--output", type=Path, default=Path("results/gsm8k_ablations.json"))
+    parser.add_argument(
+        "--tag-prefix",
+        help="include only one suite tag and remove its prefix from ablation labels",
+    )
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
@@ -121,7 +125,14 @@ def main() -> None:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         if not _is_method_summary(summary):
             continue
-        tag = str(summary["tag"])
+        recorded_tag = str(summary["tag"])
+        if args.tag_prefix is not None:
+            prefix = f"{args.tag_prefix}-"
+            if not recorded_tag.startswith(prefix):
+                continue
+            tag = recorded_tag[len(prefix) :]
+        else:
+            tag = recorded_tag
         groups = _groups(tag)
         if not groups:
             continue
@@ -135,6 +146,7 @@ def main() -> None:
         row = {
             "method": summary["method"],
             "tag": tag,
+            "recorded_tag": recorded_tag,
             "runner_sha256": implementation[RUNNER_PATH],
             "examples": int(summary["examples"]),
             "accuracy": float(summary["accuracy"]),

@@ -82,6 +82,18 @@ def test_allocation_respects_shared_history_inventory_and_fresh_minimum() -> Non
     assert sum(item.estimated_cost for item in allocations) <= 6.0
 
 
+def test_allocation_requires_a_capacity_for_every_history_group() -> None:
+    with pytest.raises(ValueError, match="missing capacities"):
+        allocate_variance_cost_budget(
+            outer_ratios=[1.0],
+            statistics=[VarianceCostEstimate(1.0, 1.0)],
+            history_capacities=[1],
+            history_groups=["missing"],
+            group_capacities={},
+            rollout_budget=2.0,
+        )
+
+
 def test_fresh_only_allocator_reuses_the_common_variance_cost_solver() -> None:
     allocations = allocate_fresh_rollout_budget(
         outer_ratios=(1.0, 1.0),

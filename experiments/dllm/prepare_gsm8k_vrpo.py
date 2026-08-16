@@ -17,13 +17,16 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.runtime import (
     capped_generation_length,
-    file_sha256,
+    checkpoint_metadata_hashes,
+    implementation_hashes,
     json_fingerprint,
     llada_snapshot_delta,
     sampling_from_section,
+    validate_llada_weights,
 )
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.artifacts import load_jsonl as _load_records
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.preferences import select_verified_preference_pair
 from inference_scaling.dllm.types import DiffusionGenerationRequest
@@ -43,20 +46,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/backends/loader.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
 )
-
-
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    records = []
-    with path.open("r", encoding="utf-8") as source:
-        for line_number, line in enumerate(source, start=1):
-            if line.strip():
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"invalid JSONL at {path}:{line_number}") from exc
-    return records
 
 
 def main() -> None:
@@ -91,15 +80,7 @@ def main() -> None:
         raise ValueError("max_pairs cannot exceed candidate_pool_size")
 
     model_dir = Path(str(config["model"]["path"]))
-    weights = tuple(str(value) for value in config["model"]["weight_files"])
-    expected_hashes = tuple(str(value) for value in config["model"]["weight_sha256"])
-    actual_hashes: dict[str, str] = {}
-    for name, expected_hash in zip(weights, expected_hashes, strict=True):
-        path = model_dir / name
-        actual = file_sha256(path)
-        if actual != expected_hash:
-            raise ValueError(f"LLaDA weight hash does not match the manifest: {path}")
-        actual_hashes[name] = actual
+    actual_hashes = validate_llada_weights(config)
 
     problems = select_problems(
         load_gsm8k(args.data, split="train"),
@@ -114,9 +95,11 @@ def main() -> None:
         "candidate_pool_size": pool_size,
         "num_generations": generations,
         "model_weight_sha256": actual_hashes,
-        "implementation_sha256": {
-            path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
+        "model_metadata_sha256": checkpoint_metadata_hashes(model_dir),
+        "implementation_sha256": implementation_hashes(
+            REPOSITORY_ROOT,
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
     }
     fingerprint = json_fingerprint(effective)
     output_path.parent.mkdir(parents=True, exist_ok=True)

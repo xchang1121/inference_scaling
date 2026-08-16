@@ -37,7 +37,6 @@ from inference_scaling.shared.smc import (
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
-    SequenceSample,
     TokenSequence,
 )
 

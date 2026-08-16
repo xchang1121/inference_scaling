@@ -18,13 +18,16 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.artifacts import load_jsonl as _load_records
 from experiments.shared.config_overrides import apply_config_overrides
 from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.dllm.runtime import (
+    adapter_hashes as _adapter_hashes,
     capped_generation_length as _capped_generation_length,
+    checkpoint_metadata_hashes,
     empty_llada_compute as _zero_compute,
-    file_sha256 as _file_sha256,
+    implementation_hashes as _implementation_hashes,
     json_fingerprint as _fingerprint,
     llada_snapshot_delta as _snapshot_delta,
     sampling_from_section as _sampling,
@@ -524,13 +527,6 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    with path.open("r", encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
-
-
 def _synchronize_cuda(device: str) -> None:
     if not device.startswith("cuda"):
         return
@@ -549,6 +545,8 @@ def _run_draw(
     config: dict[str, Any],
     problems: Sequence[GSM8KProblem],
     actual_hashes: dict[str, str],
+    model_metadata_hashes: dict[str, str],
+    adapter_hashes: dict[str, str] | None,
     implementation_hashes: dict[str, str],
     backend: Any,
     proposal_backend: Any | None,
@@ -561,6 +559,8 @@ def _run_draw(
         "draw_index": draw_index,
         "execution_profile": profile,
         "model_weight_sha256": actual_hashes,
+        "model_metadata_sha256": model_metadata_hashes,
+        "adapter_sha256": adapter_hashes,
         "problem_indices": [problem.index for problem in problems],
         "implementation_sha256": implementation_hashes,
     }
@@ -697,21 +697,30 @@ def main() -> None:
         draw_indices = (draw_index,)
     device = validate_runtime_device(config)
     actual_hashes = validate_llada_weights(config)
+    model_metadata_hashes = checkpoint_metadata_hashes(
+        Path(str(config["model"]["path"]))
+    )
     problems = select_problems(
         load_gsm8k(args.data),
         int(config["run"]["sample_count"]),
         seed=int(config["run"]["subset_seed"]),
     )
     role = "aligned" if args.method.startswith("vrpo_") else "base"
+    adapter_hashes = (
+        _adapter_hashes(Path(str(config["alignment"]["adapter"])))
+        if role == "aligned"
+        else None
+    )
     backend = load_llada_backend(config, role)
     proposal_backend = (
         load_llada_backend(config, "proposal", base_backend=backend)
         if "reduced_layer_proposal" in args.method or args.method in DYNAMIC_METHODS
         else None
     )
-    implementation_hashes = {
-        path: _file_sha256(REPOSITORY_ROOT / path) for path in IMPLEMENTATION_FILES
-    }
+    implementation_hashes = _implementation_hashes(
+        REPOSITORY_ROOT,
+        entrypoints=IMPLEMENTATION_FILES,
+    )
     try:
         for draw_index in draw_indices:
             _run_draw(
@@ -723,6 +732,8 @@ def main() -> None:
                 config=config,
                 problems=problems,
                 actual_hashes=actual_hashes,
+                model_metadata_hashes=model_metadata_hashes,
+                adapter_hashes=adapter_hashes,
                 implementation_hashes=implementation_hashes,
                 backend=backend,
                 proposal_backend=proposal_backend,

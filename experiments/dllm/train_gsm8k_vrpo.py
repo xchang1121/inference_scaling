@@ -18,7 +18,11 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.runtime import file_sha256, json_fingerprint
+from experiments.dllm.runtime import (
+    checkpoint_metadata_hashes,
+    implementation_hashes,
+    json_fingerprint,
+)
 from experiments.shared.paired_protocol import load_pairing
 from inference_scaling.dllm.config import VRPOSamplingConfig
 from inference_scaling.dllm.vrpo import (
@@ -284,14 +288,16 @@ def main() -> None:
     pairs, preference_manifest = _load_pairs(data_path, preference_manifest_path)
     output = Path(str(config["alignment"]["adapter"]))
     model_path = str(config["model"]["path"])
-    implementation_hashes = {
-        path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-    }
+    source_hashes = implementation_hashes(
+        REPOSITORY_ROOT,
+        entrypoints=IMPLEMENTATION_FILES,
+    )
     effective = {
         "config": config,
         "max_steps": max_steps,
         "preference_fingerprint": preference_manifest["fingerprint"],
-        "implementation_sha256": implementation_hashes,
+        "model_metadata_sha256": checkpoint_metadata_hashes(Path(model_path)),
+        "implementation_sha256": source_hashes,
     }
     fingerprint = json_fingerprint(effective)
 

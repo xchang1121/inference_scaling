@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
-
-
-def _positive(name: str, value: int | float) -> None:
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value!r}")
+from inference_scaling.shared.config import (
+    RuntimeConfig as RuntimeConfig,
+    SMCForestConfig as SMCForestConfig,
+    canonical_float,
+    require_finite,
+    require_positive,
+    require_probability,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,18 +24,18 @@ class SamplingConfig:
     eos_token_id: int | None = None
 
     def __post_init__(self) -> None:
-        _positive("temperature", self.temperature)
-        if not 0 < self.top_p <= 1:
-            raise ValueError(f"top_p must lie in (0, 1], got {self.top_p!r}")
+        require_positive("temperature", self.temperature)
+        require_probability("top_p", self.top_p, include_zero=False)
         if self.top_k is not None:
-            _positive("top_k", self.top_k)
+            require_positive("top_k", self.top_k)
         if self.eos_token_id is not None and self.eos_token_id < 0:
             raise ValueError("eos_token_id must be non-negative")
 
     @property
     def policy_id(self) -> str:
         return (
-            f"temperature={self.temperature:g};top_p={self.top_p:g};"
+            f"temperature={canonical_float(self.temperature)};"
+            f"top_p={canonical_float(self.top_p)};"
             f"top_k={self.top_k};eos={self.eos_token_id}"
         )
 
@@ -47,10 +49,11 @@ class MHConfig:
     chains: int = 1
 
     def __post_init__(self) -> None:
+        require_finite("alpha", self.alpha)
         if self.alpha < 1:
             raise ValueError("alpha must be at least one")
         for name in ("total_length", "block_size", "steps_per_block", "chains"):
-            _positive(name, getattr(self, name))
+            require_positive(name, getattr(self, name))
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
 
@@ -66,8 +69,8 @@ class RewardMHConfig:
 
     def __post_init__(self) -> None:
         for name in ("total_length", "block_size", "steps_per_block"):
-            _positive(name, getattr(self, name))
-        _positive("reward_temperature", self.reward_temperature)
+            require_positive(name, getattr(self, name))
+        require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
 
@@ -89,10 +92,10 @@ class ConditionalISConfig:
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
-            _positive(name, getattr(self, name))
-        _positive("reward_temperature", self.reward_temperature)
+            require_positive(name, getattr(self, name))
+        require_positive("reward_temperature", self.reward_temperature)
         if self.importance_log_ratio_clip is not None:
-            _positive(
+            require_positive(
                 "importance_log_ratio_clip",
                 self.importance_log_ratio_clip,
             )
@@ -129,11 +132,11 @@ class ProgressiveISConfig:
             "total_length",
             "reward_workers",
         ):
-            _positive(name, getattr(self, name))
-        _positive("evaluation_cost_budget", self.evaluation_cost_budget)
-        _positive("reward_temperature", self.reward_temperature)
+            require_positive(name, getattr(self, name))
+        require_positive("evaluation_cost_budget", self.evaluation_cost_budget)
+        require_positive("reward_temperature", self.reward_temperature)
         if self.importance_log_ratio_clip is not None:
-            _positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
+            require_positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
         if self.run_ahead_rollouts_per_candidate < 0:
@@ -160,14 +163,14 @@ class BaseReplayConfig:
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "block_size", "total_length"):
-            _positive(name, getattr(self, name))
-        _positive("reward_temperature", self.reward_temperature)
+            require_positive(name, getattr(self, name))
+        require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
         if self.max_history_per_candidate < 0:
             raise ValueError("max_history_per_candidate must be non-negative")
-        _positive("fresh_rollouts", self.fresh_rollouts)
-        _positive("truncation", self.truncation)
+        require_positive("fresh_rollouts", self.fresh_rollouts)
+        require_positive("truncation", self.truncation)
         if self.reserve_rollouts < 0:
             raise ValueError("reserve_rollouts must be non-negative")
 
@@ -187,16 +190,17 @@ class DynamicISConfig:
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "block_size", "total_length"):
-            _positive(name, getattr(self, name))
-        _positive("reward_temperature", self.reward_temperature)
+            require_positive(name, getattr(self, name))
+        require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
         if self.max_history_per_candidate < 0:
             raise ValueError("max_history_per_candidate must be non-negative")
-        _positive("truncation", self.truncation)
+        require_positive("truncation", self.truncation)
         if self.reserve_rollouts < 0:
             raise ValueError("reserve_rollouts must be non-negative")
-        _positive("rollout_budget", self.rollout_budget)
-        if not 0 <= self.auxiliary_mixture < 1:
+        require_positive("rollout_budget", self.rollout_budget)
+        require_probability("auxiliary_mixture", self.auxiliary_mixture)
+        if self.auxiliary_mixture >= 1:
             raise ValueError("auxiliary_mixture must lie in [0, 1)")
-        _positive("minimum_fresh_per_candidate", self.minimum_fresh_per_candidate)
+        require_positive("minimum_fresh_per_candidate", self.minimum_fresh_per_candidate)

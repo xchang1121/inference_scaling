@@ -16,7 +16,7 @@ from inference_scaling.shared.importance import (
     ProbabilityObservation,
     ReplayWeightEstimate as SharedReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
-    corrected_replay_log_weight,
+    corrected_replay_log_weight as corrected_replay_log_weight,
     logmeanexp,
 )
 from inference_scaling.arllm.replay import (
@@ -33,7 +33,7 @@ from inference_scaling.arllm.replay import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.stepwise import normalize_log_weights
-from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)

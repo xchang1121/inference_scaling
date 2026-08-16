@@ -3,6 +3,46 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
+
+
+def canonical_float(value: float) -> str:
+    """Return a stable, round-trippable identifier for one finite float."""
+
+    numeric = float(value)
+    if not isfinite(numeric):
+        raise ValueError(f"a policy parameter must be finite, got {value!r}")
+    return repr(numeric)
+
+
+def require_finite(name: str, value: int | float) -> None:
+    if not isfinite(float(value)):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+
+
+def require_positive(name: str, value: int | float) -> None:
+    require_finite(name, value)
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value!r}")
+
+
+def require_nonnegative(name: str, value: int | float) -> None:
+    require_finite(name, value)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value!r}")
+
+
+def require_probability(
+    name: str,
+    value: float,
+    *,
+    include_zero: bool = True,
+) -> None:
+    require_finite(name, value)
+    lower_valid = value >= 0 if include_zero else value > 0
+    if not lower_valid or value > 1:
+        interval = "[0, 1]" if include_zero else "(0, 1]"
+        raise ValueError(f"{name} must lie in {interval}, got {value!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,12 +53,9 @@ class RuntimeConfig:
     deterministic: bool = True
 
     def __post_init__(self) -> None:
-        if self.seed < 0:
-            raise ValueError("seed must be non-negative")
-        if self.max_batch_size <= 0:
-            raise ValueError("max_batch_size must be positive")
-        if self.max_batch_tokens <= 0:
-            raise ValueError("max_batch_tokens must be positive")
+        require_nonnegative("seed", self.seed)
+        require_positive("max_batch_size", self.max_batch_size)
+        require_positive("max_batch_tokens", self.max_batch_tokens)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +81,17 @@ class SMCForestConfig:
             "reward_temperature",
             "reward_workers",
         ):
-            if getattr(self, name) <= 0:
-                raise ValueError(f"{name} must be positive")
+            require_positive(name, getattr(self, name))
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
 
 
-__all__ = ["RuntimeConfig", "SMCForestConfig"]
+__all__ = [
+    "RuntimeConfig",
+    "SMCForestConfig",
+    "canonical_float",
+    "require_finite",
+    "require_nonnegative",
+    "require_positive",
+    "require_probability",
+]

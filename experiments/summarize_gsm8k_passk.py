@@ -153,7 +153,12 @@ def summarize_is_raw_chunks(
         if total_rollouts <= 0:
             raise ValueError(f"{method} has no rollout diagnostics")
 
-        def weighted(field: str) -> float:
+        def weighted(
+            field: str,
+            diagnostics=diagnostics,
+            rollout_counts=rollout_counts,
+            total_rollouts=total_rollouts,
+        ) -> float:
             return sum(
                 float(item[field]) * count
                 for item, count in zip(diagnostics, rollout_counts, strict=True)

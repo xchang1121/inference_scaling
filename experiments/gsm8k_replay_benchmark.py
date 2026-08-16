@@ -15,11 +15,13 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-import torch
+
+from experiments.arllm.runtime import validate_model_artifacts
+from experiments.shared.artifacts import load_jsonl as _load_records
 
 from gsm8k_reproduction import (
     _fingerprint,
-    _file_sha256,
+    _implementation_hashes,
     _fraction_text,
     _load_backend,
     _prompt_tokens,
@@ -176,10 +178,15 @@ def _run_warm(
         cache_base_before = backend.snapshot()
         cache_proposal_before = proposal_backend.snapshot()
 
-        def build_history():
+        def build_history(
+            generated_prefix=tuple(generated),
+            block_length=block_length,
+            remaining=remaining,
+            step_index=step_index,
+        ):
             candidates = _sample_candidates(
                 cached_base,
-                prompt + tuple(generated),
+                prompt + generated_prefix,
                 algorithm.candidate_count,
                 block_length,
                 sampling,
@@ -193,7 +200,7 @@ def _run_warm(
                     continue
                 key = ReplayKey(
                     prompt,
-                    tuple(generated),
+                    generated_prefix,
                     candidate.token_ids,
                     "gsm8k-exact-v1",
                 )
@@ -236,12 +243,13 @@ def _run_warm(
         online_before = backend.snapshot()
         online_proposal_before = proposal_backend.snapshot()
         (step, decision_seconds) = _timed(
-            lambda: base_replay_step(
+            lambda generated_prefix=tuple(generated),
+            step_index=step_index: base_replay_step(
                 base_backend=cached_base,
                 registry=registry,
                 store=store,
                 prompt=prompt,
-                generated_prefix=tuple(generated),
+                generated_prefix=generated_prefix,
                 config=algorithm,
                 base_sampling=sampling,
                 reward=reward,
@@ -345,12 +353,6 @@ def _run_warm(
     }
 
 
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
@@ -385,27 +387,22 @@ def main() -> None:
     manifest_path = run_dir / "manifest.json"
     records_path = run_dir / "records.jsonl"
     summary_path = run_dir / "summary.json"
-    actual_base_hash = _file_sha256(
-        Path(str(config["models"]["base"])) / "model.safetensors"
-    )
-    actual_proposal_hash = _file_sha256(
-        Path(str(config["models"]["proposal"])) / "model.safetensors"
-    )
-    if actual_base_hash != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    if actual_proposal_hash != str(config["models"]["proposal_weight_sha256"]):
-        raise ValueError("proposal model weight hash does not match the pinned configuration")
+    input_artifacts = validate_model_artifacts(config, {"base", "proposal"})
+    actual_base_hash = input_artifacts["weight_sha256"]["base"]
+    actual_proposal_hash = input_artifacts["weight_sha256"]["proposal"]
     effective = {
         "config": config,
         "tag": args.tag,
         "problem_indices": [problem.index for problem in problems],
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
+        "implementation_sha256": _implementation_hashes(
+            Path(__file__).resolve().parents[1],
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
         "input_weight_sha256": {
             "base": actual_base_hash,
             "proposal": actual_proposal_hash,
         },
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
     }
     fingerprint = _fingerprint(effective)
     manifest = {
@@ -465,17 +462,21 @@ def main() -> None:
 
             fresh_before = backend.snapshot()
             (fresh_tokens, fresh_info), fresh_seconds = _timed(
-                lambda: _run_fresh(backend, prompt, problem.gold_answer, config, seed)
+                lambda prompt=prompt,
+                gold_answer=problem.gold_answer,
+                seed=seed: _run_fresh(backend, prompt, gold_answer, config, seed)
             )
             fresh_after = backend.snapshot()
             warm_base_before = backend.snapshot()
             warm_proposal_before = proposal.snapshot()
             (warm_tokens, warm_info), warm_total_seconds = _timed(
-                lambda: _run_warm(
+                lambda prompt=prompt,
+                gold_answer=problem.gold_answer,
+                seed=seed: _run_warm(
                     backend,
                     proposal,
                     prompt,
-                    problem.gold_answer,
+                    gold_answer,
                     config,
                     seed,
                 )

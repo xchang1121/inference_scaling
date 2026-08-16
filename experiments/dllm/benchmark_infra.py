@@ -19,8 +19,9 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.dllm.runtime import (
     capped_generation_length,
+    checkpoint_metadata_hashes,
     empty_llada_compute,
-    file_sha256,
+    implementation_hashes,
     json_fingerprint,
     llada_snapshot_delta,
     sampling_from_section,
@@ -28,6 +29,7 @@ from experiments.dllm.runtime import (
     validate_runtime_device,
 )
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.artifacts import load_jsonl as _load_records
 from inference_scaling.dllm.algorithms import (
     run_conditional_diffusion_is,
     run_diffusion_replay_mixture_mh,
@@ -123,16 +125,6 @@ def _measure(
     }
 
 
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
-
 def _aggregate(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     families: dict[str, Any] = {}
     for family in sorted({record["family"] for record in records}):
@@ -159,11 +151,19 @@ def _aggregate(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         baseline = arms[baseline_name]
         optimized = arms[optimized_name]
 
-        def optimized_over_baseline(field: str) -> float | None:
+        def optimized_over_baseline(
+            field: str,
+            baseline=baseline,
+            optimized=optimized,
+        ) -> float | None:
             denominator = float(baseline[field])
             return float(optimized[field]) / denominator if denominator else None
 
-        def baseline_over_optimized(field: str) -> float | None:
+        def baseline_over_optimized(
+            field: str,
+            baseline=baseline,
+            optimized=optimized,
+        ) -> float | None:
             denominator = float(optimized[field])
             return float(baseline[field]) / denominator if denominator else None
 
@@ -653,9 +653,13 @@ def main() -> None:
         "families": families,
         "problem_indices": [problem.index for problem in problems],
         "model_weight_sha256": weight_hashes,
-        "implementation_sha256": {
-            path: file_sha256(REPOSITORY_ROOT / path) for path in IMPLEMENTATION_FILES
-        },
+        "model_metadata_sha256": checkpoint_metadata_hashes(
+            Path(str(config["model"]["path"]))
+        ),
+        "implementation_sha256": implementation_hashes(
+            REPOSITORY_ROOT,
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
     }
     fingerprint = json_fingerprint(effective)
     run_dir = args.output_root / args.tag / "components" / (

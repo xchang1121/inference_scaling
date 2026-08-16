@@ -23,6 +23,7 @@ from experiments.shared.statistics import (
     probability_distribution,
     total_variation_distance,
 )
+from experiments.shared.artifacts import load_jsonl
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -32,11 +33,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         raise FileNotFoundError(f"missing draw records: {path}")
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return load_jsonl(path)
 
 
 def load_draw_grid(

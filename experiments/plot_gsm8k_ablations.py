@@ -205,7 +205,6 @@ def _x_log(value: float, left: int, domain: tuple[float, float]) -> float:
 
 
 def _base_panel(left: int, top: int, title: str, subtitle: str) -> list[str]:
-    bottom = top + PLOT_HEIGHT
     right = left + PANEL_WIDTH
     title_y = top - 78
     lines = [

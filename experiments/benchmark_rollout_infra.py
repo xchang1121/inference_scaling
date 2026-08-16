@@ -517,10 +517,14 @@ def _algorithm_arm(
         def run_all() -> list[TokenSequence]:
             outputs: list[TokenSequence] = []
             for problem, prompt in zip(problems, prompts, strict=True):
-                def exact_reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
+                def exact_reward(
+                    _prompt: TokenSequence,
+                    generated: TokenSequence,
+                    gold_answer=problem.gold_answer,
+                ) -> float:
                     return float(
                         extract_numeric_answer(raw.decode(generated))
-                        == problem.gold_answer
+                        == gold_answer
                     )
 
                 problem_seed = SeedStream(seed).derive(

@@ -11,9 +11,9 @@ from typing import Any
 from experiments.summarize_gsm8k import _paired_difference
 
 try:
-    from experiments.shared.artifacts import file_sha256 as _sha256
+    from experiments.shared.artifacts import file_sha256 as _sha256, load_jsonl
 except ModuleNotFoundError:  # direct execution from experiments/
-    from shared.artifacts import file_sha256 as _sha256
+    from shared.artifacts import file_sha256 as _sha256, load_jsonl
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -21,7 +21,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    return load_jsonl(path)
 
 
 def _bundle(directory: Path) -> dict[str, Any]:

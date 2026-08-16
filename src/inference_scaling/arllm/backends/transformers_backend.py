@@ -7,7 +7,7 @@ import math
 import threading
 import warnings
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 

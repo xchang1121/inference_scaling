@@ -6,11 +6,19 @@ from pathlib import Path
 from typing import Any
 
 from experiments.shared.artifacts import (
+    adapter_hashes,
+    cached_file_sha256,
+    checkpoint_metadata_hashes,
     dataclass_snapshot_delta,
+    directory_hashes,
     file_sha256,
+    implementation_hashes,
     json_fingerprint,
 )
 from inference_scaling.dllm.config import DiffusionSamplingConfig
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+HASH_CACHE = REPOSITORY_ROOT / ".cache" / "artifact_hashes"
 
 
 def sampling_from_section(section: dict[str, Any]) -> DiffusionSamplingConfig:
@@ -115,17 +123,23 @@ def validate_llada_weights(config: dict[str, Any]) -> dict[str, str]:
             )
         if weight.stat().st_size != expected_size:
             raise ValueError(f"LLaDA weight size does not match the manifest: {weight}")
-        actual_hash = file_sha256(weight)
-        if actual_hash != expected_hash:
-            raise ValueError(f"LLaDA weight hash does not match the manifest: {weight}")
+        actual_hash = cached_file_sha256(
+            weight,
+            cache_directory=HASH_CACHE,
+            expected=expected_hash,
+        )
         actual[name] = actual_hash
     return actual
 
 
 __all__ = [
+    "adapter_hashes",
     "capped_generation_length",
+    "checkpoint_metadata_hashes",
+    "directory_hashes",
     "empty_llada_compute",
     "file_sha256",
+    "implementation_hashes",
     "json_fingerprint",
     "llada_snapshot_delta",
     "sampling_from_section",

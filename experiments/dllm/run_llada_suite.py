@@ -14,7 +14,8 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import DYNAMIC_METHODS, METHODS
 from experiments.dllm.profiles import apply_execution_profile
-from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.components import DLLM_COMPONENTS, FULL_COMPONENTS
+from experiments.shared.environment import validate_environment
 from experiments.shared.paired_protocol import MethodPair, load_pairing
 from experiments.shared.suite_runner import run_manifested_commands
 
@@ -24,7 +25,7 @@ DEFAULT_METHODS = tuple(
     if not method.startswith("vrpo_") and method not in DYNAMIC_METHODS
 )
 ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
-IMPLEMENTED_COMPONENTS = FULL_COMPONENTS
+IMPLEMENTED_COMPONENTS = DLLM_COMPONENTS
 
 
 def _paired_methods(
@@ -518,7 +519,7 @@ def main() -> None:
         "--output-root", type=Path, default=Path("results/dllm/gsm8k")
     )
     parser.add_argument("--methods", nargs="+", choices=METHODS)
-    parser.add_argument("--components", nargs="+", choices=COMPONENTS)
+    parser.add_argument("--components", nargs="+", choices=DLLM_COMPONENTS)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--draw-index", type=int, default=0)
     parser.add_argument("--ablation-limit", type=int)
@@ -544,6 +545,16 @@ def main() -> None:
         help="compatibility alias that adds or removes the replay component",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="replace an existing suite manifest and execute the full command plan",
+    )
+    parser.add_argument(
+        "--no-environment-check",
+        action="store_true",
+        help="skip the role-specific dependency preflight",
+    )
     args = parser.parse_args()
 
     config, pairing = load_pairing(args.config)
@@ -562,6 +573,12 @@ def main() -> None:
             "components unsupported by the dLLM suite: " + ", ".join(unsupported)
         )
     args.components = tuple(components)
+    if not args.dry_run and not args.no_environment_check:
+        validate_environment(
+            "dllm",
+            stage="all" if args.vrpo in {"preflight", "train"} else "inference",
+            components=args.components,
+        )
 
     methods = list(args.methods or DEFAULT_METHODS)
     required_methods = set(methods if "quality" in components else ())
@@ -616,6 +633,7 @@ def main() -> None:
             "vrpo": args.vrpo,
         },
         dry_run=args.dry_run,
+        restart=args.restart,
     )
 
 

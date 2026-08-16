@@ -12,6 +12,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.environment import validate_environment
 from experiments.shared.suite_runner import run_manifested_commands
 
 AR_METHODS = (
@@ -213,6 +214,16 @@ def main() -> None:
     parser.add_argument("--vllm-workers", type=int)
     parser.add_argument("--summary-root", type=Path, default=Path("results/arllm"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="replace an existing suite manifest and execute the full command plan",
+    )
+    parser.add_argument(
+        "--no-environment-check",
+        action="store_true",
+        help="skip the role-specific dependency preflight",
+    )
     args = parser.parse_args()
 
     if args.config is None:
@@ -252,6 +263,13 @@ def main() -> None:
         args.vllm_limit = args.vllm_limit or 32
         args.vllm_workers = args.vllm_workers or 8
 
+    if not args.dry_run and not args.no_environment_check:
+        validate_environment(
+            "arllm",
+            stage=args.stage,
+            components=args.components,
+        )
+
     root = REPOSITORY_ROOT
     commands = build_commands(args, root)
     run_manifested_commands(
@@ -267,6 +285,7 @@ def main() -> None:
             "components": args.components,
         },
         dry_run=args.dry_run,
+        restart=args.restart,
     )
 
 

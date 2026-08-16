@@ -16,9 +16,8 @@ from experiments.arllm.run_arllm_suite import AR_METHODS
 from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
 from experiments.dllm.run_llada_suite import (
     DEFAULT_METHODS as DEFAULT_DLLM_METHODS,
-    IMPLEMENTED_COMPONENTS as DLLM_COMPONENTS,
 )
-from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.components import COMPONENTS, DLLM_COMPONENTS, FULL_COMPONENTS
 from experiments.shared.suite_runner import run_manifested_commands
 
 
@@ -29,6 +28,8 @@ def _default_python(environment_variable: str) -> str:
 
 
 def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
+    if args.family == "dllm" and args.backend is not None:
+        raise ValueError("--ar-backend/--backend applies only to an AR-LLM run")
     commands: list[list[str]] = []
     if args.family in {"arllm", "both"}:
         command = [
@@ -71,6 +72,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 command.extend((flag, str(value)))
         if args.dry_run:
             command.append("--dry-run")
+        if getattr(args, "restart", False):
+            command.append("--restart")
         commands.append(command)
 
     if args.family in {"dllm", "both"}:
@@ -176,6 +179,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 command.append("--with-aligned")
             if args.dry_run:
                 command.append("--dry-run")
+            if getattr(args, "restart", False):
+                command.append("--restart")
             commands.append(command)
     return commands
 
@@ -196,7 +201,13 @@ def main() -> None:
     parser.add_argument("--ar-methods", nargs="+", choices=AR_METHODS)
     parser.add_argument("--dllm-methods", nargs="+", choices=DLLM_METHODS)
     parser.add_argument("--components", nargs="+", choices=COMPONENTS)
-    parser.add_argument("--backend", choices=("transformers", "vllm", "vllm-sync"))
+    parser.add_argument(
+        "--ar-backend",
+        "--backend",
+        dest="backend",
+        choices=("transformers", "vllm", "vllm-sync"),
+        help="AR-LLM inference backend; ignored values are rejected for --family dllm",
+    )
     parser.add_argument(
         "--ar-python",
         default=_default_python("AR_PYTHON"),
@@ -221,6 +232,11 @@ def main() -> None:
     parser.add_argument("--infra-limit", type=int, default=1)
     parser.add_argument("--output-root", type=Path, default=Path("results/reproduction"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="replace an existing suite manifest and execute the full command plan",
+    )
     args = parser.parse_args()
 
     args.ar_methods = tuple(args.ar_methods or AR_METHODS)
@@ -254,6 +270,7 @@ def main() -> None:
             },
         },
         dry_run=args.dry_run,
+        restart=args.restart,
     )
 
 

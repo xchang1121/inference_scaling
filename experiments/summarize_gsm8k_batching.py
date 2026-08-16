@@ -96,7 +96,7 @@ def main() -> None:
         if baseline["implementation_sha256"].get(path)
         != grouped["implementation_sha256"].get(path)
     }
-    expected_change = {"src/inference_scaling/backends/batching.py"}
+    expected_change = {"src/inference_scaling/arllm/backends/batching.py"}
     if set(implementation_changes) != expected_change:
         raise ValueError(
             "the batching comparison changed implementation files other than the scheduler"

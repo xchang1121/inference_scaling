@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import statistics
 import time
 from pathlib import Path
 import sys
@@ -20,11 +19,13 @@ from experiments.dllm.gsm8k_reproduction import (
     IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES,
 )
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.artifacts import load_jsonl as _load_records
 from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.dllm.runtime import (
     capped_generation_length,
-    file_sha256,
+    checkpoint_metadata_hashes,
+    implementation_hashes,
     json_fingerprint,
     llada_snapshot_delta,
     sampling_from_section,
@@ -368,16 +369,6 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _load_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -409,10 +400,14 @@ def main() -> None:
         "tag": args.tag,
         "execution_profile": args.profile,
         "model_weight_sha256": actual_hashes,
+        "model_metadata_sha256": checkpoint_metadata_hashes(
+            Path(str(config["model"]["path"]))
+        ),
         "problem_indices": [problem.index for problem in problems],
-        "implementation_sha256": {
-            path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
+        "implementation_sha256": implementation_hashes(
+            REPOSITORY_ROOT,
+            entrypoints=IMPLEMENTATION_FILES,
+        ),
     }
     fingerprint = json_fingerprint(effective)
     run_dir = args.output_root / args.tag / "replay"

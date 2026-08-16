@@ -18,10 +18,13 @@ from typing import Any
 import torch
 import transformers
 
+from experiments.arllm.runtime import validate_model_artifacts
+
 if __package__:
     from experiments.gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _snapshot_delta,
@@ -31,6 +34,7 @@ else:
     from gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _snapshot_delta,
@@ -64,7 +68,7 @@ METHODS = (
 ASYNC_IMPLEMENTATION_FILES = (
     *IMPLEMENTATION_FILES,
     "experiments/gsm8k_async_benchmark.py",
-    "src/inference_scaling/backends/batching.py",
+    "src/inference_scaling/arllm/backends/batching.py",
 )
 
 
@@ -319,20 +323,12 @@ def main() -> None:
         seed=int(config["run"]["subset_seed"]),
     )
 
-    base_weight_hash = _file_sha256(
-        Path(str(config["models"]["base"])) / "model.safetensors"
+    input_artifacts = validate_model_artifacts(
+        config,
+        {"base", "proposal"} if needs_proposal else {"base"},
     )
-    if base_weight_hash != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    proposal_weight_hash = None
-    if needs_proposal:
-        proposal_weight_hash = _file_sha256(
-            Path(str(config["models"]["proposal"])) / "model.safetensors"
-        )
-        if proposal_weight_hash != str(config["models"]["proposal_weight_sha256"]):
-            raise ValueError(
-                "proposal model weight hash does not match the pinned configuration"
-            )
+    base_weight_hash = input_artifacts["weight_sha256"]["base"]
+    proposal_weight_hash = input_artifacts["weight_sha256"].get("proposal")
 
     raw_backend = _load_backend(str(config["models"]["base"]), config)
     try:
@@ -375,7 +371,9 @@ def main() -> None:
         base_before = raw_backend.snapshot()
         proposal_before = raw_proposal.snapshot() if uses_proposal else None
         synchronous, synchronous_seconds = _timed(
-            lambda: [
+            lambda method=method,
+            synchronous_base=synchronous_base,
+            synchronous_proposal=synchronous_proposal: [
                 _run_one(
                     method,
                     synchronous_base,
@@ -411,7 +409,11 @@ def main() -> None:
                 else None
             )
 
-            def run_parallel():
+            def run_parallel(
+                method=method,
+                asynchronous_base=asynchronous_base,
+                asynchronous_proposal=asynchronous_proposal,
+            ):
                 with ThreadPoolExecutor(max_workers=workers) as executor:
                     futures = [
                         executor.submit(
@@ -527,20 +529,25 @@ def main() -> None:
             "base": {
                 "path": str(config["models"]["base"]),
                 "weight_sha256": base_weight_hash,
+                "metadata_sha256": input_artifacts["metadata_sha256"]["base"],
                 "parameter_count": raw_backend.parameter_count,
             },
             "proposal": {
                 "path": str(config["models"]["proposal"]),
                 "weight_sha256": proposal_weight_hash,
+                "metadata_sha256": input_artifacts["metadata_sha256"].get(
+                    "proposal"
+                ),
                 "parameter_count": (
                     raw_proposal.parameter_count if raw_proposal is not None else None
                 ),
                 "loaded": raw_proposal is not None,
             },
         },
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in ASYNC_IMPLEMENTATION_FILES
-        },
+        "implementation_sha256": _implementation_hashes(
+            Path(__file__).resolve().parents[1],
+            entrypoints=ASYNC_IMPLEMENTATION_FILES,
+        ),
         "compute_interpretation": (
             "Continuous batching is applied separately but uniformly to Base, "
             "Best-of-N, conditional IS, and small-proposal conditional IS. Its intended "

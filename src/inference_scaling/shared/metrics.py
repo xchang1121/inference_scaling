@@ -12,12 +12,15 @@ import numpy as np
 T = TypeVar("T", bound=Hashable)
 
 
-def empirical_distribution(samples: Iterable[T]) -> dict[T, float]:
-    counts = Counter(samples)
+def normalize_counts(counts: Mapping[T, int]) -> dict[T, float]:
     total = sum(counts.values())
     if total == 0:
         raise ValueError("at least one sample is required")
     return {value: count / total for value, count in counts.items()}
+
+
+def empirical_distribution(samples: Iterable[T]) -> dict[T, float]:
+    return normalize_counts(Counter(samples))
 
 
 def total_variation(left: Mapping[T, float], right: Mapping[T, float]) -> float:
@@ -58,3 +61,11 @@ def autocorrelation_ess(values: Sequence[float]) -> float:
     integrated_time = max(1.0, 1.0 + 2.0 * sum(correlations))
     return min(float(count), float(count / integrated_time))
 
+
+__all__ = [
+    "autocorrelation_ess",
+    "empirical_distribution",
+    "importance_effective_sample_size",
+    "normalize_counts",
+    "total_variation",
+]

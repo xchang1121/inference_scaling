@@ -6,14 +6,18 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 from typing import Any, Mapping, Sequence
+
+from experiments.shared.artifacts import json_fingerprint
 
 
 def command_text(command: Sequence[str]) -> str:
     """Render a command using the quoting rules of the current platform."""
 
-    return subprocess.list2cmdline(list(command))
+    values = list(command)
+    return subprocess.list2cmdline(values) if os.name == "nt" else shlex.join(values)
 
 
 def repository_environment(
@@ -49,26 +53,54 @@ def run_manifested_commands(
     metadata: Mapping[str, Any],
     dry_run: bool,
     environment: Mapping[str, str] | None = None,
+    restart: bool = False,
 ) -> dict[str, Any]:
-    """Execute commands in order while atomically recording suite progress."""
+    """Execute a stable command plan and resume after its last completed command."""
 
-    manifest: dict[str, Any] = {
-        "schema_version": 1,
+    command_lists = [list(command) for command in commands]
+    rendered_commands = [command_text(command) for command in command_lists]
+    plan = {
+        "metadata": dict(metadata),
+        "commands": command_lists,
+    }
+    plan_fingerprint = json_fingerprint(plan)
+    initial: dict[str, Any] = {
+        "schema_version": 2,
         **metadata,
-        "commands": [command_text(command) for command in commands],
+        "commands": rendered_commands,
+        "command_argv": command_lists,
+        "command_sha256": [json_fingerprint(command) for command in command_lists],
+        "plan_fingerprint": plan_fingerprint,
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "completed_commands": 0,
         "status": "dry_run" if dry_run else "running",
     }
+    manifest = initial
+    if manifest_path.is_file() and not restart:
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if previous.get("plan_fingerprint") != plan_fingerprint:
+            raise ValueError(
+                f"existing suite manifest has a different command plan: {manifest_path}"
+            )
+        completed = int(previous.get("completed_commands", 0))
+        if not 0 <= completed <= len(commands):
+            raise ValueError("suite manifest has an invalid completed command count")
+        manifest = previous
+        manifest["status"] = "dry_run" if dry_run else "running"
+        manifest.pop("finished_at_utc", None)
+        manifest["resumed_at_utc"] = datetime.now(timezone.utc).isoformat()
+    else:
+        completed = 0
     _write_manifest(manifest_path, manifest)
-    for command in commands:
-        print(command_text(command), flush=True)
+    for index, command in enumerate(commands):
+        status = "SKIP" if index < completed else "RUN"
+        print(f"{status} {command_text(command)}", flush=True)
     if dry_run:
         return manifest
 
     process_environment = repository_environment(root, base=environment)
     try:
-        for index, command in enumerate(commands, start=1):
+        for index, command in enumerate(commands[completed:], start=completed + 1):
             subprocess.run(
                 list(command),
                 cwd=root,
@@ -87,4 +119,3 @@ def run_manifested_commands(
     manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     _write_manifest(manifest_path, manifest)
     return manifest
-

@@ -19,6 +19,8 @@ from typing import Any
 
 import torch
 
+from experiments.arllm.runtime import validate_model_artifacts
+
 if __package__:
     from experiments.gsm8k_passk import (
         PASSK_IMPLEMENTATION_FILES,
@@ -32,6 +34,7 @@ if __package__:
     )
     from experiments.gsm8k_reproduction import (
         _file_sha256,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -52,6 +55,7 @@ else:
     )
     from gsm8k_reproduction import (
         _file_sha256,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -549,10 +553,15 @@ def main() -> None:
     profile = str(config["run"]["name"])
     output = args.output or Path(f"results/{profile}_{args.tag}.json")
     raw_path = args.raw_output or output.with_suffix(".chunks.jsonl")
-    implementation_sha256 = {
-        path: _file_sha256(Path(path)) for path in IS_PASSK_IMPLEMENTATION_FILES
-    }
-    input_weight_sha256 = _input_weight_hashes(config, methods)
+    implementation_sha256 = _implementation_hashes(
+        Path(__file__).resolve().parents[1],
+        entrypoints=IS_PASSK_IMPLEMENTATION_FILES,
+    )
+    roles = {"base"}
+    if any(_uses_small_proposal(method) for method in methods):
+        roles.add("proposal")
+    input_artifacts = validate_model_artifacts(config, roles)
+    input_weight_sha256 = input_artifacts["weight_sha256"]
     _, fingerprint, _ = _prepare_manifest(
         config=config,
         data_path=args.data,
@@ -563,6 +572,8 @@ def main() -> None:
         input_weight_sha256=input_weight_sha256,
         implementation_sha256=implementation_sha256,
         raw_path=raw_path,
+        input_metadata_sha256=input_artifacts["metadata_sha256"],
+        input_adapter_sha256=input_artifacts["adapter_sha256"],
     )
     plan = _chunk_plan(methods, args.draws, problem_indices, args.workers)
     completed = _validate_chunks(_load_jsonl(raw_path), fingerprint, plan)
@@ -712,6 +723,8 @@ def main() -> None:
         "manifest_fingerprint": fingerprint,
         "raw_chunks_sha256": _file_sha256(raw_path),
         "input_weight_sha256": input_weight_sha256,
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
+        "input_adapter_sha256": input_artifacts["adapter_sha256"],
         "implementation_sha256": implementation_sha256,
         "compute_definition": (
             "2 * each model's parameter count * that model's observed padded forward "

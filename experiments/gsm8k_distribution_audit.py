@@ -16,11 +16,14 @@ from typing import Any, Mapping
 
 import torch
 
+from experiments.arllm.runtime import validate_model_artifacts
+
 if __package__:
     from experiments.gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
         _fingerprint,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -32,6 +35,7 @@ else:
         IMPLEMENTATION_FILES,
         _file_sha256,
         _fingerprint,
+        _implementation_hashes,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -52,6 +56,7 @@ from experiments.shared.statistics import (
     quantile,
     total_variation_distance,
 )
+from experiments.shared.artifacts import load_jsonl as _load_jsonl
 
 DEFAULT_METHODS = (
     "base",
@@ -78,12 +83,6 @@ _distribution = probability_distribution
 _tv = total_variation_distance
 _js = jensen_shannon_bits
 _quantile = quantile
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _bootstrap_answer_distance(
@@ -160,6 +159,8 @@ def _prepare_manifest(
     input_weight_hashes: dict[str, str],
     implementation_hashes: dict[str, str],
     raw_path: Path,
+    input_metadata_hashes: dict[str, Any] | None = None,
+    input_adapter_hashes: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str, Path]:
     effective = {
         "config": config,
@@ -167,6 +168,8 @@ def _prepare_manifest(
         "draws_per_problem": draws,
         "methods": list(methods),
         "input_weight_sha256": input_weight_hashes,
+        "input_metadata_sha256": input_metadata_hashes or {},
+        "input_adapter_sha256": input_adapter_hashes or {},
         "implementation_sha256": implementation_hashes,
     }
     fingerprint = _fingerprint(effective)
@@ -406,10 +409,15 @@ def main() -> None:
     if "rl_sample" not in methods:
         raise ValueError("the audit requires rl_sample as its GRPO reference")
 
-    input_weight_hashes = _input_weight_hashes(config, methods)
-    implementation_hashes = {
-        path: _file_sha256(Path(path)) for path in AUDIT_IMPLEMENTATION_FILES
-    }
+    roles = {"base", "rl"}
+    if any(method.endswith("small_proposal") for method in methods):
+        roles.add("proposal")
+    input_artifacts = validate_model_artifacts(config, roles)
+    input_weight_hashes = input_artifacts["weight_sha256"]
+    implementation_hashes = _implementation_hashes(
+        Path(__file__).resolve().parents[1],
+        entrypoints=AUDIT_IMPLEMENTATION_FILES,
+    )
     raw_path = args.raw_output or args.output.with_suffix(".records.jsonl")
     _, manifest_fingerprint, _ = _prepare_manifest(
         config=config,
@@ -419,6 +427,8 @@ def main() -> None:
         input_weight_hashes=input_weight_hashes,
         implementation_hashes=implementation_hashes,
         raw_path=raw_path,
+        input_metadata_hashes=input_artifacts["metadata_sha256"],
+        input_adapter_hashes=input_artifacts["adapter_sha256"],
     )
     expected_keys = {
         (method, draw, problem_index)
@@ -483,6 +493,8 @@ def main() -> None:
         "public_dataset": "OpenAI GSM8K official test split",
         "problem_indices": problem_indices,
         "input_weight_sha256": input_weight_hashes,
+        "input_metadata_sha256": input_artifacts["metadata_sha256"],
+        "input_adapter_sha256": input_artifacts["adapter_sha256"],
         "implementation_sha256": implementation_hashes,
         "draws_per_problem": args.draws,
         "distribution_level": "parsed final answer, not full token sequence",

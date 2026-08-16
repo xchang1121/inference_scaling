@@ -11,6 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from inference_scaling.rng import SeedStream
+from experiments.shared.artifacts import load_jsonl as _load_jsonl
 
 METHODS = (
     "base_candidate_fixed",
@@ -269,10 +270,6 @@ def build_summary(
             "seed": seed,
         },
     }
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def main() -> None:

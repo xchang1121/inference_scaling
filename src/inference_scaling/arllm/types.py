@@ -8,6 +8,7 @@ policy, not merely unprocessed model logits.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Protocol, Sequence, runtime_checkable
 
 from inference_scaling.arllm.config import SamplingConfig
@@ -44,6 +45,8 @@ class SequenceSample:
     def __post_init__(self) -> None:
         if len(self.token_ids) != len(self.token_logprobs):
             raise ValueError("each sampled token must have one actual-policy log-probability")
+        if any(not isfinite(value) for value in self.token_logprobs):
+            raise ValueError("actual-policy token log-probabilities must be finite")
         if (self.reference_token_logprobs is None) != (
             self.reference_policy_id is None
         ):

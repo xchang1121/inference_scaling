@@ -19,7 +19,6 @@ from inference_scaling.shared.importance import (
     ProbabilityObservation,
     ReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
-    corrected_replay_log_weight,
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
