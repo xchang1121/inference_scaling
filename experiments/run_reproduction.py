@@ -14,6 +14,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.arllm.run_arllm_suite import AR_METHODS
 from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
+from experiments.dllm.run_llada_suite import IMPLEMENTED_COMPONENTS as DLLM_COMPONENTS
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.suite_runner import run_manifested_commands
 
@@ -59,6 +60,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             ("--ablation-limit", args.ablation_limit),
             ("--passk-limit", args.passk_limit),
             ("--passk-draws", args.passk_draws),
+            ("--distribution-problems", args.distribution_problems),
+            ("--distribution-draws", args.distribution_draws),
         ):
             if value is not None:
                 command.extend((flag, str(value)))
@@ -67,6 +70,17 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         commands.append(command)
 
     if args.family in {"dllm", "both"}:
+        dllm_components = tuple(
+            component for component in args.components if component in DLLM_COMPONENTS
+        )
+        unsupported = tuple(
+            component for component in args.components if component not in DLLM_COMPONENTS
+        )
+        if unsupported and getattr(args, "components_explicit", False):
+            raise ValueError(
+                "requested dLLM components are not implemented yet: "
+                + ", ".join(unsupported)
+            )
         dllm_config = str(args.dllm_config)
         if args.stage == "prepare":
             commands.append(
@@ -137,16 +151,24 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 vrpo,
                 "--methods",
                 *args.dllm_methods,
+                "--components",
+                *dllm_components,
             ]
-            if args.limit is not None:
-                command.extend(("--limit", str(args.limit)))
+            for flag, value in (
+                ("--limit", args.limit),
+                ("--ablation-limit", args.ablation_limit),
+                ("--passk-limit", args.passk_limit),
+                ("--passk-draws", args.passk_draws),
+                ("--distribution-problems", args.distribution_problems),
+                ("--distribution-draws", args.distribution_draws),
+            ):
+                if value is not None:
+                    command.extend((flag, str(value)))
             if (
                 any(method.startswith("vrpo_") for method in args.dllm_methods)
                 and vrpo != "train"
             ):
                 command.append("--with-aligned")
-            if "replay" not in args.components:
-                command.append("--no-with-replay")
             if args.dry_run:
                 command.append("--dry-run")
             commands.append(command)
@@ -189,6 +211,8 @@ def main() -> None:
     parser.add_argument("--ablation-limit", type=int)
     parser.add_argument("--passk-limit", type=int)
     parser.add_argument("--passk-draws", type=int)
+    parser.add_argument("--distribution-problems", type=int)
+    parser.add_argument("--distribution-draws", type=int)
     parser.add_argument("--output-root", type=Path, default=Path("results/reproduction"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -198,6 +222,7 @@ def main() -> None:
         args.dllm_methods
         or (method for method in DLLM_METHODS if not method.startswith("vrpo_"))
     )
+    args.components_explicit = args.components is not None
     args.components = tuple(
         args.components
         or (("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS)

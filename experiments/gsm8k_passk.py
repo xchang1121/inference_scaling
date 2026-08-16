@@ -6,7 +6,6 @@ import argparse
 import gc
 import hashlib
 import json
-import math
 import random
 import statistics
 import tomllib
@@ -58,6 +57,7 @@ from inference_scaling.evaluation import (
     select_problems,
 )
 from inference_scaling.rng import SeedStream
+from experiments.shared.statistics import estimated_pass_at_k
 
 PASSK_METHODS = ("base", "mh", "rl_sample")
 PASSK_IMPLEMENTATION_FILES = (
@@ -110,12 +110,7 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _estimated_pass_at_k(correct: int, draws: int, k: int) -> float:
-    if draws <= 0 or not 1 <= k <= draws:
-        raise ValueError("k must lie between one and the number of draws")
-    if draws - correct < k:
-        return 1.0
-    return 1.0 - math.comb(draws - correct, k) / math.comb(draws, k)
+_estimated_pass_at_k = estimated_pass_at_k
 
 
 def _chunk_plan(

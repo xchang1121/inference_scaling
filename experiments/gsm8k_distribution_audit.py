@@ -7,8 +7,6 @@ import copy
 import gc
 import hashlib
 import json
-import math
-import random
 import statistics
 import time
 import tomllib
@@ -46,6 +44,13 @@ from inference_scaling.backends import (
     set_backend_override,
 )
 from inference_scaling.rng import SeedStream
+from experiments.shared.statistics import (
+    bootstrap_answer_distance,
+    jensen_shannon_bits,
+    probability_distribution,
+    quantile,
+    total_variation_distance,
+)
 
 DEFAULT_METHODS = (
     "base",
@@ -68,43 +73,10 @@ def _answer_key(answer: Fraction | None) -> str:
     return f"{answer.numerator}/{answer.denominator}"
 
 
-def _distribution(counts: Mapping[str, int]) -> dict[str, float]:
-    total = sum(counts.values())
-    if total <= 0:
-        raise ValueError("answer distribution requires at least one draw")
-    return {answer: count / total for answer, count in counts.items()}
-
-
-def _tv(left: Mapping[str, float], right: Mapping[str, float]) -> float:
-    support = set(left) | set(right)
-    return 0.5 * sum(abs(left.get(key, 0.0) - right.get(key, 0.0)) for key in support)
-
-
-def _js(left: Mapping[str, float], right: Mapping[str, float]) -> float:
-    support = set(left) | set(right)
-    midpoint = {key: (left.get(key, 0.0) + right.get(key, 0.0)) / 2 for key in support}
-
-    def kl(distribution: Mapping[str, float]) -> float:
-        return sum(
-            probability * math.log2(probability / midpoint[key])
-            for key, probability in distribution.items()
-            if probability > 0
-        )
-
-    return 0.5 * (kl(left) + kl(right))
-
-
-def _quantile(values: list[float], probability: float) -> float:
-    ordered = sorted(values)
-    if not ordered:
-        raise ValueError("quantile requires at least one value")
-    position = (len(ordered) - 1) * probability
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+_distribution = probability_distribution
+_tv = total_variation_distance
+_js = jensen_shannon_bits
+_quantile = quantile
 
 
 def _fingerprint(value: Any) -> str:
@@ -125,37 +97,12 @@ def _bootstrap_answer_distance(
     *,
     samples: int = 2_000,
 ) -> dict[str, list[float]]:
-    rng = random.Random(0)
-    tv_samples: list[float] = []
-    js_samples: list[float] = []
-    for _ in range(samples):
-        televisions: list[float] = []
-        divergences: list[float] = []
-        for problem_index in problem_indices:
-            left_answers = left[problem_index]
-            right_answers = right[problem_index]
-            left_resample = Counter(
-                left_answers[rng.randrange(len(left_answers))] for _ in left_answers
-            )
-            right_resample = Counter(
-                right_answers[rng.randrange(len(right_answers))] for _ in right_answers
-            )
-            left_distribution = _distribution(left_resample)
-            right_distribution = _distribution(right_resample)
-            televisions.append(_tv(left_distribution, right_distribution))
-            divergences.append(_js(left_distribution, right_distribution))
-        tv_samples.append(statistics.fmean(televisions))
-        js_samples.append(statistics.fmean(divergences))
-    return {
-        "mean_total_variation_bootstrap_95": [
-            _quantile(tv_samples, 0.025),
-            _quantile(tv_samples, 0.975),
-        ],
-        "mean_jensen_shannon_bits_bootstrap_95": [
-            _quantile(js_samples, 0.025),
-            _quantile(js_samples, 0.975),
-        ],
-    }
+    return bootstrap_answer_distance(
+        left,
+        right,
+        problem_indices,
+        replicates=samples,
+    )
 
 
 def _split_half_noise_floor(

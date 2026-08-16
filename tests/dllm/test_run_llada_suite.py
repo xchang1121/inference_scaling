@@ -67,3 +67,45 @@ def test_llada_suite_records_subprocess_failure(monkeypatch, tmp_path):
     )
     assert manifest["status"] == "failed"
     assert manifest["completed_commands"] == 0
+
+
+def test_llada_suite_plans_passk_draws_with_one_model_load_per_method(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llada_suite.py",
+            "--config",
+            "configs/gsm8k_llada_moe_3090.toml",
+            "--profile",
+            "smoke",
+            "--tag",
+            "passk-unit",
+            "--output-root",
+            str(tmp_path),
+            "--components",
+            "passk",
+            "--passk-limit",
+            "1",
+            "--passk-draws",
+            "2",
+            "--vrpo",
+            "train",
+            "--dry-run",
+        ],
+    )
+    main()
+
+    manifest = json.loads(
+        (tmp_path / "passk-unit" / "suite_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    commands = manifest["commands"]
+    reproduction = [command for command in commands if "gsm8k_reproduction.py" in command]
+    assert len(reproduction) == 7
+    assert all("--draws 2" in command for command in reproduction)
+    assert sum("gsm8k_analysis.py" in command for command in commands) == 1
+    assert manifest["components"] == ["passk"]

@@ -8,7 +8,6 @@ import hashlib
 import json
 import statistics
 import time
-import tomllib
 from dataclasses import asdict, replace
 from pathlib import Path
 import sys
@@ -20,6 +19,8 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.config_overrides import apply_config_overrides
+from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
 from inference_scaling.dllm.algorithms import (
     run_conditional_diffusion_is,
@@ -69,6 +70,8 @@ METHODS = (
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
     "experiments/dllm/profiles.py",
+    "experiments/shared/config_overrides.py",
+    "experiments/shared/statistics.py",
     "src/inference_scaling/dllm/algorithms/is_sampling.py",
     "src/inference_scaling/dllm/algorithms/mh.py",
     "src/inference_scaling/dllm/algorithms/search.py",
@@ -371,10 +374,11 @@ def run_method(
     rollout_backend = proposal_backend if reduced else backend
     assert rollout_backend is not None
     apply_correction = reduced and not uncorrected
+    configured_clip = conditional.get("importance_log_ratio_clip")
     clip = (
         None
-        if not apply_correction or unclipped
-        else float(conditional["importance_log_ratio_clip"])
+        if not apply_correction or unclipped or configured_clip is None
+        else float(configured_clip)
     )
     reward_batch = None if verifier else CumulativeConsensusReward(backend.decode)
     result = run_conditional_diffusion_is(
@@ -443,14 +447,7 @@ def _snapshot_delta(before: Any, after: Any) -> dict[str, Any]:
     return result
 
 
-def _wilson(correct: int, count: int, z: float = 1.959963984540054) -> list[float]:
-    proportion = correct / count
-    denominator = 1 + z * z / count
-    center = (proportion + z * z / (2 * count)) / denominator
-    radius = z * (
-        (proportion * (1 - proportion) / count + z * z / (4 * count * count)) ** 0.5
-    ) / denominator
-    return [center - radius, center + radius]
+_wilson = wilson_interval
 
 
 def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -534,6 +531,116 @@ def _synchronize_cuda(device: str) -> None:
     torch.cuda.synchronize()
 
 
+def _run_draw(
+    *,
+    method: str,
+    draw_index: int,
+    tag: str,
+    output_root: Path,
+    profile: str,
+    config: dict[str, Any],
+    problems: Sequence[GSM8KProblem],
+    actual_hashes: dict[str, str],
+    implementation_hashes: dict[str, str],
+    backend: Any,
+    proposal_backend: Any | None,
+    device: str,
+) -> None:
+    effective = {
+        "config": config,
+        "method": method,
+        "tag": tag,
+        "draw_index": draw_index,
+        "execution_profile": profile,
+        "model_weight_sha256": actual_hashes,
+        "problem_indices": [problem.index for problem in problems],
+        "implementation_sha256": implementation_hashes,
+    }
+    fingerprint = _fingerprint(effective)
+    run_dir = output_root / tag / method / f"draw-{draw_index}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = run_dir / "manifest.json"
+    records_path = run_dir / "records.jsonl"
+    summary_path = run_dir / "summary.json"
+    manifest = {"fingerprint": fingerprint, **effective}
+    if manifest_path.is_file():
+        prior = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if prior.get("fingerprint") != fingerprint:
+            raise ValueError(f"existing run has a different fingerprint: {run_dir}")
+    else:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    prior_records = _load_records(records_path)
+    completed = {int(record["problem_index"]) for record in prior_records}
+    seeds = SeedStream(int(config["run"]["seed"]))
+    with records_path.open("a", encoding="utf-8", buffering=1) as output:
+        for problem in problems:
+            if problem.index in completed:
+                continue
+            prompt = backend.encode_chat(gsm8k_prompt(problem.question))
+            main_before = backend.snapshot()
+            proposal_before = (
+                proposal_backend.snapshot() if proposal_backend is not None else None
+            )
+            _synchronize_cuda(device)
+            started = time.perf_counter()
+            tokens, diagnostics = run_method(
+                method,
+                backend,
+                problem,
+                prompt,
+                config,
+                seed=seeds.derive(
+                    "dllm-gsm8k", method, draw_index, problem.index
+                ),
+                proposal_backend=proposal_backend,
+            )
+            _synchronize_cuda(device)
+            elapsed = time.perf_counter() - started
+            main_compute = _snapshot_delta(main_before, backend.snapshot())
+            proposal_compute = (
+                _snapshot_delta(proposal_before, proposal_backend.snapshot())
+                if proposal_backend is not None and proposal_before is not None
+                else _zero_compute()
+            )
+            text = backend.decode(tokens)
+            prediction = extract_numeric_answer(text)
+            record = {
+                "fingerprint": fingerprint,
+                "method": method,
+                "draw_index": draw_index,
+                "problem_index": problem.index,
+                "gold_answer": str(problem.gold_answer),
+                "prediction": str(prediction) if prediction is not None else None,
+                "correct": prediction == problem.gold_answer,
+                "prompt_tokens": len(prompt),
+                "selected_output_tokens": len(tokens),
+                "output_token_ids": list(tokens),
+                "output_text": text,
+                "elapsed_seconds": elapsed,
+                "main_compute": main_compute,
+                "proposal_compute": proposal_compute,
+                "diagnostics": diagnostics,
+            }
+            output.write(json.dumps(record, ensure_ascii=False) + "\n")
+            prior_records.append(record)
+            completed.add(problem.index)
+            print(
+                f"{method} draw={draw_index} {len(completed)}/{len(problems)} "
+                f"index={problem.index} correct={int(record['correct'])} "
+                f"seconds={elapsed:.3f}",
+                flush=True,
+            )
+    ordered = sorted(prior_records, key=lambda record: int(record["problem_index"]))
+    summary = {"fingerprint": fingerprint, **summarize(ordered)}
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -546,18 +653,40 @@ def main() -> None:
     )
     parser.add_argument("--tag", default="paired")
     parser.add_argument("--profile", choices=("smoke", "full"), default="full")
-    parser.add_argument("--draw-index", type=int, default=0)
+    draws = parser.add_mutually_exclusive_group()
+    draws.add_argument("--draw-index", type=int)
+    draws.add_argument(
+        "--draws",
+        type=int,
+        help="run draw indices [0, draws) while keeping the model loaded",
+    )
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--set",
+        dest="config_overrides",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="override an existing TOML field; repeat for multiple fields",
+    )
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
+    config = apply_config_overrides(config, args.config_overrides)
     if args.limit is not None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
         config["run"]["sample_count"] = args.limit
-    if args.draw_index < 0:
-        raise ValueError("--draw-index must be non-negative")
+    if args.draws is not None:
+        if args.draws <= 0:
+            raise ValueError("--draws must be positive")
+        draw_indices = tuple(range(args.draws))
+    else:
+        draw_index = 0 if args.draw_index is None else args.draw_index
+        if draw_index < 0:
+            raise ValueError("--draw-index must be non-negative")
+        draw_indices = (draw_index,)
     device = str(config["runtime"]["device"])
     if device.startswith("cuda"):
         import torch
@@ -591,34 +720,6 @@ def main() -> None:
         int(config["run"]["sample_count"]),
         seed=int(config["run"]["subset_seed"]),
     )
-    effective = {
-        "config": config,
-        "method": args.method,
-        "tag": args.tag,
-        "draw_index": args.draw_index,
-        "execution_profile": args.profile,
-        "model_weight_sha256": actual_hashes,
-        "problem_indices": [problem.index for problem in problems],
-        "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
-        },
-    }
-    fingerprint = _fingerprint(effective)
-    run_dir = args.output_root / args.tag / args.method / f"draw-{args.draw_index}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_dir / "manifest.json"
-    records_path = run_dir / "records.jsonl"
-    summary_path = run_dir / "summary.json"
-    manifest = {"fingerprint": fingerprint, **effective}
-    if manifest_path.is_file():
-        prior = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if prior.get("fingerprint") != fingerprint:
-            raise ValueError(f"existing run has a different fingerprint: {run_dir}")
-    else:
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
     role = "aligned" if args.method.startswith("vrpo_") else "base"
     backend = load_llada_backend(config, role)
     proposal_backend = (
@@ -626,74 +727,25 @@ def main() -> None:
         if "reduced_layer_proposal" in args.method
         else None
     )
-    prior_records = _load_records(records_path)
-    completed = {int(record["problem_index"]) for record in prior_records}
-    seeds = SeedStream(int(config["run"]["seed"]))
+    implementation_hashes = {
+        path: _file_sha256(REPOSITORY_ROOT / path) for path in IMPLEMENTATION_FILES
+    }
     try:
-        with records_path.open("a", encoding="utf-8", buffering=1) as output:
-            for problem in problems:
-                if problem.index in completed:
-                    continue
-                prompt = backend.encode_chat(gsm8k_prompt(problem.question))
-                main_before = backend.snapshot()
-                proposal_before = (
-                    proposal_backend.snapshot() if proposal_backend is not None else None
-                )
-                _synchronize_cuda(device)
-                started = time.perf_counter()
-                tokens, diagnostics = run_method(
-                    args.method,
-                    backend,
-                    problem,
-                    prompt,
-                    config,
-                    seed=seeds.derive(
-                        "dllm-gsm8k", args.method, args.draw_index, problem.index
-                    ),
-                    proposal_backend=proposal_backend,
-                )
-                _synchronize_cuda(device)
-                elapsed = time.perf_counter() - started
-                main_compute = _snapshot_delta(main_before, backend.snapshot())
-                proposal_compute = (
-                    _snapshot_delta(proposal_before, proposal_backend.snapshot())
-                    if proposal_backend is not None and proposal_before is not None
-                    else _zero_compute()
-                )
-                text = backend.decode(tokens)
-                prediction = extract_numeric_answer(text)
-                record = {
-                    "fingerprint": fingerprint,
-                    "method": args.method,
-                    "draw_index": args.draw_index,
-                    "problem_index": problem.index,
-                    "gold_answer": str(problem.gold_answer),
-                    "prediction": str(prediction) if prediction is not None else None,
-                    "correct": prediction == problem.gold_answer,
-                    "prompt_tokens": len(prompt),
-                    "selected_output_tokens": len(tokens),
-                    "output_token_ids": list(tokens),
-                    "output_text": text,
-                    "elapsed_seconds": elapsed,
-                    "main_compute": main_compute,
-                    "proposal_compute": proposal_compute,
-                    "diagnostics": diagnostics,
-                }
-                output.write(json.dumps(record, ensure_ascii=False) + "\n")
-                prior_records.append(record)
-                completed.add(problem.index)
-                print(
-                    f"{args.method} {len(completed)}/{len(problems)} "
-                    f"index={problem.index} correct={int(record['correct'])} "
-                    f"seconds={elapsed:.3f}",
-                    flush=True,
-                )
-        ordered = sorted(prior_records, key=lambda record: int(record["problem_index"]))
-        summary = {"fingerprint": fingerprint, **summarize(ordered)}
-        summary_path.write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        for draw_index in draw_indices:
+            _run_draw(
+                method=args.method,
+                draw_index=draw_index,
+                tag=args.tag,
+                output_root=args.output_root,
+                profile=args.profile,
+                config=config,
+                problems=problems,
+                actual_hashes=actual_hashes,
+                implementation_hashes=implementation_hashes,
+                backend=backend,
+                proposal_backend=proposal_backend,
+                device=device,
+            )
     finally:
         del proposal_backend
         del backend

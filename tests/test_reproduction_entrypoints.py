@@ -149,6 +149,8 @@ def _paired_args(**overrides):
         "ablation_limit": None,
         "passk_limit": None,
         "passk_draws": None,
+        "distribution_problems": None,
+        "distribution_draws": None,
         "dry_run": True,
     }
     values.update(overrides)
@@ -217,6 +219,30 @@ def test_dllm_prepare_stage_downloads_or_validates_model():
     assert "--validate-only" not in commands[0]
 
 
+def test_paired_entry_routes_supported_components_to_dllm_suite():
+    commands = build_paired_commands(
+        _paired_args(
+            family="dllm",
+            stage="inference",
+            components=("passk", "distribution"),
+            passk_limit=4,
+            passk_draws=3,
+            distribution_problems=2,
+            distribution_draws=5,
+        ),
+        Path.cwd(),
+    )
+
+    command = commands[0]
+    component_index = command.index("--components")
+    assert command[component_index + 1 : component_index + 3] == [
+        "passk",
+        "distribution",
+    ]
+    assert command[command.index("--passk-draws") + 1] == "3"
+    assert command[command.index("--distribution-draws") + 1] == "5"
+
+
 def test_interpreter_default_supports_environment_and_current_python(monkeypatch):
     monkeypatch.delenv("AR_PYTHON", raising=False)
     assert _default_python("AR_PYTHON") == sys.executable
@@ -237,6 +263,7 @@ def test_public_entrypoints_do_not_require_pythonpath(tmp_path):
         root / "experiments" / "arllm" / "run_arllm_suite.py",
         root / "experiments" / "dllm" / "run_llada_suite.py",
         root / "experiments" / "dllm" / "gsm8k_reproduction.py",
+        root / "experiments" / "dllm" / "gsm8k_analysis.py",
         root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py",
         root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py",
         root / "experiments" / "dllm" / "train_gsm8k_vrpo.py",

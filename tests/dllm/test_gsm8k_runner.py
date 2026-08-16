@@ -172,6 +172,19 @@ def test_reduced_layer_variants_separate_clipped_exact_and_uncorrected_weights()
     assert unclipped["apply_importance_correction"] is True
     assert uncorrected["apply_importance_correction"] is False
 
+    config["conditional_is"]["importance_log_ratio_clip"] = None
+    _, configured_unclipped = run_method(
+        "conditional_is_reduced_layer_proposal",
+        base,
+        problem,
+        (7,),
+        config,
+        seed=9,
+        proposal_backend=proposal,
+    )
+    assert configured_unclipped["importance_log_ratio_clip"] is None
+    assert configured_unclipped["apply_importance_correction"] is True
+
 
 def test_llada_generation_cap_retains_complete_diffusion_blocks():
     sampling = DiffusionSamplingConfig(

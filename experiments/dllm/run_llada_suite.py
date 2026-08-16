@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import Any, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
@@ -12,11 +13,466 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.dllm.gsm8k_reproduction import METHODS
-from experiments.shared.paired_protocol import load_pairing
+from experiments.dllm.profiles import apply_execution_profile
+from experiments.shared.components import COMPONENTS
+from experiments.shared.paired_protocol import MethodPair, load_pairing
 from experiments.shared.suite_runner import run_manifested_commands
 
 DEFAULT_METHODS = tuple(method for method in METHODS if not method.startswith("vrpo_"))
 ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
+IMPLEMENTED_COMPONENTS = (
+    "quality",
+    "matched_target",
+    "replay",
+    "passk",
+    "ablations",
+    "budget_curve",
+    "length_ablation",
+    "distribution",
+)
+
+
+def _paired_methods(
+    pairing: dict[str, tuple[MethodPair, ...]], section: str
+) -> tuple[str, ...]:
+    return tuple(pair.dllm for pair in pairing[section])
+
+
+def _unique(items: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(items))
+
+
+def _component_tag(tag: str, component: str, suffix: str | None = None) -> str:
+    parts = (tag, "components", component, suffix)
+    return "/".join(part for part in parts if part)
+
+
+def build_commands(
+    args: argparse.Namespace,
+    root: Path,
+    config: dict[str, Any],
+    pairing: dict[str, tuple[MethodPair, ...]],
+    methods: Sequence[str],
+    tag: str,
+) -> list[list[str]]:
+    runner = root / "experiments" / "dllm" / "gsm8k_reproduction.py"
+    replay_runner = root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py"
+    analyzer = root / "experiments" / "dllm" / "gsm8k_analysis.py"
+    prepare_vrpo = root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"
+    train_vrpo = root / "experiments" / "dllm" / "train_gsm8k_vrpo.py"
+    commands: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def add(command: list[str]) -> None:
+        key = tuple(command)
+        if key not in seen:
+            seen.add(key)
+            commands.append(command)
+
+    if args.vrpo == "preflight":
+        add(
+            [
+                sys.executable,
+                str(train_vrpo),
+                "--config",
+                str(args.config),
+                "--preflight",
+            ]
+        )
+    elif args.vrpo == "train":
+        add(
+            [
+                sys.executable,
+                str(prepare_vrpo),
+                "--config",
+                str(args.config),
+                "--profile",
+                "full",
+            ]
+        )
+        add(
+            [
+                sys.executable,
+                str(train_vrpo),
+                "--config",
+                str(args.config),
+                "--resume",
+                "auto",
+            ]
+        )
+
+    base_common = [
+        "--config",
+        str(args.config),
+        "--data",
+        str(args.data),
+        "--output-root",
+        str(args.output_root),
+        "--profile",
+        args.profile,
+    ]
+
+    def add_run(
+        method: str,
+        *,
+        run_tag: str,
+        limit: int | None,
+        draw_index: int | None = 0,
+        draws: int | None = None,
+        overrides: Sequence[str] = (),
+    ) -> None:
+        command = [
+            sys.executable,
+            str(runner),
+            *base_common,
+            "--tag",
+            run_tag,
+            "--method",
+            method,
+        ]
+        if limit is not None:
+            command.extend(("--limit", str(limit)))
+        if draws is not None:
+            command.extend(("--draws", str(draws)))
+        elif draw_index is not None:
+            command.extend(("--draw-index", str(draw_index)))
+        for override in overrides:
+            command.extend(("--set", override))
+        add(command)
+
+    components = set(args.components)
+    quality_methods: list[str] = []
+    if "quality" in components:
+        quality_methods.extend(methods)
+    if "matched_target" in components:
+        quality_methods.extend(
+            (
+                "verifier_mh",
+                "verifier_conditional_is",
+                "verifier_conditional_is_reduced_layer_proposal",
+            )
+        )
+    for method in _unique(quality_methods):
+        add_run(
+            method,
+            run_tag=tag,
+            limit=args.limit,
+            draw_index=args.draw_index,
+        )
+
+    if "replay" in components:
+        command = [
+            sys.executable,
+            str(replay_runner),
+            *base_common,
+            "--tag",
+            tag,
+        ]
+        if args.limit is not None:
+            command.extend(("--limit", str(args.limit)))
+        add(command)
+
+    bootstrap_replicates = 100 if args.profile == "smoke" else 2_000
+    if "passk" in components:
+        passk_methods = _paired_methods(pairing, "passk_pairs")
+        passk_draws = args.passk_draws or int(config["passk"]["draws"])
+        passk_limit = (
+            args.passk_limit or args.limit or int(config["run"]["sample_count"])
+        )
+        passk_tag = _component_tag(tag, "passk")
+        for method in passk_methods:
+            add_run(
+                method,
+                run_tag=passk_tag,
+                limit=passk_limit,
+                draw_index=None,
+                draws=passk_draws,
+            )
+        passk_root = args.output_root / passk_tag
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "passk",
+                "--run-root",
+                str(passk_root),
+                "--methods",
+                *passk_methods,
+                "--draws",
+                str(passk_draws),
+                "--k",
+                *(str(k) for k in config["passk"]["k"] if int(k) <= passk_draws),
+                "--bootstrap-replicates",
+                str(bootstrap_replicates),
+            ]
+        )
+
+    if "distribution" in components:
+        distribution_methods = _paired_methods(pairing, "distribution_pairs")
+        distribution_draws = args.distribution_draws or (
+            2 if args.profile == "smoke" else int(config["passk"]["draws"])
+        )
+        distribution_limit = args.distribution_problems or args.limit or (
+            1 if args.profile == "smoke" else 4
+        )
+        distribution_tag = _component_tag(tag, "distribution")
+        for method in distribution_methods:
+            add_run(
+                method,
+                run_tag=distribution_tag,
+                limit=distribution_limit,
+                draw_index=None,
+                draws=distribution_draws,
+            )
+        distribution_root = args.output_root / distribution_tag
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "distribution",
+                "--run-root",
+                str(distribution_root),
+                "--methods",
+                *distribution_methods,
+                "--draws",
+                str(distribution_draws),
+                "--reference",
+                "vrpo_sample",
+                "--bootstrap-replicates",
+                str(bootstrap_replicates),
+            ]
+        )
+
+    sweep_limit = args.ablation_limit or args.limit or (
+        1 if args.profile == "smoke" else int(config["run"]["sample_count"])
+    )
+    generation_length = int(config["generation"]["max_new_tokens"])
+    diffusion_block = int(config["generation"]["block_length"])
+    conditional = config["conditional_is"]
+
+    def add_sweep(
+        component: str,
+        axis: str,
+        label: str,
+        method: str,
+        overrides: Sequence[str],
+    ) -> None:
+        add_run(
+            method,
+            run_tag=_component_tag(tag, component, f"{axis}/{label}"),
+            limit=sweep_limit,
+            overrides=overrides,
+        )
+
+    if "ablations" in components:
+        alpha_values = (
+            (4.0, 8.0)
+            if args.profile == "smoke"
+            else (1.0, 2.0, 4.0, 8.0)
+        )
+        update_values = (
+            (1, 2) if args.profile == "smoke" else (1, 2, 5, 10)
+        )
+        candidate_values = (
+            (3, 8) if args.profile == "smoke" else (3, 5, 10)
+        )
+        rollout_values = (
+            (1, 3) if args.profile == "smoke" else (1, 3, 5)
+        )
+        temperature_values = (
+            (1.0, 1.5)
+            if args.profile == "smoke"
+            else (0.7, 1.0, 1.5)
+        )
+        clip_values: tuple[float | None, ...] = (
+            (10.0, None) if args.profile == "smoke" else (5.0, 10.0, None)
+        )
+        for value in alpha_values:
+            add_sweep(
+                "ablations",
+                "trajectory_mh_alpha",
+                f"alpha-{value:g}",
+                "trajectory_power_mh",
+                (f"mh.alpha={value}",),
+            )
+        for value in update_values:
+            add_sweep(
+                "ablations",
+                "trajectory_mh_updates",
+                f"updates-{value}",
+                "trajectory_power_mh",
+                (f"mh.updates_per_stage={value}",),
+            )
+        for value in candidate_values:
+            add_sweep(
+                "ablations",
+                "candidate_count",
+                f"candidates-{value}",
+                "conditional_is",
+                (f"conditional_is.candidate_count={value}",),
+            )
+        for value in rollout_values:
+            add_sweep(
+                "ablations",
+                "rollout_count",
+                f"rollouts-{value}",
+                "conditional_is",
+                (f"conditional_is.rollout_count={value}",),
+            )
+        possible_stages = tuple(
+            stages
+            for stages in (1, 2, 4)
+            if generation_length % stages == 0
+            and (generation_length // stages) % diffusion_block == 0
+        )
+        for stages in possible_stages:
+            add_sweep(
+                "ablations",
+                "decision_stages",
+                f"stages-{stages}",
+                "conditional_is",
+                (f"conditional_is.decision_block_size={generation_length // stages}",),
+            )
+        for value in clip_values:
+            encoded = "none" if value is None else f"{value:g}"
+            add_sweep(
+                "ablations",
+                "trajectory_importance_clip",
+                f"clip-{encoded}",
+                "conditional_is_reduced_layer_proposal",
+                (f"conditional_is.importance_log_ratio_clip={encoded}",),
+            )
+        add_sweep(
+            "ablations", "reward_source", "self-consistency", "conditional_is", ()
+        )
+        add_sweep(
+            "ablations",
+            "reward_source",
+            "exact-verifier",
+            "verifier_conditional_is",
+            (),
+        )
+        for value in temperature_values:
+            add_sweep(
+                "ablations",
+                "temperature",
+                f"temperature-{value:g}",
+                "conditional_is",
+                (f"generation.temperature={value}",),
+            )
+        ablation_root = args.output_root / _component_tag(tag, "ablations")
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "sweep",
+                "--run-root",
+                str(ablation_root),
+            ]
+        )
+
+    if "budget_curve" in components:
+        budget_values = (
+            (4, 8) if args.profile == "smoke" else (3, 4, 5, 8, 10)
+        )
+        for width in (4, 8):
+            add_sweep(
+                "budget_curve",
+                "block_beam",
+                f"width-{width}",
+                "block_beam",
+                (f"search.width={width}",),
+            )
+        for samples in (4, 8):
+            add_sweep(
+                "budget_curve",
+                "best_of_n",
+                f"samples-{samples}",
+                "best_of_n",
+                (f"best_of_n.samples={samples}",),
+            )
+        for candidates in budget_values:
+            for method in (
+                "conditional_is",
+                "conditional_is_reduced_layer_proposal",
+            ):
+                add_sweep(
+                    "budget_curve",
+                    method,
+                    f"candidates-{candidates}",
+                    method,
+                    (
+                        f"conditional_is.candidate_count={candidates}",
+                        "conditional_is.rollout_count=3",
+                    ),
+                )
+        budget_root = args.output_root / _component_tag(tag, "budget_curve")
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "sweep",
+                "--run-root",
+                str(budget_root),
+            ]
+        )
+
+    if "length_ablation" in components:
+        maximum_blocks = generation_length // diffusion_block
+        requested_blocks = (
+            (2, maximum_blocks) if args.profile == "smoke" else (2, 3, 4)
+        )
+        lengths = tuple(
+            dict.fromkeys(
+                diffusion_block * blocks
+                for blocks in requested_blocks
+                if 1 <= blocks <= maximum_blocks
+            )
+        )
+        length_methods = (
+            "base",
+            "best_of_n",
+            "block_beam",
+            "conditional_is",
+            "conditional_is_reduced_layer_proposal",
+            "vrpo_greedy",
+        )
+        for length in lengths:
+            for method in length_methods:
+                overrides = [f"generation.max_new_tokens={length}"]
+                if method == "conditional_is" or "reduced_layer_proposal" in method:
+                    overrides.append(
+                        "conditional_is.decision_block_size="
+                        f"{min(int(conditional['decision_block_size']), length)}"
+                    )
+                if method == "block_beam":
+                    overrides.append(
+                        "search.decision_block_size="
+                        f"{min(int(config['search']['decision_block_size']), length)}"
+                    )
+                add_sweep(
+                    "length_ablation",
+                    f"length-{length}",
+                    method,
+                    method,
+                    overrides,
+                )
+        length_root = args.output_root / _component_tag(tag, "length_ablation")
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "sweep",
+                "--run-root",
+                str(length_root),
+            ]
+        )
+    return commands
 
 
 def main() -> None:
@@ -31,8 +487,14 @@ def main() -> None:
         "--output-root", type=Path, default=Path("results/dllm/gsm8k")
     )
     parser.add_argument("--methods", nargs="+", choices=METHODS)
+    parser.add_argument("--components", nargs="+", choices=COMPONENTS)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--draw-index", type=int, default=0)
+    parser.add_argument("--ablation-limit", type=int)
+    parser.add_argument("--passk-limit", type=int)
+    parser.add_argument("--passk-draws", type=int)
+    parser.add_argument("--distribution-problems", type=int)
+    parser.add_argument("--distribution-draws", type=int)
     parser.add_argument("--with-aligned", action="store_true")
     parser.add_argument(
         "--vrpo",
@@ -44,99 +506,77 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--with-replay", action=argparse.BooleanOptionalAction, default=True
+        "--with-replay",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="compatibility alias that adds or removes the replay component",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    config, _ = load_pairing(args.config)
+    config, pairing = load_pairing(args.config)
+    config = apply_execution_profile(config, args.profile)
+    components = list(args.components or ("quality", "replay"))
+    if args.with_replay is True and "replay" not in components:
+        components.append("replay")
+    elif args.with_replay is False:
+        components = [component for component in components if component != "replay"]
+    unsupported = sorted(set(components) - set(IMPLEMENTED_COMPONENTS))
+    if unsupported:
+        raise ValueError(
+            "dLLM components are not implemented yet: " + ", ".join(unsupported)
+        )
+    args.components = tuple(components)
+
     methods = list(args.methods or DEFAULT_METHODS)
-    include_aligned = args.with_aligned or args.vrpo == "train"
+    required_methods = set(methods if "quality" in components else ())
+    if "matched_target" in components:
+        required_methods.update(
+            (
+                "verifier_mh",
+                "verifier_conditional_is",
+                "verifier_conditional_is_reduced_layer_proposal",
+            )
+        )
+    for component, section in (
+        ("passk", "passk_pairs"),
+        ("distribution", "distribution_pairs"),
+    ):
+        if component in components:
+            required_methods.update(_paired_methods(pairing, section))
+    if "length_ablation" in components:
+        required_methods.add("vrpo_greedy")
+
+    include_aligned = (
+        args.with_aligned
+        or args.vrpo == "train"
+        or any(method in ALIGNED_METHODS for method in required_methods)
+    )
     if include_aligned and args.vrpo != "train":
         adapter = Path(str(config["alignment"]["adapter"]))
         if not adapter.is_dir():
             raise FileNotFoundError(
                 f"aligned LLaDA adapter is absent: {adapter}; run the VRPO stage first"
             )
-    if include_aligned:
+    if args.with_aligned or args.vrpo == "train":
         for method in ALIGNED_METHODS:
             if method not in methods:
                 methods.append(method)
-    elif any(method in ALIGNED_METHODS for method in methods):
+    elif any(method in ALIGNED_METHODS for method in methods) and not include_aligned:
         raise ValueError("aligned methods require --with-aligned")
 
     tag = args.tag or f"llada-{args.profile}"
-    root = REPOSITORY_ROOT
-    runner = root / "experiments" / "dllm" / "gsm8k_reproduction.py"
-    replay_runner = root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py"
-    prepare_vrpo = root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"
-    train_vrpo = root / "experiments" / "dllm" / "train_gsm8k_vrpo.py"
-    common = [
-        "--config",
-        str(args.config),
-        "--data",
-        str(args.data),
-        "--output-root",
-        str(args.output_root),
-        "--tag",
-        tag,
-        "--profile",
-        args.profile,
-    ]
-    if args.limit is not None:
-        common.extend(("--limit", str(args.limit)))
-
-    commands: list[list[str]] = []
-    if args.vrpo == "preflight":
-        commands.append(
-            [sys.executable, str(train_vrpo), "--config", str(args.config), "--preflight"]
-        )
-    elif args.vrpo == "train":
-        commands.extend(
-            (
-                [
-                    sys.executable,
-                    str(prepare_vrpo),
-                    "--config",
-                    str(args.config),
-                    "--profile",
-                    "full",
-                ],
-                [
-                    sys.executable,
-                    str(train_vrpo),
-                    "--config",
-                    str(args.config),
-                    "--resume",
-                    "auto",
-                ],
-            )
-        )
-    commands.extend([
-        [
-            sys.executable,
-            str(runner),
-            *common,
-            "--method",
-            method,
-            "--draw-index",
-            str(args.draw_index),
-        ]
-        for method in methods
-    ])
-    if args.with_replay:
-        commands.append([sys.executable, str(replay_runner), *common])
-
+    commands = build_commands(args, REPOSITORY_ROOT, config, pairing, methods, tag)
     run_manifested_commands(
         commands=commands,
-        root=root,
+        root=REPOSITORY_ROOT,
         manifest_path=args.output_root / tag / "suite_manifest.json",
         metadata={
             "family": "dllm",
             "profile": args.profile,
             "tag": tag,
             "methods": methods,
-            "with_replay": args.with_replay,
+            "components": args.components,
             "with_aligned": include_aligned,
             "vrpo": args.vrpo,
         },
