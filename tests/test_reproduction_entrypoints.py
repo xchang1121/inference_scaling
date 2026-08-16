@@ -151,6 +151,7 @@ def _paired_args(**overrides):
         "passk_draws": None,
         "distribution_problems": None,
         "distribution_draws": None,
+        "infra_limit": 1,
         "dry_run": True,
     }
     values.update(overrides)
@@ -265,6 +266,7 @@ def test_public_entrypoints_do_not_require_pythonpath(tmp_path):
         root / "experiments" / "dllm" / "gsm8k_reproduction.py",
         root / "experiments" / "dllm" / "gsm8k_analysis.py",
         root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py",
+        root / "experiments" / "dllm" / "benchmark_infra.py",
         root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py",
         root / "experiments" / "dllm" / "train_gsm8k_vrpo.py",
     ):

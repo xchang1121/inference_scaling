@@ -27,6 +27,7 @@ from experiments.dllm.gsm8k_reproduction import (
 )
 from experiments.shared.paired_protocol import load_pairing
 from experiments.dllm.profiles import apply_execution_profile
+from experiments.dllm.runtime import validate_llada_weights
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.config import diffusion_decision_stage_lengths
 from inference_scaling.dllm.replay import (
@@ -391,25 +392,7 @@ def main() -> None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
         config["run"]["sample_count"] = args.limit
-    model_dir = Path(str(config["model"]["path"]))
-    weight_files = tuple(str(value) for value in config["model"]["weight_files"])
-    expected_hashes = tuple(str(value) for value in config["model"]["weight_sha256"])
-    expected_sizes = tuple(int(value) for value in config["model"]["weight_bytes"])
-    if not (len(weight_files) == len(expected_hashes) == len(expected_sizes)):
-        raise ValueError("LLaDA weight manifest columns have different lengths")
-    actual_hashes: dict[str, str] = {}
-    for name, expected_hash, expected_size in zip(
-        weight_files, expected_hashes, expected_sizes, strict=True
-    ):
-        weight = model_dir / name
-        if not weight.is_file():
-            raise FileNotFoundError(f"pinned LLaDA weight is absent: {weight}")
-        if weight.stat().st_size != expected_size:
-            raise ValueError(f"LLaDA weight size does not match the manifest: {weight}")
-        actual_hash = _file_sha256(weight)
-        if actual_hash != expected_hash:
-            raise ValueError(f"LLaDA weight hash does not match the manifest: {weight}")
-        actual_hashes[name] = actual_hash
+    actual_hashes = validate_llada_weights(config)
     problems = select_problems(
         load_gsm8k(args.data),
         int(config["run"]["sample_count"]),

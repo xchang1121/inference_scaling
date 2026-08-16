@@ -65,6 +65,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             ("--passk-draws", args.passk_draws),
             ("--distribution-problems", args.distribution_problems),
             ("--distribution-draws", args.distribution_draws),
+            ("--infra-limit", args.infra_limit),
         ):
             if value is not None:
                 command.extend((flag, str(value)))
@@ -164,6 +165,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 ("--passk-draws", args.passk_draws),
                 ("--distribution-problems", args.distribution_problems),
                 ("--distribution-draws", args.distribution_draws),
+                ("--infra-limit", args.infra_limit),
             ):
                 if value is not None:
                     command.extend((flag, str(value)))
@@ -216,6 +218,7 @@ def main() -> None:
     parser.add_argument("--passk-draws", type=int)
     parser.add_argument("--distribution-problems", type=int)
     parser.add_argument("--distribution-draws", type=int)
+    parser.add_argument("--infra-limit", type=int, default=1)
     parser.add_argument("--output-root", type=Path, default=Path("results/reproduction"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

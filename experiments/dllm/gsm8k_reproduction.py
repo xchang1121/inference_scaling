@@ -22,6 +22,11 @@ from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.config_overrides import apply_config_overrides
 from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
+from experiments.dllm.runtime import (
+    file_sha256 as _file_sha256,
+    validate_llada_weights,
+    validate_runtime_device,
+)
 from inference_scaling.dllm.algorithms import (
     run_conditional_diffusion_is,
     run_diffusion_block_beam,
@@ -79,6 +84,7 @@ DYNAMIC_METHODS = (
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
     "experiments/dllm/profiles.py",
+    "experiments/dllm/runtime.py",
     "experiments/shared/config_overrides.py",
     "experiments/shared/statistics.py",
     "src/inference_scaling/dllm/algorithms/is_sampling.py",
@@ -90,14 +96,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/dynamic_is.py",
     "src/inference_scaling/shared/budget.py",
 )
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _fingerprint(value: Any) -> str:
@@ -777,34 +775,8 @@ def main() -> None:
         if draw_index < 0:
             raise ValueError("--draw-index must be non-negative")
         draw_indices = (draw_index,)
-    device = str(config["runtime"]["device"])
-    if device.startswith("cuda"):
-        import torch
-
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
-
-    model_dir = Path(str(config["model"]["path"]))
-    weight_files = tuple(str(value) for value in config["model"]["weight_files"])
-    expected_hashes = tuple(str(value) for value in config["model"]["weight_sha256"])
-    expected_sizes = tuple(int(value) for value in config["model"]["weight_bytes"])
-    if not (len(weight_files) == len(expected_hashes) == len(expected_sizes)):
-        raise ValueError("LLaDA weight manifest columns have different lengths")
-    actual_hashes: dict[str, str] = {}
-    for name, expected_hash, expected_size in zip(
-        weight_files, expected_hashes, expected_sizes, strict=True
-    ):
-        weight = model_dir / name
-        if not weight.is_file():
-            raise FileNotFoundError(
-                f"pinned LLaDA weight is absent: {weight}; run experiments/dllm/download_llada.py"
-            )
-        if weight.stat().st_size != expected_size:
-            raise ValueError(f"LLaDA weight size does not match the manifest: {weight}")
-        actual_hash = _file_sha256(weight)
-        if actual_hash != expected_hash:
-            raise ValueError(f"LLaDA weight hash does not match the manifest: {weight}")
-        actual_hashes[name] = actual_hash
+    device = validate_runtime_device(config)
+    actual_hashes = validate_llada_weights(config)
     problems = select_problems(
         load_gsm8k(args.data),
         int(config["run"]["sample_count"]),

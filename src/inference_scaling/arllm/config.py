@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from inference_scaling.shared.config import RuntimeConfig
+from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
 
 
 def _positive(name: str, value: int | float) -> None:
@@ -148,34 +148,6 @@ class ProgressiveISConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class SMCForestConfig:
-    """Auxiliary particle filter with reusable conditional rollout suffixes."""
-
-    particle_count: int = 8
-    branch_factor: int = 2
-    rollout_count: int = 4
-    block_size: int = 16
-    total_length: int = 128
-    reward_temperature: float = 1.0
-    reward_workers: int = 4
-    reuse_rollout_forest: bool = True
-
-    def __post_init__(self) -> None:
-        for name in (
-            "particle_count",
-            "branch_factor",
-            "rollout_count",
-            "block_size",
-            "total_length",
-            "reward_workers",
-        ):
-            _positive(name, getattr(self, name))
-        _positive("reward_temperature", self.reward_temperature)
-        if self.block_size > self.total_length:
-            raise ValueError("block_size cannot exceed total_length")
-
-
-@dataclass(frozen=True, slots=True)
 class BaseReplayConfig:
     candidate_count: int = 4
     block_size: int = 16
@@ -228,4 +200,3 @@ class DynamicISConfig:
         if not 0 <= self.auxiliary_mixture < 1:
             raise ValueError("auxiliary_mixture must lie in [0, 1)")
         _positive("minimum_fresh_per_candidate", self.minimum_fresh_per_candidate)
-

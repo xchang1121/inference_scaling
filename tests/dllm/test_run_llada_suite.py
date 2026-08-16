@@ -109,3 +109,44 @@ def test_llada_suite_plans_passk_draws_with_one_model_load_per_method(
     assert all("--draws 2" in command for command in reproduction)
     assert sum("gsm8k_analysis.py" in command for command in commands) == 1
     assert manifest["components"] == ["passk"]
+
+
+def test_llada_suite_coalesces_async_and_infra_into_one_full_benchmark(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llada_suite.py",
+            "--config",
+            "configs/gsm8k_llada_moe_3090.toml",
+            "--profile",
+            "smoke",
+            "--tag",
+            "infra-unit",
+            "--output-root",
+            str(tmp_path),
+            "--components",
+            "async",
+            "infra",
+            "--infra-limit",
+            "2",
+            "--vrpo",
+            "skip",
+            "--dry-run",
+        ],
+    )
+    main()
+
+    manifest = json.loads(
+        (tmp_path / "infra-unit" / "suite_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    commands = [
+        command for command in manifest["commands"] if "benchmark_infra.py" in command
+    ]
+    assert len(commands) == 1
+    assert "--section all" in commands[0]
+    assert "--limit 2" in commands[0]

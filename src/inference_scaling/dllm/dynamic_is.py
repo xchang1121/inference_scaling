@@ -256,35 +256,63 @@ def _sample_standard_deviation(values: Sequence[float]) -> float:
     if len(values) < 2:
         return 1.0
     result = float(np.std(np.asarray(values, dtype=np.float64), ddof=1))
-    return result if isfinite(result) and result > 0 else 1.0
+    return result if isfinite(result) and result >= 0 else 1.0
 
 
 def _design_statistics(
     histories: Sequence[DiffusionReplayHistory],
+    fresh_histories: Sequence[DiffusionReplayHistory],
     *,
     reward_temperature: float,
     truncation: float,
     history_cost: float,
     fresh_cost: float,
 ) -> tuple[VarianceCostEstimate, ...]:
+    if len(histories) != len(fresh_histories):
+        raise ValueError("history and fresh design samples must align by candidate")
     log_truncation = log(truncation)
-    result = []
-    for history in histories:
-        history_terms = [
-            min(
-                log_truncation,
-                record.target_trajectory_logprob
-                - record.behavior_trajectory_logprob,
+    reward_shift = max(
+        (
+            record.reward / reward_temperature
+            for design in (*histories, *fresh_histories)
+            for record in design.records
+        ),
+        default=0.0,
+    )
+    result: list[VarianceCostEstimate] = []
+    for history, fresh in zip(histories, fresh_histories, strict=True):
+        history_contributions = [
+            exp(
+                min(
+                    log_truncation,
+                    record.target_trajectory_logprob
+                    - record.behavior_trajectory_logprob,
+                )
+                + record.reward / reward_temperature
+                - reward_shift
             )
-            + record.reward / reward_temperature
             for record in history.records
         ]
-        shift = max(history_terms, default=0.0)
-        scaled = [exp(value - shift) for value in history_terms]
+        fresh_contributions = [
+            max(
+                0.0,
+                1.0
+                - exp(
+                    min(
+                        0.0,
+                        log_truncation
+                        + record.target_trajectory_logprob
+                        - record.behavior_trajectory_logprob,
+                    )
+                ),
+            )
+            * exp(record.reward / reward_temperature - reward_shift)
+            for record in fresh.records
+        ]
         result.append(
             VarianceCostEstimate(
-                history_std=_sample_standard_deviation(scaled),
-                fresh_std=1.0,
+                history_std=_sample_standard_deviation(history_contributions),
+                fresh_std=_sample_standard_deviation(fresh_contributions),
                 history_cost=history_cost,
                 fresh_cost=fresh_cost,
             )
@@ -419,9 +447,30 @@ def run_dynamic_diffusion_is(
                     reward_batch=reward_batch,
                     seed=seeds.derive("dynamic", arm, "design-history", stage_index),
                 )
-                design_count = sum(len(history.records) for history in design_histories)
+                # A second, independent pilot is drawn from the target policy.
+                # Reversing target/behavior in the history builder gives both
+                # exact log densities needed for the fresh-tail variance.
+                fresh_design_histories = build_diffusion_replay_history(
+                    target_backend=auxiliary_backend,
+                    behavior_backend=target_backend,
+                    prompt=prompt,
+                    generated_prefix=generated,
+                    candidates=candidates,
+                    rollout_length=rollout_length,
+                    count_per_candidate=design_rollouts,
+                    target_sampling=sampling,
+                    behavior_sampling=sampling,
+                    reward_batch=reward_batch,
+                    seed=seeds.derive("dynamic", arm, "design-fresh", stage_index),
+                )
+                design_count = sum(
+                    len(history.records)
+                    for design_set in (design_histories, fresh_design_histories)
+                    for history in design_set
+                )
                 statistics = _design_statistics(
                     design_histories,
+                    fresh_design_histories,
                     reward_temperature=config.reward_temperature,
                     truncation=truncation,
                     history_cost=history_cost,

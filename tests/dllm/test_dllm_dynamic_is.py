@@ -135,5 +135,5 @@ def test_every_dynamic_arm_runs_through_the_same_diffusion_core(arm):
     assert all(item.fresh_count >= 1 for item in result.steps[0].allocations)
     assert all(item.estimated_cost == 0 for item in result.steps[-1].allocations)
     if arm == "trajectory_replay_aware_optimal":
-        assert result.steps[0].design_rollouts == 8
+        assert result.steps[0].design_rollouts == 16
         assert result.steps[0].evaluation_history_rollouts == 8

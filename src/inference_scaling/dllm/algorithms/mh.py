@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import isfinite
+
 from inference_scaling.dllm.config import DiffusionMHConfig, DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest, DiffusionSample
 from inference_scaling.shared.mh import decide_metropolis_hastings
@@ -14,6 +16,59 @@ DiffusionRewardFunction = Callable[[TokenSequence, TokenSequence], float]
 DiffusionRewardBatchFunction = Callable[
     [TokenSequence, Sequence[TokenSequence]], Sequence[float]
 ]
+
+
+def _mh_requests(
+    prompt: TokenSequence,
+    config: DiffusionMHConfig,
+    sampling: DiffusionSamplingConfig,
+    seeds: SeedStream,
+) -> list[DiffusionGenerationRequest]:
+    return [
+        DiffusionGenerationRequest(
+            prefix=prompt,
+            generation_length=config.total_length,
+            sampling=sampling,
+            seed=seeds.derive("dllm-mh", draw),
+            request_id=f"dllm-mh:draw:{draw}",
+        )
+        for draw in range(config.updates + 1)
+    ]
+
+
+def _sample_mh_requests(
+    backend: DiffusionBackend,
+    requests: Sequence[DiffusionGenerationRequest],
+    proposal_batch_size: int | None,
+) -> list[DiffusionSample]:
+    if proposal_batch_size is not None and proposal_batch_size <= 0:
+        raise ValueError("proposal_batch_size must be positive when provided")
+    batch_size = proposal_batch_size or len(requests)
+    samples: list[DiffusionSample] = []
+    for offset in range(0, len(requests), batch_size):
+        samples.extend(backend.sample_batch(requests[offset : offset + batch_size]))
+    if len(samples) != len(requests):
+        raise RuntimeError("backend returned an invalid number of MH proposals")
+    return samples
+
+
+def _evaluate_mh_rewards(
+    prompt: TokenSequence,
+    samples: Sequence[DiffusionSample],
+    reward: DiffusionRewardFunction | None,
+    reward_batch: DiffusionRewardBatchFunction | None,
+) -> list[float]:
+    continuations = [sample.token_ids for sample in samples]
+    if reward_batch is not None:
+        values = [float(value) for value in reward_batch(prompt, continuations)]
+    else:
+        assert reward is not None
+        values = [float(reward(prompt, continuation)) for continuation in continuations]
+    if len(values) != len(samples):
+        raise RuntimeError("reward evaluator returned an invalid number of values")
+    if any(not isfinite(value) for value in values):
+        raise ValueError("reward values must be finite")
+    return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +106,7 @@ def run_diffusion_reward_mh(
     reward: DiffusionRewardFunction | None = None,
     seed: int = 0,
     reward_batch: DiffusionRewardBatchFunction | None = None,
+    proposal_batch_size: int | None = None,
 ) -> DiffusionMHResult:
     """Run independence MH with proposals drawn from the base dLLM sampler.
 
@@ -66,27 +122,9 @@ def run_diffusion_reward_mh(
         prefix_length=len(prompt),
     )
     seeds = SeedStream(seed)
-    requests = [
-        DiffusionGenerationRequest(
-            prefix=prompt,
-            generation_length=config.total_length,
-            sampling=sampling,
-            seed=seeds.derive("dllm-mh", draw),
-            request_id=f"dllm-mh:draw:{draw}",
-        )
-        for draw in range(config.updates + 1)
-    ]
-    samples = backend.sample_batch(requests)
-    if len(samples) != len(requests):
-        raise RuntimeError("backend returned an invalid number of MH proposals")
-    continuations = [sample.token_ids for sample in samples]
-    if reward_batch is not None:
-        reward_values = [float(value) for value in reward_batch(prompt, continuations)]
-    else:
-        assert reward is not None
-        reward_values = [float(reward(prompt, continuation)) for continuation in continuations]
-    if len(reward_values) != len(samples):
-        raise RuntimeError("reward evaluator returned an invalid number of values")
+    requests = _mh_requests(prompt, config, sampling, seeds)
+    samples = _sample_mh_requests(backend, requests, proposal_batch_size)
+    reward_values = _evaluate_mh_rewards(prompt, samples, reward, reward_batch)
 
     current = samples[0]
     current_reward = reward_values[0]

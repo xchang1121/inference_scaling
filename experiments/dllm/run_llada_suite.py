@@ -29,11 +29,13 @@ IMPLEMENTED_COMPONENTS = (
     "matched_target",
     "replay",
     "dynamic_is",
+    "async",
     "passk",
     "ablations",
     "budget_curve",
     "length_ablation",
     "distribution",
+    "infra",
 )
 
 
@@ -62,6 +64,7 @@ def build_commands(
 ) -> list[list[str]]:
     runner = root / "experiments" / "dllm" / "gsm8k_reproduction.py"
     replay_runner = root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py"
+    infra_runner = root / "experiments" / "dllm" / "benchmark_infra.py"
     analyzer = root / "experiments" / "dllm" / "gsm8k_analysis.py"
     prepare_vrpo = root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"
     train_vrpo = root / "experiments" / "dllm" / "train_gsm8k_vrpo.py"
@@ -195,6 +198,22 @@ def build_commands(
                 str(args.output_root / dynamic_tag),
             ]
         )
+
+    if "infra" in components or "async" in components:
+        section = "all" if "infra" in components else "async"
+        command = [
+            sys.executable,
+            str(infra_runner),
+            *base_common,
+            "--tag",
+            tag,
+            "--section",
+            section,
+        ]
+        infra_limit = args.infra_limit or args.limit
+        if infra_limit is not None:
+            command.extend(("--limit", str(infra_limit)))
+        add(command)
 
     bootstrap_replicates = 100 if args.profile == "smoke" else 2_000
     if "passk" in components:
@@ -519,6 +538,7 @@ def main() -> None:
     parser.add_argument("--passk-draws", type=int)
     parser.add_argument("--distribution-problems", type=int)
     parser.add_argument("--distribution-draws", type=int)
+    parser.add_argument("--infra-limit", type=int)
     parser.add_argument("--with-aligned", action="store_true")
     parser.add_argument(
         "--vrpo",
