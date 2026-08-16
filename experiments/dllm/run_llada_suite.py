@@ -12,18 +12,23 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import METHODS
+from experiments.dllm.gsm8k_reproduction import DYNAMIC_METHODS, METHODS
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.shared.components import COMPONENTS
 from experiments.shared.paired_protocol import MethodPair, load_pairing
 from experiments.shared.suite_runner import run_manifested_commands
 
-DEFAULT_METHODS = tuple(method for method in METHODS if not method.startswith("vrpo_"))
+DEFAULT_METHODS = tuple(
+    method
+    for method in METHODS
+    if not method.startswith("vrpo_") and method not in DYNAMIC_METHODS
+)
 ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
 IMPLEMENTED_COMPONENTS = (
     "quality",
     "matched_target",
     "replay",
+    "dynamic_is",
     "passk",
     "ablations",
     "budget_curve",
@@ -171,6 +176,25 @@ def build_commands(
         if args.limit is not None:
             command.extend(("--limit", str(args.limit)))
         add(command)
+
+    if "dynamic_is" in components:
+        dynamic_tag = _component_tag(tag, "dynamic_is")
+        for method in DYNAMIC_METHODS:
+            add_run(
+                method,
+                run_tag=f"{dynamic_tag}/{method}",
+                limit=args.ablation_limit or args.limit,
+            )
+        add(
+            [
+                sys.executable,
+                str(analyzer),
+                "--kind",
+                "sweep",
+                "--run-root",
+                str(args.output_root / dynamic_tag),
+            ]
+        )
 
     bootstrap_replicates = 100 if args.profile == "smoke" else 2_000
     if "passk" in components:

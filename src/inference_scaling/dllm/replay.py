@@ -120,6 +120,7 @@ class DiffusionReplayEnergyEstimate:
 class DiffusionReplayCandidate:
     sample: DiffusionSample
     estimate: DiffusionReplayEnergyEstimate
+    outer_log_ratio: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,20 +223,32 @@ def select_diffusion_candidates_with_replay(
     candidates: Sequence[DiffusionSample],
     histories: Sequence[DiffusionReplayHistory] | None,
     rollout_length: int,
-    fresh_count: int,
+    fresh_count: int | Sequence[int],
     target_sampling: DiffusionSamplingConfig,
     behavior_sampling: DiffusionSamplingConfig | None,
     reward_batch: DiffusionReplayRewardBatch,
     reward_temperature: float,
     truncation: float,
     seed: int,
+    candidate_log_ratios: Sequence[float] | None = None,
 ) -> DiffusionReplaySelection:
     """Estimate each rollout energy from fresh data or corrected replay plus a fresh tail."""
 
     if not candidates:
         raise ValueError("at least one candidate is required")
-    if fresh_count <= 0 or reward_temperature <= 0 or truncation <= 0:
-        raise ValueError("fresh_count, reward_temperature, and truncation must be positive")
+    if isinstance(fresh_count, int):
+        fresh_counts = (fresh_count,) * len(candidates)
+    else:
+        fresh_counts = tuple(int(value) for value in fresh_count)
+    if len(fresh_counts) != len(candidates) or any(value <= 0 for value in fresh_counts):
+        raise ValueError("fresh_count must be positive for every candidate")
+    if reward_temperature <= 0 or truncation <= 0:
+        raise ValueError("reward_temperature and truncation must be positive")
+    outer_log_ratios = tuple(candidate_log_ratios or (0.0,) * len(candidates))
+    if len(outer_log_ratios) != len(candidates) or any(
+        not isfinite(value) for value in outer_log_ratios
+    ):
+        raise ValueError("candidate log-ratios must be finite and match the candidates")
     histories = histories or tuple(
         DiffusionReplayHistory(prompt + generated_prefix + candidate.token_ids, ())
         for candidate in candidates
@@ -261,11 +274,17 @@ def select_diffusion_candidates_with_replay(
                     (),
                     (reward / reward_temperature,),
                 ),
+                outer_log_ratio=outer_log_ratio,
             )
-            for candidate, reward in zip(candidates, rewards, strict=True)
+            for candidate, reward, outer_log_ratio in zip(
+                candidates, rewards, outer_log_ratios, strict=True
+            )
         )
         probabilities = _normalized(
-            [candidate.estimate.log_energy for candidate in replay_candidates]
+            [
+                candidate.estimate.log_energy + candidate.outer_log_ratio
+                for candidate in replay_candidates
+            ]
         )
         selected = int(np.random.default_rng(seed).choice(len(candidates), p=probabilities))
         return DiffusionReplaySelection(
@@ -282,7 +301,7 @@ def select_diffusion_candidates_with_replay(
         expected_prefix = prompt + generated_prefix + candidate.token_ids
         if histories[candidate_index].rollout_prefix != expected_prefix:
             raise ValueError("replay history does not belong to its candidate")
-        for fresh_index in range(fresh_count):
+        for fresh_index in range(fresh_counts[candidate_index]):
             requests.append(
                 DiffusionGenerationRequest(
                     prefix=expected_prefix,
@@ -335,8 +354,8 @@ def select_diffusion_candidates_with_replay(
         )
 
     replay_candidates: list[DiffusionReplayCandidate] = []
-    for candidate, history, fresh_records in zip(
-        candidates, histories, grouped_fresh, strict=True
+    for candidate, history, fresh_records, outer_log_ratio in zip(
+        candidates, histories, grouped_fresh, outer_log_ratios, strict=True
     ):
         if history.records:
             shared_estimate = TruncatedReplayRolloutWeightProvider(
@@ -363,10 +382,14 @@ def select_diffusion_candidates_with_replay(
                     tuple(history_terms),
                     tuple(fresh_terms),
                 ),
+                outer_log_ratio=outer_log_ratio,
             )
         )
     probabilities = _normalized(
-        [candidate.estimate.log_energy for candidate in replay_candidates]
+        [
+            candidate.estimate.log_energy + candidate.outer_log_ratio
+            for candidate in replay_candidates
+        ]
     )
     selected = int(
         seeds.generator("dllm-replay-select").choice(

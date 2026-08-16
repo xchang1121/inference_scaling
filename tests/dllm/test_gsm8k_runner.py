@@ -110,6 +110,17 @@ def _config():
             "reward_temperature": 1.0,
             "importance_log_ratio_clip": 3.0,
         },
+        "replay": {
+            "history_rollouts": 2,
+            "fresh_rollouts": 1,
+            "truncation": 2.0,
+        },
+        "dynamic_is": {
+            "auxiliary_probability": 0.5,
+            "history_cost": 0.05,
+            "fresh_cost": 1.0,
+            "design_rollouts": 2,
+        },
     }
 
 

@@ -192,3 +192,31 @@ def test_fresh_only_arm_needs_no_behavior_model_or_rescoring():
     assert [candidate.estimate.fresh_count for candidate in selection.candidates] == [3, 3]
     assert target.sample_requests == 6
     assert target.score_requests == 0
+
+
+def test_replay_accepts_per_candidate_fresh_budgets_and_outer_weights():
+    target = CoinDiffusionBackend("target", 0.8)
+    candidates = (_candidate(0), _candidate(1))
+
+    selection = select_diffusion_candidates_with_replay(
+        target_backend=target,
+        behavior_backend=None,
+        prompt=(9,),
+        generated_prefix=(),
+        candidates=candidates,
+        histories=None,
+        rollout_length=1,
+        fresh_count=(1, 3),
+        target_sampling=EXACT,
+        behavior_sampling=None,
+        reward_batch=_reward,
+        reward_temperature=1.0,
+        truncation=2.0,
+        seed=12,
+        candidate_log_ratios=(2.0, -2.0),
+    )
+
+    assert [candidate.estimate.fresh_count for candidate in selection.candidates] == [1, 3]
+    assert [candidate.outer_log_ratio for candidate in selection.candidates] == [2.0, -2.0]
+    assert target.sample_requests == 4
+    assert selection.probabilities[0] > selection.probabilities[1]

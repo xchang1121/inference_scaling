@@ -273,6 +273,8 @@ def collect_sweep(run_root: Path) -> dict[str, Any]:
                         "best_of_n",
                         "mh",
                         "conditional_is",
+                        "replay",
+                        "dynamic_is",
                     )
                 },
                 "summary": summary,
@@ -325,4 +327,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -33,6 +33,13 @@ from inference_scaling.dllm.vrpo import (
     estimate_vrpo_preference_loss,
     sample_vrpo_mask_plan,
 )
+from inference_scaling.dllm.dynamic_is import (
+    DynamicDiffusionDraw,
+    DynamicDiffusionResult,
+    DynamicDiffusionStep,
+    draw_defensive_diffusion_candidates,
+    run_dynamic_diffusion_is,
+)
 
 __all__ = [
     "DiffusionBackend",
@@ -50,6 +57,9 @@ __all__ = [
     "DiffusionSamplingConfig",
     "DiffusionTraceStep",
     "DiffusionTrajectoryScoreRequest",
+    "DynamicDiffusionDraw",
+    "DynamicDiffusionResult",
+    "DynamicDiffusionStep",
     "VRPOSamplingConfig",
     "VRPOMaskPlan",
     "VRPOMaskSample",
@@ -58,6 +68,8 @@ __all__ = [
     "estimate_vrpo_preference_loss",
     "diffusion_decision_stage_lengths",
     "build_diffusion_replay_history",
+    "draw_defensive_diffusion_candidates",
     "sample_vrpo_mask_plan",
+    "run_dynamic_diffusion_is",
     "select_diffusion_candidates_with_replay",
 ]

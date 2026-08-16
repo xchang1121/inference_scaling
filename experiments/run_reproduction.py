@@ -14,7 +14,10 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.arllm.run_arllm_suite import AR_METHODS
 from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
-from experiments.dllm.run_llada_suite import IMPLEMENTED_COMPONENTS as DLLM_COMPONENTS
+from experiments.dllm.run_llada_suite import (
+    DEFAULT_METHODS as DEFAULT_DLLM_METHODS,
+    IMPLEMENTED_COMPONENTS as DLLM_COMPONENTS,
+)
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.suite_runner import run_manifested_commands
 
@@ -220,7 +223,7 @@ def main() -> None:
     args.ar_methods = tuple(args.ar_methods or AR_METHODS)
     args.dllm_methods = tuple(
         args.dllm_methods
-        or (method for method in DLLM_METHODS if not method.startswith("vrpo_"))
+        or DEFAULT_DLLM_METHODS
     )
     args.components_explicit = args.components is not None
     args.components = tuple(

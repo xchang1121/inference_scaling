@@ -29,6 +29,7 @@ from inference_scaling.dllm.algorithms import (
     run_diffusion_trajectory_power_mh,
 )
 from inference_scaling.dllm.backends import load_llada_backend
+from inference_scaling.dllm.dynamic_is import run_dynamic_diffusion_is
 from inference_scaling.dllm.config import (
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
@@ -66,6 +67,14 @@ METHODS = (
     "verifier_conditional_is_reduced_layer_proposal",
     "vrpo_sample",
     "vrpo_greedy",
+    "base_candidate_fixed",
+    "trajectory_replay_aware_fixed",
+    "trajectory_replay_aware_optimal",
+)
+DYNAMIC_METHODS = (
+    "base_candidate_fixed",
+    "trajectory_replay_aware_fixed",
+    "trajectory_replay_aware_optimal",
 )
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
@@ -78,6 +87,8 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/backends/llada.py",
     "src/inference_scaling/dllm/backends/loader.py",
     "src/inference_scaling/dllm/config.py",
+    "src/inference_scaling/dllm/dynamic_is.py",
+    "src/inference_scaling/shared/budget.py",
 )
 
 
@@ -312,6 +323,85 @@ def run_method(
             seeds=seeds,
             problem_index=problem.index,
         )
+
+    if method in DYNAMIC_METHODS:
+        if proposal_backend is None:
+            raise ValueError("dynamic dLLM IS requires the shared early-exit backend")
+        conditional = config["conditional_is"]
+        replay = config["replay"]
+        dynamic = config.get("dynamic_is", {})
+        importance_clip = conditional.get("importance_log_ratio_clip")
+        result = run_dynamic_diffusion_is(
+            arm=method,
+            target_backend=backend,
+            auxiliary_backend=proposal_backend,
+            prompt=prompt,
+            config=DiffusionISConfig(
+                candidate_count=int(conditional["candidate_count"]),
+                rollout_count=int(conditional["rollout_count"]),
+                block_size=int(conditional["decision_block_size"]),
+                total_length=generation_length,
+                reward_temperature=float(conditional["reward_temperature"]),
+                importance_log_ratio_clip=(
+                    float(importance_clip) if importance_clip is not None else None
+                ),
+            ),
+            sampling=exact_sampling,
+            reward_batch=CumulativeConsensusReward(backend.decode),
+            history_rollouts=int(replay["history_rollouts"]),
+            fresh_rollouts=int(replay["fresh_rollouts"]),
+            truncation=float(replay["truncation"]),
+            auxiliary_probability=float(dynamic.get("auxiliary_probability", 0.5)),
+            history_cost=float(dynamic.get("history_cost", 0.05)),
+            fresh_cost=float(dynamic.get("fresh_cost", 1.0)),
+            design_rollouts=int(dynamic.get("design_rollouts", 2)),
+            seed=seeds.derive(method, problem.index),
+        )
+        outer_log_ratios = [
+            draw.outer_log_ratio for step in result.steps for draw in step.draws
+        ]
+        history_used = sum(
+            candidate.estimate.history_count
+            for step in result.steps
+            for candidate in step.selection.candidates
+        )
+        fresh_used = sum(
+            candidate.estimate.fresh_count
+            for step in result.steps
+            for candidate in step.selection.candidates
+        )
+        return result.token_ids, {
+            "target": "exact_base_reverse_trajectory_times_conditional_rollout_energy",
+            "dynamic_arm": method,
+            "candidate_proposal": (
+                "exact_base_reverse_trajectory"
+                if method == "base_candidate_fixed"
+                else "defensive_base_early_exit_mixture"
+            ),
+            "outer_importance_correction": method != "base_candidate_fixed",
+            "outer_importance_ess": importance_effective_sample_size(
+                outer_log_ratios
+            ),
+            "decision_stages": len(result.steps),
+            "design_rollouts": sum(step.design_rollouts for step in result.steps),
+            "evaluation_history_generated": sum(
+                step.evaluation_history_rollouts for step in result.steps
+            ),
+            "history_used": history_used,
+            "fresh_used": fresh_used,
+            "rollout_reuse_rate": (
+                history_used / (history_used + fresh_used)
+                if history_used + fresh_used
+                else 0.0
+            ),
+            "allocations": [
+                [asdict(allocation) for allocation in step.allocations]
+                for step in result.steps
+            ],
+            "candidate_sources": [
+                [draw.source for draw in step.draws] for step in result.steps
+            ],
+        }
 
     if method == "trajectory_power_mh":
         mh = config["mh"]
@@ -724,7 +814,7 @@ def main() -> None:
     backend = load_llada_backend(config, role)
     proposal_backend = (
         load_llada_backend(config, "proposal", base_backend=backend)
-        if "reduced_layer_proposal" in args.method
+        if "reduced_layer_proposal" in args.method or args.method in DYNAMIC_METHODS
         else None
     )
     implementation_hashes = {
