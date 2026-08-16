@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
+
 import pytest
 
+from experiments.shared.artifacts import (
+    dataclass_snapshot_delta,
+    file_sha256,
+    json_fingerprint,
+)
 from experiments.shared.config_overrides import (
     apply_config_overrides,
     parse_override_value,
@@ -48,3 +56,22 @@ def test_shared_probability_estimators_have_known_values() -> None:
     assert total_variation_distance(left, right) == 1.0
     assert jensen_shannon_bits(left, right) == 1.0
 
+
+def test_shared_artifact_helpers_are_stable_and_preserve_constants(tmp_path) -> None:
+    path = tmp_path / "artifact.bin"
+    path.write_bytes(b"artifact")
+    assert file_sha256(path) == hashlib.sha256(b"artifact").hexdigest()
+    assert json_fingerprint({"b": 2, "a": "值"}) == json_fingerprint(
+        {"a": "值", "b": 2}
+    )
+
+    @dataclass(frozen=True)
+    class Snapshot:
+        requests: int
+        parameters: int
+
+    assert dataclass_snapshot_delta(
+        Snapshot(2, 10),
+        Snapshot(5, 10),
+        constant_fields={"parameters"},
+    ) == {"requests": 3, "parameters": 10}

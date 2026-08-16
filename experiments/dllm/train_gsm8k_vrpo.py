@@ -18,7 +18,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import _file_sha256, _fingerprint
+from experiments.dllm.runtime import file_sha256, json_fingerprint
 from experiments.shared.paired_protocol import load_pairing
 from inference_scaling.dllm.config import VRPOSamplingConfig
 from inference_scaling.dllm.vrpo import (
@@ -285,7 +285,7 @@ def main() -> None:
     output = Path(str(config["alignment"]["adapter"]))
     model_path = str(config["model"]["path"])
     implementation_hashes = {
-        path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
+        path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
     }
     effective = {
         "config": config,
@@ -293,7 +293,7 @@ def main() -> None:
         "preference_fingerprint": preference_manifest["fingerprint"],
         "implementation_sha256": implementation_hashes,
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
 
     state_path = output / "training_state.json"
     optimizer_path = output / "optimizer.pt"

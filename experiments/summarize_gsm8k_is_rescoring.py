@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +12,11 @@ from experiments.gsm8k_is_passk import (
     _paired_pass_at_k_difference,
 )
 from inference_scaling.rng import SeedStream
+
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
 
 
 REFERENCE_METHODS = (
@@ -25,14 +29,6 @@ UNCORRECTED_METHOD = "conditional_is_small_proposal_uncorrected"
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _validate(reference: dict[str, Any], ablation: dict[str, Any]) -> None:

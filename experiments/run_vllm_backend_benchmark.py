@@ -3,25 +3,21 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
+
 
 def _run(command: list[str], environment: dict[str, str]) -> None:
     print("RUN", subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, check=True, env=environment)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _matches_requested_run(

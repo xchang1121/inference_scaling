@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import json
 import statistics
 import time
@@ -23,7 +22,12 @@ from experiments.shared.config_overrides import apply_config_overrides
 from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.dllm.runtime import (
+    capped_generation_length as _capped_generation_length,
+    empty_llada_compute as _zero_compute,
     file_sha256 as _file_sha256,
+    json_fingerprint as _fingerprint,
+    llada_snapshot_delta as _snapshot_delta,
+    sampling_from_section as _sampling,
     validate_llada_weights,
     validate_runtime_device,
 )
@@ -96,45 +100,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/dynamic_is.py",
     "src/inference_scaling/shared/budget.py",
 )
-
-
-def _fingerprint(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _sampling(section: dict[str, Any]) -> DiffusionSamplingConfig:
-    return DiffusionSamplingConfig(
-        block_length=int(section["block_length"]),
-        steps_per_block=int(section.get("denoising_steps", section.get("steps_per_block"))),
-        temperature=float(section.get("temperature", 0.0)),
-        top_k=int(section.get("top_k", 0)),
-        top_p=float(section.get("top_p", 1.0)),
-        cfg_scale=float(section.get("cfg_scale", 0.0)),
-        remasking=str(section.get("remasking", "low_confidence")),
-        confidence_threshold=float(section.get("confidence_threshold", 0.85)),
-        mask_token_id=(
-            int(section["mask_token_id"])
-            if section.get("mask_token_id") is not None
-            else None
-        ),
-    )
-
-
-def _capped_generation_length(
-    *,
-    prompt_length: int,
-    maximum: int,
-    sampling: DiffusionSamplingConfig,
-) -> int:
-    """Use at most the AR budget and retain complete diffusion blocks."""
-
-    del prompt_length
-    remainder = maximum % sampling.block_length
-    length = maximum - remainder
-    if length <= 0:
-        raise ValueError("generation budget is too small to complete a diffusion block")
-    return length
 
 
 def _sample_one(
@@ -515,26 +480,6 @@ def run_method(
     return result.token_ids, diagnostics
 
 
-def _snapshot_delta(before: Any, after: Any) -> dict[str, Any]:
-    left = asdict(before)
-    right = asdict(after)
-    constants = {"total_parameters", "active_parameters"}
-    result = {
-        key: right[key] if key in constants else right[key] - left[key]
-        for key in right
-    }
-    result["estimated_active_flops"] = (
-        2 * result["active_parameters"] * result["model_token_slots"]
-    )
-    result["estimated_sample_active_flops"] = (
-        2 * result["active_parameters"] * result["sample_model_token_slots"]
-    )
-    result["estimated_score_active_flops"] = (
-        2 * result["active_parameters"] * result["score_model_token_slots"]
-    )
-    return result
-
-
 _wilson = wilson_interval
 
 
@@ -576,31 +521,6 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "exact trajectory rescoring are recorded separately for the full LLaDA-MoE "
             "model and the shared early-exit proposal"
         ),
-    }
-
-
-def _zero_compute() -> dict[str, int | float]:
-    return {
-        "sample_requests": 0,
-        "score_requests": 0,
-        "forward_calls": 0,
-        "model_sequences": 0,
-        "model_token_slots": 0,
-        "generated_tokens": 0,
-        "elapsed_seconds": 0.0,
-        "total_parameters": 0,
-        "active_parameters": 0,
-        "sample_forward_calls": 0,
-        "score_forward_calls": 0,
-        "sample_model_sequences": 0,
-        "score_model_sequences": 0,
-        "sample_model_token_slots": 0,
-        "score_model_token_slots": 0,
-        "sample_elapsed_seconds": 0.0,
-        "score_elapsed_seconds": 0.0,
-        "estimated_active_flops": 0,
-        "estimated_sample_active_flops": 0,
-        "estimated_score_active_flops": 0,
     }
 
 

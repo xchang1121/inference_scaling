@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from experiments.summarize_gsm8k import _paired_difference
+
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -18,14 +22,6 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _bundle(directory: Path) -> dict[str, Any]:

@@ -1,5 +1,12 @@
 """Infrastructure shared by autoregressive and diffusion language models."""
 
+from inference_scaling.shared.budget import (
+    BudgetAllocation,
+    VarianceCostEstimate,
+    allocate_fresh_rollout_budget,
+    allocate_variance_cost_budget,
+)
+from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
 from inference_scaling.shared.importance import (
     MonteCarloEnergyEstimate,
     MonteCarloRolloutWeightProvider,
@@ -19,8 +26,12 @@ from inference_scaling.shared.mh import (
     decide_metropolis_hastings,
     metropolis_hastings_log_acceptance,
 )
-from inference_scaling.shared.config import RuntimeConfig
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.smc import (
+    normalize_smc_log_weights,
+    partition_resampled_reservoirs,
+    systematic_resample,
+)
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     StepwiseGenerationBackend,
@@ -34,6 +45,9 @@ from inference_scaling.shared.stepwise import (
 from inference_scaling.shared.types import TokenSequence
 
 __all__ = [
+    "BudgetAllocation",
+    "VarianceCostEstimate",
+    "SMCForestConfig",
     "MetropolisHastingsDecision",
     "MetropolisHastingsProposal",
     "MetropolisHastingsTransition",
@@ -52,12 +66,17 @@ __all__ = [
     "SeedStream",
     "TokenSequence",
     "apply_metropolis_hastings",
+    "allocate_fresh_rollout_budget",
+    "allocate_variance_cost_budget",
     "corrected_replay_log_energy",
     "logmeanexp",
     "metropolis_hastings_log_acceptance",
     "normalize_log_energies",
+    "normalize_smc_log_weights",
+    "partition_resampled_reservoirs",
     "decide_metropolis_hastings",
     "run_stepwise_generation",
     "select_stepwise_candidate",
     "stepwise_generation_step",
+    "systematic_resample",
 ]

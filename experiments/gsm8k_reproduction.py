@@ -14,7 +14,6 @@ import sys
 import time
 import tomllib
 from collections import Counter
-from dataclasses import asdict
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -55,6 +54,19 @@ from inference_scaling.evaluation import (
 from inference_scaling.metrics import importance_effective_sample_size
 from inference_scaling.rng import SeedStream
 from inference_scaling.types import GenerationRequest, ScoreRequest, TokenSequence
+
+try:
+    from experiments.shared.artifacts import (
+        dataclass_snapshot_delta as _snapshot_delta,
+        file_sha256 as _file_sha256,
+        json_fingerprint as _fingerprint,
+    )
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import (
+        dataclass_snapshot_delta as _snapshot_delta,
+        file_sha256 as _file_sha256,
+        json_fingerprint as _fingerprint,
+    )
 
 METHODS = (
     "base",
@@ -129,25 +141,6 @@ def _timed(call: Callable[[], Any]) -> tuple[Any, float]:
     result = call()
     _cuda_sync()
     return result, time.perf_counter() - started
-
-
-def _fingerprint(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _snapshot_delta(before: Any, after: Any) -> dict[str, int | float]:
-    left = asdict(before)
-    right = asdict(after)
-    return {name: right[name] - left[name] for name in left}
 
 
 def _prompt_tokens(backend: Any, problem: GSM8KProblem) -> TokenSequence:

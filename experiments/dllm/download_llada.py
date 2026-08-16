@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 from pathlib import Path
+import sys
 import tomllib
 
 from huggingface_hub import snapshot_download as huggingface_snapshot_download
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from experiments.shared.artifacts import file_sha256 as sha256
 
 MODEL_ID = "inclusionAI/LLaDA-MoE-7B-A1B-Instruct"
 REVISION = "783d3467f108d28ac0a78d3e41af16ab05cabd8d"
@@ -32,14 +38,6 @@ WEIGHTS = (
     ),
 )
 DEFAULT_OUTPUT = Path("models/LLaDA-MoE-7B-A1B-Instruct-783d3467")
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def validate_checkpoint(directory: Path) -> dict[str, object]:

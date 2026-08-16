@@ -7,14 +7,17 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Sequence
 
-import numpy as np
-
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.replay import DiffusionReplayRewardBatch
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest
 from inference_scaling.shared.config import SMCForestConfig
 from inference_scaling.shared.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.smc import (
+    normalize_smc_log_weights,
+    partition_resampled_reservoirs,
+    systematic_resample,
+)
 from inference_scaling.shared.types import TokenSequence
 
 
@@ -61,20 +64,6 @@ class DiffusionSMCResult:
     steps: tuple[DiffusionSMCStep, ...]
     reused_rollouts: int
     fresh_rollouts: int
-
-
-def _systematic_resample(
-    probabilities: np.ndarray,
-    count: int,
-    generator: np.random.Generator,
-) -> tuple[int, ...]:
-    start = float(generator.random()) / count
-    positions = start + np.arange(count, dtype=np.float64) / count
-    cumulative = np.cumsum(probabilities, dtype=np.float64)
-    cumulative[-1] = 1.0
-    return tuple(
-        int(value) for value in np.searchsorted(cumulative, positions, side="right")
-    )
 
 
 def _candidate_blocks(
@@ -265,27 +254,18 @@ def _evaluate_branches(
 def _split_reservoirs(
     branches: Sequence[DiffusionSMCBranch], selected: Sequence[int]
 ) -> tuple[DiffusionSMCParticle, ...]:
-    occurrences: dict[int, list[int]] = defaultdict(list)
-    for output_index, branch_index in enumerate(selected):
-        occurrences[int(branch_index)].append(output_index)
-    particles: list[DiffusionSMCParticle | None] = [None] * len(selected)
-    for branch_index, output_positions in occurrences.items():
-        branch = branches[branch_index]
-        buckets: list[list[DiffusionForestRollout]] = [
-            [] for _ in output_positions
-        ]
-        for index, rollout in enumerate(branch.reservoir):
-            buckets[index % len(buckets)].append(rollout)
-        for output_position, bucket in zip(output_positions, buckets, strict=True):
-            particles[output_position] = DiffusionSMCParticle(
-                branch.full_prefix,
-                branch.log_lookahead,
-                tuple(bucket),
-                branch_index,
-            )
-    if any(particle is None for particle in particles):
-        raise RuntimeError("SMC resampling omitted an output particle")
-    return tuple(particle for particle in particles if particle is not None)
+    buckets = partition_resampled_reservoirs(
+        [branch.reservoir for branch in branches], selected
+    )
+    return tuple(
+        DiffusionSMCParticle(
+            branches[branch_index].full_prefix,
+            branches[branch_index].log_lookahead,
+            bucket,
+            branch_index,
+        )
+        for branch_index, bucket in zip(selected, buckets, strict=True)
+    )
 
 
 def run_diffusion_smc_rollout_forest(
@@ -338,12 +318,10 @@ def run_diffusion_smc_rollout_forest(
             seeds=seeds,
             step_index=len(steps),
         )
-        log_weights = np.asarray(
-            [branch.incremental_log_weight for branch in branches], dtype=np.float64
+        probabilities, effective_sample_size = normalize_smc_log_weights(
+            [branch.incremental_log_weight for branch in branches]
         )
-        weights = np.exp(log_weights - float(np.max(log_weights)))
-        probabilities = weights / weights.sum()
-        selected = _systematic_resample(
+        selected = systematic_resample(
             probabilities,
             config.particle_count,
             seeds.generator("dllm-smc", len(steps), "resample"),
@@ -356,7 +334,7 @@ def run_diffusion_smc_rollout_forest(
                 generated_length_before=generated_before,
                 branches=branches,
                 normalized_weights=tuple(float(value) for value in probabilities),
-                effective_sample_size=float(1 / np.square(probabilities).sum()),
+                effective_sample_size=effective_sample_size,
                 selected_branch_indices=selected,
             )
         )
@@ -379,4 +357,3 @@ __all__ = [
     "DiffusionSMCStep",
     "run_diffusion_smc_rollout_forest",
 ]
-

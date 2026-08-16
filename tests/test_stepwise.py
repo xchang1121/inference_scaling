@@ -11,6 +11,11 @@ from inference_scaling.shared.importance import (
     TruncatedReplayRolloutWeightProvider,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.smc import (
+    normalize_smc_log_weights,
+    partition_resampled_reservoirs,
+    systematic_resample,
+)
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     normalize_log_energies,
@@ -95,3 +100,21 @@ def test_replay_provider_exposes_history_and_fresh_terms():
     assert len(estimate.history_log_terms) == 1
     assert len(estimate.fresh_log_terms) == 1
     assert estimate.log_energy > estimate.history_log_terms[0]
+
+
+def test_common_smc_primitives_normalize_resample_and_split_without_copying():
+    probabilities, ess = normalize_smc_log_weights((0.0, log(3.0)))
+    assert probabilities == pytest.approx((0.25, 0.75))
+    assert ess == pytest.approx(1.6)
+    selected = systematic_resample(
+        probabilities,
+        4,
+        SeedStream(3).generator("smc-test"),
+    )
+    assert len(selected) == 4
+
+    buckets = partition_resampled_reservoirs(
+        (("a", "b", "c", "d"), ("e",)),
+        (0, 0, 1),
+    )
+    assert buckets == (("a", "c"), ("b", "d"), ("e",))

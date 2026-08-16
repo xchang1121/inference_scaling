@@ -9,7 +9,6 @@ per-query cost of MH and conditional importance sampling.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -42,13 +41,13 @@ from inference_scaling.evaluation import (
     select_problems,
 )
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+try:
+    from experiments.shared.artifacts import (
+        file_sha256 as _sha256,
+        json_fingerprint,
+    )
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256, json_fingerprint
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -196,8 +195,7 @@ def _resume_fingerprint(effective: dict[str, Any]) -> str:
     stable = json.loads(json.dumps(effective))
     for key in ("max_steps", "save_steps", "logging_steps"):
         stable["training"].pop(key, None)
-    encoded = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    return json_fingerprint(stable)
 
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:

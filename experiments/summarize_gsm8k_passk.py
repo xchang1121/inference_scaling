@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 import statistics
@@ -13,17 +12,11 @@ from typing import Any
 
 if __package__:
     from experiments.gsm8k_passk import _estimated_pass_at_k
+    from experiments.shared.artifacts import file_sha256 as _file_sha256
 else:
     from gsm8k_passk import _estimated_pass_at_k
+    from shared.artifacts import file_sha256 as _file_sha256
 from inference_scaling.rng import SeedStream
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while block := source.read(1024 * 1024):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _paired_difference(

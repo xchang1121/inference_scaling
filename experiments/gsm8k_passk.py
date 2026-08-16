@@ -21,6 +21,7 @@ if __package__:
     from experiments.gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _fingerprint,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -33,6 +34,7 @@ else:
     from gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _fingerprint,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -88,13 +90,6 @@ class _MethodBackend:
 
     def decode(self, tokens) -> str:
         return self._raw_backend.decode(tokens)
-
-
-def _fingerprint(value: Any) -> str:
-    encoded = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

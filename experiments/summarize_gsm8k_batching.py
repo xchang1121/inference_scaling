@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
 
 
 def _prefill_saved(method: dict[str, Any], path: str) -> int:

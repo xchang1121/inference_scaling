@@ -7,9 +7,9 @@ from inference_scaling.arllm.config import (
     MHConfig,
     ProgressiveISConfig,
     RewardMHConfig,
-    SMCForestConfig,
     SamplingConfig,
 )
+from inference_scaling.shared.config import SMCForestConfig
 
 __all__ = [
     "BaseReplayConfig",

@@ -16,15 +16,14 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import (
-    _capped_generation_length,
-    _fingerprint,
-    _sampling,
-    _snapshot_delta,
-)
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.dllm.runtime import (
+    capped_generation_length,
+    empty_llada_compute,
     file_sha256,
+    json_fingerprint,
+    llada_snapshot_delta,
+    sampling_from_section,
     validate_llada_weights,
     validate_runtime_device,
 )
@@ -91,31 +90,6 @@ COMPARISON_ARMS = {
 }
 
 
-def _zero_compute() -> dict[str, int | float]:
-    return {
-        "sample_requests": 0,
-        "score_requests": 0,
-        "forward_calls": 0,
-        "model_sequences": 0,
-        "model_token_slots": 0,
-        "generated_tokens": 0,
-        "elapsed_seconds": 0.0,
-        "total_parameters": 0,
-        "active_parameters": 0,
-        "sample_forward_calls": 0,
-        "score_forward_calls": 0,
-        "sample_model_sequences": 0,
-        "score_model_sequences": 0,
-        "sample_model_token_slots": 0,
-        "score_model_token_slots": 0,
-        "sample_elapsed_seconds": 0.0,
-        "score_elapsed_seconds": 0.0,
-        "estimated_active_flops": 0,
-        "estimated_sample_active_flops": 0,
-        "estimated_score_active_flops": 0,
-    }
-
-
 def _synchronize(device: str) -> None:
     if device.startswith("cuda"):
         import torch
@@ -139,11 +113,11 @@ def _measure(
     return {
         "output_token_ids": [int(token) for token in token_ids],
         "seconds": elapsed,
-        "main_compute": _snapshot_delta(main_before, backend.snapshot()),
+        "main_compute": llada_snapshot_delta(main_before, backend.snapshot()),
         "proposal_compute": (
-            _snapshot_delta(proposal_before, proposal.snapshot())
+            llada_snapshot_delta(proposal_before, proposal.snapshot())
             if proposal is not None and proposal_before is not None
-            else _zero_compute()
+            else empty_llada_compute()
         ),
         "diagnostics": diagnostics,
     }
@@ -238,9 +212,9 @@ def _problem_groups(
     seed: int,
     families: Sequence[str],
 ) -> dict[str, dict[str, Any]]:
-    exact_sampling = _sampling(config["exact_policy"])
-    generation_sampling = _sampling(config["generation"])
-    total_length = _capped_generation_length(
+    exact_sampling = sampling_from_section(config["exact_policy"])
+    generation_sampling = sampling_from_section(config["generation"])
+    total_length = capped_generation_length(
         prompt_length=len(prompt),
         maximum=int(config["generation"]["max_new_tokens"]),
         sampling=generation_sampling,
@@ -683,7 +657,7 @@ def main() -> None:
             path: file_sha256(REPOSITORY_ROOT / path) for path in IMPLEMENTATION_FILES
         },
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     run_dir = args.output_root / args.tag / "components" / (
         "async" if args.section == "async" else "infra"
     )

@@ -25,8 +25,7 @@ from inference_scaling.dllm.types import (
 )
 from inference_scaling.shared.budget import (
     BudgetAllocation,
-    VarianceCostEstimate,
-    allocate_variance_cost_budget,
+    allocate_fresh_rollout_budget,
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
@@ -202,16 +201,10 @@ def run_progressive_diffusion_is(
                 step_index=step_index,
             )
             pilot_count = len(candidates) * pilot_rollouts_per_candidate
-            groups = tuple(range(len(candidates)))
-            allocations = allocate_variance_cost_budget(
+            allocations = allocate_fresh_rollout_budget(
                 outer_ratios=(1.0,) * len(candidates),
-                statistics=tuple(
-                    VarianceCostEstimate(0.0, deviation)
-                    for deviation in deviations
-                ),
-                history_capacities=(0,) * len(candidates),
-                history_groups=groups,
-                group_capacities={group: 0 for group in groups},
+                standard_deviations=deviations,
+                costs=(1.0,) * len(candidates),
                 rollout_budget=float(evaluation_rollout_budget),
                 minimum_fresh=1,
             )

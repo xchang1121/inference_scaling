@@ -20,8 +20,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-import numpy as np
-
 from inference_scaling.arllm.acceleration import StreamingRewardEvaluator
 from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardBatchFunction,
@@ -31,6 +29,11 @@ from inference_scaling.arllm.algorithms.conditional_energy import (
 )
 from inference_scaling.arllm.config import SMCForestConfig, SamplingConfig
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.smc import (
+    normalize_smc_log_weights,
+    partition_resampled_reservoirs,
+    systematic_resample,
+)
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -88,18 +91,6 @@ class SMCForestResult:
 
 def _block_from_suffix(suffix: TokenSequence, block_length: int) -> TokenSequence:
     return suffix[:block_length]
-
-
-def _systematic_resample(
-    probabilities: np.ndarray,
-    count: int,
-    generator: np.random.Generator,
-) -> tuple[int, ...]:
-    start = float(generator.random()) / count
-    positions = start + np.arange(count, dtype=np.float64) / count
-    cumulative = np.cumsum(probabilities, dtype=np.float64)
-    cumulative[-1] = 1.0
-    return tuple(int(value) for value in np.searchsorted(cumulative, positions, side="right"))
 
 
 def _candidate_blocks(
@@ -318,25 +309,18 @@ def _split_selected_reservoirs(
     branches: Sequence[SMCBranch],
     selected: Sequence[int],
 ) -> tuple[SMCParticle, ...]:
-    occurrences: dict[int, list[int]] = defaultdict(list)
-    for output_index, branch_index in enumerate(selected):
-        occurrences[int(branch_index)].append(output_index)
-    particles: list[SMCParticle | None] = [None] * len(selected)
-    for branch_index, output_positions in occurrences.items():
-        branch = branches[branch_index]
-        buckets: list[list[ForestRollout]] = [[] for _ in output_positions]
-        for index, rollout in enumerate(branch.reservoir):
-            buckets[index % len(buckets)].append(rollout)
-        for output_position, bucket in zip(output_positions, buckets, strict=True):
-            particles[output_position] = SMCParticle(
-                token_ids=branch.full_prefix,
-                log_lookahead=branch.log_lookahead,
-                reservoir=tuple(bucket),
-                ancestor=branch_index,
-            )
-    if any(particle is None for particle in particles):
-        raise RuntimeError("SMC resampling omitted an output particle")
-    return tuple(particle for particle in particles if particle is not None)
+    buckets = partition_resampled_reservoirs(
+        [branch.reservoir for branch in branches], selected
+    )
+    return tuple(
+        SMCParticle(
+            token_ids=branches[branch_index].full_prefix,
+            log_lookahead=branches[branch_index].log_lookahead,
+            reservoir=bucket,
+            ancestor=branch_index,
+        )
+        for branch_index, bucket in zip(selected, buckets, strict=True)
+    )
 
 
 def run_smc_rollout_forest(
@@ -408,13 +392,10 @@ def run_smc_rollout_forest(
                 step_index=len(steps),
                 streaming_evaluator=evaluator,
             )
-            log_weights = np.asarray(
-                [branch.incremental_log_weight for branch in branches], dtype=np.float64
+            probabilities, ess = normalize_smc_log_weights(
+                [branch.incremental_log_weight for branch in branches]
             )
-            weights = np.exp(log_weights - float(np.max(log_weights)))
-            probabilities = weights / weights.sum()
-            ess = float(1.0 / np.square(probabilities).sum())
-            selected = _systematic_resample(
+            selected = systematic_resample(
                 probabilities,
                 config.particle_count,
                 seeds.generator("smc_forest", len(steps), "resample"),

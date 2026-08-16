@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import copy
 import gc
-import hashlib
 import json
 import statistics
 import time
@@ -21,6 +20,7 @@ if __package__:
     from experiments.gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _fingerprint,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -31,6 +31,7 @@ else:
     from gsm8k_reproduction import (
         IMPLEMENTATION_FILES,
         _file_sha256,
+        _fingerprint,
         _load_backend,
         _prompt_tokens,
         _run_method,
@@ -77,11 +78,6 @@ _distribution = probability_distribution
 _tv = total_variation_distance
 _js = jensen_shannon_bits
 _quantile = quantile
-
-
-def _fingerprint(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

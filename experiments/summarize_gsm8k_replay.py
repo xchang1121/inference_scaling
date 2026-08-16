@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import random
@@ -11,48 +10,18 @@ import tomllib
 from pathlib import Path
 from typing import Any, Sequence
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+    from experiments.shared.statistics import quantile as _quantile
+    from experiments.shared.statistics import wilson_interval as _wilson
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
+    from shared.statistics import quantile as _quantile
+    from shared.statistics import wilson_interval as _wilson
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def _wilson(
-    correct: int, count: int, z: float = 1.959963984540054
-) -> tuple[float, float]:
-    if count <= 0:
-        raise ValueError("Wilson interval requires at least one observation")
-    proportion = correct / count
-    denominator = 1.0 + z * z / count
-    center = (proportion + z * z / (2.0 * count)) / denominator
-    radius = (
-        z
-        * math.sqrt(
-            proportion * (1.0 - proportion) / count + z * z / (4.0 * count * count)
-        )
-        / denominator
-    )
-    return center - radius, center + radius
-
-
-def _quantile(values: Sequence[float], probability: float) -> float:
-    ordered = sorted(values)
-    if not ordered:
-        raise ValueError("quantile requires at least one value")
-    position = (len(ordered) - 1) * probability
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
 def _paired_quality(

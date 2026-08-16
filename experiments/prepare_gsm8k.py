@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import time
 import tomllib
 from pathlib import Path
@@ -12,13 +11,10 @@ from huggingface_hub import snapshot_download
 
 from inference_scaling.evaluation import download_gsm8k
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+try:
+    from experiments.shared.artifacts import file_sha256 as _sha256
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import file_sha256 as _sha256
 
 
 def _download_model(

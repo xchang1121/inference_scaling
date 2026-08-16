@@ -15,12 +15,12 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import (
-    _capped_generation_length,
-    _file_sha256,
-    _fingerprint,
-    _sampling,
-    _snapshot_delta,
+from experiments.dllm.runtime import (
+    capped_generation_length,
+    file_sha256,
+    json_fingerprint,
+    llada_snapshot_delta,
+    sampling_from_section,
 )
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.shared.paired_protocol import load_pairing
@@ -96,7 +96,7 @@ def main() -> None:
     actual_hashes: dict[str, str] = {}
     for name, expected_hash in zip(weights, expected_hashes, strict=True):
         path = model_dir / name
-        actual = _file_sha256(path)
+        actual = file_sha256(path)
         if actual != expected_hash:
             raise ValueError(f"LLaDA weight hash does not match the manifest: {path}")
         actual_hashes[name] = actual
@@ -115,10 +115,10 @@ def main() -> None:
         "num_generations": generations,
         "model_weight_sha256": actual_hashes,
         "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
+            path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
         },
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     if manifest_path.is_file():
@@ -141,8 +141,8 @@ def main() -> None:
     completed = {int(record["problem_index"]) for record in records}
     pair_count = sum(record.get("status") == "pair" for record in records)
     backend = load_llada_backend(config, "base")
-    sampling = _sampling(config["generation"])
-    generation_length = _capped_generation_length(
+    sampling = sampling_from_section(config["generation"])
+    generation_length = capped_generation_length(
         prompt_length=0,
         maximum=int(config["generation"]["max_new_tokens"]),
         sampling=sampling,
@@ -221,7 +221,7 @@ def main() -> None:
             raise RuntimeError(
                 f"candidate pool yielded {pair_count} pairs, fewer than requested {max_pairs}"
             )
-        compute = _snapshot_delta(before, backend.snapshot())
+        compute = llada_snapshot_delta(before, backend.snapshot())
         manifest = {
             "fingerprint": fingerprint,
             "status": "complete",

@@ -42,6 +42,38 @@ class BudgetAllocation:
     estimated_cost: float
 
 
+def allocate_fresh_rollout_budget(
+    *,
+    outer_ratios: Sequence[float],
+    standard_deviations: Sequence[float],
+    costs: Sequence[float],
+    rollout_budget: float,
+    minimum_fresh: int | Sequence[int] = 1,
+) -> tuple[BudgetAllocation, ...]:
+    """Specialize the common allocator to independent fresh rollouts only."""
+
+    count = len(outer_ratios)
+    if len(standard_deviations) != count or len(costs) != count:
+        raise ValueError("fresh allocation inputs must have the same length")
+    groups = tuple(range(count))
+    return allocate_variance_cost_budget(
+        outer_ratios=outer_ratios,
+        statistics=tuple(
+            VarianceCostEstimate(
+                history_std=0.0,
+                fresh_std=deviation,
+                fresh_cost=cost,
+            )
+            for deviation, cost in zip(standard_deviations, costs, strict=True)
+        ),
+        history_capacities=(0,) * count,
+        history_groups=groups,
+        group_capacities={group: 0 for group in groups},
+        rollout_budget=rollout_budget,
+        minimum_fresh=minimum_fresh,
+    )
+
+
 def _proportional_capped_counts(
     total: float,
     coefficients: np.ndarray,
@@ -318,6 +350,6 @@ def allocate_variance_cost_budget(
 __all__ = [
     "BudgetAllocation",
     "VarianceCostEstimate",
+    "allocate_fresh_rollout_budget",
     "allocate_variance_cost_budget",
 ]
-

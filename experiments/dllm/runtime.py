@@ -2,17 +2,90 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
+from experiments.shared.artifacts import (
+    dataclass_snapshot_delta,
+    file_sha256,
+    json_fingerprint,
+)
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+
+def sampling_from_section(section: dict[str, Any]) -> DiffusionSamplingConfig:
+    return DiffusionSamplingConfig(
+        block_length=int(section["block_length"]),
+        steps_per_block=int(section.get("denoising_steps", section.get("steps_per_block"))),
+        temperature=float(section.get("temperature", 0.0)),
+        top_k=int(section.get("top_k", 0)),
+        top_p=float(section.get("top_p", 1.0)),
+        cfg_scale=float(section.get("cfg_scale", 0.0)),
+        remasking=str(section.get("remasking", "low_confidence")),
+        confidence_threshold=float(section.get("confidence_threshold", 0.85)),
+        mask_token_id=(
+            int(section["mask_token_id"])
+            if section.get("mask_token_id") is not None
+            else None
+        ),
+    )
+
+
+def capped_generation_length(
+    *,
+    prompt_length: int,
+    maximum: int,
+    sampling: DiffusionSamplingConfig,
+) -> int:
+    del prompt_length
+    length = maximum - maximum % sampling.block_length
+    if length <= 0:
+        raise ValueError("generation budget is too small to complete a diffusion block")
+    return length
+
+
+def llada_snapshot_delta(before: Any, after: Any) -> dict[str, Any]:
+    result = dataclass_snapshot_delta(
+        before,
+        after,
+        constant_fields={"total_parameters", "active_parameters"},
+    )
+    result["estimated_active_flops"] = (
+        2 * result["active_parameters"] * result["model_token_slots"]
+    )
+    result["estimated_sample_active_flops"] = (
+        2 * result["active_parameters"] * result["sample_model_token_slots"]
+    )
+    result["estimated_score_active_flops"] = (
+        2 * result["active_parameters"] * result["score_model_token_slots"]
+    )
+    return result
+
+
+def empty_llada_compute() -> dict[str, int | float]:
+    return {
+        "sample_requests": 0,
+        "score_requests": 0,
+        "forward_calls": 0,
+        "model_sequences": 0,
+        "model_token_slots": 0,
+        "generated_tokens": 0,
+        "elapsed_seconds": 0.0,
+        "total_parameters": 0,
+        "active_parameters": 0,
+        "resident_parameters": 0,
+        "sample_forward_calls": 0,
+        "score_forward_calls": 0,
+        "sample_model_sequences": 0,
+        "score_model_sequences": 0,
+        "sample_model_token_slots": 0,
+        "score_model_token_slots": 0,
+        "sample_elapsed_seconds": 0.0,
+        "score_elapsed_seconds": 0.0,
+        "estimated_active_flops": 0,
+        "estimated_sample_active_flops": 0,
+        "estimated_score_active_flops": 0,
+    }
 
 
 def validate_runtime_device(config: dict[str, Any]) -> str:
@@ -49,5 +122,13 @@ def validate_llada_weights(config: dict[str, Any]) -> dict[str, str]:
     return actual
 
 
-__all__ = ["file_sha256", "validate_llada_weights", "validate_runtime_device"]
-
+__all__ = [
+    "capped_generation_length",
+    "empty_llada_compute",
+    "file_sha256",
+    "json_fingerprint",
+    "llada_snapshot_delta",
+    "sampling_from_section",
+    "validate_llada_weights",
+    "validate_runtime_device",
+]

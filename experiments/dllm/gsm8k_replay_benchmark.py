@@ -18,16 +18,18 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import (
     IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES,
-    _capped_generation_length,
-    _file_sha256,
-    _fingerprint,
-    _sampling,
-    _snapshot_delta,
-    _wilson,
 )
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.statistics import wilson_interval
 from experiments.dllm.profiles import apply_execution_profile
-from experiments.dllm.runtime import validate_llada_weights
+from experiments.dllm.runtime import (
+    capped_generation_length,
+    file_sha256,
+    json_fingerprint,
+    llada_snapshot_delta,
+    sampling_from_section,
+    validate_llada_weights,
+)
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.config import diffusion_decision_stage_lengths
 from inference_scaling.dllm.replay import (
@@ -96,10 +98,10 @@ def _run_fresh(
     config: dict[str, Any],
     seed: int,
 ) -> tuple[TokenSequence, dict[str, Any]]:
-    generation_sampling = _sampling(config["generation"])
-    exact_sampling = _sampling(config["exact_policy"])
+    generation_sampling = sampling_from_section(config["generation"])
+    exact_sampling = sampling_from_section(config["exact_policy"])
     maximum = int(config["generation"]["max_new_tokens"])
-    total_length = _capped_generation_length(
+    total_length = capped_generation_length(
         prompt_length=len(prompt), maximum=maximum, sampling=generation_sampling
     )
     conditional = config["conditional_is"]
@@ -162,10 +164,10 @@ def _run_warm(
     config: dict[str, Any],
     seed: int,
 ) -> tuple[TokenSequence, dict[str, Any]]:
-    generation_sampling = _sampling(config["generation"])
-    exact_sampling = _sampling(config["exact_policy"])
+    generation_sampling = sampling_from_section(config["generation"])
+    exact_sampling = sampling_from_section(config["exact_policy"])
     maximum = int(config["generation"]["max_new_tokens"])
-    total_length = _capped_generation_length(
+    total_length = capped_generation_length(
         prompt_length=len(prompt), maximum=maximum, sampling=generation_sampling
     )
     conditional = config["conditional_is"]
@@ -215,9 +217,11 @@ def _run_warm(
             seed=seeds.derive("dllm-replay-history", stage_index),
         )
         build_seconds += time.perf_counter() - started
-        build_base_deltas.append(_snapshot_delta(build_base_before, backend.snapshot()))
+        build_base_deltas.append(
+            llada_snapshot_delta(build_base_before, backend.snapshot())
+        )
         build_proposal_deltas.append(
-            _snapshot_delta(build_proposal_before, proposal.snapshot())
+            llada_snapshot_delta(build_proposal_before, proposal.snapshot())
         )
         history_generated += sum(len(history.records) for history in histories)
 
@@ -253,9 +257,11 @@ def _run_warm(
             seed=seeds.derive("dllm-replay-online-select", stage_index),
         )
         online_seconds += time.perf_counter() - started
-        online_base_deltas.append(_snapshot_delta(online_base_before, backend.snapshot()))
+        online_base_deltas.append(
+            llada_snapshot_delta(online_base_before, backend.snapshot())
+        )
         online_proposal_deltas.append(
-            _snapshot_delta(online_proposal_before, proposal.snapshot())
+            llada_snapshot_delta(online_proposal_before, proposal.snapshot())
         )
         selections.append(selection)
         generated += selection.selected.sample.token_ids
@@ -334,14 +340,14 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "fresh_only": {
             "correct": fresh_correct,
             "accuracy": fresh_correct / count,
-            "accuracy_wilson_95": _wilson(fresh_correct, count),
+            "accuracy_wilson_95": wilson_interval(fresh_correct, count),
             "seconds": fresh_seconds,
             "estimated_active_flops": fresh_flops,
         },
         "warm_replay": {
             "correct": warm_correct,
             "accuracy": warm_correct / count,
-            "accuracy_wilson_95": _wilson(warm_correct, count),
+            "accuracy_wilson_95": wilson_interval(warm_correct, count),
             "online_seconds": warm_online_seconds,
             "end_to_end_seconds": warm_end_seconds,
             "online_estimated_active_flops": warm_online_flops,
@@ -405,10 +411,10 @@ def main() -> None:
         "model_weight_sha256": actual_hashes,
         "problem_indices": [problem.index for problem in problems],
         "implementation_sha256": {
-            path: _file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
+            path: file_sha256(Path(path)) for path in IMPLEMENTATION_FILES
         },
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     run_dir = args.output_root / args.tag / "replay"
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
@@ -442,7 +448,7 @@ def main() -> None:
                     backend, prompt, problem, config, problem_seed
                 )
                 fresh_seconds = time.perf_counter() - started
-                fresh_delta = _snapshot_delta(fresh_before, backend.snapshot())
+                fresh_delta = llada_snapshot_delta(fresh_before, backend.snapshot())
 
                 warm_started = time.perf_counter()
                 warm_tokens, warm_info = _run_warm(

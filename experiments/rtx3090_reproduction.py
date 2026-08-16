@@ -8,7 +8,6 @@ weights even though ordinary text generation still looked reasonable.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import platform
 import re
@@ -57,6 +56,17 @@ MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 MODEL_WEIGHT_SHA256 = "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
 T = TypeVar("T")
 
+try:
+    from experiments.shared.artifacts import (
+        dataclass_snapshot_delta as _snapshot_delta,
+        file_sha256 as _file_sha256,
+    )
+except ModuleNotFoundError:  # direct execution from experiments/
+    from shared.artifacts import (
+        dataclass_snapshot_delta as _snapshot_delta,
+        file_sha256 as _file_sha256,
+    )
+
 
 def _synchronize() -> None:
     if torch.cuda.is_available():
@@ -69,13 +79,6 @@ def _timed(function: Callable[[], T]) -> tuple[T, float]:
     value = function()
     _synchronize()
     return value, time.perf_counter() - start
-
-
-def _snapshot_delta(before: Any, after: Any) -> dict[str, int]:
-    return {
-        field: int(getattr(after, field) - getattr(before, field))
-        for field in before.__dataclass_fields__
-    }
 
 
 def _chat_prefix(backend: TransformersBackend, question: str) -> TokenSequence:
@@ -134,11 +137,7 @@ def _verify_model_weight(model_path: str) -> None:
     weight_path = Path(model_path) / "model.safetensors"
     if not weight_path.is_file():
         raise FileNotFoundError(f"missing pinned model weight: {weight_path}")
-    digest = hashlib.sha256()
-    with weight_path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    actual = digest.hexdigest()
+    actual = _file_sha256(weight_path)
     if actual != MODEL_WEIGHT_SHA256:
         raise ValueError(
             "model.safetensors does not match the pinned reproduction weight: "

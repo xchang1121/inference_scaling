@@ -28,11 +28,8 @@ from inference_scaling.arllm.algorithms.conditional_energy import (
     _validate_base_sampling,
     _validate_rollout_sampling,
 )
-from inference_scaling.arllm.algorithms.dynamic_is import (
-    VarianceCostEstimate,
-    allocate_variance_cost_budget,
-)
 from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
+from inference_scaling.shared.budget import allocate_fresh_rollout_budget
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
@@ -416,19 +413,12 @@ def progressive_is_step(
                 "evaluation_cost_budget cannot cover the minimum independent "
                 "evaluation rollouts"
             )
-        allocations = allocate_variance_cost_budget(
+        allocations = allocate_fresh_rollout_budget(
             outer_ratios=[1.0] * len(active_indices),
-            statistics=[
-                VarianceCostEstimate(
-                    history_std=0.0,
-                    fresh_std=max(deviations[index], 1e-12),
-                    fresh_cost=costs[index],
-                )
-                for index in active_indices
+            standard_deviations=[
+                max(deviations[index], 1e-12) for index in active_indices
             ],
-            history_capacities=[0] * len(active_indices),
-            history_groups=active_indices,
-            group_capacities={index: 0 for index in active_indices},
+            costs=[costs[index] for index in active_indices],
             rollout_budget=evaluation_cost_budget,
             minimum_fresh=config.minimum_evaluation_per_candidate,
         )

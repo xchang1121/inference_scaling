@@ -15,6 +15,7 @@ from inference_scaling.algorithms.dynamic_is import (
 from inference_scaling.backends import TabularAutoregressiveBackend
 from inference_scaling.config import DynamicISConfig, SamplingConfig
 from inference_scaling.metrics import total_variation
+from inference_scaling.shared.budget import allocate_fresh_rollout_budget
 from inference_scaling.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
@@ -79,6 +80,20 @@ def test_allocation_respects_shared_history_inventory_and_fresh_minimum() -> Non
     assert sum(item.history_count for item in allocations) <= 1
     assert all(item.fresh_count >= 1 for item in allocations)
     assert sum(item.estimated_cost for item in allocations) <= 6.0
+
+
+def test_fresh_only_allocator_reuses_the_common_variance_cost_solver() -> None:
+    allocations = allocate_fresh_rollout_budget(
+        outer_ratios=(1.0, 1.0),
+        standard_deviations=(1.0, 2.0),
+        costs=(1.0, 1.0),
+        rollout_budget=6.0,
+        minimum_fresh=1,
+    )
+
+    assert sum(item.fresh_count for item in allocations) == 6
+    assert allocations[1].fresh_count > allocations[0].fresh_count
+    assert all(item.history_count == 0 for item in allocations)
 
 
 def test_step_budget_can_be_frozen_from_candidate_metadata() -> None:
