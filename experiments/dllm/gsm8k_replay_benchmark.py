@@ -20,6 +20,7 @@ from experiments.dllm.gsm8k_reproduction import (
     _wilson,
 )
 from experiments.shared.paired_protocol import load_pairing
+from experiments.dllm.profiles import apply_execution_profile
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.config import diffusion_decision_stage_lengths
 from inference_scaling.dllm.replay import (
@@ -374,10 +375,12 @@ def main() -> None:
         "--output-root", type=Path, default=Path("results/dllm/gsm8k")
     )
     parser.add_argument("--tag", default="paired")
+    parser.add_argument("--profile", choices=("smoke", "full"), default="full")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
+    config = apply_execution_profile(config, args.profile)
     if args.limit is not None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
@@ -409,6 +412,7 @@ def main() -> None:
     effective = {
         "config": config,
         "tag": args.tag,
+        "execution_profile": args.profile,
         "model_weight_sha256": actual_hashes,
         "problem_indices": [problem.index for problem in problems],
         "implementation_sha256": {

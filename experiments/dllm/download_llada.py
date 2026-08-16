@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import tomllib
 
 from huggingface_hub import snapshot_download as huggingface_snapshot_download
 
@@ -68,7 +69,8 @@ def validate_checkpoint(directory: Path) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--endpoint",
         help="Optional Hugging Face-compatible endpoint; the official SHA is always checked.",
@@ -102,6 +104,12 @@ def main() -> None:
         help="Do not access the network; validate an existing local checkpoint.",
     )
     args = parser.parse_args()
+    if args.output is None:
+        if args.config is None:
+            args.output = DEFAULT_OUTPUT
+        else:
+            with args.config.open("rb") as source:
+                args.output = Path(str(tomllib.load(source)["model"]["path"]))
     if args.endpoint:
         os.environ["HF_ENDPOINT"] = args.endpoint
 

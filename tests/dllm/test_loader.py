@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -52,3 +54,34 @@ def test_base_and_proposal_roles_share_the_loaded_model(monkeypatch, tmp_path):
 def test_aligned_role_requires_a_completed_adapter(tmp_path):
     with pytest.raises(FileNotFoundError, match="run the VRPO stage first"):
         load_llada_backend(_config(tmp_path), "aligned")
+
+
+def test_aligned_role_retains_the_runtime_batch_cap(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    Path(config["alignment"]["adapter"]).mkdir(parents=True)
+    constructed = []
+    base = SimpleNamespace(model=object(), tokenizer=object(), mask_token_id=17)
+
+    class FakeBackend:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            return base
+
+        def __init__(self, model, tokenizer, **kwargs):
+            constructed.append((model, tokenizer, kwargs))
+
+    class FakePeftModel:
+        @staticmethod
+        def from_pretrained(model, adapter):
+            return SimpleNamespace(eval=lambda: "aligned-model")
+
+    monkeypatch.setattr(
+        "inference_scaling.dllm.backends.loader.LLaDATransformersBackend",
+        FakeBackend,
+    )
+    monkeypatch.setitem(sys.modules, "peft", SimpleNamespace(PeftModel=FakePeftModel))
+
+    load_llada_backend(config, "aligned")
+
+    assert constructed[0][2]["max_batch_size"] == 3
+    assert constructed[0][2]["mask_token_id"] == 17

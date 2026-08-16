@@ -40,6 +40,9 @@ training = [
   "pyarrow==25.0.0",
   "trl==1.9.2",
 ]
+dllm-training = [
+  "peft==0.20.0",
+]
 
 [project.scripts]
 inference-scaling = "inference_scaling.cli:main"

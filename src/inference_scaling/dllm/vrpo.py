@@ -164,6 +164,59 @@ class VRPOPreferenceEstimate:
     reference_rejected_plan: VRPOMaskPlan
 
 
+class AdapterDisabledReference:
+    """Evaluate the frozen base policy through a trainable PEFT model.
+
+    Current-policy and reference-policy calls share one resident base model.
+    This avoids loading a second multi-billion-parameter checkpoint while the
+    adapter context provides the exact frozen reference used by DPO-style VRPO.
+    """
+
+    def __init__(self, model: Any) -> None:
+        if not callable(getattr(model, "disable_adapter", None)):
+            raise TypeError("model must provide the PEFT disable_adapter context")
+        self.model = model
+
+    def parameters(self):
+        return self.model.parameters()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        was_training = bool(getattr(self.model, "training", False))
+        try:
+            self.model.eval()
+            with self.model.disable_adapter():
+                return self.model(*args, **kwargs)
+        finally:
+            self.model.train(was_training)
+
+
+def vrpo_forward_token_slots(
+    *,
+    prompt_length: int,
+    chosen_length: int,
+    rejected_length: int,
+    config: VRPOSamplingConfig,
+) -> dict[str, int]:
+    """Return current/reference forward token slots for one preference pair."""
+
+    for name, value in (
+        ("prompt_length", prompt_length),
+        ("chosen_length", chosen_length),
+        ("rejected_length", rejected_length),
+    ):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+    samples = config.forward_passes
+    one_policy = samples * (
+        prompt_length + chosen_length + prompt_length + rejected_length
+    )
+    return {
+        "current_policy": one_policy,
+        "reference_policy": one_policy,
+        "total": 2 * one_policy,
+    }
+
+
 def estimate_vrpo_preference_loss(
     current_model: Any,
     reference_model: Any,
@@ -252,10 +305,12 @@ def estimate_vrpo_preference_loss(
 
 
 __all__ = [
+    "AdapterDisabledReference",
     "VRPOMaskPlan",
     "VRPOMaskSample",
     "VRPOPreferenceEstimate",
     "estimate_masked_elbo",
     "estimate_vrpo_preference_loss",
     "sample_vrpo_mask_plan",
+    "vrpo_forward_token_slots",
 ]

@@ -63,6 +63,7 @@ def load_llada_backend(
         base.tokenizer,
         model_id=str(adapter_path),
         mask_token_id=base.mask_token_id,
+        max_batch_size=int(runtime.get("max_batch_size", 8)),
     )
 
 

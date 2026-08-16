@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import hashlib
+import sys
 
 import pytest
 
@@ -36,3 +38,26 @@ def test_checkpoint_validation_rejects_corruption(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
         download_llada.validate_checkpoint(tmp_path)
+
+
+def test_cli_reads_output_directory_from_paired_config(monkeypatch, tmp_path, capsys):
+    model_dir = tmp_path / "model"
+    config = tmp_path / "config.toml"
+    config.write_text(f'[model]\npath = "{model_dir.as_posix()}"\n', encoding="utf-8")
+    observed = []
+
+    def fake_validate(path):
+        observed.append(path)
+        return {"path": str(path)}
+
+    monkeypatch.setattr(download_llada, "validate_checkpoint", fake_validate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["download_llada.py", "--config", str(config), "--validate-only"],
+    )
+
+    download_llada.main()
+
+    assert observed == [model_dir]
+    assert ast.literal_eval(capsys.readouterr().out)["path"] == str(model_dir)

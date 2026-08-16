@@ -38,6 +38,38 @@ method = "vrpo"
 adapter = "models/LLaDA-MoE-7B-A1B-Instruct-VRPO-GSM8K"
 reference = "models/LLaDA-MoE-7B-A1B-Instruct-783d3467"
 
+[vrpo_training]
+preference_data = "data/gsm8k/llada_vrpo_preferences.jsonl"
+preference_manifest = "data/gsm8k/llada_vrpo_preferences.manifest.json"
+candidate_pool_size = 512
+preference_pairs = 205
+num_generations = 4
+max_steps = 205
+gradient_accumulation_steps = 4
+timestep_samples = 8
+masks_per_timestep = 1
+antithetic = true
+learning_rate = 5e-6
+beta = 0.04
+max_grad_norm = 1.0
+save_steps = 25
+seed = 20260808
+gradient_checkpointing = true
+
+[vrpo_lora]
+r = 16
+alpha = 32
+dropout = 0.05
+target_modules = [
+  "q_proj",
+  "k_proj",
+  "v_proj",
+  "o_proj",
+  "gate_proj",
+  "up_proj",
+  "down_proj",
+]
+
 [runtime]
 device = "cuda"
 dtype = "bfloat16"

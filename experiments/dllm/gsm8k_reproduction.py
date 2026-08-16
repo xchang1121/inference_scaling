@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from experiments.shared.paired_protocol import load_pairing
+from experiments.dllm.profiles import apply_execution_profile
 from inference_scaling.dllm.algorithms import (
     run_conditional_diffusion_is,
     run_diffusion_block_beam,
@@ -61,6 +62,7 @@ METHODS = (
 )
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
+    "experiments/dllm/profiles.py",
     "src/inference_scaling/dllm/algorithms/is_sampling.py",
     "src/inference_scaling/dllm/algorithms/mh.py",
     "src/inference_scaling/dllm/algorithms/search.py",
@@ -537,11 +539,13 @@ def main() -> None:
         "--output-root", type=Path, default=Path("results/dllm/gsm8k")
     )
     parser.add_argument("--tag", default="paired")
+    parser.add_argument("--profile", choices=("smoke", "full"), default="full")
     parser.add_argument("--draw-index", type=int, default=0)
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
+    config = apply_execution_profile(config, args.profile)
     if args.limit is not None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
@@ -586,6 +590,7 @@ def main() -> None:
         "method": args.method,
         "tag": args.tag,
         "draw_index": args.draw_index,
+        "execution_profile": args.profile,
         "model_weight_sha256": actual_hashes,
         "problem_indices": [problem.index for problem in problems],
         "implementation_sha256": {
