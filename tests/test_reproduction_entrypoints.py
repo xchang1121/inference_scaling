@@ -242,6 +242,42 @@ def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
     )
 
 
+def test_ar_adapter_is_not_forwarded_to_replay_or_dynamic_scripts(
+    monkeypatch, tmp_path
+):
+    commands: list[list[str]] = []
+    adapter = tmp_path / "adapter"
+    monkeypatch.setattr(
+        ar_matrix,
+        "_run",
+        lambda command, _environment: commands.append(command),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gsm8k_suite.py",
+            "--config",
+            "configs/gsm8k_quick.toml",
+            "--methods",
+            "rl_sample",
+            "--rl-adapter",
+            str(adapter),
+            "--with-replay",
+            "--with-dynamic-is",
+            "--summary-root",
+            str(tmp_path),
+        ],
+    )
+
+    ar_matrix.main()
+
+    by_script = {Path(command[1]).name: command for command in commands}
+    assert "--rl-adapter" in by_script["gsm8k_reproduction.py"]
+    assert "--rl-adapter" not in by_script["gsm8k_replay_benchmark.py"]
+    assert "--rl-adapter" not in by_script["gsm8k_dynamic_is_benchmark.py"]
+
+
 def _paired_args(**overrides):
     values = {
         "family": "both",

@@ -112,10 +112,10 @@ def main() -> None:
     rl_args = [] if args.rl_adapter is None else ["--rl-adapter", str(args.rl_adapter)]
     if args.backend is not None:
         common.extend(backend_args)
-    common.extend(rl_args)
     if args.limit is not None:
         common.extend(["--limit", str(args.limit)])
         summary_common.extend(["--limit", str(args.limit)])
+    method_common = [*common, *rl_args]
 
     methods = tuple(method.strip() for method in args.methods.split(",") if method.strip())
     unknown = sorted(set(methods) - set(SUPPORTED_METHODS))
@@ -126,7 +126,7 @@ def main() -> None:
             [
                 sys.executable,
                 "experiments/arllm/gsm8k_reproduction.py",
-                *common,
+                *method_common,
                 "--method",
                 method,
             ],
@@ -145,7 +145,7 @@ def main() -> None:
                 [
                     sys.executable,
                     "experiments/arllm/gsm8k_reproduction.py",
-                    *common,
+                    *method_common,
                     "--method",
                     method,
                 ],
