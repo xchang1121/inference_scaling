@@ -15,12 +15,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from math import exp, isfinite, log
-
-import numpy as np
+from math import isfinite
 
 from inference_scaling.arllm.config import ConditionalEnergyConfig, SamplingConfig
+from inference_scaling.shared.importance import (
+    MonteCarloRolloutWeightProvider,
+    RolloutObservation,
+    logmeanexp,
+)
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.stepwise import (
+    StepwiseCandidate,
+    run_stepwise_generation,
+    stepwise_generation_step,
+)
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -75,12 +83,9 @@ class ConditionalISResult:
 
 
 def _logmeanexp(values: Sequence[float]) -> float:
-    if not values:
-        raise ValueError("at least one value is required")
-    maximum = max(values)
-    if maximum == float("-inf"):
-        return maximum
-    return maximum + log(sum(exp(value - maximum) for value in values)) - log(len(values))
+    """Compatibility wrapper for older replay modules."""
+
+    return logmeanexp(values)
 
 
 def _validate_base_sampling(sampling: SamplingConfig) -> None:
@@ -293,34 +298,45 @@ def estimate_conditional_energies(
     if any(not isfinite(value) for value in rewards):
         raise ValueError("reward must be finite")
 
+    importance_weights = MonteCarloRolloutWeightProvider[
+        tuple[TokenSequence, str, str]
+    ](
+        reward_temperature=reward_temperature,
+        correction="importance",
+        log_ratio_clip=importance_log_ratio_clip,
+    )
+    reward_only_weights = MonteCarloRolloutWeightProvider[
+        tuple[TokenSequence, str, str]
+    ](
+        reward_temperature=reward_temperature,
+        correction="none",
+    )
     by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
     reward_index = 0
     for candidate_index, group in enumerate(pending_by_candidate):
         for token_ids, base_logprob, proposal_logprob, model_id, policy_id, _ in group:
             reward_value = rewards[reward_index]
             reward_index += 1
-            if base_logprob is None:
-                raw_log_ratio = None
-                applied_log_ratio = None
-                log_weight = reward_value / reward_temperature
-            else:
-                raw_log_ratio = base_logprob - proposal_logprob
-                applied_log_ratio = raw_log_ratio
-                if importance_log_ratio_clip is not None:
-                    applied_log_ratio = max(
-                        -importance_log_ratio_clip,
-                        min(importance_log_ratio_clip, raw_log_ratio),
-                    )
-                log_weight = reward_value / reward_temperature + applied_log_ratio
+            observation = RolloutObservation(
+                reward=reward_value,
+                target_logprob=base_logprob,
+                proposal_logprob=proposal_logprob,
+                payload=(token_ids, model_id, policy_id),
+            )
+            weighted = (
+                importance_weights.weight(observation)
+                if base_logprob is not None
+                else reward_only_weights.weight(observation)
+            )
             by_candidate[candidate_index].append(
                 RolloutEvaluation(
                     token_ids=token_ids,
                     reward=reward_value,
                     base_logprob=base_logprob,
                     proposal_logprob=proposal_logprob,
-                    raw_log_importance_ratio=raw_log_ratio,
-                    applied_log_importance_ratio=applied_log_ratio,
-                    log_weight=log_weight,
+                    raw_log_importance_ratio=weighted.raw_log_importance_ratio,
+                    applied_log_importance_ratio=weighted.applied_log_importance_ratio,
+                    log_weight=weighted.log_weight,
                     proposal_model_id=model_id,
                     proposal_policy_id=policy_id,
                 )
@@ -342,6 +358,106 @@ def estimate_conditional_energies(
     return tuple(evaluated)
 
 
+class AutoregressiveStepwiseAdapter:
+    """Expose conditional AR generation through the common stepwise protocol."""
+
+    def __init__(
+        self,
+        *,
+        base_backend: AutoregressiveBackend,
+        rollout_backend: AutoregressiveBackend,
+        prompt: TokenSequence,
+        config: ConditionalEnergyConfig,
+        base_sampling: SamplingConfig,
+        rollout_sampling: SamplingConfig,
+        reward: RewardFunction | None,
+        reward_batch: RewardBatchFunction | None = None,
+    ) -> None:
+        self.base_backend = base_backend
+        self.rollout_backend = rollout_backend
+        self.prompt = prompt
+        self.config = config
+        self.base_sampling = base_sampling
+        self.rollout_sampling = rollout_sampling
+        self.reward = reward
+        self.reward_batch = reward_batch
+
+    @property
+    def initial_state(self) -> TokenSequence:
+        return ()
+
+    def is_terminal(self, state: TokenSequence) -> bool:
+        eos = self.base_sampling.eos_token_id
+        return len(state) >= self.config.total_length or (
+            eos is not None and eos in state
+        )
+
+    def propose(
+        self,
+        state: TokenSequence,
+        step_index: int,
+        seeds: SeedStream,
+    ) -> Sequence[SequenceSample]:
+        _validate_base_sampling(self.base_sampling)
+        remaining = self.config.total_length - len(state)
+        if remaining <= 0:
+            raise ValueError("generated prefix has already reached total_length")
+        return _sample_candidates(
+            self.base_backend,
+            self.prompt + state,
+            self.config.candidate_count,
+            min(self.config.block_size, remaining),
+            self.base_sampling,
+            seeds,
+            step_index,
+        )
+
+    def evaluate(
+        self,
+        state: TokenSequence,
+        proposals: Sequence[SequenceSample],
+        step_index: int,
+        seeds: SeedStream,
+    ) -> Sequence[StepwiseCandidate[ConditionalCandidate]]:
+        remaining = self.config.total_length - len(state)
+        candidate_length = len(proposals[0].token_ids)
+        evaluated = estimate_conditional_energies(
+            base_backend=self.base_backend,
+            rollout_backend=self.rollout_backend,
+            prompt=self.prompt,
+            generated_prefix=state,
+            candidates=proposals,
+            rollout_length=max(0, remaining - candidate_length),
+            rollout_count=self.config.rollout_count,
+            base_sampling=self.base_sampling,
+            rollout_sampling=self.rollout_sampling,
+            reward_temperature=self.config.reward_temperature,
+            importance_log_ratio_clip=self.config.importance_log_ratio_clip,
+            apply_importance_correction=self.config.apply_importance_correction,
+            reward=self.reward,
+            seeds=seeds,
+            step_index=step_index,
+            reward_batch=self.reward_batch,
+        )
+        return tuple(
+            StepwiseCandidate(candidate, candidate.log_energy)
+            for candidate in evaluated
+        )
+
+    def advance(
+        self,
+        state: TokenSequence,
+        selected: ConditionalCandidate,
+        step_index: int,
+    ) -> TokenSequence:
+        del step_index
+        generated = state + selected.token_ids
+        eos = self.base_sampling.eos_token_id
+        if eos is not None and eos in generated:
+            generated = generated[: generated.index(eos) + 1]
+        return generated
+
+
 def conditional_is_step(
     *,
     base_backend: AutoregressiveBackend,
@@ -356,50 +472,27 @@ def conditional_is_step(
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISStep:
-    _validate_base_sampling(base_sampling)
-    remaining = config.total_length - len(generated_prefix)
-    if remaining <= 0:
-        raise ValueError("generated prefix has already reached total_length")
-    block_length = min(config.block_size, remaining)
-    candidates = _sample_candidates(
-        base_backend,
-        prompt + generated_prefix,
-        config.candidate_count,
-        block_length,
-        base_sampling,
-        seeds,
-        step_index,
-    )
-    evaluated = estimate_conditional_energies(
+    adapter = AutoregressiveStepwiseAdapter(
         base_backend=base_backend,
         rollout_backend=rollout_backend,
         prompt=prompt,
-        generated_prefix=generated_prefix,
-        candidates=candidates,
-        rollout_length=max(0, remaining - block_length),
-        rollout_count=config.rollout_count,
+        config=config,
         base_sampling=base_sampling,
         rollout_sampling=rollout_sampling,
-        reward_temperature=config.reward_temperature,
-        importance_log_ratio_clip=config.importance_log_ratio_clip,
-        apply_importance_correction=config.apply_importance_correction,
         reward=reward,
-        seeds=seeds,
-        step_index=step_index,
         reward_batch=reward_batch,
     )
-    log_energies = np.asarray([candidate.log_energy for candidate in evaluated], dtype=np.float64)
-    shifted = np.exp(log_energies - float(np.max(log_energies)))
-    probabilities = shifted / shifted.sum()
-    selected_index = int(
-        seeds.generator("conditional_is", step_index, "select").choice(
-            len(evaluated), p=probabilities
-        )
+    selection = stepwise_generation_step(
+        adapter,
+        generated_prefix,
+        step_index,
+        seeds,
+        selection_namespace=("conditional_is",),
     )
     return ConditionalISStep(
         generated_length_before=len(generated_prefix),
-        candidates=evaluated,
-        selected_index=selected_index,
+        candidates=tuple(candidate.value for candidate in selection.candidates),
+        selected_index=selection.selected_index,
     )
 
 
@@ -425,29 +518,27 @@ def run_conditional_is(
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
 
-    generated: list[int] = []
-    steps: list[ConditionalISStep] = []
-    step_index = 0
-    while len(generated) < config.total_length:
-        step = conditional_is_step(
-            base_backend=base_backend,
-            rollout_backend=rollout_backend,
-            prompt=prompt,
-            generated_prefix=tuple(generated),
-            config=config,
-            base_sampling=base_sampling,
-            rollout_sampling=rollout_sampling,
-            reward=reward,
-            seeds=seeds,
-            step_index=step_index,
-            reward_batch=reward_batch,
+    adapter = AutoregressiveStepwiseAdapter(
+        base_backend=base_backend,
+        rollout_backend=rollout_backend,
+        prompt=prompt,
+        config=config,
+        base_sampling=base_sampling,
+        rollout_sampling=rollout_sampling,
+        reward=reward,
+        reward_batch=reward_batch,
+    )
+    generic = run_stepwise_generation(
+        adapter,
+        seeds,
+        selection_namespace=("conditional_is",),
+    )
+    steps = tuple(
+        ConditionalISStep(
+            generated_length_before=len(step.state_before),
+            candidates=tuple(candidate.value for candidate in step.candidates),
+            selected_index=step.selected_index,
         )
-        generated.extend(step.selected.token_ids)
-        steps.append(step)
-        eos = base_sampling.eos_token_id
-        if eos is not None and eos in step.selected.token_ids:
-            eos_index = generated.index(eos)
-            generated = generated[: eos_index + 1]
-            break
-        step_index += 1
-    return ConditionalISResult(prompt=prompt, token_ids=tuple(generated), steps=tuple(steps))
+        for step in generic.steps
+    )
+    return ConditionalISResult(prompt=prompt, token_ids=generic.final_state, steps=steps)

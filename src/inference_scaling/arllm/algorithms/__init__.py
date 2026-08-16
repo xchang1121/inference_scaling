@@ -13,6 +13,7 @@ from inference_scaling.arllm.algorithms.base_replay import (
     write_reserve_records,
 )
 from inference_scaling.arllm.algorithms.conditional_energy import (
+    AutoregressiveStepwiseAdapter,
     ConditionalCandidate,
     ConditionalISResult,
     ConditionalISStep,
@@ -89,6 +90,7 @@ from inference_scaling.arllm.algorithms.streaming_is import (
 )
 
 __all__ = [
+    "AutoregressiveStepwiseAdapter",
     "BaseReplayCandidate",
     "BaseReplayResult",
     "BaseReplayStep",
