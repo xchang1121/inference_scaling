@@ -67,6 +67,7 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 | [推理执行与 rollout 复用](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
 | [GSM8K 集成检查](docs/validation/GSM8K_QUICK_VALIDATION.md) | 8 题端到端路径和 32 题批处理检查 |
 | [RTX 3090 复现记录](docs/validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分、KV、MH、IS 与 replay 检查 |
+| [AR-LLM 全链路真机验证](docs/validation/ARLLM_FULL_ROUTE.md) | GRPO 与全部 AR 推理、复用和 infra 组件的真实模型检查 |
 | [机器可读结果](results/README.md) | 正式汇总、训练摘要和验证产物索引 |
 
 ## 实现与结果状态

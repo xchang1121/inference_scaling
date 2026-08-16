@@ -1,0 +1,789 @@
+{
+  "schema_version": 1,
+  "created_at_unix": 1786886866.5280626,
+  "machine": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.7",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_total_memory_mib": 24575.5
+  },
+  "setting": {
+    "backend": "transformers",
+    "dtype": "bfloat16",
+    "dataset": "pinned OpenAI GSM8K test split",
+    "problem_indices": [
+      1311
+    ],
+    "model": "models/Qwen2.5-1.5B-Instruct",
+    "max_new_tokens": 64,
+    "block_size": 16,
+    "history_rollouts_per_prompt": 2,
+    "active_batch_sequence": [
+      4,
+      2,
+      1
+    ],
+    "candidate_count": 3,
+    "rollout_count": 2,
+    "particle_count": 3,
+    "branch_factor": 2,
+    "seed": 20260812,
+    "reward": "exact numeric verifier, used only for the algorithm diagnostic"
+  },
+  "decode_arms": [
+    {
+      "name": "baseline",
+      "backend": "transformers",
+      "speculation_tiers": [],
+      "cache_build": {
+        "telemetry": {
+          "wall_seconds": 0.0
+        },
+        "main_model": {
+          "sample_calls": 0,
+          "score_calls": 0,
+          "sampled_sequences": 0,
+          "generated_tokens": 0,
+          "prefill_tokens": 0,
+          "shared_prefill_tokens_saved": 0,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 0,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 0,
+          "speculative_requests": 0,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 0,
+        "tokens": 0
+      },
+      "online": {
+        "telemetry": {
+          "samples": 28,
+          "mean_gpu_utilization_percent": 31.75,
+          "maximum_gpu_memory_used_mib": 5306.0,
+          "mean_gpu_power_watts": 139.81607142857143,
+          "wall_seconds": 8.48852149999584,
+          "torch_peak_allocated_mib": 3000.0087890625,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 3,
+          "score_calls": 0,
+          "sampled_sequences": 7,
+          "generated_tokens": 426,
+          "prefill_tokens": 360,
+          "shared_prefill_tokens_saved": 480,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 779,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 2405106885632,
+          "speculative_requests": 0,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "draft_cache": {},
+        "quality": {
+          "sequences": 7,
+          "output_tokens": 426,
+          "parseable_fraction": 1.0,
+          "accuracy": 0.0,
+          "output_tokens_per_second": 50.185418037782995
+        },
+        "exact_token_trace_match_fraction_vs_baseline": 1.0
+      }
+    },
+    {
+      "name": "history_tree_static",
+      "backend": "transformers",
+      "speculation_tiers": [
+        {
+          "max_batch": 4,
+          "draft_tokens": 8
+        }
+      ],
+      "cache_build": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 36.90909090909091,
+          "maximum_gpu_memory_used_mib": 5318.0,
+          "mean_gpu_power_watts": 137.15727272727273,
+          "wall_seconds": 3.305268600001,
+          "torch_peak_allocated_mib": 2977.59912109375,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 55,
+          "mean_gpu_utilization_percent": 36.38181818181818,
+          "maximum_gpu_memory_used_mib": 5327.0,
+          "mean_gpu_power_watts": 141.15527272727272,
+          "wall_seconds": 16.872371100005694,
+          "torch_peak_allocated_mib": 2972.55419921875,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 3,
+          "score_calls": 0,
+          "sampled_sequences": 7,
+          "generated_tokens": 431,
+          "prefill_tokens": 840,
+          "shared_prefill_tokens_saved": 0,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 1314,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 4056881190912,
+          "speculative_requests": 7,
+          "speculative_hits": 7,
+          "draft_tokens_proposed": 56,
+          "draft_tokens_accepted": 6,
+          "speculative_verification_forward_token_slots": 896
+        },
+        "draft_cache": {
+          "observed_sequences": 7,
+          "observed_tokens": 1271,
+          "contexts": 17906,
+          "evicted_contexts": 0,
+          "queries": 7,
+          "hits": 7,
+          "proposed_tokens": 56,
+          "accepted_tokens": 6,
+          "rejected_tokens": 50
+        },
+        "quality": {
+          "sequences": 7,
+          "output_tokens": 431,
+          "parseable_fraction": 1.0,
+          "accuracy": 0.0,
+          "output_tokens_per_second": 25.544720267553537
+        },
+        "exact_token_trace_match_fraction_vs_baseline": 0.0
+      }
+    },
+    {
+      "name": "history_tree_load_aware",
+      "backend": "transformers",
+      "speculation_tiers": [
+        {
+          "max_batch": 1,
+          "draft_tokens": 8
+        },
+        {
+          "max_batch": 4,
+          "draft_tokens": 0
+        }
+      ],
+      "cache_build": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 37.54545454545455,
+          "maximum_gpu_memory_used_mib": 5310.0,
+          "mean_gpu_power_watts": 119.50090909090909,
+          "wall_seconds": 3.228842500015162,
+          "torch_peak_allocated_mib": 2977.59912109375,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 28,
+          "mean_gpu_utilization_percent": 33.0,
+          "maximum_gpu_memory_used_mib": 5269.0,
+          "mean_gpu_power_watts": 130.6314285714286,
+          "wall_seconds": 8.674688200000674,
+          "torch_peak_allocated_mib": 3000.0087890625,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 3,
+          "score_calls": 0,
+          "sampled_sequences": 7,
+          "generated_tokens": 431,
+          "prefill_tokens": 360,
+          "shared_prefill_tokens_saved": 480,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 792,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 2445243457536,
+          "speculative_requests": 7,
+          "speculative_hits": 1,
+          "draft_tokens_proposed": 8,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 128
+        },
+        "draft_cache": {
+          "observed_sequences": 7,
+          "observed_tokens": 1271,
+          "contexts": 17917,
+          "evicted_contexts": 0,
+          "queries": 1,
+          "hits": 1,
+          "proposed_tokens": 8,
+          "accepted_tokens": 0,
+          "rejected_tokens": 8
+        },
+        "quality": {
+          "sequences": 7,
+          "output_tokens": 431,
+          "parseable_fraction": 1.0,
+          "accuracy": 0.0,
+          "output_tokens_per_second": 49.68478290666015
+        },
+        "exact_token_trace_match_fraction_vs_baseline": 0.8571428571428571
+      }
+    }
+  ],
+  "algorithm_arms": [
+    {
+      "name": "conditional_fixed",
+      "backend": "transformers",
+      "cache_build": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 35.90909090909091,
+          "maximum_gpu_memory_used_mib": 5260.0,
+          "mean_gpu_power_watts": 117.93818181818182,
+          "wall_seconds": 3.2744133999804035,
+          "torch_peak_allocated_mib": 2977.59912109375,
+          "torch_peak_reserved_mib": 3192.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 27,
+          "mean_gpu_utilization_percent": 31.814814814814813,
+          "maximum_gpu_memory_used_mib": 5297.0,
+          "mean_gpu_power_watts": 144.49962962962962,
+          "wall_seconds": 8.334001999988686,
+          "torch_peak_allocated_mib": 3023.14990234375,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 7,
+          "score_calls": 0,
+          "sampled_sequences": 30,
+          "generated_tokens": 768,
+          "prefill_tokens": 1944,
+          "shared_prefill_tokens_saved": 2520,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 2682,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 8280483526656,
+          "speculative_requests": 30,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "draft_cache": {
+          "observed_sequences": 30,
+          "observed_tokens": 5232,
+          "contexts": 26846,
+          "evicted_contexts": 0,
+          "queries": 0,
+          "hits": 0,
+          "proposed_tokens": 0,
+          "accepted_tokens": 0,
+          "rejected_tokens": 0
+        },
+        "problems": 1,
+        "output_tokens": 64,
+        "output_tokens_per_second": 7.679383806253812,
+        "parseable_fraction": 1.0,
+        "accuracy": 0.0,
+        "diagnostics": [
+          {
+            "steps": 4,
+            "evaluation_rollouts": 21
+          }
+        ]
+      },
+      "background_drain": {
+        "telemetry": {
+          "wall_seconds": 0.0
+        },
+        "main_model": {},
+        "run_ahead": null
+      }
+    },
+    {
+      "name": "progressive",
+      "backend": "transformers",
+      "cache_build": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 37.09090909090909,
+          "maximum_gpu_memory_used_mib": 5279.0,
+          "mean_gpu_power_watts": 122.11545454545454,
+          "wall_seconds": 3.2415812999824993,
+          "torch_peak_allocated_mib": 2977.59912109375,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 43,
+          "mean_gpu_utilization_percent": 33.30232558139535,
+          "maximum_gpu_memory_used_mib": 5266.0,
+          "mean_gpu_power_watts": 144.94976744186047,
+          "wall_seconds": 13.24283750000177,
+          "torch_peak_allocated_mib": 3000.28173828125,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 10,
+          "score_calls": 0,
+          "sampled_sequences": 30,
+          "generated_tokens": 768,
+          "prefill_tokens": 3312,
+          "shared_prefill_tokens_saved": 1152,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 4050,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 12504085862400,
+          "speculative_requests": 30,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "draft_cache": {
+          "observed_sequences": 30,
+          "observed_tokens": 5232,
+          "contexts": 25014,
+          "evicted_contexts": 0,
+          "queries": 0,
+          "hits": 0,
+          "proposed_tokens": 0,
+          "accepted_tokens": 0,
+          "rejected_tokens": 0
+        },
+        "problems": 1,
+        "output_tokens": 64,
+        "output_tokens_per_second": 4.832801127401242,
+        "parseable_fraction": 1.0,
+        "accuracy": 0.0,
+        "diagnostics": [
+          {
+            "steps": 4,
+            "pilot_rollouts": 9,
+            "evaluation_rollouts": 12,
+            "frozen_evaluation_cost": 9.0,
+            "reward_tail_seconds": 0
+          }
+        ]
+      },
+      "background_drain": {
+        "telemetry": {
+          "wall_seconds": 0.0
+        },
+        "main_model": {},
+        "run_ahead": null
+      }
+    },
+    {
+      "name": "progressive_streaming_runahead",
+      "backend": "transformers",
+      "cache_build": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 36.45454545454545,
+          "maximum_gpu_memory_used_mib": 5265.0,
+          "mean_gpu_power_watts": 130.83545454545455,
+          "wall_seconds": 3.2777836000022944,
+          "torch_peak_allocated_mib": 2977.59912109375,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 54,
+          "mean_gpu_utilization_percent": 30.944444444444443,
+          "maximum_gpu_memory_used_mib": 5315.0,
+          "mean_gpu_power_watts": 145.66314814814817,
+          "wall_seconds": 16.548827799997525,
+          "torch_peak_allocated_mib": 3008.40673828125,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 14,
+          "score_calls": 0,
+          "sampled_sequences": 34,
+          "generated_tokens": 832,
+          "prefill_tokens": 3856,
+          "shared_prefill_tokens_saved": 1152,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 4685,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 14464603028480,
+          "speculative_requests": 35,
+          "speculative_hits": 4,
+          "draft_tokens_proposed": 32,
+          "draft_tokens_accepted": 1,
+          "speculative_verification_forward_token_slots": 576
+        },
+        "draft_cache": {
+          "observed_sequences": 34,
+          "observed_tokens": 5840,
+          "contexts": 32872,
+          "evicted_contexts": 0,
+          "queries": 5,
+          "hits": 5,
+          "proposed_tokens": 40,
+          "accepted_tokens": 1,
+          "rejected_tokens": 31
+        },
+        "problems": 1,
+        "output_tokens": 64,
+        "output_tokens_per_second": 3.867343401809376,
+        "parseable_fraction": 1.0,
+        "accuracy": 0.0,
+        "diagnostics": [
+          {
+            "steps": 4,
+            "pilot_rollouts": 9,
+            "evaluation_rollouts": 12,
+            "frozen_evaluation_cost": 9.0,
+            "reward_tail_seconds": 0.0001079000358004123
+          }
+        ]
+      },
+      "background_drain": {
+        "telemetry": {
+          "samples": 48,
+          "mean_gpu_utilization_percent": 40.1875,
+          "maximum_gpu_memory_used_mib": 5347.0,
+          "mean_gpu_power_watts": 168.47375,
+          "wall_seconds": 14.660792400012724,
+          "torch_peak_allocated_mib": 2981.99267578125,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 32,
+          "score_calls": 0,
+          "sampled_sequences": 32,
+          "generated_tokens": 512,
+          "prefill_tokens": 5120,
+          "shared_prefill_tokens_saved": 0,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 5738,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 17715665352704,
+          "speculative_requests": 31,
+          "speculative_hits": 26,
+          "draft_tokens_proposed": 208,
+          "draft_tokens_accepted": 70,
+          "speculative_verification_forward_token_slots": 4320
+        },
+        "run_ahead": {
+          "submitted_requests": 18,
+          "completed_requests": 18,
+          "completed_tokens": 576,
+          "failed_requests": 0,
+          "queued_requests": 0,
+          "critical_calls": 12,
+          "critical_wait_seconds": 3.2833177000284195
+        }
+      }
+    },
+    {
+      "name": "smc_no_reuse",
+      "backend": "transformers",
+      "cache_build": {
+        "telemetry": {
+          "samples": 5,
+          "mean_gpu_utilization_percent": 48.4,
+          "maximum_gpu_memory_used_mib": 5311.0,
+          "mean_gpu_power_watts": 214.302,
+          "wall_seconds": 1.4656450999900699,
+          "torch_peak_allocated_mib": 2985.44677734375,
+          "torch_peak_reserved_mib": 3238.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 11,
+          "mean_gpu_utilization_percent": 59.36363636363637,
+          "maximum_gpu_memory_used_mib": 5420.0,
+          "mean_gpu_power_watts": 229.0909090909091,
+          "wall_seconds": 3.324355499993544,
+          "torch_peak_allocated_mib": 3120.8837890625,
+          "torch_peak_reserved_mib": 3318.0
+        },
+        "main_model": {
+          "sample_calls": 5,
+          "score_calls": 0,
+          "sampled_sequences": 36,
+          "generated_tokens": 894,
+          "prefill_tokens": 2320,
+          "shared_prefill_tokens_saved": 2800,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 3400,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 10497257267200,
+          "speculative_requests": 36,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "draft_cache": {
+          "observed_sequences": 36,
+          "observed_tokens": 6014,
+          "contexts": 32343,
+          "evicted_contexts": 0,
+          "queries": 0,
+          "hits": 0,
+          "proposed_tokens": 0,
+          "accepted_tokens": 0,
+          "rejected_tokens": 0
+        },
+        "problems": 1,
+        "output_tokens": 56,
+        "output_tokens_per_second": 16.845370478611194,
+        "parseable_fraction": 1.0,
+        "accuracy": 1.0,
+        "diagnostics": [
+          {
+            "steps": 4,
+            "fresh_rollouts": 28,
+            "reused_rollouts": 4,
+            "mean_effective_sample_size": 5.135007568299036
+          }
+        ]
+      },
+      "background_drain": {
+        "telemetry": {
+          "wall_seconds": 0.0
+        },
+        "main_model": {},
+        "run_ahead": null
+      }
+    },
+    {
+      "name": "smc_reuse",
+      "backend": "transformers",
+      "cache_build": {
+        "telemetry": {
+          "samples": 5,
+          "mean_gpu_utilization_percent": 57.8,
+          "maximum_gpu_memory_used_mib": 5420.0,
+          "mean_gpu_power_watts": 225.35999999999999,
+          "wall_seconds": 1.3171734999923501,
+          "torch_peak_allocated_mib": 2985.44677734375,
+          "torch_peak_reserved_mib": 3318.0
+        },
+        "main_model": {
+          "sample_calls": 1,
+          "score_calls": 0,
+          "sampled_sequences": 2,
+          "generated_tokens": 128,
+          "prefill_tokens": 120,
+          "shared_prefill_tokens_saved": 120,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 246,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 759507437568,
+          "speculative_requests": 2,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "sequences": 2,
+        "tokens": 128
+      },
+      "online": {
+        "telemetry": {
+          "samples": 14,
+          "mean_gpu_utilization_percent": 44.285714285714285,
+          "maximum_gpu_memory_used_mib": 5512.0,
+          "mean_gpu_power_watts": 207.06857142857143,
+          "wall_seconds": 4.34894379999605,
+          "torch_peak_allocated_mib": 3120.88232421875,
+          "torch_peak_reserved_mib": 3396.0
+        },
+        "main_model": {
+          "sample_calls": 5,
+          "score_calls": 0,
+          "sampled_sequences": 35,
+          "generated_tokens": 809,
+          "prefill_tokens": 3096,
+          "shared_prefill_tokens_saved": 1824,
+          "scored_tokens": 0,
+          "generation_forward_token_slots": 3990,
+          "score_forward_token_slots": 0,
+          "estimated_dense_forward_flops": 12318840145920,
+          "speculative_requests": 35,
+          "speculative_hits": 0,
+          "draft_tokens_proposed": 0,
+          "draft_tokens_accepted": 0,
+          "speculative_verification_forward_token_slots": 0
+        },
+        "draft_cache": {
+          "observed_sequences": 35,
+          "observed_tokens": 5729,
+          "contexts": 31982,
+          "evicted_contexts": 0,
+          "queries": 0,
+          "hits": 0,
+          "proposed_tokens": 0,
+          "accepted_tokens": 0,
+          "rejected_tokens": 0
+        },
+        "problems": 1,
+        "output_tokens": 49,
+        "output_tokens_per_second": 11.267103520639772,
+        "parseable_fraction": 1.0,
+        "accuracy": 1.0,
+        "diagnostics": [
+          {
+            "steps": 4,
+            "fresh_rollouts": 25,
+            "reused_rollouts": 14,
+            "mean_effective_sample_size": 4.750113510129004
+          }
+        ]
+      },
+      "background_drain": {
+        "telemetry": {
+          "wall_seconds": 0.0
+        },
+        "main_model": {},
+        "run_ahead": null
+      }
+    }
+  ],
+  "accounting": {
+    "main_model_flops": "2 * parameter_count * measured target forward token slots",
+    "vllm_speculation": "rejected verified draft tokens are added from native vLLM counters",
+    "exclusions": [
+      "attention sequence-length term",
+      "draft-tree CPU work",
+      "sampling and reward CPU work",
+      "model loading"
+    ]
+  }
+}

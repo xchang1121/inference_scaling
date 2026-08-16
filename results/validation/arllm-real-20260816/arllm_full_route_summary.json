@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-16",
+  "scope": "AR-LLM smoke profile real-hardware training and inference route",
+  "status": "complete",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_memory_mib": 24576,
+    "driver": "596.49",
+    "platform": "Windows 11"
+  },
+  "software": {
+    "python": "3.12.7",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "transformers": "5.15.0",
+    "accelerate": "1.14.0",
+    "peft": "0.20.0",
+    "trl": "1.9.2",
+    "numpy": "1.26.4"
+  },
+  "models": {
+    "base": "Qwen/Qwen2.5-1.5B-Instruct",
+    "proposal": "Qwen/Qwen2.5-0.5B-Instruct",
+    "base_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "base_weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+  },
+  "training": {
+    "status": "complete",
+    "algorithm": "GRPO with LoRA",
+    "optimizer_steps": 1,
+    "training_rows": 4,
+    "generated_completions": 8,
+    "generated_completion_tokens": 768,
+    "training_wall_seconds": 18.75086579998606,
+    "estimated_total_petaflops": 0.026750939076608,
+    "peak_cuda_allocated_bytes": 3766979584,
+    "peak_nvidia_smi_memory_mib": 5872.0,
+    "adapter_sha256": "699482a16f3592f463d216cfb497c7a78a58a86070b501beb164515f6725e362",
+    "adapter_reload_verified": true
+  },
+  "inference": {
+    "status": "complete",
+    "backend": "transformers",
+    "dataset": "OpenAI GSM8K official test split",
+    "problem_count": 1,
+    "methods": [
+      "base",
+      "beam",
+      "best_of_n",
+      "mh",
+      "conditional_is",
+      "conditional_is_small_proposal",
+      "verifier_mh",
+      "verifier_conditional_is",
+      "verifier_conditional_is_small_proposal",
+      "rl_sample",
+      "rl_greedy"
+    ],
+    "components": [
+      "quality",
+      "matched_target",
+      "replay",
+      "dynamic_is",
+      "async",
+      "passk",
+      "ablations",
+      "budget_curve",
+      "length_ablation",
+      "distribution",
+      "infra"
+    ],
+    "completed_component_commands": 4,
+    "generic_passk_methods": [
+      "base",
+      "mh",
+      "rl_sample"
+    ],
+    "is_passk_methods": [
+      "conditional_is",
+      "conditional_is_small_proposal",
+      "conditional_is_small_proposal_unclipped",
+      "conditional_is_small_proposal_uncorrected"
+    ]
+  },
+  "selected_diagnostics": {
+    "replay_candidate_reproduction_all": true,
+    "replay_mean_rollout_reuse_rate": 0.42857142857142855,
+    "replay_fresh_over_warm_online_wall_time_factor": 1.0167213628286258,
+    "replay_fresh_over_warm_online_flop_factor": 1.1156779275248125,
+    "async_methods_with_bitwise_equal_sync_output": 4,
+    "async_methods_checked": 4,
+    "streaming_is_first_update_seconds_batch": 3.035580399999162,
+    "streaming_is_first_update_seconds_streaming": 0.8195796000072733,
+    "mh_prefetch_path_matches_ordinary": true,
+    "delayed_acceptance_exact_reward_evaluations_ordinary": 9,
+    "delayed_acceptance_exact_reward_evaluations_filtered": 8,
+    "postfix_cache_api_real_run_sequences": 6,
+    "postfix_cache_api_deprecation_warning_observed": false
+  },
+  "tests": {
+    "full_repository_pytest_passed": 318,
+    "ar_interpreter_pytest_passed": 234,
+    "postfix_targeted_pytest_passed": 34,
+    "dllm_runner_isolation_pytest_passed": 5,
+    "cuda_fp16_matmul": "passed",
+    "pip_check": "passed",
+    "gpu_memory_released_after_run": true
+  },
+  "limitations": {
+    "statistical_scope": "Smoke profile results establish executable paths and accounting integrity; one GSM8K problem and two pass@k draws do not support method-quality conclusions.",
+    "vllm": "Native Windows has no installed WSL distribution and the AR interpreter has no vLLM package. vLLM adapters are covered by unit and mock tests; a real vLLM engine run requires Linux or WSL2."
+  },
+  "artifacts": {
+    "training_manifest": "ar-real-20260816/arllm_suite_manifest.json",
+    "inference_manifest": "ar-real-inference-20260816/arllm_suite_manifest.json",
+    "generic_passk": "gsm8k_quick_passk_ar-real-postfix-20260816.json",
+    "is_passk": "gsm8k_quick_is_passk_ar-real-inference-20260816.json",
+    "replay": "gsm8k_quick_replay_ar-real-inference-20260816.json",
+    "dynamic_is": "gsm8k_quick_dynamic_is_ar-real-inference-20260816.json",
+    "async": "gsm8k_quick_async_grouped_ar-real-inference-20260816.json",
+    "distribution": "arllm_distribution_ar-real-inference-20260816.json",
+    "rollout_infra": "arllm_rollout_infra_ar-real-inference-20260816.json",
+    "is_mh_infra": "arllm_is_mh_infra_ar-real-inference-20260816.json",
+    "cache_api_postfix": "cache_api_postfix.json"
+  }
+}

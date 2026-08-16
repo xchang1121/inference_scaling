@@ -8,6 +8,7 @@
 | [推理执行与 rollout 复用](reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存与复用率结果 |
 | [GSM8K 集成检查](validation/GSM8K_QUICK_VALIDATION.md) | 小规模端到端工程检查 |
 | [RTX 3090 复现记录](validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分与后端工程检查 |
+| [AR-LLM 全链路真机验证](validation/ARLLM_FULL_ROUTE.md) | GRPO、全部推理组件、infra 路径与修复后回归 |
 | [机器可读结果](../results/README.md) | 已纳入版本控制的汇总文件索引 |
 
 图表位于 [`assets/`](assets/)；原理只在算法文档定义，实验设置只在实验设计定义，报告只记录结果与解读。
