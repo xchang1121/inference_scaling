@@ -19,9 +19,13 @@ Variance-Reduced Preference Optimization（VRPO）。两侧共享 GSM8K 数据�
 
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
-| [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散 block，再按 Hastings 比接受或拒绝 | proposal 的正反概率进入接受率 | [AR 实现](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/search.py) |
+| [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散 block，再按 Hastings 比接受或拒绝 | proposal 的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
 | [条件能量 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件能量后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_energy.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) 与[动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 复用历史 completion，并按方差和成本分配 fresh rollout | behavior 概率、fresh-tail 校正和外层 $`p/q_c`$ | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
+
+共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
+目标密度差、正反 proposal 比和接受/拒绝核。AR-LLM 与 dLLM 目录只实现 token 后缀、掩码 block 或扩散
+轨迹的生成和概率评分。
 
 训练对照采用 GRPO 与 [VRPO](https://arxiv.org/abs/2505.19223)。VRPO 以掩码扩散 ELBO 代替序列
 log-likelihood：每个偏好对采样 8 个独立掩码比例、每个比例采样 1 个 mask，并让当前策略与冻结 reference
@@ -209,7 +213,7 @@ python -m pytest
 | --- | --- |
 | `src/inference_scaling/arllm/` | AR-LLM 的 MH、IS、replay、Transformers 与 vLLM 后端 |
 | `src/inference_scaling/dllm/` | LLaDA-MoE 的 block 生成、MH、IS、replay 与 VRPO |
-| `src/inference_scaling/shared/` | 两侧共用的数据评测、概率工具、统计量、随机数和计算账本 |
+| `src/inference_scaling/shared/` | 两侧共用的逐步生成、IS/replay 权重、MH 接受核、数据评测、随机数和计算账本 |
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与 dLLM 训练脚本 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |

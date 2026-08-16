@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import exp, log
-
 from inference_scaling.dllm.config import (
     DiffusionBlockBeamConfig,
     DiffusionPowerMHConfig,
@@ -18,6 +16,7 @@ from inference_scaling.dllm.types import (
     DiffusionTraceStep,
     DiffusionTrajectoryScoreRequest,
 )
+from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
@@ -275,17 +274,21 @@ def run_diffusion_trajectory_power_mh(
             old_q = sum(block.proposal_trajectory_logprob for block in old_blocks)
             new_p = sum(block.base_trajectory_logprob for block in proposed_blocks)
             new_q = sum(block.proposal_trajectory_logprob for block in proposed_blocks)
-            log_acceptance = min(0.0, config.alpha * (new_p - old_p) + old_q - new_q)
-            acceptance_probability = exp(log_acceptance)
             uniform = float(
                 seeds.generator(
                     "dllm-power-mh", stage_index, stage_update, "accept"
                 ).random()
             )
-            accepted = (
-                log(max(uniform, float.fromhex("0x1.0p-1022")))
-                <= log_acceptance
+            decision = decide_metropolis_hastings(
+                current_target_log_density=config.alpha * old_p,
+                proposed_target_log_density=config.alpha * new_p,
+                forward_proposal_log_probability=new_q,
+                reverse_proposal_log_probability=old_q,
+                uniform=uniform,
             )
+            log_acceptance = decision.log_acceptance
+            acceptance_probability = decision.acceptance_probability
+            accepted = decision.accepted
             if accepted:
                 current = DiffusionPowerMHState(prompt, kept_blocks + proposed_blocks)
             steps.append(

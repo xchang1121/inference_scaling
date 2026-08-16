@@ -12,11 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from math import isfinite, log
-
-import numpy as np
+from math import isfinite
 
 from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
+from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
@@ -296,13 +295,16 @@ def run_mh_chain(
             old_q = float(sum(proposal_logs[cut:stage_length]))
             new_p = float(sum(proposed_p))
             new_q = float(sum(proposed_q))
-            log_acceptance = min(
-                0.0,
-                config.alpha * (new_p - old_p) + old_q - new_q,
-            )
             accept_rng = seeds.generator("mh", chain_id, stage_index, step_index, "accept")
-            uniform = max(float(accept_rng.random()), np.finfo(np.float64).tiny)
-            accepted = log(uniform) <= log_acceptance
+            decision = decide_metropolis_hastings(
+                current_target_log_density=config.alpha * old_p,
+                proposed_target_log_density=config.alpha * new_p,
+                forward_proposal_log_probability=new_q,
+                reverse_proposal_log_probability=old_q,
+                uniform=float(accept_rng.random()),
+            )
+            log_acceptance = decision.log_acceptance
+            accepted = decision.accepted
             if accepted:
                 tokens[cut:stage_length] = proposed_tokens
                 base_logs[cut:stage_length] = proposed_p
@@ -441,15 +443,18 @@ def run_mh_chains_batched(
                 old_q = float(sum(proposal_logs[chain_index][cut:stage_length]))
                 new_p = float(sum(proposed_ps[chain_index]))
                 new_q = float(sum(proposed_qs[chain_index]))
-                log_acceptance = min(
-                    0.0,
-                    config.alpha * (new_p - old_p) + old_q - new_q,
-                )
                 accept_rng = stream.generator(
                     "mh", chain_id, stage_index, step_index, "accept"
                 )
-                uniform = max(float(accept_rng.random()), np.finfo(np.float64).tiny)
-                accepted = log(uniform) <= log_acceptance
+                decision = decide_metropolis_hastings(
+                    current_target_log_density=config.alpha * old_p,
+                    proposed_target_log_density=config.alpha * new_p,
+                    forward_proposal_log_probability=new_q,
+                    reverse_proposal_log_probability=old_q,
+                    uniform=float(accept_rng.random()),
+                )
+                log_acceptance = decision.log_acceptance
+                accepted = decision.accepted
                 if accepted:
                     tokens[chain_index][cut:stage_length] = proposed_tokens[chain_index]
                     base_logs[chain_index][cut:stage_length] = proposed_ps[chain_index]
@@ -553,21 +558,21 @@ def run_reward_mh_chain(
         old_q = float(sum(mutable_proposal_logs[cut:]))
         new_p = float(sum(proposed_p))
         new_q = float(sum(proposed_q))
-        log_acceptance = min(
-            0.0,
-            new_p
-            - old_p
-            + (proposed_reward - current_reward) / config.reward_temperature
-            + old_q
-            - new_q,
-        )
-        uniform = max(
-            float(
+        decision = decide_metropolis_hastings(
+            current_target_log_density=(
+                old_p + current_reward / config.reward_temperature
+            ),
+            proposed_target_log_density=(
+                new_p + proposed_reward / config.reward_temperature
+            ),
+            forward_proposal_log_probability=new_q,
+            reverse_proposal_log_probability=old_q,
+            uniform=float(
                 seeds.generator("reward_mh", chain_id, step_index, "accept").random()
             ),
-            np.finfo(np.float64).tiny,
         )
-        accepted = log(uniform) <= log_acceptance
+        log_acceptance = decision.log_acceptance
+        accepted = decision.accepted
         previous_reward = current_reward
         if accepted:
             mutable_tokens[cut:] = proposed_tokens

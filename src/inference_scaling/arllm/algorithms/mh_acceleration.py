@@ -26,6 +26,7 @@ from inference_scaling.arllm.algorithms.mh import (
     _validate_proposal,
 )
 from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 
@@ -260,15 +261,21 @@ def _accept_standard_proposal(
     if state.reward is None:
         raise RuntimeError("current MH state is missing its exact reward")
     cut = proposed.cut
-    log_acceptance = min(
-        0.0,
-        sum(proposed.base_token_logprobs)
-        - sum(state.base_token_logprobs[cut:])
-        + (proposed_reward - state.reward) / config.reward_temperature
-        + sum(state.proposal_token_logprobs[cut:])
-        - sum(proposed.proposal_token_logprobs),
+    decision = decide_metropolis_hastings(
+        current_target_log_density=(
+            sum(state.base_token_logprobs[cut:])
+            + state.reward / config.reward_temperature
+        ),
+        proposed_target_log_density=(
+            sum(proposed.base_token_logprobs)
+            + proposed_reward / config.reward_temperature
+        ),
+        forward_proposal_log_probability=sum(proposed.proposal_token_logprobs),
+        reverse_proposal_log_probability=sum(state.proposal_token_logprobs[cut:]),
+        uniform=uniform,
     )
-    accepted = log(max(float(uniform), np.finfo(np.float64).tiny)) <= log_acceptance
+    log_acceptance = decision.log_acceptance
+    accepted = decision.accepted
     if not accepted:
         return state, log_acceptance, False
     return (
@@ -327,48 +334,48 @@ def run_reward_mh_chain_delayed(
         )
         surrogate_evaluations += 1
         cut = proposed.cut
-        stage_one_log_acceptance = min(
-            0.0,
-            sum(proposed.base_token_logprobs)
-            - sum(state.base_token_logprobs[cut:])
-            + (proposed_surrogate - current_surrogate) / config.reward_temperature
-            + sum(state.proposal_token_logprobs[cut:])
-            - sum(proposed.proposal_token_logprobs),
-        )
-        stage_one_uniform = max(
-            float(
+        stage_one_decision = decide_metropolis_hastings(
+            current_target_log_density=(
+                sum(state.base_token_logprobs[cut:])
+                + current_surrogate / config.reward_temperature
+            ),
+            proposed_target_log_density=(
+                sum(proposed.base_token_logprobs)
+                + proposed_surrogate / config.reward_temperature
+            ),
+            forward_proposal_log_probability=sum(proposed.proposal_token_logprobs),
+            reverse_proposal_log_probability=sum(state.proposal_token_logprobs[cut:]),
+            uniform=float(
                 seeds.generator(
                     "reward_mh", chain_id, step_index, "delayed-stage-one"
                 ).random()
             ),
-            np.finfo(np.float64).tiny,
         )
-        stage_one_accepted = log(stage_one_uniform) <= stage_one_log_acceptance
+        stage_one_log_acceptance = stage_one_decision.log_acceptance
+        stage_one_accepted = stage_one_decision.accepted
         proposed_reward: float | None = None
         stage_two_log_acceptance: float | None = None
         accepted = False
         if stage_one_accepted:
             proposed_reward = _finite_reward(reward, prompt, proposed.sequence)
             exact_evaluations += 1
-            stage_two_log_acceptance = min(
-                0.0,
-                (
-                    proposed_reward
-                    - state.reward
-                    - proposed_surrogate
-                    + current_surrogate
+            stage_two_decision = decide_metropolis_hastings(
+                current_target_log_density=(
+                    state.reward - current_surrogate
                 )
                 / config.reward_temperature,
-            )
-            stage_two_uniform = max(
-                float(
+                proposed_target_log_density=(
+                    proposed_reward - proposed_surrogate
+                )
+                / config.reward_temperature,
+                uniform=float(
                     seeds.generator(
                         "reward_mh", chain_id, step_index, "delayed-stage-two"
                     ).random()
                 ),
-                np.finfo(np.float64).tiny,
             )
-            accepted = log(stage_two_uniform) <= stage_two_log_acceptance
+            stage_two_log_acceptance = stage_two_decision.log_acceptance
+            accepted = stage_two_decision.accepted
         previous_reward = state.reward
         previous_surrogate = current_surrogate
         if accepted:
@@ -722,19 +729,21 @@ def run_reward_mh_chain_replay_proposal(
         proposed_sequence = retained + draw.token_ids
         proposed_reward = _finite_reward(reward, prompt, proposed_sequence)
         new_p = float(sum(draw.base_token_logprobs))
-        log_acceptance = min(
-            0.0,
-            new_p
-            - old_p
-            + (proposed_reward - current_reward) / config.reward_temperature
-            + old_q
-            - draw.proposal_logprob,
+        decision = decide_metropolis_hastings(
+            current_target_log_density=(
+                old_p + current_reward / config.reward_temperature
+            ),
+            proposed_target_log_density=(
+                new_p + proposed_reward / config.reward_temperature
+            ),
+            forward_proposal_log_probability=draw.proposal_logprob,
+            reverse_proposal_log_probability=old_q,
+            uniform=float(
+                seeds.generator("reward_mh", chain_id, step_index, "accept").random()
+            ),
         )
-        uniform = max(
-            float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
-            np.finfo(np.float64).tiny,
-        )
-        accepted = log(uniform) <= log_acceptance
+        log_acceptance = decision.log_acceptance
+        accepted = decision.accepted
         previous_reward = current_reward
         if accepted:
             tokens = proposed_sequence

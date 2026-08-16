@@ -49,6 +49,32 @@ Sampling-Importance-Resampling（采样--重要性加权--重采样），SMC 指
 重要性修正要求 $`p(y)\gt 0\Rightarrow q(y)\gt 0`$。硬 top-k/top-p 可能破坏该条件；权重截断以偏差换取
 有限权重范围。
 
+### 1.1 模型无关算法层与生成适配层
+
+AR-LLM 与 dLLM 的生成状态不同：前者追加 token 后缀，后者更新掩码 block 或完整反向轨迹。算法层仅依赖
+候选、目标值和 proposal 概率，不直接调用具体模型。实现边界如下。
+
+| 共享对象 | 算法层操作 | AR-LLM 适配 | dLLM 适配 |
+| --- | --- | --- | --- |
+| `StepwiseGenerationBackend` | 生成候选、估计条件能量、归一化、重采样、提交候选 | token block 与自回归补全 | 掩码 block 与扩散补全 |
+| `MonteCarloRolloutWeightProvider` | 汇总 on-policy、off-policy 或不校正的 rollout 权重 | token 条件概率比 | 轨迹或 block 条件概率比 |
+| `TruncatedReplayRolloutWeightProvider` | 合并历史样本与独立 fresh tail | 历史 token 补全 | 历史扩散轨迹 |
+| `MetropolisHastingsProposal` | 根据目标密度与正反 proposal 概率执行接受或拒绝 | 随机后缀 proposal | block、轨迹或整段 proposal |
+
+对任意逐步生成模型，MH 适配层为当前状态 $`y`$ 和 proposal $`y'`$ 提供四个标量：
+$`\log\widetilde\pi(y)`$、$`\log\widetilde\pi(y')`$、$`\log q(y'\mid y)`$ 与
+$`\log q(y\mid y')`$。共享核计算
+
+```math
+\log A=\min\left\{0,
+\log\widetilde\pi(y')-\log\widetilde\pi(y)
++\log q(y\mid y')-\log q(y'\mid y)
+\right\},
+```
+
+再以 $`\log U\leq\log A`$ 接受 proposal，其中 $`U`$ 为 $`[0,1)`$ 上的均匀随机数。后缀切点、扩散
+block、批处理和异步预取属于 proposal 的执行方式，不改变该接受核。
+
 <a id="alg-overview"></a>
 ## 2. 方法总览
 
@@ -200,15 +226,17 @@ A(y\to y')=
 
 真实模型实验报告更新轮次、接受率和输出诊断；收缩常数需要显式转移矩阵 $`K`$。
 
-代码中的接受率与式 (4) 一一对应：
+代码中的接受率由模型无关的共享核计算；AR 适配层只提供式 (4) 的四个概率项：
 
 ```python
-log_acceptance = min(
-    0.0,
-    alpha * (new_base_logprob - old_base_logprob)
-    + old_proposal_logprob - new_proposal_logprob,
+decision = decide_metropolis_hastings(
+    current_target_log_density=alpha * old_base_logprob,
+    proposed_target_log_density=alpha * new_base_logprob,
+    forward_proposal_log_probability=new_proposal_logprob,
+    reverse_proposal_log_probability=old_proposal_logprob,
+    uniform=uniform,
 )
-accepted = log(uniform) <= log_acceptance
+accepted = decision.accepted
 ```
 
 EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/arllm/backends/absorbing.py) 转换为固定长度吸收状态；
@@ -234,6 +262,11 @@ A_r(y\to y')=\min\left\{1,
 当 $`q_s=p(\cdot\mid x,y_{\lt s})`$ 时，基础模型与 proposal 项抵消，只剩
 $`\min\{1,e^{(r(y')-r(y))/\tau}\}`$。代码仍保留展开后的四项，因而同样支持任意可精确评分、具有完整
 support 的温度 proposal。与式 (5) 相同，整段重生成使有限状态链在通常条件下几何收敛到 $`\pi_r`$。
+
+dLLM 的整段奖励 MH 从基础模型独立生成完整 proposal。基础轨迹概率在目标与 proposal 中抵消，因此共享核
+只接收 $`r(y)/\tau`$ 与 $`r(y')/\tau`$，无需额外计算轨迹 likelihood；初始样本和后续 proposal 可在一次
+批处理中生成。dLLM 的幂目标轨迹 MH 不发生该抵消，适配层将旧、新轨迹的基础概率及 proposal 概率交给同一
+接受核。
 
 奖励在实现中是完整生成序列的函数。数值正确性、外部 verifier 等只能在完整 proposal 后得到时，每次普通
 MH 更新都要完成整段后缀并调用奖励；降低这部分成本的方法见
@@ -916,6 +949,9 @@ python experiments\benchmark_is_mh_reuse.py `
 
 | 内容 | 代码 | 主要测试 |
 | --- | --- | --- |
+| 模型无关逐步生成与重采样 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py) | `tests/test_stepwise.py` |
+| 模型无关 MH 接受核 | [`mh.py`](../../src/inference_scaling/shared/mh.py) | `tests/test_shared_mh.py` |
+| 通用 rollout 权重与 replay 汇总 | [`importance.py`](../../src/inference_scaling/shared/importance.py) | `tests/test_conditional_energy.py`、`tests/test_replay.py` |
 | 幂分布与奖励 MH | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py) | `tests/test_mh.py` |
 | 条件 IS 与 off-policy 修正 | [`conditional_energy.py`](../../src/inference_scaling/arllm/algorithms/conditional_energy.py) | `tests/test_conditional_energy.py` |
 | replay 恒等式与 fresh/reserve | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | `tests/test_replay.py` |

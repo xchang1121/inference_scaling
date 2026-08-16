@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from math import exp, log
-
 from inference_scaling.dllm.config import DiffusionMHConfig, DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest, DiffusionSample
+from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
@@ -97,10 +96,14 @@ def run_diffusion_reward_mh(
     for update, (proposal, proposal_reward) in enumerate(
         zip(samples[1:], reward_values[1:], strict=True), start=1
     ):
-        log_acceptance = min(0.0, (proposal_reward - current_reward) / config.reward_temperature)
-        acceptance_probability = exp(log_acceptance)
         uniform = float(seeds.generator("dllm-mh", "accept", update).random())
-        accepted = log(max(uniform, float.fromhex("0x1.0p-1022"))) <= log_acceptance
+        decision = decide_metropolis_hastings(
+            current_target_log_density=current_reward / config.reward_temperature,
+            proposed_target_log_density=proposal_reward / config.reward_temperature,
+            uniform=uniform,
+        )
+        acceptance_probability = decision.acceptance_probability
+        accepted = decision.accepted
         previous_reward = current_reward
         if accepted:
             current = proposal

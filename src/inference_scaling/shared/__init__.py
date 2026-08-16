@@ -11,6 +11,16 @@ from inference_scaling.shared.importance import (
     corrected_replay_log_energy,
     logmeanexp,
 )
+from inference_scaling.shared.mh import (
+    MetropolisHastingsDecision,
+    MetropolisHastingsProposal,
+    MetropolisHastingsTransition,
+    apply_metropolis_hastings,
+    decide_metropolis_hastings,
+    metropolis_hastings_log_acceptance,
+)
+from inference_scaling.shared.config import RuntimeConfig
+from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     StepwiseGenerationBackend,
@@ -21,8 +31,12 @@ from inference_scaling.shared.stepwise import (
     select_stepwise_candidate,
     stepwise_generation_step,
 )
+from inference_scaling.shared.types import TokenSequence
 
 __all__ = [
+    "MetropolisHastingsDecision",
+    "MetropolisHastingsProposal",
+    "MetropolisHastingsTransition",
     "MonteCarloEnergyEstimate",
     "MonteCarloRolloutWeightProvider",
     "ProbabilityObservation",
@@ -34,16 +48,16 @@ __all__ = [
     "StepwiseSelection",
     "TruncatedReplayRolloutWeightProvider",
     "WeightedRollout",
+    "RuntimeConfig",
+    "SeedStream",
+    "TokenSequence",
+    "apply_metropolis_hastings",
     "corrected_replay_log_energy",
     "logmeanexp",
+    "metropolis_hastings_log_acceptance",
     "normalize_log_energies",
+    "decide_metropolis_hastings",
     "run_stepwise_generation",
     "select_stepwise_candidate",
     "stepwise_generation_step",
 ]
-
-from inference_scaling.shared.config import RuntimeConfig
-from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import TokenSequence
-
-__all__ = ["RuntimeConfig", "SeedStream", "TokenSequence"]
