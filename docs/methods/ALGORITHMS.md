@@ -902,11 +902,11 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 
 ```powershell
 $env:PYTHONPATH = "src;."
-.\.venv\Scripts\python experiments\benchmark_rollout_infra.py `
+python experiments\benchmark_rollout_infra.py `
   --backend transformers --dtype bfloat16 --section all `
   --output results\infra\rtx3090_transformers.json
 
-.\.venv\Scripts\python experiments\benchmark_is_mh_reuse.py `
+python experiments\benchmark_is_mh_reuse.py `
   --backend transformers --dtype bfloat16 --section all `
   --output results\infra\rtx3090_transformers_is_mh.json
 ```

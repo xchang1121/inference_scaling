@@ -74,46 +74,46 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 
 ## 安装
 
-AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本，因此分别创建环境。AR-LLM 环境：
+AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本，需要两个独立的 Python 解释器。以下路径由使用者
+按机器配置指定：
 
 ```powershell
-python -m venv .venv-ar
-.\.venv-ar\Scripts\python -m pip install --upgrade pip
-.\.venv-ar\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
-.\.venv-ar\Scripts\python -m pip install -e ".[dev,gpu,training]"
+$env:AR_PYTHON = "C:\path\to\ar-python.exe"
+$env:DLLM_PYTHON = "C:\path\to\dllm-python.exe"
+
+& $env:AR_PYTHON -m pip install --upgrade pip
+& $env:AR_PYTHON -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+& $env:AR_PYTHON -m pip install -e ".[dev,gpu,training]"
 ```
 
-LLaDA-MoE 推理和 VRPO 环境：
+LLaDA-MoE 推理和 VRPO 依赖安装到第二个解释器：
 
 ```powershell
-python -m venv .venv-dllm
-.\.venv-dllm\Scripts\python -m pip install --upgrade pip
-.\.venv-dllm\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
-.\.venv-dllm\Scripts\python -m pip install -e ".[dev,dllm,dllm-training]"
-.\.venv-dllm\Scripts\python experiments\dllm\download_llada.py `
+& $env:DLLM_PYTHON -m pip install --upgrade pip
+& $env:DLLM_PYTHON -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+& $env:DLLM_PYTHON -m pip install -e ".[dev,dllm,dllm-training]"
+& $env:DLLM_PYTHON experiments\dllm\download_llada.py `
   --config configs\gsm8k_llada_moe_3090.toml --source modelscope
 ```
 
-vLLM `0.25.x` 使用 Linux GPU wheel。Windows 主机在 WSL2 的 Linux 文件系统中创建独立环境：
+vLLM `0.25.x` 使用 Linux GPU wheel。Windows 主机在 WSL2 的 Linux 文件系统中使用兼容的 Python：
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,vllm]"
+python3.12 -m pip install --upgrade pip
+python3.12 -m pip install -e ".[dev,vllm]"
 ```
 
 ## 统一复现入口
 
 [`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理。两个 Python 路径分别
-指向上述隔离环境。`smoke` 使用 1 题、缩短预算、AR 一次 GRPO 更新和 dLLM 的 CPU VRPO 反向传播预检；
+指向上述解释器。`smoke` 使用 1 题、缩短预算、AR 一次 GRPO 更新和 dLLM 的 CPU VRPO 反向传播预检；
 每个真实 LLaDA 推理子进程结束后释放模型显存。
 
 ```powershell
-.\.venv-ar\Scripts\python experiments\run_reproduction.py `
+python experiments\run_reproduction.py `
   --family both --stage all --profile smoke --tag local-check `
-  --ar-python .\.venv-ar\Scripts\python.exe `
-  --dllm-python .\.venv-dllm\Scripts\python.exe `
+  --ar-python $env:AR_PYTHON `
+  --dllm-python $env:DLLM_PYTHON `
   --ar-methods base mh conditional_is rl_sample `
   --dllm-methods base trajectory_power_mh conditional_is_reduced_layer_proposal `
   --components quality replay
@@ -123,10 +123,10 @@ python -m pip install -e ".[dev,vllm]"
 adapter，并运行配置中的推理方法；AR 阶段依次准备数据与权重、续跑 GRPO 和运行所选实验族。
 
 ```powershell
-.\.venv-ar\Scripts\python experiments\run_reproduction.py `
+python experiments\run_reproduction.py `
   --family both --stage all --profile full --tag full-reproduction `
-  --ar-python .\.venv-ar\Scripts\python.exe `
-  --dllm-python .\.venv-dllm\Scripts\python.exe
+  --ar-python $env:AR_PYTHON `
+  --dllm-python $env:DLLM_PYTHON
 ```
 
 主要 CLI 参数：
@@ -149,10 +149,10 @@ infra 和 vLLM。dLLM 入口覆盖对应的 base、block beam、Best-of-$`N`$、
 两侧也可独立启动：
 
 ```powershell
-.\.venv-ar\Scripts\python experiments\arllm\run_arllm_suite.py `
+& $env:AR_PYTHON experiments\arllm\run_arllm_suite.py `
   --stage all --profile full --components quality replay dynamic_is async passk infra
 
-.\.venv-dllm\Scripts\python experiments\dllm\run_llada_suite.py `
+& $env:DLLM_PYTHON experiments\dllm\run_llada_suite.py `
   --profile full --vrpo train --tag full-dllm
 ```
 
@@ -163,7 +163,7 @@ infra 和 vLLM。dLLM 入口覆盖对应的 base、block beam、Best-of-$`N`$、
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv-dllm\Scripts\python -m pytest
+& $env:DLLM_PYTHON -m pytest
 ```
 
 | 路径 | 内容 |

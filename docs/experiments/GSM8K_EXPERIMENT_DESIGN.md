@@ -181,10 +181,10 @@ QF_{\mathrm{training\text{-}free}}.
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\prepare_gsm8k.py `
+python experiments\prepare_gsm8k.py `
   --config configs\gsm8k_3090_aligned.toml
 
-.\.venv\Scripts\python experiments\train_gsm8k_grpo.py --resume auto
+python experiments\train_gsm8k_grpo.py --resume auto
 ```
 
 已有匹配 `configs/gsm8k_grpo.toml` 与 base revision 的 adapter 时，可直接进入推理实验。
@@ -193,7 +193,7 @@ $env:PYTHONPATH = "src"
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\run_gsm8k_suite.py `
+python experiments\run_gsm8k_suite.py `
   --config configs\gsm8k_3090_aligned.toml `
   --tag validated `
   --summary-root results\gsm8k_3090 `
@@ -227,66 +227,66 @@ python experiments/run_vllm_backend_benchmark.py \
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\summarize_gsm8k.py `
+python experiments\summarize_gsm8k.py `
   --config configs\gsm8k_3090_aligned.toml `
   --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_comparison_validated.json
 
-.\.venv\Scripts\python experiments\gsm8k_distribution_audit.py `
+python experiments\gsm8k_distribution_audit.py `
   --config configs\gsm8k_3090_aligned.toml `
   --problem-count 4 --draws 8 `
   --output results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json
 
-.\.venv\Scripts\python experiments\summarize_gsm8k_compute.py `
+python experiments\summarize_gsm8k_compute.py `
   --config configs\gsm8k_3090_aligned.toml `
   --tag validated `
   --training-cost models\Qwen2.5-1.5B-Instruct-GRPO-GSM8K\training_cost.json `
   --distribution-audit results\gsm8k_3090\gsm8k_3090_aligned_distribution_audit_validated.json `
   --output results\gsm8k_3090\gsm8k_3090_aligned_compute_validated.json
 
-.\.venv\Scripts\python experiments\summarize_gsm8k_ablations.py `
+python experiments\summarize_gsm8k_ablations.py `
   --config configs\gsm8k_3090_aligned.toml `
   --output results\gsm8k_3090\gsm8k_3090_aligned_ablations_validated.json
 
 $env:PYTHONPATH = "src;."
-.\.venv\Scripts\python experiments\gsm8k_reproduction.py `
+python experiments\gsm8k_reproduction.py `
   --config configs\gsm8k_3090_aligned.toml `
   --method verifier_conditional_is_small_proposal `
   --tag with-rescore-paired-validated --limit 32
 
-.\.venv\Scripts\python experiments\gsm8k_reproduction.py `
+python experiments\gsm8k_reproduction.py `
   --config configs\gsm8k_3090_aligned.toml `
   --method verifier_conditional_is_small_proposal `
   --tag no-rescore-validated --limit 32 `
   --disable-importance-correction
 
-.\.venv\Scripts\python experiments\summarize_gsm8k_verifier_rescoring.py
+python experiments\summarize_gsm8k_verifier_rescoring.py
 ```
 
 ### pass@k
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\gsm8k_passk.py `
+python experiments\gsm8k_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
   --limit 32 --draws 8 --workers 8 --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json
 
-.\.venv\Scripts\python experiments\gsm8k_is_passk.py `
+python experiments\gsm8k_is_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
   --limit 32 --draws 8 --workers 8 --tag validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json
 
-.\.venv\Scripts\python experiments\gsm8k_is_passk.py `
+python experiments\gsm8k_is_passk.py `
   --config configs\gsm8k_3090_aligned.toml `
   --limit 32 --draws 8 --workers 8 `
   --methods conditional_is_small_proposal_uncorrected `
   --tag is-uncorrected-validated `
   --output results\gsm8k_3090\gsm8k_3090_aligned_is_uncorrected_validated.json
 
-.\.venv\Scripts\python experiments\summarize_gsm8k_is_rescoring.py
+python experiments\summarize_gsm8k_is_rescoring.py
 
-.\.venv\Scripts\python experiments\summarize_gsm8k_passk.py `
+python experiments\summarize_gsm8k_passk.py `
   results\gsm8k_3090\gsm8k_3090_aligned_passk_validated.json `
   results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.json `
   --is-raw-chunks results\gsm8k_3090\gsm8k_3090_aligned_is_passk_validated.chunks.jsonl `
@@ -297,9 +297,9 @@ $env:PYTHONPATH = "src"
 
 ```powershell
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python experiments\plot_gsm8k_quality_compute.py
-.\.venv\Scripts\python experiments\plot_gsm8k_passk.py
-.\.venv\Scripts\python experiments\plot_gsm8k_ablations.py
+python experiments\plot_gsm8k_quality_compute.py
+python experiments\plot_gsm8k_passk.py
+python experiments\plot_gsm8k_ablations.py
 ```
 
 ## 消融矩阵
