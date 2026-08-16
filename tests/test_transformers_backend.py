@@ -52,6 +52,40 @@ class RepeatableCache:
         return None
 
 
+class LegacyCropCache:
+    def __init__(self):
+        self.maximum_length = None
+
+    def crop(self, maximum_length):
+        self.maximum_length = maximum_length
+
+
+class TokenRemovalCache:
+    def __init__(self, sequence_length):
+        self.sequence_length = sequence_length
+        self.tokens_to_remove = None
+
+    def get_seq_length(self):
+        return self.sequence_length
+
+    def crop(self, tokens_to_remove):
+        self.tokens_to_remove = tokens_to_remove
+
+
+def test_cache_crop_supports_legacy_absolute_length_api() -> None:
+    cache = LegacyCropCache()
+
+    assert TransformersBackend._crop_cache(cache, 7) is cache
+    assert cache.maximum_length == 7
+
+
+def test_cache_crop_uses_transformers_token_removal_api() -> None:
+    cache = TokenRemovalCache(sequence_length=11)
+
+    assert TransformersBackend._crop_cache(cache, 7) is cache
+    assert cache.tokens_to_remove == -4
+
+
 def test_request_local_randomness_is_independent_of_batch_order() -> None:
     model = ConstantLogitModel([0.55, 0.3, 0.15])
     backend = TransformersBackend(model, TinyTokenizer(), device="cpu")

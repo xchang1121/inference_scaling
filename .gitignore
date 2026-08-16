@@ -39,4 +39,8 @@ results/gsm8k_3090/*.chunks.jsonl
 results/gsm8k_3090/*.chunks.manifest.json
 results/validation/*.chunks.jsonl
 results/validation/*.chunks.manifest.json
+results/**/*.chunks.jsonl
+results/**/*.chunks.manifest.json
+results/**/*.records.jsonl
+results/**/*.records.manifest.json
 results/validation/gsm8k_*smoke*.json

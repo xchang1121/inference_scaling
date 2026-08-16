@@ -46,7 +46,7 @@ def main() -> None:
         "--summary-root",
         type=Path,
         default=Path("results"),
-        help="directory for replay and asynchronous aggregate reports",
+        help="directory for aggregate reports",
     )
     args = parser.parse_args()
 
@@ -227,6 +227,8 @@ def main() -> None:
                 str(args.passk_limit),
                 "--draws",
                 str(args.passk_draws),
+                "--output",
+                str(args.summary_root / f"{args.config.stem}_passk_{args.tag}.json"),
                 *backend_args,
                 *rl_args,
             ],

@@ -177,6 +177,8 @@ def test_ar_passk_component_runs_general_and_is_variant_grids(
         "gsm8k_passk.py",
         "gsm8k_is_passk.py",
     ]
+    general_grid = commands[0]
+    assert Path(general_grid[general_grid.index("--output") + 1]).parent == tmp_path
     is_grid = commands[1]
     assert is_grid[is_grid.index("--workers") + 1] == "2"
     assert Path(is_grid[is_grid.index("--output") + 1]).parent == tmp_path

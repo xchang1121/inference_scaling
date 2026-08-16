@@ -322,7 +322,19 @@ class TransformersBackend:
             return None
         crop = getattr(cache, "crop", None)
         if callable(crop):
-            crop(int(maximum_length))
+            parameters = inspect.signature(crop).parameters
+            if "tokens_to_remove" in parameters:
+                get_seq_length = getattr(cache, "get_seq_length", None)
+                if not callable(get_seq_length):
+                    return None
+                tokens_to_remove = max(
+                    int(get_seq_length()) - int(maximum_length),
+                    0,
+                )
+                if tokens_to_remove:
+                    crop(-tokens_to_remove)
+            else:
+                crop(int(maximum_length))
             return cache
         if isinstance(cache, (tuple, list)):
             cropped_layers = []

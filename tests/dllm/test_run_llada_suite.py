@@ -24,6 +24,7 @@ def _arguments(output: Path) -> list[str]:
         str(output),
         "--vrpo",
         "preflight",
+        "--no-environment-check",
         "--methods",
         "base",
     ]
