@@ -11,6 +11,11 @@ import subprocess
 import sys
 from typing import Sequence
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
 from experiments.arllm.run_arllm_suite import AR_METHODS, COMPONENTS
 from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
 
@@ -189,7 +194,7 @@ def main() -> None:
         args.components
         or (("quality", "replay") if args.profile == "smoke" else COMPONENTS[:-1])
     )
-    root = Path(__file__).resolve().parents[1]
+    root = REPOSITORY_ROOT
     commands = build_commands(args, root)
     manifest_dir = args.output_root / args.tag
     manifest_dir.mkdir(parents=True, exist_ok=True)

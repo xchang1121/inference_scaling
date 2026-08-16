@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
@@ -207,3 +209,22 @@ def test_interpreter_default_supports_environment_and_current_python(monkeypatch
 
     monkeypatch.setenv("AR_PYTHON", "")
     assert _default_python("AR_PYTHON") == sys.executable
+
+
+def test_public_entrypoints_do_not_require_pythonpath():
+    root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    for script in (
+        root / "experiments" / "run_reproduction.py",
+        root / "experiments" / "dllm" / "run_llada_suite.py",
+    ):
+        completed = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr

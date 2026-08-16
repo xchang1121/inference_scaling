@@ -11,6 +11,11 @@ import subprocess
 import sys
 from typing import Sequence
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
 from experiments.dllm.gsm8k_reproduction import METHODS
 from experiments.shared.paired_protocol import load_pairing
 
@@ -69,7 +74,7 @@ def main() -> None:
         raise ValueError("aligned methods require --with-aligned")
 
     tag = args.tag or f"llada-{args.profile}"
-    root = Path(__file__).resolve().parents[2]
+    root = REPOSITORY_ROOT
     runner = root / "experiments" / "dllm" / "gsm8k_reproduction.py"
     replay_runner = root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py"
     prepare_vrpo = root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"

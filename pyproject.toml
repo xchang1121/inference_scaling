@@ -55,4 +55,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
+pythonpath = ["src", "."]
 testpaths = ["tests"]

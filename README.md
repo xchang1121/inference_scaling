@@ -199,7 +199,6 @@ infra 和 vLLM。dLLM 入口覆盖对应的 base、block beam、Best-of-$`N`$、
 ## 测试与目录
 
 ```powershell
-$env:PYTHONPATH = "src"
 python -m pytest
 
 # 或使用仓库中已有的解释器
