@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
+from experiments.run_reproduction import build_commands as build_paired_commands
+from experiments.run_gsm8k_suite import SUPPORTED_METHODS
+
+
+def _ar_args(**overrides):
+    values = {
+        "stage": "all",
+        "profile": "full",
+        "config": Path("configs/gsm8k_3090_aligned.toml"),
+        "training_config": Path("configs/gsm8k_grpo.toml"),
+        "resume": "auto",
+        "train_limit": None,
+        "training_output": None,
+        "max_train_steps": None,
+        "num_generations": None,
+        "max_completion_length": None,
+        "components": (
+            "quality",
+            "matched_target",
+            "replay",
+            "dynamic_is",
+            "async",
+            "passk",
+            "ablations",
+            "budget_curve",
+            "length_ablation",
+            "distribution",
+            "infra",
+            "vllm",
+        ),
+        "methods": ("base", "mh", "conditional_is", "rl_sample"),
+        "tag": "test",
+        "summary_root": Path("results/test"),
+        "ablation_limit": 3,
+        "passk_limit": 4,
+        "passk_draws": 2,
+        "backend": "transformers",
+        "ar_python": "python-ar",
+        "dllm_python": "python-dllm",
+        "limit": 5,
+        "distribution_problems": 2,
+        "distribution_draws": 3,
+        "dtype": "bfloat16",
+        "infra_limit": 1,
+        "vllm_limit": 6,
+        "vllm_workers": 2,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_ar_full_entry_preserves_training_and_every_legacy_suite_family(tmp_path):
+    commands = build_ar_commands(_ar_args(summary_root=tmp_path), Path.cwd())
+    scripts = [Path(command[1]).name for command in commands]
+
+    assert scripts == [
+        "prepare_gsm8k.py",
+        "train_gsm8k_grpo.py",
+        "run_gsm8k_suite.py",
+        "gsm8k_distribution_audit.py",
+        "benchmark_rollout_infra.py",
+        "benchmark_is_mh_reuse.py",
+        "run_vllm_backend_benchmark.py",
+    ]
+    suite = commands[2]
+    for flag in (
+        "--with-matched-target",
+        "--with-replay",
+        "--with-dynamic-is",
+        "--with-async",
+        "--with-passk",
+        "--with-ablations",
+        "--with-budget-curve",
+        "--with-length-ablation",
+    ):
+        assert flag in suite
+    assert suite[suite.index("--methods") + 1] == "base,mh,conditional_is,rl_sample"
+
+
+def test_ar_component_without_quality_does_not_run_main_methods(tmp_path):
+    commands = build_ar_commands(
+        _ar_args(
+            stage="inference",
+            components=("replay",),
+            summary_root=tmp_path,
+        ),
+        Path.cwd(),
+    )
+
+    assert len(commands) == 1
+    assert commands[0][commands[0].index("--methods") + 1] == ""
+    assert "--with-replay" in commands[0]
+
+
+def test_ar_entry_accepts_existing_verifier_methods(tmp_path):
+    commands = build_ar_commands(
+        _ar_args(
+            stage="inference",
+            components=("quality",),
+            methods=("verifier_mh", "verifier_conditional_is"),
+            summary_root=tmp_path,
+        ),
+        Path.cwd(),
+    )
+
+    methods = commands[0][commands[0].index("--methods") + 1]
+    assert methods == "verifier_mh,verifier_conditional_is"
+    assert {
+        "verifier_mh",
+        "verifier_conditional_is",
+        "verifier_conditional_is_small_proposal",
+    } <= set(SUPPORTED_METHODS)
+
+
+def _paired_args(**overrides):
+    values = {
+        "family": "both",
+        "stage": "all",
+        "profile": "full",
+        "tag": "paired",
+        "ar_training_config": Path("configs/gsm8k_grpo.toml"),
+        "ar_config": Path("configs/gsm8k_3090_aligned.toml"),
+        "dllm_config": Path("configs/gsm8k_llada_moe_3090.toml"),
+        "output_root": Path("results/reproduction"),
+        "ar_methods": ("base", "rl_sample"),
+        "dllm_methods": ("base", "conditional_is"),
+        "components": ("quality", "replay"),
+        "backend": "transformers",
+        "ar_python": "python-ar",
+        "dllm_python": "python-dllm",
+        "limit": 3,
+        "train_limit": None,
+        "ar_training_output": None,
+        "max_train_steps": None,
+        "num_generations": None,
+        "max_completion_length": None,
+        "ablation_limit": None,
+        "passk_limit": None,
+        "passk_draws": None,
+        "dry_run": True,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_paired_full_entry_routes_grpo_and_vrpo_training():
+    commands = build_paired_commands(_paired_args(), Path.cwd())
+
+    assert len(commands) == 2
+    assert commands[0][0] == "python-ar"
+    assert commands[1][0] == "python-dllm"
+    assert Path(commands[0][1]).name == "run_arllm_suite.py"
+    assert "--stage" in commands[0] and "all" in commands[0]
+    assert Path(commands[1][1]).name == "run_llada_suite.py"
+    assert commands[1][commands[1].index("--vrpo") + 1] == "train"
+    assert "--methods" in commands[1]
+    assert "--no-with-replay" not in commands[1]
+
+
+def test_paired_smoke_uses_cpu_vrpo_preflight_instead_of_full_training():
+    commands = build_paired_commands(
+        _paired_args(family="dllm", profile="smoke"), Path.cwd()
+    )
+
+    assert len(commands) == 1
+    assert Path(commands[0][1]).name == "run_llada_suite.py"
+    assert commands[0][commands[0].index("--vrpo") + 1] == "preflight"
+
+
+def test_dllm_smoke_training_stage_is_preflight_only():
+    commands = build_paired_commands(
+        _paired_args(family="dllm", stage="train", profile="smoke"), Path.cwd()
+    )
+
+    assert len(commands) == 1
+    assert Path(commands[0][1]).name == "train_gsm8k_vrpo.py"
+    assert "--preflight" in commands[0]
+
+
+def test_dllm_prepare_stage_downloads_or_validates_model():
+    commands = build_paired_commands(
+        _paired_args(family="dllm", stage="prepare", profile="full"), Path.cwd()
+    )
+
+    assert len(commands) == 1
+    assert Path(commands[0][1]).name == "download_llada.py"
+    assert "--config" in commands[0]
+    assert "--validate-only" not in commands[0]

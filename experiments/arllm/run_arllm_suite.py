@@ -1,0 +1,315 @@
+"""Single CLI entry point for AR-LLM preparation, GRPO, and inference suites."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from typing import Sequence
+
+AR_METHODS = (
+    "base",
+    "beam",
+    "best_of_n",
+    "mh",
+    "conditional_is",
+    "conditional_is_small_proposal",
+    "verifier_mh",
+    "verifier_conditional_is",
+    "verifier_conditional_is_small_proposal",
+    "rl_sample",
+    "rl_greedy",
+)
+COMPONENTS = (
+    "quality",
+    "matched_target",
+    "replay",
+    "dynamic_is",
+    "async",
+    "passk",
+    "ablations",
+    "budget_curve",
+    "length_ablation",
+    "distribution",
+    "infra",
+    "vllm",
+)
+FULL_COMPONENTS = tuple(component for component in COMPONENTS if component != "vllm")
+
+
+def _command_text(command: Sequence[str]) -> str:
+    return subprocess.list2cmdline(list(command))
+
+
+def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
+    commands: list[list[str]] = []
+    include_training = args.stage in {"train", "all"}
+    include_inference = args.stage in {"inference", "all"}
+    if args.stage == "prepare" or include_training:
+        commands.append(
+            [
+                sys.executable,
+                str(root / "experiments" / "prepare_gsm8k.py"),
+                "--config",
+                str(args.config),
+            ]
+        )
+    if include_training:
+        command = [
+            sys.executable,
+            str(root / "experiments" / "train_gsm8k_grpo.py"),
+            "--config",
+            str(args.training_config),
+            "--resume",
+            args.resume,
+        ]
+        if args.training_output is not None:
+            command.extend(("--output-dir", str(args.training_output)))
+        overrides = (
+            ("--train-limit", args.train_limit),
+            ("--max-steps", args.max_train_steps),
+            ("--num-generations", args.num_generations),
+            ("--max-completion-length", args.max_completion_length),
+        )
+        for flag, value in overrides:
+            if value is not None:
+                command.extend((flag, str(value)))
+        commands.append(command)
+    if not include_inference:
+        return commands
+
+    components = set(args.components)
+    suite_components = {
+        "quality",
+        "matched_target",
+        "replay",
+        "dynamic_is",
+        "async",
+        "passk",
+        "ablations",
+        "budget_curve",
+        "length_ablation",
+    }
+    if components & suite_components:
+        methods = args.methods if "quality" in components else ()
+        command = [
+            sys.executable,
+            str(root / "experiments" / "run_gsm8k_suite.py"),
+            "--config",
+            str(args.config),
+            "--tag",
+            args.tag,
+            "--methods",
+            ",".join(methods),
+            "--summary-root",
+            str(args.summary_root),
+            "--ablation-limit",
+            str(args.ablation_limit),
+            "--passk-limit",
+            str(args.passk_limit),
+            "--passk-draws",
+            str(args.passk_draws),
+        ]
+        if args.backend is not None:
+            command.extend(("--backend", args.backend))
+        if args.limit is not None:
+            command.extend(("--limit", str(args.limit)))
+        for component, flag in (
+            ("matched_target", "--with-matched-target"),
+            ("replay", "--with-replay"),
+            ("dynamic_is", "--with-dynamic-is"),
+            ("async", "--with-async"),
+            ("passk", "--with-passk"),
+            ("ablations", "--with-ablations"),
+            ("budget_curve", "--with-budget-curve"),
+            ("length_ablation", "--with-length-ablation"),
+        ):
+            if component in components:
+                command.append(flag)
+        commands.append(command)
+
+    args.summary_root.mkdir(parents=True, exist_ok=True)
+    backend = args.backend or "transformers"
+    if "distribution" in components:
+        command = [
+            sys.executable,
+            str(root / "experiments" / "gsm8k_distribution_audit.py"),
+            "--config",
+            str(args.config),
+            "--problem-count",
+            str(args.distribution_problems),
+            "--draws",
+            str(args.distribution_draws),
+            "--output",
+            str(args.summary_root / f"arllm_distribution_{args.tag}.json"),
+        ]
+        if args.backend is not None:
+            command.extend(("--backend", args.backend))
+        commands.append(command)
+    if "infra" in components:
+        commands.extend(
+            (
+                [
+                    sys.executable,
+                    str(root / "experiments" / "benchmark_rollout_infra.py"),
+                    "--config",
+                    str(args.config),
+                    "--backend",
+                    backend,
+                    "--dtype",
+                    args.dtype,
+                    "--section",
+                    "all",
+                    "--limit",
+                    str(args.infra_limit),
+                    "--output",
+                    str(args.summary_root / f"arllm_rollout_infra_{args.tag}.json"),
+                ],
+                [
+                    sys.executable,
+                    str(root / "experiments" / "benchmark_is_mh_reuse.py"),
+                    "--config",
+                    str(args.config),
+                    "--backend",
+                    backend,
+                    "--dtype",
+                    args.dtype,
+                    "--section",
+                    "all",
+                    "--output",
+                    str(args.summary_root / f"arllm_is_mh_infra_{args.tag}.json"),
+                ],
+            )
+        )
+    if "vllm" in components:
+        commands.append(
+            [
+                sys.executable,
+                str(root / "experiments" / "run_vllm_backend_benchmark.py"),
+                "--config",
+                str(args.config),
+                "--limit",
+                str(args.vllm_limit),
+                "--workers",
+                str(args.vllm_workers),
+                "--tag",
+                args.tag,
+            ]
+        )
+    return commands
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage", choices=("prepare", "train", "inference", "all"), default="inference")
+    parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--training-config", type=Path, default=Path("configs/gsm8k_grpo.toml"))
+    parser.add_argument("--tag", default="arllm-reproduction")
+    parser.add_argument("--methods", nargs="+", choices=AR_METHODS)
+    parser.add_argument("--components", nargs="+", choices=COMPONENTS)
+    parser.add_argument("--backend", choices=("transformers", "vllm", "vllm-sync"))
+    parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--train-limit", type=int)
+    parser.add_argument("--training-output", type=Path)
+    parser.add_argument("--max-train-steps", type=int)
+    parser.add_argument("--num-generations", type=int)
+    parser.add_argument("--max-completion-length", type=int)
+    parser.add_argument("--resume", default="auto")
+    parser.add_argument("--ablation-limit", type=int)
+    parser.add_argument("--passk-limit", type=int)
+    parser.add_argument("--passk-draws", type=int)
+    parser.add_argument("--distribution-problems", type=int)
+    parser.add_argument("--distribution-draws", type=int)
+    parser.add_argument("--infra-limit", type=int, default=1)
+    parser.add_argument("--vllm-limit", type=int)
+    parser.add_argument("--vllm-workers", type=int)
+    parser.add_argument("--summary-root", type=Path, default=Path("results/arllm"))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    if args.config is None:
+        args.config = Path(
+            "configs/gsm8k_quick.toml"
+            if args.profile == "smoke"
+            else "configs/gsm8k_3090_aligned.toml"
+        )
+    args.methods = tuple(args.methods or AR_METHODS)
+    args.components = tuple(
+        args.components
+        or (("quality",) if args.profile == "smoke" else FULL_COMPONENTS)
+    )
+    if args.profile == "smoke":
+        if args.training_output is None:
+            args.training_output = Path(
+                f"models/Qwen2.5-1.5B-Instruct-GRPO-GSM8K-smoke-{args.tag}"
+            )
+        args.limit = args.limit or 1
+        args.train_limit = args.train_limit or 4
+        args.max_train_steps = args.max_train_steps or 1
+        args.num_generations = args.num_generations or 2
+        args.max_completion_length = args.max_completion_length or 96
+        args.ablation_limit = args.ablation_limit or 1
+        args.passk_limit = args.passk_limit or 1
+        args.passk_draws = args.passk_draws or 2
+        args.distribution_problems = args.distribution_problems or 1
+        args.distribution_draws = args.distribution_draws or 2
+        args.vllm_limit = args.vllm_limit or 1
+        args.vllm_workers = args.vllm_workers or 1
+    else:
+        args.ablation_limit = args.ablation_limit or 32
+        args.passk_limit = args.passk_limit or 32
+        args.passk_draws = args.passk_draws or 8
+        args.distribution_problems = args.distribution_problems or 4
+        args.distribution_draws = args.distribution_draws or 8
+        args.vllm_limit = args.vllm_limit or 32
+        args.vllm_workers = args.vllm_workers or 8
+
+    root = Path(__file__).resolve().parents[2]
+    commands = build_commands(args, root)
+    manifest_dir = args.summary_root / args.tag
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "arllm_suite_manifest.json"
+    manifest = {
+        "schema_version": 1,
+        "family": "arllm",
+        "stage": args.stage,
+        "profile": args.profile,
+        "tag": args.tag,
+        "methods": args.methods,
+        "components": args.components,
+        "commands": [_command_text(command) for command in commands],
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "completed_commands": 0,
+        "status": "dry_run" if args.dry_run else "running",
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    for command in commands:
+        print(_command_text(command), flush=True)
+    if args.dry_run:
+        return
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(root / "src"), str(root), environment.get("PYTHONPATH", ""))
+    ).rstrip(os.pathsep)
+    try:
+        for index, command in enumerate(commands, start=1):
+            subprocess.run(command, cwd=root, env=environment, check=True)
+            manifest["completed_commands"] = index
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    except BaseException:
+        manifest["status"] = "failed"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        raise
+    manifest["status"] = "complete"
+    manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

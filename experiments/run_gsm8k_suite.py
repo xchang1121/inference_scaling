@@ -21,6 +21,11 @@ DEFAULT_METHODS = (
     "rl_sample",
     "rl_greedy",
 )
+SUPPORTED_METHODS = DEFAULT_METHODS + (
+    "verifier_mh",
+    "verifier_conditional_is",
+    "verifier_conditional_is_small_proposal",
+)
 
 
 def _run(command: list[str], environment: dict[str, str]) -> None:
@@ -78,7 +83,7 @@ def main() -> None:
         summary_common.extend(["--limit", str(args.limit)])
 
     methods = tuple(method.strip() for method in args.methods.split(",") if method.strip())
-    unknown = sorted(set(methods) - set(DEFAULT_METHODS))
+    unknown = sorted(set(methods) - set(SUPPORTED_METHODS))
     if unknown:
         raise ValueError(f"unknown methods: {', '.join(unknown)}")
     for method in methods:
@@ -99,6 +104,8 @@ def main() -> None:
             "verifier_conditional_is",
             "verifier_conditional_is_small_proposal",
         ):
+            if method in methods:
+                continue
             _run(
                 [
                     sys.executable,

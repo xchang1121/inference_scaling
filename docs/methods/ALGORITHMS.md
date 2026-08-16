@@ -156,7 +156,7 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励或 self-co
 训练得到固定策略 $`p_{\theta_{\mathrm{GRPO}}}`$。实验分别采用温度 1 随机采样和逐 token argmax 解码。
 
 训练入口为 [`experiments/train_gsm8k_grpo.py`](../../experiments/train_gsm8k_grpo.py)，精确数值奖励实现为
-[`evaluation/grpo_reward.py`](../../src/inference_scaling/evaluation/grpo_reward.py)。
+[`shared/evaluation/grpo_reward.py`](../../src/inference_scaling/shared/evaluation/grpo_reward.py)。
 
 <a id="alg-power-mh"></a>
 ## 4. 幂分布后缀 MH
@@ -211,7 +211,7 @@ log_acceptance = min(
 accepted = log(uniform) <= log_acceptance
 ```
 
-EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/backends/absorbing.py) 转换为固定长度吸收状态；
+EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/arllm/backends/absorbing.py) 转换为固定长度吸收状态；
 终止判断作用于生成区间，EOS 后占位 token 的条件概率为 1。
 
 <a id="alg-reward-mh"></a>
@@ -282,7 +282,7 @@ selected_index = rng.choice(len(candidates), p=probabilities)
 ```
 
 实现入口为
-[`run_conditional_is`](../../src/inference_scaling/algorithms/conditional_energy.py)，候选与所有 rollout 都按
+[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_energy.py)，候选与所有 rollout 都按
 异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
 <a id="alg-offpolicy-is"></a>
@@ -428,7 +428,7 @@ store.add_evaluation(independent_reserve_record)
 ```
 
 该生命周期同时用于 `base-replay` 和 `dynamic-is`。存储实现见
-[`replay.py`](../../src/inference_scaling/replay.py)。
+[`arllm/replay.py`](../../src/inference_scaling/arllm/replay.py)。
 
 <a id="alg-dynamic-is"></a>
 ## 9. 动态候选 proposal 与外层 IS
@@ -549,7 +549,7 @@ streaming IS 使用式 (10)、(14) 或 (21)，并允许已冻结的 fresh 样本
 
 每个候选在固定 multiset 上计算 `logmeanexp`，因此结果与到达顺序无关。GPU 完成回调可立即启动 CPU
 verifier。实现见
-[`streaming_is.py`](../../src/inference_scaling/algorithms/streaming_is.py)，墙钟重叠见
+[`streaming_is.py`](../../src/inference_scaling/arllm/algorithms/streaming_is.py)，墙钟重叠见
 [流式奖励计算](#infra-streaming-reward)。
 
 <a id="alg-smc-forest"></a>
@@ -661,7 +661,7 @@ log_acceptance = min(
 
 后三类在每个 guidance step 内对全部 candidate rollout 做 min-max 归一化。熵类奖励需要全词表概率，
 由精确 Transformers scoring backend 计算。self-consistency
-实现见 [`evaluation/consensus.py`](../../src/inference_scaling/evaluation/consensus.py)。
+实现见 [`shared/evaluation/consensus.py`](../../src/inference_scaling/shared/evaluation/consensus.py)。
 
 <a id="alg-correctness-matrix"></a>
 ## 16. 正确性与近似来源
@@ -726,9 +726,9 @@ S_{\mathrm{saved}}=\sum_i(K_i-1)L_i.
 ```
 
 关键实现位于
-[`batching.py`](../../src/inference_scaling/backends/batching.py)、
-[`cache.py`](../../src/inference_scaling/backends/cache.py)和
-[`transformers_backend.py`](../../src/inference_scaling/backends/transformers_backend.py)。
+[`batching.py`](../../src/inference_scaling/arllm/backends/batching.py)、
+[`cache.py`](../../src/inference_scaling/arllm/backends/cache.py)和
+[`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。
 
 ### 17.3 历史 token tree 与部分 rollout
 
@@ -916,20 +916,20 @@ $env:PYTHONPATH = "src;."
 
 | 内容 | 代码 | 主要测试 |
 | --- | --- | --- |
-| 幂分布与奖励 MH | [`mh.py`](../../src/inference_scaling/algorithms/mh.py) | `tests/test_mh.py` |
-| 条件 IS 与 off-policy 修正 | [`conditional_energy.py`](../../src/inference_scaling/algorithms/conditional_energy.py) | `tests/test_conditional_energy.py` |
-| replay 恒等式与 fresh/reserve | [`base_replay.py`](../../src/inference_scaling/algorithms/base_replay.py) | `tests/test_replay.py` |
-| 动态候选和预算分配 | [`dynamic_is.py`](../../src/inference_scaling/algorithms/dynamic_is.py) | `tests/test_dynamic_is.py` |
-| progressive pilot/evaluation | [`progressive_is.py`](../../src/inference_scaling/algorithms/progressive_is.py) | `tests/test_progressive_is.py` |
-| frozen streaming estimator | [`streaming_is.py`](../../src/inference_scaling/algorithms/streaming_is.py) | `tests/test_streaming_is.py` |
-| SMC rollout forest | [`smc_forest.py`](../../src/inference_scaling/algorithms/smc_forest.py) | `tests/test_smc_forest.py` |
-| delayed/prefetch/replay MH | [`mh_acceleration.py`](../../src/inference_scaling/algorithms/mh_acceleration.py) | `tests/test_mh_acceleration.py` |
-| 连续批处理与评分缓存 | [`batching.py`](../../src/inference_scaling/backends/batching.py)、[`cache.py`](../../src/inference_scaling/backends/cache.py) | `tests/test_batching_backend.py`、`tests/test_score_cache.py` |
-| Transformers 后端 | [`transformers_backend.py`](../../src/inference_scaling/backends/transformers_backend.py) | `tests/test_transformers_backend.py` |
-| vLLM 后端与动态 suffix | [`vllm_backend.py`](../../src/inference_scaling/backends/vllm_backend.py)、[`vllm_suffix_proposer.py`](../../src/inference_scaling/vllm_suffix_proposer.py) | `tests/test_vllm_backend.py`、`tests/test_vllm_suffix_proposer.py` |
-| token tree、streaming、run-ahead | [`acceleration.py`](../../src/inference_scaling/acceleration.py) | `tests/test_acceleration.py` |
-| 部分 rollout broker | [`rollout_broker.py`](../../src/inference_scaling/rollout_broker.py) | `tests/test_rollout_broker.py` |
-| token/FLOPs 账本 | [`compute.py`](../../src/inference_scaling/compute.py) | `tests/test_compute_accounting.py` |
+| 幂分布与奖励 MH | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py) | `tests/test_mh.py` |
+| 条件 IS 与 off-policy 修正 | [`conditional_energy.py`](../../src/inference_scaling/arllm/algorithms/conditional_energy.py) | `tests/test_conditional_energy.py` |
+| replay 恒等式与 fresh/reserve | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | `tests/test_replay.py` |
+| 动态候选和预算分配 | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py) | `tests/test_dynamic_is.py` |
+| progressive pilot/evaluation | [`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | `tests/test_progressive_is.py` |
+| frozen streaming estimator | [`streaming_is.py`](../../src/inference_scaling/arllm/algorithms/streaming_is.py) | `tests/test_streaming_is.py` |
+| SMC rollout forest | [`smc_forest.py`](../../src/inference_scaling/arllm/algorithms/smc_forest.py) | `tests/test_smc_forest.py` |
+| delayed/prefetch/replay MH | [`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | `tests/test_mh_acceleration.py` |
+| 连续批处理与评分缓存 | [`batching.py`](../../src/inference_scaling/arllm/backends/batching.py)、[`cache.py`](../../src/inference_scaling/arllm/backends/cache.py) | `tests/test_batching_backend.py`、`tests/test_score_cache.py` |
+| Transformers 后端 | [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py) | `tests/test_transformers_backend.py` |
+| vLLM 后端与动态 suffix | [`vllm_backend.py`](../../src/inference_scaling/arllm/backends/vllm_backend.py)、[`vllm_suffix_proposer.py`](../../src/inference_scaling/arllm/vllm_suffix_proposer.py) | `tests/test_vllm_backend.py`、`tests/test_vllm_suffix_proposer.py` |
+| token tree、streaming、run-ahead | [`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | `tests/test_acceleration.py` |
+| 部分 rollout broker | [`rollout_broker.py`](../../src/inference_scaling/arllm/rollout_broker.py) | `tests/test_rollout_broker.py` |
+| token/FLOPs 账本 | [`compute.py`](../../src/inference_scaling/shared/compute.py) | `tests/test_compute_accounting.py` |
 
 有限状态测试核对转移概率、权重恒等式、样本生命周期和批处理随机流；真实模型实验核对模型概率、token
 轨迹、分模型 FLOPs 和墙钟。
