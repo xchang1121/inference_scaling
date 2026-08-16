@@ -13,22 +13,17 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
+from experiments.shared.methods import AR_METHODS
 from experiments.shared.suite_runner import run_manifested_commands
 
-AR_METHODS = (
-    "base",
-    "beam",
-    "best_of_n",
-    "mh",
-    "conditional_is",
-    "conditional_is_small_proposal",
-    "verifier_mh",
-    "verifier_conditional_is",
-    "verifier_conditional_is_small_proposal",
-    "rl_sample",
-    "rl_greedy",
-)
+
 def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
+    scripts = root / "experiments" / "arllm"
+    adapter_args = (
+        []
+        if args.training_output is None
+        else ["--rl-adapter", str(args.training_output)]
+    )
     commands: list[list[str]] = []
     include_training = args.stage in {"train", "all"}
     include_inference = args.stage in {"inference", "all"}
@@ -36,7 +31,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         commands.append(
             [
                 sys.executable,
-                str(root / "experiments" / "prepare_gsm8k.py"),
+                str(scripts / "prepare_gsm8k.py"),
                 "--config",
                 str(args.config),
             ]
@@ -44,7 +39,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
     if include_training:
         command = [
             sys.executable,
-            str(root / "experiments" / "train_gsm8k_grpo.py"),
+            str(scripts / "train_gsm8k_grpo.py"),
             "--config",
             str(args.training_config),
             "--resume",
@@ -81,11 +76,13 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         methods = args.methods if "quality" in components else ()
         command = [
             sys.executable,
-            str(root / "experiments" / "run_gsm8k_suite.py"),
+            str(scripts / "run_gsm8k_suite.py"),
             "--config",
             str(args.config),
             "--tag",
             args.tag,
+            "--profile",
+            args.profile,
             "--methods",
             ",".join(methods),
             "--summary-root",
@@ -96,6 +93,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             str(args.passk_limit),
             "--passk-draws",
             str(args.passk_draws),
+            *adapter_args,
         ]
         if args.backend is not None:
             command.extend(("--backend", args.backend))
@@ -120,7 +118,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
     if "distribution" in components:
         command = [
             sys.executable,
-            str(root / "experiments" / "gsm8k_distribution_audit.py"),
+            str(scripts / "gsm8k_distribution_audit.py"),
             "--config",
             str(args.config),
             "--problem-count",
@@ -129,6 +127,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             str(args.distribution_draws),
             "--output",
             str(args.summary_root / f"arllm_distribution_{args.tag}.json"),
+            *adapter_args,
         ]
         if args.backend is not None:
             command.extend(("--backend", args.backend))
@@ -138,7 +137,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             (
                 [
                     sys.executable,
-                    str(root / "experiments" / "benchmark_rollout_infra.py"),
+                    str(scripts / "benchmark_rollout_infra.py"),
                     "--config",
                     str(args.config),
                     "--backend",
@@ -154,7 +153,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 ],
                 [
                     sys.executable,
-                    str(root / "experiments" / "benchmark_is_mh_reuse.py"),
+                    str(scripts / "benchmark_is_mh_reuse.py"),
                     "--config",
                     str(args.config),
                     "--backend",
@@ -172,7 +171,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         commands.append(
             [
                 sys.executable,
-                str(root / "experiments" / "run_vllm_backend_benchmark.py"),
+                str(scripts / "run_vllm_backend_benchmark.py"),
                 "--config",
                 str(args.config),
                 "--limit",
@@ -238,7 +237,7 @@ def main() -> None:
         or (("quality",) if args.profile == "smoke" else FULL_COMPONENTS)
     )
     if args.profile == "smoke":
-        if args.training_output is None:
+        if args.training_output is None and args.stage in {"train", "all"}:
             args.training_output = Path(
                 f"models/Qwen2.5-1.5B-Instruct-GRPO-GSM8K-smoke-{args.tag}"
             )

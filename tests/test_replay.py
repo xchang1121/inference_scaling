@@ -3,15 +3,15 @@ from math import exp, log
 import numpy as np
 import pytest
 
-from inference_scaling.algorithms.base_replay import (
+from inference_scaling.arllm.algorithms.base_replay import (
     ProbabilityObservation,
     base_replay_step,
     corrected_replay_log_weight,
     run_base_replay,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import BaseReplayConfig, SamplingConfig
-from inference_scaling.replay import (
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
+from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
     BrokeredReplayState,
@@ -23,8 +23,8 @@ from inference_scaling.replay import (
     sample_replay_records_brokered,
     validate_record_probabilities,
 )
-from inference_scaling.rollout_broker import AsyncRolloutBroker
-from inference_scaling.rng import SeedStream
+from inference_scaling.arllm.rollout_broker import AsyncRolloutBroker
+from inference_scaling.shared.rng import SeedStream
 
 
 class BatchCountingBackend:

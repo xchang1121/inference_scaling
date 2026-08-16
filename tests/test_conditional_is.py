@@ -3,12 +3,12 @@ from math import exp
 
 import pytest
 
-from inference_scaling.algorithms.conditional_is import conditional_is_step, run_conditional_is
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import ConditionalISConfig, SamplingConfig
-from inference_scaling.metrics import total_variation
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import ScoreRequest
+from inference_scaling.arllm.algorithms.conditional_is import conditional_is_step, run_conditional_is
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
+from inference_scaling.shared.metrics import total_variation
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import ScoreRequest
 
 
 def _backend() -> TabularAutoregressiveBackend:

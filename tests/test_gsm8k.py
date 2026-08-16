@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.gsm8k_reproduction import (
+from experiments.arllm.gsm8k_reproduction import (
     _answer_counts,
     _apply_overrides,
     _minmax_rewards,
 )
-from inference_scaling.evaluation import (
+from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     ExactNumericReward,
     GSM8KProblem,
@@ -130,7 +130,7 @@ def test_cli_can_disable_small_proposal_importance_correction() -> None:
 
 
 def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
-    from experiments.gsm8k_async_benchmark import _output_agreement
+    from experiments.arllm.gsm8k_async_benchmark import _output_agreement
 
     class Backend:
         @staticmethod

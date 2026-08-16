@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from inference_scaling.backends import loader
+from inference_scaling.arllm.backends import loader
 
 
 def _config(backend: str = "transformers"):

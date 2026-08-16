@@ -4,7 +4,7 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from experiments.plot_gsm8k_ablations import load_series, render
+from experiments.arllm.plot_gsm8k_ablations import load_series, render
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.summarize_rollout_infra import _load, build_summary
+from experiments.arllm.summarize_rollout_infra import _load, build_summary
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -1,26 +1,9 @@
-"""Inference scaling for autoregressive and diffusion language models."""
+"""Inference scaling for autoregressive and diffusion language models.
 
-from inference_scaling.arllm.config import (
-    BaseReplayConfig,
-    ConditionalISConfig,
-    DynamicISConfig,
-    MHConfig,
-    ProgressiveISConfig,
-    RewardMHConfig,
-    SamplingConfig,
-)
-from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
+Public APIs are grouped under :mod:`inference_scaling.shared`,
+:mod:`inference_scaling.arllm`, and :mod:`inference_scaling.dllm`.
+"""
 
-__all__ = [
-    "BaseReplayConfig",
-    "ConditionalISConfig",
-    "DynamicISConfig",
-    "MHConfig",
-    "ProgressiveISConfig",
-    "RewardMHConfig",
-    "RuntimeConfig",
-    "SMCForestConfig",
-    "SamplingConfig",
-]
+__all__ = ["__version__"]
 
 __version__ = "0.1.0"

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections import Counter
 
-from inference_scaling.algorithms.progressive_is import (
+from inference_scaling.arllm.algorithms.progressive_is import (
     progressive_is_step,
     run_progressive_conditional_is,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import ProgressiveISConfig, SamplingConfig
-from inference_scaling.metrics import total_variation
-from inference_scaling.rng import SeedStream
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
+from inference_scaling.shared.metrics import total_variation
+from inference_scaling.shared.rng import SeedStream
 
 
 class RecordingBackend:

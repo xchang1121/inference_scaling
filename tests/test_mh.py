@@ -2,17 +2,17 @@ from itertools import product
 
 import pytest
 
-from inference_scaling.algorithms.mh import (
+from inference_scaling.arllm.algorithms.mh import (
     run_mh_chain,
     run_mh_chains,
     run_mh_chains_batched,
     run_reward_mh_chains,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import MHConfig, RewardMHConfig, SamplingConfig
-from inference_scaling.metrics import empirical_distribution, total_variation
-from inference_scaling.rng import SeedStream
-from inference_scaling.types import SequenceSample
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
+from inference_scaling.shared.metrics import empirical_distribution, total_variation
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.types import SequenceSample
 
 
 def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):

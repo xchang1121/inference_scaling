@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from itertools import product
 
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.metrics import total_variation
-from inference_scaling.rollout_broker import AsyncRolloutBroker
-from inference_scaling.types import GenerationRequest, SequenceSample
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.shared.metrics import total_variation
+from inference_scaling.arllm.rollout_broker import AsyncRolloutBroker
+from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
 
 class _SegmentBackend:

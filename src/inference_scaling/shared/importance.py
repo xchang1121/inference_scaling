@@ -76,13 +76,14 @@ class MonteCarloRolloutWeightProvider(Generic[PayloadT]):
                 raise ValueError(
                     "importance correction requires target and proposal log-probabilities"
                 )
-            raw_ratio: float | None = (
+            ratio = (
                 observation.target_logprob - observation.proposal_logprob
             )
-            applied_ratio: float | None = raw_ratio
+            raw_ratio: float | None = ratio
+            applied_ratio: float | None = ratio
             if self.log_ratio_clip is not None:
                 applied_ratio = min(
-                    max(raw_ratio, -self.log_ratio_clip), self.log_ratio_clip
+                    max(ratio, -self.log_ratio_clip), self.log_ratio_clip
                 )
         elif self.correction == "identity":
             raw_ratio = 0.0
@@ -117,18 +118,6 @@ class ProbabilityObservation:
     target_logprob: float
     behavior_logprob: float
     reward: float
-
-    @property
-    def base_logprob(self) -> float:
-        """Compatibility name retained for the ARLLM replay API."""
-
-        return self.target_logprob
-
-    @property
-    def mixture_logprob(self) -> float:
-        """Compatibility name retained for the ARLLM replay API."""
-
-        return self.behavior_logprob
 
 
 def logmeanexp(values: Sequence[float]) -> float:

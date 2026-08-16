@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from experiments.summarize_gsm8k_passk import (
+from experiments.arllm.summarize_gsm8k_passk import (
     combine_reports,
     summarize_is_raw_chunks,
 )

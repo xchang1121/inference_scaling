@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.gsm8k_distribution_audit import (
+from experiments.arllm.gsm8k_distribution_audit import (
     _prepare_manifest,
     _split_half_noise_floor,
     _validate_existing_records,

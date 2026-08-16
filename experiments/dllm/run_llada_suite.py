@@ -12,19 +12,22 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import DYNAMIC_METHODS, METHODS
 from experiments.dllm.profiles import apply_execution_profile
 from experiments.shared.components import DLLM_COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
+from experiments.shared.methods import (
+    DLLM_ALIGNED_METHODS,
+    DLLM_DEFAULT_METHODS,
+    DLLM_DYNAMIC_METHODS,
+    DLLM_METHODS,
+)
 from experiments.shared.paired_protocol import MethodPair, load_pairing
 from experiments.shared.suite_runner import run_manifested_commands
 
-DEFAULT_METHODS = tuple(
-    method
-    for method in METHODS
-    if not method.startswith("vrpo_") and method not in DYNAMIC_METHODS
-)
-ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
+METHODS = DLLM_METHODS
+DYNAMIC_METHODS = DLLM_DYNAMIC_METHODS
+DEFAULT_METHODS = DLLM_DEFAULT_METHODS
+ALIGNED_METHODS = DLLM_ALIGNED_METHODS
 IMPLEMENTED_COMPONENTS = DLLM_COMPONENTS
 
 
@@ -538,12 +541,6 @@ def main() -> None:
             "preferences and train the resumable adapter before evaluation"
         ),
     )
-    parser.add_argument(
-        "--with-replay",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="compatibility alias that adds or removes the replay component",
-    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--restart",
@@ -563,10 +560,6 @@ def main() -> None:
         args.components
         or (("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS)
     )
-    if args.with_replay is True and "replay" not in components:
-        components.append("replay")
-    elif args.with_replay is False:
-        components = [component for component in components if component != "replay"]
     unsupported = sorted(set(components) - set(IMPLEMENTED_COMPONENTS))
     if unsupported:
         raise ValueError(

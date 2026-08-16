@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -14,17 +13,6 @@ def _module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _literal_assignment(path: str, name: str):
-    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-        if any(isinstance(target, ast.Name) and target.id == name for target in targets):
-            return ast.literal_eval(node.value)
-    raise AssertionError(f"{name} was not found in {path}")
 
 
 def test_llada_protocol_covers_every_declared_ar_experiment_family():
@@ -46,16 +34,15 @@ def test_main_pairing_marks_exact_and_adapted_relations_explicitly():
 
 def test_frozen_sets_stay_synchronized_with_arllm_experiment_sources():
     module = _module()
+    from experiments.arllm.gsm8k_distribution_audit import DEFAULT_METHODS
+    from experiments.arllm.gsm8k_is_passk import IS_PASSK_METHODS
+    from experiments.arllm.gsm8k_passk import PASSK_METHODS
+    from experiments.arllm.gsm8k_reproduction import METHODS
+    from experiments.arllm.summarize_gsm8k_dynamic_is import (
+        METHODS as DYNAMIC_METHODS,
+    )
 
-    assert module.AR_MAIN_METHODS == set(
-        _literal_assignment("experiments/gsm8k_reproduction.py", "METHODS")
-    )
-    assert module.AR_PASSK_METHODS == set(
-        _literal_assignment("experiments/gsm8k_passk.py", "PASSK_METHODS")
-    ) | set(_literal_assignment("experiments/gsm8k_is_passk.py", "IS_PASSK_METHODS"))
-    assert module.AR_DISTRIBUTION_METHODS == set(
-        _literal_assignment("experiments/gsm8k_distribution_audit.py", "DEFAULT_METHODS")
-    )
-    assert module.AR_DYNAMIC_ARMS == set(
-        _literal_assignment("experiments/summarize_gsm8k_dynamic_is.py", "METHODS")
-    )
+    assert module.AR_MAIN_METHODS == set(METHODS)
+    assert module.AR_PASSK_METHODS == set(PASSK_METHODS) | set(IS_PASSK_METHODS)
+    assert module.AR_DISTRIBUTION_METHODS == set(DEFAULT_METHODS)
+    assert module.AR_DYNAMIC_ARMS == set(DYNAMIC_METHODS)

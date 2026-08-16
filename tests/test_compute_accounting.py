@@ -1,11 +1,11 @@
-from experiments.gsm8k_passk import _estimated_pass_at_k
-from experiments.summarize_gsm8k_compute import _comparison
-from experiments.summarize_gsm8k_batching import _compare_method
-from experiments.summarize_gsm8k_replay import (
+from experiments.arllm.gsm8k_passk import _estimated_pass_at_k
+from experiments.arllm.summarize_gsm8k_compute import _comparison
+from experiments.arllm.summarize_gsm8k_batching import _compare_method
+from experiments.arllm.summarize_gsm8k_replay import (
     _minimum_warm_online_uses,
     _paired_quality,
 )
-from inference_scaling.compute import (
+from inference_scaling.shared.compute import (
     estimate_grpo_compute,
     estimate_grpo_compute_from_logs,
 )

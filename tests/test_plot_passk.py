@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from experiments.plot_gsm8k_passk import KS, STYLES, render
+from experiments.arllm.plot_gsm8k_passk import KS, STYLES, render
 
 
 def _summary(offset: float) -> dict:

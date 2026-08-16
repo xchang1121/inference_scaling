@@ -63,31 +63,10 @@ from inference_scaling.shared.evaluation import (
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
+from experiments.shared.methods import DLLM_DYNAMIC_METHODS, DLLM_METHODS
 
-
-METHODS = (
-    "base",
-    "block_beam",
-    "best_of_n",
-    "trajectory_power_mh",
-    "conditional_is",
-    "conditional_is_reduced_layer_proposal",
-    "conditional_is_reduced_layer_proposal_unclipped",
-    "conditional_is_reduced_layer_proposal_uncorrected",
-    "verifier_mh",
-    "verifier_conditional_is",
-    "verifier_conditional_is_reduced_layer_proposal",
-    "vrpo_sample",
-    "vrpo_greedy",
-    "base_candidate_fixed",
-    "trajectory_replay_aware_fixed",
-    "trajectory_replay_aware_optimal",
-)
-DYNAMIC_METHODS = (
-    "base_candidate_fixed",
-    "trajectory_replay_aware_fixed",
-    "trajectory_replay_aware_optimal",
-)
+METHODS = DLLM_METHODS
+DYNAMIC_METHODS = DLLM_DYNAMIC_METHODS
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
     "experiments/dllm/profiles.py",

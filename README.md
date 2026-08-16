@@ -45,7 +45,9 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
 目标密度差、正反 proposal 比和接受/拒绝核。AR-LLM 与 dLLM 目录只实现 token 后缀、掩码 block 或扩散
-轨迹的生成和概率评分。
+轨迹的生成和概率评分。实验方法及其适用组件集中登记在
+[`experiments/shared/methods.py`](experiments/shared/methods.py)，两侧入口、配对协议和汇总程序不再分别维护
+方法名称清单。
 
 训练对照采用 GRPO 与 [VRPO](https://arxiv.org/abs/2505.19223)。VRPO 以掩码扩散 ELBO 代替序列
 log-likelihood：每个偏好对采样 8 个独立掩码比例、每个比例采样 1 个 mask，并让当前策略与冻结 reference
@@ -165,8 +167,9 @@ python experiments\run_reproduction.py `
 
 大显存机器上的完整训练和推理使用相同入口。dLLM 阶段依次构造公开训练集偏好对、续跑 VRPO LoRA、加载
 adapter，并运行配置中的推理方法；`--stage all` 会先下载或校验固定 revision 的 LLaDA 权重。AR 阶段依次
-准备数据与权重、续跑 GRPO 和运行所选实验族。推理阶段显式选择 `vrpo_sample` 或 `vrpo_greedy` 时会加载
-已有 adapter；adapter 不存在时入口在启动模型前报错。
+准备数据与权重、续跑 GRPO 和运行所选实验族，并把本次训练输出的 adapter 路径显式传给质量、pass@k、
+消融和分布诊断，避免误用配置文件中的旧 adapter。推理阶段显式选择 `vrpo_sample` 或 `vrpo_greedy` 时会
+加载已有 adapter；adapter 不存在时入口在启动模型前报错。
 
 CLI 显式路径会覆盖环境变量：
 
@@ -205,7 +208,8 @@ MH、低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token �
   --profile full --vrpo train --tag full-dllm
 ```
 
-所有入口写入命令清单和已完成子任务数；原有单实验脚本继续可用。完整统计口径见
+所有入口写入命令清单和已完成子任务数。模型族入口位于 `experiments/arllm/` 与 `experiments/dllm/`，仓库根级
+实验目录只保留成对调度入口。完整统计口径见
 [GSM8K 实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
 
 ## 测试与目录

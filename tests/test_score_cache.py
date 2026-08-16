@@ -1,6 +1,6 @@
-from inference_scaling.backends import ScoreCachingBackend, TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import ScoreRequest
+from inference_scaling.arllm.backends import ScoreCachingBackend, TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import ScoreRequest
 
 
 class CountingBackend:

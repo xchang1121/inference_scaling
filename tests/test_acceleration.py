@@ -4,15 +4,15 @@ from collections import Counter
 
 import pytest
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
     LowPriorityRunAheadBackend,
     RolloutTokenTree,
     SpeculationTier,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest
 
 
 def test_rollout_tree_uses_longest_suffix_and_tracks_verification() -> None:

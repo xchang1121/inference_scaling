@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from experiments.gsm8k_passk import (
+from experiments.arllm.gsm8k_passk import (
     _chunk_plan,
     _prepare_manifest,
     _summarize_method,

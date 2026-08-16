@@ -7,36 +7,18 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from experiments.shared.methods import (
+    AR_DISTRIBUTION_METHODS as REGISTERED_AR_DISTRIBUTION_METHODS,
+    AR_IS_PASSK_METHODS as REGISTERED_AR_IS_PASSK_METHODS,
+    AR_METHODS as REGISTERED_AR_METHODS,
+    AR_PASSK_METHODS as REGISTERED_AR_PASSK_METHODS,
+)
 
-AR_MAIN_METHODS = {
-    "base",
-    "beam",
-    "best_of_n",
-    "mh",
-    "conditional_is",
-    "conditional_is_small_proposal",
-    "verifier_mh",
-    "verifier_conditional_is",
-    "verifier_conditional_is_small_proposal",
-    "rl_sample",
-    "rl_greedy",
-}
-AR_PASSK_METHODS = {
-    "base",
-    "mh",
-    "rl_sample",
-    "conditional_is",
-    "conditional_is_small_proposal",
-    "conditional_is_small_proposal_unclipped",
-    "conditional_is_small_proposal_uncorrected",
-}
-AR_DISTRIBUTION_METHODS = {
-    "base",
-    "rl_sample",
-    "verifier_mh",
-    "verifier_conditional_is",
-    "verifier_conditional_is_small_proposal",
-}
+AR_MAIN_METHODS = set(REGISTERED_AR_METHODS)
+AR_PASSK_METHODS = set(
+    (*REGISTERED_AR_PASSK_METHODS, *REGISTERED_AR_IS_PASSK_METHODS)
+)
+AR_DISTRIBUTION_METHODS = set(REGISTERED_AR_DISTRIBUTION_METHODS)
 AR_REPLAY_ARMS = {"fresh_only", "warm_replay"}
 AR_DYNAMIC_ARMS = {
     "base_candidate_fixed",

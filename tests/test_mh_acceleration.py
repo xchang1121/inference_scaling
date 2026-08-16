@@ -3,18 +3,18 @@ from math import exp, prod
 
 import pytest
 
-from inference_scaling.algorithms.mh import run_reward_mh_chain
-from inference_scaling.algorithms.mh_acceleration import (
+from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
+from inference_scaling.arllm.algorithms.mh_acceleration import (
     FrozenReplaySuffixProposal,
     run_reward_mh_chain_delayed,
     run_reward_mh_chain_prefetched,
     run_reward_mh_chain_replay_proposal,
     run_reward_mh_chains_replay_proposal,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import RewardMHConfig, SamplingConfig
-from inference_scaling.metrics import empirical_distribution, total_variation
-from inference_scaling.rng import SeedStream
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.shared.metrics import empirical_distribution, total_variation
+from inference_scaling.shared.rng import SeedStream
 
 
 def _reward_target(probabilities, *, length, temperature, reward):

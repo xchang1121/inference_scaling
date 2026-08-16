@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from inference_scaling.vllm_suffix_proposer import DynamicSuffixDecodingProposer
+from inference_scaling.arllm.vllm_suffix_proposer import DynamicSuffixDecodingProposer
 
 
 class _Delegate:

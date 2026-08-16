@@ -4,14 +4,14 @@ import numpy as np
 import pytest
 import torch
 
-from inference_scaling.acceleration import (
+from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
     RolloutTokenTree,
     SpeculationTier,
 )
-from inference_scaling.backends import TransformersBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.backends import TransformersBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 class TinyTokenizer:

@@ -3,7 +3,7 @@ from math import exp, log
 
 import pytest
 
-from inference_scaling.algorithms.dynamic_is import (
+from inference_scaling.arllm.algorithms.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
     RolloutBudgetContext,
@@ -12,18 +12,18 @@ from inference_scaling.algorithms.dynamic_is import (
     dynamic_is_step,
     empirical_design_statistics,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import DynamicISConfig, SamplingConfig
-from inference_scaling.metrics import total_variation
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import DynamicISConfig, SamplingConfig
+from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.budget import allocate_fresh_rollout_budget
-from inference_scaling.replay import (
+from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,
     ReplayKey,
     ReplayRecord,
 )
-from inference_scaling.rng import SeedStream
+from inference_scaling.shared.rng import SeedStream
 
 
 class CountingBackend:

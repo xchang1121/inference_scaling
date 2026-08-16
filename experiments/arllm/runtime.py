@@ -20,6 +20,18 @@ def source_hashes(entrypoints: Iterable[str | Path]) -> dict[str, str]:
     return implementation_hashes(REPOSITORY_ROOT, entrypoints=entrypoints)
 
 
+def set_rl_adapter_override(config: dict[str, Any], adapter: Path | None) -> None:
+    """Point an AR evaluation config at an adapter produced by the same suite."""
+
+    if adapter is None:
+        return
+    models = config["models"]
+    models["rl"] = str(adapter)
+    models["rl_source"] = "local GRPO adapter from the current reproduction suite"
+    models["rl_revision"] = "suite-output"
+    models["rl_kind"] = "peft_adapter"
+
+
 def validate_model_artifacts(
     config: Mapping[str, Any],
     roles: Iterable[str],
@@ -70,6 +82,7 @@ def validate_model_artifacts(
 
 __all__ = [
     "REPOSITORY_ROOT",
+    "set_rl_adapter_override",
     "source_hashes",
     "validate_model_artifacts",
 ]

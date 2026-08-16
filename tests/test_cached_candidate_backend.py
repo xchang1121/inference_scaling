@@ -1,8 +1,8 @@
 import pytest
 
-from inference_scaling.backends import CachedCandidateBackend, TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.backends import CachedCandidateBackend, TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 def test_cached_candidate_backend_replays_subset_without_resampling() -> None:

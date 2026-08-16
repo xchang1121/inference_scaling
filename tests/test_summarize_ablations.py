@@ -1,6 +1,6 @@
 import pytest
 
-from experiments.summarize_gsm8k_ablations import (
+from experiments.arllm.summarize_gsm8k_ablations import (
     RUNNER_PATH,
     RESULT_COMPATIBLE_RUNNERS,
     _implementation_provenance,

@@ -12,10 +12,10 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.arllm.run_arllm_suite import AR_METHODS
-from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
-from experiments.dllm.run_llada_suite import (
-    DEFAULT_METHODS as DEFAULT_DLLM_METHODS,
+from experiments.shared.methods import (
+    AR_METHODS,
+    DLLM_DEFAULT_METHODS,
+    DLLM_METHODS,
 )
 from experiments.shared.components import COMPONENTS, DLLM_COMPONENTS, FULL_COMPONENTS
 from experiments.shared.suite_runner import run_manifested_commands
@@ -242,7 +242,7 @@ def main() -> None:
     args.ar_methods = tuple(args.ar_methods or AR_METHODS)
     args.dllm_methods = tuple(
         args.dllm_methods
-        or DEFAULT_DLLM_METHODS
+        or DLLM_DEFAULT_METHODS
     )
     args.components_explicit = args.components is not None
     args.components = tuple(

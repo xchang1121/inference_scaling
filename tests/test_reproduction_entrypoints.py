@@ -8,12 +8,13 @@ import sys
 
 import pytest
 
+import experiments.arllm.run_gsm8k_suite as ar_matrix
 from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
 from experiments.run_reproduction import (
     _default_python,
     build_commands as build_paired_commands,
 )
-from experiments.run_gsm8k_suite import SUPPORTED_METHODS
+from experiments.arllm.run_gsm8k_suite import SUPPORTED_METHODS
 
 
 def _ar_args(**overrides):
@@ -63,7 +64,7 @@ def _ar_args(**overrides):
     return argparse.Namespace(**values)
 
 
-def test_ar_full_entry_preserves_training_and_every_legacy_suite_family(tmp_path):
+def test_ar_full_entry_preserves_training_and_every_suite_family(tmp_path):
     commands = build_ar_commands(_ar_args(summary_root=tmp_path), Path.cwd())
     scripts = [Path(command[1]).name for command in commands]
 
@@ -89,6 +90,7 @@ def test_ar_full_entry_preserves_training_and_every_legacy_suite_family(tmp_path
     ):
         assert flag in suite
     assert suite[suite.index("--methods") + 1] == "base,mh,conditional_is,rl_sample"
+    assert suite[suite.index("--profile") + 1] == "full"
 
 
 def test_ar_component_without_quality_does_not_run_main_methods(tmp_path):
@@ -124,6 +126,120 @@ def test_ar_entry_accepts_existing_verifier_methods(tmp_path):
         "verifier_conditional_is",
         "verifier_conditional_is_small_proposal",
     } <= set(SUPPORTED_METHODS)
+
+
+def test_ar_training_output_is_reused_by_quality_passk_and_distribution(tmp_path):
+    adapter = tmp_path / "adapter"
+    commands = build_ar_commands(
+        _ar_args(training_output=adapter, summary_root=tmp_path),
+        Path.cwd(),
+    )
+
+    suite = commands[2]
+    distribution = commands[3]
+    assert suite[suite.index("--rl-adapter") + 1] == str(adapter)
+    assert distribution[distribution.index("--rl-adapter") + 1] == str(adapter)
+
+
+def test_ar_passk_component_runs_general_and_is_variant_grids(
+    monkeypatch, tmp_path
+):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        ar_matrix,
+        "_run",
+        lambda command, _environment: commands.append(command),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gsm8k_suite.py",
+            "--config",
+            "configs/gsm8k_quick.toml",
+            "--methods",
+            "",
+            "--profile",
+            "smoke",
+            "--with-passk",
+            "--passk-limit",
+            "1",
+            "--passk-draws",
+            "2",
+            "--summary-root",
+            str(tmp_path),
+        ],
+    )
+
+    ar_matrix.main()
+
+    assert [Path(command[1]).name for command in commands] == [
+        "gsm8k_passk.py",
+        "gsm8k_is_passk.py",
+    ]
+    is_grid = commands[1]
+    assert is_grid[is_grid.index("--workers") + 1] == "2"
+    assert Path(is_grid[is_grid.index("--output") + 1]).parent == tmp_path
+
+
+def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
+    monkeypatch, tmp_path
+):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        ar_matrix,
+        "_run",
+        lambda command, _environment: commands.append(command),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gsm8k_suite.py",
+            "--config",
+            "configs/gsm8k_quick.toml",
+            "--methods",
+            "",
+            "--profile",
+            "smoke",
+            "--with-ablations",
+            "--with-budget-curve",
+            "--with-length-ablation",
+            "--ablation-limit",
+            "1",
+            "--summary-root",
+            str(tmp_path),
+        ],
+    )
+
+    ar_matrix.main()
+
+    tags = {
+        command[command.index("--tag") + 1]
+        for command in commands
+        if "--tag" in command
+    }
+    assert {
+        "default-alpha-2",
+        "default-steps-1",
+        "default-candidates-3-rollouts-3",
+        "default-candidates-10-rollouts-1",
+        "default-guidance-steps-2",
+        "default-conditional_is-reward-exact",
+        "default-beam-temperature-0.7",
+        "default-budget-beam-4",
+        "default-budget-best-of-n-4",
+        "default-budget-conditional_is-m3-k3",
+        "default-length-32",
+    } <= tags
+    length_commands = [
+        command for command in commands if "default-length-32" in command
+    ]
+    assert len(length_commands) == 6
+    assert all(
+        command[command.index("--max-new-tokens") + 1] == "32"
+        for command in length_commands
+    )
 
 
 def _paired_args(**overrides):

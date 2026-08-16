@@ -5,8 +5,8 @@ from copy import deepcopy
 
 import pytest
 
-from experiments.run_vllm_backend_benchmark import _matches_requested_run
-from experiments.summarize_vllm_backend import build_report
+from experiments.arllm.run_vllm_backend_benchmark import _matches_requested_run
+from experiments.arllm.summarize_vllm_backend import build_report
 
 
 def _method(seconds: float, flops: int, accuracy: float) -> dict:

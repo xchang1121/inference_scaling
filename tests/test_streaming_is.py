@@ -5,11 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from inference_scaling.algorithms.streaming_is import (
+from inference_scaling.arllm.algorithms.streaming_is import (
     FrozenStreamingISEstimator,
     ordinary_importance_log_weight,
 )
-from inference_scaling.rng import SeedStream
+from inference_scaling.shared.rng import SeedStream
 
 
 def _filled(order):

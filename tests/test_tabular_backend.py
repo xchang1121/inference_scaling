@@ -1,8 +1,8 @@
 import numpy as np
 
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 def test_sample_logprob_matches_actual_truncated_policy() -> None:

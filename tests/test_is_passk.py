@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import experiments.gsm8k_is_passk as is_passk
-from experiments.gsm8k_is_passk import (
+import experiments.arllm.gsm8k_is_passk as is_passk
+from experiments.arllm.gsm8k_is_passk import (
     _combine_batching_snapshots,
     _combine_numeric_deltas,
     _execution_method_and_config,
@@ -16,9 +16,9 @@ from experiments.gsm8k_is_passk import (
     _summarize_model_compute,
     _uses_small_proposal,
 )
-from inference_scaling.backends.transformers_backend import TransformersBackendSnapshot
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, SequenceSample
+from inference_scaling.arllm.backends.transformers_backend import TransformersBackendSnapshot
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
 
 class _Tokenizer:

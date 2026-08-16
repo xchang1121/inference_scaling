@@ -1,6 +1,6 @@
 import pytest
 
-from inference_scaling.config import (
+from inference_scaling.arllm.config import (
     BaseReplayConfig,
     ConditionalISConfig,
     DynamicISConfig,

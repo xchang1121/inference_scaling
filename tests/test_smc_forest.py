@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from math import log
 
-from inference_scaling.algorithms.smc_forest import run_smc_rollout_forest
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import SMCForestConfig
-from inference_scaling.metrics import total_variation
-from inference_scaling.rng import SeedStream
+from inference_scaling.arllm.algorithms.smc_forest import run_smc_rollout_forest
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SMCForestConfig
+from inference_scaling.shared.metrics import total_variation
+from inference_scaling.shared.rng import SeedStream
 
 
 def test_smc_terminal_target_converges_to_base_times_reward() -> None:

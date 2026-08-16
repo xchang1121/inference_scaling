@@ -1,6 +1,6 @@
 import pytest
 
-from inference_scaling.rng import SeedStream
+from inference_scaling.shared.rng import SeedStream
 
 
 def test_request_stream_does_not_depend_on_call_order() -> None:

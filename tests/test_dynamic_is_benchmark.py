@@ -1,18 +1,18 @@
 import pytest
 
-from experiments.gsm8k_dynamic_is_benchmark import (
+from experiments.arllm.gsm8k_dynamic_is_benchmark import (
     FixedPerCandidateStatistics,
     MatchedProxyBudget,
     _fixed_history_targets,
 )
-from inference_scaling.algorithms.dynamic_is import (
+from inference_scaling.arllm.algorithms.dynamic_is import (
     DesignStatisticsContext,
     RolloutBudgetContext,
     allocate_variance_cost_budget,
 )
-from inference_scaling.backends import TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.replay import (
+from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,

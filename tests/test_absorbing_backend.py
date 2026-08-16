@@ -1,8 +1,8 @@
 from math import isinf
 
-from inference_scaling.backends import AbsorbingEOSBackend, TabularAutoregressiveBackend
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.backends import AbsorbingEOSBackend, TabularAutoregressiveBackend
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 def test_absorbing_eos_pads_samples_and_scores_forced_tail() -> None:

@@ -7,10 +7,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.backends import AsyncVLLMBackend, VLLMBackend
-from inference_scaling.acceleration import ActiveBatchSpeculationConfig
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.arllm.acceleration import ActiveBatchSpeculationConfig
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 @dataclass

@@ -3,12 +3,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from inference_scaling.backends import (
+from inference_scaling.arllm.backends import (
     ContinuousBatchingBackend,
     TabularAutoregressiveBackend,
 )
-from inference_scaling.config import SamplingConfig
-from inference_scaling.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
 class RecordingBackend:

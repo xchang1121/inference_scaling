@@ -1,4 +1,4 @@
-from experiments.summarize_gsm8k_dynamic_is import METHODS, build_summary
+from experiments.arllm.summarize_gsm8k_dynamic_is import METHODS, build_summary
 
 
 def _method(correct: bool, *, hit: int, history: int, fresh: int, flops: int):
