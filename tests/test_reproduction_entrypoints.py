@@ -234,6 +234,7 @@ def test_public_entrypoints_do_not_require_pythonpath(tmp_path):
     environment.pop("PYTHONPATH", None)
     for script in (
         root / "experiments" / "run_reproduction.py",
+        root / "experiments" / "arllm" / "run_arllm_suite.py",
         root / "experiments" / "dllm" / "run_llada_suite.py",
         root / "experiments" / "dllm" / "gsm8k_reproduction.py",
         root / "experiments" / "dllm" / "gsm8k_replay_benchmark.py",

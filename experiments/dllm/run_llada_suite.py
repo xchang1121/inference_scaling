@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-import json
-import os
 from pathlib import Path
-import subprocess
 import sys
-from typing import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
@@ -18,13 +13,10 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import METHODS
 from experiments.shared.paired_protocol import load_pairing
+from experiments.shared.suite_runner import run_manifested_commands
 
 DEFAULT_METHODS = tuple(method for method in METHODS if not method.startswith("vrpo_"))
 ALIGNED_METHODS = ("vrpo_sample", "vrpo_greedy")
-
-
-def _command_text(command: Sequence[str]) -> str:
-    return subprocess.list2cmdline(list(command))
 
 
 def main() -> None:
@@ -135,52 +127,20 @@ def main() -> None:
     if args.with_replay:
         commands.append([sys.executable, str(replay_runner), *common])
 
-    suite_dir = args.output_root / tag
-    suite_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = suite_dir / "suite_manifest.json"
-    manifest = {
-        "schema_version": 1,
-        "profile": args.profile,
-        "tag": tag,
-        "methods": methods,
-        "with_replay": args.with_replay,
-        "with_aligned": include_aligned,
-        "vrpo": args.vrpo,
-        "commands": [_command_text(command) for command in commands],
-        "started_at_utc": datetime.now(timezone.utc).isoformat(),
-        "completed_commands": 0,
-        "status": "dry_run" if args.dry_run else "running",
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    for command in commands:
-        print(_command_text(command), flush=True)
-    if args.dry_run:
-        return
-
-    environment = os.environ.copy()
-    python_paths = (str(root / "src"), str(root))
-    environment["PYTHONPATH"] = os.pathsep.join(
-        (*python_paths, environment.get("PYTHONPATH", ""))
-    ).rstrip(os.pathsep)
-    try:
-        for index, command in enumerate(commands, start=1):
-            subprocess.run(command, cwd=root, env=environment, check=True)
-            manifest["completed_commands"] = index
-            manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-    except BaseException:
-        manifest["status"] = "failed"
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        raise
-    manifest["status"] = "complete"
-    manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    run_manifested_commands(
+        commands=commands,
+        root=root,
+        manifest_path=args.output_root / tag / "suite_manifest.json",
+        metadata={
+            "family": "dllm",
+            "profile": args.profile,
+            "tag": tag,
+            "methods": methods,
+            "with_replay": args.with_replay,
+            "with_aligned": include_aligned,
+            "vrpo": args.vrpo,
+        },
+        dry_run=args.dry_run,
     )
 
 

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-import json
-import os
 from pathlib import Path
-import subprocess
 import sys
-from typing import Sequence
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.suite_runner import run_manifested_commands
 
 AR_METHODS = (
     "base",
@@ -24,27 +27,6 @@ AR_METHODS = (
     "rl_sample",
     "rl_greedy",
 )
-COMPONENTS = (
-    "quality",
-    "matched_target",
-    "replay",
-    "dynamic_is",
-    "async",
-    "passk",
-    "ablations",
-    "budget_curve",
-    "length_ablation",
-    "distribution",
-    "infra",
-    "vllm",
-)
-FULL_COMPONENTS = tuple(component for component in COMPONENTS if component != "vllm")
-
-
-def _command_text(command: Sequence[str]) -> str:
-    return subprocess.list2cmdline(list(command))
-
-
 def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
     commands: list[list[str]] = []
     include_training = args.stage in {"train", "all"}
@@ -270,45 +252,22 @@ def main() -> None:
         args.vllm_limit = args.vllm_limit or 32
         args.vllm_workers = args.vllm_workers or 8
 
-    root = Path(__file__).resolve().parents[2]
+    root = REPOSITORY_ROOT
     commands = build_commands(args, root)
-    manifest_dir = args.summary_root / args.tag
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_dir / "arllm_suite_manifest.json"
-    manifest = {
-        "schema_version": 1,
-        "family": "arllm",
-        "stage": args.stage,
-        "profile": args.profile,
-        "tag": args.tag,
-        "methods": args.methods,
-        "components": args.components,
-        "commands": [_command_text(command) for command in commands],
-        "started_at_utc": datetime.now(timezone.utc).isoformat(),
-        "completed_commands": 0,
-        "status": "dry_run" if args.dry_run else "running",
-    }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    for command in commands:
-        print(_command_text(command), flush=True)
-    if args.dry_run:
-        return
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        (str(root / "src"), str(root), environment.get("PYTHONPATH", ""))
-    ).rstrip(os.pathsep)
-    try:
-        for index, command in enumerate(commands, start=1):
-            subprocess.run(command, cwd=root, env=environment, check=True)
-            manifest["completed_commands"] = index
-            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    except BaseException:
-        manifest["status"] = "failed"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        raise
-    manifest["status"] = "complete"
-    manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    run_manifested_commands(
+        commands=commands,
+        root=root,
+        manifest_path=args.summary_root / args.tag / "arllm_suite_manifest.json",
+        metadata={
+            "family": "arllm",
+            "stage": args.stage,
+            "profile": args.profile,
+            "tag": args.tag,
+            "methods": args.methods,
+            "components": args.components,
+        },
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":

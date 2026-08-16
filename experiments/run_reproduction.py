@@ -3,25 +3,19 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-import json
 import os
 from pathlib import Path
-import subprocess
 import sys
-from typing import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.arllm.run_arllm_suite import AR_METHODS, COMPONENTS
+from experiments.arllm.run_arllm_suite import AR_METHODS
 from experiments.dllm.gsm8k_reproduction import METHODS as DLLM_METHODS
-
-
-def _command_text(command: Sequence[str]) -> str:
-    return subprocess.list2cmdline(list(command))
+from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.suite_runner import run_manifested_commands
 
 
 def _default_python(environment_variable: str) -> str:
@@ -206,53 +200,30 @@ def main() -> None:
     )
     args.components = tuple(
         args.components
-        or (("quality", "replay") if args.profile == "smoke" else COMPONENTS[:-1])
+        or (("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS)
     )
     root = REPOSITORY_ROOT
     commands = build_commands(args, root)
-    manifest_dir = args.output_root / args.tag
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_dir / "reproduction_manifest.json"
-    manifest = {
-        "schema_version": 1,
-        "family": args.family,
-        "stage": args.stage,
-        "profile": args.profile,
-        "tag": args.tag,
-        "ar_methods": args.ar_methods,
-        "dllm_methods": args.dllm_methods,
-        "components": args.components,
-        "python_executables": {
-            "controller": sys.executable,
-            "arllm": args.ar_python,
-            "dllm": args.dllm_python,
+    run_manifested_commands(
+        commands=commands,
+        root=root,
+        manifest_path=args.output_root / args.tag / "reproduction_manifest.json",
+        metadata={
+            "family": args.family,
+            "stage": args.stage,
+            "profile": args.profile,
+            "tag": args.tag,
+            "ar_methods": args.ar_methods,
+            "dllm_methods": args.dllm_methods,
+            "components": args.components,
+            "python_executables": {
+                "controller": sys.executable,
+                "arllm": args.ar_python,
+                "dllm": args.dllm_python,
+            },
         },
-        "commands": [_command_text(command) for command in commands],
-        "started_at_utc": datetime.now(timezone.utc).isoformat(),
-        "completed_commands": 0,
-        "status": "dry_run" if args.dry_run else "running",
-    }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    for command in commands:
-        print(_command_text(command), flush=True)
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        (str(root / "src"), str(root), environment.get("PYTHONPATH", ""))
-    ).rstrip(os.pathsep)
-    if args.dry_run:
-        return
-    try:
-        for index, command in enumerate(commands, start=1):
-            subprocess.run(command, cwd=root, env=environment, check=True)
-            manifest["completed_commands"] = index
-            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    except BaseException:
-        manifest["status"] = "failed"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        raise
-    manifest["status"] = "complete"
-    manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":
