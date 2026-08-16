@@ -6,8 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-import numpy as np
-
 from inference_scaling.arllm.algorithms.conditional_energy import (
     RewardFunction,
     _logmeanexp,
@@ -18,6 +16,7 @@ from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.importance import (
     ProbabilityObservation,
+    TruncatedReplayRolloutWeightProvider,
     corrected_replay_log_energy,
 )
 from inference_scaling.arllm.replay import (
@@ -33,6 +32,7 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.stepwise import normalize_log_energies
 from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, SequenceSample, TokenSequence
 
 
@@ -247,18 +247,19 @@ def estimate_replay_energy(
         ProbabilityObservation(log_p, log_b, record.reward)
         for record, log_p, log_b in zip(fresh_records, fresh_base, fresh_mixture, strict=True)
     )
-    log_energy, history_terms, fresh_terms = corrected_replay_log_energy(
-        history_observations,
-        fresh_observations,
+    shared_estimate = TruncatedReplayRolloutWeightProvider(
         truncation=truncation,
         reward_temperature=reward_temperature,
+    ).estimate(
+        history_observations,
+        fresh_observations,
     )
     for record in fresh_records:
         store.add_design(record)
     return ReplayEnergyEstimate(
-        log_energy=log_energy,
-        history_log_terms=history_terms,
-        fresh_log_terms=fresh_terms,
+        log_energy=shared_estimate.log_energy,
+        history_log_terms=shared_estimate.history_log_terms,
+        fresh_log_terms=shared_estimate.fresh_log_terms,
         history_record_ids=tuple(record.record_id for record in history_records),
         behavior_counts=claim.behavior_counts,
     )
@@ -371,11 +372,9 @@ def base_replay_step(
             BaseReplayCandidate(candidate.token_ids, candidate.token_logprobs, estimate)
         )
 
-    log_energies = np.asarray(
-        [candidate.estimate.log_energy for candidate in candidates], dtype=np.float64
+    probabilities = normalize_log_energies(
+        [candidate.estimate.log_energy for candidate in candidates]
     )
-    weights = np.exp(log_energies - float(np.max(log_energies)))
-    probabilities = weights / weights.sum()
     selected_index = int(
         seeds.generator("base_replay", step_index, "select").choice(
             len(candidates), p=probabilities

@@ -17,11 +17,13 @@ from inference_scaling.dllm.types import (
 )
 from inference_scaling.shared.importance import (
     ProbabilityObservation,
+    TruncatedReplayRolloutWeightProvider,
     corrected_replay_log_energy,
     logmeanexp,
 )
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.stepwise import normalize_log_energies
 from inference_scaling.shared.types import TokenSequence
 
 DiffusionReplayRewardBatch = Callable[
@@ -30,15 +32,7 @@ DiffusionReplayRewardBatch = Callable[
 
 
 def _normalized(log_weights: Sequence[float]) -> tuple[float, ...]:
-    if not log_weights:
-        raise ValueError("at least one replay candidate is required")
-    values = np.asarray(log_weights, dtype=np.float64)
-    maximum = float(np.max(values))
-    weights = np.exp(values - maximum)
-    total = float(weights.sum())
-    if not isfinite(total) or total <= 0:
-        raise ValueError("replay candidate weights cannot be normalized")
-    return tuple(float(value) for value in weights / total)
+    return normalize_log_energies(log_weights)
 
 
 def _validate_exact_pair(
@@ -345,12 +339,16 @@ def select_diffusion_candidates_with_replay(
         candidates, histories, grouped_fresh, strict=True
     ):
         if history.records:
-            log_energy, history_terms, fresh_terms = corrected_replay_log_energy(
-                [record.observation for record in history.records],
-                [record.observation for record in fresh_records],
+            shared_estimate = TruncatedReplayRolloutWeightProvider(
                 truncation=truncation,
                 reward_temperature=reward_temperature,
+            ).estimate(
+                [record.observation for record in history.records],
+                [record.observation for record in fresh_records],
             )
+            log_energy = shared_estimate.log_energy
+            history_terms = shared_estimate.history_log_terms
+            fresh_terms = shared_estimate.fresh_log_terms
         else:
             fresh_terms = tuple(
                 record.reward / reward_temperature for record in fresh_records

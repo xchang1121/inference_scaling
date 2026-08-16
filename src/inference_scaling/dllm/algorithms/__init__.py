@@ -7,6 +7,7 @@ from inference_scaling.dllm.algorithms.is_sampling import (
     DiffusionRolloutEvaluation,
     DiffusionSIRItem,
     DiffusionSIRResult,
+    DiffusionStepwiseAdapter,
     resample_diffusion_candidates,
     run_conditional_diffusion_is,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "DiffusionRolloutEvaluation",
     "DiffusionSIRItem",
     "DiffusionSIRResult",
+    "DiffusionStepwiseAdapter",
     "resample_diffusion_candidates",
     "run_conditional_diffusion_is",
     "run_diffusion_block_beam",

@@ -145,6 +145,60 @@ def test_conditional_is_rejects_decision_block_that_splits_native_block():
         )
 
 
+def test_uncorrected_off_policy_dllm_rollouts_skip_target_scoring():
+    class NoScoreBackend:
+        def __init__(self, backend):
+            self.backend = backend
+            self.model_id = backend.model_id
+
+        def sample_batch(self, requests):
+            return self.backend.sample_batch(requests)
+
+        def score_trajectories(self, requests):
+            raise AssertionError("uncorrected dLLM rollouts must not be rescored")
+
+    base = NoScoreBackend(_backend((0.0, 0.5, 1.0, -2.0), "base"))
+    proposal = _backend((1.0, 0.0, 0.5, -2.0), "proposal")
+    candidate_sampling = DiffusionSamplingConfig(
+        block_length=2,
+        steps_per_block=1,
+        temperature=0.0,
+        remasking="low_confidence",
+    )
+    proposal_sampling = DiffusionSamplingConfig(
+        block_length=2,
+        steps_per_block=2,
+        temperature=1.0,
+        remasking="random",
+    )
+
+    result = run_conditional_diffusion_is(
+        base_backend=base,
+        prompt=(0,),
+        config=DiffusionISConfig(
+            candidate_count=2,
+            rollout_count=2,
+            block_size=2,
+            total_length=4,
+        ),
+        base_sampling=candidate_sampling,
+        rollout_backend=proposal,
+        rollout_sampling=proposal_sampling,
+        apply_importance_correction=False,
+        reward=lambda _prompt, continuation: float(sum(continuation)),
+        seed=8,
+    )
+
+    first_rollouts = [
+        rollout
+        for candidate in result.steps[0].candidates
+        for rollout in candidate.rollouts
+    ]
+    assert all(item.raw_log_importance_ratio is None for item in first_rollouts)
+    assert all(item.applied_log_importance_ratio is None for item in first_rollouts)
+    assert all(item.log_weight == pytest.approx(item.reward) for item in first_rollouts)
+
+
 def _empty_sample(value: int, request_id: str) -> DiffusionSample:
     return DiffusionSample(
         prefix=(),
