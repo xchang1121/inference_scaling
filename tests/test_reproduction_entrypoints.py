@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
-from experiments.run_reproduction import build_commands as build_paired_commands
+from experiments.run_reproduction import (
+    _default_python,
+    build_commands as build_paired_commands,
+)
 from experiments.run_gsm8k_suite import SUPPORTED_METHODS
 
 
@@ -192,3 +196,14 @@ def test_dllm_prepare_stage_downloads_or_validates_model():
     assert Path(commands[0][1]).name == "download_llada.py"
     assert "--config" in commands[0]
     assert "--validate-only" not in commands[0]
+
+
+def test_interpreter_default_supports_environment_and_current_python(monkeypatch):
+    monkeypatch.delenv("AR_PYTHON", raising=False)
+    assert _default_python("AR_PYTHON") == sys.executable
+
+    monkeypatch.setenv("AR_PYTHON", "custom-ar-python")
+    assert _default_python("AR_PYTHON") == "custom-ar-python"
+
+    monkeypatch.setenv("AR_PYTHON", "")
+    assert _default_python("AR_PYTHON") == sys.executable

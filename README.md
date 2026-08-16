@@ -74,27 +74,53 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 
 ## 安装
 
-AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本，需要两个独立的 Python 解释器。以下路径由使用者
-按机器配置指定：
+AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本。单独运行一侧时可直接使用当前 Python；完整成对
+运行时使用两个解释器。
+
+### 当前 Python
+
+AR-LLM 依赖：
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+python -m pip install -e ".[dev,gpu,training]"
+```
+
+LLaDA-MoE 与 VRPO 依赖应安装到另一个 Python，或在只运行 dLLM 时安装到当前 Python：
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+python -m pip install -e ".[dev,dllm,dllm-training]"
+python experiments\dllm\download_llada.py `
+  --config configs\gsm8k_llada_moe_3090.toml --source modelscope
+```
+
+### 已有的 `.venv`
+
+仓库根目录已有 `.venv` 时可直接作为控制器、dLLM 解释器或测试解释器，无需激活：
+
+```powershell
+.\.venv\Scripts\python -m pip install -e ".[dev,dllm,dllm-training]"
+.\.venv\Scripts\python experiments\dllm\run_llada_suite.py --profile smoke
+.\.venv\Scripts\python -m pytest
+```
+
+### 两个显式解释器
+
+解释器可以来自系统安装、已有 `.venv`、Conda 或其他 Python 安装。变量值既可为绝对路径，也可为 `PATH`
+中的可执行文件名：
 
 ```powershell
 $env:AR_PYTHON = "C:\path\to\ar-python.exe"
-$env:DLLM_PYTHON = "C:\path\to\dllm-python.exe"
+$env:DLLM_PYTHON = ".\.venv\Scripts\python.exe"
 
-& $env:AR_PYTHON -m pip install --upgrade pip
-& $env:AR_PYTHON -m pip install torch --index-url https://download.pytorch.org/whl/cu130
 & $env:AR_PYTHON -m pip install -e ".[dev,gpu,training]"
-```
-
-LLaDA-MoE 推理和 VRPO 依赖安装到第二个解释器：
-
-```powershell
-& $env:DLLM_PYTHON -m pip install --upgrade pip
-& $env:DLLM_PYTHON -m pip install torch --index-url https://download.pytorch.org/whl/cu130
 & $env:DLLM_PYTHON -m pip install -e ".[dev,dllm,dllm-training]"
-& $env:DLLM_PYTHON experiments\dllm\download_llada.py `
-  --config configs\gsm8k_llada_moe_3090.toml --source modelscope
 ```
+
+### Linux / WSL2 vLLM
 
 vLLM `0.25.x` 使用 Linux GPU wheel。Windows 主机在 WSL2 的 Linux 文件系统中使用兼容的 Python：
 
@@ -109,11 +135,19 @@ python3.12 -m pip install -e ".[dev,vllm]"
 指向上述解释器。`smoke` 使用 1 题、缩短预算、AR 一次 GRPO 更新和 dLLM 的 CPU VRPO 反向传播预检；
 每个真实 LLaDA 推理子进程结束后释放模型显存。
 
+解释器选择顺序为：CLI 的 `--ar-python` / `--dllm-python`、环境变量 `AR_PYTHON` / `DLLM_PYTHON`、
+启动统一入口的当前 Python。单侧运行可省略两个解释器参数：
+
+```powershell
+python experiments\run_reproduction.py `
+  --family dllm --stage inference --profile smoke --tag local-dllm
+```
+
+环境变量方式无需在命令中重复路径：
+
 ```powershell
 python experiments\run_reproduction.py `
   --family both --stage all --profile smoke --tag local-check `
-  --ar-python $env:AR_PYTHON `
-  --dllm-python $env:DLLM_PYTHON `
   --ar-methods base mh conditional_is rl_sample `
   --dllm-methods base trajectory_power_mh conditional_is_reduced_layer_proposal `
   --components quality replay
@@ -121,6 +155,8 @@ python experiments\run_reproduction.py `
 
 大显存机器上的完整训练和推理使用相同入口。dLLM 阶段依次构造公开训练集偏好对、续跑 VRPO LoRA、加载
 adapter，并运行配置中的推理方法；AR 阶段依次准备数据与权重、续跑 GRPO 和运行所选实验族。
+
+CLI 显式路径会覆盖环境变量：
 
 ```powershell
 python experiments\run_reproduction.py `
@@ -138,6 +174,7 @@ python experiments\run_reproduction.py `
 | `--profile smoke\|full` | 低成本实现检查或正式配置 |
 | `--ar-methods ...`、`--dllm-methods ...` | 选择具体推理方法 |
 | `--components ...` | 选择质量、matched target、replay、动态 IS、异步、pass@k、消融、infra 等实验族 |
+| `--ar-python ...`、`--dllm-python ...` | 覆盖环境变量与当前解释器 |
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印下一层命令，不启动训练或推理 |
 
@@ -163,7 +200,10 @@ infra 和 vLLM。dLLM 入口覆盖对应的 base、block beam、Best-of-$`N`$、
 
 ```powershell
 $env:PYTHONPATH = "src"
-& $env:DLLM_PYTHON -m pytest
+python -m pytest
+
+# 或使用仓库中已有的解释器
+.\.venv\Scripts\python -m pytest
 ```
 
 | 路径 | 内容 |

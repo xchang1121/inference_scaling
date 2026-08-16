@@ -19,6 +19,12 @@ def _command_text(command: Sequence[str]) -> str:
     return subprocess.list2cmdline(list(command))
 
 
+def _default_python(environment_variable: str) -> str:
+    """Select a family interpreter from the environment or current process."""
+
+    return os.environ.get(environment_variable) or sys.executable
+
+
 def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
     commands: list[list[str]] = []
     if args.family in {"arllm", "both"}:
@@ -151,8 +157,16 @@ def main() -> None:
     parser.add_argument("--dllm-methods", nargs="+", choices=DLLM_METHODS)
     parser.add_argument("--components", nargs="+", choices=COMPONENTS)
     parser.add_argument("--backend", choices=("transformers", "vllm", "vllm-sync"))
-    parser.add_argument("--ar-python", default=sys.executable)
-    parser.add_argument("--dllm-python", default=sys.executable)
+    parser.add_argument(
+        "--ar-python",
+        default=_default_python("AR_PYTHON"),
+        help="AR executable name/path; defaults to AR_PYTHON, then current Python",
+    )
+    parser.add_argument(
+        "--dllm-python",
+        default=_default_python("DLLM_PYTHON"),
+        help="dLLM executable name/path; defaults to DLLM_PYTHON, then current Python",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--ar-training-output", type=Path)
@@ -189,6 +203,11 @@ def main() -> None:
         "ar_methods": args.ar_methods,
         "dllm_methods": args.dllm_methods,
         "components": args.components,
+        "python_executables": {
+            "controller": sys.executable,
+            "arllm": args.ar_python,
+            "dllm": args.dllm_python,
+        },
         "commands": [_command_text(command) for command in commands],
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "completed_commands": 0,
