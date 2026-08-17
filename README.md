@@ -150,7 +150,9 @@ $env:DLLM_PYTHON = ".\.venv\Scripts\python.exe"
 
 ### Linux / WSL2 vLLM
 
-vLLM `0.25.x` 使用 Linux GPU wheel。Windows 主机在 WSL2 的 Linux 文件系统中使用兼容的 Python：
+vLLM `0.25.x`--`0.26.x` 使用 Linux GPU wheel，并按官方 wheel 要求安装
+PyTorch `2.11.0`。建议使用独立环境，避免改变已有训练环境中的 PyTorch。Windows 主机在 WSL2 的
+Linux 文件系统中使用兼容的 Python：
 
 ```bash
 python3.12 -m pip install --upgrade pip

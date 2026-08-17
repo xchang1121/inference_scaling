@@ -65,6 +65,15 @@ _PROTECTED_ENGINE_KWARGS = frozenset(
 )
 
 
+def _load_vllm_sampling_api() -> tuple[Any, Any, Any]:
+    """Load public sampling types from their vLLM 0.25--0.26 locations."""
+
+    from vllm import SamplingParams, TokensPrompt
+    from vllm.sampling_params import BeamSearchParams
+
+    return SamplingParams, TokensPrompt, BeamSearchParams
+
+
 @dataclass(frozen=True, slots=True)
 class VLLMBackendSnapshot:
     sample_calls: int
@@ -322,7 +331,11 @@ class VLLMBackend:
     ) -> "VLLMBackend":
         try:
             from transformers import AutoTokenizer
-            from vllm import BeamSearchParams, LLM, SamplingParams, TokensPrompt
+            from vllm import LLM
+
+            SamplingParams, TokensPrompt, BeamSearchParams = (
+                _load_vllm_sampling_api()
+            )
         except ImportError as error:  # pragma: no cover - optional GPU installation
             raise ModuleNotFoundError(
                 "VLLMBackend.from_pretrained requires the project's vllm extra"
@@ -1076,9 +1089,12 @@ class AsyncVLLMBackend(VLLMBackend):
     ) -> "AsyncVLLMBackend":
         try:
             from transformers import AutoTokenizer
-            from vllm import BeamSearchParams, SamplingParams, TokensPrompt
             from vllm.engine.arg_utils import AsyncEngineArgs
             from vllm.v1.engine.async_llm import AsyncLLM
+
+            SamplingParams, TokensPrompt, BeamSearchParams = (
+                _load_vllm_sampling_api()
+            )
         except ImportError as error:  # pragma: no cover - optional GPU installation
             raise ModuleNotFoundError(
                 "AsyncVLLMBackend.from_pretrained requires the project's vllm extra"

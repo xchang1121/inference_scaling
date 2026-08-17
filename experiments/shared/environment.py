@@ -29,7 +29,10 @@ _REQUIREMENTS = {
         "safetensors>=0.4.3,<1",
     ),
     "dllm-training": ("peft==0.20.0",),
-    "vllm": ("vllm>=0.25,<0.26",),
+    "vllm": (
+        "torch==2.11.0",
+        "vllm>=0.25,<0.27",
+    ),
 }
 
 

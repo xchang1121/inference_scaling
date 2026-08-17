@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
 from inference_scaling.arllm.acceleration import ActiveBatchSpeculationConfig
+from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.arllm.backends.vllm_backend import _load_vllm_sampling_api
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
@@ -39,6 +42,20 @@ class _SamplingParams:
 
 class _BeamParams(_SamplingParams):
     pass
+
+
+def test_vllm_sampling_api_uses_025_and_026_public_import_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vllm = types.ModuleType("vllm")
+    sampling_params = types.ModuleType("vllm.sampling_params")
+    setattr(vllm, "SamplingParams", _SamplingParams)
+    setattr(vllm, "TokensPrompt", dict)
+    setattr(sampling_params, "BeamSearchParams", _BeamParams)
+    monkeypatch.setitem(sys.modules, "vllm", vllm)
+    monkeypatch.setitem(sys.modules, "vllm.sampling_params", sampling_params)
+
+    assert _load_vllm_sampling_api() == (_SamplingParams, dict, _BeamParams)
 
 
 @dataclass

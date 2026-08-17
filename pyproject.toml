@@ -33,8 +33,9 @@ dllm = [
 ]
 vllm = [
   "safetensors>=0.8,<1",
+  "torch==2.11.0",
   "transformers>=5.14,<6",
-  "vllm>=0.25,<0.26",
+  "vllm>=0.25,<0.27",
 ]
 training = [
   "datasets==5.0.1",

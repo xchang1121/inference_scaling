@@ -1,11 +1,11 @@
 """vLLM custom proposer that makes the native suffix cache accept dynamic K.
 
-vLLM 0.25's ``SuffixDecodingProposer`` owns the desired global response cache
-and per-prompt suffix trees, but asserts that every runtime draft length equals
-the fixed startup value.  Dynamic speculative scheduling deliberately passes a
-different K as the active batch changes.  This adapter keeps the upstream
-implementation and temporarily exposes the scheduler-selected K for one
-serialized ``propose`` call.
+vLLM 0.25--0.26's ``SuffixDecodingProposer`` owns the desired global response
+cache and per-prompt suffix trees, but asserts that every runtime draft length
+equals the fixed startup value.  Dynamic speculative scheduling deliberately
+passes a different K as the active batch changes.  This adapter keeps the
+upstream implementation and temporarily exposes the scheduler-selected K for
+one serialized ``propose`` call.
 
 The module does not import vLLM at import time, so the core package remains
 usable when the optional vLLM dependency is absent.
