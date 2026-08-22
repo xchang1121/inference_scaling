@@ -36,7 +36,7 @@
       "category": "algorithm",
       "status": "screening",
       "active_execution": false,
-      "comparison": "uniform suffix start at matched MH update count and generated-token budget",
+      "comparison": "uniform suffix length at matched questions, draws, alpha, block size and MH update count",
       "decision_basis": "implementation and finite-state invariance tests passed; Qwen 1.5B screen will compare acceptance, changed-token distance, accuracy, wall time and FLOPs"
     },
     {

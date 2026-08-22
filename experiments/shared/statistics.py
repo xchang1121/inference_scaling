@@ -6,7 +6,7 @@ import math
 import random
 import statistics
 from collections import Counter
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from inference_scaling.shared.metrics import normalize_counts, total_variation
 
@@ -73,6 +73,58 @@ def bootstrap_mean_interval(
         for _ in range(replicates)
     ]
     return [quantile(estimates, 0.025), quantile(estimates, 0.975)]
+
+
+def clustered_paired_binary_difference(
+    left_records: Sequence[Mapping[str, Any]],
+    right_records: Sequence[Mapping[str, Any]],
+    *,
+    cluster_key: str,
+    outcome_key: str,
+    seed: int,
+    replicates: int = 10_000,
+) -> dict[str, Any]:
+    """Compare paired binary outcomes while retaining repeated draws per cluster."""
+
+    if not left_records or not right_records or replicates <= 0:
+        raise ValueError("paired records and replicate count must be positive")
+
+    def grouped(
+        records: Sequence[Mapping[str, Any]],
+    ) -> dict[int, list[float]]:
+        result: dict[int, list[float]] = {}
+        for record in records:
+            result.setdefault(int(record[cluster_key]), []).append(
+                float(bool(record[outcome_key]))
+            )
+        return result
+
+    left = grouped(left_records)
+    right = grouped(right_records)
+    if left.keys() != right.keys():
+        raise ValueError("paired methods must contain the same clusters")
+    indices = sorted(left)
+    differences: list[float] = []
+    for index in indices:
+        if len(left[index]) != len(right[index]):
+            raise ValueError("paired methods must contain the same draws per cluster")
+        differences.append(
+            statistics.fmean(left[index]) - statistics.fmean(right[index])
+        )
+    rng = random.Random(seed)
+    bootstrap = [
+        statistics.fmean(
+            differences[rng.randrange(len(differences))] for _ in differences
+        )
+        for _ in range(replicates)
+    ]
+    return {
+        "difference": statistics.fmean(differences),
+        "clustered_bootstrap_95": [
+            quantile(bootstrap, 0.025),
+            quantile(bootstrap, 0.975),
+        ],
+    }
 
 
 def probability_distribution(counts: Mapping[str, int]) -> dict[str, float]:
@@ -155,6 +207,7 @@ def bootstrap_answer_distance(
 __all__ = [
     "bootstrap_answer_distance",
     "bootstrap_mean_interval",
+    "clustered_paired_binary_difference",
     "estimated_pass_at_k",
     "jensen_shannon_bits",
     "probability_distribution",

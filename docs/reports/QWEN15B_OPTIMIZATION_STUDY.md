@@ -97,6 +97,15 @@ $`1/\ell`$ 权重；`multiscale` 以 10% 均匀概率保证全支持，再把 90
 普通、批处理、delayed-acceptance、proposal 预取和冻结 replay-mixture 路径共用这一配置。有限状态测试已
 验证归一化与全支持、批处理逐步一致性，以及三种分布都收敛到相同的可枚举目标。
 
+可续跑筛选入口对两个 draw 使用正序与逆序执行，固定题目、$`\alpha`$、block size 和每个 block 的 MH
+更新数，只改变后缀长度分布：
+
+```powershell
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_suffix_screen `
+  --config configs\gsm8k_quick.toml --draws 2 `
+  --tag qwen15b-mh-suffix-screen
+```
+
 该消融依据 MH 转移核的混合闭包；通用接受率与不变性由
 [Tierney (1994)](https://projecteuclid.org/journals/annals-of-statistics/volume-22/issue-4/Markov-Chains-for-Exploring-Posterior-Distributions/10.1214/aos/1176325750.full)
 给出。代码仍对每个实际后缀使用完整正反 proposal 概率，不使用未经校正的截断。
