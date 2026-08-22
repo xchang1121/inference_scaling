@@ -485,6 +485,7 @@ def _run_method(
                 total_length=maximum,
                 block_size=int(mh["block_size"]),
                 steps_per_block=int(mh["steps_per_block"]),
+                suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
             SamplingConfig(temperature=1.0 / float(mh["alpha"])),
             SeedStream(seed),
@@ -493,9 +494,13 @@ def _run_method(
             "alpha": float(mh["alpha"]),
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
+            "suffix_schedule": str(mh.get("suffix_schedule", "uniform")),
             "attempts": result.attempts,
             "accepted": result.accepted,
             "acceptance_rate": result.acceptance_rate,
+            "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
+            "mean_proposed_token_changes": result.mean_proposed_token_changes,
+            "mean_accepted_token_changes": result.mean_accepted_token_changes,
         }
     if method == "verifier_mh":
         mh = config["mh"]
@@ -518,6 +523,7 @@ def _run_method(
                 block_size=int(mh["block_size"]),
                 steps_per_block=int(mh["steps_per_block"]),
                 reward_temperature=reward_temperature,
+                suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
             SamplingConfig(),
             exact_reward,
@@ -528,10 +534,14 @@ def _run_method(
             "reward_temperature": reward_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
+            "suffix_schedule": str(mh.get("suffix_schedule", "uniform")),
             "updates": result.attempts,
             "accepted": result.accepted,
             "acceptance_rate": result.acceptance_rate,
             "final_reward": result.reward,
+            "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
+            "mean_proposed_token_changes": result.mean_proposed_token_changes,
+            "mean_accepted_token_changes": result.mean_accepted_token_changes,
         }
     conditional_methods = {
         "conditional_is",
@@ -876,6 +886,8 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["mh"]["alpha"] = args.mh_alpha
     if args.mh_steps is not None:
         config["mh"]["steps_per_block"] = args.mh_steps
+    if getattr(args, "mh_suffix_schedule", None) is not None:
+        config["mh"]["suffix_schedule"] = args.mh_suffix_schedule
     if args.candidate_count is not None:
         config["conditional_is"]["candidate_count"] = args.candidate_count
     if args.rollout_count is not None:
@@ -953,6 +965,10 @@ def main() -> None:
     )
     parser.add_argument("--mh-alpha", type=float)
     parser.add_argument("--mh-steps", type=int)
+    parser.add_argument(
+        "--mh-suffix-schedule",
+        choices=("uniform", "inverse_length", "multiscale"),
+    )
     parser.add_argument("--candidate-count", type=int)
     parser.add_argument("--rollout-count", type=int)
     parser.add_argument("--iterated-pool-size", type=int)

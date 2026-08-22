@@ -157,9 +157,9 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励或 self-co
 <a id="alg-power-mh"></a>
 ## 4. 幂分布后缀 MH
 
-固定生成长度为 $`L`$。当前状态为 $`y=(y_1,\ldots,y_L)`$，每次更新从所有后缀起点
-$`s\in\{0,\ldots,L-1\}`$ 中均匀抽取一个，保留 $`y_{\lt s}`$，再从 proposal
-$`q_s(\cdot\mid x,y_{\lt s})`$ 生成新后缀 $`v`$。接受概率为
+固定生成长度为 $`L`$。当前状态为 $`y=(y_1,\ldots,y_L)`$。一次更新先按固定分布
+$`\rho(\ell)`$ 选择后缀长度 $`\ell\in\{1,\ldots,L\}`$，令 $`s=L-\ell`$，保留
+$`y_{\lt s}`$，再从 proposal $`q_s(\cdot\mid x,y_{\lt s})`$ 生成新后缀 $`v`$。接受概率为
 
 ```math
 A(y\to y')=
@@ -173,8 +173,24 @@ A(y\to y')=
 
 <p align="right">式 (4)</p>
 
-候选前缀相同，切点选择概率正反相同，因此式 (4) 为完整 Hastings 比。温度 proposal 的逐前缀归一化
-常数进入 $`q_s`$ 的正反概率。
+对固定 $`\ell`$，候选前缀相同，正向和反向转移都含同一因子 $`\rho(\ell)`$，该因子在 Hastings
+比中抵消，因此式 (4) 是该后缀长度对应的完整接受率。记其转移核为 $`K_\ell`$，则
+
+```math
+K_\rho=\sum_{\ell=1}^{L}\rho(\ell)K_\ell,
+\qquad
+\pi_\alpha K_\rho
+=\sum_{\ell=1}^{L}\rho(\ell)\pi_\alpha K_\ell
+=\pi_\alpha.
+```
+
+所以任何与当前序列无关的固定 $`\rho`$ 都保持同一目标分布。实现要求每个 $`\rho(\ell)>0`$，从而既能
+执行局部更新，也保留整段重生成。温度 proposal 的逐前缀归一化常数进入 $`q_s`$ 的正反概率。
+
+实现提供三种分布：`uniform` 对所有长度等概率；`inverse_length` 取
+$`\rho(\ell)\propto 1/\ell`$；`multiscale` 将 10% 概率均匀分给全部长度，其余 90% 均匀分给
+$`1,2,4,\ldots,L`$ 中的不同长度。后两者减少平均 proposal token 数；`multiscale` 同时提高二进制尺度和
+完整后缀的采样频率。命令行通过 `--mh-suffix-schedule` 选择，默认值仍为 `uniform`。
 
 实现按 `block_size` 逐步扩展到 $`L`$，并在每个长度执行 `steps_per_block` 次后缀更新。最终长度上的有限更新
 结果仍含 MCMC 误差。由于切点 $`s=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、
@@ -194,7 +210,8 @@ A(y\to y')=
 
 <p align="right">式 (5)</p>
 
-真实模型实验报告更新轮次、接受率和输出诊断；收缩常数需要显式转移矩阵 $`K`$。
+真实模型实验报告更新轮次、接受率、平均 proposal 长度、proposal 改变的 token 数和接受后实际改变的
+token 数；收缩常数需要显式转移矩阵 $`K`$。
 
 代码中的接受率由模型无关的共享核计算；AR 适配层只提供式 (4) 的四个概率项：
 
@@ -231,7 +248,8 @@ A_r(y\to y')=\min\left\{1,
 
 当 $`q_s=p(\cdot\mid x,y_{\lt s})`$ 时，基础模型与 proposal 项抵消，只剩
 $`\min\{1,e^{(r(y')-r(y))/\tau}\}`$。代码仍保留展开后的四项，因而同样支持任意可精确评分、具有完整
-support 的温度 proposal。与式 (5) 相同，整段重生成使有限状态链在通常条件下几何收敛到 $`\pi_r`$。
+support 的温度 proposal。与式 (5) 相同，只要 $`\rho(L)>0`$，整段重生成使有限状态链在通常条件下几何
+收敛到 $`\pi_r`$。
 
 dLLM 的整段奖励 MH 从基础模型独立生成完整 proposal。基础轨迹概率在目标与 proposal 中抵消，因此共享核
 只接收 $`r(y)/\tau`$ 与 $`r(y')/\tau`$，无需额外计算轨迹 likelihood；初始样本和后续 proposal 可在一次

@@ -27,6 +27,7 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: SamplingConfig(temperature=0),
         lambda: SamplingConfig(top_p=1.1),
         lambda: MHConfig(total_length=4, block_size=8),
+        lambda: MHConfig(suffix_schedule="unknown"),
         lambda: BaseReplayConfig(fresh_rollouts=0),
         lambda: DynamicISConfig(auxiliary_mixture=1.0),
         lambda: SamplingConfig(temperature=float("nan")),

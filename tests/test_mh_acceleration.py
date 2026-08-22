@@ -27,13 +27,17 @@ def _reward_target(probabilities, *, length, temperature, reward):
     return {sequence: weight / normalizer for sequence, weight in weights.items()}
 
 
-def test_one_step_prefetch_preserves_the_ordinary_mh_path_exactly() -> None:
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
+def test_one_step_prefetch_preserves_the_ordinary_mh_path_exactly(
+    schedule: str,
+) -> None:
     probabilities = (0.6, 0.3, 0.1)
     config = RewardMHConfig(
         total_length=5,
         block_size=2,
         steps_per_block=4,
         reward_temperature=0.7,
+        suffix_schedule=schedule,
     )
     sampling = SamplingConfig(temperature=0.8)
 

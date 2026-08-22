@@ -34,10 +34,10 @@
     {
       "id": "mh_suffix_length_mixture",
       "category": "algorithm",
-      "status": "planned",
+      "status": "screening",
       "active_execution": false,
       "comparison": "uniform suffix start at matched MH update count and generated-token budget",
-      "decision_basis": "target invariance, acceptance, changed-token distance, accuracy, wall time and FLOPs"
+      "decision_basis": "implementation and finite-state invariance tests passed; Qwen 1.5B screen will compare acceptance, changed-token distance, accuracy, wall time and FLOPs"
     },
     {
       "id": "is_scrambled_rqmc_rollouts",

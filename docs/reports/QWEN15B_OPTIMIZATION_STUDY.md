@@ -83,6 +83,20 @@ draw 的总和，因实际 EOS 与补全长度不同而存在小幅差异。
 的正概率则维持全局移动能力。本轮比较均匀起点、按后缀长度倒数加权和二进制多尺度长度，报告接受率、每次
 接受改变的 token 数、墙钟、FLOPs 及有限轮次质量。
 
+若 $`K_\ell`$ 表示固定重生成最后 $`\ell`$ 个 token 的 Hastings 核，$`\rho(\ell)`$ 与当前序列无关，
+则实际核为
+
+```math
+K_\rho=\sum_{\ell=1}^{L}\rho(\ell)K_\ell,
+\qquad
+\pi K_\rho=\sum_{\ell=1}^{L}\rho(\ell)\pi K_\ell=\pi.
+```
+
+实现中的三种 $`\rho`$ 均对每个长度赋予正概率。`uniform` 保留既有随机流；`inverse_length` 采用
+$`1/\ell`$ 权重；`multiscale` 以 10% 均匀概率保证全支持，再把 90% 概率分配到二进制尺度和完整后缀。
+普通、批处理、delayed-acceptance、proposal 预取和冻结 replay-mixture 路径共用这一配置。有限状态测试已
+验证归一化与全支持、批处理逐步一致性，以及三种分布都收敛到相同的可枚举目标。
+
 该消融依据 MH 转移核的混合闭包；通用接受率与不变性由
 [Tierney (1994)](https://projecteuclid.org/journals/annals-of-statistics/volume-22/issue-4/Markov-Chains-for-Exploring-Posterior-Distributions/10.1214/aos/1176325750.full)
 给出。代码仍对每个实际后缀使用完整正反 proposal 概率，不使用未经校正的截断。

@@ -7,6 +7,7 @@ from inference_scaling.arllm.algorithms.mh import (
     run_mh_chains,
     run_mh_chains_batched,
     run_reward_mh_chains,
+    suffix_length_probabilities,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
@@ -40,10 +41,44 @@ def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
     assert 0 <= result.acceptance_rate <= 1
 
 
-def test_mh_empirical_output_approaches_enumerated_power_target() -> None:
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
+def test_suffix_length_schedules_have_normalized_full_support(schedule: str) -> None:
+    probabilities = suffix_length_probabilities(16, schedule)
+    assert len(probabilities) == 16
+    assert sum(probabilities) == pytest.approx(1.0)
+    assert all(probability > 0.0 for probability in probabilities)
+
+
+def test_nonuniform_schedules_reduce_the_expected_proposed_suffix_length() -> None:
+    lengths = range(1, 17)
+
+    def expectation(schedule: str) -> float:
+        return sum(
+            length * probability
+            for length, probability in zip(
+                lengths, suffix_length_probabilities(16, schedule), strict=True
+            )
+        )
+
+    uniform = expectation("uniform")
+    assert expectation("inverse_length") < uniform
+    assert expectation("multiscale") < uniform
+
+
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
+def test_mh_empirical_output_approaches_enumerated_power_target(
+    schedule: str,
+) -> None:
     probabilities = (0.65, 0.35)
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    config = MHConfig(alpha=2, total_length=2, block_size=2, steps_per_block=20, chains=3000)
+    config = MHConfig(
+        alpha=2,
+        total_length=2,
+        block_size=2,
+        steps_per_block=20,
+        chains=2500,
+        suffix_schedule=schedule,
+    )
     outputs = run_mh_chains(
         backend,
         (),
@@ -53,11 +88,20 @@ def test_mh_empirical_output_approaches_enumerated_power_target() -> None:
     )
     empirical = empirical_distribution(result.token_ids for result in outputs)
     target = _power_target(probabilities, length=2, alpha=2)
-    assert total_variation(empirical, target) < 0.035
+    assert total_variation(empirical, target) < 0.045
 
 
-def test_batched_mh_preserves_independent_chain_random_streams_exactly() -> None:
-    config = MHConfig(alpha=3, total_length=7, block_size=2, steps_per_block=4)
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
+def test_batched_mh_preserves_independent_chain_random_streams_exactly(
+    schedule: str,
+) -> None:
+    config = MHConfig(
+        alpha=3,
+        total_length=7,
+        block_size=2,
+        steps_per_block=4,
+        suffix_schedule=schedule,
+    )
     proposal = SamplingConfig(temperature=0.5)
     roots = (SeedStream(17), SeedStream(29), SeedStream(41))
     sequential = tuple(

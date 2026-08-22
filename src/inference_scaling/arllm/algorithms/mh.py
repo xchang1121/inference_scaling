@@ -14,6 +14,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from math import isfinite
 
+import numpy as np
+
 from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
 from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
@@ -33,6 +35,10 @@ class MHStep:
     proposed_suffix_length: int
     log_acceptance: float
     accepted: bool
+    suffix_schedule: str
+    suffix_probability: float
+    proposed_token_changes: int
+    accepted_token_changes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +62,30 @@ class MHChainResult:
     def acceptance_rate(self) -> float:
         return self.accepted / self.attempts if self.attempts else 0.0
 
+    @property
+    def mean_proposed_suffix_length(self) -> float:
+        return (
+            sum(step.proposed_suffix_length for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
+    @property
+    def mean_proposed_token_changes(self) -> float:
+        return (
+            sum(step.proposed_token_changes for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
+    @property
+    def mean_accepted_token_changes(self) -> float:
+        return (
+            sum(step.accepted_token_changes for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RewardMHStep:
@@ -66,6 +96,10 @@ class RewardMHStep:
     proposed_reward: float
     log_acceptance: float
     accepted: bool
+    suffix_schedule: str
+    suffix_probability: float
+    proposed_token_changes: int
+    accepted_token_changes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +124,89 @@ class RewardMHChainResult:
     def acceptance_rate(self) -> float:
         return self.accepted / self.attempts if self.attempts else 0.0
 
+    @property
+    def mean_proposed_suffix_length(self) -> float:
+        return (
+            sum(step.proposed_suffix_length for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
+    @property
+    def mean_proposed_token_changes(self) -> float:
+        return (
+            sum(step.proposed_token_changes for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
+    @property
+    def mean_accepted_token_changes(self) -> float:
+        return (
+            sum(step.accepted_token_changes for step in self.trace) / self.attempts
+            if self.attempts
+            else 0.0
+        )
+
 
 def _stage_lengths(total_length: int, block_size: int) -> tuple[int, ...]:
     stages = list(range(block_size, total_length + 1, block_size))
     if not stages or stages[-1] != total_length:
         stages.append(total_length)
     return tuple(stages)
+
+
+def suffix_length_probabilities(
+    stage_length: int,
+    schedule: str,
+) -> tuple[float, ...]:
+    """Return full-support probabilities for suffix lengths 1 through ``L``."""
+
+    if stage_length <= 0:
+        raise ValueError("stage_length must be positive")
+    if schedule == "uniform":
+        values = np.ones(stage_length, dtype=np.float64)
+    elif schedule == "inverse_length":
+        values = 1.0 / np.arange(1, stage_length + 1, dtype=np.float64)
+    elif schedule == "multiscale":
+        # Ten percent uniform mass keeps every suffix length reachable.  The
+        # remaining mass is uniform over unique powers of two and the full
+        # length, which supplies both local and global proposals.
+        values = np.full(stage_length, 0.1 / stage_length, dtype=np.float64)
+        favored = {1, stage_length}
+        length = 1
+        while length < stage_length:
+            favored.add(length)
+            length *= 2
+        bonus = 0.9 / len(favored)
+        for suffix_length in favored:
+            values[suffix_length - 1] += bonus
+    else:
+        raise ValueError(f"unknown suffix schedule {schedule!r}")
+    values /= values.sum()
+    return tuple(float(value) for value in values)
+
+
+def _draw_suffix(
+    *,
+    stage_length: int,
+    schedule: str,
+    rng: np.random.Generator,
+) -> tuple[int, int, float]:
+    probabilities = suffix_length_probabilities(stage_length, schedule)
+    if schedule == "uniform":
+        # Preserve the established baseline's random stream exactly.
+        cut = int(rng.integers(0, stage_length))
+        suffix_length = stage_length - cut
+    else:
+        suffix_length = int(
+            rng.choice(
+                np.arange(1, stage_length + 1, dtype=np.int64),
+                p=probabilities,
+            )
+        )
+        cut = stage_length - suffix_length
+    return cut, suffix_length, probabilities[suffix_length - 1]
 
 
 def _validate_proposal(sampling: SamplingConfig) -> None:
@@ -274,9 +385,12 @@ def run_mh_chain(
 
         for step_index in range(config.steps_per_block):
             cut_rng = seeds.generator("mh", chain_id, stage_index, step_index, "cut")
-            cut = int(cut_rng.integers(0, stage_length))
+            cut, suffix_length, suffix_probability = _draw_suffix(
+                stage_length=stage_length,
+                schedule=config.suffix_schedule,
+                rng=cut_rng,
+            )
             shared_prefix = prompt + tuple(tokens[:cut])
-            suffix_length = stage_length - cut
             proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
                 backend,
                 prefix=shared_prefix,
@@ -305,6 +419,12 @@ def run_mh_chain(
             )
             log_acceptance = decision.log_acceptance
             accepted = decision.accepted
+            proposed_token_changes = sum(
+                old != new
+                for old, new in zip(
+                    tokens[cut:stage_length], proposed_tokens, strict=True
+                )
+            )
             if accepted:
                 tokens[cut:stage_length] = proposed_tokens
                 base_logs[cut:stage_length] = proposed_p
@@ -317,6 +437,10 @@ def run_mh_chain(
                     proposed_suffix_length=suffix_length,
                     log_acceptance=log_acceptance,
                     accepted=accepted,
+                    suffix_schedule=config.suffix_schedule,
+                    suffix_probability=suffix_probability,
+                    proposed_token_changes=proposed_token_changes,
+                    accepted_token_changes=(proposed_token_changes if accepted else 0),
                 )
             )
 
@@ -405,14 +529,17 @@ def run_mh_chains_batched(
                 proposal_logs[chain_index].extend(extension_qs[chain_index])
 
         for step_index in range(config.steps_per_block):
-            cuts = tuple(
-                int(
-                    stream.generator(
+            suffix_draws = tuple(
+                _draw_suffix(
+                    stage_length=stage_length,
+                    schedule=config.suffix_schedule,
+                    rng=stream.generator(
                         "mh", chain_id, stage_index, step_index, "cut"
-                    ).integers(0, stage_length)
+                    ),
                 )
                 for stream, chain_id in zip(seed_streams, ids, strict=True)
             )
+            cuts = tuple(draw[0] for draw in suffix_draws)
             prefixes = tuple(
                 prompt + tuple(chain_tokens[:cut])
                 for chain_tokens, cut in zip(tokens, cuts, strict=True)
@@ -455,6 +582,14 @@ def run_mh_chains_batched(
                 )
                 log_acceptance = decision.log_acceptance
                 accepted = decision.accepted
+                proposed_token_changes = sum(
+                    old != new
+                    for old, new in zip(
+                        tokens[chain_index][cut:stage_length],
+                        proposed_tokens[chain_index],
+                        strict=True,
+                    )
+                )
                 if accepted:
                     tokens[chain_index][cut:stage_length] = proposed_tokens[chain_index]
                     base_logs[chain_index][cut:stage_length] = proposed_ps[chain_index]
@@ -467,6 +602,12 @@ def run_mh_chains_batched(
                         proposed_suffix_length=suffix_lengths[chain_index],
                         log_acceptance=log_acceptance,
                         accepted=accepted,
+                        suffix_schedule=config.suffix_schedule,
+                        suffix_probability=suffix_draws[chain_index][2],
+                        proposed_token_changes=proposed_token_changes,
+                        accepted_token_changes=(
+                            proposed_token_changes if accepted else 0
+                        ),
                     )
                 )
 
@@ -526,13 +667,12 @@ def run_reward_mh_chain(
     trace: list[RewardMHStep] = []
 
     for step_index in range(config.updates):
-        cut = int(
-            seeds.generator("reward_mh", chain_id, step_index, "cut").integers(
-                0, config.total_length
-            )
+        cut, suffix_length, suffix_probability = _draw_suffix(
+            stage_length=config.total_length,
+            schedule=config.suffix_schedule,
+            rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
         )
         shared_prefix = prompt + tuple(mutable_tokens[:cut])
-        suffix_length = config.total_length - cut
         proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
             backend,
             prefix=shared_prefix,
@@ -573,6 +713,10 @@ def run_reward_mh_chain(
         )
         log_acceptance = decision.log_acceptance
         accepted = decision.accepted
+        proposed_token_changes = sum(
+            old != new
+            for old, new in zip(mutable_tokens[cut:], proposed_tokens, strict=True)
+        )
         previous_reward = current_reward
         if accepted:
             mutable_tokens[cut:] = proposed_tokens
@@ -588,6 +732,10 @@ def run_reward_mh_chain(
                 proposed_reward=proposed_reward,
                 log_acceptance=log_acceptance,
                 accepted=accepted,
+                suffix_schedule=config.suffix_schedule,
+                suffix_probability=suffix_probability,
+                proposed_token_changes=proposed_token_changes,
+                accepted_token_changes=(proposed_token_changes if accepted else 0),
             )
         )
 

@@ -70,6 +70,7 @@ samples = 8
 alpha = 4.0
 block_size = 12
 steps_per_block = 3
+suffix_schedule = "uniform"
 
 [conditional_is]
 candidate_count = 8

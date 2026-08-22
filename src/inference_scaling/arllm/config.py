@@ -47,6 +47,7 @@ class MHConfig:
     block_size: int = 32
     steps_per_block: int = 10
     chains: int = 1
+    suffix_schedule: str = "uniform"
 
     def __post_init__(self) -> None:
         require_finite("alpha", self.alpha)
@@ -56,6 +57,8 @@ class MHConfig:
             require_positive(name, getattr(self, name))
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
+        if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
+            raise ValueError("unknown MH suffix_schedule")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,7 @@ class RewardMHConfig:
     block_size: int = 32
     steps_per_block: int = 10
     reward_temperature: float = 0.1
+    suffix_schedule: str = "uniform"
 
     def __post_init__(self) -> None:
         for name in ("total_length", "block_size", "steps_per_block"):
@@ -73,6 +77,8 @@ class RewardMHConfig:
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
+        if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
+            raise ValueError("unknown MH suffix_schedule")
 
     @property
     def updates(self) -> int:

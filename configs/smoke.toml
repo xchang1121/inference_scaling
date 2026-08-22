@@ -13,6 +13,7 @@ alpha = 4.0
 total_length = 32
 block_size = 8
 steps_per_block = 4
+suffix_schedule = "uniform"
 chains = 4
 
 [conditional_is]

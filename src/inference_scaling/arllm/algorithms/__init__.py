@@ -50,6 +50,7 @@ from inference_scaling.arllm.algorithms.mh import (
     run_mh_chains_batched,
     run_reward_mh_chain,
     run_reward_mh_chains,
+    suffix_length_probabilities,
 )
 from inference_scaling.arllm.algorithms.iterated_is import (
     IteratedConditionalISResult,
@@ -169,6 +170,7 @@ __all__ = [
     "run_reward_mh_chain_prefetched",
     "run_reward_mh_chain_replay_proposal",
     "run_reward_mh_chains",
+    "suffix_length_probabilities",
     "run_reward_mh_chains_replay_proposal",
     "run_smc_rollout_forest",
     "write_reserve_records",

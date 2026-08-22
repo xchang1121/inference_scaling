@@ -19,6 +19,7 @@ import numpy as np
 from inference_scaling.arllm.algorithms.mh import (
     RewardMHChainResult,
     RewardMHStep,
+    _draw_suffix,
     _is_base_proposal,
     _sample_exact_length,
     _sample_exact_lengths,
@@ -48,6 +49,10 @@ class DelayedRewardMHStep:
     stage_two_log_acceptance: float | None
     exact_reward_evaluated: bool
     accepted: bool
+    suffix_schedule: str
+    suffix_probability: float
+    proposed_token_changes: int
+    accepted_token_changes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +112,10 @@ class ReplayProposalMHStep:
     log_acceptance: float
     accepted: bool
     proposal_source: str
+    suffix_schedule: str
+    suffix_probability: float
+    proposed_token_changes: int
+    accepted_token_changes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +173,8 @@ class _StandardProposal:
     token_ids: TokenSequence
     base_token_logprobs: tuple[float, ...]
     proposal_token_logprobs: tuple[float, ...]
+    suffix_schedule: str
+    suffix_probability: float
 
     @property
     def sequence(self) -> TokenSequence:
@@ -224,13 +235,12 @@ def _sample_standard_proposals(
 ) -> tuple[_StandardProposal, ...]:
     if not states:
         return ()
-    cut = int(
-        seeds.generator("reward_mh", chain_id, step_index, "cut").integers(
-            0, config.total_length
-        )
+    cut, suffix_length, suffix_probability = _draw_suffix(
+        stage_length=config.total_length,
+        schedule=config.suffix_schedule,
+        rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
     )
     prefixes = tuple(prompt + state.token_ids[:cut] for state in states)
-    suffix_length = config.total_length - cut
     tokens, proposal_logs, base_logs = _sample_exact_lengths(
         backend,
         prefixes=prefixes,
@@ -243,7 +253,15 @@ def _sample_standard_proposals(
         request_ids=(f"reward-mh:{chain_id}:step:{step_index}",) * len(states),
     )
     return tuple(
-        _StandardProposal(state, cut, sampled, base, proposed)
+        _StandardProposal(
+            state,
+            cut,
+            sampled,
+            base,
+            proposed,
+            config.suffix_schedule,
+            suffix_probability,
+        )
         for state, sampled, base, proposed in zip(
             states, tokens, base_logs, proposal_logs, strict=True
         )
@@ -378,6 +396,12 @@ def run_reward_mh_chain_delayed(
             accepted = stage_two_decision.accepted
         previous_reward = state.reward
         previous_surrogate = current_surrogate
+        proposed_token_changes = sum(
+            old != new
+            for old, new in zip(
+                state.token_ids[cut:], proposed.token_ids, strict=True
+            )
+        )
         if accepted:
             assert proposed_reward is not None
             state = _StandardState(
@@ -402,6 +426,10 @@ def run_reward_mh_chain_delayed(
                 stage_two_log_acceptance=stage_two_log_acceptance,
                 exact_reward_evaluated=stage_one_accepted,
                 accepted=accepted,
+                suffix_schedule=proposed.suffix_schedule,
+                suffix_probability=proposed.suffix_probability,
+                proposed_token_changes=proposed_token_changes,
+                accepted_token_changes=(proposed_token_changes if accepted else 0),
             )
         )
 
@@ -489,6 +517,14 @@ def run_reward_mh_chain_prefetched(
             reward_evaluations += 1
             assert state.reward is not None
             previous_reward = state.reward
+            proposed_token_changes = sum(
+                old != new
+                for old, new in zip(
+                    state.token_ids[current_proposal.cut :],
+                    current_proposal.token_ids,
+                    strict=True,
+                )
+            )
             uniform = float(
                 seeds.generator("reward_mh", chain_id, step_index, "accept").random()
             )
@@ -509,6 +545,12 @@ def run_reward_mh_chain_prefetched(
                     proposed_reward=proposed_reward,
                     log_acceptance=log_acceptance,
                     accepted=accepted,
+                    suffix_schedule=current_proposal.suffix_schedule,
+                    suffix_probability=current_proposal.suffix_probability,
+                    proposed_token_changes=proposed_token_changes,
+                    accepted_token_changes=(
+                        proposed_token_changes if accepted else 0
+                    ),
                 )
             )
             if next_proposals:
@@ -710,10 +752,10 @@ def run_reward_mh_chain_replay_proposal(
     trace: list[ReplayProposalMHStep] = []
 
     for step_index in range(config.updates):
-        cut = int(
-            seeds.generator("reward_mh", chain_id, step_index, "cut").integers(
-                0, config.total_length
-            )
+        cut, suffix_length, suffix_probability = _draw_suffix(
+            stage_length=config.total_length,
+            schedule=config.suffix_schedule,
+            rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
         )
         retained = tokens[:cut]
         prefix = prompt + retained
@@ -745,6 +787,10 @@ def run_reward_mh_chain_replay_proposal(
         log_acceptance = decision.log_acceptance
         accepted = decision.accepted
         previous_reward = current_reward
+        proposed_token_changes = sum(
+            old != new
+            for old, new in zip(old_suffix, draw.token_ids, strict=True)
+        )
         if accepted:
             tokens = proposed_sequence
             base_logs = base_logs[:cut] + draw.base_token_logprobs
@@ -753,7 +799,7 @@ def run_reward_mh_chain_replay_proposal(
             ReplayProposalMHStep(
                 step=step_index,
                 cut=cut,
-                proposed_suffix_length=config.total_length - cut,
+                proposed_suffix_length=suffix_length,
                 current_reward=previous_reward,
                 proposed_reward=proposed_reward,
                 old_proposal_logprob=old_q,
@@ -761,6 +807,10 @@ def run_reward_mh_chain_replay_proposal(
                 log_acceptance=log_acceptance,
                 accepted=accepted,
                 proposal_source=draw.source,
+                suffix_schedule=config.suffix_schedule,
+                suffix_probability=suffix_probability,
+                proposed_token_changes=proposed_token_changes,
+                accepted_token_changes=(proposed_token_changes if accepted else 0),
             )
         )
 
