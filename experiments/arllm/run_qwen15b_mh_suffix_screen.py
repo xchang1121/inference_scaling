@@ -26,7 +26,15 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
     )
     commands: list[list[str]] = []
     for draw in range(args.draws):
-        arms = MH_SUFFIX_ARMS if draw % 2 == 0 else tuple(reversed(MH_SUFFIX_ARMS))
+        if getattr(args, "phase", "screen") == "confirmation":
+            offset = draw % len(MH_SUFFIX_ARMS)
+            arms = MH_SUFFIX_ARMS[offset:] + MH_SUFFIX_ARMS[:offset]
+        else:
+            arms = (
+                MH_SUFFIX_ARMS
+                if draw % 2 == 0
+                else tuple(reversed(MH_SUFFIX_ARMS))
+            )
         for arm, schedule in arms:
             commands.append(
                 [
@@ -60,6 +68,10 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
             args.tag,
             "--draws",
             str(args.draws),
+            "--questions",
+            str(args.limit),
+            "--phase",
+            getattr(args, "phase", "screen"),
             "--output",
             str(args.output),
         ]
@@ -75,15 +87,18 @@ def main() -> None:
         default=Path("configs/gsm8k_quick.toml"),
     )
     parser.add_argument("--tag", default="qwen15b-mh-suffix-screen")
+    parser.add_argument(
+        "--phase",
+        choices=("screen", "confirmation"),
+        default="screen",
+    )
     parser.add_argument("--draws", type=int, default=2)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--raw-root", type=Path, default=Path("results/gsm8k"))
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(
-            "results/arllm/qwen15b_optimization/mh_suffix_screen.json"
-        ),
+        default=None,
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--restart", action="store_true")
@@ -92,12 +107,21 @@ def main() -> None:
         config = tomllib.load(source)
     configured = int(config["run"]["sample_count"])
     args.limit = configured if args.limit is None else args.limit
-    if args.limit != configured:
-        raise ValueError(
-            "the tracked screen summary requires the configured question count"
-        )
     if args.draws <= 0:
         raise ValueError("draws must be positive")
+    if args.phase == "screen" and (args.limit != 8 or args.draws != 2):
+        raise ValueError("the registered screen requires 8 questions and 2 draws")
+    if args.phase == "confirmation" and (args.limit != 32 or args.draws != 4):
+        raise ValueError(
+            "the registered confirmation requires 32 questions and 4 draws"
+        )
+    if args.output is None:
+        filename = (
+            "mh_suffix_screen.json"
+            if args.phase == "screen"
+            else "mh_suffix_confirmation.json"
+        )
+        args.output = Path("results/arllm/qwen15b_optimization") / filename
     commands = build_commands(args)
     manifest = args.output.with_name(f"{args.tag}_manifest.json")
     run_manifested_commands(
@@ -105,13 +129,18 @@ def main() -> None:
         root=REPOSITORY_ROOT,
         manifest_path=manifest,
         metadata={
-            "study": "qwen15b_mh_suffix_schedule_screen",
+            "study": "qwen15b_mh_suffix_schedule",
+            "phase": args.phase,
             "model": "Qwen2.5-1.5B-Instruct",
             "dllm_experiments": False,
             "tag": args.tag,
             "draws": args.draws,
             "questions": args.limit,
-            "execution_order": "forward arms on even draws; reverse arms on odd draws",
+            "execution_order": (
+                "cyclic Latin order across draws"
+                if args.phase == "confirmation"
+                else "forward arms on even draws; reverse arms on odd draws"
+            ),
         },
         dry_run=args.dry_run,
         restart=args.restart,

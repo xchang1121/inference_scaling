@@ -56,14 +56,20 @@ def summarize_mh_suffix_screen(
     raw_root: Path,
     tag: str,
     draws: int,
+    phase: str = "screen",
+    questions: int | None = None,
     bootstrap_replicates: int = 10_000,
 ) -> dict[str, Any]:
     if draws <= 0 or bootstrap_replicates <= 0:
         raise ValueError("draws and bootstrap_replicates must be positive")
+    if phase not in {"screen", "confirmation"}:
+        raise ValueError("unknown MH suffix study phase")
     with config_path.open("rb") as source:
         config = tomllib.load(source)
     profile = str(config["run"]["name"])
-    expected = int(config["run"]["sample_count"])
+    expected = int(config["run"]["sample_count"]) if questions is None else questions
+    if expected <= 0:
+        raise ValueError("questions must be positive")
     records_by_arm: dict[str, list[dict[str, Any]]] = {}
     sources: dict[str, list[dict[str, str]]] = {}
     environments: list[dict[str, Any]] = []
@@ -208,19 +214,50 @@ def summarize_mh_suffix_screen(
             )
         )
     ]
-    decision = {
-        "result": "advance_to_confirmation" if passing else "rejected",
-        "passing_arms": passing,
-        "confirmation_run_required": bool(passing),
-        "reason": (
-            "at least one nonuniform schedule passed the registered screen gate"
-            if passing
-            else "no nonuniform schedule met the registered quality-cost gate"
-        ),
-    }
+    if phase == "screen":
+        decision = {
+            "result": "advance_to_confirmation" if passing else "rejected",
+            "passing_arms": passing,
+            "confirmation_run_required": bool(passing),
+            "reason": (
+                "at least one nonuniform schedule passed the registered screen gate"
+                if passing
+                else "no nonuniform schedule met the registered quality-cost gate"
+            ),
+        }
+    else:
+        passing_rows = [row for row in table if row["arm"] in passing]
+        selected = (
+            max(
+                passing_rows,
+                key=lambda row: (
+                    row["accuracy"],
+                    -row["sum_seconds_excluding_model_load"],
+                    -row["main_model_dense_forward_flops"],
+                ),
+            )["arm"]
+            if passing_rows
+            else None
+        )
+        decision = {
+            "result": "accepted" if selected is not None else "rejected",
+            "passing_arms": passing,
+            "selected_default_arm": selected,
+            "selection_rule": (
+                "highest accuracy among passing arms; lower wall time and then "
+                "lower main-model FLOPs break ties"
+            ),
+            "confirmation_run_required": False,
+            "reason": (
+                "the selected arm passed confirmation"
+                if selected is not None
+                else "no nonuniform schedule met the registered confirmation gate"
+            ),
+        }
     return {
         "schema_version": 1,
         "status": "complete",
+        "phase": phase,
         "scope": {
             "model": "Qwen2.5-1.5B-Instruct",
             "model_path": str(config["models"]["base"]),
@@ -256,6 +293,12 @@ def main() -> None:
     parser.add_argument("--raw-root", type=Path, default=Path("results/gsm8k"))
     parser.add_argument("--tag", required=True)
     parser.add_argument("--draws", type=int, default=2)
+    parser.add_argument("--questions", type=int)
+    parser.add_argument(
+        "--phase",
+        choices=("screen", "confirmation"),
+        default="screen",
+    )
     parser.add_argument("--bootstrap-replicates", type=int, default=10_000)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -264,6 +307,8 @@ def main() -> None:
         raw_root=args.raw_root,
         tag=args.tag,
         draws=args.draws,
+        phase=args.phase,
+        questions=args.questions,
         bootstrap_replicates=args.bootstrap_replicates,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
