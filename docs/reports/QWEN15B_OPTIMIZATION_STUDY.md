@@ -50,16 +50,16 @@ replay、缓存和 proposal 构建分别报告冷启动与稳态成本。只在�
 
 公共 i-SIR 转移、Qwen block 适配、off-policy rollout 权重和显式 TV 界已经实现，并通过有限状态详细平衡、
 on-policy/off-policy 候选边缘分布、rollout 生命周期与总长度测试。方法标识为 `iterated_conditional_is`，
-只可显式选择，不属于默认方法集。一次 8 题筛选可用以下命令启动：
+只可显式选择，不属于默认方法集。可续跑入口依次执行三种候选池结构、两个独立 draw 和聚合程序：
 
 ```powershell
-C:\Users\singm\anaconda3\python.exe -m experiments.arllm.gsm8k_reproduction `
-  --config configs\gsm8k_quick.toml `
-  --method iterated_conditional_is `
-  --conditional-reward frozen_consensus `
-  --iterated-pool-size 3 --iterated-updates 4 `
-  --tag qwen15b-isir-n3-u4 --limit 8
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_isir_screen `
+  --config configs\gsm8k_quick.toml --draws 2 `
+  --tag qwen15b-isir-screen
 ```
+
+入口将逐题原始记录保存在忽略目录 `results/gsm8k/`，把可复核的汇总和运行清单写入
+`results/arllm/qwen15b_optimization/`。
 
 ### MH 后缀长度 proposal
 
