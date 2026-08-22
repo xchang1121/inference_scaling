@@ -53,6 +53,10 @@
 `active_execution=true`；dLLM 实验在该登记表中固定关闭。文字设置和结论见
 [Qwen2.5-1.5B 推理扩展优化研究](../docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。
 
+[`arllm/qwen15b_optimization/isir_screen.json`](arllm/qwen15b_optimization/isir_screen.json) 保存 8 题、
+2 draw 的 i-SIR 同预算筛选、题目聚类区间、分支成本和未进入确认阶段的决定；对应 suite manifest 与汇总
+同目录保存。
+
 ## 训练与验证
 
 | 路径 | 内容 | 用途 |

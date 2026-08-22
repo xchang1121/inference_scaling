@@ -25,10 +25,11 @@
     {
       "id": "is_iterated_sir",
       "category": "algorithm",
-      "status": "screening",
+      "status": "rejected",
       "active_execution": false,
       "comparison": "one-shot conditional SIR at matched candidate-rollout groups",
-      "decision_basis": "finite-pool target correctness, accuracy, ESS, wall time and per-model FLOPs"
+      "decision_basis": "8 questions x 2 draws: best i-SIR arm reached 25.0% versus 37.5% for existing conditional IS and used 2.34x main-model FLOPs per draw",
+      "result": "results/arllm/qwen15b_optimization/isir_screen.json"
     },
     {
       "id": "mh_suffix_length_mixture",

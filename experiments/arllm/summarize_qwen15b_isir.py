@@ -85,6 +85,7 @@ def summarize_isir_screen(
     tag: str,
     draws: int,
     bootstrap_replicates: int = 10_000,
+    baseline_path: Path | None = None,
 ) -> dict[str, Any]:
     if draws <= 0 or bootstrap_replicates <= 0:
         raise ValueError("draws and bootstrap_replicates must be positive")
@@ -94,6 +95,8 @@ def summarize_isir_screen(
     expected = int(config["run"]["sample_count"])
     records_by_arm: dict[str, list[dict[str, Any]]] = {}
     sources: dict[str, list[dict[str, str]]] = {}
+    environments: list[dict[str, Any]] = []
+    implementation_hashes: list[dict[str, str]] = []
     for arm, pool_size, updates in ISIR_ARMS:
         records_by_arm[arm] = []
         sources[arm] = []
@@ -120,6 +123,10 @@ def summarize_isir_screen(
                     raise ValueError(f"{records_path} has the wrong draw index")
             records_by_arm[arm].extend(records)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            environments.append(dict(manifest["environment"]))
+            implementation_hashes.append(
+                dict(manifest["effective"]["implementation_sha256"])
+            )
             sources[arm].append(
                 {
                     "records": records_path.as_posix(),
@@ -187,11 +194,88 @@ def summarize_isir_screen(
     }
     if any(value != indices["n9-u1"] for value in indices.values()):
         raise ValueError("i-SIR arms do not use the same GSM8K rows")
+    if any(environment != environments[0] for environment in environments[1:]):
+        raise ValueError("i-SIR arms were run in different environments")
+    if any(
+        hashes != implementation_hashes[0] for hashes in implementation_hashes[1:]
+    ):
+        raise ValueError("i-SIR arms do not use the same implementation")
+    baseline: dict[str, Any] | None = None
+    decision: dict[str, Any] | None = None
+    if baseline_path is not None:
+        baseline_report = json.loads(baseline_path.read_text(encoding="utf-8"))
+        baseline_rows = [
+            row
+            for row in baseline_report["table"]
+            if row["method"] == "conditional_is"
+        ]
+        if len(baseline_rows) != 1:
+            raise ValueError("baseline report must contain one conditional_is row")
+        if list(baseline_report["problem_indices"]) != indices["n9-u1"]:
+            raise ValueError("baseline report uses different GSM8K rows")
+        row = baseline_rows[0]
+        baseline = {
+            "source": baseline_path.as_posix(),
+            "source_sha256": file_sha256(baseline_path),
+            "method": "conditional_is",
+            "reward": "cumulative self-consistency",
+            "observations": int(row["examples"]),
+            "draws": 1,
+            "accuracy": float(row["accuracy"]),
+            "seconds_excluding_model_load": float(row["seconds_excluding_model_load"]),
+            "main_model_dense_forward_flops": int(row["estimated_dense_forward_flops"]),
+        }
+        for result in table:
+            result["wall_factor_per_draw_vs_existing_conditional_is"] = (
+                result["sum_seconds_excluding_model_load"]
+                / draws
+                / baseline["seconds_excluding_model_load"]
+            )
+            result["main_model_flops_factor_per_draw_vs_existing_conditional_is"] = (
+                result["main_model_dense_forward_flops"]
+                / draws
+                / baseline["main_model_dense_forward_flops"]
+            )
+        passing_arms = [
+            result["arm"]
+            for result in table
+            if (
+                result["accuracy"] - baseline["accuracy"] >= -0.03125
+                and (
+                    result["wall_factor_per_draw_vs_existing_conditional_is"] <= 0.95
+                    or result[
+                        "main_model_flops_factor_per_draw_vs_existing_conditional_is"
+                    ]
+                    <= 0.95
+                )
+            )
+            or (
+                result["accuracy"] - baseline["accuracy"] >= 0.03125
+                and result["wall_factor_per_draw_vs_existing_conditional_is"] <= 1.05
+                and result[
+                    "main_model_flops_factor_per_draw_vs_existing_conditional_is"
+                ]
+                <= 1.05
+            )
+        ]
+        decision = {
+            "result": "advance_to_confirmation" if passing_arms else "rejected",
+            "passing_arms": passing_arms,
+            "reason": (
+                "at least one arm passed the registered screen gate"
+                if passing_arms
+                else "no arm met the quality-cost gate against existing conditional IS"
+            ),
+            "confirmation_run_required": bool(passing_arms),
+        }
     return {
         "schema_version": 1,
-        "status": "screening",
+        "status": "complete" if decision is not None else "screening",
         "scope": {
             "model": "Qwen2.5-1.5B-Instruct",
+            "model_path": str(config["models"]["base"]),
+            "model_revision": str(config["models"]["base_revision"]),
+            "model_weight_sha256": str(config["models"]["base_weight_sha256"]),
             "model_family": "arllm",
             "dllm_experiments": False,
             "dataset": "pinned OpenAI GSM8K test split",
@@ -203,6 +287,7 @@ def summarize_isir_screen(
             "rollouts_per_candidate": int(config["conditional_is"]["rollout_count"]),
             "block_size": int(config["conditional_is"]["block_size"]),
             "maximum_new_tokens": int(config["generation"]["max_new_tokens"]),
+            "environment": environments[0],
         },
         "comparison": (
             "all arms evaluate nine distinct candidate-rollout states per block; "
@@ -210,7 +295,10 @@ def summarize_isir_screen(
         ),
         "problem_indices": indices["n9-u1"],
         "table": table,
+        "existing_conditional_is_baseline": baseline,
+        "decision": decision,
         "sources": sources,
+        "implementation_sha256": implementation_hashes[0],
     }
 
 
@@ -221,6 +309,7 @@ def main() -> None:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--draws", type=int, default=2)
     parser.add_argument("--bootstrap-replicates", type=int, default=10_000)
+    parser.add_argument("--baseline", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = summarize_isir_screen(
@@ -229,6 +318,7 @@ def main() -> None:
         tag=args.tag,
         draws=args.draws,
         bootstrap_replicates=args.bootstrap_replicates,
+        baseline_path=args.baseline,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

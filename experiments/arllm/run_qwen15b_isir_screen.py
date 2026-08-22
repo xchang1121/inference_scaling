@@ -58,6 +58,8 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
             args.tag,
             "--draws",
             str(args.draws),
+            "--baseline",
+            str(args.baseline),
             "--output",
             str(args.output),
         ]
@@ -76,6 +78,11 @@ def main() -> None:
     parser.add_argument("--draws", type=int, default=2)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--raw-root", type=Path, default=Path("results/gsm8k"))
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=Path("results/validation/gsm8k_quick_comparison_validated.json"),
+    )
     parser.add_argument(
         "--output",
         type=Path,

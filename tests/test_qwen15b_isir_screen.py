@@ -15,6 +15,7 @@ def test_isir_screen_command_grid_has_equal_distinct_state_budget(tmp_path: Path
         draws=2,
         limit=8,
         raw_root=tmp_path / "raw",
+        baseline=Path("results/validation/gsm8k_quick_comparison_validated.json"),
         output=tmp_path / "summary.json",
     )
     commands = build_commands(args)
@@ -27,6 +28,7 @@ def test_isir_screen_command_grid_has_equal_distinct_state_budget(tmp_path: Path
         assert "--conditional-reward" in command
         assert "frozen_consensus" in command
     assert state_budgets == [9] * 6
+    assert commands[-1][commands[-1].index("--baseline") + 1] == str(args.baseline)
 
 
 def test_isir_screen_summary_uses_question_clustered_pairs(tmp_path: Path) -> None:
@@ -35,6 +37,10 @@ def test_isir_screen_summary_uses_question_clustered_pairs(tmp_path: Path) -> No
         """[run]
 name = "fixture"
 sample_count = 2
+[models]
+base = "models/Qwen2.5-1.5B-Instruct"
+base_revision = "fixture-revision"
+base_weight_sha256 = "fixture-sha256"
 [generation]
 max_new_tokens = 16
 [conditional_is]
@@ -73,7 +79,18 @@ pilot_samples = 2
                 encoding="utf-8",
             )
             (directory / "manifest.json").write_text(
-                json.dumps({"fingerprint": f"{arm}-{draw}"}),
+                json.dumps(
+                    {
+                        "fingerprint": f"{arm}-{draw}",
+                        "environment": {
+                            "backend": "transformers",
+                            "gpu": "fixture",
+                        },
+                        "effective": {
+                            "implementation_sha256": {"fixture.py": "digest"}
+                        },
+                    }
+                ),
                 encoding="utf-8",
             )
 
