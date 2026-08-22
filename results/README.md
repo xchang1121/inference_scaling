@@ -46,6 +46,13 @@
 执行机制和成本分母见[推理扩展算法：基础、原理与实现](../docs/methods/ALGORITHMS.md)，文字结果见
 [RTX 3090 推理执行与 rollout 复用实验](../docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 
+## Qwen2.5-1.5B 优化研究
+
+[`arllm/qwen15b_optimization/attempt_registry.json`](arllm/qwen15b_optimization/attempt_registry.json)
+登记新增与已有消融的状态、比较对象和决定依据。只有 `accepted` 或 `accepted_existing` 方法可以标为
+`active_execution=true`；dLLM 实验在该登记表中固定关闭。文字设置和结论见
+[Qwen2.5-1.5B 推理扩展优化研究](../docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。
+
 ## 训练与验证
 
 | 路径 | 内容 | 用途 |

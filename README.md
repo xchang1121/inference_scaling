@@ -65,6 +65,7 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 | [GSM8K 实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据、模型、预算、指标、成本分母、命令和产物 |
 | [方法质量与计算量](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 准确率、pass@k、共享奖励、off-policy、replay 与消融 |
 | [推理执行与 rollout 复用](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
+| [Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md) | MH、IS 与 AR 执行候选的统一筛选、确认结果和默认组合决定 |
 | [GSM8K 集成检查](docs/validation/GSM8K_QUICK_VALIDATION.md) | 8 题端到端路径和 32 题批处理检查 |
 | [RTX 3090 复现记录](docs/validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分、KV、MH、IS 与 replay 检查 |
 | [AR-LLM 全链路真机验证](docs/validation/ARLLM_FULL_ROUTE.md) | GRPO 与全部 AR 推理、复用和 infra 组件的真实模型检查 |
@@ -83,6 +84,9 @@ verifier-MH 与 verifier-IS 分别为 78.125% 和 75.000%。这些数值只概�
 实验，完整设置、区间和成本见[质量报告](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。批处理、流式奖励、
 replay、MH 预取与 SMC 的墙钟、FLOPs 和复用率见[执行报告](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
 dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`；状态表分别记录预检与正式结果。
+
+当前优化研究只运行 Qwen2.5-1.5B 自回归路线；dLLM 保留实现与入口，不参与该轮消融。候选状态、收益判据
+和每次决定见[Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。
 
 ## 安装
 

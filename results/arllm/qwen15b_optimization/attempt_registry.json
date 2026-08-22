@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "scope": {
+    "model_family": "arllm",
+    "primary_model": "Qwen2.5-1.5B-Instruct",
+    "auxiliary_model": "Qwen2.5-0.5B-Instruct",
+    "auxiliary_model_role": "proposal or rollout only; compute is reported separately",
+    "dataset": "pinned OpenAI GSM8K test split",
+    "hardware": "NVIDIA GeForce RTX 3090 24 GiB",
+    "backend": "Transformers",
+    "dllm_experiments": false
+  },
+  "decision_protocol": {
+    "screen_questions": 8,
+    "screen_draws": 2,
+    "confirm_questions": 32,
+    "confirm_draws": 4,
+    "paired_bootstrap_samples": 10000,
+    "quality_noninferiority_absolute": 0.03125,
+    "minimum_wall_reduction": 0.05,
+    "minimum_main_model_flops_reduction": 0.05,
+    "cold_and_warm_costs_reported_separately": true
+  },
+  "attempts": [
+    {
+      "id": "is_iterated_sir",
+      "category": "algorithm",
+      "status": "planned",
+      "active_execution": false,
+      "comparison": "one-shot conditional SIR at matched candidate-rollout groups",
+      "decision_basis": "finite-pool target correctness, accuracy, ESS, wall time and per-model FLOPs"
+    },
+    {
+      "id": "mh_suffix_length_mixture",
+      "category": "algorithm",
+      "status": "planned",
+      "active_execution": false,
+      "comparison": "uniform suffix start at matched MH update count and generated-token budget",
+      "decision_basis": "target invariance, acceptance, changed-token distance, accuracy, wall time and FLOPs"
+    },
+    {
+      "id": "is_scrambled_rqmc_rollouts",
+      "category": "algorithm",
+      "status": "planned",
+      "active_execution": false,
+      "comparison": "independent rollout uniforms at identical rollout count",
+      "decision_basis": "unbiased marginal sampling, conditional-weight variance, ESS, accuracy and wall time"
+    },
+    {
+      "id": "is_bound_aware_early_stop",
+      "category": "algorithm",
+      "status": "planned",
+      "active_execution": false,
+      "comparison": "complete all finite-pool rollout evaluations",
+      "decision_basis": "exact selected-index agreement, stopped rollout fraction, wall time and FLOPs"
+    },
+    {
+      "id": "ar_small_model_speculative_rollout",
+      "category": "infra",
+      "status": "planned",
+      "active_execution": false,
+      "comparison": "ordinary Qwen2.5-1.5B autoregressive rollout with identical sampling distribution",
+      "decision_basis": "token equality under coupled random streams, draft acceptance, wall time and separate 1.5B/0.5B FLOPs"
+    },
+    {
+      "id": "ar_continuous_batching",
+      "category": "infra",
+      "status": "accepted_existing",
+      "active_execution": true,
+      "comparison": "sequential request execution",
+      "decision_basis": "existing three-seed RTX 3090 result: lower wall time with statistically unchanged request outputs"
+    },
+    {
+      "id": "is_warm_replay",
+      "category": "algorithm_infra",
+      "status": "accepted_existing",
+      "active_execution": true,
+      "comparison": "fresh-only conditional rollout after cache construction is amortized",
+      "decision_basis": "existing result: lower steady-state FLOPs and wall time; cache build reaches break-even after approximately seven repeated queries"
+    },
+    {
+      "id": "is_streaming_reward",
+      "category": "infra",
+      "status": "conditional",
+      "active_execution": false,
+      "comparison": "submit the same verifier workload after the whole generation batch completes",
+      "decision_basis": "existing result is positive only when reward evaluation is slow enough to overlap with generation"
+    },
+    {
+      "id": "mh_frozen_replay_mixture",
+      "category": "algorithm_infra",
+      "status": "accepted_existing",
+      "active_execution": true,
+      "comparison": "base-only suffix proposal",
+      "decision_basis": "existing three-seed online result: lower wall time with the full mixture Hastings correction"
+    },
+    {
+      "id": "mh_delayed_acceptance",
+      "category": "algorithm_infra",
+      "status": "conditional",
+      "active_execution": false,
+      "comparison": "ordinary exact-reward MH",
+      "decision_basis": "existing gain requires a sufficiently expensive exact reward and a useful cheap surrogate"
+    },
+    {
+      "id": "mh_speculative_prefetch",
+      "category": "infra",
+      "status": "conditional",
+      "active_execution": false,
+      "comparison": "generate only the next realized branch",
+      "decision_basis": "existing gain appears only when reward latency hides the additional proposal FLOPs"
+    },
+    {
+      "id": "is_history_token_tree",
+      "category": "infra",
+      "status": "rejected",
+      "active_execution": false,
+      "comparison": "ordinary autoregressive rollout",
+      "decision_basis": "existing three-seed result has no stable wall-time gain and increases FLOPs"
+    },
+    {
+      "id": "is_progressive_allocation",
+      "category": "algorithm",
+      "status": "rejected",
+      "active_execution": false,
+      "comparison": "fixed rollout allocation",
+      "decision_basis": "existing result increases both wall time and FLOPs"
+    },
+    {
+      "id": "is_variance_cost_allocation",
+      "category": "algorithm",
+      "status": "rejected",
+      "active_execution": false,
+      "comparison": "fixed rollout allocation",
+      "decision_basis": "existing result does not improve quality or wall time and increases FLOPs"
+    },
+    {
+      "id": "is_unconditional_history_tree",
+      "category": "infra",
+      "status": "rejected",
+      "active_execution": false,
+      "comparison": "ordinary autoregressive rollout",
+      "decision_basis": "existing result substantially increases wall time and FLOPs"
+    },
+    {
+      "id": "is_partial_rollout_resume_transformers",
+      "category": "infra",
+      "status": "rejected",
+      "active_execution": false,
+      "comparison": "discard partial rollout and regenerate",
+      "decision_basis": "existing Transformers result lowers wall time but more than triples FLOPs because continuation is prefetched again"
+    }
+  ]
+}

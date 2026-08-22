@@ -22,6 +22,10 @@ results/*
 !results/training/*.json
 !results/validation/
 !results/validation/*.json
+!results/arllm/
+results/arllm/*
+!results/arllm/qwen15b_optimization/
+!results/arllm/qwen15b_optimization/*.json
 !results/infra/
 results/infra/*
 !results/infra/rtx3090_transformers_decode_seed20260812.json
