@@ -37,7 +37,9 @@
       "status": "screening",
       "active_execution": false,
       "comparison": "uniform suffix length at matched questions, draws, alpha, block size and MH update count",
-      "decision_basis": "implementation and finite-state invariance tests passed; Qwen 1.5B screen will compare acceptance, changed-token distance, accuracy, wall time and FLOPs"
+      "decision_basis": "8 questions x 2 draws: inverse_length improved accuracy by 6.25 pp and reduced wall time by 44.0%; multiscale improved accuracy by 18.75 pp and reduced wall time by 19.9%; both advance to 32 questions x 4 draws",
+      "screen_result": "results/arllm/qwen15b_optimization/mh_suffix_screen.json",
+      "confirmation_selection_rule": "among arms passing the registered gate, choose the highest accuracy and break ties by lower wall time"
     },
     {
       "id": "is_scrambled_rqmc_rollouts",

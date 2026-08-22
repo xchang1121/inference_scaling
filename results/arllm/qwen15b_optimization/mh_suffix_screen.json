@@ -1,0 +1,268 @@
+{
+  "comparison": "all arms use the same questions, draws, alpha, block size and MH update count; only the fixed full-support suffix-length distribution changes",
+  "decision": {
+    "confirmation_run_required": true,
+    "passing_arms": [
+      "inverse",
+      "multiscale"
+    ],
+    "reason": "at least one nonuniform schedule passed the registered screen gate",
+    "result": "advance_to_confirmation"
+  },
+  "implementation_sha256": {
+    "experiments/arllm/gsm8k_reproduction.py": "260c1b1d0c00f4f2a7bce71b5f088d9b183c076e0a59fcf7e394b66f0528ab00",
+    "experiments/shared/__init__.py": "47f95231fdbfcebe977a90fff78a162b13275cd21a7b76b1b3d3d41ef12249f9",
+    "experiments/shared/artifacts.py": "e6363e9b52a251d306a8e519e8c12d2511f30b0f10fbc103d00e0d62347a7262",
+    "experiments/shared/attempt_registry.py": "c58c123c3475a2e2cc62c24b6367fe1ad02d4c726ddf327f75ab9a7f7e0c37c3",
+    "experiments/shared/components.py": "ea32c7febdb83d18809694b0940e5db04a72f80862ed6493f5501d9c600031d8",
+    "experiments/shared/config_overrides.py": "51e91ddd8a44ff7f8b23f5f2c6c29db2d349ec5baf77c43f458ec9e485881777",
+    "experiments/shared/environment.py": "28df6a4f81df4ce0d97ddc77028cc941a1c3ac76e65b5812af9c465dc86e0644",
+    "experiments/shared/methods.py": "b7e7339eae0808c671be8960b3d8a77e770424e4c73d61298e1caa2d2a9d5c25",
+    "experiments/shared/paired_protocol.py": "4be48a5c23bef9a5390a072a88e32eb48c9e83c7091cd4d2c1243561297f682d",
+    "experiments/shared/statistics.py": "83ea557d61db4a57ee4236f6d32c6cbf60fb9abffb063344c4032ad744c899f8",
+    "experiments/shared/suite_runner.py": "cece0a616840f3f01e9774765937382b6c5e23188f4d4c2b7cab1702cb8354e9",
+    "src/inference_scaling/__init__.py": "b36398ee1c7518b6caa16131cfa6f2fbae0ea45e0c4ef681b85ae3e83962abf0",
+    "src/inference_scaling/arllm/__init__.py": "cfc188ad19bef04300ece270e9205a51881976ab1a36dec6876e4023cb19db6b",
+    "src/inference_scaling/arllm/acceleration.py": "843af0f82354ccb604d9828c649b53789258e7ebc1bbe2f4dd4c4adaddfdc232",
+    "src/inference_scaling/arllm/algorithms/__init__.py": "338c685decdf0a6bc637620b7b17df4132c018c4b25b5aa422ec5d6eedf220df",
+    "src/inference_scaling/arllm/algorithms/base_replay.py": "ebe3d4db44df469884ca9b60f4762cfe861de13c4749f8425ae856a6693c7e77",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py": "4aef90df0aa71339e7d61c32dbf6d5ad8f0d609f1e92c708bab79867c0d6b485",
+    "src/inference_scaling/arllm/algorithms/dynamic_is.py": "6b0ac40068a73b379c93cb701edf2863c4919646e5b4485f76ab4e95ee099291",
+    "src/inference_scaling/arllm/algorithms/iterated_is.py": "0436e89cece52460cf17cb431133930990ff2d6788aa767e78fc064013fac1a0",
+    "src/inference_scaling/arllm/algorithms/mh.py": "e9d1de59df30f56fe802955a440baafd684be8510452cb7528426031c9ceda65",
+    "src/inference_scaling/arllm/algorithms/mh_acceleration.py": "83b8716ac359b6c50736b37e28c09c3dfa5f368b84b11474324d87f6f3be06bd",
+    "src/inference_scaling/arllm/algorithms/progressive_is.py": "945f5f3dbb1af543b81aad05f36792669940f277d06ec1aaad76da5e18dc875b",
+    "src/inference_scaling/arllm/algorithms/smc_forest.py": "6abcdcb2e0055613737a6dbe4603e83dc25cfc86cfc2274228273f0871691bc6",
+    "src/inference_scaling/arllm/algorithms/streaming_is.py": "59287afe44852e7812e4b1edc618aadd07b525af52b282397f7fbc873ae91158",
+    "src/inference_scaling/arllm/backends/__init__.py": "7b82af0a52db7d1de631bef0f7cc206112f7150387f9cd8835e64f1ff4b36afb",
+    "src/inference_scaling/arllm/backends/absorbing.py": "c5656a7197443cf7e941dda9d7bfd1f7c61b3effe0b08f4846fe692902054a59",
+    "src/inference_scaling/arllm/backends/batching.py": "c7fe79463b3744ea4472391728a911038e2beb354ffca005849e2f3689231f69",
+    "src/inference_scaling/arllm/backends/cache.py": "903f2db4f4bfb7d91bcd8e245a57d4ec0f6c52bc435c3b30051bab0676932488",
+    "src/inference_scaling/arllm/backends/candidate_cache.py": "63522a12790a56c3a01ce21f9aa510fe2c830364d923b510b8bfd0449e6ea2bc",
+    "src/inference_scaling/arllm/backends/loader.py": "88c4466eb8fdd3f52db65ee5f6d13f9a5e3c615a6129ef1ce051d3c86eb08f44",
+    "src/inference_scaling/arllm/backends/tabular.py": "ee7199452e2f8db773e66169a712f32d5ba15dee76c0a8f81fc2c55edb02ac09",
+    "src/inference_scaling/arllm/backends/transformers_backend.py": "5a867c70288789e8b6fdd39c48e9acb5088bc11f7bc9b1606064d23f49a00465",
+    "src/inference_scaling/arllm/backends/vllm_backend.py": "e56c0b92cde1eefdeb95153411cb0228a8a10e0a18fc5f37aaf7378a46464451",
+    "src/inference_scaling/arllm/config.py": "84304c14ba117baf995e1fa972b07301c7dbeeced2ade0d10ea57670a3aebc9b",
+    "src/inference_scaling/arllm/replay.py": "0ae67c116dbc63a4c4fe535d07f2df0d942d1a375494470ebbe57c80524144bf",
+    "src/inference_scaling/arllm/rollout_broker.py": "95008b82977fd30d2ec5ab7d05906a0513867e464bc8fbb0e4c24b37257d4ad0",
+    "src/inference_scaling/arllm/types.py": "ee0981eb480fdf15edf3e44488abe3fa6be5f1b75d8be07e6222bcb04ed21191",
+    "src/inference_scaling/arllm/vllm_suffix_proposer.py": "14dda355f3b3cf9a2c43ecde7c47aeb33d244cc2e1576d9329b4a7dc7afcab99",
+    "src/inference_scaling/dllm/__init__.py": "0c50f67bcf6147c12054bb1f0a22d04b443c6bfd69db8d19883ece120841e983",
+    "src/inference_scaling/dllm/algorithms/__init__.py": "47e0f862990773dae8f2c7a5ef8c9e91d4b0f7c82236c1e86a4d8475fe181f20",
+    "src/inference_scaling/dllm/algorithms/is_sampling.py": "3a58b47dcbc8723d7e17e16ebb35228c185a2f764a607882e8b87af63096937b",
+    "src/inference_scaling/dllm/algorithms/mh.py": "16c3e496af41c09b3462af77ba62230362e5945a5ddb2fe2e51693bb48c2f27f",
+    "src/inference_scaling/dllm/algorithms/mh_acceleration.py": "46fa45c8def126cad3f0e204db642974cf5712339cd802f9b4869d8a027b8732",
+    "src/inference_scaling/dllm/algorithms/progressive_is.py": "3cbc67179a912cadb0896c88e2e36e572416b7b7b0a285e13cc6f55f9064bc22",
+    "src/inference_scaling/dllm/algorithms/search.py": "c302b3e2f1e86d9b7b5bb72461b4280e3bee51db99dea769cc06605ddf1b74df",
+    "src/inference_scaling/dllm/algorithms/smc_forest.py": "1d7273389841f5585bdf301bf16531e92852d82206c27189eaa96efa270a40bf",
+    "src/inference_scaling/dllm/backends/__init__.py": "9e08290b6b69264e47bd2ba74cb350e8eaaaacd2f501da97f3da452c23a2a79b",
+    "src/inference_scaling/dllm/backends/llada.py": "df3156e605911b7b7e27ba155a054e87d81a7f16c598eb1633337586c73da84d",
+    "src/inference_scaling/dllm/backends/loader.py": "fd5a02cbb6c0b10ae94bec46f948c3ba4ad80ba4486e9852652f8d5e7564a7b7",
+    "src/inference_scaling/dllm/config.py": "c5dc5b7bf48d928d48bdbe8bd9bbf48318688e272d77e6fa1f40005cb135f852",
+    "src/inference_scaling/dllm/dynamic_is.py": "7d6efbd89918d307aa6eb0773dbce26d93f3975cbe7c59f71d22dee7ac7fc482",
+    "src/inference_scaling/dllm/preferences.py": "33aca6ce924539253722e035cdb966acc9b74ddf6a6a674713700424a2b56362",
+    "src/inference_scaling/dllm/replay.py": "59498e227d04c006d971bb3f9a9157b2325f22efb109a88fd52961b5ca0e4ae7",
+    "src/inference_scaling/dllm/types.py": "d5ca9ca9e5fac1bea75fed293fa6da97be8d063f64253a76aa9a7d5635f59e8a",
+    "src/inference_scaling/dllm/vrpo.py": "bff9ec5b09cfc0305f0df463d2fcd6c2a31fe0d3a91b75b1737ba4b309a7fcf5",
+    "src/inference_scaling/shared/__init__.py": "22323d0d28b33e10654b60f8baeefbeaf1aef0120e48c9ee41d2f7670521d68c",
+    "src/inference_scaling/shared/budget.py": "9c3d7158ad308d8ebcf1e99d6f6f8c805f62df6a5b2b1247d6b826cc1d314aef",
+    "src/inference_scaling/shared/compute.py": "10fabb6516ab1a50c30189425c5bbbe4543c6966a8cfe3945fdcbf264fcdfb9d",
+    "src/inference_scaling/shared/config.py": "5166a2e2eb09b7d8541d52b0f6333e0896cb4f8ea3b1116ed0723b7070cdab30",
+    "src/inference_scaling/shared/evaluation/__init__.py": "f983d850024d6ec1439bfaaee8864334088b32ec9b8281213aa62de7c0430826",
+    "src/inference_scaling/shared/evaluation/consensus.py": "57fa1039e8ea2951ce94f796b74193ebf6f8fb7751795be691ffeec86e810ccd",
+    "src/inference_scaling/shared/evaluation/grpo_reward.py": "e464eb595c60539cbc300fe5dda0b9efda42254ba8b27fe1c1e40c6bf93ec818",
+    "src/inference_scaling/shared/evaluation/gsm8k.py": "2b7fcb57f685e550d0d718a298db948adb11d61637fe5126441c7c0a0b53bf91",
+    "src/inference_scaling/shared/importance.py": "467dfe75733552787b0a0e2f1624d9094859cba8aa7554fa540a59691325ba12",
+    "src/inference_scaling/shared/iterated_sir.py": "cd1d97a51075b9a28dd2645b046eb2551adf300ea3fa77907d5414dba1d8bd75",
+    "src/inference_scaling/shared/metrics.py": "9da0bf08f63e0bbb0e104690978779f5ab8e7cb98bbfaa37b2c39aff0915976b",
+    "src/inference_scaling/shared/mh.py": "7e039df9e5b198aba59c8ea79bcad187cf813cc0df8debe4baadf586c9798448",
+    "src/inference_scaling/shared/rng.py": "be13d252125b0f04c469cc13e71a798850131859dc4d62049e31244f323d2399",
+    "src/inference_scaling/shared/smc.py": "81f764ddeddf939626f4f2ccdbbf967a456c2e1ecef298ca788bdac7692e4495",
+    "src/inference_scaling/shared/stepwise.py": "c7cb08ea172e4ab1ee20ae4ae40d7eba5e60e8acbc46942d3389448bb4c57b90",
+    "src/inference_scaling/shared/types.py": "83aebdafe069002dc4bdbca3395f276d44eac551df948d95eaa7487c24c8423b"
+  },
+  "problem_indices": [
+    55,
+    69,
+    276,
+    497,
+    704,
+    1104,
+    1269,
+    1311
+  ],
+  "schema_version": 1,
+  "scope": {
+    "alpha": 4.0,
+    "block_size": 16,
+    "dataset": "pinned OpenAI GSM8K test split",
+    "dllm_experiments": false,
+    "draws": 2,
+    "environment": {
+      "backend": "transformers",
+      "cuda_runtime": "13.0",
+      "gpu": "NVIDIA GeForce RTX 3090",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.12.7",
+      "torch": "2.13.0+cu130",
+      "transformers": "5.15.0",
+      "vllm": null
+    },
+    "maximum_new_tokens": 128,
+    "model": "Qwen2.5-1.5B-Instruct",
+    "model_family": "arllm",
+    "model_path": "models/Qwen2.5-1.5B-Instruct",
+    "model_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "model_weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+    "profile": "gsm8k-quick",
+    "questions": 8,
+    "steps_per_block": 2
+  },
+  "sources": {
+    "inverse": [
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-inverse-draw0/manifest.json",
+        "manifest_fingerprint": "6e5ca07061c10d510e40397262c087034d0da1b007bbc11465c3879a1988e182",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-inverse-draw0/records.jsonl",
+        "records_sha256": "a8a6af221ad213814a5dcf4a6b725b17f8f765b8093b1aea69cebf4ed41e1781"
+      },
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-inverse-draw1/manifest.json",
+        "manifest_fingerprint": "add8ea76ba2ab374428b6ecbe52022f9e11a948b0c72df1868d04f05049ed1f4",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-inverse-draw1/records.jsonl",
+        "records_sha256": "2ea42877a4bf736c8eb54286bcac318969bef7676e1414291e0ee8a12ec289dc"
+      }
+    ],
+    "multiscale": [
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-multiscale-draw0/manifest.json",
+        "manifest_fingerprint": "4f6b7c82dbc4a8398083d151758410e7b570c0a4661f7bd9cd55168ae9a6d898",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-multiscale-draw0/records.jsonl",
+        "records_sha256": "cd6feac3d628ffc0765851ccc22ecd0e21fa0377252f6cf23c8e34f2b1dcacc0"
+      },
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-multiscale-draw1/manifest.json",
+        "manifest_fingerprint": "1c46ea4ab6438de11024d73b2afc90fc284e05a6e7f61e886213de068e0430e8",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-multiscale-draw1/records.jsonl",
+        "records_sha256": "d7e2bfc8306ec34a694ad464e2d42f80c33294746ddf642919e3bb9e0d37b2d1"
+      }
+    ],
+    "uniform": [
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-uniform-draw0/manifest.json",
+        "manifest_fingerprint": "1f2191a616fd51302d7de8d896a842c996b041282a4cb1ecc266ea98cc55e9f7",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-uniform-draw0/records.jsonl",
+        "records_sha256": "d4b2a1aa257aae124100c695df29650f0b82679f516bdde9765dc30b208bc25b"
+      },
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-uniform-draw1/manifest.json",
+        "manifest_fingerprint": "407eb76a2dd35112d15a0c90d47e957656053876931282475b99172827fc273c",
+        "records": "results/gsm8k/gsm8k-quick/mh-qwen15b-mh-suffix-screen-0d32d80-uniform-draw1/records.jsonl",
+        "records_sha256": "563384cd6ce183c60f32dea85c244da07229a3722ccbc8834aa9ba01c17314a2"
+      }
+    ]
+  },
+  "status": "complete",
+  "table": [
+    {
+      "acceptance_rate": 0.74609375,
+      "accepted": 191,
+      "accuracy": 0.125,
+      "arm": "uniform",
+      "attempts": 256,
+      "correct": 2,
+      "generated_token_factor_vs_uniform": 1.0,
+      "generated_tokens": 10783,
+      "main_model_dense_forward_flops": 211967411082240,
+      "main_model_dense_forward_petaflops": 0.21196741108224,
+      "main_model_flops_factor_vs_uniform": 1.0,
+      "mean_accepted_token_changes": 6.3203125,
+      "mean_proposed_suffix_length": 34.7890625,
+      "mean_proposed_token_changes": 16.390625,
+      "mean_seconds_per_observation": 20.057871025000622,
+      "observations": 16,
+      "paired_vs_uniform": {
+        "accuracy_difference": 0.0,
+        "bootstrap_unit": "GSM8K question; all draws stay in the same cluster",
+        "clustered_bootstrap_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "suffix_schedule": "uniform",
+      "sum_seconds_excluding_model_load": 320.92593640000996,
+      "wall_factor_vs_uniform": 1.0,
+      "wilson_95_treating_draws_as_observations": [
+        0.03497748774324047,
+        0.36022827265758695
+      ]
+    },
+    {
+      "acceptance_rate": 0.90625,
+      "accepted": 232,
+      "accuracy": 0.1875,
+      "arm": "inverse",
+      "attempts": 256,
+      "correct": 3,
+      "generated_token_factor_vs_uniform": 0.5283316331262172,
+      "generated_tokens": 5697,
+      "main_model_dense_forward_flops": 209299872764928,
+      "main_model_dense_forward_petaflops": 0.209299872764928,
+      "main_model_flops_factor_vs_uniform": 0.987415337557352,
+      "mean_accepted_token_changes": 3.72265625,
+      "mean_proposed_suffix_length": 14.75,
+      "mean_proposed_token_changes": 6.69140625,
+      "mean_seconds_per_observation": 11.229637943749367,
+      "observations": 16,
+      "paired_vs_uniform": {
+        "accuracy_difference": 0.0625,
+        "bootstrap_unit": "GSM8K question; all draws stay in the same cluster",
+        "clustered_bootstrap_95": [
+          0.0,
+          0.1875
+        ]
+      },
+      "suffix_schedule": "inverse_length",
+      "sum_seconds_excluding_model_load": 179.67420709998987,
+      "wall_factor_vs_uniform": 0.5598619080635463,
+      "wilson_95_treating_draws_as_observations": [
+        0.06591599071428142,
+        0.4300888096197414
+      ]
+    },
+    {
+      "acceptance_rate": 0.86328125,
+      "accepted": 221,
+      "accuracy": 0.3125,
+      "arm": "multiscale",
+      "attempts": 256,
+      "correct": 5,
+      "generated_token_factor_vs_uniform": 0.7031438375220254,
+      "generated_tokens": 7582,
+      "main_model_dense_forward_flops": 206203181871104,
+      "main_model_dense_forward_petaflops": 0.206203181871104,
+      "main_model_flops_factor_vs_uniform": 0.9728060592819169,
+      "mean_accepted_token_changes": 4.5390625,
+      "mean_proposed_suffix_length": 22.6171875,
+      "mean_proposed_token_changes": 10.8203125,
+      "mean_seconds_per_observation": 16.075273424999978,
+      "observations": 16,
+      "paired_vs_uniform": {
+        "accuracy_difference": 0.1875,
+        "bootstrap_unit": "GSM8K question; all draws stay in the same cluster",
+        "clustered_bootstrap_95": [
+          0.0,
+          0.4375
+        ]
+      },
+      "suffix_schedule": "multiscale",
+      "sum_seconds_excluding_model_load": 257.20437479999964,
+      "wall_factor_vs_uniform": 0.8014446500809265,
+      "wilson_95_treating_draws_as_observations": [
+        0.14164643854782039,
+        0.5559564416525933
+      ]
+    }
+  ]
+}

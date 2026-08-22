@@ -110,6 +110,19 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_suffix_s
 [Tierney (1994)](https://projecteuclid.org/journals/annals-of-statistics/volume-22/issue-4/Markov-Chains-for-Exploring-Posterior-Distributions/10.1214/aos/1176325750.full)
 给出。代码仍对每个实际后缀使用完整正反 proposal 概率，不使用未经校正的截断。
 
+8 题、2 个 draw 的筛选结果如下。墙钟与计算量均为 16 次观测合计；相对值以同轮 `uniform` 为分母。
+
+| 后缀分布 | 准确率 | 相对准确率 | 生成 token | 相对生成 token | 主模型 PFLOPs | 相对 FLOPs | 墙钟（秒） | 相对墙钟 | 接受率 | 平均 proposal 长度 | 接受后改变 token |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `uniform` | 12.50% | 0.00 pp | 10,783 | 1.000 | 0.2120 | 1.000 | 320.9 | 1.000 | 74.61% | 34.79 | 6.32 |
+| `inverse_length` | 18.75% | +6.25 pp，95% 区间 `[0,18.75]` | 5,697 | 0.528 | 0.2093 | 0.987 | 179.7 | 0.560 | 90.62% | 14.75 | 3.72 |
+| `multiscale` | 31.25% | +18.75 pp，95% 区间 `[0,43.75]` | 7,582 | 0.703 | 0.2062 | 0.973 | 257.2 | 0.801 | 86.33% | 22.62 | 4.54 |
+
+`inverse_length` 与 `multiscale` 均通过筛选。短后缀提高接受率并减少逐 token decode；当前 Transformers
+实现会为每次 proposal 重新提交保留前缀，所以线性 dense-FLOPs 账本下降小于生成 token 和墙钟下降。
+两种策略进入 32 题、4 个 draw 的确认。若两者均通过确认，默认策略按准确率排序，准确率相同时选择墙钟较低者；
+另一策略仍作为显式速度优先配置保留。
+
 ### rollout 方差与提前停止
 
 scrambled randomized quasi-Monte Carlo（RQMC）使每条随机流保持正确边缘分布，同时让同一候选的多条 rollout
