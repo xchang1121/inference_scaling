@@ -25,7 +25,7 @@
     {
       "id": "is_iterated_sir",
       "category": "algorithm",
-      "status": "planned",
+      "status": "screening",
       "active_execution": false,
       "comparison": "one-shot conditional SIR at matched candidate-rollout groups",
       "decision_basis": "finite-pool target correctness, accuracy, ESS, wall time and per-model FLOPs"

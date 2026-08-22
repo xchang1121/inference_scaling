@@ -1,6 +1,8 @@
 from experiments.shared.methods import (
     AR_ASYNC_METHODS,
     AR_METHODS,
+    AR_DEFAULT_METHODS,
+    AR_PAIRED_METHODS,
     DLLM_METHODS,
     METHOD_REGISTRY,
     METHOD_SPECS,
@@ -13,6 +15,9 @@ def test_method_registry_has_unique_family_scoped_names():
     assert len(METHOD_REGISTRY) == len(METHOD_SPECS)
     assert AR_METHODS == methods_for("arllm", "quality")
     assert set(AR_ASYNC_METHODS) <= set(AR_METHODS)
+    assert "iterated_conditional_is" in AR_METHODS
+    assert "iterated_conditional_is" not in AR_DEFAULT_METHODS
+    assert "iterated_conditional_is" not in AR_PAIRED_METHODS
     assert set(DLLM_METHODS) == {
         spec.name for spec in METHOD_SPECS if spec.family == "dllm"
     }

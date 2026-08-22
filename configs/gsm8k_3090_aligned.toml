@@ -79,6 +79,12 @@ reward_temperature = 0.1
 reward = "self_consistency"
 importance_log_ratio_clip = 10.0
 
+[iterated_is]
+pool_size = 3
+updates = 4
+pilot_samples = 8
+reward = "frozen_consensus"
+
 [matched_target]
 reward_temperature = 0.04
 

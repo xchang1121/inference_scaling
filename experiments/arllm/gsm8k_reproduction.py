@@ -23,6 +23,7 @@ import transformers
 
 from inference_scaling.arllm.algorithms import (
     run_conditional_is,
+    run_iterated_conditional_is,
     run_mh_chain,
     run_reward_mh_chain,
 )
@@ -37,6 +38,7 @@ from inference_scaling.arllm.backends import (
 )
 from inference_scaling.arllm.config import (
     ConditionalISConfig,
+    IteratedConditionalISConfig,
     MHConfig,
     RewardMHConfig,
     SamplingConfig,
@@ -72,6 +74,7 @@ from experiments.shared.methods import AR_METHODS
 METHODS = AR_METHODS
 REWARD_SOURCES = (
     "self_consistency",
+    "frozen_consensus",
     "log_probability",
     "negative_entropy",
     "self_certainty",
@@ -81,6 +84,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_reproduction.py",
     "src/inference_scaling/arllm/algorithms/conditional_is.py",
+    "src/inference_scaling/arllm/algorithms/iterated_is.py",
     "src/inference_scaling/arllm/algorithms/mh.py",
     "src/inference_scaling/arllm/backends/absorbing.py",
     "src/inference_scaling/arllm/backends/cache.py",
@@ -89,6 +93,7 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/arllm/backends/loader.py",
     "src/inference_scaling/shared/evaluation/consensus.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
+    "src/inference_scaling/shared/iterated_sir.py",
     "src/inference_scaling/arllm/config.py",
     "src/inference_scaling/arllm/types.py",
 )
@@ -232,6 +237,45 @@ def _confidence_rewards(
         raise ValueError(f"{source!r} is not a confidence reward")
     raw = tuple(float(getattr(item, field)) for item in statistics_batch)
     return raw, _minmax_rewards(raw)
+
+
+def _frozen_consensus_reward(
+    backend: Any,
+    prompt: TokenSequence,
+    *,
+    maximum: int,
+    sampling: SamplingConfig,
+    samples: int,
+    seeds: SeedStream,
+    problem_index: int,
+) -> tuple[Callable[[TokenSequence, TokenSequence], float], dict[str, Any]]:
+    """Construct a pointwise reward from an independent base-model pilot pool."""
+
+    if samples <= 0:
+        raise ValueError("frozen-consensus pilot_samples must be positive")
+    requests = [
+        GenerationRequest(
+            prompt,
+            maximum,
+            sampling,
+            seeds.derive("frozen_consensus", problem_index, pilot_index),
+            f"frozen-consensus:{problem_index}:pilot:{pilot_index}",
+        )
+        for pilot_index in range(samples)
+    ]
+    pilots = backend.sample_batch(requests)
+    answers = [extract_numeric_answer(backend.decode(sample.token_ids)) for sample in pilots]
+    reference = modal_answer(answers)
+
+    def reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
+        prediction = extract_numeric_answer(backend.decode(generated))
+        return float(reference is not None and prediction == reference)
+
+    return reward, {
+        "pilot_samples": samples,
+        "pilot_answer_counts": _answer_counts(answers),
+        "frozen_consensus_answer": _fraction_text(reference),
+    }
 
 
 def _run_best_of_n(
@@ -491,12 +535,14 @@ def _run_method(
         }
     conditional_methods = {
         "conditional_is",
+        "iterated_conditional_is",
         "conditional_is_small_proposal",
         "verifier_conditional_is",
         "verifier_conditional_is_small_proposal",
     }
     if method in conditional_methods:
         conditional = config["conditional_is"]
+        iterated = config.get("iterated_is", {})
         rollout_backend = backend
         if method.endswith("small_proposal"):
             if proposal_backend is None:
@@ -506,7 +552,11 @@ def _run_method(
         reward_source = (
             "exact"
             if use_matched_target
-            else str(conditional.get("reward", "self_consistency"))
+            else str(
+                iterated.get("reward", "frozen_consensus")
+                if method == "iterated_conditional_is"
+                else conditional.get("reward", "self_consistency")
+            )
         )
         if reward_source not in REWARD_SOURCES:
             raise ValueError(f"unknown reward source {reward_source!r}")
@@ -520,9 +570,34 @@ def _run_method(
             else float(conditional["reward_temperature"])
         )
         reward_batch = None
+        pointwise_reward: Callable[[TokenSequence, TokenSequence], float] | None = None
+        reward_diagnostics: dict[str, Any] = {}
         if reward_source == "self_consistency":
+            if method == "iterated_conditional_is":
+                raise ValueError(
+                    "iterated_conditional_is requires a fixed pointwise reward; "
+                    "use frozen_consensus or exact"
+                )
             reward_batch = CumulativeConsensusReward(backend.decode)
+        elif reward_source == "frozen_consensus":
+            pointwise_reward, reward_diagnostics = _frozen_consensus_reward(
+                backend,
+                prompt,
+                maximum=maximum,
+                sampling=SamplingConfig(
+                    temperature=target_sampling_temperature,
+                    eos_token_id=backend.tokenizer.eos_token_id,
+                ),
+                samples=int(iterated.get("pilot_samples", 8)),
+                seeds=seeds,
+                problem_index=problem.index,
+            )
         elif reward_source not in {"exact"}:
+            if method == "iterated_conditional_is":
+                raise ValueError(
+                    "iterated_conditional_is currently accepts only fixed pointwise "
+                    "frozen_consensus or exact rewards"
+                )
 
             def confidence_reward(
                 reward_prompt: TokenSequence,
@@ -546,44 +621,78 @@ def _run_method(
             prediction = extract_numeric_answer(backend.decode(generated))
             return float(prediction == problem.gold_answer)
 
-        result = run_conditional_is(
-            ScoreCachingBackend(backend),
-            prompt,
-            ConditionalISConfig(
-                candidate_count=int(conditional["candidate_count"]),
-                rollout_count=int(conditional["rollout_count"]),
-                block_size=int(conditional["block_size"]),
-                total_length=maximum,
-                reward_temperature=reward_temperature,
-                importance_log_ratio_clip=(
-                    float(conditional["importance_log_ratio_clip"])
-                    if method.endswith("small_proposal")
-                    and bool(conditional.get("apply_importance_correction", True))
-                    and conditional.get("importance_log_ratio_clip") is not None
-                    else None
-                ),
-                apply_importance_correction=bool(
-                    conditional.get("apply_importance_correction", True)
-                ),
-            ),
-            exact_reward if use_exact_reward else None,
-            SeedStream(seed),
-            base_sampling=SamplingConfig(
-                temperature=target_sampling_temperature,
-                eos_token_id=backend.tokenizer.eos_token_id,
-            ),
-            rollout_backend=ScoreCachingBackend(rollout_backend),
-            rollout_sampling=SamplingConfig(
-                temperature=target_sampling_temperature,
-                eos_token_id=backend.tokenizer.eos_token_id,
-            ),
-            reward_batch=reward_batch,
+        base_sampling = SamplingConfig(
+            temperature=target_sampling_temperature,
+            eos_token_id=backend.tokenizer.eos_token_id,
         )
+        cached_base = ScoreCachingBackend(backend)
+        cached_rollout = ScoreCachingBackend(rollout_backend)
+        if method == "iterated_conditional_is":
+            iterated_reward = exact_reward if use_exact_reward else pointwise_reward
+            if iterated_reward is None:
+                raise RuntimeError("iterated conditional IS did not construct a reward")
+            result = run_iterated_conditional_is(
+                cached_base,
+                prompt,
+                IteratedConditionalISConfig(
+                    pool_size=int(iterated.get("pool_size", 3)),
+                    updates=int(iterated.get("updates", 4)),
+                    rollout_count=int(conditional["rollout_count"]),
+                    block_size=int(conditional["block_size"]),
+                    total_length=maximum,
+                    reward_temperature=reward_temperature,
+                ),
+                iterated_reward,
+                SeedStream(seed),
+                base_sampling=base_sampling,
+                rollout_backend=cached_rollout,
+                rollout_sampling=base_sampling,
+            )
+        else:
+            result = run_conditional_is(
+                cached_base,
+                prompt,
+                ConditionalISConfig(
+                    candidate_count=int(conditional["candidate_count"]),
+                    rollout_count=int(conditional["rollout_count"]),
+                    block_size=int(conditional["block_size"]),
+                    total_length=maximum,
+                    reward_temperature=reward_temperature,
+                    importance_log_ratio_clip=(
+                        float(conditional["importance_log_ratio_clip"])
+                        if method.endswith("small_proposal")
+                        and bool(conditional.get("apply_importance_correction", True))
+                        and conditional.get("importance_log_ratio_clip") is not None
+                        else None
+                    ),
+                    apply_importance_correction=bool(
+                        conditional.get("apply_importance_correction", True)
+                    ),
+                ),
+                exact_reward if use_exact_reward else pointwise_reward,
+                SeedStream(seed),
+                base_sampling=base_sampling,
+                rollout_backend=cached_rollout,
+                rollout_sampling=base_sampling,
+                reward_batch=reward_batch,
+            )
         diagnostics = _conditional_diagnostics(result)
+        diagnostics.update(reward_diagnostics)
+        if method == "iterated_conditional_is":
+            diagnostics.update(
+                {
+                    "pool_size": int(iterated.get("pool_size", 3)),
+                    "updates_per_block": int(iterated.get("updates", 4)),
+                    "fresh_candidate_evaluations": result.fresh_candidate_evaluations,
+                    "reused_pool_entries": result.reused_pool_entries,
+                    "finite_pool_target_invariant": True,
+                }
+            )
         diagnostics["proposal_model"] = rollout_backend.model_id
         diagnostics["candidate_source"] = "base_model"
         reward_target_name = {
             "self_consistency": "cumulative_consensus",
+            "frozen_consensus": "independent_pilot_frozen_consensus",
             "log_probability": "normalized_mean_log_probability",
             "negative_entropy": "normalized_negative_entropy",
             "self_certainty": "normalized_self_certainty",
@@ -747,6 +856,7 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["best_of_n"]["samples"] = args.best_of_n_samples
     if args.conditional_reward is not None:
         config["conditional_is"]["reward"] = args.conditional_reward
+        config.setdefault("iterated_is", {})["reward"] = args.conditional_reward
     if args.reward_temperature is not None:
         config["conditional_is"]["reward_temperature"] = args.reward_temperature
     if args.importance_log_ratio_clip is not None:
@@ -770,6 +880,14 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["conditional_is"]["candidate_count"] = args.candidate_count
     if args.rollout_count is not None:
         config["conditional_is"]["rollout_count"] = args.rollout_count
+    if getattr(args, "iterated_pool_size", None) is not None:
+        config.setdefault("iterated_is", {})["pool_size"] = args.iterated_pool_size
+    if getattr(args, "iterated_updates", None) is not None:
+        config.setdefault("iterated_is", {})["updates"] = args.iterated_updates
+    if getattr(args, "consensus_pilot_samples", None) is not None:
+        config.setdefault("iterated_is", {})[
+            "pilot_samples"
+        ] = args.consensus_pilot_samples
     if args.block_size is not None:
         if args.method in {"mh", "verifier_mh"}:
             config["mh"]["block_size"] = args.block_size
@@ -837,6 +955,9 @@ def main() -> None:
     parser.add_argument("--mh-steps", type=int)
     parser.add_argument("--candidate-count", type=int)
     parser.add_argument("--rollout-count", type=int)
+    parser.add_argument("--iterated-pool-size", type=int)
+    parser.add_argument("--iterated-updates", type=int)
+    parser.add_argument("--consensus-pilot-samples", type=int)
     parser.add_argument("--block-size", type=int)
     parser.add_argument(
         "--draw-index",

@@ -13,7 +13,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
-from experiments.shared.methods import AR_METHODS
+from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
 from experiments.shared.suite_runner import run_manifested_commands
 
 
@@ -231,7 +231,7 @@ def main() -> None:
             if args.profile == "smoke"
             else "configs/gsm8k_3090_aligned.toml"
         )
-    args.methods = tuple(args.methods or AR_METHODS)
+    args.methods = tuple(args.methods or AR_DEFAULT_METHODS)
     args.components = tuple(
         args.components
         or (("quality",) if args.profile == "smoke" else FULL_COMPONENTS)

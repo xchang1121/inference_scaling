@@ -26,6 +26,7 @@ RTX 3090 对齐配置：
 | 质量网格 dtype | FP32 |
 | 最大生成长度 | 192 token |
 | 条件 IS | 8 个候选；每候选 3 条 rollout；4 个引导阶段 |
+| 迭代条件 IS 筛选 | 9 个不同候选-rollout 状态；比较 `(pool, updates)=(9,1),(5,2),(3,4)` |
 | 幂分布 MH | $`\alpha=4`$；16 个长度阶段；每阶段 3 次更新 |
 | pass@k | 每题 8 个独立 draw |
 
@@ -42,6 +43,7 @@ RTX 3090 对齐配置：
 | 自一致性投票-8 | `best_of_n` | `best_of_n` | 8 条独立完整生成 | 返回数值众数对应的序列 |
 | 幂分布 MH | `mh` | `trajectory_power_mh` | AR 后缀或 dLLM 反向轨迹 proposal | 目标为 $`p_{\mathrm{base}}^4`$；使用完整 Hastings 比 |
 | 标准条件 IS | `conditional_is` | `conditional_is` | 主模型候选；主模型 rollout | cumulative self-consistency；on-policy |
+| 迭代条件 IS | `iterated_conditional_is` | 本轮不运行 | 主模型候选；主模型 rollout | 独立 pilot 冻结数值众数；有限池 i-SIR |
 | 低成本 proposal 条件 IS | `conditional_is_small_proposal` | `conditional_is_reduced_layer_proposal` | 主模型候选；0.5B 或低层 rollout | 用主模型概率除以实际 rollout proposal 概率 |
 | 未校正 rollout 加权 | `conditional_is_small_proposal_uncorrected` | `conditional_is_reduced_layer_proposal_uncorrected` | 与上一行相同 | 省略 $`p/q`$；目标为[式 (12)](../methods/ALGORITHMS.md#alg-uncorrected-rollout) |
 | RL 参数随机采样 | `rl_sample` | `vrpo_sample` | GRPO 或 VRPO 训练后的参数 | 温度 1 |
@@ -58,7 +60,7 @@ AR 的“低成本 proposal”指 Qwen2.5-0.5B；dLLM 对应 LLaDA 共享前缀�
 
 | 比较 | 方法 | 统计范围 |
 | --- | --- | --- |
-| 最终任务质量 | Base、搜索、自一致性、幂分布 MH、条件 IS、GRPO | 准确率与计算量 |
+| 最终任务质量 | Base、搜索、自一致性、幂分布 MH、条件 IS、迭代条件 IS、GRPO | 准确率与计算量 |
 | 共享奖励 | verifier-MH、verifier-IS、GRPO | 准确率与经验答案分布 |
 | off-policy | 标准 IS、0.5B rollout proposal IS、未校正 rollout 加权 | 准确率、ESS、分模型 FLOPs |
 | replay 与动态候选 | fresh、warm、动态 proposal、方差—成本分配 | 准确率、ESS、复用率、冷启动/在线成本 |
@@ -72,6 +74,7 @@ self-consistency 或模型置信度。
 | --- | --- | --- |
 | 数值正确性 | 解析最终数值，与标准答案比较，取 0/1 | 是 |
 | cumulative self-consistency | 按已评估数值累计众数，匹配取 1 | 无 |
+| frozen consensus | 从独立 base pilot completion 取数值众数，随后固定“是否匹配众数”的 0/1 奖励 | 无 |
 | 平均 token log-probability | 完整生成的平均选中 token log-probability | 无 |
 | 平均负熵 | 完整生成的逐 token 负熵均值 | 无 |
 | self-certainty | 逐 token $`D_{\mathrm{KL}}(U\|p_{\mathrm{base}})`$ 均值 | 无 |
@@ -263,6 +266,7 @@ python experiments\run_reproduction.py `
 
 - MH：$`\alpha\in\{1,2,4,8\}`$，每 block 更新数 $`\{1,2,5,10\}`$。
 - 条件 IS：候选数 $`M`$、rollout 数 $`K`$、引导阶段数 $`I`$。
+- 迭代条件 IS：固定 9 个不同候选-rollout 状态，比较一次性大池与多轮有限池复用。
 - 搜索：Beam、Best-of-$`N`$ 与条件 IS 的质量—计算曲线。
 - 奖励：平均 token log-probability、平均负熵、self-certainty、self-consistency、oracle correctness。
 - off-policy：截断、未截断与未校正 rollout 加权。

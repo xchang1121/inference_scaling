@@ -18,6 +18,11 @@ from inference_scaling.shared.importance import (
     corrected_replay_log_weight,
     logmeanexp,
 )
+from inference_scaling.shared.iterated_sir import (
+    IteratedSIRTransition,
+    iterated_sir_transition,
+    iterated_sir_tv_bound,
+)
 from inference_scaling.shared.mh import (
     MetropolisHastingsDecision,
     MetropolisHastingsProposal,
@@ -53,6 +58,7 @@ __all__ = [
     "MetropolisHastingsTransition",
     "MonteCarloWeightEstimate",
     "MonteCarloRolloutWeightProvider",
+    "IteratedSIRTransition",
     "ProbabilityObservation",
     "ReplayWeightEstimate",
     "RolloutObservation",
@@ -70,6 +76,8 @@ __all__ = [
     "allocate_variance_cost_budget",
     "corrected_replay_log_weight",
     "logmeanexp",
+    "iterated_sir_transition",
+    "iterated_sir_tv_bound",
     "metropolis_hastings_log_acceptance",
     "normalize_log_weights",
     "normalize_smc_log_weights",

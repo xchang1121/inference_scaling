@@ -51,6 +51,12 @@ from inference_scaling.arllm.algorithms.mh import (
     run_reward_mh_chain,
     run_reward_mh_chains,
 )
+from inference_scaling.arllm.algorithms.iterated_is import (
+    IteratedConditionalISResult,
+    IteratedConditionalISStep,
+    iterated_conditional_is_step,
+    run_iterated_conditional_is,
+)
 from inference_scaling.arllm.algorithms.mh_acceleration import (
     DelayedRewardMHResult,
     DelayedRewardMHStep,
@@ -112,6 +118,8 @@ __all__ = [
     "FrozenStreamingISEstimator",
     "FrozenReplaySuffixProposal",
     "ISContribution",
+    "IteratedConditionalISResult",
+    "IteratedConditionalISStep",
     "MHChainResult",
     "MHStep",
     "ProbabilityObservation",
@@ -146,8 +154,10 @@ __all__ = [
     "estimate_conditional_weights",
     "estimate_replay_weight",
     "ordinary_importance_log_weight",
+    "iterated_conditional_is_step",
     "run_base_replay",
     "run_conditional_is",
+    "run_iterated_conditional_is",
     "run_dynamic_is",
     "run_mh_chain",
     "run_mh_chains",

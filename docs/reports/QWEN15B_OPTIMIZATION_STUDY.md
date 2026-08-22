@@ -48,6 +48,19 @@ replay、缓存和 proposal 构建分别报告冷启动与稳态成本。只在�
 [Laitinen and Vihola (2025)](https://arxiv.org/abs/2512.00220)进一步研究 proposal 数与并行成本的权衡。
 本轮在相同候选-rollout 组总数下比较 `(pool, updates)=(9,1),(5,2),(3,4)`，从而分离一次性大池与多轮复用。
 
+公共 i-SIR 转移、Qwen block 适配、off-policy rollout 权重和显式 TV 界已经实现，并通过有限状态详细平衡、
+on-policy/off-policy 候选边缘分布、rollout 生命周期与总长度测试。方法标识为 `iterated_conditional_is`，
+只可显式选择，不属于默认方法集。一次 8 题筛选可用以下命令启动：
+
+```powershell
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.gsm8k_reproduction `
+  --config configs\gsm8k_quick.toml `
+  --method iterated_conditional_is `
+  --conditional-reward frozen_consensus `
+  --iterated-pool-size 3 --iterated-updates 4 `
+  --tag qwen15b-isir-n3-u4 --limit 8
+```
+
 ### MH 后缀长度 proposal
 
 固定生成长度下，每个后缀起点都定义一个保持目标分布不变的 MH 核。按与当前序列无关、全支持的固定概率

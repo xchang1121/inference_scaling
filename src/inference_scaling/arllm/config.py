@@ -108,6 +108,54 @@ class ConditionalISConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class IteratedConditionalISConfig:
+    """Finite-pool i-SIR updates for each autoregressive candidate block."""
+
+    pool_size: int = 3
+    updates: int = 4
+    rollout_count: int = 4
+    block_size: int = 16
+    total_length: int = 128
+    reward_temperature: float = 1.0
+    importance_log_ratio_clip: float | None = None
+    apply_importance_correction: bool = True
+
+    def __post_init__(self) -> None:
+        for name in (
+            "pool_size",
+            "updates",
+            "rollout_count",
+            "block_size",
+            "total_length",
+        ):
+            require_positive(name, getattr(self, name))
+        if self.pool_size < 2:
+            raise ValueError("pool_size must be at least two")
+        require_positive("reward_temperature", self.reward_temperature)
+        if self.importance_log_ratio_clip is not None:
+            require_positive(
+                "importance_log_ratio_clip",
+                self.importance_log_ratio_clip,
+            )
+        if not self.apply_importance_correction and self.importance_log_ratio_clip is not None:
+            raise ValueError(
+                "importance_log_ratio_clip requires apply_importance_correction=True"
+            )
+        if self.block_size > self.total_length:
+            raise ValueError("block_size cannot exceed total_length")
+
+    @property
+    def fresh_candidate_evaluations(self) -> int:
+        """Distinct extended states evaluated at one generation step."""
+
+        return 1 + self.updates * (self.pool_size - 1)
+
+    @property
+    def pool_candidate_uses(self) -> int:
+        return self.updates * self.pool_size
+
+
+@dataclass(frozen=True, slots=True)
 class ProgressiveISConfig:
     """Pilot/evaluation split for cost-aware conditional-weight estimation."""
 

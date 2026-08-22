@@ -37,12 +37,12 @@ def test_frozen_sets_stay_synchronized_with_arllm_experiment_sources():
     from experiments.arllm.gsm8k_distribution_audit import DEFAULT_METHODS
     from experiments.arllm.gsm8k_is_passk import IS_PASSK_METHODS
     from experiments.arllm.gsm8k_passk import PASSK_METHODS
-    from experiments.arllm.gsm8k_reproduction import METHODS
+    from experiments.shared.methods import AR_PAIRED_METHODS
     from experiments.arllm.summarize_gsm8k_dynamic_is import (
         METHODS as DYNAMIC_METHODS,
     )
 
-    assert module.AR_MAIN_METHODS == set(METHODS)
+    assert module.AR_MAIN_METHODS == set(AR_PAIRED_METHODS)
     assert module.AR_PASSK_METHODS == set(PASSK_METHODS) | set(IS_PASSK_METHODS)
     assert module.AR_DISTRIBUTION_METHODS == set(DEFAULT_METHODS)
     assert module.AR_DYNAMIC_ARMS == set(DYNAMIC_METHODS)

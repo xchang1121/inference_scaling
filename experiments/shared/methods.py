@@ -12,6 +12,7 @@ class MethodSpec:
     components: frozenset[str]
     requires_proposal: bool = False
     requires_adapter: bool = False
+    paired: bool = True
 
 
 def _spec(
@@ -20,6 +21,7 @@ def _spec(
     *components: str,
     requires_proposal: bool = False,
     requires_adapter: bool = False,
+    paired: bool = True,
 ) -> MethodSpec:
     return MethodSpec(
         family=family,
@@ -27,6 +29,7 @@ def _spec(
         components=frozenset(components),
         requires_proposal=requires_proposal,
         requires_adapter=requires_adapter,
+        paired=paired,
     )
 
 
@@ -36,6 +39,7 @@ METHOD_SPECS = (
     _spec("arllm", "best_of_n", "quality", "default_quality", "async"),
     _spec("arllm", "mh", "quality", "default_quality", "passk"),
     _spec("arllm", "conditional_is", "quality", "default_quality", "is_passk", "async"),
+    _spec("arllm", "iterated_conditional_is", "quality", paired=False),
     _spec(
         "arllm",
         "conditional_is_small_proposal",
@@ -184,6 +188,11 @@ AR_IS_PASSK_METHODS = methods_for("arllm", "is_passk")
 AR_ASYNC_METHODS = methods_for("arllm", "async")
 AR_DISTRIBUTION_METHODS = methods_for("arllm", "distribution")
 AR_DYNAMIC_METHODS = methods_for("arllm", "dynamic_is")
+AR_PAIRED_METHODS = tuple(
+    spec.name
+    for spec in METHOD_SPECS
+    if spec.family == "arllm" and "quality" in spec.components and spec.paired
+)
 
 DLLM_METHODS = tuple(spec.name for spec in METHOD_SPECS if spec.family == "dllm")
 DLLM_DEFAULT_METHODS = methods_for("dllm", "default_quality")
@@ -199,6 +208,7 @@ __all__ = [
     "AR_IS_PASSK_METHODS",
     "AR_METHODS",
     "AR_PASSK_METHODS",
+    "AR_PAIRED_METHODS",
     "DLLM_ALIGNED_METHODS",
     "DLLM_DEFAULT_METHODS",
     "DLLM_DYNAMIC_METHODS",

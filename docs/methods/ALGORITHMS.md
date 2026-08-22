@@ -58,6 +58,7 @@ AR-LLM 与 dLLM 的生成状态不同：前者追加 token 后缀，后者更新
 | --- | --- | --- | --- |
 | `StepwiseGenerationBackend` | 生成候选、估计条件奖励权重、归一化、重采样、提交候选 | token block 与自回归补全 | 掩码 block 与扩散补全 |
 | `MonteCarloRolloutWeightProvider` | 汇总 on-policy、off-policy 或不校正的 rollout 权重 | token 条件概率比 | 轨迹或 block 条件概率比 |
+| `IteratedSIRTransition` | 保留完整当前状态、加入独立 proposal、按权重重采样 | 候选 token block 与其 completion | 可由其他逐步生成适配层复用 |
 | `TruncatedReplayRolloutWeightProvider` | 合并历史样本与独立 fresh tail | 历史 token 补全 | 历史扩散轨迹 |
 | `MetropolisHastingsProposal` | 根据目标密度与正反 proposal 概率执行接受或拒绝 | 随机后缀 proposal | block、轨迹或整段 proposal |
 | `allocate_variance_cost_budget` | 按方差与单样本成本冻结 evaluation 配额 | token rollout 配额 | 扩散 trajectory 配额 |
@@ -86,6 +87,7 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 | 幂分布 MH | 式 (2) | 转移核精确；有限更新存在收敛误差 | `shared/mh.py` + 两侧 proposal 适配 |
 | 奖励目标 MH | 式 (1) | 转移核精确；每次 proposal 通常需完整奖励 | `shared/mh.py` + 两侧目标评分 |
 | 条件 IS | 式 (1) 的逐 block SIR | $`K,M\to\infty`$ 时趋近目标 | `shared/stepwise.py` + 两侧生成适配 |
+| 迭代条件 IS | 式 (1) 的逐 block i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `shared/iterated_sir.py` + AR completion 适配 |
 | off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对条件奖励权重无偏 | `shared/importance.py` + 两侧轨迹评分 |
 | 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | base 候选 rollout replay | 式 (1) 的逐 block SIR | history + fresh-tail 条件权重估计无偏 | `shared/importance.py` + 两侧 replay store |
@@ -108,6 +110,7 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 | self-consistency | [Wang et al. (2023)](https://openreview.net/pdf?id=1PL1NIMMrw) | 作为并行采样基线与可部署奖励信号 |
 | Metropolis--Hastings | [Hastings (1970)](https://doi.org/10.1093/biomet/57.1.97) | 用于幂分布和显式奖励目标的后缀转移 |
 | 重要性采样与 defensive mixture | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件奖励权重、外层候选修正和完整支持集 proposal |
+| iterated SIR | [Samsonov et al. (2022)](https://papers.neurips.cc/paper_files/paper/2022/file/21c86d5b10cdc28664ccdadf0a29065a-Paper-Conference.pdf) | 将一次性有限 SIR 变为按迭代轮次收敛的有限池转移 |
 | off-policy 修正 | [Precup, Sutton, and Singh (2000)](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) | 用真实 behavior 概率修正异分布 rollout |
 | 经验回放 | [Lin (1992)](https://doi.org/10.1007/BF00992699) | 历史 completion 经式 (13) 校正后进入条件奖励权重估计 |
 | GRPO | [Shao et al. (2024)](https://arxiv.org/abs/2402.03300) | 使用同一基础模型训练的参数更新基线 |
@@ -286,6 +289,94 @@ selected_index = rng.choice(len(candidates), p=probabilities)
 
 AR 条件 IS 适配位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有 rollout
 都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
+
+<a id="alg-iterated-is"></a>
+### 6.1 迭代条件 IS
+
+一次性 SIR 在有限候选数 $`M`$ 下仍有归一化重采样误差。iterated SIR（i-SIR）把一次候选定义为完整
+扩展状态
+
+```math
+\xi=(z,u_{1:K}),
+\qquad
+\lambda(\xi)=p(z\mid x,g)\prod_{k=1}^K q(u_k\mid x,g,z),
+
+```
+
+<p align="right">式 (8a)</p>
+
+并使用未截断的非负权重
+
+```math
+w(\xi)=\frac1K\sum_{k=1}^K
+\exp\{r(g,z,u_k)/\tau\}
+\frac{p(u_k\mid x,g,z)}{q(u_k\mid x,g,z)}.
+
+```
+
+<p align="right">式 (8b)</p>
+
+on-policy rollout 令 $`q=p`$ 即可。第 0 个扩展状态从 $`\lambda`$ 初始化；每轮更新执行：
+
+1. 将当前 $`\xi^{(n)}`$ 放入大小为 $`N`$ 的候选池第一个位置；
+2. 独立生成 $`N-1`$ 个新状态 $`\xi_2,\ldots,\xi_N\sim\lambda`$；
+3. 以 $`w(\xi_i)/\sum_jw(\xi_j)`$ 选择 $`\xi^{(n+1)}`$；
+4. 保留选中状态中的候选 block、rollout token、$`p/q`$ 和奖励，不重新估计其权重。
+
+最后提交 $`\xi^{(n)}`$ 的 $`z`$。候选 block 始终来自 1.5B 基础模型；其他模型或 replay 只可通过式
+(8b) 影响权重。
+
+该算法的有限池正确性可直接从一个增广联合分布得到。令候选池为 $`\xi_{1:N}`$，选中位置为 $`I`$，定义
+
+```math
+\overline\pi(\xi_{1:N},I=i)
+\propto
+\lambda(\xi_i)w(\xi_i)
+\prod_{j\ne i}\lambda(\xi_j).
+
+```
+
+<p align="right">式 (8c)</p>
+
+给定 $`I=i`$ 和 $`\xi_i`$，其余 $`N-1`$ 个状态独立服从 $`\lambda`$；给定整个候选池，$`I`$ 的条件
+概率正比于 $`w(\xi_i)`$。上述两步正是 Gibbs 更新，因此保持式 (8c) 不变。选中扩展状态的边缘分布为
+$`\widetilde\pi(\xi)\propto\lambda(\xi)w(\xi)`$。再对 rollout 求和：
+
+```math
+\sum_{u_{1:K}}\lambda(z,u_{1:K})w(z,u_{1:K})
+=p(z\mid x,g)h(g,z),
+
+```
+
+故候选 $`z`$ 的边缘分布恰为式 (7)，不需要令 $`N\to\infty`$。若
+$`L=\sup_\xi w(\xi)/\mathbb E_\lambda[w(\xi)]`$ 有限，则更新 $`n`$ 轮后的总变差距离满足
+
+```math
+\left\|\mathcal L(\xi^{(n)})-\widetilde\pi\right\|_{\mathrm{TV}}
+\le
+\left(1-\frac{N-1}{2L+N-2}\right)^n.
+
+```
+
+<p align="right">式 (8d)</p>
+
+候选 $`z`$ 是 $`\xi`$ 的函数，其总变差距离不超过式 (8d)。权重截断会改变式 (8b) 的目标；依赖当前
+候选池或历次调用而变化的奖励也不满足上述固定目标证明。Qwen 实验因此用独立 pilot completion 确定一个
+众数数值，并在整个 i-SIR 运行中冻结“是否匹配该数值”的逐序列奖励。pilot 不读取测试集标准答案，且其
+计算计入方法总成本。
+
+实现一次生成全部 $`1+n(N-1)`$ 个不同扩展状态，再顺序执行轻量重采样；每轮池中的当前状态复用已有
+rollout。相对每轮重新生成完整 $`N`$ 个状态，减少 $`n-1`$ 次候选及其 rollout 评估。
+
+```python
+current = evaluated[0]
+for update in range(updates):
+    fresh = evaluated[next_offset : next_offset + pool_size - 1]
+    current = iterated_sir_transition(current, fresh, rng=rng).selected
+```
+
+公共转移位于 [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py)，Qwen block 与 rollout
+适配位于 [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py)。
 
 <a id="alg-offpolicy-is"></a>
 ## 7. off-policy 补全与主模型重评分
@@ -672,6 +763,7 @@ log_acceptance = min(
 | --- | --- | --- |
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、FLOPs |
+| i-SIR 增加更新轮次 $`n`$ | 固定点逐序列奖励下，式 (8d) 按 $`n`$ 几何下降 | pool size、更新数、复用状态数、FLOPs |
 | off-policy 补全 + 未截断 $`p/q`$ | 式 (7) 的条件奖励权重无偏 | 两侧 log-probability、ESS、support |
 | 截断 log importance ratio | 有偏稳定化估计 | raw/applied ratio、截断次数 |
 | 未校正 rollout 加权 | 目标为式 (12) | `score_calls=0`、分模型 FLOPs |
@@ -907,6 +999,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`dllm/test_algorithms.py` |
+| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
 | 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
