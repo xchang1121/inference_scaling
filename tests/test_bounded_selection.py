@@ -3,7 +3,7 @@ from itertools import product
 import numpy as np
 import pytest
 
-from inference_scaling.shared.bounded_selection import (
+from inference_scaling.experimental.shared.bounded_selection import (
     invariant_categorical_index,
 )
 from inference_scaling.shared.stepwise import categorical_index_from_uniform

@@ -1,17 +1,5 @@
 """Inference backends."""
 
-from inference_scaling.arllm.acceleration import (
-    ActiveBatchSpeculationConfig,
-    DraftModelSpeculationConfig,
-    LowPriorityRunAheadBackend,
-    RolloutTokenTree,
-    SpeculationTier,
-    StreamingRewardEvaluator,
-)
-from inference_scaling.arllm.backends.draft_model_speculation import (
-    DraftModelSpeculationSnapshot,
-    DraftModelSpeculativeBackend,
-)
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.arllm.backends.batching import BatchingSnapshot, ContinuousBatchingBackend
 from inference_scaling.arllm.backends.cache import ScoreCacheSnapshot, ScoreCachingBackend
@@ -37,22 +25,14 @@ from inference_scaling.arllm.backends.vllm_backend import (
 
 __all__ = [
     "AbsorbingEOSBackend",
-    "ActiveBatchSpeculationConfig",
     "AsyncVLLMBackend",
     "BACKEND_CHOICES",
     "BatchingSnapshot",
     "CachedCandidateBackend",
     "ContinuousBatchingBackend",
-    "DraftModelSpeculationConfig",
-    "DraftModelSpeculationSnapshot",
-    "DraftModelSpeculativeBackend",
-    "LowPriorityRunAheadBackend",
-    "RolloutTokenTree",
     "ScoreCacheSnapshot",
     "ScoreCachingBackend",
     "SequenceScoreStatistics",
-    "SpeculationTier",
-    "StreamingRewardEvaluator",
     "TabularAutoregressiveBackend",
     "TransformersBackend",
     "TransformersBackendSnapshot",

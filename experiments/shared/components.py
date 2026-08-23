@@ -36,9 +36,21 @@ DLLM_COMPONENTS = tuple(
     spec.name for spec in COMPONENT_SPECS if "dllm" in spec.families
 )
 
-# vLLM currently serves autoregressive models only.  The remaining components
-# form the default full comparison shared by the two model families.
-FULL_COMPONENTS = DLLM_COMPONENTS
+# ``full`` is the production reproduction route.  Research screens and
+# ablations remain available through an explicit ``--components`` selection,
+# but are not scheduled implicitly.
+PRODUCTION_COMPONENTS = (
+    "quality",
+    "matched_target",
+    "replay",
+    "async",
+    "passk",
+    "distribution",
+)
+RESEARCH_COMPONENTS = tuple(
+    name for name in COMPONENTS if name not in PRODUCTION_COMPONENTS
+)
+FULL_COMPONENTS = PRODUCTION_COMPONENTS
 
 
 def components_for(family: str) -> tuple[str, ...]:
@@ -65,6 +77,8 @@ __all__ = [
     "COMPONENT_SPECS",
     "DLLM_COMPONENTS",
     "FULL_COMPONENTS",
+    "PRODUCTION_COMPONENTS",
+    "RESEARCH_COMPONENTS",
     "ComponentSpec",
     "components_for",
     "validate_components",

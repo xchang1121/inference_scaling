@@ -3,7 +3,7 @@ from math import exp
 
 import pytest
 
-from inference_scaling.arllm.algorithms.iterated_is import (
+from inference_scaling.experimental.arllm.iterated_is import (
     iterated_conditional_is_step,
     run_iterated_conditional_is,
 )

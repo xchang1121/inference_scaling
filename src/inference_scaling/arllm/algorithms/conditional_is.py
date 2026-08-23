@@ -18,17 +18,12 @@ from dataclasses import dataclass
 from math import exp, isfinite, log
 
 from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
-from inference_scaling.shared.bounded_selection import invariant_categorical_index
 from inference_scaling.shared.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.rqmc import (
-    randomized_lattice_uniforms,
-    scrambled_sobol_uniforms,
-)
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     categorical_index_from_uniform,
@@ -238,8 +233,12 @@ def estimate_conditional_weights(
             terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + full_generated_candidate
-        token_uniforms = (
-            scrambled_sobol_uniforms(
+        if rollout_design == "scrambled_sobol":
+            from inference_scaling.experimental.shared.rqmc import (
+                scrambled_sobol_uniforms,
+            )
+
+            token_uniforms = scrambled_sobol_uniforms(
                 rollout_count,
                 rollout_length,
                 seed=seeds.derive(
@@ -250,11 +249,14 @@ def estimate_conditional_weights(
                     "scrambled_sobol",
                 ),
             )
-            if rollout_design == "scrambled_sobol"
-            else (None,) * rollout_count
-        )
-        arithmetic_uniforms = (
-            randomized_lattice_uniforms(
+        else:
+            token_uniforms = (None,) * rollout_count
+        if rollout_design == "arithmetic_lattice":
+            from inference_scaling.experimental.shared.rqmc import (
+                randomized_lattice_uniforms,
+            )
+
+            arithmetic_uniforms = randomized_lattice_uniforms(
                 rollout_count,
                 seed=seeds.derive(
                     "conditional_is",
@@ -264,9 +266,8 @@ def estimate_conditional_weights(
                     "arithmetic_lattice",
                 ),
             )
-            if rollout_design == "arithmetic_lattice"
-            else (None,) * rollout_count
-        )
+        else:
+            arithmetic_uniforms = (None,) * rollout_count
         for rollout_index in range(rollout_count):
             global_rollout_index = rollout_index_offset + rollout_index
             requests.append(
@@ -668,6 +669,10 @@ def _bounded_conditional_is_step(
                 (sum(contributions) + unseen * maximum_contribution)
                 / config.rollout_count
             )
+        from inference_scaling.experimental.shared.bounded_selection import (
+            invariant_categorical_index,
+        )
+
         invariant_index = invariant_categorical_index(
             lower_candidate_weights,
             upper_candidate_weights,

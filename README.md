@@ -41,7 +41,8 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | --- | --- | --- | --- |
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散 block，再按 Hastings 比接受或拒绝 | proposal 的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
 | [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件奖励权重后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
-| [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) 与[动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 复用历史 completion，并按方差和成本分配 fresh rollout | behavior 概率、fresh-tail 校正和外层 $`p/q_c`$ | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
+| [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史 completion，并保留 fresh rollout 以覆盖支持集 | behavior 概率与 fresh-tail 校正 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
+| [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助 proposal 生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选 proposal | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
 目标密度差、正反 proposal 比和接受/拒绝核。AR-LLM 与 dLLM 目录只实现 token 后缀、掩码 block 或扩散
@@ -75,8 +76,8 @@ KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](do
 
 | 模型族 | 模型与训练对照 | 推理组件 | 状态 |
 | --- | --- | --- | --- |
-| AR-LLM | Qwen2.5-1.5B / 0.5B，GRPO | 全部公共组件及 vLLM | RTX 3090 正式结果已纳入版本控制 |
-| dLLM | LLaDA-MoE-7B-A1B，VRPO | 全部公共组件；批量 Transformers 扩散后端 | 单元测试与低显存预检完成；正式结果入口供大显存机器运行 |
+| AR-LLM | Qwen2.5-1.5B 主模型与 GRPO；0.5B 仅作 proposal/rollout | 生产默认组件及显式研究消融 | RTX 3090 正式结果已纳入版本控制；两种模型的计算量分开记录 |
+| dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 通用实现、统一 CLI 和轻量测试 | 本轮不运行正式实验；入口供后续大显存机器使用 |
 | 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算账本 | AR/dLLM 共用同一实现 |
 
 AR-LLM 的 32 题实验中，标准条件 IS 为 65.625%，GRPO 参数随机采样为 68.750%；共享正确性奖励下，
@@ -183,13 +184,12 @@ adapter，并运行配置中的推理方法；`--stage all` 会先下载或校�
 消融和分布诊断，避免误用配置文件中的旧 adapter。推理阶段显式选择 `vrpo_sample` 或 `vrpo_greedy` 时会
 加载已有 adapter；adapter 不存在时入口在启动模型前报错。
 
-CLI 显式路径会覆盖环境变量：
+Qwen2.5-1.5B 正式路线使用：
 
 ```powershell
 python experiments\run_reproduction.py `
-  --family both --stage all --profile full --tag full-reproduction `
-  --ar-python $env:AR_PYTHON `
-  --dllm-python $env:DLLM_PYTHON
+  --family arllm --stage all --profile full --tag qwen15b-full `
+  --ar-python $env:AR_PYTHON
 ```
 
 主要 CLI 参数：
@@ -205,9 +205,10 @@ python experiments\run_reproduction.py `
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印下一层命令，不启动训练或推理 |
 
-两侧的公共组件为 `quality`、`matched_target`、`replay`、`dynamic_is`、`async`、`passk`、
-`ablations`、`budget_curve`、`length_ablation`、`distribution` 和 `infra`。dLLM 使用 block beam、反向轨迹
-MH、低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token 级方法；`vllm` 组件仅用于 AR。
+`full` 默认调度已经纳入生产复现的 `quality`、`matched_target`、`replay`、`async`、`passk` 和
+`distribution`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
+`--components` 中显式指定时运行；它们用于研究消融或特定后端验证。dLLM 使用 block beam、反向轨迹 MH、
+低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token 级方法。
 方法标识、配对关系与各组件统计量见[实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
 
 两侧也可独立启动：
@@ -238,6 +239,7 @@ python -m pytest
 | `src/inference_scaling/arllm/` | AR-LLM 的 MH、IS、replay、Transformers 与 vLLM 后端 |
 | `src/inference_scaling/dllm/` | LLaDA-MoE 的 block 生成、MH、IS、replay 与 VRPO |
 | `src/inference_scaling/shared/` | 两侧共用的逐步生成、IS/replay 权重、MH 接受核、数据评测、随机数和计算账本 |
+| `src/inference_scaling/experimental/` | 保留但不由生产默认入口导入或调度的研究实现 |
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/shared/` | 两侧共用的组件清单、统计量、产物指纹和可续跑调度 |
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本 |

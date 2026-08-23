@@ -87,19 +87,21 @@ block、批处理和异步预取属于 proposal 的执行方式，不改变该�
 | 幂分布 MH | 式 (2) | 转移核精确；有限更新存在收敛误差 | `shared/mh.py` + 两侧 proposal 适配 |
 | 奖励目标 MH | 式 (1) | 转移核精确；每次 proposal 通常需完整奖励 | `shared/mh.py` + 两侧目标评分 |
 | 条件 IS | 式 (1) 的逐 block SIR | $`K,M\to\infty`$ 时趋近目标 | `shared/stepwise.py` + 两侧生成适配 |
-| 迭代条件 IS | 式 (1) 的逐 block i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `shared/iterated_sir.py` + AR completion 适配 |
+| 迭代条件 IS | 式 (1) 的逐 block i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `experimental/shared/iterated_sir.py` + AR completion 适配 |
 | off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对条件奖励权重无偏 | `shared/importance.py` + 两侧轨迹评分 |
 | 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | base 候选 rollout replay | 式 (1) 的逐 block SIR | history + fresh-tail 条件权重估计无偏 | `shared/importance.py` + 两侧 replay store |
 | 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 $`p/q_c`$ | `shared/budget.py` + 两侧候选适配 |
 | progressive IS | pilot 分配预算，独立 evaluation 估计 | 最终估计仅使用 evaluation | `shared/budget.py` + 两侧 rollout 适配 |
-| frozen streaming IS | 固定设计的异步到达版本 | 固定样本集合上的顺序不变性 | `algorithms/streaming_is.py` |
+| frozen streaming IS | 固定设计的异步到达版本 | 固定样本集合上的顺序不变性 | `experimental/arllm/streaming_is.py` |
 | SMC rollout forest | block 级粒子近似 | 有限粒子、有限 lookahead 的 SMC 近似 | `shared/smc.py` + 两侧粒子状态 |
 | delayed-acceptance MH | 式 (1) | 两阶段接受率保持目标不变 | 公共接受核 + 两侧 surrogate/exact 评分 |
 | replay-mixture MH | 式 (1) | 冻结混合 proposal 的正反概率均进入 Hastings 比 | 公共接受核 + 两侧历史 proposal |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | AR token likelihood / dLLM masked ELBO |
 
 表中的相对源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
+生产默认入口仅调度 Qwen2.5-1.5B 消融中确认产生正收益的路径。表中位于 `experimental/` 的实现以及动态
+候选、progressive IS、SMC、delayed acceptance 和草稿模型专项实验均需显式选择，不会随 `full` 自动运行。
 
 <a id="alg-sources"></a>
 ### 方法来源
@@ -390,7 +392,7 @@ requests = [
 Transformers 与表格后端使用 float64 累积概率执行两种逆 CDF。RQMC 只接受逐序列固定奖励；批内自一致性
 奖励会随 rollout 的联合分布改变，入口拒绝该组合。vLLM 当前不开放请求级采样随机数注入，因此两种 RQMC
 模式均在 vLLM 后端显式报错，`iid` 路径不受影响。实现位于
-[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)、
+[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、
 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
 [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。方法依据见
 [Arithmetic Sampling](https://proceedings.mlr.press/v202/vilnis23a.html)、
@@ -455,7 +457,7 @@ if decision is not None:
     break
 ```
 
-公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/shared/bounded_selection.py)，AR staged rollout
+公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py)，AR staged rollout
 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。分批执行可能重复 prefix
 prefill；因此实际收益由跳过的 rollout 比例、批次数、forward token slots、FLOPs 和墙钟共同决定。
 Qwen2.5-1.5B 筛选保持 16/16 成对输出一致并跳过 8.27% rollout，但重复 prefill 使 FLOPs 增加 16.4%，
@@ -547,8 +549,8 @@ for update in range(updates):
     current = iterated_sir_transition(current, fresh, rng=rng).selected
 ```
 
-公共转移位于 [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py)，Qwen block 与 rollout
-适配位于 [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py)。
+公共转移位于 [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py)，Qwen block 与 rollout
+适配位于 [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py)。
 
 <a id="alg-offpolicy-is"></a>
 ## 7. off-policy 补全与主模型重评分
@@ -827,7 +829,7 @@ streaming IS 使用式 (10)、(14) 或 (21)，并允许已冻结的 fresh 样本
 
 每个候选在固定 multiset 上计算 `logmeanexp`，因此结果与到达顺序无关。GPU 完成回调可立即启动 CPU
 verifier。实现见
-[`streaming_is.py`](../../src/inference_scaling/arllm/algorithms/streaming_is.py)，墙钟重叠见
+[`streaming_is.py`](../../src/inference_scaling/experimental/arllm/streaming_is.py)，墙钟重叠见
 [流式奖励计算](#infra-streaming-reward)。
 
 <a id="alg-smc-forest"></a>
@@ -1054,7 +1056,7 @@ logits，再逐 token 执行上述接受与残差抽样。每个请求使用独�
 Transformers 的 assisted generation 目前只支持 batch 1；批量请求由普通 target batching 执行。RTX 3090
 上的 Qwen2.5-0.5B 草稿模型消融中，最短草稿 $`K=2`$ 的墙钟因子为 `1.058×`，1.5B FLOPs 因子为
 `1.055×`，合计 FLOPs 因子为 `1.439×`，因此该后端默认关闭。实现位于
-[`draft_model_speculation.py`](../../src/inference_scaling/arllm/backends/draft_model_speculation.py)。
+[`draft_model_speculation.py`](../../src/inference_scaling/experimental/arllm/draft_model_speculation.py)。
 
 `AsyncRolloutBroker` 将长生成拆成固定 token chunk。达到所需完整轨迹数后，过量提交产生的部分轨迹保存
 token、behavior/reference 概率、continuation seed 和剩余长度；下一次从
@@ -1211,12 +1213,12 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
-| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
-| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
+| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
+| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
-| 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
+| 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
-| SMC | [`smc.py`](../../src/inference_scaling/shared/smc.py) | [`smc_forest.py`](../../src/inference_scaling/arllm/algorithms/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
+| SMC | [`smc.py`](../../src/inference_scaling/shared/smc.py) | [`smc_forest.py`](../../src/inference_scaling/experimental/arllm/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
 | 生成后端 | 公共请求、随机数和账本位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
 | RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
 | 实验调度与产物 | [`experiments/shared/`](../../experiments/shared/) | [`run_arllm_suite.py`](../../experiments/arllm/run_arllm_suite.py) | [`run_llada_suite.py`](../../experiments/dllm/run_llada_suite.py) | `test_reproduction_entrypoints.py`、`dllm/test_run_llada_suite.py` |

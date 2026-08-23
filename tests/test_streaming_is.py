@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from inference_scaling.arllm.algorithms.streaming_is import (
+from inference_scaling.experimental.arllm.streaming_is import (
     FrozenStreamingISEstimator,
     ordinary_importance_log_weight,
 )

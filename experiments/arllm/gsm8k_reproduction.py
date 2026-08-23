@@ -23,9 +23,11 @@ import transformers
 
 from inference_scaling.arllm.algorithms import (
     run_conditional_is,
-    run_iterated_conditional_is,
     run_mh_chain,
     run_reward_mh_chain,
+)
+from inference_scaling.experimental.arllm.iterated_is import (
+    run_iterated_conditional_is,
 )
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
@@ -84,7 +86,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_reproduction.py",
     "src/inference_scaling/arllm/algorithms/conditional_is.py",
-    "src/inference_scaling/arllm/algorithms/iterated_is.py",
+    "src/inference_scaling/experimental/arllm/iterated_is.py",
     "src/inference_scaling/arllm/algorithms/mh.py",
     "src/inference_scaling/arllm/backends/absorbing.py",
     "src/inference_scaling/arllm/backends/cache.py",
@@ -93,8 +95,8 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/arllm/backends/loader.py",
     "src/inference_scaling/shared/evaluation/consensus.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
-    "src/inference_scaling/shared/iterated_sir.py",
-    "src/inference_scaling/shared/rqmc.py",
+    "src/inference_scaling/experimental/shared/iterated_sir.py",
+    "src/inference_scaling/experimental/shared/rqmc.py",
     "src/inference_scaling/arllm/config.py",
     "src/inference_scaling/arllm/types.py",
 )

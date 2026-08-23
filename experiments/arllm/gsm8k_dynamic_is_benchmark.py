@@ -37,7 +37,7 @@ from experiments.arllm.gsm8k_reproduction import (
 )
 from experiments.arllm.summarize_gsm8k_dynamic_is import METHODS, build_summary
 from inference_scaling.arllm.algorithms.base_replay import _score_base
-from inference_scaling.arllm.algorithms.dynamic_is import (
+from inference_scaling.experimental.arllm.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
     RolloutBudgetContext,
@@ -69,7 +69,7 @@ from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, Seque
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_dynamic_is_benchmark.py",
     "experiments/arllm/summarize_gsm8k_dynamic_is.py",
-    "src/inference_scaling/arllm/algorithms/dynamic_is.py",
+    "src/inference_scaling/experimental/arllm/dynamic_is.py",
     "src/inference_scaling/arllm/algorithms/base_replay.py",
     "src/inference_scaling/arllm/backends/candidate_cache.py",
     "src/inference_scaling/arllm/backends/cache.py",

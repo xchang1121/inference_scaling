@@ -11,7 +11,7 @@ from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.rqmc import (
+from inference_scaling.experimental.shared.rqmc import (
     randomized_lattice_uniforms,
     scrambled_sobol_uniforms,
 )

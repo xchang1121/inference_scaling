@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from inference_scaling.arllm.algorithms.progressive_is import (
+from inference_scaling.experimental.arllm.progressive_is import (
     progressive_is_step,
     run_progressive_conditional_is,
 )
@@ -94,4 +94,3 @@ def test_progressive_constant_reward_preserves_base_distribution() -> None:
         counts[result.token_ids[0]] += 1
     empirical = {token: value / trials for token, value in counts.items()}
     assert total_variation(empirical, base_probabilities) < 0.04
-

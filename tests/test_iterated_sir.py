@@ -3,7 +3,7 @@ from itertools import product
 import numpy as np
 import pytest
 
-from inference_scaling.shared.iterated_sir import (
+from inference_scaling.experimental.shared.iterated_sir import (
     iterated_sir_transition,
     iterated_sir_tv_bound,
 )

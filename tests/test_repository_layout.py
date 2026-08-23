@@ -1,4 +1,11 @@
 from pathlib import Path
+import subprocess
+import sys
+
+from experiments.shared.components import (
+    FULL_COMPONENTS,
+    RESEARCH_COMPONENTS,
+)
 
 
 REMOVED_COMPATIBILITY_MODULES = (
@@ -28,6 +35,37 @@ def test_model_families_and_shared_code_have_distinct_namespaces():
             assert not path.exists()
         else:
             assert not any(path.glob("*.py"))
+
+
+def test_production_defaults_exclude_research_components():
+    assert FULL_COMPONENTS == (
+        "quality",
+        "matched_target",
+        "replay",
+        "async",
+        "passk",
+        "distribution",
+    )
+    assert set(FULL_COMPONENTS).isdisjoint(RESEARCH_COMPONENTS)
+
+
+def test_production_algorithm_import_does_not_load_experimental_modules():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import inference_scaling.arllm.algorithms; "
+                "assert not any(name.startswith('inference_scaling.experimental') "
+                "for name in sys.modules)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_experiment_root_contains_only_the_paired_entrypoint():

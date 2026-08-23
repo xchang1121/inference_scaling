@@ -26,10 +26,12 @@ import torch
 from experiments.arllm.runtime import source_hashes, validate_model_artifacts
 from inference_scaling.arllm.acceleration import DraftModelSpeculationConfig
 from inference_scaling.arllm.backends import (
-    DraftModelSpeculativeBackend,
     TransformersBackend,
     close_backend,
     load_backend_from_config,
+)
+from inference_scaling.experimental.arllm.draft_model_speculation import (
+    DraftModelSpeculativeBackend,
 )
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
@@ -44,7 +46,7 @@ from inference_scaling.shared.rng import SeedStream
 
 IMPLEMENTATION_FILES = (
     "experiments/arllm/run_qwen15b_draft_speculation_screen.py",
-    "src/inference_scaling/arllm/backends/draft_model_speculation.py",
+    "src/inference_scaling/experimental/arllm/draft_model_speculation.py",
     "src/inference_scaling/arllm/backends/transformers_backend.py",
     "src/inference_scaling/arllm/acceleration.py",
 )

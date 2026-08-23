@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from math import log
 
-from inference_scaling.arllm.algorithms.smc_forest import run_smc_rollout_forest
+from inference_scaling.experimental.arllm.smc_forest import run_smc_rollout_forest
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SMCForestConfig
 from inference_scaling.shared.metrics import total_variation
@@ -65,4 +65,3 @@ def test_rollout_forest_reuses_suffixes_and_reduces_fresh_generation() -> None:
     assert reused.reused_rollouts > 0
     assert reused.fresh_rollouts < fresh.fresh_rollouts
     assert len(reused.token_ids) == 3
-

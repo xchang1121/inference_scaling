@@ -5,7 +5,7 @@ from experiments.arllm.gsm8k_dynamic_is_benchmark import (
     MatchedProxyBudget,
     _fixed_history_targets,
 )
-from inference_scaling.arllm.algorithms.dynamic_is import (
+from inference_scaling.experimental.arllm.dynamic_is import (
     DesignStatisticsContext,
     RolloutBudgetContext,
     allocate_variance_cost_budget,

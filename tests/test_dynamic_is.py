@@ -3,7 +3,7 @@ from math import exp, log
 
 import pytest
 
-from inference_scaling.arllm.algorithms.dynamic_is import (
+from inference_scaling.experimental.arllm.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
     RolloutBudgetContext,

@@ -23,7 +23,7 @@ from inference_scaling.arllm.config import (
     SamplingConfig,
 )
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
-from inference_scaling.shared.iterated_sir import (
+from inference_scaling.experimental.shared.iterated_sir import (
     IteratedSIRTransition,
     iterated_sir_transition,
 )

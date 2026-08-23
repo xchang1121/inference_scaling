@@ -26,7 +26,7 @@ import transformers
 
 from inference_scaling.arllm.algorithms.base_replay import base_replay_step
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.dynamic_is import CandidateProposal, run_dynamic_is
+from inference_scaling.experimental.arllm.dynamic_is import CandidateProposal, run_dynamic_is
 from inference_scaling.arllm.algorithms.mh import run_mh_chains
 from inference_scaling.arllm.backends import (
     ContinuousBatchingBackend,

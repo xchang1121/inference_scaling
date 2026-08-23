@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from inference_scaling.shared.rqmc import (
+from inference_scaling.experimental.shared.rqmc import (
     randomized_lattice_uniforms,
     scrambled_sobol_uniforms,
 )

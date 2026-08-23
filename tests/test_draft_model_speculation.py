@@ -5,11 +5,9 @@ import pytest
 import torch
 
 from inference_scaling.arllm.acceleration import DraftModelSpeculationConfig
-from inference_scaling.arllm.backends import (
+from inference_scaling.arllm.backends import TransformersBackend
+from inference_scaling.experimental.arllm.draft_model_speculation import (
     DraftModelSpeculativeBackend,
-    TransformersBackend,
-)
-from inference_scaling.arllm.backends.draft_model_speculation import (
     _discard_stale_assistant_cache,
 )
 from inference_scaling.arllm.config import SamplingConfig

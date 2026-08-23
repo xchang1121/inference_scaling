@@ -29,11 +29,11 @@ from inference_scaling.arllm.acceleration import (
     RolloutTokenTree,
     SpeculationTier,
 )
-from inference_scaling.arllm.algorithms import (
-    run_conditional_is,
+from inference_scaling.arllm.algorithms import run_conditional_is
+from inference_scaling.experimental.arllm.progressive_is import (
     run_progressive_conditional_is,
-    run_smc_rollout_forest,
 )
+from inference_scaling.experimental.arllm.smc_forest import run_smc_rollout_forest
 from inference_scaling.arllm.backends import (
     TransformersBackend,
     close_backend,

@@ -221,11 +221,13 @@ $env:AR_PYTHON = "C:\path\to\ar-python.exe"
 $env:DLLM_PYTHON = "C:\path\to\dllm-python.exe"
 
 python experiments\run_reproduction.py `
-  --family both --stage all --profile full --tag full-reproduction
+  --family arllm --stage all --profile full --tag qwen15b-full
 ```
 
-`full` 默认运行两侧全部公共组件；AR 额外支持 `vllm`。`smoke` 使用一题、缩短生成预算、一次 GRPO 更新和
-CPU VRPO 反向传播预检，用途限于实现检查。
+`full` 默认运行已经进入生产复现的质量、共享目标、replay、异步批处理、pass@$`k`$ 和分布诊断组件。
+研究消融与后端专项测试通过 `--components` 显式选择。`smoke` 使用一题和缩短生成预算；选择 AR 训练时执行
+一次 GRPO 更新，选择 dLLM 时执行 CPU VRPO 反向传播预检。本轮正式实验只运行 Qwen2.5-1.5B；dLLM 入口
+保留但不执行。
 
 ### 单侧与组件选择
 
