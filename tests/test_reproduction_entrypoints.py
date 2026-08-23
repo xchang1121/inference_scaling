@@ -9,12 +9,14 @@ import sys
 import pytest
 
 import experiments.arllm.run_gsm8k_suite as ar_matrix
+import experiments.run_reproduction as reproduction_entry
 from experiments.arllm.run_arllm_suite import build_commands as build_ar_commands
 from experiments.run_reproduction import (
     _default_python,
     build_commands as build_paired_commands,
 )
 from experiments.arllm.run_gsm8k_suite import SUPPORTED_METHODS
+from experiments.shared.methods import AR_DEFAULT_METHODS
 
 
 def _ar_args(**overrides):
@@ -141,9 +143,7 @@ def test_ar_training_output_is_reused_by_quality_passk_and_distribution(tmp_path
     assert distribution[distribution.index("--rl-adapter") + 1] == str(adapter)
 
 
-def test_ar_passk_component_runs_general_and_is_variant_grids(
-    monkeypatch, tmp_path
-):
+def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_path):
     commands: list[list[str]] = []
     monkeypatch.setattr(
         ar_matrix,
@@ -417,6 +417,36 @@ def test_interpreter_default_supports_environment_and_current_python(monkeypatch
 
     monkeypatch.setenv("AR_PYTHON", "")
     assert _default_python("AR_PYTHON") == sys.executable
+
+
+def test_unified_entry_defaults_to_the_registered_qwen_methods(monkeypatch, tmp_path):
+    captured = {}
+
+    def record_plan(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(reproduction_entry, "run_manifested_commands", record_plan)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_reproduction.py",
+            "--family",
+            "arllm",
+            "--profile",
+            "smoke",
+            "--output-root",
+            str(tmp_path),
+            "--dry-run",
+        ],
+    )
+
+    reproduction_entry.main()
+
+    assert captured["metadata"]["family"] == "arllm"
+    assert tuple(captured["metadata"]["ar_methods"]) == AR_DEFAULT_METHODS
+    assert len(captured["commands"]) == 1
+    assert "iterated_conditional_is" not in captured["commands"][0]
 
 
 def test_public_entrypoints_do_not_require_pythonpath(tmp_path):

@@ -13,6 +13,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.shared.methods import (
+    AR_DEFAULT_METHODS,
     AR_METHODS,
     DLLM_DEFAULT_METHODS,
     DLLM_METHODS,
@@ -248,7 +249,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    args.ar_methods = tuple(args.ar_methods or AR_METHODS)
+    # Keep research-only methods available through an explicit CLI selection,
+    # but do not place rejected or unmatched methods in the default Qwen run.
+    args.ar_methods = tuple(args.ar_methods or AR_DEFAULT_METHODS)
     args.dllm_methods = tuple(args.dllm_methods or DLLM_DEFAULT_METHODS)
     args.components_explicit = args.components is not None
     args.components = tuple(
