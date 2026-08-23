@@ -196,6 +196,19 @@ index。仓库已实现解析区间判定、分批 rollout 与越界检查。筛
 $`\tau=0.1`$ 的 on-policy 条件下声明 log-weight 界 $`[0,10]`$；完整路径与提前停止路径共享候选、rollout
 seed 和候选重采样均匀数。批内 self-consistency 奖励不满足逐条固定奖励条件，不用于该消融。
 
+筛选使用每批 2 条 rollout、每个候选最多 4 条；偶数 draw 先运行完整路径，奇数 draw 先运行提前停止路径：
+
+```powershell
+$env:PYTHONNOUSERSITE = "1"
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_bounded_stop_screen `
+  --config configs\gsm8k_quick.toml --draws 2 --rollout-count 4 `
+  --evaluation-batch-size 2 --log-weight-lower 0 --log-weight-upper 10 `
+  --tag qwen15b-bounded-stop-screen
+```
+
+汇总要求每对运行的候选 token、各 step selected index 和最终输出逐项相同，再比较 rollout 跳过率、生成 token、
+主模型 FLOPs 与墙钟。分批路径若未能提前停止，会重复提交 prefix；这一额外成本计入结果。
+
 ### 自回归执行优化
 
 现有后端已实现连续批处理、共同前缀 KV 复用、评分缓存、流式奖励、冻结 replay-mixture MH proposal 和

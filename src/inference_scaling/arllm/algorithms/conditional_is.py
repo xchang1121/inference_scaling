@@ -79,6 +79,7 @@ class ConditionalISStep:
     rollout_evaluations_planned: int = 0
     rollout_evaluations_performed: int = 0
     rollout_evaluations_skipped: int = 0
+    rollout_evaluation_batches: int = 0
     exact_early_stop: bool = False
     selection_invariant_verified: bool = False
 
@@ -570,6 +571,7 @@ def _bounded_conditional_is_step(
     upper_candidate_weights: list[float] = []
     invariant_index: int | None = None
     rollout_offset = 0
+    evaluation_batches = 0
     while rollout_offset < config.rollout_count:
         batch_size = min(
             config.rollout_evaluation_batch_size,
@@ -594,6 +596,7 @@ def _bounded_conditional_is_step(
             rollout_design="iid",
             rollout_index_offset=rollout_offset,
         )
+        evaluation_batches += 1
         for candidate_index, evaluated in enumerate(batch):
             if terminal[candidate_index]:
                 if not collected[candidate_index]:
@@ -670,6 +673,7 @@ def _bounded_conditional_is_step(
         rollout_evaluations_planned=planned_total,
         rollout_evaluations_performed=performed_total,
         rollout_evaluations_skipped=skipped_total,
+        rollout_evaluation_batches=evaluation_batches,
         exact_early_stop=skipped_total > 0,
         selection_invariant_verified=skipped_total > 0 and invariant_index is not None,
     )
@@ -730,6 +734,7 @@ def conditional_is_step(
         selected_index=selection.selected_index,
         rollout_evaluations_planned=performed,
         rollout_evaluations_performed=performed,
+        rollout_evaluation_batches=1,
     )
 
 

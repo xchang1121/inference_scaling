@@ -414,6 +414,10 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
             int(getattr(step, "rollout_evaluations_skipped", 0))
             for step in result.steps
         ),
+        "rollout_evaluation_batches": sum(
+            int(getattr(step, "rollout_evaluation_batches", 1))
+            for step in result.steps
+        ),
         "exact_early_stop_steps": sum(
             bool(getattr(step, "exact_early_stop", False)) for step in result.steps
         ),
