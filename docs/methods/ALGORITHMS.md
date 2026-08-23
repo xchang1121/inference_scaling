@@ -889,6 +889,22 @@ log_acceptance = min(
 这里的 replay 改变 proposal、再由 Hastings 比校正；它与式 (14) 中直接复用 rollout 估计条件奖励权重是两种
 不同机制。
 
+replay proposal 可与式 (4) 的多尺度后缀分布组合。对每个长度 $`\ell`$，式 (25) 定义保持目标分布不变的
+Hastings 核 $`K_\ell^{\mathrm{replay}}`$；长度分布 $`\rho(\ell)`$ 在链开始前固定且与当前序列无关，因此
+
+```math
+K_{\rho}^{\mathrm{replay}}
+=\sum_{\ell=1}^{L}\rho(\ell)K_\ell^{\mathrm{replay}},
+\qquad
+\pi K_{\rho}^{\mathrm{replay}}=\pi.
+```
+
+实现对实际抽到的长度计算新旧后缀在完整 mixture 下的概率。长度选择概率在同一次正反移动中相同，仍在
+Hastings 比中抵消。Qwen2.5-1.5B 的三 seed 组合消融中，`multiscale + frozen replay` 相对
+`uniform + base` 的在线墙钟因子为 `0.357×`；主模型 FLOPs 因子为 `1.002×`。历史库的构建成本单列，
+没有匹配历史时退回基础模型 proposal。完整设置见
+[多尺度后缀与冻结 replay 的组合](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack)。
+
 <a id="alg-rewards"></a>
 ## 15. 已实现的奖励信号
 
@@ -975,7 +991,7 @@ S_{\mathrm{saved}}=\sum_i(K_i-1)L_i.
 [`cache.py`](../../src/inference_scaling/arllm/backends/cache.py)和
 [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。
 
-### 17.3 历史 token tree 与部分 rollout
+### 17.3 精确草稿验证与部分 rollout
 
 `RolloutTokenTree` 保存“后缀 context → 下一 token 计数”。确定性模式提出最高频 token；随机模式从经验
 proposal $`q_t`$ 抽取草稿 $`a`$，按下式接受：
@@ -993,6 +1009,17 @@ proposal $`q_t`$ 抽取草稿 $`a`$，按下式接受：
 接受路径贡献 $`\min(p_t,q_t)`$，拒绝路径贡献 $`p_t-\min(p_t,q_t)`$，总概率为 target $`p_t`$。
 Transformers 一次验证 `prefix + drafts`，并在拒绝点裁剪 `DynamicCache`。草稿长度由 active batch
 $`b`$ 的分段函数 $`K(b)`$ 控制，避免大 batch 下的低接受率验证开销。
+
+草稿分布 $`q_t`$ 可以来自历史 token tree，也可以来自共享 tokenizer 的小型自回归模型。后者由
+`DraftModelSpeculativeBackend` 实现：小模型自回归提出至多 $`K`$ 个 token，目标模型一次计算整个草稿块的
+logits，再逐 token 执行上述接受与残差抽样。每个请求使用独立随机流；拒绝后将 assistant 的 KV cache
+裁剪到已接受前缀，避免后续请求读取被拒绝位置。目标模型与草稿模型的 forward slots、FLOPs 和峰值显存
+分别记录。
+
+Transformers 的 assisted generation 目前只支持 batch 1；批量请求由普通 target batching 执行。RTX 3090
+上的 Qwen2.5-0.5B 草稿模型消融中，最短草稿 $`K=2`$ 的墙钟因子为 `1.058×`，1.5B FLOPs 因子为
+`1.055×`，合计 FLOPs 因子为 `1.439×`，因此该后端默认关闭。实现位于
+[`draft_model_speculation.py`](../../src/inference_scaling/arllm/backends/draft_model_speculation.py)。
 
 `AsyncRolloutBroker` 将长生成拆成固定 token chunk。达到所需完整轨迹数后，过量提交产生的部分轨迹保存
 token、behavior/reference 概率、continuation seed 和剩余长度；下一次从
@@ -1155,7 +1182,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 | 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
 | SMC | [`smc.py`](../../src/inference_scaling/shared/smc.py) | [`smc_forest.py`](../../src/inference_scaling/arllm/algorithms/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
-| 生成后端 | 公共请求、随机数和账本位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
+| 生成后端 | 公共请求、随机数和账本位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
 | RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
 | 实验调度与产物 | [`experiments/shared/`](../../experiments/shared/) | [`run_arllm_suite.py`](../../experiments/arllm/run_arllm_suite.py) | [`run_llada_suite.py`](../../experiments/dllm/run_llada_suite.py) | `test_reproduction_entrypoints.py`、`dllm/test_run_llada_suite.py` |
 

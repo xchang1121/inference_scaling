@@ -149,6 +149,39 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_suffix_s
 `PYTHONNOUSERSITE=1` 用于隔离本机用户目录中的 NumPy 2.4.3，避免与 Conda 环境内按 NumPy 1.x 编译的
 SciPy/scikit-learn 冲突；该设置不改变模型或算法。
 
+<a id="qwen15b-mh-stack"></a>
+### 多尺度后缀与冻结 replay 的组合
+
+多尺度后缀分布和冻结 replay proposal 可以直接组合。前者只改变后缀长度的固定混合权重；后者只改变给定
+长度下的后缀 proposal，并将新旧后缀的完整混合概率写入 Hastings 比。两项改动分别保持同一目标分布，
+组合后的转移核仍保持该分布。历史库必须在链开始前冻结，并与当前 prompt、模型和采样策略匹配。
+
+组合消融固定一条 GSM8K prompt、BF16、长度 32、4 条链、每链 8 次更新、8 条历史序列和奖励温度 0.3，
+只改变后缀长度分布与是否使用冻结 replay。结果为三个成对 seed 的均值与样本标准差：
+
+| proposal | 后缀分布 | 在线墙钟（秒） | 主模型 PFLOPs | 接受率 | 历史 proposal 比例 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 基础模型 | `uniform` | 12.555 ± 0.610 | 0.016783 | 61.46% | 0% |
+| 基础模型 | `multiscale` | 9.012 ± 1.469 | 0.016783 | 69.79% | 0% |
+| 冻结 replay 混合 | `uniform` | 6.550 ± 2.064 | 0.016826 | 70.83% | 34.38% |
+| 冻结 replay 混合 | `multiscale` | 4.484 ± 0.463 | 0.016822 | 80.21% | 30.21% |
+
+组合路径相对 `base + uniform` 的在线墙钟因子为 `0.357 ± 0.026×`，主模型 FLOPs 因子为
+`1.002 ± 0.001×`。在无 replay 路径上加入多尺度调度，墙钟因子为 `0.716×`；在多尺度路径上加入
+replay，墙钟因子为 `0.503×`；在 uniform replay 上加入多尺度调度，墙钟因子为 `0.754×`。两项收益在
+本组中可以叠加。
+
+replay cache build 平均为 0.657 秒和 0.001136 PFLOPs。三个 seed 中，`cache build + 首次组合查询` 的
+墙钟都低于一次 `base + uniform` 查询；在线主模型 FLOPs 略高，连同 cache build 后不存在 FLOPs 摊销
+交点。因此该组合登记为墙钟默认路径，FLOPs 优先场景仍使用 base proposal。机器可读结果由下列命令生成：
+
+```powershell
+$env:PYTHONNOUSERSITE = "1"
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_stack `
+  --config configs\gsm8k_quick.toml `
+  --output results\arllm\qwen15b_optimization\mh_replay_multiscale_stack.json
+```
+
 ### rollout 方差与提前停止
 
 scrambled randomized quasi-Monte Carlo（RQMC）使每条随机流保持正确边缘分布，同时让同一候选的多条 rollout
@@ -230,17 +263,33 @@ SMC 条件后缀复用。相关依据包括 [Orca](https://www.usenix.org/confer
 [PagedAttention](https://doi.org/10.1145/3600006.3613165)、[Sarathi-Serve](https://arxiv.org/abs/2308.16369)
 和[精确 speculative decoding](https://proceedings.mlr.press/v202/leviathan23a.html)。
 
-新增消融使用 Qwen2.5-0.5B-Instruct 批量生成草稿，再由 1.5B target 按精确 speculative sampling 规则验证。
-该路径的目标是减少 1.5B 逐 token decode 次数；0.5B 草稿计算不并入 1.5B FLOPs。验收同时检查合计 FLOPs、
-草稿接受长度和单卡墙钟，防止用额外小模型计算掩盖总体成本。
+Qwen2.5-0.5B-Instruct 生成长度为 $`K`$ 的草稿，Qwen2.5-1.5B-Instruct 按精确 speculative sampling
+规则批量验证。接受草稿 token 的概率为 $`\min(1,p/q)`$；拒绝时从归一化的 $`(p-q)_+`$ 分布抽取替代
+token，因此输出边缘分布与普通 1.5B 采样相同。主模型、草稿模型及合计 FLOPs 分列。
 
-## 已有消融的初始分类
+8 题、2 个 draw、BF16、最长 128 token 的结果如下：
+
+| 执行路径 | 墙钟（秒） | 输出 token/s | 主模型 FLOPs 因子 | 合计 FLOPs 因子 | 草稿接受率 | 峰值显存 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1.5B 普通生成 | 70.16 | 27.69 | 1.000× | 1.000× | — | 3922 MiB |
+| 0.5B 草稿，$`K=2`$ | 74.24 | 26.36 | 1.055× | 1.439× | 86.50% | 4109 MiB |
+| 0.5B 草稿，$`K=4`$ | 80.97 | 24.06 | 1.089× | 1.462× | 81.14% | 4147 MiB |
+| 0.5B 草稿，$`K=8`$ | 89.26 | 22.29 | 1.170× | 1.555× | 72.66% | 4161 MiB |
+
+$`K=2`$ 是最接近基线的草稿路径，但墙钟增加 5.8%、输出吞吐下降 4.8%、主模型 FLOPs 增加 5.5%，且
+合计 FLOPs 增加 43.9%。两个模型同时驻留也增加显存。该实现保留为显式实验后端；Qwen 1.5B 默认使用
+target-only 连续批处理。表中准确率不用于选择执行后端：两条路径保证相同采样分布，但有限随机样本不要求
+逐条输出一致。
+
+## 优化组合与方法状态
 
 | 方法 | 初始结论 | 当前默认状态 | 依据 |
 | --- | --- | --- | --- |
 | 连续批处理 | 正收益 | 启用 | 多个 workload 墙钟下降，输出统计量固定 |
 | warm replay | 稳态正收益 | 启用；冷启动单列 | 稳态 FLOPs 与墙钟下降，约 7 次重复请求摊销构建成本 |
-| 冻结 replay-mixture MH | 正收益 | 启用 | 完整 mixture Hastings 校正下在线墙钟下降 |
+| MH 多尺度后缀 | 正收益 | 启用 | 32 题确认中生成 token 下降 32.3%，聚合墙钟下降 40.7% |
+| 多尺度后缀 + 冻结 replay MH | 正收益 | 有匹配历史时启用 | 完整 Hastings 校正下在线墙钟因子 `0.357×`；FLOPs 因子 `1.002×` |
+| 0.5B 精确 speculative decoding | 负收益 | 关闭 | 最优 $`K=2`$ 的墙钟因子 `1.058×`，合计 FLOPs 因子 `1.439×` |
 | 流式奖励 | 条件收益 | 关闭 | verifier 延迟足够大时可与生成重叠；廉价奖励无收益 |
 | delayed-acceptance MH | 条件收益 | 关闭 | 需要昂贵精确奖励和有效 surrogate |
 | MH proposal 预取 | 条件收益 | 关闭 | 以更多 proposal FLOPs 隐藏奖励等待 |
@@ -250,6 +299,6 @@ SMC 条件后缀复用。相关依据包括 [Orca](https://www.usenix.org/confer
 | 无条件历史树 | 负收益 | 关闭 | 墙钟与 FLOPs 明显增加 |
 | Transformers partial resume | 成本口径下负收益 | 关闭 | 墙钟下降但重复 prefill 使 FLOPs 超过三倍 |
 
-上述初始分类来自[方法质量与计算量](GSM8K_3090_ALIGNED_RESULTS.md)和
-[推理执行与 rollout 复用](RTX3090_ROLLOUT_INFRA.md)中的已完成 RTX 3090 结果。后续各项 Qwen 1.5B
-消融将在本文件追加设置、数值、区间和进入最终组合的决定；中间调试日志不作为实验结果。
+表中已有方法来自[方法质量与计算量](GSM8K_3090_ALIGNED_RESULTS.md)、
+[推理执行与 rollout 复用](RTX3090_ROLLOUT_INFRA.md)及本轮 Qwen 1.5B 消融。机器可读登记表保存比较对象、
+默认状态和产物路径；未通过的方法仍可显式运行，不进入默认组合。

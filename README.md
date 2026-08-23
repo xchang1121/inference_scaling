@@ -86,7 +86,10 @@ replay、MH 预取与 SMC 的墙钟、FLOPs 和复用率见[执行报告](docs/r
 dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`；状态表分别记录预检与正式结果。
 
 当前优化研究只运行 Qwen2.5-1.5B 自回归路线；dLLM 保留实现与入口，不参与该轮消融。候选状态、收益判据
-和每次决定见[Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。
+和每次决定见[Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。当前 MH 墙钟组合使用
+`multiscale` 后缀调度；存在同 prompt、同策略版本的冻结历史库时再启用 replay-mixture proposal。三 seed
+组合实验的在线墙钟因子为 `0.357×`，主模型 FLOPs 因子为 `1.002×`。0.5B 精确 speculative decoding
+在本机未降低墙钟，默认关闭。
 
 ## 安装
 
@@ -147,17 +150,17 @@ python3.12 -m pip install -e ".[dev,vllm]"
 
 ## 统一复现入口
 
-[`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理。两个 Python 路径分别
-指向上述解释器。`smoke` 使用 1 题、缩短预算、AR 一次 GRPO 更新和 dLLM 的 CPU VRPO 反向传播预检；
-VRPO 预检同时保存、重新加载临时 LoRA adapter 并执行前向计算。每个真实 LLaDA 推理子进程结束后释放模型
-显存。
+[`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理，默认只运行 AR-LLM。
+本轮已验证范围使用 Qwen2.5-1.5B；dLLM 必须通过 `--family dllm` 或 `--family both` 显式选择。两个 Python 路径分别
+指向上述解释器。AR 的 `smoke` 使用 1 题、缩短预算和一次 GRPO 更新。显式选择 dLLM 时，`smoke` 执行
+CPU VRPO 反向传播、临时 LoRA 保存与重新加载检查；真实 LLaDA 推理子进程结束后释放模型显存。
 
 解释器选择顺序为：CLI 的 `--ar-python` / `--dllm-python`、环境变量 `AR_PYTHON` / `DLLM_PYTHON`、
 启动统一入口的当前 Python。单侧运行可省略两个解释器参数：
 
 ```powershell
 python experiments\run_reproduction.py `
-  --family dllm --stage inference --profile smoke --tag local-dllm
+  --family arllm --stage all --profile smoke --tag local-qwen
 ```
 
 环境变量方式无需在命令中重复路径：

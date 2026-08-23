@@ -187,7 +187,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--family", choices=("arllm", "dllm", "both"), default="both")
+    parser.add_argument("--family", choices=("arllm", "dllm", "both"), default="arllm")
     parser.add_argument("--stage", choices=("prepare", "train", "inference", "all"), default="inference")
     parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--tag", default="reproduction")

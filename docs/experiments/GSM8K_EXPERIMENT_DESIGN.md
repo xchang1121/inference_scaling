@@ -3,6 +3,9 @@
 本文件固定数据、模型、方法、预算、统计量、成本分母和复现流程。算法原理、实现、执行优化与计量口径见
 [推理扩展算法：基础、原理与实现](../methods/ALGORITHMS.md)。
 
+当前正式实验范围为 Qwen2.5-1.5B 自回归路线。dLLM 只保留实现入口和轻量接口检查，不生成质量或性能结果。
+Qwen2.5-0.5B 仅作为辅助 proposal、rollout 或 speculative draft，其计算量单独报告。
+
 ## 数据与配置
 
 实验使用公开 [GSM8K](https://arxiv.org/abs/2110.14168)。训练集含 7,473 题，仅供 GRPO 训练；测试集含
@@ -156,6 +159,8 @@ QF_{\mathrm{training\text{-}free}}.
 | warm replay 首次查询 | fresh-only / (cache build + warm online) | 同上 |
 | 动态候选在线因子 | base candidate fixed / replay-aware fixed | evaluation 成本预算 |
 | 最优预算在线因子 | replay-aware fixed / replay-aware optimal | candidate proposal、成本预算 |
+| 多尺度 replay MH 墙钟因子 | multiscale + frozen replay / uniform + base | prompt、链数、更新数、长度、奖励 |
+| 小模型 speculative decoding | 0.5B draft + 1.5B verification / 1.5B 普通生成 | 采样分布、请求、dtype、token 上限 |
 | vLLM 加速 | Transformers / vLLM | 模型、dtype、GPU、数据、workload |
 
 连续批处理结果同时保存 token 匹配、数值答案匹配、共同前缀和分叉题号。cache build、design、online
@@ -170,9 +175,11 @@ QF_{\mathrm{training\text{-}free}}.
 | 部分续跑 | 保存未完成 token / 已提交 block 后继续 | 从原始前缀重新生成 | 相同最终请求集合 |
 | 流式奖励 | completion 完成后立即提交 verifier | 整批生成后提交 | 相同 verifier 延迟与样本 |
 | 历史草稿 | AR token tree / dLLM 轨迹 cache | 普通生成 | target 校正后的相同生成分布 |
+| 小模型草稿 | 0.5B draft + 1.5B 精确验证 | 1.5B 普通生成 | 相同目标采样分布；两模型 FLOPs 分列 |
 | MH 预取 | 并行预取接受与拒绝分支 | 普通 MH | 相同更新数与实际消费分支 |
 | delayed acceptance | surrogate 早拒绝后再调用精确奖励 | 每个 proposal 调用精确奖励 | 相同 proposal 和精确目标 |
 | replay-mixture MH | base 与冻结历史 proposal 的 mixture | base proposal | 正反 mixture 概率均进入 Hastings 比；cache build 分列 |
+| 多尺度 replay-mixture MH | multiscale 后缀 + 冻结历史 mixture | uniform 后缀 + base proposal | prompt、链数、更新数与奖励固定；cache build 分列 |
 | warm replay | 已建库 history + fresh tail | fresh-only | 候选、总 rollout 数与在线请求固定 |
 | progressive IS | pilot 冻结配额，独立 evaluation 计算权重 | 每候选固定 rollout 数 | pilot 与 evaluation 分列 |
 | SMC forest | 条件后缀或轨迹 reservoir 复用 | 同一 SMC 的 fresh-only 路径 | 粒子数、lookahead 与 resampling 固定 |
@@ -231,6 +238,10 @@ python experiments\run_reproduction.py `
   --family dllm --stage inference --profile full --tag dllm-full `
   --components quality replay dynamic_is async passk infra
 ```
+
+当前 Qwen2.5-1.5B 全链路使用第一条命令；dLLM 命令只保留为后续大显存实验入口，本轮不执行。
+新增优化消融的机器可读状态与直接复现命令见
+[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md)。
 
 | 组件 | 统计对象 |
 | --- | --- |

@@ -8,6 +8,8 @@
 成对因子统一定义为“优化路径 / 对照路径”。小于 1 表示相应指标下降，大于 1 表示相应指标上升。
 墙钟排除模型与数据加载；主模型 FLOPs 按 `2 × 参数量 × 实际 forward token slots` 估算。完整网格使用
 32 题 FP32；隔离执行变量的 BF16 诊断使用 3 个 seed。详细固定项与未计项见实验设计。
+本报告中的正式执行结果均来自 Qwen2.5-1.5B；dLLM 路径未运行。Qwen2.5-0.5B 只在草稿模型消融中使用，
+其计算量与 1.5B 分列。
 
 ## IS 与 MH rollout 复用结果
 
@@ -26,6 +28,8 @@
 | [MH proposal-tree 预取，0.2 s 奖励](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | 普通 MH | 0.817 ± 0.016× | 1.267 ± 0.007× | 每步预取两个分支并消费一个分支 |
 | [delayed acceptance，0.2 s 精确奖励](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | 普通 MH | 0.827 ± 0.111× | 1.000 ± 0.000× | 精确奖励调用因子 0.556 ± 0.294× |
 | [冻结 replay 混合 proposal，在线](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
+| [多尺度后缀](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.716 ± 0.084× | 1.000 ± 0.000× | 接受率由 61.5% 升至 69.8% |
+| [多尺度后缀 + 冻结 replay](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.357 ± 0.026× | 1.002 ± 0.001× | 接受率 80.2%；历史 proposal 占 30.2% |
 
 <a id="infra-report-broker"></a>
 ### rollout token 续跑
@@ -48,6 +52,21 @@
 
 随机历史草稿相对确定性草稿将平均接受率由 17.7% 提高到 24.0%。两种草稿的墙钟区间均覆盖 1，
 主模型 FLOPs 增加约 3%–4%；验证与 CPU 分布处理成本高于该规模下的接受率收益。
+
+### 0.5B 草稿模型的精确 speculative decoding
+
+Qwen2.5-0.5B 逐段提出 token，Qwen2.5-1.5B 批量验证并按精确接受与残差抽样规则校正。该算法保持
+1.5B 的采样分布；实验只比较执行成本。8 题、2 个 draw、BF16、最长 128 token 的汇总如下：
+
+| 路径 | 墙钟因子 | 输出吞吐因子 | 1.5B FLOPs 因子 | 0.5B PFLOPs | 合计 FLOPs 因子 | 接受率 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 普通 1.5B 生成 | 1.000× | 1.000× | 1.000× | 0 | 1.000× | — |
+| 草稿长度 2 | 1.058× | 0.952× | 1.055× | 0.004362 | 1.439× | 86.50% |
+| 草稿长度 4 | 1.154× | 0.869× | 1.089× | 0.004230 | 1.462× | 81.14% |
+| 草稿长度 8 | 1.272× | 0.805× | 1.170× | 0.004364 | 1.555× | 72.66% |
+
+最短草稿仍增加墙钟、主模型 FLOPs 与合计 FLOPs。Qwen 0.5B 与 1.5B 的高 token 一致性没有抵消单卡双模型
+驻留、草稿生成、验证和残差分布处理成本。该路径默认关闭；普通 1.5B 连续批处理作为默认 rollout 后端。
 
 <a id="infra-report-mh-prefetch"></a>
 ### MH proposal-tree 预取
@@ -72,6 +91,23 @@
 共执行 32 次更新。历史后缀占 35.4%；在线墙钟因子为 `0.534×`，主模型 FLOPs 因子为 `1.003×`。
 计入 8 条历史序列的 cache build 后，墙钟因子为 `0.586 ± 0.078×`，FLOPs 因子为
 `1.070 ± 0.001×`。本组收益主要来自用并行评分替代历史命中时的串行自回归生成。
+
+### 冻结 replay 与多尺度后缀的组合
+
+组合实验固定 4 条链、每链 8 次更新、长度 32，并使用三个成对 seed。四个实验臂分别控制后缀分布和
+proposal 来源：
+
+| proposal | 后缀分布 | 在线墙钟（秒） | 在线主模型 PFLOPs | 接受率 | 历史 proposal 比例 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| base | uniform | 12.555 ± 0.610 | 0.016783 | 61.46% | 0% |
+| base | multiscale | 9.012 ± 1.469 | 0.016783 | 69.79% | 0% |
+| frozen replay mixture | uniform | 6.550 ± 2.064 | 0.016826 | 70.83% | 34.38% |
+| frozen replay mixture | multiscale | 4.484 ± 0.463 | 0.016822 | 80.21% | 30.21% |
+
+组合路径相对 `base + uniform` 的在线墙钟因子为 `0.357×`；相对 `base + multiscale` 为 `0.503×`；
+相对 `replay + uniform` 为 `0.754×`。replay cache build 平均为 0.657 秒与 0.001136 PFLOPs。三个 seed
+的首次查询墙钟均已覆盖 cache build，但在线 FLOPs 略高，故没有 FLOPs 摊销交点。部署条件为 prompt、模型
+版本和采样策略匹配的冻结历史库；没有匹配历史时使用 multiscale base proposal。
 
 ## GSM8K 完整网格的执行结果
 
@@ -179,7 +215,7 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 | replay key 重复出现 | warm replay | 历史库构建与摊销次数 |
 | 过量提交产生未完成 rollout | 部分 rollout broker | 保存 token、恢复 prefill 和完整轨迹数 |
 | verifier 含 CPU 或远程延迟 | 流式 IS、delayed acceptance；高延迟下的 MH 预取 | verifier 延迟、精确调用数和未选分支 |
-| 历史前缀命中率较高 | replay-aware MH proposal；接受率门控的历史草稿 | 前缀命中率、接受率、评分长度和 cache build |
+| 同一 prompt 存在冻结历史后缀 | multiscale replay-mixture MH | 历史 proposal 比例、接受率、评分长度和 cache build |
 | 逐 block 粒子推理 | SMC 条件后缀 forest | fresh/reused rollout 与 ESS |
 | 候选成本差异较大 | pilot/evaluation 分离和方差—成本分配 | design 样本量与 evaluation ESS |
 
@@ -187,9 +223,10 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 
 1. warm replay 与 SMC 条件后缀 forest 减少 fresh rollout；完整成本包含历史库构建和条件匹配。
 2. 流式 IS、MH 预取和 delayed acceptance 可缩短 verifier 关键路径；收益随 verifier 延迟和拒绝比例变化。
-3. speculative draft 与 token 级续跑可能降低墙钟并增加逻辑 FLOPs，两个指标需要并列报告。
-4. replay-aware MH 和高延迟 verifier 下的流式 IS 墙钟因子低于 1；历史草稿和方差—成本分配的
-   对应因子接近或高于 1。
+3. 多尺度后缀与冻结 replay 在 Qwen 1.5B MH 中可以叠加，组合在线墙钟因子为 `0.357×`；FLOPs 因子为
+   `1.002×`，其收益属于执行时间而非主模型计算量下降。
+4. Qwen 0.5B 精确 speculative decoding、历史草稿和方差—成本分配未降低当前单卡设置的墙钟；这些路径
+   保留为显式实验配置。
 
 <a id="infra-report-vllm"></a>
 ## 后端范围与机器可读结果
@@ -204,4 +241,6 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 - [`rtx3090_transformers_summary.json`](../../results/infra/rtx3090_transformers_summary.json)
   及其六份 rollout seed 文件；
 - [`rtx3090_transformers_is_mh_summary.json`](../../results/infra/rtx3090_transformers_is_mh_summary.json)
-  及三份 IS/MH seed 文件。
+  及三份 IS/MH seed 文件；
+- [`mh_replay_multiscale_stack.json`](../../results/arllm/qwen15b_optimization/mh_replay_multiscale_stack.json)
+  与 [`draft_model_speculation_screen.json`](../../results/arllm/qwen15b_optimization/draft_model_speculation_screen.json)。

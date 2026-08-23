@@ -57,6 +57,17 @@
 2 draw 的 i-SIR 同预算筛选、题目聚类区间、分支成本和未进入确认阶段的决定；对应 suite manifest 与汇总
 同目录保存。
 
+| 文件 | 内容 | 决定 |
+| --- | --- | --- |
+| `mh_suffix_screen.json`、`mh_suffix_confirmation.json` | uniform、inverse-length 与 multiscale 后缀调度的筛选和 32 题确认 | `multiscale` 进入默认 MH 组合 |
+| `mh_replay_multiscale_stack.json` | 后缀调度 × 冻结 replay proposal 的三 seed、四臂组合消融 | 墙钟默认组合；cache build 与在线成本分列 |
+| `rqmc_screen.json` | IID 与 scrambled Sobol rollout 的成对筛选 | 默认继续使用 IID |
+| `bounded_stop_screen.json` | 有界精确提前停止与完整 rollout 评估 | 默认关闭提前停止 |
+| `draft_model_speculation_screen.json` | 1.5B 普通生成与 0.5B 草稿长度 2/4/8 的执行比较 | 默认使用 1.5B target-only batching |
+
+上述文件只包含 Qwen2.5-1.5B 正式实验。0.5B 辅助模型的 forward slots 和 FLOPs 单列；未运行 dLLM
+质量或性能实验。
+
 ## 训练与验证
 
 | 路径 | 内容 | 用途 |

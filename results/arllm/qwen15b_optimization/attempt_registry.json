@@ -45,6 +45,20 @@
       "confirmation_selection_rule": "among arms passing the registered gate, choose the highest accuracy and break ties by lower wall time"
     },
     {
+      "id": "mh_multiscale_replay_stack",
+      "category": "algorithm_infra",
+      "status": "accepted",
+      "active_execution": true,
+      "comparison": "uniform suffix schedule with a base-only proposal at matched model, prompt, chain count, update count, block size and reward",
+      "decision_basis": "three paired RTX 3090 seeds: multiscale plus frozen replay used 0.357x online wall time and 1.002x main-model FLOPs, raised acceptance from 61.5% to 80.2%, and remained faster after adding cache construction for the first query in all three seeds",
+      "implementation": "src/inference_scaling/arllm/algorithms/mh.py and src/inference_scaling/arllm/algorithms/mh_acceleration.py",
+      "runner": "experiments/arllm/run_qwen15b_mh_stack.py",
+      "result": "results/arllm/qwen15b_optimization/mh_replay_multiscale_stack.json",
+      "selected_schedule": "multiscale",
+      "deployment_condition": "the replay library is frozen before the chain starts and belongs to the same prompt and policy version",
+      "compute_accounting": "cache construction, online target-model FLOPs and wall time are reported separately; this experiment has no FLOPs break-even because online FLOPs are 0.2% above the base-only arm"
+    },
+    {
       "id": "is_scrambled_rqmc_rollouts",
       "category": "algorithm",
       "status": "rejected",

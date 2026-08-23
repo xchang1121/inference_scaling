@@ -12,7 +12,7 @@ def test_qwen15b_attempt_registry_is_valid_and_excludes_dllm_experiments() -> No
     document = load_attempt_registry(REGISTRY)
     assert document["scope"]["dllm_experiments"] is False
     assert {attempt["status"] for attempt in document["attempts"]} >= {
-        "planned",
+        "accepted",
         "accepted_existing",
         "conditional",
         "rejected",
