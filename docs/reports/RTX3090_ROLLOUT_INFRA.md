@@ -30,8 +30,8 @@ off-policy rollout proposal 使用，其计算量与 1.5B 分列。
 | [冻结 replay 混合 proposal，在线](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
 | [多尺度后缀](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.716 ± 0.084× | 1.000 ± 0.000× | 接受率由 61.5% 升至 69.8% |
 | [多尺度后缀 + 冻结 replay](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.357 ± 0.026× | 1.002 ± 0.001× | 接受率 80.2%；历史 proposal 占 30.2% |
-| [IS replay 候选缓存](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 顺序 warm replay | 0.696 ± 0.006× | 0.807 ± 0.004× | 复用 cache build 已产生的 16 个候选 draw |
-| [IS replay 候选缓存 + 连续批处理](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 连续批处理 fresh-only | 0.686 ± 0.131× | 0.746 ± 0.010× | 在线总 FLOPs 因子 0.909×；复用率 31.62% |
+| [IS replay 候选缓存](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 顺序 warm replay | 0.697 ± 0.009× | 0.807 ± 0.004× | 复用 cache build 已产生的 16 个候选 draw |
+| [IS replay 候选缓存 + 连续批处理](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 连续批处理 fresh-only | 0.754 ± 0.093× | 0.744 ± 0.004× | 在线总 FLOPs 因子 0.907×；复用率 31.62% |
 
 <a id="infra-report-broker"></a>
 ### rollout token 续跑
@@ -156,13 +156,13 @@ rollout 和评分请求；对应顺序/批处理输出也逐 token 一致。
 
 | 对比 | 在线墙钟因子 | 在线 1.5B FLOPs 因子 | 在线总 FLOPs 因子 |
 | --- | ---: | ---: | ---: |
-| 候选缓存 / 顺序 warm replay | 0.696 ± 0.006× | 0.807 ± 0.004× | 0.836× |
-| 连续批处理 / 顺序候选缓存 | 0.502 ± 0.072× | 1.097× | 1.095× |
-| 完整栈 / 连续批处理 fresh-only | 0.686 ± 0.131× | 0.746× | 0.909× |
+| 候选缓存 / 顺序 warm replay | 0.697 ± 0.009× | 0.807 ± 0.004× | 0.836× |
+| 连续批处理 / 顺序候选缓存 | 0.537 ± 0.092× | 1.094× | 1.094× |
+| 完整栈 / 连续批处理 fresh-only | 0.754 ± 0.093× | 0.744× | 0.907× |
 
 连续批处理的局部 FLOPs 增量来自 padding；候选缓存与 replay 节省抵消该增量后，完整在线栈的合计 FLOPs
-仍下降 9.1%。如果本次请求需要新建 history，冷启动相对连续批处理 fresh-only 为 `1.266×` 墙钟和
-`1.945×` 总 FLOPs。部署时仅对匹配且未消费的 history 启用 warm replay；其余请求使用连续批处理
+仍下降 9.3%。如果本次请求需要新建 history，冷启动相对连续批处理 fresh-only 为 `1.361×` 墙钟和
+`1.941×` 总 FLOPs。部署时仅对匹配且未消费的 history 启用 warm replay；其余请求使用连续批处理
 fresh-only。
 标准 `replay` 复现入口现已复用建库候选，并把 Qwen2.5-1.5B 与 Qwen2.5-0.5B 的在线及建库 FLOPs 分列。
 `async` 组件验证跨 prompt 连续批处理；两项组合的完整因子以上表最后一行为准。
@@ -252,7 +252,7 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 4. Qwen 0.5B 精确 speculative decoding、历史草稿和方差—成本分配未降低当前单卡设置的墙钟；这些路径
    保留为显式实验配置。
 5. IS 候选缓存与连续批处理在 warm 在线阶段可叠加；相对连续批处理 fresh-only 的墙钟、1.5B FLOPs 和
-   总 FLOPs 因子分别为 `0.686×`、`0.746×` 和 `0.909×`。新建 history 的冷启动不启用该路径。
+   总 FLOPs 因子分别为 `0.754×`、`0.744×` 和 `0.907×`。新建 history 的冷启动不启用该路径。
 
 <a id="infra-report-vllm"></a>
 ## 后端范围与机器可读结果

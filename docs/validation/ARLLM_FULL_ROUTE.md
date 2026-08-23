@@ -135,6 +135,28 @@ Ruff 全仓检查和共享层 24 个文件的 mypy 检查均通过。仓库现�
 环境。所有真机子进程结束后没有残留 Python 进程；GPU
 占用回到桌面基线 1,862 MiB，可用显存 22,465 MiB。
 
+## Qwen 生产默认路径回归（2026-08-23）
+
+在结构隔离和默认组合接入后，使用 Qwen2.5-1.5B 对 `base`、MH、条件 IS、replay 和 async 组件执行一题
+真实模型回归。Qwen2.5-0.5B 只在 replay 与小 proposal 调度检查中作为辅助模型；本轮未启动 dLLM。调度
+清单确认统一入口向质量路径传入 `--mh-suffix-schedule multiscale`。
+
+| 检查 | 结果 |
+| --- | ---: |
+| 完成的统一入口子命令 | 1 / 1 |
+| base / MH / 条件 IS | 三条真实生成路径均完成 |
+| replay 建库候选复用 | 16 个 candidate draw |
+| fresh / warm-online 墙钟比 | 1.641× |
+| fresh / warm-online FLOPs 比 | 1.452× |
+| warm-online 1.5B / 0.5B FLOPs | 0.009151 / 0.002806 PFLOPs |
+| cache build 1.5B / 0.5B FLOPs | 0.012186 / 0.005674 PFLOPs |
+| replay fresh/warm 数值输出一致率 | 100% |
+| async 四种方法的顺序/批处理输出 | 全部逐 token 一致 |
+
+async 子任务只使用一个问题和一个 worker，用于验证请求路由、随机流与输出一致性，不据此估计吞吐收益。
+正式三 seed 组合结果见[优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack)。全部子进程结束
+后无模型进程残留，GPU 占用为 1,218 MiB、可用显存 23,109 MiB。
+
 ## vLLM 验证边界
 
 本机没有 WSL Linux 发行版，AR 解释器也未安装 vLLM。vLLM 后端、同步/异步适配器、请求映射、
@@ -155,3 +177,6 @@ logprob 解析、分组和错误处理由单元测试与 mock engine 覆盖；�
 - [rollout infra](../../results/validation/arllm-real-20260816/arllm_rollout_infra_ar-real-inference-20260816.json)
 - [IS/MH infra](../../results/validation/arllm-real-20260816/arllm_is_mh_infra_ar-real-inference-20260816.json)
 - [Transformers 5.x KV 修复后复跑](../../results/validation/arllm-real-20260816/cache_api_postfix.json)
+- [生产 replay 回归](../../results/validation/qwen-positive-default-smoke-20260823/gsm8k_quick_replay_qwen-positive-default-smoke-20260823.json)
+- [生产 async 回归](../../results/validation/qwen-positive-default-smoke-20260823/gsm8k_quick_async_grouped_qwen-positive-default-smoke-20260823.json)
+- [生产入口调度清单](../../results/validation/qwen-positive-default-smoke-20260823/qwen-positive-default-smoke-20260823/arllm_suite_manifest.json)

@@ -78,6 +78,7 @@
 | `validation/rtx3090_reproduction.json` | FP32 真实模型算法与后端结果 | 工程检查 |
 | `validation/rtx3090_backend_bfloat16.json` | BF16 概率与显存结果 | 精度检查 |
 | `validation/arllm-real-20260816/` | GRPO smoke、全部 AR 推理组件与修复后真机检查 | 全链路可用性 |
+| `validation/qwen-positive-default-smoke-20260823/` | multiscale MH、候选复用 replay、1.5B/0.5B 分账与 async 输出一致性 | 生产默认路径回归 |
 
 对应记录见 [GSM8K quick 集成检查](../docs/validation/GSM8K_QUICK_VALIDATION.md) 和
 [RTX 3090 复现记录](../docs/validation/RTX3090_REPRODUCTION.md)。完整 AR 入口的训练、推理与 infra 覆盖见

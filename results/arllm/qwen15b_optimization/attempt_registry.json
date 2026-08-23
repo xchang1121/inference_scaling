@@ -141,7 +141,7 @@
       "status": "accepted",
       "active_execution": true,
       "comparison": "sequential fresh-only and sequential warm replay at matched Qwen2.5-1.5B candidates, rollout budget, prompts and random streams",
-      "decision_basis": "three paired FP32 RTX 3090 seeds: candidate reuse used 0.696x replay-online wall time and 0.807x main-model FLOPs; adding continuous batching used 0.502x wall time with a 1.095x local total-FLOP factor; the complete online stack used 0.686x wall time, 0.746x main-model FLOPs and 0.909x total FLOPs versus continuous-batched fresh-only execution; all execution-equivalent pairs were token-exact",
+      "decision_basis": "three paired FP32 RTX 3090 seeds: candidate reuse used 0.697x replay-online wall time and 0.807x main-model FLOPs; adding continuous batching used 0.537x wall time with a 1.094x local total-FLOP factor; the complete online stack used 0.754x wall time, 0.744x main-model FLOPs and 0.907x total FLOPs versus continuous-batched fresh-only execution; all execution-equivalent pairs were token-exact",
       "implementation": "src/inference_scaling/arllm/algorithms/base_replay.py and src/inference_scaling/arllm/backends/batching.py",
       "runner": "experiments/arllm/run_qwen15b_is_stack.py",
       "result": "results/arllm/qwen15b_optimization/is_replay_batching_stack.json",
@@ -149,7 +149,7 @@
       "dtype": "float32",
       "deployment_condition": "enable warm replay only for matching evaluation records that have not been consumed; if history must be constructed for the current request, continuous-batched fresh-only execution remains the default",
       "production_entrypoint": "the replay component reuses candidate draws from cache construction; the async component supplies cross-request continuous batching",
-      "cold_start_result": "new history construction plus the first query used 1.266x wall time and 1.945x total FLOPs versus continuous-batched fresh-only execution"
+      "cold_start_result": "new history construction plus the first query used 1.361x wall time and 1.941x total FLOPs versus continuous-batched fresh-only execution"
     },
     {
       "id": "is_streaming_reward",
