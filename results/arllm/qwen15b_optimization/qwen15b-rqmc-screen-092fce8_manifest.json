@@ -136,6 +136,8 @@
   ],
   "plan_fingerprint": "2157de010e8e21d983f1dd2a5ea25df540202b7209d9ce31f5aba34e16361bc4",
   "started_at_utc": "2026-08-23T09:04:10.164260+00:00",
-  "completed_commands": 0,
-  "status": "dry_run"
+  "completed_commands": 5,
+  "status": "complete",
+  "resumed_at_utc": "2026-08-23T09:04:54.981740+00:00",
+  "finished_at_utc": "2026-08-23T09:12:03.312068+00:00"
 }

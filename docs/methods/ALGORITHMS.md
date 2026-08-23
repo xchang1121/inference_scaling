@@ -374,6 +374,8 @@ Transformers 与表格后端使用 float64 累积概率执行逆 CDF；partial r
 报错；`iid` 路径不受影响。实现位于 [`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)和
 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。方法依据见
 [Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。
+Qwen2.5-1.5B 的 8 题、2 draw 筛选未观察到准确率或成本收益，因此默认仍为 `iid`；数值见
+[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
 
 <a id="alg-iterated-is"></a>
 ### 6.2 迭代条件 IS

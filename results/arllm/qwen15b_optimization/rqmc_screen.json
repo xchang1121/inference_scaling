@@ -1,0 +1,276 @@
+{
+  "comparison": "paired iid and digitally scrambled Sobol rollout uniforms at fixed questions, candidate count, rollout count, proposal, reward and model",
+  "decision": {
+    "confirmation_run_required": false,
+    "passing_arms": [],
+    "reason": "scrambled Sobol did not meet the registered quality-cost gate",
+    "result": "rejected"
+  },
+  "implementation_sha256": {
+    "experiments/arllm/gsm8k_reproduction.py": "97a5e129fdee4cb729881ac09bb541726e60340448918c8111d4f06b632113e3",
+    "experiments/shared/__init__.py": "47f95231fdbfcebe977a90fff78a162b13275cd21a7b76b1b3d3d41ef12249f9",
+    "experiments/shared/artifacts.py": "e6363e9b52a251d306a8e519e8c12d2511f30b0f10fbc103d00e0d62347a7262",
+    "experiments/shared/attempt_registry.py": "c58c123c3475a2e2cc62c24b6367fe1ad02d4c726ddf327f75ab9a7f7e0c37c3",
+    "experiments/shared/components.py": "ea32c7febdb83d18809694b0940e5db04a72f80862ed6493f5501d9c600031d8",
+    "experiments/shared/config_overrides.py": "51e91ddd8a44ff7f8b23f5f2c6c29db2d349ec5baf77c43f458ec9e485881777",
+    "experiments/shared/environment.py": "28df6a4f81df4ce0d97ddc77028cc941a1c3ac76e65b5812af9c465dc86e0644",
+    "experiments/shared/methods.py": "b7e7339eae0808c671be8960b3d8a77e770424e4c73d61298e1caa2d2a9d5c25",
+    "experiments/shared/paired_protocol.py": "4be48a5c23bef9a5390a072a88e32eb48c9e83c7091cd4d2c1243561297f682d",
+    "experiments/shared/statistics.py": "83ea557d61db4a57ee4236f6d32c6cbf60fb9abffb063344c4032ad744c899f8",
+    "experiments/shared/suite_runner.py": "cece0a616840f3f01e9774765937382b6c5e23188f4d4c2b7cab1702cb8354e9",
+    "src/inference_scaling/__init__.py": "b36398ee1c7518b6caa16131cfa6f2fbae0ea45e0c4ef681b85ae3e83962abf0",
+    "src/inference_scaling/arllm/__init__.py": "cfc188ad19bef04300ece270e9205a51881976ab1a36dec6876e4023cb19db6b",
+    "src/inference_scaling/arllm/acceleration.py": "ca7c77d8306f28f8155baabb3d4f2d9d0eebdb5f596e623ee29f0f1331daae17",
+    "src/inference_scaling/arllm/algorithms/__init__.py": "338c685decdf0a6bc637620b7b17df4132c018c4b25b5aa422ec5d6eedf220df",
+    "src/inference_scaling/arllm/algorithms/base_replay.py": "ebe3d4db44df469884ca9b60f4762cfe861de13c4749f8425ae856a6693c7e77",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py": "d915bedf2b6ee080cf77842d5e09de37c131643dd51c969d1c160102b0fa8c8e",
+    "src/inference_scaling/arllm/algorithms/dynamic_is.py": "6b0ac40068a73b379c93cb701edf2863c4919646e5b4485f76ab4e95ee099291",
+    "src/inference_scaling/arllm/algorithms/iterated_is.py": "0436e89cece52460cf17cb431133930990ff2d6788aa767e78fc064013fac1a0",
+    "src/inference_scaling/arllm/algorithms/mh.py": "e9d1de59df30f56fe802955a440baafd684be8510452cb7528426031c9ceda65",
+    "src/inference_scaling/arllm/algorithms/mh_acceleration.py": "83b8716ac359b6c50736b37e28c09c3dfa5f368b84b11474324d87f6f3be06bd",
+    "src/inference_scaling/arllm/algorithms/progressive_is.py": "945f5f3dbb1af543b81aad05f36792669940f277d06ec1aaad76da5e18dc875b",
+    "src/inference_scaling/arllm/algorithms/smc_forest.py": "6abcdcb2e0055613737a6dbe4603e83dc25cfc86cfc2274228273f0871691bc6",
+    "src/inference_scaling/arllm/algorithms/streaming_is.py": "59287afe44852e7812e4b1edc618aadd07b525af52b282397f7fbc873ae91158",
+    "src/inference_scaling/arllm/backends/__init__.py": "7b82af0a52db7d1de631bef0f7cc206112f7150387f9cd8835e64f1ff4b36afb",
+    "src/inference_scaling/arllm/backends/absorbing.py": "9457ba31245be98928830017c7ea23d58e2f256a755d194879155ed9e48de03e",
+    "src/inference_scaling/arllm/backends/batching.py": "c7fe79463b3744ea4472391728a911038e2beb354ffca005849e2f3689231f69",
+    "src/inference_scaling/arllm/backends/cache.py": "903f2db4f4bfb7d91bcd8e245a57d4ec0f6c52bc435c3b30051bab0676932488",
+    "src/inference_scaling/arllm/backends/candidate_cache.py": "63522a12790a56c3a01ce21f9aa510fe2c830364d923b510b8bfd0449e6ea2bc",
+    "src/inference_scaling/arllm/backends/loader.py": "88c4466eb8fdd3f52db65ee5f6d13f9a5e3c615a6129ef1ce051d3c86eb08f44",
+    "src/inference_scaling/arllm/backends/tabular.py": "8ef2fa4a4c6a6d301c8dce362ebff7a5baef27f5a8a935320d2a4204bf92af9f",
+    "src/inference_scaling/arllm/backends/transformers_backend.py": "e3d1f1e13beec69b1b3024d2ca8cb3c8893427dc5d6af34c30a044dfaf13792a",
+    "src/inference_scaling/arllm/backends/vllm_backend.py": "598e3240b2f9f2dd5918df0c71f7d0f0e1b5cc8b8d3260a292ffb71cf9d34506",
+    "src/inference_scaling/arllm/config.py": "3ee1c3cf1617b7dc7f5afdbadecc4638cbd151c468a3af6d34d33f560f6c88d7",
+    "src/inference_scaling/arllm/replay.py": "0ae67c116dbc63a4c4fe535d07f2df0d942d1a375494470ebbe57c80524144bf",
+    "src/inference_scaling/arllm/rollout_broker.py": "5c0bd713007d67157122da016c78358909e387429190ebc48ae86a46d143bcc1",
+    "src/inference_scaling/arllm/types.py": "089b790728259c704b37324ce9e00446c73e5c2ae33d3b49eb1469f918f40d76",
+    "src/inference_scaling/arllm/vllm_suffix_proposer.py": "14dda355f3b3cf9a2c43ecde7c47aeb33d244cc2e1576d9329b4a7dc7afcab99",
+    "src/inference_scaling/dllm/__init__.py": "0c50f67bcf6147c12054bb1f0a22d04b443c6bfd69db8d19883ece120841e983",
+    "src/inference_scaling/dllm/algorithms/__init__.py": "47e0f862990773dae8f2c7a5ef8c9e91d4b0f7c82236c1e86a4d8475fe181f20",
+    "src/inference_scaling/dllm/algorithms/is_sampling.py": "3a58b47dcbc8723d7e17e16ebb35228c185a2f764a607882e8b87af63096937b",
+    "src/inference_scaling/dllm/algorithms/mh.py": "16c3e496af41c09b3462af77ba62230362e5945a5ddb2fe2e51693bb48c2f27f",
+    "src/inference_scaling/dllm/algorithms/mh_acceleration.py": "46fa45c8def126cad3f0e204db642974cf5712339cd802f9b4869d8a027b8732",
+    "src/inference_scaling/dllm/algorithms/progressive_is.py": "3cbc67179a912cadb0896c88e2e36e572416b7b7b0a285e13cc6f55f9064bc22",
+    "src/inference_scaling/dllm/algorithms/search.py": "c302b3e2f1e86d9b7b5bb72461b4280e3bee51db99dea769cc06605ddf1b74df",
+    "src/inference_scaling/dllm/algorithms/smc_forest.py": "1d7273389841f5585bdf301bf16531e92852d82206c27189eaa96efa270a40bf",
+    "src/inference_scaling/dllm/backends/__init__.py": "9e08290b6b69264e47bd2ba74cb350e8eaaaacd2f501da97f3da452c23a2a79b",
+    "src/inference_scaling/dllm/backends/llada.py": "df3156e605911b7b7e27ba155a054e87d81a7f16c598eb1633337586c73da84d",
+    "src/inference_scaling/dllm/backends/loader.py": "fd5a02cbb6c0b10ae94bec46f948c3ba4ad80ba4486e9852652f8d5e7564a7b7",
+    "src/inference_scaling/dllm/config.py": "c5dc5b7bf48d928d48bdbe8bd9bbf48318688e272d77e6fa1f40005cb135f852",
+    "src/inference_scaling/dllm/dynamic_is.py": "7d6efbd89918d307aa6eb0773dbce26d93f3975cbe7c59f71d22dee7ac7fc482",
+    "src/inference_scaling/dllm/preferences.py": "33aca6ce924539253722e035cdb966acc9b74ddf6a6a674713700424a2b56362",
+    "src/inference_scaling/dllm/replay.py": "59498e227d04c006d971bb3f9a9157b2325f22efb109a88fd52961b5ca0e4ae7",
+    "src/inference_scaling/dllm/types.py": "d5ca9ca9e5fac1bea75fed293fa6da97be8d063f64253a76aa9a7d5635f59e8a",
+    "src/inference_scaling/dllm/vrpo.py": "bff9ec5b09cfc0305f0df463d2fcd6c2a31fe0d3a91b75b1737ba4b309a7fcf5",
+    "src/inference_scaling/shared/__init__.py": "22323d0d28b33e10654b60f8baeefbeaf1aef0120e48c9ee41d2f7670521d68c",
+    "src/inference_scaling/shared/budget.py": "9c3d7158ad308d8ebcf1e99d6f6f8c805f62df6a5b2b1247d6b826cc1d314aef",
+    "src/inference_scaling/shared/compute.py": "10fabb6516ab1a50c30189425c5bbbe4543c6966a8cfe3945fdcbf264fcdfb9d",
+    "src/inference_scaling/shared/config.py": "5166a2e2eb09b7d8541d52b0f6333e0896cb4f8ea3b1116ed0723b7070cdab30",
+    "src/inference_scaling/shared/evaluation/__init__.py": "f983d850024d6ec1439bfaaee8864334088b32ec9b8281213aa62de7c0430826",
+    "src/inference_scaling/shared/evaluation/consensus.py": "57fa1039e8ea2951ce94f796b74193ebf6f8fb7751795be691ffeec86e810ccd",
+    "src/inference_scaling/shared/evaluation/grpo_reward.py": "e464eb595c60539cbc300fe5dda0b9efda42254ba8b27fe1c1e40c6bf93ec818",
+    "src/inference_scaling/shared/evaluation/gsm8k.py": "2b7fcb57f685e550d0d718a298db948adb11d61637fe5126441c7c0a0b53bf91",
+    "src/inference_scaling/shared/importance.py": "467dfe75733552787b0a0e2f1624d9094859cba8aa7554fa540a59691325ba12",
+    "src/inference_scaling/shared/iterated_sir.py": "cd1d97a51075b9a28dd2645b046eb2551adf300ea3fa77907d5414dba1d8bd75",
+    "src/inference_scaling/shared/metrics.py": "9da0bf08f63e0bbb0e104690978779f5ab8e7cb98bbfaa37b2c39aff0915976b",
+    "src/inference_scaling/shared/mh.py": "7e039df9e5b198aba59c8ea79bcad187cf813cc0df8debe4baadf586c9798448",
+    "src/inference_scaling/shared/rng.py": "be13d252125b0f04c469cc13e71a798850131859dc4d62049e31244f323d2399",
+    "src/inference_scaling/shared/rqmc.py": "8d09351a48b18b2d4ced5150f05b0249bc4e0ab673a7d860ee7b4e0eb72c6c4e",
+    "src/inference_scaling/shared/smc.py": "81f764ddeddf939626f4f2ccdbbf967a456c2e1ecef298ca788bdac7692e4495",
+    "src/inference_scaling/shared/stepwise.py": "c7cb08ea172e4ab1ee20ae4ae40d7eba5e60e8acbc46942d3389448bb4c57b90",
+    "src/inference_scaling/shared/types.py": "83aebdafe069002dc4bdbca3395f276d44eac551df948d95eaa7487c24c8423b"
+  },
+  "paired_first_step_weight_diagnostics": {
+    "first_step_candidates_identical": true,
+    "first_step_log_weight_mean_absolute_difference": 2.684530530634285,
+    "first_step_log_weight_mean_difference": -0.14092619799686576,
+    "first_step_log_weight_root_mean_squared_difference": 4.795541648910604,
+    "first_step_max_weight_candidate_agreement": 0.4375,
+    "first_step_selected_index_agreement": 0.5625,
+    "interpretation": "paired estimator difference at matched candidates; this is not an across-randomization variance estimate",
+    "paired_observations": 16
+  },
+  "phase": "screen",
+  "problem_indices": [
+    55,
+    69,
+    276,
+    497,
+    704,
+    1104,
+    1269,
+    1311
+  ],
+  "schema_version": 1,
+  "scope": {
+    "block_size": 32,
+    "candidate_count": 4,
+    "dataset": "pinned OpenAI GSM8K test split",
+    "dllm_experiments": false,
+    "draws": 2,
+    "environment": {
+      "backend": "transformers",
+      "cuda_runtime": "13.0",
+      "gpu": "NVIDIA GeForce RTX 3090",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.12.7",
+      "torch": "2.13.0+cu130",
+      "transformers": "5.15.0",
+      "vllm": null
+    },
+    "maximum_new_tokens": 128,
+    "model": "Qwen2.5-1.5B-Instruct",
+    "model_family": "arllm",
+    "model_path": "models/Qwen2.5-1.5B-Instruct",
+    "model_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "model_weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+    "pilot_samples": 8,
+    "profile": "gsm8k-quick",
+    "questions": 8,
+    "reward": "independent-pilot frozen consensus",
+    "rollouts_per_candidate": 4
+  },
+  "sources": {
+    "iid": [
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-iid-draw0/manifest.json",
+        "manifest_fingerprint": "9fcaf3d90cd3414d0c4cca8291faa3130da3545a0c3c68e22bf6ee4cdf8f1ceb",
+        "records": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-iid-draw0/records.jsonl",
+        "records_sha256": "cb693b88586a8f53d3e1f99950de8d70446246043fdd1f034813aedb91da6586"
+      },
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-iid-draw1/manifest.json",
+        "manifest_fingerprint": "720c22b62726a938a261a96c9a4de7e61d14ee3d06b7cabf32b2238a188be33b",
+        "records": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-iid-draw1/records.jsonl",
+        "records_sha256": "bef6959fe193fd3659fb91f17df9f116d029568b32f97a47f11f0bbbce15c53e"
+      }
+    ],
+    "sobol": [
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-sobol-draw0/manifest.json",
+        "manifest_fingerprint": "b22ef20e5fa600e4a3ea038da797712db8d384577dd4a64936bd685df66049fd",
+        "records": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-sobol-draw0/records.jsonl",
+        "records_sha256": "99567a3aeacabd2d30beaa803aeb35bd3339abc9a53f2aa1a23ba75babd6af07"
+      },
+      {
+        "manifest": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-sobol-draw1/manifest.json",
+        "manifest_fingerprint": "47b285365877d1c59edbfe73297cb62d65c25b403cfd3dce0accf4ebe28363cb",
+        "records": "results/gsm8k/gsm8k-quick/conditional_is-qwen15b-rqmc-screen-092fce8-sobol-draw1/records.jsonl",
+        "records_sha256": "44d90fd48215cb77572bd533f0e5466f51ea9fb7ca5340394f79c76e3900ad7c"
+      }
+    ]
+  },
+  "status": "complete",
+  "table": [
+    {
+      "accuracy": 0.1875,
+      "arm": "iid",
+      "correct": 3,
+      "generated_token_factor_vs_iid": 1.0,
+      "generated_tokens": 69718,
+      "main_model_dense_forward_flops": 376795962177536,
+      "main_model_dense_forward_petaflops": 0.376795962177536,
+      "main_model_flops_factor_vs_iid": 1.0,
+      "mean_rollout_ess_descriptive": 2.6784383846395703,
+      "mean_seconds_per_observation": 11.887969849999877,
+      "mean_within_candidate_log_weight_dispersion": 7.341746794871795,
+      "observations": 16,
+      "paired_vs_iid": {
+        "accuracy_difference": 0.0,
+        "bootstrap_unit": "GSM8K question; all draws stay in the same cluster",
+        "clustered_bootstrap_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "per_draw": [
+        {
+          "accuracy": 0.125,
+          "correct": 1,
+          "draw_index": 0,
+          "generated_token_factor_vs_iid_same_draw": 1.0,
+          "generated_tokens": 34144,
+          "main_model_dense_forward_flops": 196740213187584,
+          "main_model_flops_factor_vs_iid_same_draw": 1.0,
+          "observations": 8,
+          "seconds_excluding_model_load": 94.49780719999853,
+          "wall_factor_vs_iid_same_draw": 1.0
+        },
+        {
+          "accuracy": 0.25,
+          "correct": 2,
+          "draw_index": 1,
+          "generated_token_factor_vs_iid_same_draw": 1.0,
+          "generated_tokens": 35574,
+          "main_model_dense_forward_flops": 180055748989952,
+          "main_model_flops_factor_vs_iid_same_draw": 1.0,
+          "observations": 8,
+          "seconds_excluding_model_load": 95.7097103999995,
+          "wall_factor_vs_iid_same_draw": 1.0
+        }
+      ],
+      "rollout_design": "iid",
+      "sum_seconds_excluding_model_load": 190.20751759999803,
+      "wall_factor_vs_iid": 1.0,
+      "wilson_95_treating_draws_as_observations": [
+        0.06591599071428142,
+        0.4300888096197414
+      ]
+    },
+    {
+      "accuracy": 0.1875,
+      "arm": "sobol",
+      "correct": 3,
+      "generated_token_factor_vs_iid": 1.0017642502653548,
+      "generated_tokens": 69841,
+      "main_model_dense_forward_flops": 384792402272256,
+      "main_model_dense_forward_petaflops": 0.384792402272256,
+      "main_model_flops_factor_vs_iid": 1.0212222021926878,
+      "mean_rollout_ess_descriptive": 2.6797403499711274,
+      "mean_seconds_per_observation": 11.946061043750205,
+      "mean_within_candidate_log_weight_dispersion": 6.720753205128205,
+      "observations": 16,
+      "paired_vs_iid": {
+        "accuracy_difference": 0.0,
+        "bootstrap_unit": "GSM8K question; all draws stay in the same cluster",
+        "clustered_bootstrap_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "per_draw": [
+        {
+          "accuracy": 0.125,
+          "correct": 1,
+          "draw_index": 0,
+          "generated_token_factor_vs_iid_same_draw": 1.0022551546391754,
+          "generated_tokens": 34221,
+          "main_model_dense_forward_flops": 197332999480320,
+          "main_model_flops_factor_vs_iid_same_draw": 1.0030130408172873,
+          "observations": 8,
+          "seconds_excluding_model_load": 95.20186200000262,
+          "wall_factor_vs_iid_same_draw": 1.007450488226822
+        },
+        {
+          "accuracy": 0.25,
+          "correct": 2,
+          "draw_index": 1,
+          "generated_token_factor_vs_iid_same_draw": 1.001293079215157,
+          "generated_tokens": 35620,
+          "main_model_dense_forward_flops": 187459402791936,
+          "main_model_flops_factor_vs_iid_same_draw": 1.0411186748743977,
+          "observations": 8,
+          "seconds_excluding_model_load": 95.93511470000067,
+          "wall_factor_vs_iid_same_draw": 1.0023550828756993
+        }
+      ],
+      "rollout_design": "scrambled_sobol",
+      "sum_seconds_excluding_model_load": 191.1369767000033,
+      "wall_factor_vs_iid": 1.004886552917219,
+      "wilson_95_treating_draws_as_observations": [
+        0.06591599071428142,
+        0.4300888096197414
+      ]
+    }
+  ]
+}
