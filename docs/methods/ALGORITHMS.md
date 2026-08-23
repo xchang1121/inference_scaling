@@ -705,6 +705,8 @@ store.add_evaluation(independent_reserve_record)
 多请求执行时，缓存构建和在线选择按 guidance step 分成两个阶段。每个阶段内部可合并不同 prompt 的兼容
 生成与评分请求；阶段边界保证 cache build、在线 1.5B 计算和在线 0.5B 辅助计算可以分别计账。正式 replay
 概率实验使用 FP32；低精度 logits 可能随 batch 形状出现足以影响保存概率复核的数值差异。
+Qwen2.5-1.5B 的候选缓存与连续批处理组合消融见
+[IS replay 执行组合](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack)。
 
 <a id="alg-dynamic-is"></a>
 ## 9. 动态候选 proposal 与外层 IS

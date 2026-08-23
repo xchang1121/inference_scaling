@@ -83,8 +83,9 @@ def test_is_stack_summary_reports_factors_exactness_and_break_even() -> None:
     assert all(
         item["all_runs_token_exact"] for item in summary["execution_exactness"].values()
     )
-    assert summary["break_even_queries_by_seed"]["wall_queries"] == [1]
-    assert summary["break_even_queries_by_seed"]["total_flops_queries"] == [2]
+    assert summary["break_even_queries_by_seed"]["wall_queries"] == [2]
+    assert summary["break_even_queries_by_seed"]["total_flops_queries"] == [1]
+    assert "consumes each evaluation record once" in summary["break_even_scope"]
 
 
 def test_is_stack_summary_rejects_a_slow_batching_interaction() -> None:

@@ -8,8 +8,8 @@
 成对因子统一定义为“优化路径 / 对照路径”。小于 1 表示相应指标下降，大于 1 表示相应指标上升。
 墙钟排除模型与数据加载；主模型 FLOPs 按 `2 × 参数量 × 实际 forward token slots` 估算。完整网格使用
 32 题 FP32；隔离执行变量的 BF16 诊断使用 3 个 seed。详细固定项与未计项见实验设计。
-本报告中的正式执行结果均来自 Qwen2.5-1.5B；dLLM 路径未运行。Qwen2.5-0.5B 只在草稿模型消融中使用，
-其计算量与 1.5B 分列。
+本报告中的正式执行结果均来自 Qwen2.5-1.5B；dLLM 路径未运行。Qwen2.5-0.5B 只作为草稿模型或
+off-policy rollout proposal 使用，其计算量与 1.5B 分列。
 
 ## IS 与 MH rollout 复用结果
 
@@ -30,6 +30,8 @@
 | [冻结 replay 混合 proposal，在线](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | base suffix proposal | 0.534 ± 0.078× | 1.003 ± 0.001× | 32 次更新中历史 proposal 占 35.4% ± 9.5% |
 | [多尺度后缀](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.716 ± 0.084× | 1.000 ± 0.000× | 接受率由 61.5% 升至 69.8% |
 | [多尺度后缀 + 冻结 replay](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack) | uniform 后缀、base proposal | 0.357 ± 0.026× | 1.002 ± 0.001× | 接受率 80.2%；历史 proposal 占 30.2% |
+| [IS replay 候选缓存](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 顺序 warm replay | 0.696 ± 0.006× | 0.807 ± 0.004× | 复用 cache build 已产生的 16 个候选 draw |
+| [IS replay 候选缓存 + 连续批处理](QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack) | 连续批处理 fresh-only | 0.686 ± 0.131× | 0.746 ± 0.010× | 在线总 FLOPs 因子 0.909×；复用率 31.62% |
 
 <a id="infra-report-broker"></a>
 ### rollout token 续跑
@@ -139,9 +141,29 @@ padding 和 batch 分叉略微增加逻辑 slots；连续批处理的主要收�
 | [warm cache 在线阶段](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | 1.0326 | 362.9 s | 0.766× | 0.859× |
 | [cache build + 首次 warm 查询](../experiments/GSM8K_EXPERIMENT_DESIGN.md#infra-labels) | 3.1563 | 763.4 s | 2.341× | 1.807× |
 
-在线阶段的 FLOPs 降低 23.4%，墙钟降低 14.1%。完整计入历史库构建后，同一 replay key 需要重复查询
-7 次，累计 FLOPs 和累计墙钟才同时低于 fresh-only。准确率差及配对区间见
+在线阶段的 FLOPs 降低 23.4%，墙钟降低 14.1%。旧版报告曾把完整构建成本除以在线节省量，得到同一
+replay key 重复 7 次的算术交点；该数字不属于默认算法结论。默认生命周期将 evaluation 记录消费一次，
+不能为摊销构建成本而重复使用同一记录。warm 行表示已有、匹配且未消费的 history；需要为当前请求新建
+history 时，应比较完整冷启动成本。准确率差及配对区间见
 [质量报告](GSM8K_3090_ALIGNED_RESULTS.md#quality-replay-dynamic)。
+
+<a id="infra-report-is-stack"></a>
+### IS replay 候选缓存与连续批处理
+
+4 道固定题、3 个 seed 的 FP32 组合消融将候选缓存与跨 prompt 批处理分别打开。候选缓存省略 replay key
+构建后对同一 base 候选的重复自回归生成；缓存前后输出逐 token 一致。连续批处理再合并不同 prompt 的候选、
+rollout 和评分请求；对应顺序/批处理输出也逐 token 一致。
+
+| 对比 | 在线墙钟因子 | 在线 1.5B FLOPs 因子 | 在线总 FLOPs 因子 |
+| --- | ---: | ---: | ---: |
+| 候选缓存 / 顺序 warm replay | 0.696 ± 0.006× | 0.807 ± 0.004× | 0.836× |
+| 连续批处理 / 顺序候选缓存 | 0.502 ± 0.072× | 1.097× | 1.095× |
+| 完整栈 / 连续批处理 fresh-only | 0.686 ± 0.131× | 0.746× | 0.909× |
+
+连续批处理的局部 FLOPs 增量来自 padding；候选缓存与 replay 节省抵消该增量后，完整在线栈的合计 FLOPs
+仍下降 9.1%。如果本次请求需要新建 history，冷启动相对连续批处理 fresh-only 为 `1.266×` 墙钟和
+`1.945×` 总 FLOPs。部署时仅对匹配且未消费的 history 启用 warm replay；其余请求使用连续批处理
+fresh-only。
 
 <a id="infra-report-dynamic"></a>
 ### 动态候选与方差—成本预算
@@ -212,7 +234,7 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 | 工作负载 | 当前结果支持的配置 | 需要同时记录的成本 |
 | --- | --- | --- |
 | 大量独立请求 | 连续批处理、重复前缀 KV 复用 | batch 形状、padding slots 与数值一致性 |
-| replay key 重复出现 | warm replay | 历史库构建与摊销次数 |
+| 存在匹配且未消费的 replay 记录 | warm replay、候选缓存、连续批处理 | history 来源、cache build、1.5B/0.5B 分账 |
 | 过量提交产生未完成 rollout | 部分 rollout broker | 保存 token、恢复 prefill 和完整轨迹数 |
 | verifier 含 CPU 或远程延迟 | 流式 IS、delayed acceptance；高延迟下的 MH 预取 | verifier 延迟、精确调用数和未选分支 |
 | 同一 prompt 存在冻结历史后缀 | multiscale replay-mixture MH | 历史 proposal 比例、接受率、评分长度和 cache build |
@@ -227,6 +249,8 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
    `1.002×`，其收益属于执行时间而非主模型计算量下降。
 4. Qwen 0.5B 精确 speculative decoding、历史草稿和方差—成本分配未降低当前单卡设置的墙钟；这些路径
    保留为显式实验配置。
+5. IS 候选缓存与连续批处理在 warm 在线阶段可叠加；相对连续批处理 fresh-only 的墙钟、1.5B FLOPs 和
+   总 FLOPs 因子分别为 `0.686×`、`0.746×` 和 `0.909×`。新建 history 的冷启动不启用该路径。
 
 <a id="infra-report-vllm"></a>
 ## 后端范围与机器可读结果
@@ -243,4 +267,5 @@ SMC 条件后缀复用相对 fresh-only SMC 的墙钟因子为 `0.856×`，FLOPs
 - [`rtx3090_transformers_is_mh_summary.json`](../../results/infra/rtx3090_transformers_is_mh_summary.json)
   及三份 IS/MH seed 文件；
 - [`mh_replay_multiscale_stack.json`](../../results/arllm/qwen15b_optimization/mh_replay_multiscale_stack.json)
+  、[`is_replay_batching_stack.json`](../../results/arllm/qwen15b_optimization/is_replay_batching_stack.json)
   与 [`draft_model_speculation_screen.json`](../../results/arllm/qwen15b_optimization/draft_model_speculation_screen.json)。

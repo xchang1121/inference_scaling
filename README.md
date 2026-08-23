@@ -91,6 +91,10 @@ dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`�
 组合实验的在线墙钟因子为 `0.357×`，主模型 FLOPs 因子为 `1.002×`。0.5B 精确 speculative decoding
 在本机未降低墙钟，默认关闭。
 
+IS 在线路径在存在匹配且未消费的 history 时启用候选缓存与连续批处理。三 seed 组合实验相对已启用连续
+批处理的 fresh-only 路径，墙钟、1.5B FLOPs 和 1.5B＋0.5B 总 FLOPs 因子分别为 `0.686×`、`0.746×`
+和 `0.909×`。如果 history 需要为当前请求新建，则使用连续批处理 fresh-only，并单列冷启动成本。
+
 ## 安装
 
 AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本。单独运行一侧时可直接使用当前 Python；完整成对

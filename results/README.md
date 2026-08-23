@@ -34,7 +34,7 @@
 | 目录或文件 | 内容 |
 | --- | --- |
 | `gsm8k_3090/gsm8k_3090_aligned_compute_validated.json` | GRPO 训练成本与累计 FLOPs 交点 |
-| `gsm8k_3090/gsm8k_3090_aligned_replay_validated.json` | fresh、warm、cache build 与摊销次数 |
+| `gsm8k_3090/gsm8k_3090_aligned_replay_validated.json` | fresh、warm、cache build 与历史算术交点；默认记录仍单次消费 |
 | `gsm8k_3090/gsm8k_3090_aligned_dynamic_is_validated.json` | 动态候选、design、复用率与成本 |
 | `gsm8k_3090/gsm8k_3090_aligned_async_grouped_validated.json` | 逐 prompt 与连续批处理 |
 | `infra/rtx3090_transformers_summary.json` | 历史树、progressive、run-ahead 与 SMC 的三 seed 聚合 |
@@ -61,6 +61,7 @@
 | --- | --- | --- |
 | `mh_suffix_screen.json`、`mh_suffix_confirmation.json` | uniform、inverse-length 与 multiscale 后缀调度的筛选和 32 题确认 | `multiscale` 进入默认 MH 组合 |
 | `mh_replay_multiscale_stack.json` | 后缀调度 × 冻结 replay proposal 的三 seed、四臂组合消融 | 墙钟默认组合；cache build 与在线成本分列 |
+| `is_replay_batching_stack.json` | warm replay × 候选缓存 × 连续批处理的三 seed 组合消融；1.5B/0.5B 分账 | 匹配且未消费的 history 存在时启用完整在线栈 |
 | `rqmc_screen.json` | IID 与 scrambled Sobol rollout 的成对筛选 | 默认继续使用 IID |
 | `bounded_stop_screen.json` | 有界精确提前停止与完整 rollout 评估 | 默认关闭提前停止 |
 | `draft_model_speculation_screen.json` | 1.5B 普通生成与 0.5B 草稿长度 2/4/8 的执行比较 | 默认使用 1.5B target-only batching |

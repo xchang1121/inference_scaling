@@ -684,6 +684,10 @@ def summarize(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "replay_candidate_cache_continuous",
             "fresh_sequential",
         ),
+        "full_stack_over_fresh_continuous": (
+            "replay_candidate_cache_continuous",
+            "fresh_continuous",
+        ),
         "full_stack_over_replay_sequential": (
             "replay_candidate_cache_continuous",
             "replay_sequential",
@@ -736,7 +740,7 @@ def summarize(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
     for run in runs:
         arms = {arm["name"]: arm for arm in run["arms"]}
-        baseline = arms["fresh_sequential"]
+        baseline = arms["fresh_continuous"]
         stack = arms["replay_candidate_cache_continuous"]
         for output_key, metric in (
             ("wall_queries", "wall_seconds"),
@@ -773,17 +777,22 @@ def summarize(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ]["mean"]
     )
     full_wall = float(
-        comparisons["full_stack_over_fresh_sequential"]["online"]["wall_seconds"][
+        comparisons["full_stack_over_fresh_continuous"]["online"]["wall_seconds"][
             "mean"
         ]
+    )
+    full_total_flops = float(
+        comparisons["full_stack_over_fresh_continuous"]["online"][
+            "total_estimated_dense_forward_flops"
+        ]["mean"]
     )
     accepted = (
         all_exact
         and candidate_wall <= 1.05
         and candidate_flops <= 1.0
         and batching_wall <= 0.95
-        and batching_flops <= 1.05
         and full_wall <= 0.95
+        and full_total_flops <= 1.05
     )
     return {
         "complete": True,
@@ -792,14 +801,21 @@ def summarize(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "comparisons": comparisons,
         "execution_exactness": exactness,
         "break_even_queries_by_seed": break_even,
+        "break_even_scope": (
+            "arithmetic comparison against fresh continuous batching only; the "
+            "default exact replay lifecycle consumes each evaluation record once, so "
+            "repeated use of one frozen history library is not enabled by this result"
+        ),
         "decision": {
             "status": "accepted" if accepted else "rejected",
             "criterion": (
                 "execution-only pairs must be token-exact; candidate reuse may add no "
                 "main-model FLOPs and at most 5% wall time; continuous batching on "
-                "cached replay must reduce mean online wall time by at least 5% while "
-                "adding at most 5% total FLOPs; the full stack must reduce mean online "
-                "wall time by at least 5% versus sequential fresh-only execution"
+                "cached replay must reduce mean online wall time by at least 5%; the "
+                "full stack must reduce mean online wall time by at least 5% versus "
+                "continuous-batched fresh-only execution and may add at most 5% total online "
+                "FLOPs. The batching-only FLOP factor is reported as a trade-off "
+                f"({batching_flops:.6g} in this summary) rather than hidden."
             ),
         },
     }

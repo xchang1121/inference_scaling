@@ -288,7 +288,8 @@ $`K=2`$ 是最接近基线的草稿路径，但墙钟增加 5.8%、输出吞吐�
 target-only 连续批处理。表中准确率不用于选择执行后端：两条路径保证相同采样分布，但有限随机样本不要求
 逐条输出一致。
 
-### IS replay、候选缓存与连续批处理的组合协议
+<a id="qwen15b-is-stack"></a>
+### IS replay、候选缓存与连续批处理的组合
 
 组合实验只使用 Qwen2.5-1.5B 产生候选和 fresh rollout。Qwen2.5-0.5B 只产生 off-policy history，并在
 在线阶段计算 fresh completion 的 behavior probability；两种模型的 forward token 与 FLOPs 分列。五个
@@ -297,7 +298,8 @@ target-only 连续批处理。表中准确率不用于选择执行后端：两�
 
 候选缓存复用 replay key 构建时已经生成的同一组 base 候选，省略在线阶段的重复候选生成。该改动不改变
 候选、权重或重采样；顺序 replay 的缓存前后输出必须逐 token 相同。连续批处理使用请求局部随机流，并要求
-与对应顺序臂逐 token 相同。缓存构建、在线阶段和冷启动总成本分别报告，摊销点按每个 seed 独立计算。
+与对应顺序臂逐 token 相同。缓存构建、在线阶段和冷启动总成本分别报告；重复缓存的算术交点只作诊断，
+不改变 evaluation 记录单次消费的默认生命周期。
 正式运行采用 FP32，以保证保存的 behavior log probability 能在不同评分 batch 中通过数值复核。
 
 可续跑入口为：
@@ -309,14 +311,37 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_is_stack `
   --output results\arllm\qwen15b_optimization\is_replay_batching_stack.json
 ```
 
-本节在三 seed 实验完成后写入汇总结果；dLLM 不进入该实验。
+实验固定 4 道题、3 个 seed、FP32、4 个 prompt worker、最长 64 token、32-token block、4 个候选，
+每个非终止候选使用 1 条 history 和 1 条 fresh rollout。固定的 GSM8K 精确答案 verifier 只用于保持 replay
+奖励不变；本组用于比较执行等价性和成本，不替代 32 题质量实验。三 seed 的均值如下：
+
+| 路径 | cache build（秒） | 在线墙钟（秒） | 在线 1.5B PFLOPs | 在线 0.5B PFLOPs | 在线合计 PFLOPs | 冷启动墙钟（秒） |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fresh-only，顺序 | 0 | 8.279 | 0.016022 | 0 | 0.016022 | 8.279 |
+| fresh-only，连续批处理 | 0 | 4.353 | 0.017185 | 0 | 0.017185 | 4.353 |
+| warm replay，顺序 | 5.844 | 8.451 | 0.014490 | 0.002562 | 0.017052 | 14.294 |
+| warm replay，候选缓存 | 5.903 | 5.883 | 0.011696 | 0.002562 | 0.014258 | 11.786 |
+| warm replay，候选缓存与连续批处理 | 2.495 | 2.959 | 0.012825 | 0.002792 | 0.015617 | 5.455 |
+
+候选缓存相对顺序 warm replay 的在线墙钟因子为 `0.696 ± 0.006×`，1.5B FLOPs 因子为
+`0.807 ± 0.004×`。在候选缓存上加入连续批处理，墙钟因子为 `0.502 ± 0.072×`；padding 使该局部
+对比的 1.5B FLOPs 和总 FLOPs 分别为 `1.097×` 和 `1.095×`。完整在线栈相对已经启用连续批处理的
+fresh-only 路径，墙钟因子为 `0.686 ± 0.131×`，1.5B FLOPs 因子为 `0.746×`，合计 FLOPs 因子为
+`0.909×`。fresh 顺序/批处理、replay 候选缓存前后、replay 顺序/批处理三类配对在三个 seed 中均逐
+token 一致。平均 rollout 复用率为 31.62%。
+
+若当前请求还需生成并评分 history，完整冷启动相对连续批处理 fresh-only 的墙钟和总 FLOPs 分别为
+`1.266×` 和 `1.945×`。默认路径只在存在匹配且尚未消费的 evaluation 记录时启用 warm replay；否则使用
+连续批处理 fresh-only。默认生命周期中每条 evaluation 记录只消费一次，因此不以重复使用同一 history
+记录计算摊销收益。该组合登记为 `accepted`，适用范围是 warm 在线阶段。dLLM 未进入本实验。
 
 ## 优化组合与方法状态
 
 | 方法 | 初始结论 | 当前默认状态 | 依据 |
 | --- | --- | --- | --- |
 | 连续批处理 | 正收益 | 启用 | 多个 workload 墙钟下降，输出统计量固定 |
-| warm replay | 稳态正收益 | 启用；冷启动单列 | 稳态 FLOPs 与墙钟下降，约 7 次重复请求摊销构建成本 |
+| warm replay | 稳态正收益 | 有匹配且未消费的 history 时启用 | 在线 FLOPs 与墙钟下降；新建 history 的冷启动单列 |
+| IS replay + 候选缓存 + 连续批处理 | 正收益 | 有匹配且未消费的 history 时启用 | 相对连续批处理 fresh-only，在线墙钟 `0.686×`、1.5B FLOPs `0.746×`、总 FLOPs `0.909×` |
 | MH 多尺度后缀 | 正收益 | 启用 | 32 题确认中生成 token 下降 32.3%，聚合墙钟下降 40.7% |
 | 多尺度后缀 + 冻结 replay MH | 正收益 | 有匹配历史时启用 | 完整 Hastings 校正下在线墙钟因子 `0.357×`；FLOPs 因子 `1.002×` |
 | 迭代 SIR | 负收益 | 关闭 | 最优筛选臂准确率低于标准条件 IS，主模型 FLOPs 为其 2.34 倍 |
