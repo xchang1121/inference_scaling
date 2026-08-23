@@ -184,19 +184,21 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_stack `
 
 ### rollout 方差与提前停止
 
-scrambled randomized quasi-Monte Carlo（RQMC）使每条随机流保持正确边缘分布，同时让同一候选的多条 rollout
-在单位立方体上覆盖得更均匀。[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)
-给出 RQMC 与重要性采样/SMC 的组合。仓库已实现经过数字扰动的 Sobol 点集和逐 token 逆 CDF：候选生成、
-rollout 数、proposal、$`p/q`$ 和重采样随机数均保持不变，只替换 rollout 使用的均匀数。每条 rollout 的
-边缘分布仍为原 proposal，因此条件权重估计保持无偏；点集内部不再独立，ESS 只作为权重离散程度的描述量。
+randomized quasi-Monte Carlo（RQMC）保持每条 rollout 的 proposal 边缘分布，同时改变同一候选内多条
+rollout 的联合分布。本轮比较两种实现。`scrambled_sobol` 为每个 token 位置注入经过数字扰动的 Sobol
+坐标；`arithmetic_lattice` 使用一维随机平移格点，并通过算术逆 CDF 将每个格点递推为完整序列。
+[Arithmetic Sampling](https://proceedings.mlr.press/v202/vilnis23a.html)和
+[QuasiMoTTo](https://arxiv.org/abs/2607.01179)给出后一构造；
+[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)讨论 RQMC 与
+重要性采样/SMC 的组合。
 
-实现限定于 Transformers 与表格后端。vLLM 当前不能注入逐 token 均匀数，因此显式拒绝该模式。消融使用
-独立 pilot 冻结的逐序列奖励；批内自一致性奖励会随 rollout 相关性改变，不能用于这一成对比较。离散长序列和
-很小的 rollout 数可能削弱收益，筛选将以成对候选权重差异、描述性 ESS、准确率、生成 token、FLOPs 和
-墙钟决定是否进入确认。严格的估计量方差需要在固定候选上重复独立 scramble；本轮任务质量筛选不以点集内部
-方差代替该量。
+两种设计均保持候选、rollout 数、proposal、$`p/q`$ 和候选重采样随机数不变。每条 rollout 的边缘分布
+仍为原 proposal，故条件权重的算术平均保持无偏。点集内部不独立，ESS 和单个点集的 log-weight 离散度只作
+描述性指标；严格方差需要在固定候选上重复独立随机平移或数字扰动。消融使用独立 pilot 冻结的逐序列奖励，
+避免批内自一致性奖励随 rollout 相关结构改变。Transformers 与表格后端支持这两种随机流；vLLM 当前不支持
+请求级均匀数注入并显式拒绝该模式。
 
-可续跑入口在偶数 draw 先运行 IID、在奇数 draw 先运行 scrambled Sobol；每个候选均使用 4 条 rollout：
+执行顺序在 draw 0 为 IID、Sobol、格点，在 draw 1 完全反转；每个候选均使用 4 条 rollout：
 
 ```powershell
 $env:PYTHONNOUSERSITE = "1"
@@ -209,18 +211,23 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_rqmc_screen
 `results/arllm/qwen15b_optimization/`。汇总核对每个成对运行的第一步候选 token 完全一致；单个点集内部的
 log-weight 离散程度与 ESS 均按描述性指标报告，不作为跨随机化方差估计。
 
-8 题、2 个 draw 的筛选结果如下。准确率与成本均为 16 次观测的聚合值；两臂使用冻结 pilot 共识奖励，
+8 题、2 个 draw 的筛选结果如下。准确率与成本均为 16 次观测的聚合值；三臂使用冻结 pilot 共识奖励，
 因此绝对准确率不与使用批内自一致性奖励的既有条件 IS 结果横向比较。
 
 | rollout 均匀数 | 准确率 | 相对 IID 准确率 | 描述性 ESS | log-weight 离散度 | 生成 token | 主模型 PFLOPs | 相对 FLOPs | 墙钟（秒） | 相对墙钟 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| IID | 18.75% | 0.00 pp | 2.678 | 7.342 | 69,718 | 0.3768 | 1.000 | 190.2 | 1.000 |
-| scrambled Sobol | 18.75% | 0.00 pp，95% 区间 `[0,0]` | 2.680 | 6.721 | 69,841 | 0.3848 | 1.021 | 191.1 | 1.005 |
+| IID | 18.75% | 0.00 pp | 2.678 | 7.342 | 69,718 | 0.3768 | 1.000 | 167.2 | 1.000 |
+| scrambled Sobol | 18.75% | 0.00 pp，95% 区间 `[0,0]` | 2.680 | 6.721 | 69,841 | 0.3848 | 1.021 | 169.5 | 1.013 |
+| 算术格点 | 18.75% | 0.00 pp，95% 区间 `[-18.75,18.75]` | 2.852 | 5.204 | 69,036 | 0.3924 | 1.042 | 174.6 | 1.044 |
 
-Sobol 将点集内部的 log-weight 离散度降低 8.5%，但描述性 ESS、准确率、生成 token 与墙钟均无实际改善。
-在第一步候选 token 完全一致的 16 对观测中，两臂最大权重候选的一致率为 43.75%，实际 selected index
-一致率为 56.25%；有限 rollout 权重发生明显变化，但没有转化为任务质量收益。该方法未通过登记的质量--成本
-门槛，不执行 32 题确认，状态记为 `rejected`。默认条件 IS 继续使用 IID rollout；Sobol 路径仅保留为显式
+Sobol 和算术格点分别把点集内部的 log-weight 离散度降低 8.5% 和 29.1%；算术格点的描述性 ESS 提高
+6.5%。在第一步候选 token 完全一致的 16 对观测中，Sobol 与算术格点的最大权重候选一致率分别为 43.75%
+和 62.50%，两者的实际 selected index 一致率均为 56.25%。这些差异表明 RQMC 确实改变了有限 rollout
+权重估计，但没有提高本轮准确率。
+
+算术格点减少 1.0% 生成 token，同时因后续候选选择和 prefix 长度改变而增加 4.2% 计账主模型 FLOPs；
+逐步概率排序与区间更新使墙钟增加 4.4%。Sobol 同样没有质量或成本收益。两种方法均未通过登记门槛，
+不执行 32 题确认，状态记为 `rejected`。默认条件 IS 继续使用 IID rollout；两种 RQMC 路径保留为显式
 非默认消融。
 
 当奖励和重要性比具有已知上下界时，可以在未完成全部 rollout 前计算每个候选最终权重的区间；只有一个候选
@@ -289,6 +296,9 @@ target-only 连续批处理。表中准确率不用于选择执行后端：两�
 | warm replay | 稳态正收益 | 启用；冷启动单列 | 稳态 FLOPs 与墙钟下降，约 7 次重复请求摊销构建成本 |
 | MH 多尺度后缀 | 正收益 | 启用 | 32 题确认中生成 token 下降 32.3%，聚合墙钟下降 40.7% |
 | 多尺度后缀 + 冻结 replay MH | 正收益 | 有匹配历史时启用 | 完整 Hastings 校正下在线墙钟因子 `0.357×`；FLOPs 因子 `1.002×` |
+| 迭代 SIR | 负收益 | 关闭 | 最优筛选臂准确率低于标准条件 IS，主模型 FLOPs 为其 2.34 倍 |
+| Sobol / 算术格点 rollout | 负收益 | 关闭 | 权重离散度下降，但准确率不变，墙钟因子分别为 `1.013×` 和 `1.044×` |
+| 有界权重精确停止 | 负收益 | 关闭 | 跳过 8.27% rollout，但分批 prefill 使墙钟因子达到 `1.398×` |
 | 0.5B 精确 speculative decoding | 负收益 | 关闭 | 最优 $`K=2`$ 的墙钟因子 `1.058×`，合计 FLOPs 因子 `1.439×` |
 | 流式奖励 | 条件收益 | 关闭 | verifier 延迟足够大时可与生成重叠；廉价奖励无收益 |
 | delayed-acceptance MH | 条件收益 | 关闭 | 需要昂贵精确奖励和有效 surrogate |
