@@ -159,8 +159,22 @@ rollout 数、proposal、$`p/q`$ 和重采样随机数均保持不变，只替�
 
 实现限定于 Transformers 与表格后端。vLLM 当前不能注入逐 token 均匀数，因此显式拒绝该模式。消融使用
 独立 pilot 冻结的逐序列奖励；批内自一致性奖励会随 rollout 相关性改变，不能用于这一成对比较。离散长序列和
-很小的 rollout 数可能削弱收益，筛选将以多个独立 scramble 下的候选权重方差、准确率、生成 token、FLOPs
-和墙钟决定是否进入确认。
+很小的 rollout 数可能削弱收益，筛选将以成对候选权重差异、描述性 ESS、准确率、生成 token、FLOPs 和
+墙钟决定是否进入确认。严格的估计量方差需要在固定候选上重复独立 scramble；本轮任务质量筛选不以点集内部
+方差代替该量。
+
+可续跑入口在偶数 draw 先运行 IID、在奇数 draw 先运行 scrambled Sobol；每个候选均使用 4 条 rollout：
+
+```powershell
+$env:PYTHONNOUSERSITE = "1"
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_rqmc_screen `
+  --config configs\gsm8k_quick.toml --draws 2 --rollout-count 4 `
+  --tag qwen15b-rqmc-screen
+```
+
+入口将逐题记录写入忽略目录 `results/gsm8k/`，将汇总与可续跑清单写入
+`results/arllm/qwen15b_optimization/`。汇总核对每个成对运行的第一步候选 token 完全一致；单个点集内部的
+log-weight 离散程度与 ESS 均按描述性指标报告，不作为跨随机化方差估计。
 
 当奖励和重要性比具有已知上下界时，可以在未完成全部 rollout 前计算每个候选最终权重的区间；只有一个候选
 在所有剩余取值下仍会被同一固定重采样随机数选中时才停止。该规则要求逐次验证与完整计算得到相同 selected

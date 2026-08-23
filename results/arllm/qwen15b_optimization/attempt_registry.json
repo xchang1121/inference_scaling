@@ -52,6 +52,8 @@
       "comparison": "independent rollout uniforms at identical rollout count",
       "decision_basis": "unbiased marginal sampling, across-scramble conditional-weight variance, descriptive ESS, accuracy, FLOPs and wall time",
       "implementation": "src/inference_scaling/shared/rqmc.py and src/inference_scaling/arllm/algorithms/conditional_is.py",
+      "runner": "experiments/arllm/run_qwen15b_rqmc_screen.py",
+      "planned_result": "results/arllm/qwen15b_optimization/rqmc_screen.json",
       "supported_backends": [
         "Transformers",
         "tabular"

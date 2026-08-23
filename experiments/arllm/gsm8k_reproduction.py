@@ -94,6 +94,7 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/shared/evaluation/consensus.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
     "src/inference_scaling/shared/iterated_sir.py",
+    "src/inference_scaling/shared/rqmc.py",
     "src/inference_scaling/arllm/config.py",
     "src/inference_scaling/arllm/types.py",
 )
@@ -397,6 +398,10 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
         ),
         "candidate_log_weight_estimates_by_step": [
             [candidate.log_weight for candidate in step.candidates]
+            for step in result.steps
+        ],
+        "candidate_token_ids_by_step": [
+            [candidate.token_ids for candidate in step.candidates]
             for step in result.steps
         ],
         "selected_candidate_indices": [step.selected_index for step in result.steps],
@@ -712,6 +717,11 @@ def _run_method(
         diagnostics["rollout_ess_is_descriptive"] = (
             diagnostics["rollout_design"] != "iid"
         )
+        diagnostics["configured_candidate_count"] = int(
+            conditional["candidate_count"]
+        )
+        diagnostics["configured_rollout_count"] = int(conditional["rollout_count"])
+        diagnostics["configured_block_size"] = int(conditional["block_size"])
         if method == "iterated_conditional_is":
             diagnostics.update(
                 {
