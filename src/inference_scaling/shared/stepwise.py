@@ -116,6 +116,27 @@ def normalize_log_weights(log_weights: Sequence[float]) -> tuple[float, ...]:
     return tuple(float(value) for value in shifted / total)
 
 
+def categorical_index_from_uniform(
+    probabilities: Sequence[float],
+    uniform: float,
+) -> int:
+    """Select from categorical probabilities using one explicit uniform draw."""
+
+    values = np.asarray(probabilities, dtype=np.float64)
+    if values.ndim != 1 or not len(values):
+        raise ValueError("categorical probabilities must be a non-empty vector")
+    if np.any(~np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("categorical probabilities must be finite and non-negative")
+    total = float(values.sum())
+    if not isfinite(total) or total <= 0.0:
+        raise ValueError("categorical probabilities must have positive mass")
+    if not isfinite(uniform) or not 0.0 <= uniform < 1.0:
+        raise ValueError("uniform must be finite and lie in [0, 1)")
+    cumulative = np.cumsum(values / total, dtype=np.float64)
+    cumulative[-1] = 1.0
+    return int(np.searchsorted(cumulative, uniform, side="right"))
+
+
 def select_stepwise_candidate(
     *,
     state: StateT,
@@ -129,7 +150,10 @@ def select_stepwise_candidate(
     probabilities = normalize_log_weights(
         [candidate.log_weight for candidate in evaluated]
     )
-    selected_index = int(rng.choice(len(evaluated), p=probabilities))
+    selected_index = categorical_index_from_uniform(
+        probabilities,
+        float(rng.random()),
+    )
     return StepwiseSelection(
         step_index=step_index,
         state_before=state,
@@ -191,6 +215,7 @@ def run_stepwise_generation(
 
 
 __all__ = [
+    "categorical_index_from_uniform",
     "StepwiseCandidate",
     "StepwiseGenerationBackend",
     "StepwiseGenerationResult",

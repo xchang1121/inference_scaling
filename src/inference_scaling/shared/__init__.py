@@ -6,6 +6,7 @@ from inference_scaling.shared.budget import (
     allocate_fresh_rollout_budget,
     allocate_variance_cost_budget,
 )
+from inference_scaling.shared.bounded_selection import invariant_categorical_index
 from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
 from inference_scaling.shared.importance import (
     MonteCarloWeightEstimate,
@@ -42,6 +43,7 @@ from inference_scaling.shared.stepwise import (
     StepwiseGenerationBackend,
     StepwiseGenerationResult,
     StepwiseSelection,
+    categorical_index_from_uniform,
     normalize_log_weights,
     run_stepwise_generation,
     select_stepwise_candidate,
@@ -75,6 +77,8 @@ __all__ = [
     "allocate_fresh_rollout_budget",
     "allocate_variance_cost_budget",
     "corrected_replay_log_weight",
+    "categorical_index_from_uniform",
+    "invariant_categorical_index",
     "logmeanexp",
     "iterated_sir_transition",
     "iterated_sir_tv_bound",
