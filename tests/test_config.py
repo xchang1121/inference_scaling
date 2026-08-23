@@ -34,6 +34,19 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: SamplingConfig(top_p=float("inf")),
         lambda: ConditionalISConfig(reward_temperature=float("inf")),
         lambda: ConditionalISConfig(rollout_design="unknown"),
+        lambda: ConditionalISConfig(exact_rollout_early_stop=True),
+        lambda: ConditionalISConfig(
+            rollout_log_weight_bounds=(0.0, 1.0),
+        ),
+        lambda: ConditionalISConfig(
+            exact_rollout_early_stop=True,
+            rollout_log_weight_bounds=(1.0, 0.0),
+        ),
+        lambda: ConditionalISConfig(
+            rollout_design="scrambled_sobol",
+            exact_rollout_early_stop=True,
+            rollout_log_weight_bounds=(0.0, 1.0),
+        ),
         lambda: DynamicISConfig(auxiliary_mixture=float("nan")),
     ],
 )

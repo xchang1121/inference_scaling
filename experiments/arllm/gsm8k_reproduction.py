@@ -390,6 +390,37 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
     return {
         "guidance_steps": len(result.steps),
         "rollout_evaluations": rollout_count,
+        "rollout_evaluations_planned": sum(
+            int(
+                getattr(
+                    step,
+                    "rollout_evaluations_planned",
+                    sum(len(candidate.rollouts) for candidate in step.candidates),
+                )
+            )
+            for step in result.steps
+        ),
+        "rollout_evaluations_performed": sum(
+            int(
+                getattr(
+                    step,
+                    "rollout_evaluations_performed",
+                    sum(len(candidate.rollouts) for candidate in step.candidates),
+                )
+            )
+            for step in result.steps
+        ),
+        "rollout_evaluations_skipped": sum(
+            int(getattr(step, "rollout_evaluations_skipped", 0))
+            for step in result.steps
+        ),
+        "exact_early_stop_steps": sum(
+            bool(getattr(step, "exact_early_stop", False)) for step in result.steps
+        ),
+        "selection_invariant_verified_steps": sum(
+            bool(getattr(step, "selection_invariant_verified", False))
+            for step in result.steps
+        ),
         "mean_rollout_ess": statistics.fmean(ess) if ess else 0.0,
         "mean_within_candidate_log_weight_dispersion": (
             statistics.fmean(within_candidate_log_weight_dispersion)
@@ -402,6 +433,16 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
         ],
         "candidate_token_ids_by_step": [
             [candidate.token_ids for candidate in step.candidates]
+            for step in result.steps
+        ],
+        "candidate_log_weight_intervals_by_step": [
+            [
+                [
+                    candidate.log_weight_lower_bound,
+                    candidate.log_weight_upper_bound,
+                ]
+                for candidate in step.candidates
+            ]
             for step in result.steps
         ],
         "selected_candidate_indices": [step.selected_index for step in result.steps],
@@ -699,6 +740,20 @@ def _run_method(
                         conditional.get("apply_importance_correction", True)
                     ),
                     rollout_design=str(conditional.get("rollout_design", "iid")),
+                    exact_rollout_early_stop=bool(
+                        conditional.get("exact_rollout_early_stop", False)
+                    ),
+                    rollout_log_weight_bounds=(
+                        (
+                            float(conditional["rollout_log_weight_lower_bound"]),
+                            float(conditional["rollout_log_weight_upper_bound"]),
+                        )
+                        if bool(conditional.get("exact_rollout_early_stop", False))
+                        else None
+                    ),
+                    rollout_evaluation_batch_size=int(
+                        conditional.get("rollout_evaluation_batch_size", 1)
+                    ),
                 ),
                 exact_reward if use_exact_reward else pointwise_reward,
                 SeedStream(seed),
@@ -722,6 +777,20 @@ def _run_method(
         )
         diagnostics["configured_rollout_count"] = int(conditional["rollout_count"])
         diagnostics["configured_block_size"] = int(conditional["block_size"])
+        diagnostics["exact_rollout_early_stop_enabled"] = bool(
+            conditional.get("exact_rollout_early_stop", False)
+        )
+        diagnostics["rollout_evaluation_batch_size"] = int(
+            conditional.get("rollout_evaluation_batch_size", 1)
+        )
+        diagnostics["declared_rollout_log_weight_bounds"] = (
+            [
+                float(conditional["rollout_log_weight_lower_bound"]),
+                float(conditional["rollout_log_weight_upper_bound"]),
+            ]
+            if bool(conditional.get("exact_rollout_early_stop", False))
+            else None
+        )
         if method == "iterated_conditional_is":
             diagnostics.update(
                 {
@@ -930,6 +999,34 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         if args.method == "iterated_conditional_is":
             raise ValueError("--rollout-design is not implemented for iterated conditional IS")
         config["conditional_is"]["rollout_design"] = args.rollout_design
+    if getattr(args, "exact_rollout_early_stop", False):
+        if args.method == "iterated_conditional_is":
+            raise ValueError(
+                "exact rollout early stopping is not implemented for iterated conditional IS"
+            )
+        lower = getattr(args, "rollout_log_weight_lower", None)
+        upper = getattr(args, "rollout_log_weight_upper", None)
+        if lower is None or upper is None:
+            raise ValueError(
+                "exact rollout early stopping requires lower and upper log-weight bounds"
+            )
+        config["conditional_is"]["exact_rollout_early_stop"] = True
+        config["conditional_is"]["rollout_log_weight_lower_bound"] = lower
+        config["conditional_is"]["rollout_log_weight_upper_bound"] = upper
+        config["conditional_is"]["rollout_evaluation_batch_size"] = int(
+            getattr(args, "rollout_evaluation_batch_size", None) or 1
+        )
+    elif any(
+        value is not None
+        for value in (
+            getattr(args, "rollout_log_weight_lower", None),
+            getattr(args, "rollout_log_weight_upper", None),
+            getattr(args, "rollout_evaluation_batch_size", None),
+        )
+    ):
+        raise ValueError(
+            "rollout bounds and evaluation batch size require --exact-rollout-early-stop"
+        )
     if getattr(args, "iterated_pool_size", None) is not None:
         config.setdefault("iterated_is", {})["pool_size"] = args.iterated_pool_size
     if getattr(args, "iterated_updates", None) is not None:
@@ -1013,6 +1110,10 @@ def main() -> None:
         "--rollout-design",
         choices=("iid", "scrambled_sobol"),
     )
+    parser.add_argument("--exact-rollout-early-stop", action="store_true")
+    parser.add_argument("--rollout-log-weight-lower", type=float)
+    parser.add_argument("--rollout-log-weight-upper", type=float)
+    parser.add_argument("--rollout-evaluation-batch-size", type=int)
     parser.add_argument("--iterated-pool-size", type=int)
     parser.add_argument("--iterated-updates", type=int)
     parser.add_argument("--consensus-pilot-samples", type=int)

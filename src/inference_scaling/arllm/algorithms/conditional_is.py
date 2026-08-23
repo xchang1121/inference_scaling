@@ -15,9 +15,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from math import isfinite
+from math import exp, isfinite, log
 
 from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
+from inference_scaling.shared.bounded_selection import invariant_categorical_index
 from inference_scaling.shared.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
@@ -27,6 +28,8 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.rqmc import scrambled_sobol_uniforms
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
+    categorical_index_from_uniform,
+    normalize_log_weights,
     run_stepwise_generation,
     stepwise_generation_step,
 )
@@ -63,6 +66,9 @@ class ConditionalCandidate:
     base_token_logprobs: tuple[float, ...]
     rollouts: tuple[RolloutEvaluation, ...]
     log_weight: float
+    planned_rollout_count: int = 0
+    log_weight_lower_bound: float | None = None
+    log_weight_upper_bound: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +76,11 @@ class ConditionalISStep:
     generated_length_before: int
     candidates: tuple[ConditionalCandidate, ...]
     selected_index: int
+    rollout_evaluations_planned: int = 0
+    rollout_evaluations_performed: int = 0
+    rollout_evaluations_skipped: int = 0
+    exact_early_stop: bool = False
+    selection_invariant_verified: bool = False
 
     @property
     def selected(self) -> ConditionalCandidate:
@@ -172,6 +183,7 @@ def estimate_conditional_weights(
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
     rollout_design: str = "iid",
+    rollout_index_offset: int = 0,
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional weight with on/off-policy rollouts."""
 
@@ -184,6 +196,10 @@ def estimate_conditional_weights(
         raise ValueError("provide exactly one of reward or reward_batch")
     if rollout_design not in {"iid", "scrambled_sobol"}:
         raise ValueError("unknown rollout_design")
+    if rollout_index_offset < 0:
+        raise ValueError("rollout_index_offset must be non-negative")
+    if rollout_index_offset and rollout_design != "iid":
+        raise ValueError("staged rollout offsets currently require iid rollouts")
     if rollout_design == "scrambled_sobol" and reward_batch is not None:
         raise ValueError(
             "scrambled Sobol rollouts require a fixed pointwise reward; "
@@ -221,6 +237,7 @@ def estimate_conditional_weights(
             else (None,) * rollout_count
         )
         for rollout_index in range(rollout_count):
+            global_rollout_index = rollout_index_offset + rollout_index
             requests.append(
                 GenerationRequest(
                     prefix=rollout_prefix,
@@ -232,11 +249,12 @@ def estimate_conditional_weights(
                         "candidate",
                         candidate_index,
                         "rollout",
-                        rollout_index,
+                        global_rollout_index,
                     ),
                     request_id=(
                         "conditional-is:"
-                        f"step:{step_index}:candidate:{candidate_index}:rollout:{rollout_index}"
+                        f"step:{step_index}:candidate:{candidate_index}:"
+                        f"rollout:{global_rollout_index}"
                     ),
                     uniforms=uniforms[rollout_index],
                 )
@@ -366,12 +384,18 @@ def estimate_conditional_weights(
         evaluations = by_candidate[candidate_index]
         if not evaluations:
             raise RuntimeError("each candidate must have at least one weight contribution")
+        candidate_log_weight = logmeanexp(
+            [item.log_weight for item in evaluations]
+        )
         evaluated.append(
             ConditionalCandidate(
                 token_ids=candidate.token_ids,
                 base_token_logprobs=candidate.token_logprobs,
                 rollouts=tuple(evaluations),
-                log_weight=logmeanexp([item.log_weight for item in evaluations]),
+                log_weight=candidate_log_weight,
+                planned_rollout_count=len(evaluations),
+                log_weight_lower_bound=candidate_log_weight,
+                log_weight_upper_bound=candidate_log_weight,
             )
         )
     return tuple(evaluated)
@@ -478,6 +502,179 @@ class AutoregressiveStepwiseAdapter:
         return generated
 
 
+def _bounded_conditional_is_step(
+    *,
+    base_backend: AutoregressiveBackend,
+    rollout_backend: AutoregressiveBackend,
+    prompt: TokenSequence,
+    generated_prefix: TokenSequence,
+    config: ConditionalISConfig,
+    base_sampling: SamplingConfig,
+    rollout_sampling: SamplingConfig,
+    reward: RewardFunction | None,
+    seeds: SeedStream,
+    step_index: int,
+    reward_batch: RewardBatchFunction | None,
+) -> ConditionalISStep:
+    """Evaluate rollout batches until the fixed categorical choice is known."""
+
+    if reward is None or reward_batch is not None:
+        raise ValueError(
+            "exact rollout early stopping requires a fixed pointwise reward"
+        )
+    if config.rollout_log_weight_bounds is None:
+        raise ValueError("exact rollout early stopping requires log-weight bounds")
+    if config.rollout_design != "iid":
+        raise ValueError("exact rollout early stopping currently requires iid rollouts")
+    _validate_base_sampling(base_sampling)
+    remaining_length = config.total_length - len(generated_prefix)
+    if remaining_length <= 0:
+        raise ValueError("generated prefix has already reached total_length")
+    candidate_length = min(config.block_size, remaining_length)
+    proposals = _sample_candidates(
+        base_backend,
+        prompt + generated_prefix,
+        config.candidate_count,
+        candidate_length,
+        base_sampling,
+        seeds,
+        step_index,
+    )
+    rollout_length = max(0, remaining_length - len(proposals[0].token_ids))
+    eos = rollout_sampling.eos_token_id
+    terminal = tuple(
+        rollout_length == 0
+        or (eos is not None and proposal.token_ids[-1] == eos)
+        for proposal in proposals
+    )
+    planned = tuple(1 if is_terminal else config.rollout_count for is_terminal in terminal)
+    planned_total = sum(planned)
+    selection_uniform = float(
+        seeds.generator("conditional_is", step_index, "select").random()
+    )
+    lower_log_weight, upper_log_weight = config.rollout_log_weight_bounds
+    try:
+        minimum_contribution = exp(lower_log_weight)
+        maximum_contribution = exp(upper_log_weight)
+    except OverflowError as error:
+        raise ValueError("rollout log-weight bounds cannot be exponentiated") from error
+    if (
+        not isfinite(minimum_contribution)
+        or not isfinite(maximum_contribution)
+        or minimum_contribution <= 0.0
+    ):
+        raise ValueError("rollout log-weight bounds must map to finite positive weights")
+
+    collected: list[list[RolloutEvaluation]] = [[] for _ in proposals]
+    lower_candidate_weights: list[float] = []
+    upper_candidate_weights: list[float] = []
+    invariant_index: int | None = None
+    rollout_offset = 0
+    while rollout_offset < config.rollout_count:
+        batch_size = min(
+            config.rollout_evaluation_batch_size,
+            config.rollout_count - rollout_offset,
+        )
+        batch = estimate_conditional_weights(
+            base_backend=base_backend,
+            rollout_backend=rollout_backend,
+            prompt=prompt,
+            generated_prefix=generated_prefix,
+            candidates=proposals,
+            rollout_length=rollout_length,
+            rollout_count=batch_size,
+            base_sampling=base_sampling,
+            rollout_sampling=rollout_sampling,
+            reward_temperature=config.reward_temperature,
+            importance_log_ratio_clip=config.importance_log_ratio_clip,
+            apply_importance_correction=config.apply_importance_correction,
+            reward=reward,
+            seeds=seeds,
+            step_index=step_index,
+            rollout_design="iid",
+            rollout_index_offset=rollout_offset,
+        )
+        for candidate_index, evaluated in enumerate(batch):
+            if terminal[candidate_index]:
+                if not collected[candidate_index]:
+                    collected[candidate_index].append(evaluated.rollouts[0])
+                continue
+            for rollout in evaluated.rollouts:
+                if not lower_log_weight <= rollout.log_weight <= upper_log_weight:
+                    raise ValueError(
+                        "observed rollout log-weight lies outside the declared bounds"
+                    )
+                collected[candidate_index].append(rollout)
+        rollout_offset += batch_size
+
+        lower_candidate_weights = []
+        upper_candidate_weights = []
+        for candidate_index, evaluations in enumerate(collected):
+            contributions = [exp(item.log_weight) for item in evaluations]
+            if terminal[candidate_index]:
+                exact_weight = contributions[0]
+                lower_candidate_weights.append(exact_weight)
+                upper_candidate_weights.append(exact_weight)
+                continue
+            unseen = config.rollout_count - len(evaluations)
+            lower_candidate_weights.append(
+                (sum(contributions) + unseen * minimum_contribution)
+                / config.rollout_count
+            )
+            upper_candidate_weights.append(
+                (sum(contributions) + unseen * maximum_contribution)
+                / config.rollout_count
+            )
+        invariant_index = invariant_categorical_index(
+            lower_candidate_weights,
+            upper_candidate_weights,
+            uniform=selection_uniform,
+        )
+        if invariant_index is not None:
+            break
+
+    evaluated_candidates: list[ConditionalCandidate] = []
+    for candidate_index, proposal in enumerate(proposals):
+        evaluations = collected[candidate_index]
+        if not evaluations:
+            raise RuntimeError("bounded evaluation omitted a candidate")
+        lower_weight = lower_candidate_weights[candidate_index]
+        upper_weight = upper_candidate_weights[candidate_index]
+        representative_weight = (lower_weight + upper_weight) / 2.0
+        evaluated_candidates.append(
+            ConditionalCandidate(
+                token_ids=proposal.token_ids,
+                base_token_logprobs=proposal.token_logprobs,
+                rollouts=tuple(evaluations),
+                log_weight=log(representative_weight),
+                planned_rollout_count=planned[candidate_index],
+                log_weight_lower_bound=log(lower_weight),
+                log_weight_upper_bound=log(upper_weight),
+            )
+        )
+    probabilities = normalize_log_weights(
+        [candidate.log_weight for candidate in evaluated_candidates]
+    )
+    selected_index = categorical_index_from_uniform(
+        probabilities,
+        selection_uniform,
+    )
+    if invariant_index is not None and selected_index != invariant_index:
+        raise RuntimeError("bounded categorical proof disagrees with representative weights")
+    performed_total = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
+    skipped_total = planned_total - performed_total
+    return ConditionalISStep(
+        generated_length_before=len(generated_prefix),
+        candidates=tuple(evaluated_candidates),
+        selected_index=selected_index,
+        rollout_evaluations_planned=planned_total,
+        rollout_evaluations_performed=performed_total,
+        rollout_evaluations_skipped=skipped_total,
+        exact_early_stop=skipped_total > 0,
+        selection_invariant_verified=skipped_total > 0 and invariant_index is not None,
+    )
+
+
 def conditional_is_step(
     *,
     base_backend: AutoregressiveBackend,
@@ -492,6 +689,20 @@ def conditional_is_step(
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISStep:
+    if config.exact_rollout_early_stop:
+        return _bounded_conditional_is_step(
+            base_backend=base_backend,
+            rollout_backend=rollout_backend,
+            prompt=prompt,
+            generated_prefix=generated_prefix,
+            config=config,
+            base_sampling=base_sampling,
+            rollout_sampling=rollout_sampling,
+            reward=reward,
+            seeds=seeds,
+            step_index=step_index,
+            reward_batch=reward_batch,
+        )
     adapter = AutoregressiveStepwiseAdapter(
         base_backend=base_backend,
         rollout_backend=rollout_backend,
@@ -509,10 +720,16 @@ def conditional_is_step(
         seeds,
         selection_namespace=("conditional_is",),
     )
+    evaluated_candidates = tuple(
+        candidate.value for candidate in selection.candidates
+    )
+    performed = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
     return ConditionalISStep(
         generated_length_before=len(generated_prefix),
-        candidates=tuple(candidate.value for candidate in selection.candidates),
+        candidates=evaluated_candidates,
         selected_index=selection.selected_index,
+        rollout_evaluations_planned=performed,
+        rollout_evaluations_performed=performed,
     )
 
 
@@ -537,6 +754,38 @@ def run_conditional_is(
     _validate_rollout_sampling(rollout_sampling)
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
+
+    if config.exact_rollout_early_stop:
+        generated: TokenSequence = ()
+        steps: list[ConditionalISStep] = []
+        step_index = 0
+        eos = base_sampling.eos_token_id
+        while len(generated) < config.total_length and (
+            eos is None or eos not in generated
+        ):
+            step = conditional_is_step(
+                base_backend=base_backend,
+                rollout_backend=rollout_backend,
+                prompt=prompt,
+                generated_prefix=generated,
+                config=config,
+                base_sampling=base_sampling,
+                rollout_sampling=rollout_sampling,
+                reward=reward,
+                seeds=seeds,
+                step_index=step_index,
+                reward_batch=reward_batch,
+            )
+            generated += step.selected.token_ids
+            if eos is not None and eos in generated:
+                generated = generated[: generated.index(eos) + 1]
+            steps.append(step)
+            step_index += 1
+        return ConditionalISResult(
+            prompt=prompt,
+            token_ids=generated,
+            steps=tuple(steps),
+        )
 
     adapter = AutoregressiveStepwiseAdapter(
         base_backend=base_backend,

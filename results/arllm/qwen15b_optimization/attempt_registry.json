@@ -64,10 +64,12 @@
     {
       "id": "is_bound_aware_early_stop",
       "category": "algorithm",
-      "status": "planned",
+      "status": "screening",
       "active_execution": false,
       "comparison": "complete all finite-pool rollout evaluations",
-      "decision_basis": "exact selected-index agreement, stopped rollout fraction, wall time and FLOPs"
+      "decision_basis": "exact selected-index agreement, skipped rollout fraction, generation token count, wall time and FLOPs",
+      "implementation": "src/inference_scaling/shared/bounded_selection.py and src/inference_scaling/arllm/algorithms/conditional_is.py",
+      "reward_requirement": "fixed pointwise reward with deterministic finite log-weight bounds"
     },
     {
       "id": "ar_small_model_speculative_rollout",

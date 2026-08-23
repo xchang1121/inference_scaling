@@ -368,3 +368,161 @@ def test_scrambled_sobol_rejects_batch_coupled_reward() -> None:
             SeedStream(19),
             reward_batch=lambda _prompt, generated: [0.0] * len(generated),
         )
+
+
+def test_exact_bounded_early_stop_matches_full_algorithm_and_skips_rollouts() -> None:
+    full_config = ConditionalISConfig(
+        candidate_count=3,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+    )
+    early_config = ConditionalISConfig(
+        candidate_count=3,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+        exact_rollout_early_stop=True,
+        rollout_log_weight_bounds=(0.0, 0.0),
+        rollout_evaluation_batch_size=1,
+    )
+    for seed in range(20):
+        full = run_conditional_is(
+            _backend(),
+            (),
+            full_config,
+            lambda _prompt, _generated: 0.0,
+            SeedStream(seed),
+        )
+        early = run_conditional_is(
+            _backend(),
+            (),
+            early_config,
+            lambda _prompt, _generated: 0.0,
+            SeedStream(seed),
+        )
+
+        assert early.token_ids == full.token_ids
+        assert [step.selected_index for step in early.steps] == [
+            step.selected_index for step in full.steps
+        ]
+        assert early.steps[0].rollout_evaluations_planned == 12
+        assert early.steps[0].rollout_evaluations_performed == 3
+        assert early.steps[0].rollout_evaluations_skipped == 9
+        assert early.steps[0].selection_invariant_verified is True
+        assert all(
+            candidate.planned_rollout_count == 4
+            and len(candidate.rollouts) == 1
+            and candidate.log_weight_lower_bound == pytest.approx(0.0)
+            and candidate.log_weight_upper_bound == pytest.approx(0.0)
+            for candidate in early.steps[0].candidates
+        )
+
+
+def test_bounded_staged_evaluation_matches_full_algorithm_with_variable_weights() -> None:
+    full_config = ConditionalISConfig(
+        candidate_count=4,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+    )
+    early_config = ConditionalISConfig(
+        candidate_count=4,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+        exact_rollout_early_stop=True,
+        rollout_log_weight_bounds=(0.0, 2.0),
+        rollout_evaluation_batch_size=1,
+    )
+    reward = lambda _prompt, generated: float(sum(generated))
+    for seed in range(50):
+        full = run_conditional_is(
+            _backend(),
+            (),
+            full_config,
+            reward,
+            SeedStream(10_000 + seed),
+        )
+        early = run_conditional_is(
+            _backend(),
+            (),
+            early_config,
+            reward,
+            SeedStream(10_000 + seed),
+        )
+        assert early.token_ids == full.token_ids
+        assert [step.selected_index for step in early.steps] == [
+            step.selected_index for step in full.steps
+        ]
+
+
+def test_bounded_early_stop_rejects_invalid_weight_claim_and_batch_reward() -> None:
+    config = ConditionalISConfig(
+        candidate_count=2,
+        rollout_count=2,
+        block_size=1,
+        total_length=2,
+        exact_rollout_early_stop=True,
+        rollout_log_weight_bounds=(0.0, 0.0),
+    )
+    with pytest.raises(ValueError, match="outside the declared bounds"):
+        run_conditional_is(
+            _backend(),
+            (),
+            config,
+            lambda _prompt, _generated: 1.0,
+            SeedStream(31),
+        )
+    with pytest.raises(ValueError, match="fixed pointwise reward"):
+        run_conditional_is(
+            _backend(),
+            (),
+            config,
+            None,
+            SeedStream(31),
+            reward_batch=lambda _prompt, generated: [0.0] * len(generated),
+        )
+
+
+def test_bounded_staged_off_policy_weights_match_complete_evaluation() -> None:
+    base = TabularAutoregressiveBackend({}, fallback=(0.8, 0.2), model_id="base")
+    proposal = TabularAutoregressiveBackend(
+        {}, fallback=(0.5, 0.5), model_id="proposal"
+    )
+    full_config = ConditionalISConfig(
+        candidate_count=3,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+    )
+    early_config = ConditionalISConfig(
+        candidate_count=3,
+        rollout_count=4,
+        block_size=1,
+        total_length=2,
+        exact_rollout_early_stop=True,
+        rollout_log_weight_bounds=(-2.0, 2.0),
+        rollout_evaluation_batch_size=2,
+    )
+    for seed in range(20):
+        full = run_conditional_is(
+            base,
+            (),
+            full_config,
+            lambda _prompt, _generated: 0.0,
+            SeedStream(20_000 + seed),
+            rollout_backend=proposal,
+        )
+        staged = run_conditional_is(
+            base,
+            (),
+            early_config,
+            lambda _prompt, _generated: 0.0,
+            SeedStream(20_000 + seed),
+            rollout_backend=proposal,
+        )
+        assert staged.token_ids == full.token_ids
+        assert [step.selected_index for step in staged.steps] == [
+            step.selected_index for step in full.steps
+        ]

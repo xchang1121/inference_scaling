@@ -96,6 +96,9 @@ class ConditionalISConfig:
     importance_log_ratio_clip: float | None = None
     apply_importance_correction: bool = True
     rollout_design: str = "iid"
+    exact_rollout_early_stop: bool = False
+    rollout_log_weight_bounds: tuple[float, float] | None = None
+    rollout_evaluation_batch_size: int = 1
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -114,6 +117,31 @@ class ConditionalISConfig:
             raise ValueError("block_size cannot exceed total_length")
         if self.rollout_design not in {"iid", "scrambled_sobol"}:
             raise ValueError("unknown rollout_design")
+        require_positive(
+            "rollout_evaluation_batch_size",
+            self.rollout_evaluation_batch_size,
+        )
+        if self.rollout_log_weight_bounds is not None:
+            if len(self.rollout_log_weight_bounds) != 2:
+                raise ValueError("rollout_log_weight_bounds requires two values")
+            lower, upper = self.rollout_log_weight_bounds
+            require_finite("rollout_log_weight_lower_bound", lower)
+            require_finite("rollout_log_weight_upper_bound", upper)
+            if lower > upper:
+                raise ValueError("rollout log-weight bounds must be ordered")
+        if self.exact_rollout_early_stop:
+            if self.rollout_log_weight_bounds is None:
+                raise ValueError(
+                    "exact rollout early stopping requires log-weight bounds"
+                )
+            if self.rollout_design != "iid":
+                raise ValueError(
+                    "exact rollout early stopping currently requires iid rollouts"
+                )
+        elif self.rollout_log_weight_bounds is not None:
+            raise ValueError(
+                "rollout_log_weight_bounds require exact_rollout_early_stop=True"
+            )
 
 
 @dataclass(frozen=True, slots=True)

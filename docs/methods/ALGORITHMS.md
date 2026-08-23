@@ -377,8 +377,68 @@ Transformers 与表格后端使用 float64 累积概率执行逆 CDF；partial r
 Qwen2.5-1.5B 的 8 题、2 draw 筛选未观察到准确率或成本收益，因此默认仍为 `iid`；数值见
 [Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
 
+<a id="alg-bounded-is"></a>
+### 6.2 有界权重下的精确提前停止
+
+当每条 rollout 的非归一化权重具有已知确定性界 $`a\leq w_{mk}\leq b`$ 时，可以分批评估 rollout，并在
+候选选择已经不可能改变时停止。该规则固定完整条件 IS 原本使用的同一个均匀数 $`\eta\in[0,1)`$，不使用
+置信区间或近似 margin。
+
+候选 $`m`$ 已评估 $`k_m`$ 条 rollout 后，其最终平均权重位于
+
+```math
+L_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)a}{K},
+\qquad
+U_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)b}{K}.
+```
+
+<p align="right">式 (8-E1)</p>
+
+若完整权重为 $`H_m\in[L_m,U_m]`$，固定 $`\eta`$ 时选择候选 $`j`$ 等价于
+
+```math
+\sum_{i<j}H_i\leq\eta\sum_iH_i
+<\sum_{i\leq j}H_i.
+```
+
+<p align="right">式 (8-E2)</p>
+
+式 (8-E2) 对所有合法 $`H_i`$ 都成立，当且仅当
+
+```math
+(1-\eta)\sum_{i<j}U_i-\eta\sum_{i\geq j}L_i\leq0,
+\qquad
+(1-\eta)\sum_{i\leq j}L_i-\eta\sum_{i>j}U_i>0.
+```
+
+<p align="right">式 (8-E3)</p>
+
+第一项是式 (8-E2) 左侧不等式在区间盒上的最大值，第二项是右侧严格不等式在区间盒上的最小值；线性函数
+的极值分别在对应端点取得。因此式 (8-E3) 成立时，任何尚未生成的 rollout 都会得到同一个 selected index，
+可以直接提交候选 $`j`$。若不成立，则继续评估下一批。最迟在 $`K`$ 条 rollout 全部完成后，所有区间退化
+为单点，算法必然终止。故提前停止路径与完整有限 $`K,M`$ 算法逐步选择相同候选，不引入新的分布误差。
+
+实现接受 rollout **log-weight** 的确定性界。on-policy、二值奖励 $`r\in[0,1]`$ 时可取
+$`[0,1/\tau]`$；若 off-policy log-ratio 被算法本身截断到 $`[-c,c]`$，可取
+$`[-c,1/\tau+c]`$。未截断的 $`p/q`$ 通常没有有限统一上界，不能使用该优化。实测权重一旦超出声明区间，
+运行立即失败。批内自一致性奖励依赖尚未完成的其他 rollout，也不满足逐条固定权重条件。
+
+```python
+decision = invariant_categorical_index(
+    lower_candidate_weights,
+    upper_candidate_weights,
+    uniform=selection_uniform,
+)
+if decision is not None:
+    break
+```
+
+公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/shared/bounded_selection.py)，AR staged rollout
+位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。分批执行可能重复 prefix
+prefill；因此实际收益由跳过的 rollout 比例、批次数、forward token slots、FLOPs 和墙钟共同决定。
+
 <a id="alg-iterated-is"></a>
-### 6.2 迭代条件 IS
+### 6.3 迭代条件 IS
 
 一次性 SIR 在有限候选数 $`M`$ 下仍有归一化重采样误差。iterated SIR（i-SIR）把一次候选定义为完整
 扩展状态
@@ -850,6 +910,7 @@ log_acceptance = min(
 | --- | --- | --- |
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、FLOPs |
+| 有界权重精确提前停止 | 与完整有限 $`M,K`$ 选择逐步一致 | 声明/实测权重界、selected index、跳过率、FLOPs |
 | i-SIR 增加更新轮次 $`n`$ | 固定点逐序列奖励下，式 (8d) 按 $`n`$ 几何下降 | pool size、更新数、复用状态数、FLOPs |
 | off-policy 补全 + 未截断 $`p/q`$ | 式 (7) 的条件奖励权重无偏 | 两侧 log-probability、ESS、support |
 | 截断 log importance ratio | 有偏稳定化估计 | raw/applied ratio、截断次数 |
@@ -1085,7 +1146,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
-| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`dllm/test_algorithms.py` |
+| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
 | 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
 | 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
