@@ -248,7 +248,7 @@ python experiments\run_reproduction.py `
 | 组件 | 统计对象 |
 | --- | --- |
 | `quality`、`matched_target` | 主质量网格与共享奖励诊断 |
-| `replay`、`dynamic_is` | fresh/warm replay、动态候选与预算分配 |
+| `replay`、`dynamic_is` | fresh/warm replay、建库候选复用、动态候选与预算分配 |
 | `async`、`infra` | 批处理、部分续跑、流式奖励、MH 预取与 SMC |
 | `passk`、`distribution` | 独立 draw 的 pass@$`k`$ 与答案分布 |
 | `ablations`、`budget_curve`、`length_ablation` | 算法参数、计算预算与长度消融 |
@@ -257,6 +257,10 @@ python experiments\run_reproduction.py `
 `--ar-methods` 与 `--dllm-methods` 选择具体方法；成对标识由
 [`gsm8k_llada_moe_3090.toml`](../../configs/gsm8k_llada_moe_3090.toml)固定。`--dry-run` 只写命令清单，
 适合在目标机器上检查解释器、路径和实验范围。
+
+AR 统一入口的 MH 后缀分布默认为 `multiscale`，并将同一设置传给质量与 pass@$`k`$ 子任务。使用
+`--ar-mh-suffix-schedule uniform` 可复现均匀后缀基线。配置文件本身保留基线参数，因此独立调用底层
+`gsm8k_reproduction.py` 时只有显式传入 `--mh-suffix-schedule multiscale` 才启用生产设置。
 
 ### 运行产物
 

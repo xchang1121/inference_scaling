@@ -30,6 +30,10 @@ def main() -> None:
     parser.add_argument("--profile", choices=("smoke", "full"), default="full")
     parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument(
+        "--mh-suffix-schedule",
+        choices=("uniform", "inverse_length", "multiscale"),
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--with-replay", action="store_true")
     parser.add_argument("--with-dynamic-is", action="store_true")
@@ -110,12 +114,17 @@ def main() -> None:
     summary_common = ["--config", str(args.config), "--tag", args.tag]
     backend_args = [] if args.backend is None else ["--backend", args.backend]
     rl_args = [] if args.rl_adapter is None else ["--rl-adapter", str(args.rl_adapter)]
+    mh_args = (
+        []
+        if args.mh_suffix_schedule is None
+        else ["--mh-suffix-schedule", args.mh_suffix_schedule]
+    )
     if args.backend is not None:
         common.extend(backend_args)
     if args.limit is not None:
         common.extend(["--limit", str(args.limit)])
         summary_common.extend(["--limit", str(args.limit)])
-    method_common = [*common, *rl_args]
+    method_common = [*common, *rl_args, *mh_args]
 
     methods = tuple(method.strip() for method in args.methods.split(",") if method.strip())
     unknown = sorted(set(methods) - set(SUPPORTED_METHODS))
@@ -231,6 +240,7 @@ def main() -> None:
                 str(args.summary_root / f"{args.config.stem}_passk_{args.tag}.json"),
                 *backend_args,
                 *rl_args,
+                *mh_args,
             ],
             environment,
         )
@@ -261,6 +271,7 @@ def main() -> None:
             str(args.config),
             *backend_args,
             *rl_args,
+            *mh_args,
             "--limit",
             str(args.ablation_limit),
         ]

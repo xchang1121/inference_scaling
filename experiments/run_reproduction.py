@@ -55,6 +55,9 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             command.extend(("--config", str(args.ar_config)))
         if args.backend is not None:
             command.extend(("--backend", args.backend))
+        ar_mh_suffix_schedule = getattr(args, "ar_mh_suffix_schedule", "multiscale")
+        if ar_mh_suffix_schedule is not None:
+            command.extend(("--mh-suffix-schedule", ar_mh_suffix_schedule))
         for flag, value in (
             ("--limit", args.limit),
             ("--train-limit", args.train_limit),
@@ -217,6 +220,12 @@ def main() -> None:
         help="AR-LLM inference backend; ignored values are rejected for --family dllm",
     )
     parser.add_argument(
+        "--ar-mh-suffix-schedule",
+        choices=("uniform", "inverse_length", "multiscale"),
+        default="multiscale",
+        help="AR-LLM MH suffix schedule; multiscale is the production default",
+    )
+    parser.add_argument(
         "--ar-python",
         default=_default_python("AR_PYTHON"),
         help="AR executable name/path; defaults to AR_PYTHON, then current Python",
@@ -272,6 +281,7 @@ def main() -> None:
             "ar_methods": args.ar_methods,
             "dllm_methods": args.dllm_methods,
             "components": args.components,
+            "ar_mh_suffix_schedule": args.ar_mh_suffix_schedule,
             "python_executables": {
                 "controller": sys.executable,
                 "arllm": args.ar_python,

@@ -95,6 +95,9 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             str(args.passk_draws),
             *adapter_args,
         ]
+        mh_suffix_schedule = getattr(args, "mh_suffix_schedule", "multiscale")
+        if mh_suffix_schedule is not None:
+            command.extend(("--mh-suffix-schedule", mh_suffix_schedule))
         if args.backend is not None:
             command.extend(("--backend", args.backend))
         if args.limit is not None:
@@ -196,6 +199,12 @@ def main() -> None:
     parser.add_argument("--components", nargs="+", choices=COMPONENTS)
     parser.add_argument("--backend", choices=("transformers", "vllm", "vllm-sync"))
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument(
+        "--mh-suffix-schedule",
+        choices=("uniform", "inverse_length", "multiscale"),
+        default="multiscale",
+        help="Qwen MH suffix schedule; multiscale is the confirmed production default",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--training-output", type=Path)

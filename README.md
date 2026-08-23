@@ -200,6 +200,7 @@ python experiments\run_reproduction.py `
 | `--stage prepare\|train\|inference\|all` | 选择模型准备、RL 训练、推理或完整流水线 |
 | `--profile smoke\|full` | 低成本实现检查或正式配置 |
 | `--ar-methods ...`、`--dllm-methods ...` | 选择具体推理方法 |
+| `--ar-mh-suffix-schedule ...` | 选择 AR-MH 后缀分布；生产默认值为 `multiscale`，`uniform` 用于基线复现 |
 | `--components ...` | 选择质量、matched target、replay、动态 IS、异步、pass@k、消融、infra 等实验族 |
 | `--ar-python ...`、`--dllm-python ...` | 覆盖环境变量与当前解释器 |
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
@@ -209,6 +210,8 @@ python experiments\run_reproduction.py `
 `distribution`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
 `--components` 中显式指定时运行；它们用于研究消融或特定后端验证。dLLM 使用 block beam、反向轨迹 MH、
 低层 proposal、轨迹 replay、block SMC 与 VRPO 对应 AR 的 token 级方法。
+AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。replay 入口将建库时已经生成的 base 候选
+直接交给在线选择，避免第二次生成同一候选；连续批处理仍由 `async` 组件和生产后端承担。
 方法标识、配对关系与各组件统计量见[实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
 
 两侧也可独立启动：

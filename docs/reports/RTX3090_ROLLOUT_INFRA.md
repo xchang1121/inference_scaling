@@ -164,6 +164,8 @@ rollout 和评分请求；对应顺序/批处理输出也逐 token 一致。
 仍下降 9.1%。如果本次请求需要新建 history，冷启动相对连续批处理 fresh-only 为 `1.266×` 墙钟和
 `1.945×` 总 FLOPs。部署时仅对匹配且未消费的 history 启用 warm replay；其余请求使用连续批处理
 fresh-only。
+标准 `replay` 复现入口现已复用建库候选，并把 Qwen2.5-1.5B 与 Qwen2.5-0.5B 的在线及建库 FLOPs 分列。
+`async` 组件验证跨 prompt 连续批处理；两项组合的完整因子以上表最后一行为准。
 
 <a id="infra-report-dynamic"></a>
 ### 动态候选与方差—成本预算

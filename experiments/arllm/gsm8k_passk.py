@@ -267,6 +267,7 @@ def _run_chunk(
                     total_length=int(config["generation"]["max_new_tokens"]),
                     block_size=int(section["block_size"]),
                     steps_per_block=int(section["steps_per_block"]),
+                    suffix_schedule=str(section.get("suffix_schedule", "uniform")),
                 ),
                 SamplingConfig(temperature=1.0 / alpha),
                 chain_seeds,
@@ -278,6 +279,9 @@ def _run_chunk(
                         "alpha": alpha,
                         "block_size": int(section["block_size"]),
                         "steps_per_block": int(section["steps_per_block"]),
+                        "suffix_schedule": str(
+                            section.get("suffix_schedule", "uniform")
+                        ),
                         "attempts": result.attempts,
                         "accepted": result.accepted,
                         "acceptance_rate": result.acceptance_rate,
@@ -546,6 +550,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--methods", default=",".join(PASSK_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument(
+        "--mh-suffix-schedule",
+        choices=("uniform", "inverse_length", "multiscale"),
+    )
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--raw-output", type=Path)
     parser.add_argument("--output", type=Path)
@@ -562,6 +570,8 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    if args.mh_suffix_schedule is not None:
+        config["mh"]["suffix_schedule"] = args.mh_suffix_schedule
     set_backend_override(config, args.backend)
     set_rl_adapter_override(config, args.rl_adapter)
     config["run"]["sample_count"] = args.limit

@@ -165,6 +165,7 @@ def _run_warm(
     cache_build_seconds = 0.0
     online_seconds = 0.0
     candidates_reproduced = True
+    candidate_draws_reused = 0
     history_generated = 0
     step_index = 0
     cache_base_deltas: list[dict[str, int | float]] = []
@@ -244,7 +245,8 @@ def _run_warm(
         online_proposal_before = proposal_backend.snapshot()
         (step, decision_seconds) = _timed(
             lambda generated_prefix=tuple(generated),
-            step_index=step_index: base_replay_step(
+            step_index=step_index,
+            candidate_samples=cached_candidates: base_replay_step(
                 base_backend=cached_base,
                 registry=registry,
                 store=store,
@@ -256,6 +258,7 @@ def _run_warm(
                 reward_version="gsm8k-exact-v1",
                 seeds=seeds,
                 step_index=step_index,
+                candidate_samples=candidate_samples,
             )
         )
         online_seconds += decision_seconds
@@ -264,6 +267,7 @@ def _run_warm(
         candidates_reproduced &= [item.token_ids for item in cached_candidates] == [
             item.token_ids for item in step.candidates
         ]
+        candidate_draws_reused += len(cached_candidates)
         generated.extend(step.selected.token_ids)
         steps.append(step)
         cache_base_deltas.append(_snapshot_delta(cache_base_before, cache_base_after))
@@ -302,6 +306,7 @@ def _run_warm(
         if history_used + fresh_used
         else 0.0,
         "candidates_reproduced": candidates_reproduced,
+        "candidate_draws_reused": candidate_draws_reused,
         "evaluation_records_remaining": store.evaluation_count,
         "design_records": store.design_count,
         "cache_build_base_forward_token_slots": total(
@@ -316,6 +321,12 @@ def _run_warm(
             "estimated_dense_forward_flops", cache_base_deltas
         )
         + total("estimated_dense_forward_flops", cache_proposal_deltas),
+        "cache_build_base_estimated_dense_forward_flops": total(
+            "estimated_dense_forward_flops", cache_base_deltas
+        ),
+        "cache_build_proposal_estimated_dense_forward_flops": total(
+            "estimated_dense_forward_flops", cache_proposal_deltas
+        ),
         "online_base_forward_token_slots": total(
             "generation_forward_token_slots", online_base_deltas
         )
@@ -406,7 +417,7 @@ def main() -> None:
     }
     fingerprint = _fingerprint(effective)
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "fingerprint": fingerprint,
         "benchmark": "GSM8K verifier-assisted rollout replay performance",
         "effective": effective,
@@ -505,7 +516,7 @@ def main() -> None:
             fresh_text = backend.decode(fresh_tokens)
             warm_text = backend.decode(warm_tokens)
             record = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "manifest_fingerprint": fingerprint,
                 "problem_index": problem.index,
                 "question_sha256": hashlib.sha256(problem.question.encode()).hexdigest(),
@@ -575,6 +586,22 @@ def main() -> None:
         int(item["warm_replay"]["cache_build_estimated_dense_forward_flops"])
         for item in records
     )
+    warm_online_base_flops = sum(
+        int(item["warm_replay"]["online_base_estimated_dense_forward_flops"])
+        for item in records
+    )
+    warm_online_proposal_flops = sum(
+        int(item["warm_replay"]["online_proposal_estimated_dense_forward_flops"])
+        for item in records
+    )
+    warm_cache_base_flops = sum(
+        int(item["warm_replay"]["cache_build_base_estimated_dense_forward_flops"])
+        for item in records
+    )
+    warm_cache_proposal_flops = sum(
+        int(item["warm_replay"]["cache_build_proposal_estimated_dense_forward_flops"])
+        for item in records
+    )
     base_cache_hits = sum(
         int(item["warm_replay"]["base_score_cache"]["hits"])
         for item in records
@@ -592,7 +619,7 @@ def main() -> None:
         for item in records
     )
     summary = {
-        "schema_version": 3,
+        "schema_version": 4,
         "benchmark": "GSM8K verifier-assisted rollout replay performance",
         "manifest_fingerprint": fingerprint,
         "profile": str(config["run"]["name"]),
@@ -632,7 +659,18 @@ def main() -> None:
         },
         "fresh_total_estimated_dense_forward_flops": fresh_flops,
         "warm_online_total_estimated_dense_forward_flops": warm_online_flops,
+        "warm_online_base_estimated_dense_forward_flops": warm_online_base_flops,
+        "warm_online_proposal_estimated_dense_forward_flops": (
+            warm_online_proposal_flops
+        ),
         "cache_build_total_estimated_dense_forward_flops": warm_cache_flops,
+        "cache_build_base_estimated_dense_forward_flops": warm_cache_base_flops,
+        "cache_build_proposal_estimated_dense_forward_flops": (
+            warm_cache_proposal_flops
+        ),
+        "candidate_draws_reused": sum(
+            int(item["warm_replay"]["candidate_draws_reused"]) for item in records
+        ),
         "aggregate_fresh_over_warm_online_flop_factor": fresh_flops
         / warm_online_flops,
         "aggregate_fresh_over_warm_one_shot_flop_factor": (

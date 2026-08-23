@@ -709,6 +709,8 @@ store.add_evaluation(independent_reserve_record)
 概率实验使用 FP32；低精度 logits 可能随 batch 形状出现足以影响保存概率复核的数值差异。
 Qwen2.5-1.5B 的候选缓存与连续批处理组合消融见
 [IS replay 执行组合](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack)。
+统一复现入口的 `replay` 组件已经传入建库候选，并分别记录在线主模型、在线辅助模型、建库主模型和建库
+辅助模型 FLOPs。无匹配 history 时，`base_replay_step` 的 claim 为空，算法自然退化为 fresh-only。
 
 <a id="alg-dynamic-is"></a>
 ## 9. 动态候选 proposal 与外层 IS

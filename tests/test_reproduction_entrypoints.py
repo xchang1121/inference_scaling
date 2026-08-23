@@ -93,6 +93,7 @@ def test_ar_full_entry_preserves_training_and_every_suite_family(tmp_path):
         assert flag in suite
     assert suite[suite.index("--methods") + 1] == "base,mh,conditional_is,rl_sample"
     assert suite[suite.index("--profile") + 1] == "full"
+    assert suite[suite.index("--mh-suffix-schedule") + 1] == "multiscale"
 
 
 def test_ar_component_without_quality_does_not_run_main_methods(tmp_path):
@@ -162,6 +163,8 @@ def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_p
             "--profile",
             "smoke",
             "--with-passk",
+            "--mh-suffix-schedule",
+            "multiscale",
             "--passk-limit",
             "1",
             "--passk-draws",
@@ -179,6 +182,10 @@ def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_p
     ]
     general_grid = commands[0]
     assert Path(general_grid[general_grid.index("--output") + 1]).parent == tmp_path
+    assert (
+        general_grid[general_grid.index("--mh-suffix-schedule") + 1]
+        == "multiscale"
+    )
     is_grid = commands[1]
     assert is_grid[is_grid.index("--workers") + 1] == "2"
     assert Path(is_grid[is_grid.index("--output") + 1]).parent == tmp_path
@@ -322,6 +329,10 @@ def test_paired_full_entry_routes_grpo_and_vrpo_training():
     assert commands[1][0] == "python-dllm"
     assert Path(commands[0][1]).name == "run_arllm_suite.py"
     assert "--stage" in commands[0] and "all" in commands[0]
+    assert (
+        commands[0][commands[0].index("--mh-suffix-schedule") + 1]
+        == "multiscale"
+    )
     assert Path(commands[1][1]).name == "download_llada.py"
     assert Path(commands[2][1]).name == "run_llada_suite.py"
     assert commands[2][commands[2].index("--vrpo") + 1] == "train"

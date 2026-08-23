@@ -132,6 +132,10 @@ def main() -> None:
         "all_candidate_batches_reproduced": all(
             bool(item["warm_replay"]["candidates_reproduced"]) for item in records
         ),
+        "candidate_draws_reused": sum(
+            int(item["warm_replay"].get("candidate_draws_reused", 0))
+            for item in records
+        ),
         "definition": (
             "minimum integer q such that cache construction plus q warm-online "
             "evaluations costs no more than q matched fresh-only evaluations"

@@ -335,6 +335,11 @@ token 一致。平均 rollout 复用率为 31.62%。
 连续批处理 fresh-only。默认生命周期中每条 evaluation 记录只消费一次，因此不以重复使用同一 history
 记录计算摊销收益。该组合登记为 `accepted`，适用范围是 warm 在线阶段。dLLM 未进入本实验。
 
+生产入口的接入方式如下：统一 AR CLI 默认传递 `--mh-suffix-schedule multiscale`，并同步用于单次质量评测
+和 pass@$`k`$ 的批处理 MH；`replay` 组件把建库阶段返回的候选传给在线 `base_replay_step`；无匹配且未消费
+history 时继续执行 fresh-only。跨 prompt 合批由连续批处理后端完成。配置文件保留均匀后缀基线，便于独立
+复现实验对照。
+
 ## 优化组合与方法状态
 
 | 方法 | 初始结论 | 当前默认状态 | 依据 |
