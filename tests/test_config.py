@@ -16,9 +16,10 @@ def test_sampling_config_identifies_actual_policy() -> None:
 
 
 def test_policy_id_preserves_distinct_float_values() -> None:
-    assert SamplingConfig(temperature=1.0000001).policy_id != SamplingConfig(
-        temperature=1.0000002
-    ).policy_id
+    assert (
+        SamplingConfig(temperature=1.0000001).policy_id
+        != SamplingConfig(temperature=1.0000002).policy_id
+    )
 
 
 @pytest.mark.parametrize(
@@ -67,3 +68,26 @@ def test_sampled_token_logprob_must_be_finite() -> None:
 def test_generation_request_validates_explicit_uniforms(uniforms) -> None:
     with pytest.raises(ValueError, match="uniform"):
         GenerationRequest((), 2, SamplingConfig(), 1, "invalid", uniforms=uniforms)
+
+
+def test_generation_request_validates_arithmetic_uniform() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        GenerationRequest(
+            (),
+            2,
+            SamplingConfig(),
+            1,
+            "invalid",
+            uniforms=(0.1, 0.2),
+            arithmetic_uniform=0.3,
+        )
+    for value in (-0.1, 1.0, float("inf")):
+        with pytest.raises(ValueError, match="arithmetic sampling uniform"):
+            GenerationRequest(
+                (),
+                2,
+                SamplingConfig(),
+                1,
+                "invalid",
+                arithmetic_uniform=value,
+            )

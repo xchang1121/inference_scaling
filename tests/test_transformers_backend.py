@@ -101,7 +101,9 @@ def test_request_local_randomness_is_independent_of_batch_order() -> None:
         assert sample == by_id[sample.request_id]
 
 
-def test_explicit_uniforms_determine_tokens_independently_of_seed_and_batch_order() -> None:
+def test_explicit_uniforms_determine_tokens_independently_of_seed_and_batch_order() -> (
+    None
+):
     model = ConstantLogitModel([0.55, 0.3, 0.15])
     backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
     uniforms = (0.1, 0.7, 0.95)
@@ -126,6 +128,30 @@ def test_explicit_uniforms_determine_tokens_independently_of_seed_and_batch_orde
         assert sample == by_id[sample.request_id]
 
 
+def test_arithmetic_uniform_is_rescaled_and_independent_of_batch_order() -> None:
+    model = ConstantLogitModel([0.55, 0.3, 0.15])
+    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    requests = [
+        GenerationRequest(
+            (0,),
+            3,
+            SamplingConfig(),
+            seed,
+            f"arithmetic-{seed}",
+            arithmetic_uniform=0.6,
+        )
+        for seed in (3, 91)
+    ]
+
+    together = backend.sample_batch(requests)
+    reversed_outputs = backend.sample_batch(list(reversed(requests)))
+    by_id = {sample.request_id: sample for sample in reversed_outputs}
+
+    assert all(sample.token_ids == (1, 0, 0) for sample in together)
+    for sample in together:
+        assert sample == by_id[sample.request_id]
+
+
 def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
     vocabulary_size = 1000
     seed = 12434
@@ -135,7 +161,9 @@ def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
     sample = backend.sample_batch(
         [GenerationRequest((0,), 1, SamplingConfig(), seed, "large-vocabulary")]
     )[0]
-    probabilities = torch.log_softmax(model.constant_logits, dim=-1).exp().double().numpy()
+    probabilities = (
+        torch.log_softmax(model.constant_logits, dim=-1).exp().double().numpy()
+    )
     uniform = np.random.default_rng(seed).random()
     expected = int((np.cumsum(probabilities, dtype=np.float64) < uniform).sum())
 
@@ -249,9 +277,7 @@ def test_each_repeated_prefix_group_is_prefilled_once_then_forked() -> None:
 def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:
     model = ConstantLogitModel([0.6, 0.3, 0.1])
     backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
-    backend.score_batch(
-        [ScoreRequest((0,), ((0,), (1,), (0, 1)), SamplingConfig())]
-    )
+    backend.score_batch([ScoreRequest((0,), ((0,), (1,), (0, 1)), SamplingConfig())])
 
     snapshot = backend.snapshot()
     assert snapshot.scored_tokens == 4
@@ -388,7 +414,10 @@ def test_high_active_batch_disables_transformers_speculation() -> None:
         speculation=config,
     )
     backend.sample_batch(
-        [GenerationRequest((0, 1), 2, SamplingConfig(), index, str(index)) for index in range(2)]
+        [
+            GenerationRequest((0, 1), 2, SamplingConfig(), index, str(index))
+            for index in range(2)
+        ]
     )
     assert backend.snapshot().speculative_hits == 0
     assert backend.snapshot().draft_tokens_proposed == 0

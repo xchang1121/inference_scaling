@@ -29,16 +29,15 @@ def test_rqmc_command_grid_is_counterbalanced_and_uses_fixed_reward(
 
     commands = build_commands(args)
 
-    assert len(commands) == 5
+    assert len(commands) == 7
     designs = [
         command[command.index("--rollout-design") + 1] for command in commands[:-1]
     ]
     expected = [design for _, design in RQMC_ARMS]
-    assert designs[:2] == expected
-    assert designs[2:] == list(reversed(expected))
+    assert designs[:3] == expected
+    assert designs[3:] == list(reversed(expected))
     assert all(
-        command[command.index("--conditional-reward") + 1]
-        == "frozen_consensus"
+        command[command.index("--conditional-reward") + 1] == "frozen_consensus"
         for command in commands[:-1]
     )
     assert all(
@@ -94,9 +93,7 @@ pilot_samples = 2
                             "mean_within_candidate_log_weight_dispersion": 0.25,
                             "candidate_token_ids_by_step": [[[1], [2]]],
                             "candidate_log_weight_estimates_by_step": [
-                                [0.0, 1.0]
-                                if arm == "iid"
-                                else [0.1, 0.9]
+                                [0.0, 1.0] if arm == "iid" else [0.1, 0.9]
                             ],
                             "selected_candidate_indices": [1],
                         },
@@ -138,7 +135,7 @@ pilot_samples = 2
     sobol = report["table"][1]
     assert sobol["paired_vs_iid"]["accuracy_difference"] == pytest.approx(0.5)
     assert sobol["main_model_flops_factor_vs_iid"] == pytest.approx(1.0)
-    paired = report["paired_first_step_weight_diagnostics"]
+    paired = report["paired_first_step_weight_diagnostics"]["sobol"]
     assert paired["first_step_candidates_identical"] is True
     assert paired["first_step_selected_index_agreement"] == pytest.approx(1.0)
     assert paired["first_step_log_weight_mean_absolute_difference"] == pytest.approx(

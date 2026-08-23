@@ -20,6 +20,7 @@ from experiments.shared.statistics import (
 RQMC_ARMS = (
     ("iid", "iid"),
     ("sobol", "scrambled_sobol"),
+    ("lattice", "arithmetic_lattice"),
 )
 
 
@@ -51,16 +52,10 @@ def _per_draw_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for draw in range(draws):
-        current = [
-            record for record in records if int(record["draw_index"]) == draw
-        ]
-        baseline = [
-            record for record in reference if int(record["draw_index"]) == draw
-        ]
+        current = [record for record in records if int(record["draw_index"]) == draw]
+        baseline = [record for record in reference if int(record["draw_index"]) == draw]
         seconds = sum(float(record["elapsed_seconds"]) for record in current)
-        baseline_seconds = sum(
-            float(record["elapsed_seconds"]) for record in baseline
-        )
+        baseline_seconds = sum(float(record["elapsed_seconds"]) for record in baseline)
         flops = _sum_backend(current, "estimated_dense_forward_flops")
         baseline_flops = _sum_backend(baseline, "estimated_dense_forward_flops")
         tokens = _sum_backend(current, "generated_tokens")
@@ -120,13 +115,12 @@ def _paired_first_step_diagnostics(
                 strict=True,
             )
         )
-        selected_agreement += (
-            int(left["selected_candidate_indices"][0])
-            == int(right["selected_candidate_indices"][0])
+        selected_agreement += int(left["selected_candidate_indices"][0]) == int(
+            right["selected_candidate_indices"][0]
         )
-        ranking_agreement += left_weights.index(max(left_weights)) == right_weights.index(
-            max(right_weights)
-        )
+        ranking_agreement += left_weights.index(
+            max(left_weights)
+        ) == right_weights.index(max(right_weights))
         observations += 1
     return {
         "paired_observations": observations,
@@ -193,7 +187,9 @@ def summarize_rqmc_study(
                 if int(diagnostics["configured_rollout_count"]) != rollout_count:
                     raise ValueError(f"{records_path} has the wrong rollout count")
                 if bool(diagnostics["uses_test_gold_oracle"]):
-                    raise ValueError(f"{records_path} used the test answer during inference")
+                    raise ValueError(
+                        f"{records_path} used the test answer during inference"
+                    )
                 if int(record["draw_index"]) != draw:
                     raise ValueError(f"{records_path} has the wrong draw index")
             records_by_arm[arm].extend(records)
@@ -280,42 +276,46 @@ def summarize_rqmc_study(
         raise ValueError("RQMC arms do not use the same GSM8K rows and draws")
     if any(environment != environments[0] for environment in environments[1:]):
         raise ValueError("RQMC arms were run in different environments")
-    if any(
-        hashes != implementation_hashes[0] for hashes in implementation_hashes[1:]
-    ):
+    if any(hashes != implementation_hashes[0] for hashes in implementation_hashes[1:]):
         raise ValueError("RQMC arms do not use the same implementation")
 
-    paired_weights = _paired_first_step_diagnostics(
-        reference,
-        records_by_arm["sobol"],
-    )
-    sobol = next(row for row in table if row["arm"] == "sobol")
-    accuracy_difference = float(sobol["paired_vs_iid"]["accuracy_difference"])
-    passes = (
-        accuracy_difference >= -0.03125
-        and (
-            sobol["wall_factor_vs_iid"] <= 0.95
-            or sobol["main_model_flops_factor_vs_iid"] <= 0.95
+    paired_weights = {
+        arm: _paired_first_step_diagnostics(reference, records_by_arm[arm])
+        for arm, _ in RQMC_ARMS
+        if arm != "iid"
+    }
+    passing_arms: list[str] = []
+    for row in table:
+        if row["arm"] == "iid":
+            continue
+        accuracy_difference = float(row["paired_vs_iid"]["accuracy_difference"])
+        passes = (
+            accuracy_difference >= -0.03125
+            and (
+                row["wall_factor_vs_iid"] <= 0.95
+                or row["main_model_flops_factor_vs_iid"] <= 0.95
+            )
+        ) or (
+            accuracy_difference >= 0.03125
+            and row["wall_factor_vs_iid"] <= 1.05
+            and row["main_model_flops_factor_vs_iid"] <= 1.05
         )
-    ) or (
-        accuracy_difference >= 0.03125
-        and sobol["wall_factor_vs_iid"] <= 1.05
-        and sobol["main_model_flops_factor_vs_iid"] <= 1.05
-    )
+        if passes:
+            passing_arms.append(str(row["arm"]))
     decision = {
         "result": (
             "advance_to_confirmation"
-            if phase == "screen" and passes
+            if phase == "screen" and passing_arms
             else "accepted"
-            if phase == "confirmation" and passes
+            if phase == "confirmation" and passing_arms
             else "rejected"
         ),
-        "passing_arms": ["sobol"] if passes else [],
-        "confirmation_run_required": phase == "screen" and passes,
+        "passing_arms": passing_arms,
+        "confirmation_run_required": phase == "screen" and bool(passing_arms),
         "reason": (
-            "scrambled Sobol met the registered quality-cost gate"
-            if passes
-            else "scrambled Sobol did not meet the registered quality-cost gate"
+            "at least one randomized QMC design met the registered quality-cost gate"
+            if passing_arms
+            else "no randomized QMC design met the registered quality-cost gate"
         ),
     }
     return {
@@ -342,8 +342,9 @@ def summarize_rqmc_study(
             "environment": environments[0],
         },
         "comparison": (
-            "paired iid and digitally scrambled Sobol rollout uniforms at fixed "
-            "questions, candidate count, rollout count, proposal, reward and model"
+            "paired iid, token-level scrambled Sobol and one-dimensional randomized "
+            "lattice arithmetic rollouts at fixed questions, candidate count, rollout "
+            "count, proposal, reward and model"
         ),
         "problem_indices": sorted({key[0] for key in keys["iid"]}),
         "table": table,

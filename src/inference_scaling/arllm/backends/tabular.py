@@ -12,7 +12,12 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.types import (
+    GenerationRequest,
+    ScoreRequest,
+    SequenceSample,
+    TokenSequence,
+)
 
 
 def _normalize(values: np.ndarray) -> np.ndarray:
@@ -31,15 +36,24 @@ class TabularAutoregressiveBackend:
         model_id: str = "tabular",
     ) -> None:
         if not probabilities and fallback is None:
-            raise ValueError("at least one transition or a fallback distribution is required")
-        raw = {tuple(prefix): np.asarray(row, dtype=np.float64) for prefix, row in probabilities.items()}
+            raise ValueError(
+                "at least one transition or a fallback distribution is required"
+            )
+        raw = {
+            tuple(prefix): np.asarray(row, dtype=np.float64)
+            for prefix, row in probabilities.items()
+        }
         first = next(iter(raw.values()), np.asarray(fallback, dtype=np.float64))
         assert first is not None
         self._vocab_size = int(first.shape[0])
         self._probabilities: dict[TokenSequence, np.ndarray] = {}
         for prefix, row in raw.items():
             self._probabilities[prefix] = self._validate_row(row)
-        self._fallback = None if fallback is None else self._validate_row(np.asarray(fallback, dtype=np.float64))
+        self._fallback = (
+            None
+            if fallback is None
+            else self._validate_row(np.asarray(fallback, dtype=np.float64))
+        )
         self._model_id = model_id
 
     @property
@@ -52,7 +66,9 @@ class TabularAutoregressiveBackend:
 
     def _validate_row(self, row: np.ndarray) -> np.ndarray:
         if row.ndim != 1 or row.shape[0] != self._vocab_size:
-            raise ValueError("all transition rows must have the same one-dimensional vocabulary")
+            raise ValueError(
+                "all transition rows must have the same one-dimensional vocabulary"
+            )
         if np.any(row < 0) or np.any(~np.isfinite(row)):
             raise ValueError("transition probabilities must be finite and non-negative")
         return _normalize(row.copy())
@@ -64,7 +80,9 @@ class TabularAutoregressiveBackend:
             return self._fallback
         raise KeyError(f"no transition probabilities for prefix {prefix!r}")
 
-    def probabilities(self, prefix: TokenSequence, sampling: SamplingConfig | None = None) -> np.ndarray:
+    def probabilities(
+        self, prefix: TokenSequence, sampling: SamplingConfig | None = None
+    ) -> np.ndarray:
         base = self._base_probabilities(prefix)
         if sampling is None:
             return base.copy()
@@ -74,7 +92,7 @@ class TabularAutoregressiveBackend:
         scaled[positive] = np.exp(np.log(base[positive]) / sampling.temperature)
 
         if sampling.top_k is not None and sampling.top_k < self._vocab_size:
-            keep = np.argpartition(scaled, -sampling.top_k)[-sampling.top_k:]
+            keep = np.argpartition(scaled, -sampling.top_k)[-sampling.top_k :]
             mask = np.zeros(self._vocab_size, dtype=bool)
             mask[keep] = True
             scaled[~mask] = 0
@@ -91,17 +109,44 @@ class TabularAutoregressiveBackend:
             scaled = _normalize(scaled)
         return scaled
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]:
         outputs: list[SequenceSample] = []
         for request in requests:
             rng = np.random.default_rng(request.seed)
+            arithmetic_uniform = request.arithmetic_uniform
             context = list(request.prefix)
             tokens: list[int] = []
             logprobs: list[float] = []
             finish_reason = "length"
             for step in range(request.max_new_tokens):
                 probs = self.probabilities(tuple(context), request.sampling)
-                if request.uniforms is None:
+                if arithmetic_uniform is not None:
+                    order = np.argsort(-probs, kind="stable")
+                    ordered = probs[order]
+                    cumulative = np.cumsum(ordered, dtype=np.float64)
+                    cumulative[-1] = 1.0
+                    rank = int(
+                        np.searchsorted(
+                            cumulative,
+                            arithmetic_uniform,
+                            side="right",
+                        )
+                    )
+                    rank = min(rank, self._vocab_size - 1)
+                    token = int(order[rank])
+                    lower = 0.0 if rank == 0 else float(cumulative[rank - 1])
+                    probability = float(ordered[rank])
+                    if probability <= 0:
+                        raise RuntimeError(
+                            "arithmetic sampling selected a zero-probability token"
+                        )
+                    arithmetic_uniform = min(
+                        max((arithmetic_uniform - lower) / probability, 0.0),
+                        float(np.nextafter(1.0, 0.0)),
+                    )
+                elif request.uniforms is None:
                     token = int(rng.choice(self._vocab_size, p=probs))
                 else:
                     token = int(
@@ -140,7 +185,11 @@ class TabularAutoregressiveBackend:
                 for token in continuation:
                     probs = self.probabilities(tuple(context), request.sampling)
                     probability = float(probs[token])
-                    token_logprobs.append(float("-inf") if probability == 0 else float(np.log(probability)))
+                    token_logprobs.append(
+                        float("-inf")
+                        if probability == 0
+                        else float(np.log(probability))
+                    )
                     context.append(token)
                 outputs.append(tuple(token_logprobs))
         return outputs

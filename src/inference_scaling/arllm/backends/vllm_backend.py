@@ -108,7 +108,9 @@ class _AsyncLoopRunner:
         self._thread.start()
         self._ready.wait()
         if self._error is not None:
-            raise RuntimeError("failed to initialize the asynchronous vLLM engine") from self._error
+            raise RuntimeError(
+                "failed to initialize the asynchronous vLLM engine"
+            ) from self._error
 
     def _run_loop(self) -> None:
         loop = asyncio.new_event_loop()
@@ -130,7 +132,9 @@ class _AsyncLoopRunner:
             for task in pending:
                 task.cancel()
             if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
             loop.run_until_complete(loop.shutdown_asyncgens())
             asyncio.set_event_loop(None)
             loop.close()
@@ -187,7 +191,9 @@ def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
         with safe_open(path, framework="pt", device="cpu") as handle:
             for name in handle.keys():
                 if name in names:
-                    raise ValueError(f"duplicate tensor {name!r} across checkpoint shards")
+                    raise ValueError(
+                        f"duplicate tensor {name!r} across checkpoint shards"
+                    )
                 names.add(name)
                 size = 1
                 for dimension in handle.get_slice(name).get_shape():
@@ -357,7 +363,9 @@ class VLLMBackend:
             "max_num_seqs": max_num_seqs,
             "max_num_batched_tokens": max_num_batched_tokens,
         }
-        kwargs.update({name: value for name, value in optional.items() if value is not None})
+        kwargs.update(
+            {name: value for name, value in optional.items() if value is not None}
+        )
         if speculation is not None:
             kwargs["speculative_config"] = speculation.vllm_suffix_config(
                 dynamic=dynamic_speculation
@@ -436,10 +444,10 @@ class VLLMBackend:
         return self._tokens_prompt_factory(prompt_token_ids=token_ids)
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
-        if request.uniforms is not None:
+        if request.uniforms is not None or request.arithmetic_uniform is not None:
             raise NotImplementedError(
-                "vLLM does not expose request-local token uniforms; "
-                "use the Transformers backend for scrambled Sobol rollouts"
+                "vLLM does not expose request-local token uniforms or arithmetic uniforms; "
+                "use the Transformers backend for randomized QMC rollouts"
             )
         policy = request.sampling
         return self._sampling_params_factory(
@@ -563,7 +571,9 @@ class VLLMBackend:
         tokens = tuple(int(token) for token in completion.token_ids)
         positions = completion.logprobs
         if positions is None or len(positions) != len(tokens):
-            raise RuntimeError("vLLM returned an invalid generated log-probability shape")
+            raise RuntimeError(
+                "vLLM returned an invalid generated log-probability shape"
+            )
         token_logprobs = tuple(
             _logprob_value(position, token)
             for position, token in zip(positions, tokens, strict=True)
@@ -610,7 +620,9 @@ class VLLMBackend:
             )
             self._engine_requests += len(samples)
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]:
         if not requests:
             return []
         outputs = self._generate(
@@ -653,7 +665,9 @@ class VLLMBackend:
             self._observed_draft_sequences += len(materialized)
 
     def observe_draft_sequences(self, sequences: Iterable[TokenSequence]) -> None:
-        materialized = tuple(tuple(int(token) for token in sequence) for sequence in sequences)
+        materialized = tuple(
+            tuple(int(token) for token in sequence) for sequence in sequences
+        )
         if self._draft_tree is not None:
             for sequence in materialized:
                 self._draft_tree.observe(sequence)
@@ -687,8 +701,12 @@ class VLLMBackend:
         for (index, request, continuation), output in zip(items, outputs, strict=True):
             prompt_logprobs = getattr(output, "prompt_logprobs", None)
             prefix = self._model_prefix(request.prefix)
-            if prompt_logprobs is None or len(prompt_logprobs) != len(prefix) + len(continuation):
-                raise RuntimeError("vLLM returned an invalid prompt log-probability shape")
+            if prompt_logprobs is None or len(prompt_logprobs) != len(prefix) + len(
+                continuation
+            ):
+                raise RuntimeError(
+                    "vLLM returned an invalid prompt log-probability shape"
+                )
             positions = prompt_logprobs[len(prefix) :]
             results[index] = tuple(
                 _logprob_value(position, token)
@@ -763,36 +781,51 @@ class VLLMBackend:
         delegated_flops = 0
         if delegated:
             if self._scoring_backend is None:
-                policies = sorted({item[1].sampling.policy_id for item in delegated if item[1].sampling})
+                policies = sorted(
+                    {
+                        item[1].sampling.policy_id
+                        for item in delegated
+                        if item[1].sampling
+                    }
+                )
                 raise ValueError(
                     "vLLM prompt log-probabilities cannot exactly score temperature/top-k/top-p "
-                    "policies; configure an exact scoring_backend for: " + ", ".join(policies)
+                    "policies; configure an exact scoring_backend for: "
+                    + ", ".join(policies)
                 )
             delegated_requests = [
                 ScoreRequest(request.prefix, (continuation,), request.sampling)
                 for _, request, continuation in delegated
             ]
-            delegated_outputs, delegated_slots, delegated_flops = self._run_delegated_score(
-                delegated_requests,
-                "score_batch",
+            delegated_outputs, delegated_slots, delegated_flops = (
+                self._run_delegated_score(
+                    delegated_requests,
+                    "score_batch",
+                )
             )
             if len(delegated_outputs) != len(delegated):
-                raise RuntimeError("exact scoring backend returned an invalid result count")
+                raise RuntimeError(
+                    "exact scoring backend returned an invalid result count"
+                )
             for (index, _, continuation), scores in zip(
                 delegated, delegated_outputs, strict=True
             ):
                 if len(scores) != len(continuation):
-                    raise RuntimeError("exact scoring backend returned an invalid score shape")
+                    raise RuntimeError(
+                        "exact scoring backend returned an invalid score shape"
+                    )
                 results[index] = scores
 
         with self._statistics_lock:
             self._score_calls += 1
-            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
+            self._scored_tokens += sum(
+                len(continuation) for _, continuation in flattened
+            )
             self._shared_prefill_tokens_saved += cached_tokens
             self._score_forward_token_slots += score_slots + delegated_slots
-            self._estimated_dense_forward_flops += dense_forward_flops(
-                self.parameter_count, score_slots
-            ) + delegated_flops
+            self._estimated_dense_forward_flops += (
+                dense_forward_flops(self.parameter_count, score_slots) + delegated_flops
+            )
             self._engine_requests += native_count
             self._native_score_sequences += native_count
             self._delegated_score_sequences += len(delegated)
@@ -871,7 +904,9 @@ class VLLMBackend:
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
         return tuple(
             int(token)
-            for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
+            for token in self.tokenizer.encode(
+                text, add_special_tokens=add_special_tokens
+            )
         )
 
     def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True) -> str:
@@ -950,11 +985,15 @@ class VLLMBackend:
         self._closed = True
         shutdown = getattr(self._engine, "shutdown", None)
         if shutdown is None:
-            shutdown = getattr(getattr(self._engine, "llm_engine", None), "shutdown", None)
+            shutdown = getattr(
+                getattr(self._engine, "llm_engine", None), "shutdown", None
+            )
         if shutdown is not None:
             result = shutdown()
             if inspect.isawaitable(result):
-                raise RuntimeError("an asynchronous vLLM engine requires AsyncVLLMBackend")
+                raise RuntimeError(
+                    "an asynchronous vLLM engine requires AsyncVLLMBackend"
+                )
 
     def __enter__(self) -> "VLLMBackend":
         return self
@@ -1079,7 +1118,9 @@ class AsyncVLLMBackend(VLLMBackend):
             "max_num_seqs": max_num_seqs,
             "max_num_batched_tokens": max_num_batched_tokens,
         }
-        kwargs.update({name: value for name, value in optional.items() if value is not None})
+        kwargs.update(
+            {name: value for name, value in optional.items() if value is not None}
+        )
         if speculation is not None:
             kwargs["speculative_config"] = speculation.vllm_suffix_config(
                 dynamic=dynamic_speculation
@@ -1158,9 +1199,7 @@ class AsyncVLLMBackend(VLLMBackend):
                         metrics = await metrics
             except (AssertionError, ImportError, RuntimeError):
                 return 0, 0, 0
-            return self._sum_metric_values(
-                metrics, model_name=self._metric_model_name
-            )
+            return self._sum_metric_values(metrics, model_name=self._metric_model_name)
 
         return self._runner.run(read())
 
@@ -1186,7 +1225,9 @@ class AsyncVLLMBackend(VLLMBackend):
     async def _generate_many(self, prompts: Sequence[Any], params: Any) -> list[Any]:
         policies = params if isinstance(params, list) else [params] * len(prompts)
         if len(policies) != len(prompts):
-            raise ValueError("the number of vLLM sampling policies must match the prompts")
+            raise ValueError(
+                "the number of vLLM sampling policies must match the prompts"
+            )
         return list(
             await asyncio.gather(
                 *(
@@ -1205,7 +1246,9 @@ class AsyncVLLMBackend(VLLMBackend):
     ) -> list[tuple[SequenceSample, int, int, int]]:
         policies = params if isinstance(params, list) else [params] * len(prompts)
         if len(policies) != len(prompts) or len(requests) != len(prompts):
-            raise ValueError("vLLM prompts, policies, and requests must have equal length")
+            raise ValueError(
+                "vLLM prompts, policies, and requests must have equal length"
+            )
 
         async def indexed(index: int, prompt: Any, policy: Any):
             return index, await self._generate_one(prompt, policy)
@@ -1312,7 +1355,9 @@ class AsyncVLLMBackend(VLLMBackend):
                 completion = self._completion(output)
                 positions = completion.logprobs
                 if positions is None or len(positions) != 1:
-                    raise RuntimeError("vLLM beam expansion omitted next-token log-probabilities")
+                    raise RuntimeError(
+                        "vLLM beam expansion omitted next-token log-probabilities"
+                    )
                 for token, value in positions[0].items():
                     token_id = int(token)
                     expanded = tokens + (token_id,)

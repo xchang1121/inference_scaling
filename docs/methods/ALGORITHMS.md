@@ -313,15 +313,13 @@ AR 条件 IS 适配位于 [`conditional_is.py`](../../src/inference_scaling/arll
 都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
 <a id="alg-rqmc-rollouts"></a>
-### 6.1 scrambled-Sobol rollout
+### 6.1 随机化 QMC rollout
 
-普通条件 IS 为每个候选独立生成 $`K`$ 条 rollout。scrambled randomized quasi-Monte Carlo（RQMC）保持
-每条 rollout 的边缘分布不变，同时使同一候选的 $`K`$ 组均匀数更均匀地覆盖 $`[0,1)^L`$。其中 $`L`$
-是该 guidance step 的最大补全长度。
+普通条件 IS 为每个候选独立生成 $`K`$ 条 rollout。仓库实现两种 randomized quasi-Monte Carlo（RQMC）
+设计；两者都保持每条 rollout 的 proposal 边缘分布，只改变同一候选下 $`K`$ 条 rollout 的联合分布。
 
-对候选 $`z_m`$，生成经过数字扰动的 Sobol 点
-$`v_{m1},\ldots,v_{mK}\in[0,1)^L`$。第 $`k`$ 条 rollout 的第 $`t`$ 个 token 通过 proposal 条件分布
-的逆 CDF 得到：
+`scrambled_sobol` 为长度 $`L`$ 的补全生成经过数字扰动的 Sobol 点
+$`v_{m1},\ldots,v_{mK}\in[0,1)^L`$，并在每个 token 位置执行 proposal 条件分布的逆 CDF：
 
 ```math
 u_{mk,t}=F^{-1}_{q,t}
@@ -330,51 +328,75 @@ u_{mk,t}=F^{-1}_{q,t}
 
 <p align="right">式 (8-R1)</p>
 
-随机扰动使每个 $`v_{mk}`$ 的边缘分布均为 $`L`$ 维均匀分布，因此每条 $`u_{mk}`$ 的边缘分布仍是
-$`q(\cdot\mid x,g,z_m)`$。不同 $`k`$ 的 rollout 相互依赖，但式 (10) 的无偏性只需要正确边缘分布。令
+`arithmetic_lattice` 先抽取一个共享随机平移 $`\Delta_m\sim\operatorname{Unif}[0,1)`$，再构造一维格点
 
 ```math
-G_m(v)=
-\exp\{r(g,z_m,u(v))/\tau\}
-\frac{p(u(v)\mid x,g,z_m)}{q(u(v)\mid x,g,z_m)},
-```
-
-则
-
-```math
-\mathbb E\!\left[\frac1K\sum_{k=1}^K G_m(v_{mk})\right]
-=\frac1K\sum_{k=1}^K\mathbb E[G_m(v_{mk})]
-=h(g,z_m).
+a_{mk,1}=\left(\Delta_m+\frac{k}{K}\right)\bmod 1,
+\qquad k=0,\ldots,K-1.
 ```
 
 <p align="right">式 (8-R2)</p>
 
-上述等式同时覆盖 on-policy 与 off-policy rollout，不需要修改 $`p/q`$。点集内部的相关性意味着普通独立
-样本 ESS 只能作为权重离散程度的描述量；估计方差必须由多个独立数字扰动重复实验得到。对具有适当正则性的
-被积函数，增大 Sobol 点集可降低积分误差；语言模型的逆 CDF 映射产生离散、分段常数函数，因此有限 $`K`$
-下没有统一的方差改进保证。有限候选 SIR 的归一化误差也仍然存在。
+在第 $`t`$ 个 token 位置，将 proposal 概率按固定规则排列。若 $`a_{mk,t}`$ 落在 token $`u_{mk,t}`$
+对应的区间 $`[\ell_{mk,t},\ell_{mk,t}+q_{mk,t})`$，则选择该 token，并把区间重新缩放到 $`[0,1)`$：
 
-实现为每个候选构造独立点集，并把每一行直接传给生成请求：
+```math
+a_{mk,t+1}=
+\frac{a_{mk,t}-\ell_{mk,t}}{q_{mk,t}}.
+```
+
+<p align="right">式 (8-R3)</p>
+
+随机平移使每个带编号的 $`a_{mk,1}`$ 都服从 $`\operatorname{Unif}[0,1)`$。算术逆 CDF 将任一序列
+$`u`$ 对应到长度恰为 $`q(u\mid x,g,z_m)`$ 的区间，因此每条 $`u_{mk}`$ 的边缘分布严格等于 rollout
+proposal。格点之间的距离固定为 $`1/K`$，其覆盖约束强于逐 token Sobol 在高维空间中的有限点集约束。
+
+令
+
+```math
+G_m(u)=
+\exp\{r(g,z_m,u)/\tau\}
+\frac{p(u\mid x,g,z_m)}{q(u\mid x,g,z_m)}.
+```
+
+两种 RQMC 设计都满足
+
+```math
+\mathbb E\!\left[\frac1K\sum_{k=1}^K G_m(u_{mk})\right]
+=\frac1K\sum_{k=1}^K\mathbb E[G_m(u_{mk})]
+=h(g,z_m).
+```
+
+<p align="right">式 (8-R4)</p>
+
+该等式只使用期望的线性性和每条 rollout 的正确边缘分布，因此同时覆盖 on-policy 与 off-policy rollout，
+原有 $`p/q`$ 权重无需改变。有限候选 SIR 的归一化误差仍然存在。RQMC 点集内部不独立，普通独立样本 ESS
+只能描述当前权重的离散程度；估计量方差需要用多个独立随机平移或数字扰动测量，有限 $`K`$ 下也没有统一的
+方差下降保证。
+
+实现为每个候选构造独立点集。算术格点只向每条请求传递一个初始随机数，后端在生成过程中更新局部坐标：
 
 ```python
-uniforms = scrambled_sobol_uniforms(
+latents = randomized_lattice_uniforms(
     rollout_count,
-    rollout_length,
-    seed=candidate_scramble_seed,
+    seed=candidate_shift_seed,
 )
 requests = [
-    GenerationRequest(..., uniforms=uniforms[k])
+    GenerationRequest(..., arithmetic_uniform=latents[k])
     for k in range(rollout_count)
 ]
 ```
 
-Transformers 与表格后端使用 float64 累积概率执行逆 CDF；partial rollout 按已生成 token 数切分同一随机数流。
-该模式只接受逐序列固定的奖励函数。批内自一致性奖励依赖其他 rollout，改变 rollout 之间的相关性会同时改变
-奖励本身，入口因此拒绝该组合。vLLM 当前不开放逐 token 均匀数注入，`scrambled_sobol` 在 vLLM 后端显式
-报错；`iid` 路径不受影响。实现位于 [`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)和
-[`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。方法依据见
-[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。
-Qwen2.5-1.5B 的 8 题、2 draw 筛选未观察到准确率或成本收益，因此默认仍为 `iid`；数值见
+Transformers 与表格后端使用 float64 累积概率执行两种逆 CDF。RQMC 只接受逐序列固定奖励；批内自一致性
+奖励会随 rollout 的联合分布改变，入口拒绝该组合。vLLM 当前不开放请求级采样随机数注入，因此两种 RQMC
+模式均在 vLLM 后端显式报错，`iid` 路径不受影响。实现位于
+[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)、
+[`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
+[`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。方法依据见
+[Arithmetic Sampling](https://proceedings.mlr.press/v202/vilnis23a.html)、
+[QuasiMoTTo](https://arxiv.org/abs/2607.01179)以及 RQMC 与重要性采样组合的
+[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。逐 token Sobol
+在 Qwen2.5-1.5B 的首轮筛选中未通过收益门槛；算术格点使用同一入口单独登记并筛选，数值见
 [Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
 
 <a id="alg-bounded-is"></a>

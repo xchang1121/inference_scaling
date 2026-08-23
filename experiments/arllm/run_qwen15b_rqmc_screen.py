@@ -1,4 +1,4 @@
-"""Resumable Qwen2.5-1.5B scrambled-Sobol rollout study."""
+"""Resumable Qwen2.5-1.5B randomized-QMC rollout study."""
 
 from __future__ import annotations
 
@@ -18,9 +18,7 @@ from experiments.shared.suite_runner import run_manifested_commands
 
 def build_commands(args: argparse.Namespace) -> list[list[str]]:
     reproduction = REPOSITORY_ROOT / "experiments" / "arllm" / "gsm8k_reproduction.py"
-    summarizer = (
-        REPOSITORY_ROOT / "experiments" / "arllm" / "summarize_qwen15b_rqmc.py"
-    )
+    summarizer = REPOSITORY_ROOT / "experiments" / "arllm" / "summarize_qwen15b_rqmc.py"
     commands: list[list[str]] = []
     for draw in range(args.draws):
         arms = RQMC_ARMS if draw % 2 == 0 else tuple(reversed(RQMC_ARMS))
@@ -105,9 +103,7 @@ def main() -> None:
         )
     if args.output is None:
         filename = (
-            "rqmc_screen.json"
-            if args.phase == "screen"
-            else "rqmc_confirmation.json"
+            "rqmc_screen.json" if args.phase == "screen" else "rqmc_confirmation.json"
         )
         args.output = Path("results/arllm/qwen15b_optimization") / filename
     commands = build_commands(args)
@@ -117,7 +113,7 @@ def main() -> None:
         root=REPOSITORY_ROOT,
         manifest_path=manifest,
         metadata={
-            "study": "qwen15b_scrambled_sobol_rollouts",
+            "study": "qwen15b_randomized_qmc_rollouts",
             "phase": args.phase,
             "model": "Qwen2.5-1.5B-Instruct",
             "dllm_experiments": False,

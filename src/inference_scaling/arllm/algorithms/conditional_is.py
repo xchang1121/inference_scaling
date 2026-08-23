@@ -25,7 +25,10 @@ from inference_scaling.shared.importance import (
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.rqmc import scrambled_sobol_uniforms
+from inference_scaling.shared.rqmc import (
+    randomized_lattice_uniforms,
+    scrambled_sobol_uniforms,
+)
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     categorical_index_from_uniform,
@@ -130,7 +133,9 @@ def _score_samples(
             raise RuntimeError("backend returned an invalid base token score shape")
         total = float(sum(scores))
         if not isfinite(total):
-            raise ValueError("rollout proposal generated a completion outside base-model support")
+            raise ValueError(
+                "rollout proposal generated a completion outside base-model support"
+            )
         totals.append(total)
     return totals
 
@@ -149,7 +154,9 @@ def _sample_candidates(
             prefix=prefix,
             max_new_tokens=block_length,
             sampling=sampling,
-            seed=seeds.derive("conditional_is", step_index, "candidate", candidate_index),
+            seed=seeds.derive(
+                "conditional_is", step_index, "candidate", candidate_index
+            ),
             request_id=f"conditional-is:step:{step_index}:candidate:{candidate_index}",
         )
         for candidate_index in range(count)
@@ -160,8 +167,13 @@ def _sample_candidates(
     for candidate in candidates:
         if not candidate.token_ids:
             raise RuntimeError("a candidate block must contain at least one token")
-        if candidate.model_id != base_backend.model_id or candidate.policy_id != sampling.policy_id:
-            raise RuntimeError("candidate was not sampled and scored by the requested base policy")
+        if (
+            candidate.model_id != base_backend.model_id
+            or candidate.policy_id != sampling.policy_id
+        ):
+            raise RuntimeError(
+                "candidate was not sampled and scored by the requested base policy"
+            )
     return candidates
 
 
@@ -195,15 +207,19 @@ def estimate_conditional_weights(
         raise ValueError("reward_temperature must be positive")
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
-    if rollout_design not in {"iid", "scrambled_sobol"}:
+    if rollout_design not in {
+        "iid",
+        "scrambled_sobol",
+        "arithmetic_lattice",
+    }:
         raise ValueError("unknown rollout_design")
     if rollout_index_offset < 0:
         raise ValueError("rollout_index_offset must be non-negative")
     if rollout_index_offset and rollout_design != "iid":
         raise ValueError("staged rollout offsets currently require iid rollouts")
-    if rollout_design == "scrambled_sobol" and reward_batch is not None:
+    if rollout_design != "iid" and reward_batch is not None:
         raise ValueError(
-            "scrambled Sobol rollouts require a fixed pointwise reward; "
+            "randomized QMC rollouts require a fixed pointwise reward; "
             "batch-coupled rewards change when rollout dependence changes"
         )
 
@@ -222,7 +238,7 @@ def estimate_conditional_weights(
             terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + full_generated_candidate
-        uniforms = (
+        token_uniforms = (
             scrambled_sobol_uniforms(
                 rollout_count,
                 rollout_length,
@@ -235,6 +251,20 @@ def estimate_conditional_weights(
                 ),
             )
             if rollout_design == "scrambled_sobol"
+            else (None,) * rollout_count
+        )
+        arithmetic_uniforms = (
+            randomized_lattice_uniforms(
+                rollout_count,
+                seed=seeds.derive(
+                    "conditional_is",
+                    step_index,
+                    "candidate",
+                    candidate_index,
+                    "arithmetic_lattice",
+                ),
+            )
+            if rollout_design == "arithmetic_lattice"
             else (None,) * rollout_count
         )
         for rollout_index in range(rollout_count):
@@ -257,7 +287,8 @@ def estimate_conditional_weights(
                         f"step:{step_index}:candidate:{candidate_index}:"
                         f"rollout:{global_rollout_index}"
                     ),
-                    uniforms=uniforms[rollout_index],
+                    uniforms=token_uniforms[rollout_index],
+                    arithmetic_uniform=arithmetic_uniforms[rollout_index],
                 )
             )
             request_candidates.append(candidate_index)
@@ -311,7 +342,9 @@ def estimate_conditional_weights(
     for candidate_index, sample, base_logprob in zip(
         request_candidates, samples, base_totals, strict=True
     ):
-        generated = generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
+        generated = (
+            generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
+        )
         proposal_logprob = sample.logprob
         pending_by_candidate[candidate_index].append(
             (
@@ -327,12 +360,16 @@ def estimate_conditional_weights(
     pending = [item for group in pending_by_candidate for item in group]
     generated_sequences = [item[-1] for item in pending]
     if reward_batch is not None:
-        rewards = tuple(float(value) for value in reward_batch(prompt, generated_sequences))
+        rewards = tuple(
+            float(value) for value in reward_batch(prompt, generated_sequences)
+        )
         if len(rewards) != len(pending):
             raise ValueError("reward_batch returned an invalid number of rewards")
     else:
         assert reward is not None
-        rewards = tuple(float(reward(prompt, generated)) for generated in generated_sequences)
+        rewards = tuple(
+            float(reward(prompt, generated)) for generated in generated_sequences
+        )
     if any(not isfinite(value) for value in rewards):
         raise ValueError("reward must be finite")
 
@@ -384,10 +421,10 @@ def estimate_conditional_weights(
     for candidate_index, candidate in enumerate(candidates):
         evaluations = by_candidate[candidate_index]
         if not evaluations:
-            raise RuntimeError("each candidate must have at least one weight contribution")
-        candidate_log_weight = logmeanexp(
-            [item.log_weight for item in evaluations]
-        )
+            raise RuntimeError(
+                "each candidate must have at least one weight contribution"
+            )
+        candidate_log_weight = logmeanexp([item.log_weight for item in evaluations])
         evaluated.append(
             ConditionalCandidate(
                 token_ids=candidate.token_ids,
@@ -544,11 +581,12 @@ def _bounded_conditional_is_step(
     rollout_length = max(0, remaining_length - len(proposals[0].token_ids))
     eos = rollout_sampling.eos_token_id
     terminal = tuple(
-        rollout_length == 0
-        or (eos is not None and proposal.token_ids[-1] == eos)
+        rollout_length == 0 or (eos is not None and proposal.token_ids[-1] == eos)
         for proposal in proposals
     )
-    planned = tuple(1 if is_terminal else config.rollout_count for is_terminal in terminal)
+    planned = tuple(
+        1 if is_terminal else config.rollout_count for is_terminal in terminal
+    )
     planned_total = sum(planned)
     selection_uniform = float(
         seeds.generator("conditional_is", step_index, "select").random()
@@ -564,7 +602,9 @@ def _bounded_conditional_is_step(
         or not isfinite(maximum_contribution)
         or minimum_contribution <= 0.0
     ):
-        raise ValueError("rollout log-weight bounds must map to finite positive weights")
+        raise ValueError(
+            "rollout log-weight bounds must map to finite positive weights"
+        )
 
     collected: list[list[RolloutEvaluation]] = [[] for _ in proposals]
     lower_candidate_weights: list[float] = []
@@ -663,7 +703,9 @@ def _bounded_conditional_is_step(
         selection_uniform,
     )
     if invariant_index is not None and selected_index != invariant_index:
-        raise RuntimeError("bounded categorical proof disagrees with representative weights")
+        raise RuntimeError(
+            "bounded categorical proof disagrees with representative weights"
+        )
     performed_total = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
     skipped_total = planned_total - performed_total
     return ConditionalISStep(
@@ -724,9 +766,7 @@ def conditional_is_step(
         seeds,
         selection_namespace=("conditional_is",),
     )
-    evaluated_candidates = tuple(
-        candidate.value for candidate in selection.candidates
-    )
+    evaluated_candidates = tuple(candidate.value for candidate in selection.candidates)
     performed = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
     return ConditionalISStep(
         generated_length_before=len(generated_prefix),

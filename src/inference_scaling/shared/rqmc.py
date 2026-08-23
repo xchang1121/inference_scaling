@@ -1,8 +1,29 @@
-"""Randomized quasi-Monte Carlo point sets for rollout sampling."""
+"""Randomized quasi-Monte Carlo point sets for autoregressive sampling."""
 
 from __future__ import annotations
 
 import numpy as np
+
+
+def randomized_lattice_uniforms(
+    count: int,
+    *,
+    seed: int,
+) -> tuple[float, ...]:
+    """Return a randomly shifted one-dimensional lattice in ``[0, 1)``.
+
+    Every labelled point is marginally uniform because the shared shift is
+    uniform.  The points are dependent and exactly ``1 / count`` apart on the
+    unit circle.  An autoregressive backend can turn each point into a complete
+    sequence with arithmetic inverse-CDF sampling.
+    """
+
+    if count <= 0:
+        raise ValueError("lattice count must be positive")
+    if seed < 0:
+        raise ValueError("lattice seed must be non-negative")
+    shift = float(np.random.default_rng(seed).random())
+    return tuple((shift + index / count) % 1.0 for index in range(count))
 
 
 def scrambled_sobol_uniforms(
@@ -31,4 +52,4 @@ def scrambled_sobol_uniforms(
     return tuple(tuple(float(value) for value in row) for row in points)
 
 
-__all__ = ["scrambled_sobol_uniforms"]
+__all__ = ["randomized_lattice_uniforms", "scrambled_sobol_uniforms"]

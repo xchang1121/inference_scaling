@@ -108,6 +108,7 @@ def _installed_package_version(name: str) -> str | None:
     except importlib.metadata.PackageNotFoundError:
         return None
 
+
 def _fraction_text(value: Fraction | None) -> str | None:
     if value is None:
         return None
@@ -265,7 +266,9 @@ def _frozen_consensus_reward(
         for pilot_index in range(samples)
     ]
     pilots = backend.sample_batch(requests)
-    answers = [extract_numeric_answer(backend.decode(sample.token_ids)) for sample in pilots]
+    answers = [
+        extract_numeric_answer(backend.decode(sample.token_ids)) for sample in pilots
+    ]
     reference = modal_answer(answers)
 
     def reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
@@ -351,11 +354,14 @@ def _run_best_of_n(
         "uses_test_gold_oracle": reward_source == "exact",
         "reward_normalization": (
             "per-decision min-max over candidate completions"
-            if reward_source in {"log_probability", "negative_entropy", "self_certainty"}
+            if reward_source
+            in {"log_probability", "negative_entropy", "self_certainty"}
             else None
         ),
         "selection_rewards": list(selection_rewards),
-        "raw_confidence_rewards": list(raw_rewards) if raw_rewards is not None else None,
+        "raw_confidence_rewards": list(raw_rewards)
+        if raw_rewards is not None
+        else None,
         "answer_counts": _answer_counts(parsed_answers),
     }
 
@@ -415,8 +421,7 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
             for step in result.steps
         ),
         "rollout_evaluation_batches": sum(
-            int(getattr(step, "rollout_evaluation_batches", 1))
-            for step in result.steps
+            int(getattr(step, "rollout_evaluation_batches", 1)) for step in result.steps
         ),
         "exact_early_stop_steps": sum(
             bool(getattr(step, "exact_early_stop", False)) for step in result.steps
@@ -486,9 +491,7 @@ def _run_method(
     proposal_backend: Any | None,
 ) -> tuple[TokenSequence, dict[str, Any]]:
     maximum = int(config["generation"]["max_new_tokens"])
-    sampling_temperature = float(
-        config.get("sampling", {}).get("temperature", 1.0)
-    )
+    sampling_temperature = float(config.get("sampling", {}).get("temperature", 1.0))
     seed = seeds.derive(method, problem.index)
     if method in {"base", "rl_sample"}:
         temperature = 1.0 if method == "rl_sample" else sampling_temperature
@@ -776,9 +779,7 @@ def _run_method(
         diagnostics["rollout_ess_is_descriptive"] = (
             diagnostics["rollout_design"] != "iid"
         )
-        diagnostics["configured_candidate_count"] = int(
-            conditional["candidate_count"]
-        )
+        diagnostics["configured_candidate_count"] = int(conditional["candidate_count"])
         diagnostics["configured_rollout_count"] = int(conditional["rollout_count"])
         diagnostics["configured_block_size"] = int(conditional["block_size"])
         diagnostics["exact_rollout_early_stop_enabled"] = bool(
@@ -829,13 +830,16 @@ def _run_method(
             method.endswith("small_proposal")
             and conditional.get("importance_log_ratio_clip") is not None
         ):
-            target_description = "clipped_finite_rollout_approximation_to_" + target_description
+            target_description = (
+                "clipped_finite_rollout_approximation_to_" + target_description
+            )
         diagnostics["target"] = target_description
         diagnostics["reward_temperature"] = reward_temperature
         diagnostics["reward_source"] = reward_source
         diagnostics["reward_normalization"] = (
             "per-guidance-step min-max over all candidate rollouts"
-            if reward_source in {"log_probability", "negative_entropy", "self_certainty"}
+            if reward_source
+            in {"log_probability", "negative_entropy", "self_certainty"}
             else None
         )
         diagnostics["importance_log_ratio_clip"] = (
@@ -855,14 +859,20 @@ def _run_method(
     raise ValueError(f"unknown method {method!r}")
 
 
-def _summary(records: Sequence[dict[str, Any]], manifest: dict[str, Any]) -> dict[str, Any]:
+def _summary(
+    records: Sequence[dict[str, Any]], manifest: dict[str, Any]
+) -> dict[str, Any]:
     count = len(records)
     correct = sum(bool(record["correct"]) for record in records)
     low, high = wilson_interval(correct, count)
     elapsed = [float(record["elapsed_seconds"]) for record in records]
     output_lengths = [int(record["output_tokens"]) for record in records]
-    generated = sum(int(record["backend_delta"].get("generated_tokens", 0)) for record in records)
-    scored = sum(int(record["backend_delta"].get("scored_tokens", 0)) for record in records)
+    generated = sum(
+        int(record["backend_delta"].get("generated_tokens", 0)) for record in records
+    )
+    scored = sum(
+        int(record["backend_delta"].get("scored_tokens", 0)) for record in records
+    )
     proposal_generated = sum(
         int(record.get("proposal_backend_delta", {}).get("generated_tokens", 0))
         for record in records
@@ -884,27 +894,47 @@ def _summary(records: Sequence[dict[str, Any]], manifest: dict[str, Any]) -> dic
         for record in records
     )
     proposal_generation_slots = sum(
-        int(record.get("proposal_backend_delta", {}).get("generation_forward_token_slots", 0))
+        int(
+            record.get("proposal_backend_delta", {}).get(
+                "generation_forward_token_slots", 0
+            )
+        )
         for record in records
     )
     proposal_shared_prefill_saved = sum(
-        int(record.get("proposal_backend_delta", {}).get("shared_prefill_tokens_saved", 0))
+        int(
+            record.get("proposal_backend_delta", {}).get(
+                "shared_prefill_tokens_saved", 0
+            )
+        )
         for record in records
     )
     proposal_score_slots = sum(
-        int(record.get("proposal_backend_delta", {}).get("score_forward_token_slots", 0))
+        int(
+            record.get("proposal_backend_delta", {}).get("score_forward_token_slots", 0)
+        )
         for record in records
     )
     proposal_flops = sum(
-        int(record.get("proposal_backend_delta", {}).get("estimated_dense_forward_flops", 0))
+        int(
+            record.get("proposal_backend_delta", {}).get(
+                "estimated_dense_forward_flops", 0
+            )
+        )
         for record in records
     )
     direct_slots = sum(
-        int(record.get("diagnostics", {}).get("direct_generation_forward_token_slots", 0))
+        int(
+            record.get("diagnostics", {}).get(
+                "direct_generation_forward_token_slots", 0
+            )
+        )
         for record in records
     )
     direct_flops = sum(
-        int(record.get("diagnostics", {}).get("direct_estimated_dense_forward_flops", 0))
+        int(
+            record.get("diagnostics", {}).get("direct_estimated_dense_forward_flops", 0)
+        )
         for record in records
     )
     total_forward_slots = (
@@ -1001,7 +1031,9 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["conditional_is"]["rollout_count"] = args.rollout_count
     if getattr(args, "rollout_design", None) is not None:
         if args.method == "iterated_conditional_is":
-            raise ValueError("--rollout-design is not implemented for iterated conditional IS")
+            raise ValueError(
+                "--rollout-design is not implemented for iterated conditional IS"
+            )
         config["conditional_is"]["rollout_design"] = args.rollout_design
     if getattr(args, "exact_rollout_early_stop", False):
         if args.method == "iterated_conditional_is":
@@ -1036,9 +1068,9 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     if getattr(args, "iterated_updates", None) is not None:
         config.setdefault("iterated_is", {})["updates"] = args.iterated_updates
     if getattr(args, "consensus_pilot_samples", None) is not None:
-        config.setdefault("iterated_is", {})[
-            "pilot_samples"
-        ] = args.consensus_pilot_samples
+        config.setdefault("iterated_is", {})["pilot_samples"] = (
+            args.consensus_pilot_samples
+        )
     if args.block_size is not None:
         if args.method in {"mh", "verifier_mh"}:
             config["mh"]["block_size"] = args.block_size
@@ -1112,7 +1144,7 @@ def main() -> None:
     parser.add_argument("--rollout-count", type=int)
     parser.add_argument(
         "--rollout-design",
-        choices=("iid", "scrambled_sobol"),
+        choices=("iid", "scrambled_sobol", "arithmetic_lattice"),
     )
     parser.add_argument("--exact-rollout-early-stop", action="store_true")
     parser.add_argument("--rollout-log-weight-lower", type=float)
@@ -1133,7 +1165,10 @@ def main() -> None:
     with args.config.open("rb") as source:
         config = tomllib.load(source)
     _apply_overrides(config, args)
-    if str(config["runtime"]["device"]).startswith("cuda") and not torch.cuda.is_available():
+    if (
+        str(config["runtime"]["device"]).startswith("cuda")
+        and not torch.cuda.is_available()
+    ):
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
 
     all_problems = load_gsm8k(args.data)
@@ -1167,7 +1202,9 @@ def main() -> None:
         "problem_indices": [problem.index for problem in problems],
     }
     fingerprint = _fingerprint(effective)
-    run_dir = args.output_root / str(config["run"]["name"]) / f"{args.method}-{args.tag}"
+    run_dir = (
+        args.output_root / str(config["run"]["name"]) / f"{args.method}-{args.tag}"
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
     records_path = run_dir / "records.jsonl"
@@ -1255,7 +1292,9 @@ def main() -> None:
     if args.method.endswith("small_proposal"):
         proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
         if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
-            raise ValueError("base and proposal tokenizers do not have identical vocabularies")
+            raise ValueError(
+                "base and proposal tokenizers do not have identical vocabularies"
+            )
 
     manifest["model"]["parameter_count"] = backend.parameter_count
     manifest["model"]["verified_base_weight_sha256"] = actual_base_hash
@@ -1297,17 +1336,16 @@ def main() -> None:
             before = backend.snapshot()
             proposal_before = proposal_backend.snapshot() if proposal_backend else None
             (tokens, diagnostics), elapsed = _timed(
-                lambda backend=backend,
-                problem=problem,
-                prompt=prompt,
-                proposal_backend=proposal_backend: _run_method(
-                    args.method,
-                    backend,
-                    problem,
-                    prompt,
-                    config,
-                    seeds,
-                    proposal_backend,
+                lambda backend=backend, problem=problem, prompt=prompt, proposal_backend=proposal_backend: (
+                    _run_method(
+                        args.method,
+                        backend,
+                        problem,
+                        prompt,
+                        config,
+                        seeds,
+                        proposal_backend,
+                    )
                 )
             )
             after = backend.snapshot()
@@ -1320,7 +1358,9 @@ def main() -> None:
                 "tag": args.tag,
                 "draw_index": args.draw_index,
                 "problem_index": problem.index,
-                "question_sha256": hashlib.sha256(problem.question.encode()).hexdigest(),
+                "question_sha256": hashlib.sha256(
+                    problem.question.encode()
+                ).hexdigest(),
                 "gold_answer": _fraction_text(problem.gold_answer),
                 "prediction": _fraction_text(prediction),
                 "correct": prediction == problem.gold_answer,
@@ -1344,7 +1384,11 @@ def main() -> None:
             )
 
     records = _load_records(records_path)
-    selected = [record for record in records if int(record["problem_index"]) in {p.index for p in problems}]
+    selected = [
+        record
+        for record in records
+        if int(record["problem_index"]) in {p.index for p in problems}
+    ]
     summary = _summary(selected, manifest)
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

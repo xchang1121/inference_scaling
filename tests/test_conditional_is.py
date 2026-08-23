@@ -3,12 +3,18 @@ from math import exp
 
 import pytest
 
-from inference_scaling.arllm.algorithms.conditional_is import conditional_is_step, run_conditional_is
+from inference_scaling.arllm.algorithms.conditional_is import (
+    conditional_is_step,
+    run_conditional_is,
+)
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.rqmc import scrambled_sobol_uniforms
+from inference_scaling.shared.rqmc import (
+    randomized_lattice_uniforms,
+    scrambled_sobol_uniforms,
+)
 from inference_scaling.arllm.types import ScoreRequest
 
 
@@ -33,8 +39,7 @@ def _exact_first_token_target() -> dict[int, float]:
     weights = []
     for candidate in (0, 1):
         weight = sum(
-            completion[candidate][token]
-            * exp(_reward((), (candidate, token)))
+            completion[candidate][token] * exp(_reward((), (candidate, token)))
             for token in (0, 1)
         )
         weights.append(weight)
@@ -235,7 +240,9 @@ def test_conditional_is_never_exceeds_total_length() -> None:
     result = run_conditional_is(
         backend,
         (),
-        ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=2, total_length=5),
+        ConditionalISConfig(
+            candidate_count=2, rollout_count=2, block_size=2, total_length=5
+        ),
         lambda _prompt, generated: float(sum(generated)),
         SeedStream(17),
     )
@@ -352,6 +359,61 @@ def test_scrambled_sobol_rollouts_receive_one_point_set_per_candidate() -> None:
         assert observed == expected
 
 
+def test_arithmetic_lattice_rollouts_receive_one_shifted_grid_per_candidate() -> None:
+    class RecordingBackend(TabularAutoregressiveBackend):
+        def __init__(self):
+            super().__init__({}, fallback=(0.6, 0.4))
+            self.generation_calls = []
+
+        def sample_batch(self, requests):
+            self.generation_calls.append(tuple(requests))
+            return super().sample_batch(requests)
+
+    backend = RecordingBackend()
+    seed = 829
+    step = conditional_is_step(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        generated_prefix=(),
+        config=ConditionalISConfig(
+            candidate_count=2,
+            rollout_count=4,
+            block_size=1,
+            total_length=4,
+            rollout_design="arithmetic_lattice",
+        ),
+        base_sampling=SamplingConfig(),
+        rollout_sampling=SamplingConfig(),
+        reward=lambda _prompt, generated: float(sum(generated)),
+        seeds=SeedStream(seed),
+        step_index=0,
+    )
+
+    assert len(step.candidates) == 2
+    rollout_requests = backend.generation_calls[1]
+    assert len(rollout_requests) == 8
+    for candidate_index in range(2):
+        expected = randomized_lattice_uniforms(
+            4,
+            seed=SeedStream(seed).derive(
+                "conditional_is",
+                0,
+                "candidate",
+                candidate_index,
+                "arithmetic_lattice",
+            ),
+        )
+        observed = tuple(
+            request.arithmetic_uniform
+            for request in rollout_requests[
+                candidate_index * 4 : (candidate_index + 1) * 4
+            ]
+        )
+        assert observed == expected
+        assert all(request.uniforms is None for request in rollout_requests)
+
+
 def test_scrambled_sobol_rejects_batch_coupled_reward() -> None:
     with pytest.raises(ValueError, match="fixed pointwise reward"):
         run_conditional_is(
@@ -366,6 +428,24 @@ def test_scrambled_sobol_rejects_batch_coupled_reward() -> None:
             ),
             None,
             SeedStream(19),
+            reward_batch=lambda _prompt, generated: [0.0] * len(generated),
+        )
+
+
+def test_arithmetic_lattice_rejects_batch_coupled_reward() -> None:
+    with pytest.raises(ValueError, match="fixed pointwise reward"):
+        run_conditional_is(
+            _backend(),
+            (),
+            ConditionalISConfig(
+                candidate_count=2,
+                rollout_count=2,
+                block_size=1,
+                total_length=2,
+                rollout_design="arithmetic_lattice",
+            ),
+            None,
+            SeedStream(20),
             reward_batch=lambda _prompt, generated: [0.0] * len(generated),
         )
 
@@ -419,7 +499,9 @@ def test_exact_bounded_early_stop_matches_full_algorithm_and_skips_rollouts() ->
         )
 
 
-def test_bounded_staged_evaluation_matches_full_algorithm_with_variable_weights() -> None:
+def test_bounded_staged_evaluation_matches_full_algorithm_with_variable_weights() -> (
+    None
+):
     full_config = ConditionalISConfig(
         candidate_count=4,
         rollout_count=4,

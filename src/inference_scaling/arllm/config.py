@@ -109,13 +109,20 @@ class ConditionalISConfig:
                 "importance_log_ratio_clip",
                 self.importance_log_ratio_clip,
             )
-        if not self.apply_importance_correction and self.importance_log_ratio_clip is not None:
+        if (
+            not self.apply_importance_correction
+            and self.importance_log_ratio_clip is not None
+        ):
             raise ValueError(
                 "importance_log_ratio_clip requires apply_importance_correction=True"
             )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
-        if self.rollout_design not in {"iid", "scrambled_sobol"}:
+        if self.rollout_design not in {
+            "iid",
+            "scrambled_sobol",
+            "arithmetic_lattice",
+        }:
             raise ValueError("unknown rollout_design")
         require_positive(
             "rollout_evaluation_batch_size",
@@ -174,7 +181,10 @@ class IteratedConditionalISConfig:
                 "importance_log_ratio_clip",
                 self.importance_log_ratio_clip,
             )
-        if not self.apply_importance_correction and self.importance_log_ratio_clip is not None:
+        if (
+            not self.apply_importance_correction
+            and self.importance_log_ratio_clip is not None
+        ):
             raise ValueError(
                 "importance_log_ratio_clip requires apply_importance_correction=True"
             )
@@ -221,7 +231,9 @@ class ProgressiveISConfig:
         require_positive("evaluation_cost_budget", self.evaluation_cost_budget)
         require_positive("reward_temperature", self.reward_temperature)
         if self.importance_log_ratio_clip is not None:
-            require_positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
+            require_positive(
+                "importance_log_ratio_clip", self.importance_log_ratio_clip
+            )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
         if self.run_ahead_rollouts_per_candidate < 0:
@@ -288,4 +300,6 @@ class DynamicISConfig:
         require_probability("auxiliary_mixture", self.auxiliary_mixture)
         if self.auxiliary_mixture >= 1:
             raise ValueError("auxiliary_mixture must lie in [0, 1)")
-        require_positive("minimum_fresh_per_candidate", self.minimum_fresh_per_candidate)
+        require_positive(
+            "minimum_fresh_per_candidate", self.minimum_fresh_per_candidate
+        )

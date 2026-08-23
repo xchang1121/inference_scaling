@@ -23,6 +23,7 @@ class GenerationRequest:
     seed: int
     request_id: str
     uniforms: tuple[float, ...] | None = None
+    arithmetic_uniform: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:
@@ -31,14 +32,23 @@ class GenerationRequest:
             raise ValueError("seed must be non-negative")
         if self.uniforms is not None:
             if len(self.uniforms) != self.max_new_tokens:
-                raise ValueError(
-                    "explicit sampling uniforms must match max_new_tokens"
-                )
+                raise ValueError("explicit sampling uniforms must match max_new_tokens")
             if any(
-                not isfinite(value) or not 0.0 <= value < 1.0
-                for value in self.uniforms
+                not isfinite(value) or not 0.0 <= value < 1.0 for value in self.uniforms
             ):
                 raise ValueError("sampling uniforms must be finite values in [0, 1)")
+        if self.arithmetic_uniform is not None:
+            if self.uniforms is not None:
+                raise ValueError(
+                    "token uniforms and an arithmetic uniform are mutually exclusive"
+                )
+            if (
+                not isfinite(self.arithmetic_uniform)
+                or not 0.0 <= self.arithmetic_uniform < 1.0
+            ):
+                raise ValueError(
+                    "the arithmetic sampling uniform must be finite and in [0, 1)"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +65,9 @@ class SequenceSample:
 
     def __post_init__(self) -> None:
         if len(self.token_ids) != len(self.token_logprobs):
-            raise ValueError("each sampled token must have one actual-policy log-probability")
+            raise ValueError(
+                "each sampled token must have one actual-policy log-probability"
+            )
         if any(not isfinite(value) for value in self.token_logprobs):
             raise ValueError("actual-policy token log-probabilities must be finite")
         if (self.reference_token_logprobs is None) != (
@@ -64,9 +76,8 @@ class SequenceSample:
             raise ValueError(
                 "reference token probabilities and their policy id must be provided together"
             )
-        if (
-            self.reference_token_logprobs is not None
-            and len(self.token_ids) != len(self.reference_token_logprobs)
+        if self.reference_token_logprobs is not None and len(self.token_ids) != len(
+            self.reference_token_logprobs
         ):
             raise ValueError(
                 "each sampled token must have one reference-policy log-probability"
@@ -95,6 +106,10 @@ class AutoregressiveBackend(Protocol):
     @property
     def model_id(self) -> str: ...
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]: ...
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]: ...
 
-    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]: ...
+    def score_batch(
+        self, requests: Sequence[ScoreRequest]
+    ) -> list[tuple[float, ...]]: ...

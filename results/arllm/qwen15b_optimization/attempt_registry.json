@@ -76,6 +76,23 @@
       "reward_requirement": "fixed pointwise reward"
     },
     {
+      "id": "is_arithmetic_lattice_rollouts",
+      "category": "algorithm",
+      "status": "screening",
+      "active_execution": false,
+      "comparison": "iid and token-level scrambled-Sobol rollouts at identical candidate and rollout counts",
+      "decision_basis": "registered Qwen2.5-1.5B screen pending",
+      "implementation": "src/inference_scaling/shared/rqmc.py, src/inference_scaling/arllm/types.py, src/inference_scaling/arllm/backends/transformers_backend.py and src/inference_scaling/arllm/algorithms/conditional_is.py",
+      "runner": "experiments/arllm/run_qwen15b_rqmc_screen.py",
+      "planned_result": "results/arllm/qwen15b_optimization/rqmc_screen.json",
+      "reward_requirement": "fixed pointwise reward",
+      "marginal_property": "each arithmetic rollout has exactly the configured proposal marginal; dependence only couples rollouts within one candidate",
+      "literature": [
+        "https://arxiv.org/abs/2607.01179",
+        "https://proceedings.mlr.press/v202/vilnis23a.html"
+      ]
+    },
+    {
       "id": "is_bound_aware_early_stop",
       "category": "algorithm",
       "status": "rejected",

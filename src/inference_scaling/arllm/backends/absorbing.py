@@ -63,10 +63,14 @@ class AbsorbingEOSBackend:
             return False
         first = generated_prefix.index(self.eos_token_id)
         if any(token != self.eos_token_id for token in generated_prefix[first:]):
-            raise ValueError("an absorbing-EOS prefix contains a non-EOS token after EOS")
+            raise ValueError(
+                "an absorbing-EOS prefix contains a non-EOS token after EOS"
+            )
         return True
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]:
         outputs: list[SequenceSample | None] = [None] * len(requests)
         pending: list[GenerationRequest] = []
         pending_indices: list[int] = []
@@ -97,6 +101,7 @@ class AbsorbingEOSBackend:
                     seed=request.seed,
                     request_id=request.request_id,
                     uniforms=request.uniforms,
+                    arithmetic_uniform=request.arithmetic_uniform,
                 )
             )
             pending_indices.append(index)
@@ -104,7 +109,12 @@ class AbsorbingEOSBackend:
         sampled = self.backend.sample_batch(pending) if pending else []
         if len(sampled) != len(pending):
             raise RuntimeError("wrapped backend returned an invalid number of samples")
-        for index, outer, inner in zip(pending_indices, (requests[i] for i in pending_indices), sampled, strict=True):
+        for index, outer, inner in zip(
+            pending_indices,
+            (requests[i] for i in pending_indices),
+            sampled,
+            strict=True,
+        ):
             missing = outer.max_new_tokens - len(inner.token_ids)
             if missing < 0:
                 raise RuntimeError("wrapped backend exceeded max_new_tokens")

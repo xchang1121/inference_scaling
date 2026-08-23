@@ -92,11 +92,15 @@ class TransformersBackend:
         self.model = model
         self.tokenizer = tokenizer
         self._model_id = model_id or str(
-            getattr(getattr(model, "config", None), "_name_or_path", "transformers-model")
+            getattr(
+                getattr(model, "config", None), "_name_or_path", "transformers-model"
+            )
         )
         inferred_device = getattr(model, "device", None)
         self.device = torch_module.device(
-            device or inferred_device or ("cuda" if torch_module.cuda.is_available() else "cpu")
+            device
+            or inferred_device
+            or ("cuda" if torch_module.cuda.is_available() else "cpu")
         )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if pad_token_id is None:
@@ -128,7 +132,9 @@ class TransformersBackend:
         self._generation_forward_token_slots = 0
         self._score_forward_token_slots = 0
         self._estimated_dense_forward_flops = 0
-        self._parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        self._parameter_count = sum(
+            parameter.numel() for parameter in model.parameters()
+        )
         self._speculation = speculation
         self._draft_tree = (
             draft_tree
@@ -263,10 +269,12 @@ class TransformersBackend:
         transformed = logits.to(dtype=torch_module.float32) / policy.temperature
         vocabulary_size = transformed.shape[-1]
         if policy.top_k is not None and policy.top_k < vocabulary_size:
-            threshold = torch_module.topk(
-                transformed, policy.top_k, dim=-1
-            ).values[..., -1, None]
-            transformed = transformed.masked_fill(transformed < threshold, float("-inf"))
+            threshold = torch_module.topk(transformed, policy.top_k, dim=-1).values[
+                ..., -1, None
+            ]
+            transformed = transformed.masked_fill(
+                transformed < threshold, float("-inf")
+            )
         if policy.top_p < 1:
             sorted_logits, sorted_indices = torch_module.sort(
                 transformed, descending=True, dim=-1
@@ -292,7 +300,9 @@ class TransformersBackend:
         )
         attention_mask = torch_module.zeros_like(input_ids)
         for index, prefix in enumerate(prefixes):
-            values = torch_module.tensor(prefix, dtype=torch_module.long, device=self.device)
+            values = torch_module.tensor(
+                prefix, dtype=torch_module.long, device=self.device
+            )
             input_ids[index, maximum - len(prefix) :] = values
             attention_mask[index, maximum - len(prefix) :] = 1
         return input_ids, attention_mask
@@ -391,7 +401,9 @@ class TransformersBackend:
             model_id=self.model_id,
             request_id=request.request_id,
             finish_reason=finish_reason,
-            reference_token_logprobs=tuple(float(value) for value in reference_logprobs),
+            reference_token_logprobs=tuple(
+                float(value) for value in reference_logprobs
+            ),
             reference_policy_id=reference_sampling.policy_id,
         )
 
@@ -439,13 +451,21 @@ class TransformersBackend:
             )
         first_predictor = len(prefix) - 1
         logits_start = len(sequence) - outputs.logits.shape[1]
-        predictor_rows = torch_module.arange(
-            first_predictor,
-            first_predictor + len(draft) + 1,
-            device=self.device,
-        ) - logits_start
-        if int(predictor_rows.min()) < 0 or int(predictor_rows.max()) >= outputs.logits.shape[1]:
-            raise RuntimeError("draft verification omitted a required predictor position")
+        predictor_rows = (
+            torch_module.arange(
+                first_predictor,
+                first_predictor + len(draft) + 1,
+                device=self.device,
+            )
+            - logits_start
+        )
+        if (
+            int(predictor_rows.min()) < 0
+            or int(predictor_rows.max()) >= outputs.logits.shape[1]
+        ):
+            raise RuntimeError(
+                "draft verification omitted a required predictor position"
+            )
         token_logits = outputs.logits[0].index_select(0, predictor_rows)
         policy_log_probs = self._policy_log_probs(token_logits, request.sampling)
         reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
@@ -482,8 +502,13 @@ class TransformersBackend:
                         residual[int(token)] -= float(probability)
                     residual.clamp_min_(0.0)
                     total = residual.sum()
-                    if not bool(torch_module.isfinite(total)) or float(total.detach().cpu()) <= 0:
-                        raise RuntimeError("rejected stochastic draft has no residual mass")
+                    if (
+                        not bool(torch_module.isfinite(total))
+                        or float(total.detach().cpu()) <= 0
+                    ):
+                        raise RuntimeError(
+                            "rejected stochastic draft has no residual mass"
+                        )
                     residual /= total
                     sampled = self._sample_from_probabilities(
                         residual, uniforms[consumed]
@@ -600,11 +625,7 @@ class TransformersBackend:
                 past_key_values=cache,
                 use_cache=True,
                 return_dict=True,
-                **(
-                    {"logits_to_keep": 1}
-                    if self._supports_logits_to_keep
-                    else {}
-                ),
+                **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
             )
             generation_slots += 1
             logits = outputs.logits[:, -1, :]
@@ -653,11 +674,7 @@ class TransformersBackend:
                     past_key_values=cache,
                     use_cache=True,
                     return_dict=True,
-                    **(
-                        {"logits_to_keep": 1}
-                        if self._supports_logits_to_keep
-                        else {}
-                    ),
+                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
                 )
                 generation_slots += 1
                 logits = outputs.logits[:, -1, :]
@@ -695,7 +712,9 @@ class TransformersBackend:
                     for positions in prefix_positions.values()
                     for position in positions
                 ]
-                indexed_requests = [indexed_requests[position] for position in row_order]
+                indexed_requests = [
+                    indexed_requests[position] for position in row_order
+                ]
                 requests = [request for _, request in indexed_requests]
                 prefixes = [self._model_prefix(request.prefix) for request in requests]
                 reusable_prefixes = list(prefix_positions)
@@ -705,6 +724,8 @@ class TransformersBackend:
                 if uniform_streams is not None and original_index in uniform_streams
                 else np.asarray(request.uniforms, dtype=np.float64)
                 if request.uniforms is not None
+                else np.zeros(request.max_new_tokens, dtype=np.float64)
+                if request.arithmetic_uniform is not None
                 else np.random.default_rng(request.seed).random(request.max_new_tokens)
             )
             for original_index, request in indexed_requests
@@ -717,17 +738,36 @@ class TransformersBackend:
             )
             for original_index, _ in indexed_requests
         ]
+        arithmetic_mask = torch_module.tensor(
+            [request.arithmetic_uniform is not None for request in requests],
+            dtype=torch_module.bool,
+            device=self.device,
+        )
+        arithmetic_uniforms = torch_module.tensor(
+            [
+                0.0
+                if request.arithmetic_uniform is None
+                else request.arithmetic_uniform
+                for request in requests
+            ],
+            dtype=torch_module.float64,
+            device=self.device,
+        )
         token_lists: list[list[int]] = [[] for _ in requests]
         logprob_lists: list[list[float]] = [[] for _ in requests]
         reference_logprob_lists: list[list[float]] = [[] for _ in requests]
         reference_sampling = SamplingConfig(eos_token_id=sampling.eos_token_id)
-        active = torch_module.ones(len(requests), dtype=torch_module.bool, device=self.device)
+        active = torch_module.ones(
+            len(requests), dtype=torch_module.bool, device=self.device
+        )
         finish_reasons = ["length"] * len(requests)
         callback_completed: set[int] = set()
         maximum_new_tokens = max(request.max_new_tokens for request in requests)
         prefill_tokens = sum(len(prefix) for prefix in prefixes)
         shared_prefill_tokens_saved = 0
-        generation_forward_token_slots = len(requests) * max(len(prefix) for prefix in prefixes)
+        generation_forward_token_slots = len(requests) * max(
+            len(prefix) for prefix in prefixes
+        )
 
         with self._model_lock, torch_module.inference_mode():
             cache = None
@@ -741,11 +781,7 @@ class TransformersBackend:
                     position_ids=self._position_ids(unique_attention_mask),
                     use_cache=True,
                     return_dict=True,
-                    **(
-                        {"logits_to_keep": 1}
-                        if self._supports_logits_to_keep
-                        else {}
-                    ),
+                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
                 )
                 cache = self._repeat_cache(
                     getattr(unique_outputs, "past_key_values", None),
@@ -772,11 +808,7 @@ class TransformersBackend:
                     position_ids=self._position_ids(attention_mask),
                     use_cache=True,
                     return_dict=True,
-                    **(
-                        {"logits_to_keep": 1}
-                        if self._supports_logits_to_keep
-                        else {}
-                    ),
+                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
                 )
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
@@ -813,12 +845,73 @@ class TransformersBackend:
                 # decoded in different batch shapes.  Accumulating the same
                 # policy probabilities in float64 preserves the categorical
                 # policy while making request-local seeds robust to scheduling.
-                cumulative = probabilities.to(dtype=torch_module.float64).cumsum(
-                    dim=-1
-                )
+                probabilities_64 = probabilities.to(dtype=torch_module.float64)
+                cumulative = probabilities_64.cumsum(dim=-1)
+                cumulative[:, -1] = 1.0
                 sampled_tokens = (cumulative < random_values[:, None]).sum(dim=-1)
                 sampled_tokens = sampled_tokens.clamp_max(probabilities.shape[-1] - 1)
-                sampled_logprobs = log_probs.gather(-1, sampled_tokens[:, None]).squeeze(-1)
+                if bool(arithmetic_mask.any()):
+                    ordered_probabilities, order = torch_module.sort(
+                        probabilities_64,
+                        dim=-1,
+                        descending=True,
+                        stable=True,
+                    )
+                    ordered_cumulative = ordered_probabilities.cumsum(dim=-1)
+                    ordered_cumulative[:, -1] = 1.0
+                    arithmetic_ranks = (
+                        ordered_cumulative < arithmetic_uniforms[:, None]
+                    ).sum(dim=-1)
+                    arithmetic_ranks = arithmetic_ranks.clamp_max(
+                        probabilities.shape[-1] - 1
+                    )
+                    arithmetic_tokens = order.gather(
+                        -1, arithmetic_ranks[:, None]
+                    ).squeeze(-1)
+                    sampled_tokens = torch_module.where(
+                        arithmetic_mask,
+                        arithmetic_tokens,
+                        sampled_tokens,
+                    )
+                    arithmetic_probabilities = ordered_probabilities.gather(
+                        -1, arithmetic_ranks[:, None]
+                    ).squeeze(-1)
+                    padded_cumulative = torch_module.cat(
+                        [
+                            torch_module.zeros(
+                                (len(requests), 1),
+                                dtype=torch_module.float64,
+                                device=self.device,
+                            ),
+                            ordered_cumulative,
+                        ],
+                        dim=-1,
+                    )
+                    arithmetic_lower = padded_cumulative.gather(
+                        -1, arithmetic_ranks[:, None]
+                    ).squeeze(-1)
+                    arithmetic_active = arithmetic_mask & step_active
+                    if bool((arithmetic_probabilities[arithmetic_active] <= 0).any()):
+                        raise RuntimeError(
+                            "arithmetic sampling selected a zero-probability token"
+                        )
+                    updated_arithmetic_uniforms = (
+                        arithmetic_uniforms - arithmetic_lower
+                    ) / arithmetic_probabilities.clamp_min(
+                        torch_module.finfo(torch_module.float64).tiny
+                    )
+                    updated_arithmetic_uniforms = updated_arithmetic_uniforms.clamp(
+                        min=0.0,
+                        max=float(np.nextafter(1.0, 0.0)),
+                    )
+                    arithmetic_uniforms = torch_module.where(
+                        arithmetic_active,
+                        updated_arithmetic_uniforms,
+                        arithmetic_uniforms,
+                    )
+                sampled_logprobs = log_probs.gather(
+                    -1, sampled_tokens[:, None]
+                ).squeeze(-1)
                 sampled_reference_logprobs = reference_log_probs.gather(
                     -1, sampled_tokens[:, None]
                 ).squeeze(-1)
@@ -837,7 +930,10 @@ class TransformersBackend:
                     reference_logprob_lists[index].append(
                         float(reference_logprobs_cpu[index])
                     )
-                    if sampling.eos_token_id is not None and token == sampling.eos_token_id:
+                    if (
+                        sampling.eos_token_id is not None
+                        and token == sampling.eos_token_id
+                    ):
                         finish_reasons[index] = "eos"
                     if on_complete is not None and (
                         finish_reasons[index] == "eos"
@@ -880,7 +976,10 @@ class TransformersBackend:
                 )
                 next_positions = attention_mask.sum(dim=-1, dtype=torch_module.long)
                 attention_mask = torch_module.cat(
-                    [attention_mask, step_active.to(dtype=attention_mask.dtype)[:, None]],
+                    [
+                        attention_mask,
+                        step_active.to(dtype=attention_mask.dtype)[:, None],
+                    ],
                     dim=-1,
                 )
                 outputs = self.model(
@@ -890,11 +989,7 @@ class TransformersBackend:
                     past_key_values=cache,
                     use_cache=True,
                     return_dict=True,
-                    **(
-                        {"logits_to_keep": 1}
-                        if self._supports_logits_to_keep
-                        else {}
-                    ),
+                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
                 )
                 generation_forward_token_slots += len(requests)
                 logits = outputs.logits[:, -1, :]
@@ -997,7 +1092,9 @@ class TransformersBackend:
                 tokens.extend(tail.token_ids)
                 logprobs.extend(tail.token_logprobs)
                 if tail.reference_token_logprobs is None:
-                    raise RuntimeError("Transformers tail omitted reference log-probabilities")
+                    raise RuntimeError(
+                        "Transformers tail omitted reference log-probabilities"
+                    )
                 reference_logprobs.extend(tail.reference_token_logprobs)
                 finish_reason = tail.finish_reason
         sample = self._sequence_sample(
@@ -1023,6 +1120,8 @@ class TransformersBackend:
             draft_tokens = self._speculation.draft_tokens(len(requests))
             if draft_tokens > 0:
                 for index, request in enumerate(requests):
+                    if request.arithmetic_uniform is not None:
+                        continue
                     proposal = self._draft_tree.draft(
                         self._model_prefix(request.prefix),
                         min(draft_tokens, request.max_new_tokens),
@@ -1040,9 +1139,9 @@ class TransformersBackend:
             with self._statistics_lock:
                 self._speculative_requests += len(requests)
 
-        grouped: OrderedDict[
-            SamplingConfig, list[tuple[int, GenerationRequest]]
-        ] = OrderedDict()
+        grouped: OrderedDict[SamplingConfig, list[tuple[int, GenerationRequest]]] = (
+            OrderedDict()
+        )
         for index, request in enumerate(requests):
             if index not in proposals:
                 grouped.setdefault(request.sampling, []).append((index, request))
@@ -1070,7 +1169,9 @@ class TransformersBackend:
             self._generated_tokens += sum(len(output.token_ids) for output in outputs)
         return outputs
 
-    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]:
         return self._sample_batch(requests, None)
 
     def sample_batch_with_callback(
@@ -1114,10 +1215,14 @@ class TransformersBackend:
         if nonempty:
             for start in range(0, len(nonempty), self.max_score_batch_size):
                 chunk = nonempty[start : start + self.max_score_batch_size]
-                sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
+                sequences = [
+                    prefix + continuation for _, _, continuation, prefix in chunk
+                ]
                 input_ids, attention_mask = self._padded_inputs(sequences)
                 score_forward_token_slots += int(input_ids.numel())
-                logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
+                logits_to_keep = (
+                    max(len(continuation) for _, _, continuation, _ in chunk) + 1
+                )
                 with self._model_lock, torch_module.inference_mode():
                     outputs = self.model(
                         input_ids=input_ids,
@@ -1133,16 +1238,25 @@ class TransformersBackend:
                     )
                 padded_length = input_ids.shape[1]
                 logits_start = padded_length - outputs.logits.shape[1]
-                for row, (flat_index, request, continuation, prefix) in enumerate(chunk):
+                for row, (flat_index, request, continuation, prefix) in enumerate(
+                    chunk
+                ):
                     padding = padded_length - len(prefix) - len(continuation)
-                    predictor_positions = torch_module.arange(
-                        padding + len(prefix) - 1,
-                        padding + len(prefix) + len(continuation) - 1,
-                        device=self.device,
-                    ) - logits_start
+                    predictor_positions = (
+                        torch_module.arange(
+                            padding + len(prefix) - 1,
+                            padding + len(prefix) + len(continuation) - 1,
+                            device=self.device,
+                        )
+                        - logits_start
+                    )
                     if int(predictor_positions.min()) < 0:
-                        raise RuntimeError("logits_to_keep omitted a required score position")
-                    token_logits = outputs.logits[row].index_select(0, predictor_positions)
+                        raise RuntimeError(
+                            "logits_to_keep omitted a required score position"
+                        )
+                    token_logits = outputs.logits[row].index_select(
+                        0, predictor_positions
+                    )
                     log_probs = self._policy_log_probs(token_logits, request.sampling)
                     targets = torch_module.tensor(
                         continuation, dtype=torch_module.long, device=self.device
@@ -1153,7 +1267,9 @@ class TransformersBackend:
                     )
         with self._statistics_lock:
             self._score_calls += 1
-            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
+            self._scored_tokens += sum(
+                len(continuation) for _, continuation in flattened
+            )
             self._score_forward_token_slots += score_forward_token_slots
             self._estimated_dense_forward_flops += self._dense_forward_flops(
                 score_forward_token_slots
@@ -1198,7 +1314,9 @@ class TransformersBackend:
             sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
             input_ids, attention_mask = self._padded_inputs(sequences)
             score_forward_token_slots += int(input_ids.numel())
-            logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
+            logits_to_keep = (
+                max(len(continuation) for _, _, continuation, _ in chunk) + 1
+            )
             with self._model_lock, torch_module.inference_mode():
                 outputs = self.model(
                     input_ids=input_ids,
@@ -1216,13 +1334,18 @@ class TransformersBackend:
             logits_start = padded_length - outputs.logits.shape[1]
             for row, (flat_index, request, continuation, prefix) in enumerate(chunk):
                 padding = padded_length - len(prefix) - len(continuation)
-                predictor_positions = torch_module.arange(
-                    padding + len(prefix) - 1,
-                    padding + len(prefix) + len(continuation) - 1,
-                    device=self.device,
-                ) - logits_start
+                predictor_positions = (
+                    torch_module.arange(
+                        padding + len(prefix) - 1,
+                        padding + len(prefix) + len(continuation) - 1,
+                        device=self.device,
+                    )
+                    - logits_start
+                )
                 if int(predictor_positions.min()) < 0:
-                    raise RuntimeError("logits_to_keep omitted a required score position")
+                    raise RuntimeError(
+                        "logits_to_keep omitted a required score position"
+                    )
                 token_logits = outputs.logits[row].index_select(0, predictor_positions)
                 log_probs = self._policy_log_probs(token_logits, request.sampling)
                 probabilities = log_probs.exp()
@@ -1232,10 +1355,10 @@ class TransformersBackend:
                 selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
                 negative_entropy = (probabilities * log_probs).sum(dim=-1)
                 vocabulary_size = log_probs.shape[-1]
-                self_certainty = -(
-                    math.log(vocabulary_size) + log_probs
-                ).mean(dim=-1)
-                token_logprobs = tuple(float(value) for value in selected.cpu().tolist())
+                self_certainty = -(math.log(vocabulary_size) + log_probs).mean(dim=-1)
+                token_logprobs = tuple(
+                    float(value) for value in selected.cpu().tolist()
+                )
                 results[flat_index] = SequenceScoreStatistics(
                     token_logprobs=token_logprobs,
                     mean_logprob=float(selected.mean().cpu()),
@@ -1245,7 +1368,9 @@ class TransformersBackend:
 
         with self._statistics_lock:
             self._score_calls += 1
-            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
+            self._scored_tokens += sum(
+                len(continuation) for _, continuation in flattened
+            )
             self._score_forward_token_slots += score_forward_token_slots
             self._estimated_dense_forward_flops += self._dense_forward_flops(
                 score_forward_token_slots
@@ -1279,7 +1404,9 @@ class TransformersBackend:
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
         return tuple(
             int(token)
-            for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
+            for token in self.tokenizer.encode(
+                text, add_special_tokens=add_special_tokens
+            )
         )
 
     def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True) -> str:
@@ -1299,7 +1426,9 @@ class TransformersBackend:
         if max_new_tokens <= 0 or num_beams <= 0:
             raise ValueError("generation length and beam count must be positive")
         torch_module = _require_torch()
-        input_ids = torch_module.tensor([prefix], dtype=torch_module.long, device=self.device)
+        input_ids = torch_module.tensor(
+            [prefix], dtype=torch_module.long, device=self.device
+        )
         attention_mask = torch_module.ones_like(input_ids)
         with self._model_lock, torch_module.inference_mode():
             output = self.model.generate(

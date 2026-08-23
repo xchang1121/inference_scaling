@@ -86,7 +86,11 @@ def _aligned_candidate_generator(target_model: Any, draft_model: Any):
         target_tokenizer: Any = None,
         assistant_tokenizer: Any = None,
     ) -> Any:
-        if assistant_model is draft_model and target_tokenizer is None and assistant_tokenizer is None:
+        if (
+            assistant_model is draft_model
+            and target_tokenizer is None
+            and assistant_tokenizer is None
+        ):
             return candidate_class(
                 input_ids=input_ids,
                 assistant_model=assistant_model,
@@ -215,9 +219,13 @@ class DraftModelSpeculativeBackend:
         if target is draft or target.model is draft.model:
             raise ValueError("target and draft models must be distinct")
         if target.tokenizer.get_vocab() != draft.tokenizer.get_vocab():
-            raise ValueError("target and draft tokenizers must have identical vocabularies")
+            raise ValueError(
+                "target and draft tokenizers must have identical vocabularies"
+            )
         for name in ("bos_token_id", "eos_token_id", "pad_token_id"):
-            if getattr(target.tokenizer, name, None) != getattr(draft.tokenizer, name, None):
+            if getattr(target.tokenizer, name, None) != getattr(
+                draft.tokenizer, name, None
+            ):
                 raise ValueError(f"target and draft tokenizers disagree on {name}")
         self.target = target
         self.draft = draft
@@ -271,9 +279,10 @@ class DraftModelSpeculativeBackend:
         return sorted(indices)
 
     def _sample_one(self, request: GenerationRequest) -> SequenceSample:
-        if request.uniforms is not None:
+        if request.uniforms is not None or request.arithmetic_uniform is not None:
             raise ValueError(
-                "native draft-model speculation cannot consume explicit token uniforms"
+                "native draft-model speculation cannot consume explicit token uniforms "
+                "or arithmetic uniforms"
             )
         torch_module = __import__("torch")
         prefix = self.target._model_prefix(request.prefix)
@@ -369,7 +378,9 @@ class DraftModelSpeculativeBackend:
         rounds = target_counter.calls
         accepted = max(len(token_ids) - rounds, 0)
         if proposed and accepted > proposed:
-            raise RuntimeError("Transformers reported more accepted than proposed draft tokens")
+            raise RuntimeError(
+                "Transformers reported more accepted than proposed draft tokens"
+            )
         finish_reason = (
             "eos"
             if token_ids
@@ -417,7 +428,11 @@ class DraftModelSpeculativeBackend:
                 outputs.append(sample)
                 if on_complete is not None:
                     on_complete(index, sample)
-        if on_complete is not None and self.config.single_request_only and len(requests) > 1:
+        if (
+            on_complete is not None
+            and self.config.single_request_only
+            and len(requests) > 1
+        ):
             for index, sample in enumerate(outputs):
                 on_complete(index, sample)
         with self._statistics_lock:
@@ -459,7 +474,8 @@ class DraftModelSpeculativeBackend:
                 score_calls=target.score_calls,
                 sampled_sequences=self._sampled_sequences,
                 generated_tokens=self._generated_tokens,
-                prefill_tokens=target.prefill_tokens + self._native_target_prefill_tokens,
+                prefill_tokens=target.prefill_tokens
+                + self._native_target_prefill_tokens,
                 shared_prefill_tokens_saved=target.shared_prefill_tokens_saved,
                 scored_tokens=target.scored_tokens,
                 generation_forward_token_slots=target_generation_slots,
