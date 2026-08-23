@@ -312,8 +312,71 @@ selected_index = rng.choice(len(candidates), p=probabilities)
 AR 条件 IS 适配位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有 rollout
 都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
+<a id="alg-rqmc-rollouts"></a>
+### 6.1 scrambled-Sobol rollout
+
+普通条件 IS 为每个候选独立生成 $`K`$ 条 rollout。scrambled randomized quasi-Monte Carlo（RQMC）保持
+每条 rollout 的边缘分布不变，同时使同一候选的 $`K`$ 组均匀数更均匀地覆盖 $`[0,1)^L`$。其中 $`L`$
+是该 guidance step 的最大补全长度。
+
+对候选 $`z_m`$，生成经过数字扰动的 Sobol 点
+$`v_{m1},\ldots,v_{mK}\in[0,1)^L`$。第 $`k`$ 条 rollout 的第 $`t`$ 个 token 通过 proposal 条件分布
+的逆 CDF 得到：
+
+```math
+u_{mk,t}=F^{-1}_{q,t}
+\left(v_{mk,t}\mid x,g,z_m,u_{mk,<t}\right).
+```
+
+<p align="right">式 (8-R1)</p>
+
+随机扰动使每个 $`v_{mk}`$ 的边缘分布均为 $`L`$ 维均匀分布，因此每条 $`u_{mk}`$ 的边缘分布仍是
+$`q(\cdot\mid x,g,z_m)`$。不同 $`k`$ 的 rollout 相互依赖，但式 (10) 的无偏性只需要正确边缘分布。令
+
+```math
+G_m(v)=
+\exp\{r(g,z_m,u(v))/\tau\}
+\frac{p(u(v)\mid x,g,z_m)}{q(u(v)\mid x,g,z_m)},
+```
+
+则
+
+```math
+\mathbb E\!\left[\frac1K\sum_{k=1}^K G_m(v_{mk})\right]
+=\frac1K\sum_{k=1}^K\mathbb E[G_m(v_{mk})]
+=h(g,z_m).
+```
+
+<p align="right">式 (8-R2)</p>
+
+上述等式同时覆盖 on-policy 与 off-policy rollout，不需要修改 $`p/q`$。点集内部的相关性意味着普通独立
+样本 ESS 只能作为权重离散程度的描述量；估计方差必须由多个独立数字扰动重复实验得到。对具有适当正则性的
+被积函数，增大 Sobol 点集可降低积分误差；语言模型的逆 CDF 映射产生离散、分段常数函数，因此有限 $`K`$
+下没有统一的方差改进保证。有限候选 SIR 的归一化误差也仍然存在。
+
+实现为每个候选构造独立点集，并把每一行直接传给生成请求：
+
+```python
+uniforms = scrambled_sobol_uniforms(
+    rollout_count,
+    rollout_length,
+    seed=candidate_scramble_seed,
+)
+requests = [
+    GenerationRequest(..., uniforms=uniforms[k])
+    for k in range(rollout_count)
+]
+```
+
+Transformers 与表格后端使用 float64 累积概率执行逆 CDF；partial rollout 按已生成 token 数切分同一随机数流。
+该模式只接受逐序列固定的奖励函数。批内自一致性奖励依赖其他 rollout，改变 rollout 之间的相关性会同时改变
+奖励本身，入口因此拒绝该组合。vLLM 当前不开放逐 token 均匀数注入，`scrambled_sobol` 在 vLLM 后端显式
+报错；`iid` 路径不受影响。实现位于 [`rqmc.py`](../../src/inference_scaling/shared/rqmc.py)和
+[`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。方法依据见
+[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。
+
 <a id="alg-iterated-is"></a>
-### 6.1 迭代条件 IS
+### 6.2 迭代条件 IS
 
 一次性 SIR 在有限候选数 $`M`$ 下仍有归一化重采样误差。iterated SIR（i-SIR）把一次候选定义为完整
 扩展状态
@@ -1020,7 +1083,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x` 的 Linux/WSL2 �
 
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
-| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`dllm/test_algorithms.py` |
+| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/shared/rqmc.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`dllm/test_algorithms.py` |
 | 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/arllm/algorithms/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
 | 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/arllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/arllm/algorithms/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |

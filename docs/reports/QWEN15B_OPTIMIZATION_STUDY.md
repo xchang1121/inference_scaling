@@ -153,8 +153,14 @@ SciPy/scikit-learn 冲突；该设置不改变模型或算法。
 
 scrambled randomized quasi-Monte Carlo（RQMC）使每条随机流保持正确边缘分布，同时让同一候选的多条 rollout
 在单位立方体上覆盖得更均匀。[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)
-给出 RQMC 与重要性采样/SMC 的组合。离散长序列和很小的 rollout 数可能削弱收益，因此该方法只作为消融，
-以条件权重方差、ESS、准确率和墙钟决定是否保留。
+给出 RQMC 与重要性采样/SMC 的组合。仓库已实现经过数字扰动的 Sobol 点集和逐 token 逆 CDF：候选生成、
+rollout 数、proposal、$`p/q`$ 和重采样随机数均保持不变，只替换 rollout 使用的均匀数。每条 rollout 的
+边缘分布仍为原 proposal，因此条件权重估计保持无偏；点集内部不再独立，ESS 只作为权重离散程度的描述量。
+
+实现限定于 Transformers 与表格后端。vLLM 当前不能注入逐 token 均匀数，因此显式拒绝该模式。消融使用
+独立 pilot 冻结的逐序列奖励；批内自一致性奖励会随 rollout 相关性改变，不能用于这一成对比较。离散长序列和
+很小的 rollout 数可能削弱收益，筛选将以多个独立 scramble 下的候选权重方差、准确率、生成 token、FLOPs
+和墙钟决定是否进入确认。
 
 当奖励和重要性比具有已知上下界时，可以在未完成全部 rollout 前计算每个候选最终权重的区间；只有一个候选
 在所有剩余取值下仍会被同一固定重采样随机数选中时才停止。该规则要求逐次验证与完整计算得到相同 selected

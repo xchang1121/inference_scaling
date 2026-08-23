@@ -19,6 +19,7 @@ chains = 4
 [conditional_is]
 candidate_count = 4
 rollout_count = 4
+rollout_design = "iid"
 block_size = 4
 total_length = 32
 reward_temperature = 1.0

@@ -80,3 +80,21 @@ def test_chunked_rollouts_preserve_the_requested_autoregressive_distribution() -
         for sequence in product(range(2), repeat=3)
     }
     assert total_variation(empirical, target) < 0.025
+
+
+def test_chunked_rollout_preserves_explicit_uniform_stream() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=(0.7, 0.3), model_id="base")
+    broker = AsyncRolloutBroker(backend, chunk_tokens=1)
+    request = GenerationRequest(
+        (),
+        3,
+        SamplingConfig(),
+        77,
+        "explicit",
+        uniforms=(0.1, 0.9, 0.2),
+    )
+
+    result = broker.run_until([request]).completed
+
+    assert len(result) == 1
+    assert result[0].token_ids == (0, 1, 0)

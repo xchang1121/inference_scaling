@@ -47,10 +47,16 @@
     {
       "id": "is_scrambled_rqmc_rollouts",
       "category": "algorithm",
-      "status": "planned",
+      "status": "screening",
       "active_execution": false,
       "comparison": "independent rollout uniforms at identical rollout count",
-      "decision_basis": "unbiased marginal sampling, conditional-weight variance, ESS, accuracy and wall time"
+      "decision_basis": "unbiased marginal sampling, across-scramble conditional-weight variance, descriptive ESS, accuracy, FLOPs and wall time",
+      "implementation": "src/inference_scaling/shared/rqmc.py and src/inference_scaling/arllm/algorithms/conditional_is.py",
+      "supported_backends": [
+        "Transformers",
+        "tabular"
+      ],
+      "reward_requirement": "fixed pointwise reward"
     },
     {
       "id": "is_bound_aware_early_stop",

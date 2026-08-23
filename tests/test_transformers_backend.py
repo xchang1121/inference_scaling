@@ -101,6 +101,31 @@ def test_request_local_randomness_is_independent_of_batch_order() -> None:
         assert sample == by_id[sample.request_id]
 
 
+def test_explicit_uniforms_determine_tokens_independently_of_seed_and_batch_order() -> None:
+    model = ConstantLogitModel([0.55, 0.3, 0.15])
+    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    uniforms = (0.1, 0.7, 0.95)
+    requests = [
+        GenerationRequest(
+            (0,),
+            3,
+            SamplingConfig(),
+            seed,
+            f"explicit-{seed}",
+            uniforms=uniforms,
+        )
+        for seed in (3, 91)
+    ]
+
+    together = backend.sample_batch(requests)
+    reversed_outputs = backend.sample_batch(list(reversed(requests)))
+    by_id = {sample.request_id: sample for sample in reversed_outputs}
+
+    assert all(sample.token_ids == (0, 1, 2) for sample in together)
+    for sample in together:
+        assert sample == by_id[sample.request_id]
+
+
 def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
     vocabulary_size = 1000
     seed = 12434

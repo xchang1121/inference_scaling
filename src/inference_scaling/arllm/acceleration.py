@@ -594,6 +594,11 @@ class LowPriorityRunAheadBackend:
                     sampling=request.sampling,
                     seed=request.seed,
                     request_id=request.request_id,
+                    uniforms=(
+                        request.uniforms[:length]
+                        if request.uniforms is not None
+                        else None
+                    ),
                 )
                 sample = self.backend.sample_batch([chunk_request])[0]
                 if not self._outputs_already_observed:
@@ -611,6 +616,11 @@ class LowPriorityRunAheadBackend:
                         sampling=request.sampling,
                         seed=self._continuation_seed(request.seed, len(sample.token_ids)),
                         request_id=f"{request.request_id}:continued:{len(sample.token_ids)}",
+                        uniforms=(
+                            request.uniforms[len(sample.token_ids) :]
+                            if request.uniforms is not None
+                            else None
+                        ),
                     )
                     with self._condition:
                         may_continue = not self._closed

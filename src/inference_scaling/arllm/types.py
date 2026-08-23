@@ -22,12 +22,23 @@ class GenerationRequest:
     sampling: SamplingConfig
     seed: int
     request_id: str
+    uniforms: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be positive")
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
+        if self.uniforms is not None:
+            if len(self.uniforms) != self.max_new_tokens:
+                raise ValueError(
+                    "explicit sampling uniforms must match max_new_tokens"
+                )
+            if any(
+                not isfinite(value) or not 0.0 <= value < 1.0
+                for value in self.uniforms
+            ):
+                raise ValueError("sampling uniforms must be finite values in [0, 1)")
 
 
 @dataclass(frozen=True, slots=True)

@@ -99,9 +99,19 @@ class TabularAutoregressiveBackend:
             tokens: list[int] = []
             logprobs: list[float] = []
             finish_reason = "length"
-            for _ in range(request.max_new_tokens):
+            for step in range(request.max_new_tokens):
                 probs = self.probabilities(tuple(context), request.sampling)
-                token = int(rng.choice(self._vocab_size, p=probs))
+                if request.uniforms is None:
+                    token = int(rng.choice(self._vocab_size, p=probs))
+                else:
+                    token = int(
+                        np.searchsorted(
+                            np.cumsum(probs, dtype=np.float64),
+                            request.uniforms[step],
+                            side="right",
+                        )
+                    )
+                    token = min(token, self._vocab_size - 1)
                 tokens.append(token)
                 logprobs.append(float(np.log(probs[token])))
                 context.append(token)
@@ -134,4 +144,3 @@ class TabularAutoregressiveBackend:
                     context.append(token)
                 outputs.append(tuple(token_logprobs))
         return outputs
-

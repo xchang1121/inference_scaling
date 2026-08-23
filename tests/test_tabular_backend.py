@@ -25,3 +25,22 @@ def test_base_and_behavior_scores_are_distinct() -> None:
     )[0]
     assert not np.allclose(base, behavior)
 
+
+def test_explicit_uniforms_use_float64_inverse_cdf() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.2, 0.3, 0.5])
+    request = GenerationRequest(
+        (),
+        6,
+        SamplingConfig(),
+        5,
+        "explicit-uniforms",
+        uniforms=(0.0, 0.1999, 0.2, 0.4999, 0.5, 0.9999),
+    )
+
+    sample = backend.sample_batch([request])[0]
+
+    assert sample.token_ids == (0, 0, 1, 1, 2, 2)
+    np.testing.assert_allclose(
+        sample.token_logprobs,
+        np.log([0.2, 0.2, 0.3, 0.3, 0.5, 0.5]),
+    )

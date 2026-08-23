@@ -8,6 +8,7 @@ from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.rqmc import scrambled_sobol_uniforms
 from inference_scaling.arllm.types import ScoreRequest
 
 
@@ -294,3 +295,76 @@ def test_conditional_is_accepts_one_joint_batch_reward() -> None:
     assert len(result.token_ids) == 2
     assert seen
     assert len(seen[0]) == 4
+
+
+def test_scrambled_sobol_rollouts_receive_one_point_set_per_candidate() -> None:
+    class RecordingBackend(TabularAutoregressiveBackend):
+        def __init__(self):
+            super().__init__({}, fallback=(0.6, 0.4))
+            self.generation_calls = []
+
+        def sample_batch(self, requests):
+            self.generation_calls.append(tuple(requests))
+            return super().sample_batch(requests)
+
+    backend = RecordingBackend()
+    seed = 731
+    step = conditional_is_step(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        generated_prefix=(),
+        config=ConditionalISConfig(
+            candidate_count=2,
+            rollout_count=4,
+            block_size=1,
+            total_length=4,
+            rollout_design="scrambled_sobol",
+        ),
+        base_sampling=SamplingConfig(),
+        rollout_sampling=SamplingConfig(),
+        reward=lambda _prompt, generated: float(sum(generated)),
+        seeds=SeedStream(seed),
+        step_index=0,
+    )
+
+    assert len(step.candidates) == 2
+    rollout_requests = backend.generation_calls[1]
+    assert len(rollout_requests) == 8
+    for candidate_index in range(2):
+        expected = scrambled_sobol_uniforms(
+            4,
+            3,
+            seed=SeedStream(seed).derive(
+                "conditional_is",
+                0,
+                "candidate",
+                candidate_index,
+                "scrambled_sobol",
+            ),
+        )
+        observed = tuple(
+            request.uniforms
+            for request in rollout_requests[
+                candidate_index * 4 : (candidate_index + 1) * 4
+            ]
+        )
+        assert observed == expected
+
+
+def test_scrambled_sobol_rejects_batch_coupled_reward() -> None:
+    with pytest.raises(ValueError, match="fixed pointwise reward"):
+        run_conditional_is(
+            _backend(),
+            (),
+            ConditionalISConfig(
+                candidate_count=2,
+                rollout_count=2,
+                block_size=1,
+                total_length=2,
+                rollout_design="scrambled_sobol",
+            ),
+            None,
+            SeedStream(19),
+            reward_batch=lambda _prompt, generated: [0.0] * len(generated),
+        )

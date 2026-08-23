@@ -436,6 +436,11 @@ class VLLMBackend:
         return self._tokens_prompt_factory(prompt_token_ids=token_ids)
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
+        if request.uniforms is not None:
+            raise NotImplementedError(
+                "vLLM does not expose request-local token uniforms; "
+                "use the Transformers backend for scrambled Sobol rollouts"
+            )
         policy = request.sampling
         return self._sampling_params_factory(
             max_tokens=int(request.max_new_tokens),

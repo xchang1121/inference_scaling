@@ -703,6 +703,8 @@ class TransformersBackend:
             (
                 uniform_streams[original_index]
                 if uniform_streams is not None and original_index in uniform_streams
+                else np.asarray(request.uniforms, dtype=np.float64)
+                if request.uniforms is not None
                 else np.random.default_rng(request.seed).random(request.max_new_tokens)
             )
             for original_index, request in indexed_requests
@@ -944,7 +946,11 @@ class TransformersBackend:
         proposal: DraftProposal,
         on_complete: SampleCompletionCallback | None,
     ) -> SequenceSample:
-        uniforms = np.random.default_rng(request.seed).random(request.max_new_tokens)
+        uniforms = (
+            np.asarray(request.uniforms, dtype=np.float64)
+            if request.uniforms is not None
+            else np.random.default_rng(request.seed).random(request.max_new_tokens)
+        )
         acceptance_uniforms = None
         if proposal.stochastic:
             acceptance_uniforms = np.random.default_rng(

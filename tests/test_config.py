@@ -7,7 +7,7 @@ from inference_scaling.arllm.config import (
     MHConfig,
     SamplingConfig,
 )
-from inference_scaling.arllm.types import SequenceSample
+from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
 
 def test_sampling_config_identifies_actual_policy() -> None:
@@ -33,6 +33,7 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
         lambda: ConditionalISConfig(reward_temperature=float("inf")),
+        lambda: ConditionalISConfig(rollout_design="unknown"),
         lambda: DynamicISConfig(auxiliary_mixture=float("nan")),
     ],
 )
@@ -44,3 +45,12 @@ def test_invalid_configs_fail_early(factory) -> None:
 def test_sampled_token_logprob_must_be_finite() -> None:
     with pytest.raises(ValueError, match="finite"):
         SequenceSample((), (1,), (float("nan"),), "policy", "model", "request")
+
+
+@pytest.mark.parametrize(
+    "uniforms",
+    [(0.1,), (0.1, float("nan")), (0.1, 1.0), (0.1, -0.1)],
+)
+def test_generation_request_validates_explicit_uniforms(uniforms) -> None:
+    with pytest.raises(ValueError, match="uniform"):
+        GenerationRequest((), 2, SamplingConfig(), 1, "invalid", uniforms=uniforms)

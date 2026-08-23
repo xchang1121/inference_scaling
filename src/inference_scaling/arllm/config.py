@@ -95,6 +95,7 @@ class ConditionalISConfig:
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
     apply_importance_correction: bool = True
+    rollout_design: str = "iid"
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -111,6 +112,8 @@ class ConditionalISConfig:
             )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
+        if self.rollout_design not in {"iid", "scrambled_sobol"}:
+            raise ValueError("unknown rollout_design")
 
 
 @dataclass(frozen=True, slots=True)

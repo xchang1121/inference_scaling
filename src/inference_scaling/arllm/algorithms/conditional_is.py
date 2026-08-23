@@ -24,6 +24,7 @@ from inference_scaling.shared.importance import (
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.rqmc import scrambled_sobol_uniforms
 from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     run_stepwise_generation,
@@ -170,6 +171,7 @@ def estimate_conditional_weights(
     seeds: SeedStream,
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
+    rollout_design: str = "iid",
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional weight with on/off-policy rollouts."""
 
@@ -180,6 +182,13 @@ def estimate_conditional_weights(
         raise ValueError("reward_temperature must be positive")
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
+    if rollout_design not in {"iid", "scrambled_sobol"}:
+        raise ValueError("unknown rollout_design")
+    if rollout_design == "scrambled_sobol" and reward_batch is not None:
+        raise ValueError(
+            "scrambled Sobol rollouts require a fixed pointwise reward; "
+            "batch-coupled rewards change when rollout dependence changes"
+        )
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
@@ -196,6 +205,21 @@ def estimate_conditional_weights(
             terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + full_generated_candidate
+        uniforms = (
+            scrambled_sobol_uniforms(
+                rollout_count,
+                rollout_length,
+                seed=seeds.derive(
+                    "conditional_is",
+                    step_index,
+                    "candidate",
+                    candidate_index,
+                    "scrambled_sobol",
+                ),
+            )
+            if rollout_design == "scrambled_sobol"
+            else (None,) * rollout_count
+        )
         for rollout_index in range(rollout_count):
             requests.append(
                 GenerationRequest(
@@ -214,6 +238,7 @@ def estimate_conditional_weights(
                         "conditional-is:"
                         f"step:{step_index}:candidate:{candidate_index}:rollout:{rollout_index}"
                     ),
+                    uniforms=uniforms[rollout_index],
                 )
             )
             request_candidates.append(candidate_index)
@@ -432,6 +457,7 @@ class AutoregressiveStepwiseAdapter:
             seeds=seeds,
             step_index=step_index,
             reward_batch=self.reward_batch,
+            rollout_design=self.config.rollout_design,
         )
         return tuple(
             StepwiseCandidate(candidate, candidate.log_weight)

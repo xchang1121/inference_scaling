@@ -361,6 +361,7 @@ def _run_best_of_n(
 
 def _conditional_diagnostics(result: Any) -> dict[str, Any]:
     ess: list[float] = []
+    within_candidate_log_weight_dispersion: list[float] = []
     raw_corrections: list[float] = []
     applied_corrections: list[float] = []
     rollout_count = 0
@@ -369,6 +370,10 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
         for candidate in step.candidates:
             weights = [rollout.log_weight for rollout in candidate.rollouts]
             ess.append(importance_effective_sample_size(weights))
+            if len(weights) > 1:
+                within_candidate_log_weight_dispersion.append(
+                    statistics.pvariance(weights)
+                )
             rollout_count += len(weights)
             rewards.extend(rollout.reward for rollout in candidate.rollouts)
             raw_corrections.extend(
@@ -385,6 +390,16 @@ def _conditional_diagnostics(result: Any) -> dict[str, Any]:
         "guidance_steps": len(result.steps),
         "rollout_evaluations": rollout_count,
         "mean_rollout_ess": statistics.fmean(ess) if ess else 0.0,
+        "mean_within_candidate_log_weight_dispersion": (
+            statistics.fmean(within_candidate_log_weight_dispersion)
+            if within_candidate_log_weight_dispersion
+            else 0.0
+        ),
+        "candidate_log_weight_estimates_by_step": [
+            [candidate.log_weight for candidate in step.candidates]
+            for step in result.steps
+        ],
+        "selected_candidate_indices": [step.selected_index for step in result.steps],
         "mean_rollout_reward": statistics.fmean(rewards) if rewards else 0.0,
         "minimum_rollout_reward": min(rewards) if rewards else 0.0,
         "maximum_rollout_reward": max(rewards) if rewards else 0.0,
@@ -678,6 +693,7 @@ def _run_method(
                     apply_importance_correction=bool(
                         conditional.get("apply_importance_correction", True)
                     ),
+                    rollout_design=str(conditional.get("rollout_design", "iid")),
                 ),
                 exact_reward if use_exact_reward else pointwise_reward,
                 SeedStream(seed),
@@ -688,6 +704,14 @@ def _run_method(
             )
         diagnostics = _conditional_diagnostics(result)
         diagnostics.update(reward_diagnostics)
+        diagnostics["rollout_design"] = (
+            "iid"
+            if method == "iterated_conditional_is"
+            else str(conditional.get("rollout_design", "iid"))
+        )
+        diagnostics["rollout_ess_is_descriptive"] = (
+            diagnostics["rollout_design"] != "iid"
+        )
         if method == "iterated_conditional_is":
             diagnostics.update(
                 {
@@ -892,6 +916,10 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["conditional_is"]["candidate_count"] = args.candidate_count
     if args.rollout_count is not None:
         config["conditional_is"]["rollout_count"] = args.rollout_count
+    if getattr(args, "rollout_design", None) is not None:
+        if args.method == "iterated_conditional_is":
+            raise ValueError("--rollout-design is not implemented for iterated conditional IS")
+        config["conditional_is"]["rollout_design"] = args.rollout_design
     if getattr(args, "iterated_pool_size", None) is not None:
         config.setdefault("iterated_is", {})["pool_size"] = args.iterated_pool_size
     if getattr(args, "iterated_updates", None) is not None:
@@ -971,6 +999,10 @@ def main() -> None:
     )
     parser.add_argument("--candidate-count", type=int)
     parser.add_argument("--rollout-count", type=int)
+    parser.add_argument(
+        "--rollout-design",
+        choices=("iid", "scrambled_sobol"),
+    )
     parser.add_argument("--iterated-pool-size", type=int)
     parser.add_argument("--iterated-updates", type=int)
     parser.add_argument("--consensus-pilot-samples", type=int)

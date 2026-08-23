@@ -96,6 +96,7 @@ class AbsorbingEOSBackend:
                     sampling=self._inner_sampling(request.sampling),
                     seed=request.seed,
                     request_id=request.request_id,
+                    uniforms=request.uniforms,
                 )
             )
             pending_indices.append(index)

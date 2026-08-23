@@ -96,6 +96,13 @@ class PartialRollout:
             sampling=self.request.sampling,
             seed=seed,
             request_id=f"{self.request.request_id}:segment:{self.segments}",
+            uniforms=(
+                self.request.uniforms[
+                    len(self.token_ids) : len(self.token_ids) + segment_length
+                ]
+                if self.request.uniforms is not None
+                else None
+            ),
         )
 
     def append(

@@ -75,6 +75,7 @@ suffix_schedule = "uniform"
 [conditional_is]
 candidate_count = 4
 rollout_count = 2
+rollout_design = "iid"
 block_size = 32
 reward_temperature = 0.1
 reward = "self_consistency"
