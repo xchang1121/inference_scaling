@@ -43,9 +43,16 @@ def test_stack_summary_reports_interaction_and_break_even() -> None:
 
     assert summary["complete"] is True
     assert summary["decision"]["status"] == "accepted"
-    assert summary["comparisons"]["stack_over_base_uniform"]["wall_factor"]["mean"] == 0.8
-    assert summary["comparisons"]["stack_over_uniform_replay"]["wall_factor"]["mean"] < 1
-    assert summary["arms"]["replay_multiscale"]["history_proposal_fraction"]["mean"] == 0.375
+    assert (
+        summary["comparisons"]["stack_over_base_uniform"]["wall_factor"]["mean"] == 0.8
+    )
+    assert (
+        summary["comparisons"]["stack_over_uniform_replay"]["wall_factor"]["mean"] < 1
+    )
+    assert (
+        summary["arms"]["replay_multiscale"]["history_proposal_fraction"]["mean"]
+        == 0.375
+    )
     assert summary["break_even_queries_by_seed"]["wall_queries"] == [2]
     assert summary["break_even_queries_by_seed"]["flops_queries"] == [1]
 

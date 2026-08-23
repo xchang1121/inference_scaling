@@ -127,7 +127,9 @@ def summarize(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "online_wall_seconds": _mean_std([_online_wall(arm) for arm in selected]),
             "online_pflops": _mean_std([_online_flops(arm) / 1e15 for arm in selected]),
             "cache_build_seconds": _mean_std([_cache_wall(arm) for arm in selected]),
-            "cache_build_pflops": _mean_std([_cache_flops(arm) / 1e15 for arm in selected]),
+            "cache_build_pflops": _mean_std(
+                [_cache_flops(arm) / 1e15 for arm in selected]
+            ),
             "acceptance_rate": _mean_std(
                 [float(arm["online"]["acceptance_rate"]) for arm in selected]
             ),
@@ -256,7 +258,9 @@ def main() -> None:
         ),
     )
     parser.add_argument("--dtype", default="bfloat16")
-    parser.add_argument("--seeds", type=int, nargs="+", default=(20260812, 20260813, 20260814))
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=(20260812, 20260813, 20260814)
+    )
     parser.add_argument("--total-length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--chains", type=int, default=4)
@@ -265,13 +269,16 @@ def main() -> None:
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if min(
-        args.total_length,
-        args.steps,
-        args.chains,
-        args.history_rollouts,
-        *args.seeds,
-    ) <= 0:
+    if (
+        min(
+            args.total_length,
+            args.steps,
+            args.chains,
+            args.history_rollouts,
+            *args.seeds,
+        )
+        <= 0
+    ):
         raise ValueError("budgets and seeds must be positive")
     if len(set(args.seeds)) != len(args.seeds):
         raise ValueError("seeds must be unique")
@@ -302,8 +309,13 @@ def main() -> None:
     payload: dict[str, Any]
     if args.output.is_file():
         payload = json.loads(args.output.read_text(encoding="utf-8"))
-        if payload["setting"] != setting or payload["implementation_sha256"] != implementation:
-            raise ValueError("existing result has a different protocol or implementation")
+        if (
+            payload["setting"] != setting
+            or payload["implementation_sha256"] != implementation
+        ):
+            raise ValueError(
+                "existing result has a different protocol or implementation"
+            )
     else:
         payload = {
             "schema_version": 1,
@@ -327,7 +339,9 @@ def main() -> None:
             if seed in completed:
                 continue
             arm_results = []
-            ordered = ARMS[seed_position % len(ARMS) :] + ARMS[: seed_position % len(ARMS)]
+            ordered = (
+                ARMS[seed_position % len(ARMS) :] + ARMS[: seed_position % len(ARMS)]
+            )
             for name, schedule, replay in ordered:
                 config_for_arm = RewardMHConfig(
                     total_length=args.total_length,
@@ -358,7 +372,9 @@ def main() -> None:
                     ),
                     flush=True,
                 )
-            arm_results.sort(key=lambda arm: [value[0] for value in ARMS].index(arm["name"]))
+            arm_results.sort(
+                key=lambda arm: [value[0] for value in ARMS].index(arm["name"])
+            )
             payload["runs"].append(
                 {
                     "seed": seed,

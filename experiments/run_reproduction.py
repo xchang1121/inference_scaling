@@ -81,12 +81,13 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             component for component in args.components if component in DLLM_COMPONENTS
         )
         unsupported = tuple(
-            component for component in args.components if component not in DLLM_COMPONENTS
+            component
+            for component in args.components
+            if component not in DLLM_COMPONENTS
         )
         if unsupported and getattr(args, "components_explicit", False):
             raise ValueError(
-                "components unsupported by the dLLM suite: "
-                + ", ".join(unsupported)
+                "components unsupported by the dLLM suite: " + ", ".join(unsupported)
             )
         dllm_config = str(args.dllm_config)
         if args.stage == "prepare":
@@ -114,7 +115,9 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                     (
                         [
                             args.dllm_python,
-                            str(root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"),
+                            str(
+                                root / "experiments" / "dllm" / "prepare_gsm8k_vrpo.py"
+                            ),
                             "--config",
                             dllm_config,
                             "--profile",
@@ -188,11 +191,15 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=("arllm", "dllm", "both"), default="arllm")
-    parser.add_argument("--stage", choices=("prepare", "train", "inference", "all"), default="inference")
+    parser.add_argument(
+        "--stage", choices=("prepare", "train", "inference", "all"), default="inference"
+    )
     parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--tag", default="reproduction")
     parser.add_argument("--ar-config", type=Path)
-    parser.add_argument("--ar-training-config", type=Path, default=Path("configs/gsm8k_grpo.toml"))
+    parser.add_argument(
+        "--ar-training-config", type=Path, default=Path("configs/gsm8k_grpo.toml")
+    )
     parser.add_argument(
         "--dllm-config",
         type=Path,
@@ -230,7 +237,9 @@ def main() -> None:
     parser.add_argument("--distribution-problems", type=int)
     parser.add_argument("--distribution-draws", type=int)
     parser.add_argument("--infra-limit", type=int, default=1)
-    parser.add_argument("--output-root", type=Path, default=Path("results/reproduction"))
+    parser.add_argument(
+        "--output-root", type=Path, default=Path("results/reproduction")
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--restart",
@@ -240,10 +249,7 @@ def main() -> None:
     args = parser.parse_args()
 
     args.ar_methods = tuple(args.ar_methods or AR_METHODS)
-    args.dllm_methods = tuple(
-        args.dllm_methods
-        or DLLM_DEFAULT_METHODS
-    )
+    args.dllm_methods = tuple(args.dllm_methods or DLLM_DEFAULT_METHODS)
     args.components_explicit = args.components is not None
     args.components = tuple(
         args.components
