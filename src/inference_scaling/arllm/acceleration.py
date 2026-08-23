@@ -141,6 +141,31 @@ class ActiveBatchSpeculationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DraftModelSpeculationConfig:
+    """Exact target-model sampling assisted by a smaller draft model.
+
+    Transformers currently supports native assisted generation only for one
+    active request.  ``single_request_only`` therefore preserves ordinary
+    target-model batching whenever more than one request is submitted.  Setting
+    it to ``False`` is an explicit diagnostic arm that executes those requests
+    one at a time.
+    """
+
+    draft_tokens: int = 4
+    single_request_only: bool = True
+    confidence_threshold: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.draft_tokens <= 0:
+            raise ValueError("draft_tokens must be positive")
+        if (
+            self.confidence_threshold is not None
+            and not 0 < self.confidence_threshold < 1
+        ):
+            raise ValueError("confidence_threshold must lie strictly between zero and one")
+
+
+@dataclass(frozen=True, slots=True)
 class DraftProposal:
     token_ids: TokenSequence
     token_probabilities: tuple[float, ...]
