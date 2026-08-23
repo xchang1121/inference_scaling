@@ -43,6 +43,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一 block 生成候选，用 rollout 估计条件奖励权重后重采样 | completion 来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史 completion，并保留 fresh rollout 以覆盖支持集 | behavior 概率与 fresh-tail 校正 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
 | [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助 proposal 生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选 proposal | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
+| [可枚举候选 logit adjustment](docs/methods/ALGORITHMS.md#alg-logit-adjustment) | 将估计条件权重的对数加到基础候选 logits，再在完整候选集上归一化 | 可直接使用 fresh、off-policy 或 replay 条件权重 | 理论参考；当前没有 CLI、代码实现或实验结果 |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
 目标密度差、正反 proposal 比和接受/拒绝核。AR-LLM 与 dLLM 目录只实现 token 后缀、掩码 block 或扩散
@@ -54,15 +55,15 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 log-likelihood：每个偏好对采样 8 个独立掩码比例、每个比例采样 1 个 mask，并让当前策略与冻结 reference
 使用相同 mask。LoRA adapter 与被禁用 adapter 的 reference 共用一份常驻基础模型。
 
-progressive IS、流式奖励、SMC rollout forest、delayed-acceptance MH、历史后缀 proposal、批处理、
-KV 复用和 vLLM 后端均在同一份[算法基础、原理与实现文档](docs/methods/ALGORITHMS.md)中按“目标—算法—实现—误差与
-成本”组织。
+当前 Qwen 默认 MH/IS 的完整步骤、模型职责和参数表，以及 progressive IS、流式奖励、SMC rollout forest、
+delayed-acceptance MH、历史后缀 proposal、批处理、KV 复用和 vLLM 后端，均集中在同一份
+[算法基础、原理与实现文档](docs/methods/ALGORITHMS.md)中按“目标—算法—实现—误差与成本”组织。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | 基础知识、数学目标、算法步骤、收敛性质、关键代码、执行优化和 vLLM 配置 |
+| [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | 默认 Qwen MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
 | [GSM8K 实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据、模型、预算、指标、成本分母、命令和产物 |
 | [方法质量与计算量](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 准确率、pass@k、共享奖励、off-policy、replay 与消融 |
 | [推理执行与 rollout 复用](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
@@ -92,9 +93,11 @@ dLLM 正式运行会把同口径结果写入 `results/reproduction/dllm/<tag>/`�
 组合实验的在线墙钟因子为 `0.357×`，主模型 FLOPs 因子为 `1.002×`。0.5B 精确 speculative decoding
 在本机未降低墙钟，默认关闭。
 
-IS 在线路径在存在匹配且未消费的 history 时启用候选缓存与连续批处理。三 seed 组合实验相对已启用连续
-批处理的 fresh-only 路径，墙钟、1.5B FLOPs 和 1.5B＋0.5B 总 FLOPs 因子分别为 `0.754×`、`0.744×`
-和 `0.907×`。如果 history 需要为当前请求新建，则使用连续批处理 fresh-only，并单列冷启动成本。
+IS 推荐在线路径在存在匹配且未消费的 history 时使用候选缓存与连续批处理。三 seed 组合实验相对已启用
+连续批处理的 fresh-only 路径，墙钟、1.5B FLOPs 和 1.5B＋0.5B 总 FLOPs 因子分别为 `0.754×`、`0.744×`
+和 `0.907×`。如果 history 需要为当前请求新建，则使用连续批处理 fresh-only，并单列冷启动成本。专用
+`run_qwen15b_is_stack.py` 入口执行这一组合；根级 `full` 复现当前将 `replay` 与 `async` 作为独立实验组件
+调度，不提供常驻服务的请求级自动切换。
 
 ## 安装
 

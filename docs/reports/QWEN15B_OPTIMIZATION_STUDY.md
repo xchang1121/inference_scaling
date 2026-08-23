@@ -154,7 +154,8 @@ SciPy/scikit-learn 冲突；该设置不改变模型或算法。
 
 多尺度后缀分布和冻结 replay proposal 可以直接组合。前者只改变后缀长度的固定混合权重；后者只改变给定
 长度下的后缀 proposal，并将新旧后缀的完整混合概率写入 Hastings 比。两项改动分别保持同一目标分布，
-组合后的转移核仍保持该分布。历史库必须在链开始前冻结，并与当前 prompt、模型和采样策略匹配。
+组合后的转移核仍保持该分布。历史库必须在链开始前冻结，并与当前 prompt、模型和采样策略匹配。完整在线
+顺序见[默认后缀 MH](../methods/ALGORITHMS.md#alg-qwen-default-mh)。
 
 组合消融固定一条 GSM8K prompt、BF16、长度 32、4 条链、每链 8 次更新、8 条历史序列和奖励温度 0.3，
 只改变后缀长度分布与是否使用冻结 replay。结果为三个成对 seed 的均值与样本标准差：
@@ -294,7 +295,8 @@ target-only 连续批处理。表中准确率不用于选择执行后端：两�
 组合实验只使用 Qwen2.5-1.5B 产生候选和 fresh rollout。Qwen2.5-0.5B 只产生 off-policy history，并在
 在线阶段计算 fresh completion 的 behavior probability；两种模型的 forward token 与 FLOPs 分列。五个
 实验臂依次为顺序 fresh-only、连续批处理 fresh-only、顺序 warm replay、顺序 warm replay 加候选缓存，
-以及 warm replay 加候选缓存和连续批处理。
+以及 warm replay 加候选缓存和连续批处理。候选、history、重评分、fresh-tail 与 reserve 的完整顺序见
+[默认条件 IS 与 warm replay](../methods/ALGORITHMS.md#alg-qwen-default-is)。
 
 候选缓存复用 replay key 构建时已经生成的同一组 base 候选，省略在线阶段的重复候选生成。该改动不改变
 候选、权重或重采样；顺序 replay 的缓存前后输出必须逐 token 相同。连续批处理使用请求局部随机流，并要求

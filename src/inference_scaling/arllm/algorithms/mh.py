@@ -1,9 +1,10 @@
 """Suffix-resampling Metropolis--Hastings for sequence power targets.
 
 For a fixed generated length ``L``, the target is proportional to
-``p_base(x | prompt) ** alpha``.  A move retains a uniformly selected prefix,
-regenerates the suffix from an autoregressive proposal, and uses the full
-forward/reverse proposal correction.  The implementation caches per-token
+``p_base(x | prompt) ** alpha``.  A move draws a suffix length from a configured
+full-support schedule, retains the corresponding prefix, regenerates the suffix
+from an autoregressive proposal, and uses the full forward/reverse proposal
+correction.  The implementation caches per-token
 base and proposal log-probabilities for the current state; this is an
 algorithmic reproduction, not the later paged-KV runtime optimization.
 """
