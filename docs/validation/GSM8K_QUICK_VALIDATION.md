@@ -1,4 +1,4 @@
-# GSM8K quick 集成检查
+# GSM8K 小规模集成检查
 
 本记录验证 `configs/gsm8k_quick.toml` 的端到端执行。正式统计结论见
 [GSM8K 方法质量与计算量实验](../reports/GSM8K_3090_ALIGNED_RESULTS.md)。
@@ -7,12 +7,12 @@
 
 | 项目 | 设置 |
 | --- | --- |
-| 数据 | 主方法、共享目标与 replay：8 道固定 GSM8K test 题；批处理：32 道固定题 |
+| 数据 | 主方法、共享目标与 replay：8 道固定 GSM8K 测试题；批处理：32 道固定题 |
 | 模型 | Qwen2.5-1.5B-Instruct；0.5B rollout proposal；GRPO LoRA |
-| 并发 | 批处理实验使用 8 个 worker |
+| 并发 | 批处理实验使用 8 个工作线程 |
 | 统计范围 | 集成检查；8 题准确率的 Wilson 区间较宽 |
 
-产物：
+输出文件：
 
 - `results/validation/gsm8k_quick_comparison_validated.json`
 - `results/validation/gsm8k_quick_replay_validated.json`
@@ -38,7 +38,7 @@
 
 ## 共享奖励
 
-目标为 `p_base(y|x) × exp(r_exact(y) / 0.04)`。
+目标为 $`p_{\mathrm{base}}(y\mid x)\exp\{r_{\mathrm{exact}}(y)/0.04\}`$。
 
 | 方法 | 正确数 / 8 | 准确率 | 推理 FLOPs | 墙钟 |
 | --- | ---: | ---: | ---: | ---: |
@@ -48,20 +48,20 @@
 | GRPO 参数 + 随机采样 | 5 | 62.5% | 0.0054 PFLOPs | 61.3 s |
 
 verifier-MH 与 GRPO 的逐题正确向量相同；verifier-IS 的总正确数相同，题目集合不同。GRPO 推理成本
-排除一次性 15.646 PFLOPs 训练成本。正式实验使用 32 题、独立 draw 和答案分布审计。
+排除一次性 15.646 PFLOPs 训练成本。正式实验使用 32 题、独立重复采样和答案分布诊断。
 
 ## rollout replay
 
-每个候选使用一条历史 rollout 和一条 fresh rollout，平均复用率为 42.86%。
+每个候选使用一条历史 rollout 和一条新生成 rollout，平均复用率为 42.86%。
 
 | 路径 / 对照 | FLOPs 因子 | 墙钟因子 |
 | --- | ---: | ---: |
-| warm replay 在线 / fresh-only | 0.980× | 0.977× |
-| cache build + 首次 warm / fresh-only | 2.156× | 1.898× |
+| 已有历史 replay 在线阶段 / 纯新生成 | 0.980× | 0.977× |
+| 缓存构建 + 首次历史复用 / 纯新生成 | 2.156× | 1.898× |
 
 ## 连续批处理
 
-分母为同一方法的逐 prompt 同步执行。
+分母为同一方法逐个处理提示的同步执行。
 
 | 方法 | 同步 / 批处理墙钟 | 批处理 / 同步 FLOPs | token 匹配 | 数值答案匹配 | 平均共同前缀 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -70,4 +70,4 @@ verifier-MH 与 GRPO 的逐题正确向量相同；verifier-IS 的总正确数�
 | 条件 IS | 1.413× | 1.619× | 26/32 | 30/32 | 88.26% |
 | 0.5B rollout proposal 条件 IS | 1.554× | 1.091× | 30/32 | 30/32 | 93.77% |
 
-请求级随机流保持固定；CUDA batch 形状引起的数值分叉由 token 匹配、数值答案匹配和共同前缀共同记录。
+每个请求的随机数序列保持固定；CUDA 批量形状引起的数值差异由 token 匹配、数值结果匹配和共同前缀共同记录。
