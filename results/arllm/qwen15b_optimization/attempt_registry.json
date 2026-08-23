@@ -77,10 +77,15 @@
     {
       "id": "ar_small_model_speculative_rollout",
       "category": "infra",
-      "status": "planned",
+      "status": "rejected",
       "active_execution": false,
       "comparison": "ordinary Qwen2.5-1.5B autoregressive rollout with identical sampling distribution",
-      "decision_basis": "token equality under coupled random streams, draft acceptance, wall time and separate 1.5B/0.5B FLOPs"
+      "decision_basis": "8 questions x 2 draws: K=2 was the best assisted arm but used 1.058x wall time, delivered 0.952x output-token throughput, used 1.055x main-model FLOPs and 1.439x total FLOPs despite 86.5% draft acceptance; K=4 and K=8 were slower still",
+      "implementation": "src/inference_scaling/arllm/backends/draft_model_speculation.py",
+      "runner": "experiments/arllm/run_qwen15b_draft_speculation_screen.py",
+      "result": "results/arllm/qwen15b_optimization/draft_model_speculation_screen.json",
+      "default_rollout_backend": "ordinary target-only batching",
+      "compute_accounting": "Qwen2.5-1.5B and Qwen2.5-0.5B forward token slots and dense FLOPs are reported separately"
     },
     {
       "id": "ar_continuous_batching",
