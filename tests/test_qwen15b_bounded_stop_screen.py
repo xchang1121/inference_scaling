@@ -99,8 +99,10 @@ pilot_samples = 2
                                 [[1], [2]],
                                 [[3], [4]],
                             ],
-                            "rollout_evaluations_planned": 20,
-                            "rollout_evaluations_performed": 12 if early_stop else 20,
+                            "rollout_evaluations": 20,
+                            "guidance_steps": 2,
+                            "rollout_evaluations_planned": 20 if early_stop else 0,
+                            "rollout_evaluations_performed": 12 if early_stop else 0,
                             "rollout_evaluations_skipped": 8 if early_stop else 0,
                             "rollout_evaluation_batches": 4 if early_stop else 2,
                             "exact_early_stop_steps": 1 if early_stop else 0,
@@ -145,6 +147,9 @@ pilot_samples = 2
     assert report["scope"]["dllm_experiments"] is False
     assert report["decision"]["result"] == "advance_to_confirmation"
     bounded = report["table"][1]
+    full = report["table"][0]
+    assert full["rollout_evaluations_planned"] == 80
+    assert full["rollout_evaluation_batches"] == 8
     assert bounded["rollout_skip_fraction"] == pytest.approx(0.4)
     assert bounded["main_model_flops_factor_vs_full"] == pytest.approx(0.8)
     assert report["paired_exact_agreement"]["exact_output_match_fraction"] == 1.0

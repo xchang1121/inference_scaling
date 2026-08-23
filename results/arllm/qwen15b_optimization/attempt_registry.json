@@ -64,13 +64,14 @@
     {
       "id": "is_bound_aware_early_stop",
       "category": "algorithm",
-      "status": "screening",
+      "status": "rejected",
       "active_execution": false,
       "comparison": "complete all finite-pool rollout evaluations",
-      "decision_basis": "exact selected-index agreement, skipped rollout fraction, generation token count, wall time and FLOPs",
+      "decision_basis": "8 questions x 2 draws: all 16 paired candidates, selected indices and outputs matched exactly; 8.27% of rollouts were skipped, but evaluation batches increased from 63 to 102, main-model FLOPs increased 16.4%, and wall time increased 39.8%",
       "implementation": "src/inference_scaling/shared/bounded_selection.py and src/inference_scaling/arllm/algorithms/conditional_is.py",
       "runner": "experiments/arllm/run_qwen15b_bounded_stop_screen.py",
-      "planned_result": "results/arllm/qwen15b_optimization/bounded_stop_screen.json",
+      "result": "results/arllm/qwen15b_optimization/bounded_stop_screen.json",
+      "default_enabled": false,
       "reward_requirement": "fixed pointwise reward with deterministic finite log-weight bounds"
     },
     {

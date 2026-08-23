@@ -807,12 +807,22 @@ def run_conditional_is(
         seeds,
         selection_namespace=("conditional_is",),
     )
-    steps = tuple(
-        ConditionalISStep(
-            generated_length_before=len(step.state_before),
-            candidates=tuple(candidate.value for candidate in step.candidates),
-            selected_index=step.selected_index,
+    steps: list[ConditionalISStep] = []
+    for step in generic.steps:
+        candidates = tuple(candidate.value for candidate in step.candidates)
+        performed = sum(len(candidate.rollouts) for candidate in candidates)
+        steps.append(
+            ConditionalISStep(
+                generated_length_before=len(step.state_before),
+                candidates=candidates,
+                selected_index=step.selected_index,
+                rollout_evaluations_planned=performed,
+                rollout_evaluations_performed=performed,
+                rollout_evaluation_batches=1,
+            )
         )
-        for step in generic.steps
+    return ConditionalISResult(
+        prompt=prompt,
+        token_ids=generic.final_state,
+        steps=tuple(steps),
     )
-    return ConditionalISResult(prompt=prompt, token_ids=generic.final_state, steps=steps)

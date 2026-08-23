@@ -46,6 +46,62 @@ def _sum_diagnostic(records: Sequence[dict[str, Any]], field: str) -> int:
     return sum(int(record["diagnostics"].get(field, 0)) for record in records)
 
 
+def _rollout_accounting(
+    records: Sequence[dict[str, Any]],
+    *,
+    early_stop: bool,
+) -> tuple[int, int, int, int]:
+    planned = _sum_diagnostic(records, "rollout_evaluations_planned")
+    performed = _sum_diagnostic(records, "rollout_evaluations_performed")
+    skipped = _sum_diagnostic(records, "rollout_evaluations_skipped")
+    batches = _sum_diagnostic(records, "rollout_evaluation_batches")
+    if not early_stop:
+        legacy_performed = _sum_diagnostic(records, "rollout_evaluations")
+        if planned == 0:
+            planned = legacy_performed
+        if performed == 0:
+            performed = legacy_performed
+        if batches == 0:
+            batches = _sum_diagnostic(records, "guidance_steps")
+    return planned, performed, skipped, batches
+
+
+def _per_draw_rows(
+    records: Sequence[dict[str, Any]],
+    full: Sequence[dict[str, Any]],
+    draws: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for draw in range(draws):
+        current = [
+            record for record in records if int(record["draw_index"]) == draw
+        ]
+        reference = [
+            record for record in full if int(record["draw_index"]) == draw
+        ]
+        seconds = sum(float(record["elapsed_seconds"]) for record in current)
+        reference_seconds = sum(
+            float(record["elapsed_seconds"]) for record in reference
+        )
+        flops = _sum_backend(current, "estimated_dense_forward_flops")
+        reference_flops = _sum_backend(reference, "estimated_dense_forward_flops")
+        tokens = _sum_backend(current, "generated_tokens")
+        reference_tokens = _sum_backend(reference, "generated_tokens")
+        rows.append(
+            {
+                "draw_index": draw,
+                "observations": len(current),
+                "seconds_excluding_model_load": seconds,
+                "wall_factor_vs_full_same_draw": seconds / reference_seconds,
+                "main_model_dense_forward_flops": flops,
+                "main_model_flops_factor_vs_full_same_draw": flops / reference_flops,
+                "generated_tokens": tokens,
+                "generated_token_factor_vs_full_same_draw": tokens / reference_tokens,
+            }
+        )
+    return rows
+
+
 def _paired_agreement(
     full: Sequence[dict[str, Any]],
     bounded: Sequence[dict[str, Any]],
@@ -169,9 +225,10 @@ def summarize_bounded_stop_study(
         seconds = sum(float(record["elapsed_seconds"]) for record in records)
         flops = _sum_backend(records, "estimated_dense_forward_flops")
         tokens = _sum_backend(records, "generated_tokens")
-        planned = _sum_diagnostic(records, "rollout_evaluations_planned")
-        performed = _sum_diagnostic(records, "rollout_evaluations_performed")
-        skipped = _sum_diagnostic(records, "rollout_evaluations_skipped")
+        planned, performed, skipped, evaluation_batches = _rollout_accounting(
+            records,
+            early_stop=early_stop,
+        )
         paired = clustered_paired_binary_difference(
             records,
             full,
@@ -202,9 +259,7 @@ def summarize_bounded_stop_study(
                 "rollout_evaluations_performed": performed,
                 "rollout_evaluations_skipped": skipped,
                 "rollout_skip_fraction": skipped / planned if planned else 0.0,
-                "rollout_evaluation_batches": _sum_diagnostic(
-                    records, "rollout_evaluation_batches"
-                ),
+                "rollout_evaluation_batches": evaluation_batches,
                 "exact_early_stop_steps": _sum_diagnostic(
                     records, "exact_early_stop_steps"
                 ),
@@ -218,6 +273,7 @@ def summarize_bounded_stop_study(
                         "GSM8K question; all draws stay in the same cluster"
                     ),
                 },
+                "per_draw": _per_draw_rows(records, full, draws),
             }
         )
 

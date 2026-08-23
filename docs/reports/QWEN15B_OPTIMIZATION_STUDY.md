@@ -209,6 +209,20 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_bounded_sto
 汇总要求每对运行的候选 token、各 step selected index 和最终输出逐项相同，再比较 rollout 跳过率、生成 token、
 主模型 FLOPs 与墙钟。分批路径若未能提前停止，会重复提交 prefix；这一额外成本计入结果。
 
+8 题、2 个 draw 的筛选结果如下。两臂的 16 对候选 token、各 step selected index 和最终输出均逐项相同，
+准确率同为 18.75%。
+
+| 执行方式 | rollout 计划/执行/跳过 | 评估 batch | 生成 token | 相对 token | 主模型 PFLOPs | 相对 FLOPs | 墙钟（秒） | 相对墙钟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 完整评估 | 822 / 822 / 0 | 63 | 69,718 | 1.000 | 0.3768 | 1.000 | 312.2 | 1.000 |
+| 有界精确停止 | 822 / 754 / 68 | 102 | 66,629 | 0.956 | 0.4387 | 1.164 | 436.5 | 1.398 |
+
+有界停止在 10 个 guidance step 提前确定候选，跳过 8.27% rollout，并减少 4.43% 生成 token；但评估 batch
+增加 61.9%，重复 prefix prefill 使主模型 FLOPs 增加 16.4%、墙钟增加 39.8%。反序运行的两个 draw 中，
+FLOPs 分别增加 11.9% 和 21.4%，墙钟分别增加 30.8% 和 51.8%，负收益不由单一执行顺序造成。该实现证明
+了选中候选的精确提前停止规则，但在当前 Transformers 后端未通过成本门槛，不执行确认，状态记为
+`rejected`。默认路径继续一次批量完成全部 rollout；有界停止仅保留为显式非默认实验。
+
 ### 自回归执行优化
 
 现有后端已实现连续批处理、共同前缀 KV 复用、评分缓存、流式奖励、冻结 replay-mixture MH proposal 和

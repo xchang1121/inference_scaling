@@ -436,6 +436,9 @@ if decision is not None:
 公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/shared/bounded_selection.py)，AR staged rollout
 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。分批执行可能重复 prefix
 prefill；因此实际收益由跳过的 rollout 比例、批次数、forward token slots、FLOPs 和墙钟共同决定。
+Qwen2.5-1.5B 筛选保持 16/16 成对输出一致并跳过 8.27% rollout，但重复 prefill 使 FLOPs 增加 16.4%，
+故默认关闭；完整数值见
+[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
 
 <a id="alg-iterated-is"></a>
 ### 6.3 迭代条件 IS
