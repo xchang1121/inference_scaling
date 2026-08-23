@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import threading
 from dataclasses import dataclass
-from types import TracebackType
+from types import MethodType, TracebackType
 from typing import Any
 
 from inference_scaling.arllm.acceleration import (
@@ -15,6 +16,104 @@ from inference_scaling.arllm.backends.transformers_backend import TransformersBa
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 from inference_scaling.shared.compute import dense_forward_flops
+
+
+_NATIVE_GENERATION_LOCK = threading.RLock()
+_CACHE_ALIGNED_CANDIDATE_GENERATOR: type[Any] | None = None
+
+
+def _discard_stale_assistant_cache(cache: Any, input_length: int) -> int:
+    """Remove rejected draft positions left beyond the accepted prefix."""
+
+    get_seq_length = getattr(cache, "get_seq_length", None)
+    crop = getattr(cache, "crop", None)
+    if not callable(get_seq_length) or not callable(crop):
+        return 0
+    stale = max(int(get_seq_length()) - int(input_length), 0)
+    if stale:
+        crop(-stale)
+    return stale
+
+
+def _cache_aligned_candidate_generator() -> type[Any]:
+    global _CACHE_ALIGNED_CANDIDATE_GENERATOR
+    if _CACHE_ALIGNED_CANDIDATE_GENERATOR is not None:
+        return _CACHE_ALIGNED_CANDIDATE_GENERATOR
+    from transformers.generation.candidate_generator import AssistedCandidateGenerator
+
+    class CacheAlignedAssistedCandidateGenerator(AssistedCandidateGenerator):
+        """Crop rejected assistant positions before the library's one-token crop."""
+
+        def _update_past_and_masks(
+            self,
+            input_ids: Any,
+            remove_from_pkv: int = 0,
+            num_added_tokens: int = 1,
+        ) -> bool:
+            cache = self.assistant_kwargs.get("past_key_values")
+            if cache is not None:
+                _discard_stale_assistant_cache(cache, int(input_ids.shape[-1]))
+            return super()._update_past_and_masks(
+                input_ids,
+                remove_from_pkv=remove_from_pkv,
+                num_added_tokens=num_added_tokens,
+            )
+
+    _CACHE_ALIGNED_CANDIDATE_GENERATOR = CacheAlignedAssistedCandidateGenerator
+    return CacheAlignedAssistedCandidateGenerator
+
+
+@contextmanager
+def _aligned_candidate_generator(target_model: Any, draft_model: Any):
+    """Install a request-local generator that keeps the assistant KV cache aligned."""
+
+    original = getattr(target_model, "_get_candidate_generator", None)
+    if not callable(original):
+        yield
+        return
+    candidate_class = _cache_aligned_candidate_generator()
+    had_instance_override = "_get_candidate_generator" in vars(target_model)
+    prior_instance_value = vars(target_model).get("_get_candidate_generator")
+
+    def build(
+        _target: Any,
+        generation_config: Any,
+        input_ids: Any,
+        inputs_tensor: Any,
+        logits_processor: Any,
+        model_kwargs: dict[str, Any],
+        assistant_model: Any = None,
+        target_tokenizer: Any = None,
+        assistant_tokenizer: Any = None,
+    ) -> Any:
+        if assistant_model is draft_model and target_tokenizer is None and assistant_tokenizer is None:
+            return candidate_class(
+                input_ids=input_ids,
+                assistant_model=assistant_model,
+                generation_config=generation_config,
+                model_kwargs=model_kwargs,
+                inputs_tensor=inputs_tensor,
+                logits_processor=logits_processor,
+            )
+        return original(
+            generation_config=generation_config,
+            input_ids=input_ids,
+            inputs_tensor=inputs_tensor,
+            logits_processor=logits_processor,
+            model_kwargs=model_kwargs,
+            assistant_model=assistant_model,
+            target_tokenizer=target_tokenizer,
+            assistant_tokenizer=assistant_tokenizer,
+        )
+
+    target_model._get_candidate_generator = MethodType(build, target_model)
+    try:
+        yield
+    finally:
+        if had_instance_override:
+            target_model._get_candidate_generator = prior_instance_value
+        else:
+            delattr(target_model, "_get_candidate_generator")
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +225,6 @@ class DraftModelSpeculativeBackend:
         self.tokenizer = target.tokenizer
         self.device = target.device
         self._statistics_lock = threading.Lock()
-        self._native_lock = threading.RLock()
         self._sample_calls = 0
         self._sampled_sequences = 0
         self._generated_tokens = 0
@@ -199,7 +297,7 @@ class DraftModelSpeculativeBackend:
         target_counter: _ForwardCounter
         draft_counter: _ForwardCounter
         rng_devices = self._cuda_rng_devices(self.target.device, self.draft.device)
-        with self._native_lock, self.target._model_lock, self.draft._model_lock:
+        with _NATIVE_GENERATION_LOCK, self.target._model_lock, self.draft._model_lock:
             assistant_config.num_assistant_tokens = self.config.draft_tokens
             assistant_config.num_assistant_tokens_schedule = "constant"
             if self.config.confidence_threshold is not None:
@@ -211,6 +309,7 @@ class DraftModelSpeculativeBackend:
                     torch_module.random.fork_rng(devices=rng_devices),
                     _ForwardAccounting(self.target.model) as target_counter,
                     _ForwardAccounting(self.draft.model) as draft_counter,
+                    _aligned_candidate_generator(self.target.model, self.draft.model),
                     torch_module.inference_mode(),
                 ):
                     torch_module.manual_seed(request.seed)

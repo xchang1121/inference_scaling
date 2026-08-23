@@ -9,6 +9,9 @@ from inference_scaling.arllm.backends import (
     DraftModelSpeculativeBackend,
     TransformersBackend,
 )
+from inference_scaling.arllm.backends.draft_model_speculation import (
+    _discard_stale_assistant_cache,
+)
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest
 
@@ -74,6 +77,19 @@ class _NativeGenerateModel(torch.nn.Module):
         )
 
 
+class _CroppableCache:
+    def __init__(self, length: int) -> None:
+        self.length = length
+        self.removals = []
+
+    def get_seq_length(self):
+        return self.length
+
+    def crop(self, tokens_to_remove):
+        self.removals.append(tokens_to_remove)
+        self.length -= abs(tokens_to_remove)
+
+
 def _backend(probabilities, *, target=False, tokenizer=None):
     return TransformersBackend(
         _NativeGenerateModel(probabilities, target=target),
@@ -87,6 +103,15 @@ def test_draft_model_config_rejects_invalid_values() -> None:
         DraftModelSpeculationConfig(draft_tokens=0)
     with pytest.raises(ValueError, match="confidence_threshold"):
         DraftModelSpeculationConfig(confidence_threshold=1.0)
+
+
+def test_rejected_assistant_tokens_are_removed_before_cache_reuse() -> None:
+    cache = _CroppableCache(11)
+
+    assert _discard_stale_assistant_cache(cache, 7) == 4
+    assert cache.length == 7
+    assert cache.removals == [-4]
+    assert _discard_stale_assistant_cache(cache, 7) == 0
 
 
 def test_native_draft_model_path_keeps_target_probabilities_and_separate_costs() -> None:
