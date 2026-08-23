@@ -695,6 +695,17 @@ store.add_evaluation(independent_reserve_record)
 该生命周期同时用于 `base-replay` 和 `dynamic-is`。存储实现见
 [`arllm/replay.py`](../../src/inference_scaling/arllm/replay.py)。
 
+构建某个 replay key 时已经按本轮随机流生成了相应的 base 候选。在线选择若再次调用同一候选生成请求，
+会重复执行一次完全相同的自回归计算。AR 实现可将构建阶段返回的 `SequenceSample` 直接传给
+`base_replay_step(..., candidate_samples=...)`。该入口逐项校验候选数量、完整前缀、模型标识、采样策略、
+步号、候选序号和最大长度；校验通过后只省略重复生成，候选 token、候选 log probability、replay claim、
+式 (14) 的权重和重采样随机数均不变。该缓存仅覆盖同一轮已经冻结的候选，不把随机生成透明地缓存为全局
+后端行为。
+
+多请求执行时，缓存构建和在线选择按 guidance step 分成两个阶段。每个阶段内部可合并不同 prompt 的兼容
+生成与评分请求；阶段边界保证 cache build、在线 1.5B 计算和在线 0.5B 辅助计算可以分别计账。正式 replay
+概率实验使用 FP32；低精度 logits 可能随 batch 形状出现足以影响保存概率复核的数值差异。
+
 <a id="alg-dynamic-is"></a>
 ## 9. 动态候选 proposal 与外层 IS
 

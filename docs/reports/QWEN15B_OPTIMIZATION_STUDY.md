@@ -288,6 +288,29 @@ $`K=2`$ 是最接近基线的草稿路径，但墙钟增加 5.8%、输出吞吐�
 target-only 连续批处理。表中准确率不用于选择执行后端：两条路径保证相同采样分布，但有限随机样本不要求
 逐条输出一致。
 
+### IS replay、候选缓存与连续批处理的组合协议
+
+组合实验只使用 Qwen2.5-1.5B 产生候选和 fresh rollout。Qwen2.5-0.5B 只产生 off-policy history，并在
+在线阶段计算 fresh completion 的 behavior probability；两种模型的 forward token 与 FLOPs 分列。五个
+实验臂依次为顺序 fresh-only、连续批处理 fresh-only、顺序 warm replay、顺序 warm replay 加候选缓存，
+以及 warm replay 加候选缓存和连续批处理。
+
+候选缓存复用 replay key 构建时已经生成的同一组 base 候选，省略在线阶段的重复候选生成。该改动不改变
+候选、权重或重采样；顺序 replay 的缓存前后输出必须逐 token 相同。连续批处理使用请求局部随机流，并要求
+与对应顺序臂逐 token 相同。缓存构建、在线阶段和冷启动总成本分别报告，摊销点按每个 seed 独立计算。
+正式运行采用 FP32，以保证保存的 behavior log probability 能在不同评分 batch 中通过数值复核。
+
+可续跑入口为：
+
+```powershell
+$env:PYTHONNOUSERSITE = "1"
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_is_stack `
+  --config configs\gsm8k_quick.toml `
+  --output results\arllm\qwen15b_optimization\is_replay_batching_stack.json
+```
+
+本节在三 seed 实验完成后写入汇总结果；dLLM 不进入该实验。
+
 ## 优化组合与方法状态
 
 | 方法 | 初始结论 | 当前默认状态 | 依据 |

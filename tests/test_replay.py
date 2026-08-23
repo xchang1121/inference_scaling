@@ -9,6 +9,7 @@ from inference_scaling.arllm.algorithms.base_replay import (
     corrected_replay_log_weight,
     run_base_replay,
 )
+from inference_scaling.arllm.algorithms.conditional_is import _sample_candidates
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
 from inference_scaling.arllm.replay import (
@@ -57,7 +58,9 @@ def test_truncated_history_and_fresh_tail_are_exact_in_expectation() -> None:
             log_weight, _, _ = corrected_replay_log_weight(
                 [
                     ProbabilityObservation(
-                        log(p[history_token]), log(q[history_token]), rewards[history_token]
+                        log(p[history_token]),
+                        log(q[history_token]),
+                        rewards[history_token],
                     )
                 ],
                 [
@@ -278,6 +281,82 @@ def test_fresh_replay_is_generated_in_one_cross_candidate_batch() -> None:
 
     assert len(step.candidates) == 4
     assert backend.sample_batch_sizes == [4, 12]
+
+
+def test_base_replay_can_reuse_frozen_candidate_draws() -> None:
+    backend = BatchCountingBackend(
+        TabularAutoregressiveBackend({}, fallback=[0.6, 0.4])
+    )
+    sampling = SamplingConfig()
+    seeds = SeedStream(37)
+    candidates = _sample_candidates(
+        backend,
+        (),
+        4,
+        1,
+        sampling,
+        seeds,
+        0,
+    )
+
+    step = base_replay_step(
+        base_backend=backend,
+        registry=BehaviorRegistry(),
+        store=InMemoryReplayStore(),
+        prompt=(),
+        generated_prefix=(),
+        config=BaseReplayConfig(
+            candidate_count=4,
+            block_size=1,
+            total_length=2,
+            fresh_rollouts=3,
+        ),
+        base_sampling=sampling,
+        reward=lambda _prompt, generated: float(sum(generated)),
+        reward_version="reward-v1",
+        seeds=seeds,
+        step_index=0,
+        candidate_samples=candidates,
+    )
+
+    assert [candidate.token_ids for candidate in step.candidates] == [
+        candidate.token_ids for candidate in candidates
+    ]
+    assert backend.sample_batch_sizes == [4, 12]
+
+
+def test_base_replay_rejects_a_mismatched_frozen_candidate() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=[0.6, 0.4])
+    candidates = _sample_candidates(
+        backend,
+        (),
+        1,
+        1,
+        SamplingConfig(),
+        SeedStream(41),
+        0,
+    )
+
+    with pytest.raises(ValueError, match="frozen candidate"):
+        base_replay_step(
+            base_backend=backend,
+            registry=BehaviorRegistry(),
+            store=InMemoryReplayStore(),
+            prompt=(1,),
+            generated_prefix=(),
+            config=BaseReplayConfig(
+                candidate_count=1,
+                block_size=1,
+                total_length=2,
+                fresh_rollouts=1,
+            ),
+            base_sampling=SamplingConfig(),
+            reward=lambda _prompt, generated: float(sum(generated)),
+            reward_version="reward-v1",
+            seeds=SeedStream(41),
+            step_index=0,
+            candidate_samples=candidates,
+        )
 
 
 def test_history_is_scored_under_the_configured_base_temperature() -> None:

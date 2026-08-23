@@ -33,7 +33,12 @@ from inference_scaling.arllm.replay import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.stepwise import normalize_log_weights
-from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest, TokenSequence
+from inference_scaling.arllm.types import (
+    AutoregressiveBackend,
+    ScoreRequest,
+    SequenceSample,
+    TokenSequence,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +92,9 @@ def _score_base(
             raise RuntimeError("base backend returned an invalid token score shape")
         total = float(sum(token_scores))
         if not isfinite(total):
-            raise ValueError("replay behavior generated a completion outside base support")
+            raise ValueError(
+                "replay behavior generated a completion outside base support"
+            )
         totals.append(total)
     return tuple(totals)
 
@@ -106,7 +113,12 @@ def build_fresh_replay_requests(
             key=key,
             max_new_tokens=rollout_length,
             seed=seeds.derive(
-                "base_replay", step_index, "candidate", candidate_index, "fresh", fresh_index
+                "base_replay",
+                step_index,
+                "candidate",
+                candidate_index,
+                "fresh",
+                fresh_index,
             ),
             record_id=(
                 f"fresh:{step_index}:{candidate_index}:{fresh_index}:"
@@ -173,19 +185,25 @@ def estimate_replay_weight(
     else:
         fresh_records = tuple(precomputed_fresh_records)
         if len(fresh_records) != fresh_count:
-            raise ValueError("precomputed fresh record count does not match the frozen design")
+            raise ValueError(
+                "precomputed fresh record count does not match the frozen design"
+            )
         if any(
             record.key != claim.key or record.behavior_id != base_policy.behavior_id
             for record in fresh_records
         ):
-            raise ValueError("precomputed fresh records do not match the candidate and base policy")
+            raise ValueError(
+                "precomputed fresh records do not match the candidate and base policy"
+            )
 
     if claim.count == 0:
         if store.reveal_and_consume(claim):
             raise RuntimeError("an empty replay claim unexpectedly contained records")
         for record in fresh_records:
             store.add_design(record)
-        log_terms = tuple(record.reward / reward_temperature for record in fresh_records)
+        log_terms = tuple(
+            record.reward / reward_temperature for record in fresh_records
+        )
         return ReplayWeightEstimate(
             log_weight=logmeanexp(log_terms),
             history_log_terms=(),
@@ -225,7 +243,9 @@ def estimate_replay_weight(
     )
     fresh_observations = tuple(
         ProbabilityObservation(log_p, log_b, record.reward)
-        for record, log_p, log_b in zip(fresh_records, fresh_base, fresh_mixture, strict=True)
+        for record, log_p, log_b in zip(
+            fresh_records, fresh_base, fresh_mixture, strict=True
+        )
     )
     shared_estimate = TruncatedReplayRolloutWeightProvider(
         truncation=truncation,
@@ -258,23 +278,51 @@ def base_replay_step(
     reward_version: str,
     seeds: SeedStream,
     step_index: int,
+    candidate_samples: Sequence[SequenceSample] | None = None,
 ) -> BaseReplayStep:
-    """Run one base-candidate guidance step with a frozen replay design."""
+    """Run one base-candidate guidance step with a frozen replay design.
+
+    ``candidate_samples`` may contain candidate draws that were frozen while the
+    matching replay entries were built.  Reusing those draws avoids generating the
+    same seeded candidates twice.  Every field that identifies the requested base
+    draw is checked before the samples enter the statistical calculation.
+    """
 
     _validate_base_sampling(base_sampling)
     remaining = config.total_length - len(generated_prefix)
     if remaining <= 0:
         raise ValueError("generated prefix has already reached total_length")
     block_length = min(config.block_size, remaining)
-    candidate_samples = _sample_candidates(
-        base_backend,
-        prompt + generated_prefix,
-        config.candidate_count,
-        block_length,
-        base_sampling,
-        seeds,
-        step_index,
-    )
+    candidate_prefix = prompt + generated_prefix
+    if candidate_samples is None:
+        source_candidates = _sample_candidates(
+            base_backend,
+            candidate_prefix,
+            config.candidate_count,
+            block_length,
+            base_sampling,
+            seeds,
+            step_index,
+        )
+    else:
+        source_candidates = list(candidate_samples)
+        if len(source_candidates) != config.candidate_count:
+            raise ValueError("frozen candidate count does not match the replay design")
+        for candidate_index, candidate in enumerate(source_candidates):
+            expected_request_id = (
+                f"conditional-is:step:{step_index}:candidate:{candidate_index}"
+            )
+            if (
+                candidate.prefix != candidate_prefix
+                or candidate.model_id != base_backend.model_id
+                or candidate.policy_id != base_sampling.policy_id
+                or candidate.request_id != expected_request_id
+                or not candidate.token_ids
+                or len(candidate.token_ids) > block_length
+            ):
+                raise ValueError(
+                    "a frozen candidate does not match its base-model generation request"
+                )
     base_policy = BehaviorPolicy.for_backend(base_backend, base_sampling, label="base")
     registry.register(base_policy)
     rollout_length = max(0, remaining - block_length)
@@ -282,10 +330,10 @@ def base_replay_step(
 
     keys = [
         ReplayKey(prompt, generated_prefix, candidate.token_ids, reward_version)
-        for candidate in candidate_samples
+        for candidate in source_candidates
     ]
     claims: list[FrozenReplayClaim | None] = []
-    for key, candidate in zip(keys, candidate_samples, strict=True):
+    for key, candidate in zip(keys, source_candidates, strict=True):
         terminal = rollout_length == 0 or (
             eos is not None and candidate.token_ids[-1] == eos
         )
@@ -317,10 +365,12 @@ def base_replay_step(
 
     candidates: list[BaseReplayCandidate] = []
     for candidate_index, (candidate, key, claim, fresh_range) in enumerate(
-        zip(candidate_samples, keys, claims, fresh_ranges, strict=True)
+        zip(source_candidates, keys, claims, fresh_ranges, strict=True)
     ):
         if claim is None:
-            terminal_reward = float(reward(prompt, generated_prefix + candidate.token_ids))
+            terminal_reward = float(
+                reward(prompt, generated_prefix + candidate.token_ids)
+            )
             estimate = ReplayWeightEstimate(
                 log_weight=terminal_reward / config.reward_temperature,
                 history_log_terms=(),
@@ -406,8 +456,8 @@ def write_reserve_records(
                 max_new_tokens=rollout_length,
                 seed=seeds.derive("base_replay", step_index, "reserve", reserve_index),
                 record_id=(
-                f"reserve:{step_index}:{reserve_index}:"
-                f"{seeds.derive('reserve-id', step_index, reserve_index)}"
+                    f"reserve:{step_index}:{reserve_index}:"
+                    f"{seeds.derive('reserve-id', step_index, reserve_index)}"
                 ),
             )
         )

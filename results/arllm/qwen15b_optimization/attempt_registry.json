@@ -135,6 +135,19 @@
       "decision_basis": "existing result: lower steady-state FLOPs and wall time; cache build reaches break-even after approximately seven repeated queries"
     },
     {
+      "id": "is_replay_candidate_cache_batching_stack",
+      "category": "algorithm_infra",
+      "status": "screening",
+      "active_execution": false,
+      "comparison": "sequential fresh-only and sequential warm replay at matched Qwen2.5-1.5B candidates, rollout budget, prompts and random streams",
+      "decision_basis": "implementation and real-model smoke test completed; the registered three-seed Qwen2.5-1.5B combination ablation is pending",
+      "implementation": "src/inference_scaling/arllm/algorithms/base_replay.py and src/inference_scaling/arllm/backends/batching.py",
+      "runner": "experiments/arllm/run_qwen15b_is_stack.py",
+      "planned_result": "results/arllm/qwen15b_optimization/is_replay_batching_stack.json",
+      "auxiliary_model_accounting": "Qwen2.5-0.5B is used only for off-policy rollouts and is reported separately",
+      "dtype": "float32"
+    },
+    {
       "id": "is_streaming_reward",
       "category": "infra",
       "status": "conditional",
