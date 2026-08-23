@@ -82,6 +82,7 @@
     "src/inference_scaling/shared/stepwise.py": "c7cb08ea172e4ab1ee20ae4ae40d7eba5e60e8acbc46942d3389448bb4c57b90",
     "src/inference_scaling/shared/types.py": "83aebdafe069002dc4bdbca3395f276d44eac551df948d95eaa7487c24c8423b"
   },
+  "phase": "screen",
   "problem_indices": [
     55,
     69,
@@ -190,6 +191,32 @@
           0.0
         ]
       },
+      "per_draw": [
+        {
+          "accuracy": 0.125,
+          "correct": 1,
+          "draw_index": 0,
+          "generated_token_factor_vs_uniform_same_draw": 1.0,
+          "generated_tokens": 5106,
+          "main_model_dense_forward_flops": 105975986969600,
+          "main_model_flops_factor_vs_uniform_same_draw": 1.0,
+          "observations": 8,
+          "seconds_excluding_model_load": 213.1969572000089,
+          "wall_factor_vs_uniform_same_draw": 1.0
+        },
+        {
+          "accuracy": 0.125,
+          "correct": 1,
+          "draw_index": 1,
+          "generated_token_factor_vs_uniform_same_draw": 1.0,
+          "generated_tokens": 5677,
+          "main_model_dense_forward_flops": 105991424112640,
+          "main_model_flops_factor_vs_uniform_same_draw": 1.0,
+          "observations": 8,
+          "seconds_excluding_model_load": 107.72897920000105,
+          "wall_factor_vs_uniform_same_draw": 1.0
+        }
+      ],
       "suffix_schedule": "uniform",
       "sum_seconds_excluding_model_load": 320.92593640000996,
       "wall_factor_vs_uniform": 1.0,
@@ -223,6 +250,32 @@
           0.1875
         ]
       },
+      "per_draw": [
+        {
+          "accuracy": 0.25,
+          "correct": 2,
+          "draw_index": 0,
+          "generated_token_factor_vs_uniform_same_draw": 0.5842146494320407,
+          "generated_tokens": 2983,
+          "main_model_dense_forward_flops": 105302927533056,
+          "main_model_flops_factor_vs_uniform_same_draw": 0.9936489439184268,
+          "observations": 8,
+          "seconds_excluding_model_load": 124.59790810000413,
+          "wall_factor_vs_uniform_same_draw": 0.5844262963993133
+        },
+        {
+          "accuracy": 0.125,
+          "correct": 1,
+          "draw_index": 1,
+          "generated_token_factor_vs_uniform_same_draw": 0.4780694028536199,
+          "generated_tokens": 2714,
+          "main_model_dense_forward_flops": 103996945231872,
+          "main_model_flops_factor_vs_uniform_same_draw": 0.9811826390911739,
+          "observations": 8,
+          "seconds_excluding_model_load": 55.07629899998574,
+          "wall_factor_vs_uniform_same_draw": 0.5112486854417831
+        }
+      ],
       "suffix_schedule": "inverse_length",
       "sum_seconds_excluding_model_load": 179.67420709998987,
       "wall_factor_vs_uniform": 0.5598619080635463,
@@ -256,6 +309,32 @@
           0.4375
         ]
       },
+      "per_draw": [
+        {
+          "accuracy": 0.375,
+          "correct": 3,
+          "draw_index": 0,
+          "generated_token_factor_vs_uniform_same_draw": 0.77340383862123,
+          "generated_tokens": 3949,
+          "main_model_dense_forward_flops": 102879296075776,
+          "main_model_flops_factor_vs_uniform_same_draw": 0.9707793153678077,
+          "observations": 8,
+          "seconds_excluding_model_load": 164.34152700000413,
+          "wall_factor_vs_uniform_same_draw": 0.770843679752092
+        },
+        {
+          "accuracy": 0.25,
+          "correct": 2,
+          "draw_index": 1,
+          "generated_token_factor_vs_uniform_same_draw": 0.6399506781750924,
+          "generated_tokens": 3633,
+          "main_model_dense_forward_flops": 103323885795328,
+          "main_model_flops_factor_vs_uniform_same_draw": 0.9748325080104865,
+          "observations": 8,
+          "seconds_excluding_model_load": 92.8628477999955,
+          "wall_factor_vs_uniform_same_draw": 0.8620043417249293
+        }
+      ],
       "suffix_schedule": "multiscale",
       "sum_seconds_excluding_model_load": 257.20437479999964,
       "wall_factor_vs_uniform": 0.8014446500809265,

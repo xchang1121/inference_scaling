@@ -140,6 +140,10 @@ steps_per_block = 2
     assert inverse["main_model_flops_factor_vs_uniform"] == pytest.approx(0.8)
     assert inverse["mean_proposed_suffix_length"] == pytest.approx(6.4)
     assert inverse["paired_vs_uniform"]["accuracy_difference"] == 0.0
+    assert [row["wall_factor_vs_uniform_same_draw"] for row in inverse["per_draw"]] == [
+        pytest.approx(0.8),
+        pytest.approx(0.8),
+    ]
 
 
 def test_confirmation_selects_highest_accuracy_passing_arm(tmp_path: Path) -> None:

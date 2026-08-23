@@ -117,6 +117,10 @@ def summarize_mh_suffix_screen(
     reference_tokens = sum(
         int(record["backend_delta"]["generated_tokens"]) for record in reference
     )
+    reference_by_draw = {
+        draw: [record for record in reference if int(record["draw_index"]) == draw]
+        for draw in range(draws)
+    }
     table: list[dict[str, Any]] = []
     for arm, schedule in MH_SUFFIX_ARMS:
         records = records_by_arm[arm]
@@ -140,6 +144,57 @@ def summarize_mh_suffix_screen(
             seed=20260822 + len(arm),
             replicates=bootstrap_replicates,
         )
+        per_draw: list[dict[str, Any]] = []
+        for draw in range(draws):
+            draw_records = [
+                record for record in records if int(record["draw_index"]) == draw
+            ]
+            draw_reference = reference_by_draw[draw]
+            draw_seconds = sum(
+                float(record["elapsed_seconds"]) for record in draw_records
+            )
+            draw_reference_seconds = sum(
+                float(record["elapsed_seconds"]) for record in draw_reference
+            )
+            draw_flops = sum(
+                int(record["backend_delta"]["estimated_dense_forward_flops"])
+                for record in draw_records
+            )
+            draw_reference_flops = sum(
+                int(record["backend_delta"]["estimated_dense_forward_flops"])
+                for record in draw_reference
+            )
+            draw_tokens = sum(
+                int(record["backend_delta"]["generated_tokens"])
+                for record in draw_records
+            )
+            draw_reference_tokens = sum(
+                int(record["backend_delta"]["generated_tokens"])
+                for record in draw_reference
+            )
+            per_draw.append(
+                {
+                    "draw_index": draw,
+                    "observations": len(draw_records),
+                    "correct": sum(bool(record["correct"]) for record in draw_records),
+                    "accuracy": sum(
+                        bool(record["correct"]) for record in draw_records
+                    )
+                    / len(draw_records),
+                    "seconds_excluding_model_load": draw_seconds,
+                    "wall_factor_vs_uniform_same_draw": (
+                        draw_seconds / draw_reference_seconds
+                    ),
+                    "main_model_dense_forward_flops": draw_flops,
+                    "main_model_flops_factor_vs_uniform_same_draw": (
+                        draw_flops / draw_reference_flops
+                    ),
+                    "generated_tokens": draw_tokens,
+                    "generated_token_factor_vs_uniform_same_draw": (
+                        draw_tokens / draw_reference_tokens
+                    ),
+                }
+            )
         table.append(
             {
                 "arm": arm,
@@ -179,6 +234,7 @@ def summarize_mh_suffix_screen(
                         "GSM8K question; all draws stay in the same cluster"
                     ),
                 },
+                "per_draw": per_draw,
             }
         )
 

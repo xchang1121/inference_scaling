@@ -192,6 +192,10 @@ $`\rho(\ell)\propto 1/\ell`$；`multiscale` 将 10% 概率均匀分给全部长�
 $`1,2,4,\ldots,L`$ 中的不同长度。后两者减少平均 proposal token 数；`multiscale` 同时提高二进制尺度和
 完整后缀的采样频率。命令行通过 `--mh-suffix-schedule` 选择，默认值仍为 `uniform`。
 
+历史实验配置显式保留 `uniform` 以维持原结果指纹；Qwen2.5-1.5B 的优化组合采用经 32 题、4 个 draw 确认的
+`multiscale`。确认结果与速度优先的 `inverse_length` 配置见
+[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#mh-后缀长度-proposal)。
+
 实现按 `block_size` 逐步扩展到 $`L`$，并在每个长度执行 `steps_per_block` 次后缀更新。最终长度上的有限更新
 结果仍含 MCMC 误差。由于切点 $`s=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、
 固定长度空间上处处为正，转移矩阵任意两行都有正重叠。写

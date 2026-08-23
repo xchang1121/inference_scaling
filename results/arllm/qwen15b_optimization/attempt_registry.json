@@ -34,11 +34,14 @@
     {
       "id": "mh_suffix_length_mixture",
       "category": "algorithm",
-      "status": "screening",
-      "active_execution": false,
+      "status": "accepted",
+      "active_execution": true,
       "comparison": "uniform suffix length at matched questions, draws, alpha, block size and MH update count",
-      "decision_basis": "8 questions x 2 draws: inverse_length improved accuracy by 6.25 pp and reduced wall time by 44.0%; multiscale improved accuracy by 18.75 pp and reduced wall time by 19.9%; both advance to 32 questions x 4 draws",
+      "decision_basis": "32 questions x 4 draws: multiscale improved accuracy by 5.47 pp, reduced generated tokens by 32.3%, and reduced aggregate wall time by 40.7%; its clustered accuracy difference interval was [-2.34, 14.84] pp and it was selected by the preregistered accuracy-first rule",
       "screen_result": "results/arllm/qwen15b_optimization/mh_suffix_screen.json",
+      "confirmation_result": "results/arllm/qwen15b_optimization/mh_suffix_confirmation.json",
+      "selected_default": "multiscale",
+      "speed_priority_alternative": "inverse_length",
       "confirmation_selection_rule": "among arms passing the registered gate, choose the highest accuracy and break ties by lower wall time"
     },
     {

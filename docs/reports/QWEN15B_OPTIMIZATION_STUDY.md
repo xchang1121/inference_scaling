@@ -123,6 +123,32 @@ C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_suffix_s
 两种策略进入 32 题、4 个 draw 的确认。若两者均通过确认，默认策略按准确率排序，准确率相同时选择墙钟较低者；
 另一策略仍作为显式速度优先配置保留。
 
+确认结果如下。每行含 128 次观测，准确率差的区间以 GSM8K 题目为聚类单位；墙钟包含四轮不同系统负载，
+逐 draw 数值在机器可读结果中保留。
+
+| 后缀分布 | 准确率 | 相对准确率 | 生成 token | 相对生成 token | 主模型 PFLOPs | 相对 FLOPs | 墙钟（秒） | 相对墙钟 | 接受率 | 平均 proposal 长度 | 接受后改变 token |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `uniform` | 12.50% | 0.00 pp | 90,544 | 1.000 | 1.7720 | 1.000 | 2,483.1 | 1.000 | 70.26% | 36.63 | 6.45 |
+| `inverse_length` | 13.28% | +0.78 pp，95% 区间 `[-4.69,6.25]` | 45,455 | 0.502 | 1.7573 | 0.992 | 1,342.6 | 0.541 | 88.18% | 14.55 | 2.80 |
+| `multiscale` | 17.97% | +5.47 pp，95% 区间 `[-2.34,14.84]` | 61,271 | 0.677 | 1.7647 | 0.996 | 1,473.5 | 0.593 | 82.57% | 22.21 | 4.24 |
+
+两个非均匀分布均满足确认门槛。`multiscale` 按预先登记的准确率优先规则成为默认 MH 后缀分布；
+`inverse_length` 作为速度优先配置保留。四轮 uniform 墙钟分别为 518.9、441.0、800.0 和 723.2 秒，表明
+绝对墙钟受到系统负载影响；生成 token 减少 32.3%、四轮聚合墙钟减少 40.7% 以及相邻执行位置的同向结果共同
+支持 `multiscale` 的成本收益。线性 dense-FLOPs 仅下降 0.41%，原因仍是 Transformers 路径重复提交保留前缀。
+
+确认运行命令为：
+
+```powershell
+$env:PYTHONNOUSERSITE = "1"
+C:\Users\singm\anaconda3\python.exe -m experiments.arllm.run_qwen15b_mh_suffix_screen `
+  --config configs\gsm8k_quick.toml --phase confirmation `
+  --limit 32 --draws 4 --tag qwen15b-mh-suffix-confirm-149c545
+```
+
+`PYTHONNOUSERSITE=1` 用于隔离本机用户目录中的 NumPy 2.4.3，避免与 Conda 环境内按 NumPy 1.x 编译的
+SciPy/scikit-learn 冲突；该设置不改变模型或算法。
+
 ### rollout 方差与提前停止
 
 scrambled randomized quasi-Monte Carlo（RQMC）使每条随机流保持正确边缘分布，同时让同一候选的多条 rollout
