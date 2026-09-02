@@ -1076,6 +1076,12 @@ def _summary(
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     set_backend_override(config, args.backend)
+    if getattr(args, "vllm_mh_fused_logprobs", False):
+        if args.method != "mh":
+            raise ValueError("--vllm-mh-fused-logprobs requires --method mh")
+        config.setdefault("vllm", {}).setdefault("base", {})[
+            "mh_fused_logprobs"
+        ] = True
     set_rl_adapter_override(config, getattr(args, "rl_adapter", None))
     replace_verifier_from_file(config, getattr(args, "verifier_config", None))
     if args.limit is not None:
@@ -1191,6 +1197,14 @@ def main() -> None:
         "--backend",
         choices=BACKEND_CHOICES,
         help="override runtime.backend before the experiment fingerprint is computed",
+    )
+    parser.add_argument(
+        "--vllm-mh-fused-logprobs",
+        action="store_true",
+        help=(
+            "return proposal and base token probabilities from one vLLM decode; "
+            "requires --backend vllm-sync and vLLM 0.26.x"
+        ),
     )
     parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--tag", default="default")

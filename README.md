@@ -221,6 +221,18 @@ python3.12 -m pip install --upgrade pip
 python3.12 -m pip install -e ".[dev,vllm]"
 ```
 
+幂目标 MH 在 vLLM `0.26.x` 上可把 proposal 概率和基础模型概率合并到同一次解码，省去生成后的整段
+重评分。该路径使用同步入口，且不与 speculative decoding 同时启用：
+
+```bash
+python -m experiments.arllm.gsm8k_reproduction \
+  --config configs/gsm8k_3090_aligned.toml \
+  --backend vllm-sync --method mh --vllm-mh-fused-logprobs \
+  --tag mh-fused --limit 32
+```
+
+实现约束、概率记账和统计字段见[算法与实现文档](docs/methods/ALGORITHMS.md#infra-vllm)。
+
 ## 统一复现入口
 
 [`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理，默认只运行 AR-LLM。

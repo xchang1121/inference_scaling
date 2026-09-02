@@ -157,6 +157,29 @@ def test_vllm_sync_override_and_unknown_setting(monkeypatch) -> None:
         loader.load_backend_from_config("base-model", config)
 
 
+def test_vllm_mh_fused_logprobs_require_sync_without_speculation(monkeypatch) -> None:
+    config = _config("vllm-sync")
+    config["vllm"] = {"proposal": {"mh_fused_logprobs": True}}
+    calls = []
+    monkeypatch.setattr(
+        loader.VLLMBackend,
+        "from_pretrained",
+        lambda model, **kwargs: calls.append((model, kwargs)) or "sync-vllm",
+    )
+
+    assert loader.load_backend_from_config("proposal-model", config) == "sync-vllm"
+    assert calls[0][1]["enable_mh_fused_logprobs"] is True
+
+    config["runtime"]["backend"] = "vllm"
+    with pytest.raises(ValueError, match="requires runtime.backend='vllm-sync'"):
+        loader.load_backend_from_config("proposal-model", config)
+
+    config["runtime"]["backend"] = "vllm-sync"
+    config["acceleration"] = {"speculation": {"enabled": True}}
+    with pytest.raises(ValueError, match="cannot be combined"):
+        loader.load_backend_from_config("proposal-model", config)
+
+
 def test_backend_override_is_fingerprinted_in_config() -> None:
     config = _config()
     loader.set_backend_override(config, "vllm")

@@ -16,13 +16,18 @@ using incorrect importance ratios.
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import inspect
 import itertools
+import os
 import threading
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from math import isclose, isfinite
 from pathlib import Path
 from typing import Any
+
+from packaging.version import Version
 
 from inference_scaling.arllm.acceleration import (
     ActiveBatchSpeculationConfig,
@@ -61,8 +66,25 @@ _PROTECTED_ENGINE_KWARGS = frozenset(
         "max_model_len",
         "max_num_seqs",
         "max_num_batched_tokens",
+        "worker_cls",
+        "async_scheduling",
     }
 )
+
+_MH_FUSED_WORKER = (
+    "inference_scaling.arllm.backends.vllm_mh_worker.MHFusedLogprobWorker"
+)
+
+
+def _validate_mh_fused_vllm_version() -> None:
+    """Fail before allocating a model when the worker adapter is incompatible."""
+
+    installed = Version(importlib.metadata.version("vllm"))
+    if not Version("0.26") <= installed < Version("0.27"):
+        raise RuntimeError(
+            "MH fused log-probabilities require vLLM >=0.26,<0.27; "
+            f"found {installed}"
+        )
 
 
 def _load_vllm_sampling_api() -> tuple[Any, Any, Any]:
@@ -92,6 +114,9 @@ class VLLMBackendSnapshot:
     delegated_score_forward_token_slots: int
     delegated_estimated_dense_forward_flops: int
     maximum_in_flight_requests: int
+    mh_fused_logprobs: bool = False
+    fused_reference_sequences: int = 0
+    fused_reference_tokens: int = 0
     native_suffix_speculation: bool = False
     observed_draft_sequences: int = 0
     native_speculative_drafts: int = 0
@@ -248,6 +273,7 @@ class VLLMBackend:
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
         native_suffix_speculation: bool = False,
+        mh_fused_logprobs: bool = False,
     ) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
@@ -269,6 +295,12 @@ class VLLMBackend:
         # retain one only when a caller explicitly requests diagnostics.
         self._draft_tree = draft_tree
         self._native_suffix_speculation = bool(native_suffix_speculation)
+        self._mh_fused_logprobs = bool(mh_fused_logprobs)
+        if self._mh_fused_logprobs and speculation is not None:
+            raise ValueError(
+                "MH fused log-probabilities currently require speculative decoding "
+                "to be disabled"
+            )
         pad = getattr(tokenizer, "pad_token_id", None)
         eos = getattr(tokenizer, "eos_token_id", None)
         if pad is None and eos is not None:
@@ -300,6 +332,8 @@ class VLLMBackend:
         self._active_engine_requests = 0
         self._maximum_in_flight_requests = 0
         self._observed_draft_sequences = 0
+        self._fused_reference_sequences = 0
+        self._fused_reference_tokens = 0
 
     @classmethod
     def from_pretrained(
@@ -327,6 +361,7 @@ class VLLMBackend:
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
         dynamic_speculation: bool = False,
+        enable_mh_fused_logprobs: bool = False,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "VLLMBackend":
         try:
@@ -353,6 +388,14 @@ class VLLMBackend:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
 
+        if enable_mh_fused_logprobs:
+            _validate_mh_fused_vllm_version()
+            if speculation is not None:
+                raise ValueError(
+                    "MH fused log-probabilities cannot be combined with speculative "
+                    "decoding"
+                )
+
         kwargs: dict[str, Any] = {
             "model": base_model,
             "dtype": dtype,
@@ -371,6 +414,12 @@ class VLLMBackend:
             "enable_lora": adapter_name_or_path is not None,
             "max_lora_rank": int(max_lora_rank),
         }
+        if enable_mh_fused_logprobs:
+            # The adapter targets vLLM's stable V1 runner in 0.26.  Sampling
+            # remains synchronous inside the engine so the selected raw
+            # probability is associated with the same request step.
+            kwargs["worker_cls"] = _MH_FUSED_WORKER
+            kwargs["async_scheduling"] = False
         optional = {
             "max_model_len": max_model_len,
             "max_num_seqs": max_num_seqs,
@@ -396,7 +445,27 @@ class VLLMBackend:
                     + ", ".join(sorted(overlap))
                 )
             kwargs.update(engine_kwargs)
-        engine = LLM(**kwargs)
+        previous_v2_runner = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
+        if enable_mh_fused_logprobs:
+            if previous_v2_runner is not None and previous_v2_runner.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                raise ValueError(
+                    "MH fused log-probabilities conflict with "
+                    "VLLM_USE_V2_MODEL_RUNNER=1"
+                )
+            os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "0"
+        try:
+            engine = LLM(**kwargs)
+        finally:
+            if enable_mh_fused_logprobs:
+                if previous_v2_runner is None:
+                    os.environ.pop("VLLM_USE_V2_MODEL_RUNNER", None)
+                else:
+                    os.environ["VLLM_USE_V2_MODEL_RUNNER"] = previous_v2_runner
 
         lora_request = None
         if adapter_name_or_path is not None:
@@ -427,6 +496,7 @@ class VLLMBackend:
             draft_tree=draft_tree,
             speculation=speculation,
             native_suffix_speculation=speculation is not None,
+            mh_fused_logprobs=enable_mh_fused_logprobs,
         )
 
     @property
@@ -511,6 +581,96 @@ class VLLMBackend:
             self._engine_requests_finished(len(prompts))
         return list(outputs)
 
+    def _collect_mh_reference_logprobs(
+        self, outputs: Sequence[Any]
+    ) -> dict[str, tuple[float, ...]]:
+        callback = getattr(self._engine, "collective_rpc", None)
+        if callback is None:
+            raise RuntimeError(
+                "the configured vLLM engine does not expose collective_rpc; "
+                "disable mh_fused_logprobs or use the supported offline LLM frontend"
+            )
+        request_ids: list[str] = []
+        for output in outputs:
+            request_id = getattr(output, "request_id", None)
+            if request_id is None:
+                raise RuntimeError(
+                    "vLLM omitted the request id required for fused MH accounting"
+                )
+            request_ids.append(str(request_id))
+        if len(set(request_ids)) != len(request_ids):
+            raise RuntimeError("vLLM returned duplicate request ids")
+
+        responses = callback(
+            "pop_mh_reference_logprobs",
+            args=(tuple(request_ids),),
+        )
+        if inspect.isawaitable(responses):
+            raise RuntimeError(
+                "MH fused log-probabilities require the synchronous vLLM frontend"
+            )
+        if isinstance(responses, Mapping):
+            worker_responses: Sequence[Any] = (responses,)
+        else:
+            worker_responses = tuple(responses)
+
+        merged: dict[str, tuple[float, ...]] = {}
+        for response in worker_responses:
+            if not isinstance(response, Mapping):
+                raise RuntimeError(
+                    "the fused MH worker returned an invalid probability payload"
+                )
+            for raw_request_id, raw_values in response.items():
+                request_id = str(raw_request_id)
+                values = tuple(float(value) for value in raw_values)
+                if any(not isfinite(value) for value in values):
+                    raise RuntimeError(
+                        "the fused MH worker returned a non-finite probability"
+                    )
+                previous = merged.get(request_id)
+                if previous is not None and (
+                    len(previous) != len(values)
+                    or any(
+                        not isclose(left, right, rel_tol=1e-5, abs_tol=1e-6)
+                        for left, right in zip(previous, values, strict=True)
+                    )
+                ):
+                    raise RuntimeError(
+                        "tensor-parallel vLLM workers disagreed on base log-probabilities"
+                    )
+                merged[request_id] = values
+
+        missing = [request_id for request_id in request_ids if request_id not in merged]
+        if missing:
+            raise RuntimeError(
+                "the fused MH worker omitted completed requests: " + ", ".join(missing)
+            )
+        return merged
+
+    def _generate_with_mh_reference(
+        self, prompts: Sequence[Any], params: Any
+    ) -> tuple[list[Any], dict[str, tuple[float, ...]]]:
+        """Generate and drain the worker side channel under one engine lock."""
+
+        if not self._mh_fused_logprobs:
+            return self._generate(prompts, params), {}
+        if self._closed:
+            raise RuntimeError("vLLM backend is closed")
+        kwargs = {
+            "sampling_params": params,
+            "use_tqdm": False,
+        }
+        if self._lora_request is not None:
+            kwargs["lora_request"] = self._lora_request
+        self._engine_requests_started(len(prompts))
+        try:
+            with self._engine_lock:
+                outputs = list(self._engine.generate(list(prompts), **kwargs))
+                references = self._collect_mh_reference_logprobs(outputs)
+        finally:
+            self._engine_requests_finished(len(prompts))
+        return outputs, references
+
     def _engine_requests_started(self, count: int) -> None:
         with self._statistics_lock:
             self._active_engine_requests += int(count)
@@ -579,6 +739,7 @@ class VLLMBackend:
         self,
         request: GenerationRequest,
         output: Any,
+        reference_token_logprobs: Sequence[float] | None = None,
     ) -> tuple[SequenceSample, int, int, int]:
         completion = self._completion(output)
         tokens = tuple(int(token) for token in completion.token_ids)
@@ -591,6 +752,43 @@ class VLLMBackend:
             _logprob_value(position, token)
             for position, token in zip(positions, tokens, strict=True)
         )
+        reference_values: tuple[float, ...] | None = None
+        if reference_token_logprobs is not None:
+            reference_values = tuple(float(value) for value in reference_token_logprobs)
+        else:
+            raw_positions = getattr(completion, "reference_logprobs", None)
+            if raw_positions is None:
+                # Accept the earlier fused-worker payload name as well.
+                raw_positions = getattr(completion, "power_logprobs", None)
+            if raw_positions is not None:
+                if len(raw_positions) != len(tokens):
+                    raise RuntimeError(
+                        "vLLM returned an invalid reference log-probability shape"
+                    )
+                parsed_reference: list[float] = []
+                for position, token in zip(raw_positions, tokens, strict=True):
+                    if isinstance(position, Mapping):
+                        parsed_reference.append(_logprob_value(position, token))
+                    else:
+                        parsed_reference.append(
+                            float(getattr(position, "logprob", position))
+                        )
+                reference_values = tuple(parsed_reference)
+
+        reference_sampling = SamplingConfig(
+            eos_token_id=request.sampling.eos_token_id
+        )
+        if reference_values is None and request.sampling == reference_sampling:
+            reference_values = token_logprobs
+        if reference_values is not None:
+            if len(reference_values) != len(tokens):
+                raise RuntimeError(
+                    "vLLM returned an invalid reference log-probability shape"
+                )
+            if any(not isfinite(value) for value in reference_values):
+                raise RuntimeError(
+                    "vLLM returned a non-finite reference log-probability"
+                )
         finish_reason = str(getattr(completion, "finish_reason", "length") or "length")
         eos = request.sampling.eos_token_id
         if eos is not None and tokens and tokens[-1] == eos:
@@ -603,6 +801,10 @@ class VLLMBackend:
             model_id=self.model_id,
             request_id=request.request_id,
             finish_reason=finish_reason,
+            reference_token_logprobs=reference_values,
+            reference_policy_id=(
+                None if reference_values is None else reference_sampling.policy_id
+            ),
         )
         prompt_length = len(self._model_prefix(request.prefix))
         cached = min(prompt_length, int(getattr(output, "num_cached_tokens", 0) or 0))
@@ -632,22 +834,37 @@ class VLLMBackend:
                 self.parameter_count, forward_slots
             )
             self._engine_requests += len(samples)
+            fused = [
+                sample
+                for sample in samples
+                if sample.reference_token_logprobs is not None
+                and sample.reference_policy_id != sample.policy_id
+            ]
+            self._fused_reference_sequences += len(fused)
+            self._fused_reference_tokens += sum(
+                len(sample.token_ids) for sample in fused
+            )
 
     def sample_batch(
         self, requests: Sequence[GenerationRequest]
     ) -> list[SequenceSample]:
         if not requests:
             return []
-        outputs = self._generate(
+        outputs, references = self._generate_with_mh_reference(
             [self._prompt(request.prefix) for request in requests],
             [self._sampling_params(request) for request in requests],
         )
         if len(outputs) != len(requests):
             raise RuntimeError("vLLM returned an invalid number of request outputs")
-        parsed = [
-            self._sample_from_output(request, output)
-            for request, output in zip(requests, outputs, strict=True)
-        ]
+        parsed = []
+        for request, output in zip(requests, outputs, strict=True):
+            output_request_id = getattr(output, "request_id", None)
+            reference = (
+                None
+                if output_request_id is None
+                else references.get(str(output_request_id))
+            )
+            parsed.append(self._sample_from_output(request, output, reference))
         samples = [item[0] for item in parsed]
         self._record_sample_batch(
             samples,
@@ -906,6 +1123,9 @@ class VLLMBackend:
                     self._delegated_estimated_dense_forward_flops
                 ),
                 maximum_in_flight_requests=self._maximum_in_flight_requests,
+                mh_fused_logprobs=self._mh_fused_logprobs,
+                fused_reference_sequences=self._fused_reference_sequences,
+                fused_reference_tokens=self._fused_reference_tokens,
                 native_suffix_speculation=self._native_suffix_speculation,
                 observed_draft_sequences=self._observed_draft_sequences,
                 native_speculative_drafts=drafts,

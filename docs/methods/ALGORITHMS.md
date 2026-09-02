@@ -1446,13 +1446,26 @@ AR-LLM 的 `runtime.backend` 和命令行 `--backend` 使用同一组标识：
 | --- | --- | --- |
 | 调度 | 显式组成批次与连续批处理封装 | 长期运行的 `AsyncLLM` 原生连续调度器 |
 | 前缀复用 | 每批唯一前缀只执行一次预填充并复制 KV | 跨调用 APC |
-| 生成概率 | 实际采样分布与基础模型分布同时返回 | `processed_logprobs` |
+| 生成概率 | 实际采样分布与基础模型分布同时返回 | 默认返回 `processed_logprobs`；同步 MH 可在同一 logits 步返回两套概率 |
 | 补全评分 | 任意可表示的采样策略 | 温度 1 由 vLLM 直接处理；其余交给精确 Transformers 后端 |
 | 历史草稿 | 确定性或随机 token 树 | 全局后缀 proposal |
 | 部分 rollout 恢复 | token 状态 + 前缀预填充 | token 状态 + APC |
 
 当前 vLLM 后端用于 AR-LLM。dLLM 需要返回反向扩散轨迹、每一步的转移对数概率与可提交的分块状态，因此
 使用第 17.6 节的批量 Transformers 后端；公共算法接口和计算量统计不随执行引擎变化。
+
+幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $q$ 和基础模型概率 $p$。vLLM
+的常规输出只含 $q$，因而原路径在生成后还要对完整后缀执行一次 $p$ 的前向评分。为消除这次重复前向，
+本仓库在 vLLM 0.26 的同步 worker 中先从原始 logits 取出最终选中 token 的 $\log p$，再由原采样器产生
+token 与 $\log q$。worker 只向主进程
+传回每步一个标量，不复制全词表 logits，也不修改 MH 接受率。`SequenceSample` 携带这组基础模型概率后，
+MH 的已有缓存分支会跳过整段重评分。
+
+该路径通过 `vllm.mh_fused_logprobs` 显式启用，当前约束为 `vllm-sync`、vLLM `0.26.x`、V1 model runner、
+无 speculative decoding。约束不满足时初始化直接报错，不会回退到不完整的概率。普通异步 vLLM、全词表
+熵统计和任意给定序列评分仍使用原实现。一次 MH 运行可在 backend delta 中核对
+`fused_reference_sequences`、`fused_reference_tokens` 和 `score_calls`；与常规 vLLM 的比较对象是同一模型、
+同一 proposal、同一随机种子及相同 MH 更新次数，差别仅为是否执行生成后的基础模型重评分。
 
 24 GiB 单卡同时加载 1.5B 基础模型和 0.5B rollout proposal 模型的配置为：
 
@@ -1481,6 +1494,25 @@ max_num_batched_tokens = 6144
 
 [vllm.engine_kwargs]
 enable_chunked_prefill = true
+```
+
+同步幂目标 MH 的融合概率配置只需放在基础模型角色中：
+
+```toml
+[runtime]
+backend = "vllm-sync"
+
+[vllm.base]
+mh_fused_logprobs = true
+```
+
+也可通过统一的单方法入口启用，无需修改配置文件：
+
+```bash
+python -m experiments.arllm.gsm8k_reproduction \
+  --config configs/gsm8k_3090_aligned.toml \
+  --backend vllm-sync --method mh --vllm-mh-fused-logprobs \
+  --tag mh-fused --limit 32
 ```
 
 熵、自确定度、非单位温度采样分布和把部分概率截为零的 top-k/top-p 所需精确重评分通过
@@ -1521,6 +1553,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x`--`0.26.x` 的 Li
 | 流式奖励 | 整批生成后提交相同奖励 |
 | MH 预取 | 相同更新次数的普通奖励 MH |
 | 两阶段延迟接受 | 使用相同 proposal 的普通精确 MH |
+| MH 同步双概率 | 相同 vLLM、proposal、随机种子与更新次数，但在生成后单独执行基础模型后缀评分 |
 | 已有历史 replay | 纯新生成路径；缓存构建成本单列 |
 | SMC 复用 | 相同 SMC 的纯新生成路径 |
 | vLLM | 使用同一模型、dtype、GPU 数与请求集合的 Transformers |

@@ -10,10 +10,12 @@ from dataclasses import dataclass
 import pytest
 
 from inference_scaling.arllm.acceleration import ActiveBatchSpeculationConfig
+from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
 from inference_scaling.arllm.backends.vllm_backend import _load_vllm_sampling_api
-from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.config import MHConfig, SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
+from inference_scaling.shared.rng import SeedStream
 
 
 @dataclass
@@ -26,6 +28,7 @@ class _Completion:
     token_ids: list[int]
     logprobs: list[dict[int, _Logprob]]
     finish_reason: str = "length"
+    power_logprobs: list[dict[int, _Logprob]] | None = None
 
 
 @dataclass
@@ -33,6 +36,7 @@ class _Output:
     outputs: list[_Completion]
     prompt_logprobs: list[dict[int, _Logprob] | None] | None = None
     num_cached_tokens: int = 0
+    request_id: str | None = None
 
 
 class _SamplingParams:
@@ -152,6 +156,39 @@ class _MetricEngine(_Engine):
         ]
 
 
+class _FusedEngine(_Engine):
+    def __init__(self):
+        super().__init__()
+        self.references = {}
+        self.rpc_calls = []
+
+    def generate(self, prompts, *, sampling_params, use_tqdm, **kwargs):
+        outputs = super().generate(
+            prompts,
+            sampling_params=sampling_params,
+            use_tqdm=use_tqdm,
+            **kwargs,
+        )
+        call = len(self.calls)
+        for index, output in enumerate(outputs):
+            request_id = f"engine:{call}:{index}"
+            output.request_id = request_id
+            tokens = output.outputs[0].token_ids
+            self.references[request_id] = tuple(-0.4 for _ in tokens)
+        return outputs
+
+    def collective_rpc(self, method, *, args):
+        self.rpc_calls.append((method, args))
+        request_ids = args[0]
+        return [
+            {
+                request_id: self.references.pop(request_id)
+                for request_id in request_ids
+                if request_id in self.references
+            }
+        ]
+
+
 class _Fallback:
     model_id = "fake"
 
@@ -206,6 +243,67 @@ def test_vllm_sampling_preserves_per_request_seed_policy_and_order() -> None:
     assert snapshot.generated_tokens == 4
     assert snapshot.shared_prefill_tokens_saved == 4
     assert snapshot.prefill_tokens == 0
+
+
+def test_vllm_accepts_upstream_power_logprobs_without_rescoring() -> None:
+    engine = _Engine()
+    backend = VLLMBackend(
+        engine,
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+    )
+    original_generate = engine.generate
+
+    def generate(*args, **kwargs):
+        outputs = original_generate(*args, **kwargs)
+        for output in outputs:
+            completion = output.outputs[0]
+            completion.power_logprobs = [
+                {token: _Logprob(-0.4)} for token in completion.token_ids
+            ]
+        return outputs
+
+    engine.generate = generate
+    request = GenerationRequest(
+        (1,), 2, SamplingConfig(temperature=0.5), 4, "power"
+    )
+
+    sample = backend.sample_batch([request])[0]
+
+    assert sample.reference_token_logprobs == (-0.4, -0.4)
+    assert sample.reference_policy_id == SamplingConfig().policy_id
+    assert backend.snapshot().fused_reference_tokens == 2
+
+
+def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
+    engine = _FusedEngine()
+    backend = VLLMBackend(
+        engine,
+        _Tokenizer(),
+        model_id="fake",
+        parameter_count=100,
+        sampling_params_factory=_SamplingParams,
+        mh_fused_logprobs=True,
+    )
+
+    result = run_mh_chain(
+        backend,
+        (1,),
+        MHConfig(alpha=2.0, total_length=2, block_size=2, steps_per_block=1),
+        SamplingConfig(temperature=0.5),
+        SeedStream(7),
+    )
+
+    assert len(result.token_ids) == 2
+    assert result.base_token_logprobs == (-0.4, -0.4)
+    snapshot = backend.snapshot()
+    assert snapshot.score_calls == 0
+    assert snapshot.mh_fused_logprobs
+    assert snapshot.fused_reference_sequences == 2
+    assert snapshot.fused_reference_tokens >= 3
+    assert len(engine.rpc_calls) == 2
 
 
 def test_vllm_rejects_explicit_token_uniforms() -> None:

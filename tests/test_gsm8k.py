@@ -106,6 +106,36 @@ def test_cli_can_disable_small_proposal_importance_correction() -> None:
         _apply_overrides(config, args)
 
 
+def test_cli_enables_fused_vllm_accounting_only_for_power_mh() -> None:
+    args = SimpleNamespace(
+        backend="vllm-sync",
+        vllm_mh_fused_logprobs=True,
+        limit=None,
+        max_new_tokens=None,
+        sampling_temperature=None,
+        num_beams=None,
+        best_of_n_samples=None,
+        conditional_reward=None,
+        reward_temperature=None,
+        importance_log_ratio_clip=None,
+        disable_importance_correction=False,
+        method="mh",
+        mh_alpha=None,
+        mh_steps=None,
+        candidate_count=None,
+        rollout_count=None,
+        block_size=None,
+    )
+    config = {"runtime": {}, "conditional_is": {}, "mh": {}}
+
+    _apply_overrides(config, args)
+
+    assert config["vllm"]["base"]["mh_fused_logprobs"] is True
+    args.method = "base"
+    with pytest.raises(ValueError, match="requires --method mh"):
+        _apply_overrides(config, args)
+
+
 def test_async_output_agreement_reports_token_and_answer_divergence() -> None:
     from experiments.arllm.gsm8k_async_benchmark import _output_agreement
 

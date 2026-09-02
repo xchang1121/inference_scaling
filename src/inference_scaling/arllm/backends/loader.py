@@ -31,6 +31,7 @@ _VLLM_SETTINGS = {
     "max_model_len",
     "max_num_batched_tokens",
     "max_num_seqs",
+    "mh_fused_logprobs",
     "parameter_count",
     "quantization",
     "revision",
@@ -59,6 +60,8 @@ _EXPLICIT_ENGINE_SETTINGS = {
     "seed",
     "tensor_parallel_size",
     "trust_remote_code",
+    "worker_cls",
+    "async_scheduling",
 }
 
 
@@ -237,6 +240,15 @@ def load_backend_from_config(
     asynchronous = bool(settings.pop("asynchronous", True))
     if backend_kind == "vllm-sync":
         asynchronous = False
+    mh_fused_logprobs = bool(settings.pop("mh_fused_logprobs", False))
+    if mh_fused_logprobs and asynchronous:
+        raise ValueError(
+            "vllm.mh_fused_logprobs requires runtime.backend='vllm-sync'"
+        )
+    if mh_fused_logprobs and speculation is not None:
+        raise ValueError(
+            "vllm.mh_fused_logprobs cannot be combined with speculative decoding"
+        )
     engine_kwargs = _mapping(
         settings.pop("engine_kwargs", None),
         name="vllm.engine_kwargs",
@@ -283,6 +295,7 @@ def load_backend_from_config(
             scoring_backend=exact_backend,
             enable_prefix_caching=bool(settings.pop("enable_prefix_caching", True)),
             max_lora_rank=int(settings.pop("max_lora_rank", 16)),
+            enable_mh_fused_logprobs=mh_fused_logprobs,
             engine_kwargs=engine_kwargs,
             **acceleration_kwargs,
         )
