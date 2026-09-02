@@ -88,6 +88,11 @@ def build_commands(
                 str(args.config),
                 "--profile",
                 "full",
+                *(
+                    []
+                    if getattr(args, "verifier_config", None) is None
+                    else ["--verifier-config", str(args.verifier_config)]
+                ),
             ]
         )
         add(
@@ -111,6 +116,8 @@ def build_commands(
         "--profile",
         args.profile,
     ]
+    if getattr(args, "verifier_config", None) is not None:
+        base_common.extend(("--verifier-config", str(args.verifier_config)))
 
     def add_run(
         method: str,
@@ -385,7 +392,7 @@ def build_commands(
         add_sweep(
             "ablations",
             "reward_source",
-            "exact-verifier",
+            "configured-verifier",
             "verifier_conditional_is",
             (),
         )
@@ -516,6 +523,7 @@ def main() -> None:
         "--config", type=Path, default=Path("configs/gsm8k_llada_moe_3090.toml")
     )
     parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument("--tag")
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument(
@@ -624,6 +632,9 @@ def main() -> None:
             "components": args.components,
             "with_aligned": include_aligned,
             "vrpo": args.vrpo,
+            "verifier_config": (
+                str(args.verifier_config) if args.verifier_config is not None else None
+            ),
         },
         dry_run=args.dry_run,
         restart=args.restart,

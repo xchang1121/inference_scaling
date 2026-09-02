@@ -10,13 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import re
 import urllib.request
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from pathlib import Path
 from typing import Iterable, Literal, Sequence
+
+from inference_scaling.shared.evaluation.numeric import extract_numeric_answer
 
 GSM8K_TRAIN_URL = (
     "https://raw.githubusercontent.com/openai/grade-school-math/"
@@ -40,21 +40,6 @@ _SPLITS: dict[GSM8KSplit, tuple[str, str, int]] = {
     "train": (GSM8K_TRAIN_URL, GSM8K_TRAIN_SHA256, 7473),
     "test": (GSM8K_TEST_URL, GSM8K_TEST_SHA256, 1319),
 }
-
-_NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?"
-_FRACTION = rf"(?:{_NUMBER})\s*/\s*(?:{_NUMBER})"
-_BOXED_RE = re.compile(r"\\boxed\s*\{\s*(" + _FRACTION + "|" + _NUMBER + r")\s*\}")
-_HASH_RE = re.compile(r"####\s*(" + _FRACTION + "|" + _NUMBER + r")")
-_ANSWER_RE = re.compile(
-    r"(?:final\s+answer|answer\s+is|answer)\s*(?:is|:|=)?\s*\$?\s*("
-    + _FRACTION
-    + "|"
-    + _NUMBER
-    + r")",
-    flags=re.IGNORECASE,
-)
-_ANY_NUMBER_RE = re.compile(_FRACTION + "|" + _NUMBER)
-
 
 @dataclass(frozen=True, slots=True)
 class GSM8KProblem:
@@ -93,32 +78,6 @@ def download_gsm8k(path: str | Path, *, split: GSM8KSplit = "test") -> Path:
     finally:
         temporary.unlink(missing_ok=True)
     return destination
-
-
-def _as_fraction(value: str) -> Fraction | None:
-    cleaned = value.strip().replace(",", "").replace("$", "")
-    try:
-        if "/" in cleaned:
-            numerator, denominator = cleaned.split("/", 1)
-            return Fraction(Decimal(numerator.strip())) / Fraction(
-                Decimal(denominator.strip())
-            )
-        return Fraction(Decimal(cleaned))
-    except (InvalidOperation, ValueError, ZeroDivisionError):
-        return None
-
-
-def extract_numeric_answer(text: str) -> Fraction | None:
-    """Extract a final numeric answer without executing model-produced text."""
-
-    for pattern in (_HASH_RE, _BOXED_RE, _ANSWER_RE):
-        matches = pattern.findall(text)
-        if matches:
-            parsed = _as_fraction(matches[-1])
-            if parsed is not None:
-                return parsed
-    matches = _ANY_NUMBER_RE.findall(text)
-    return _as_fraction(matches[-1]) if matches else None
 
 
 def load_gsm8k(

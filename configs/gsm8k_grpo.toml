@@ -37,6 +37,12 @@ save_steps = 25
 save_total_limit = 4
 power_sample_seconds = 2.0
 
+[verifier]
+provider = "python"
+name = "numeric_reference"
+factory = "inference_scaling.shared.evaluation.numeric:build_numeric_reference_verifier"
+requires_reference = true
+
 [lora]
 r = 16
 alpha = 32

@@ -1,38 +1,39 @@
-from fractions import Fraction
-
-from inference_scaling.dllm.preferences import select_verified_preference_pair
+from inference_scaling.dllm.preferences import select_scored_preference_pair
 
 
-def test_verified_rollout_is_preferred_when_group_has_both_outcomes():
-    pair = select_verified_preference_pair(
+def test_highest_scored_rollout_is_preferred_when_group_has_both_outcomes():
+    pair = select_scored_preference_pair(
         candidate_texts=("work\n#### 12", "wrong\n#### 7"),
-        gold_solution="gold\n#### 12",
-        gold_answer=Fraction(12),
+        candidate_rewards=(1.0, 0.0),
+        reference_text="gold\n#### 12",
+        reference_reward=1.0,
     )
 
     assert pair is not None
     assert pair.chosen == "work\n#### 12"
-    assert pair.chosen_source == "verified_rollout:0"
-    assert pair.rejected_candidate_index == 1
+    assert pair.chosen_source == "candidate:0"
+    assert pair.rejected_source == "candidate:1"
 
 
-def test_public_training_solution_fills_missing_positive():
-    pair = select_verified_preference_pair(
+def test_scored_reference_completion_fills_missing_positive():
+    pair = select_scored_preference_pair(
         candidate_texts=("wrong\n#### 7", "also wrong\n#### 8"),
-        gold_solution="gold\n#### 12",
-        gold_answer=Fraction(12),
+        candidate_rewards=(0.0, 0.0),
+        reference_text="gold\n#### 12",
+        reference_reward=1.0,
     )
 
     assert pair is not None
     assert pair.chosen == "gold\n#### 12"
-    assert pair.chosen_source == "public_training_solution"
+    assert pair.chosen_source == "dataset_reference_completion"
 
 
-def test_all_correct_group_is_omitted():
-    pair = select_verified_preference_pair(
+def test_equal_reward_group_is_omitted():
+    pair = select_scored_preference_pair(
         candidate_texts=("first\n#### 12", "second\n#### 12"),
-        gold_solution="gold\n#### 12",
-        gold_answer=Fraction(12),
+        candidate_rewards=(1.0, 1.0),
+        reference_text="gold\n#### 12",
+        reference_reward=1.0,
     )
 
     assert pair is None

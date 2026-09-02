@@ -44,6 +44,7 @@ preference_manifest = "data/gsm8k/llada_vrpo_preferences.manifest.json"
 candidate_pool_size = 512
 preference_pairs = 205
 num_generations = 4
+include_reference_completion = true
 max_steps = 205
 gradient_accumulation_steps = 4
 timestep_samples = 8
@@ -117,6 +118,12 @@ rollout_count = 3
 decision_block_size = 48
 reward_temperature = 0.1
 importance_log_ratio_clip = 10.0
+
+[verifier]
+provider = "python"
+name = "numeric_reference"
+factory = "inference_scaling.shared.evaluation.numeric:build_numeric_reference_verifier"
+requires_reference = true
 
 [replay]
 history_rollouts = 2

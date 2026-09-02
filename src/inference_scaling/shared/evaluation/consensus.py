@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from fractions import Fraction
 
-from inference_scaling.shared.evaluation.gsm8k import extract_numeric_answer
+from inference_scaling.shared.evaluation.numeric import extract_numeric_answer
 from inference_scaling.shared.types import TokenSequence
 
 

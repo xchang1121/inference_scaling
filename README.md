@@ -59,6 +59,68 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 多树搜索、两阶段延迟接受 MH、历史后缀 proposal、批处理、KV 复用和 vLLM 后端，均集中在同一份
 [算法基础、原理与实现文档](docs/methods/ALGORITHMS.md)中按“目标—算法—实现—误差与成本”组织。
 
+## 奖励与 verifier 配置
+
+MH、IS 与 replay 的算法层统一接收
+`reward(prompt_tokens, completion_tokens) -> float`，或保持相同逐序列定义的批量版本。数据集读取、文本解析、
+远程服务和模型族均不进入算法实现。外部 verifier 由顶层 `[verifier]` 表选择；默认 GSM8K 配置使用数值
+参考值插件，但该插件只是一个可替换实现：
+
+```toml
+[verifier]
+provider = "python"
+name = "numeric_reference"
+factory = "inference_scaling.shared.evaluation.numeric:build_numeric_reference_verifier"
+requires_reference = true
+
+[verifier.options]
+correct_reward = 1.0
+incorrect_reward = 0.0
+unparseable_reward = 0.0
+```
+
+`python` provider 从可信的本地模块加载工厂函数。工厂接收 `context` 和 `[verifier.options]`，返回
+`score(prompt, completion)` 对象或等价可调用对象；可选的 `score_batch(inputs)` 用于批量服务。
+`requires_reference = false` 时，实验入口不会把数据集参考值传给 verifier。配置、工厂路径和参数共同生成稳定
+版本号，replay 只复用版本一致的奖励记录。核心接口位于
+[`shared/verifier.py`](src/inference_scaling/shared/verifier.py)，独立配置示例位于
+[`configs/verifiers/`](configs/verifiers/)；所有统一入口都接受 `--verifier-config`：
+
+```powershell
+python -m experiments.arllm.gsm8k_reproduction `
+  --method verifier_conditional_is `
+  --verifier-config configs\verifiers\gsm8k_numeric_reference.toml `
+  --limit 1 --tag verifier-check
+```
+
+GRPO 的批量奖励适配器也读取同一 `[verifier]` 表；`gold_answer` 仅在
+`requires_reference = true` 时交给 verifier。VRPO 偏好数据按 verifier 分数选择最高与最低的生成；默认配置把
+公开训练集解答作为一个额外候选并同样评分，设置
+`vrpo_training.include_reference_completion = false` 可完全排除该候选。训练与推理可使用同一
+`--verifier-config`，也可在各自配置文件中选择不同 verifier。
+
+AR-LLM 还实现与外部 verifier 分离的完整序列对数概率奖励：
+
+```math
+r_{\log p}(x,y)=c\log p(y\mid x),
+\qquad
+p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
+=p(y\mid x)^{1+c/\tau}.
+```
+
+因此目标为 $`p^\alpha`$ 时可取 $`c=(\alpha-1)\tau`$。`Best-of-N` 直接复用生成时保存的 token
+对数概率；条件 IS 与迭代 IS 通过后端的批量序列评分计算该奖励。这里的 $`p`$ 是配置实际采用的完整支持
+采样策略。直接设置 $`c=1`$ 时指数是 $`1+1/\tau`$，并不固定为 2；例如 $`\tau=0.1`$ 时指数为 11。
+MH 对同一目标直接使用 `mh --mh-alpha <alpha>`，无需把 logprob 再作为奖励评分一次。该奖励模式需要模型后端
+返回精确 token 对数概率，不能用于只返回文本的黑盒接口：
+
+```powershell
+python -m experiments.arllm.gsm8k_reproduction `
+  --method conditional_is --conditional-reward sequence_log_probability `
+  --reward-temperature 0.5 --logprob-reward-scale 0.5 `
+  --limit 1 --tag power-two-is
+```
+
 ## 文档
 
 | 文档 | 内容 |
@@ -208,6 +270,7 @@ python experiments\run_reproduction.py `
 | `--ar-methods ...`、`--dllm-methods ...` | 选择具体推理方法 |
 | `--ar-mh-suffix-schedule ...` | 选择 AR-MH 后缀分布；默认值为 `multiscale`，`uniform` 用于基线复现 |
 | `--components ...` | 选择质量、matched target、replay、动态 IS、异步、pass@k、消融、infra 等实验族 |
+| `--verifier-config ...` | 用独立 TOML 文件替换外部 verifier，不修改数据集或算法配置 |
 | `--ar-python ...`、`--dllm-python ...` | 覆盖环境变量与当前解释器 |
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印子命令，不启动训练或推理 |

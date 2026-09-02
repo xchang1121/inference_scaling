@@ -324,15 +324,17 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励或自一�
 
 ### 3.2 GRPO 对照
 
-本仓库中的 GRPO 使用同一基础模型和 GSM8K 数值正确性奖励进行参数训练。若忽略参数化限制，一个带 KL
+已归档的 GRPO 对照使用同一基础模型和默认 GSM8K 数值参考值 verifier 进行参数训练；训练入口也可通过
+独立 `[verifier]` 配置替换奖励。若忽略参数化限制，一个带 KL
 正则的理想策略优化问题具有式 (1) 的形式；实际 GRPO 只通过有限 rollout、组内相对优势和有限梯度更新去近似
 该目标。报告分别列出训练 FLOPs 与训练后采样 FLOPs；单次推理成本指训练完成后的生成成本。
 
 训练得到固定策略 $`p_{\theta_{\mathrm{GRPO}}}`$。实验分别采用温度 1 随机采样和逐 token 最大概率
 （argmax）解码。
 
-训练入口为 [`experiments/arllm/train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py)，精确数值奖励实现为
-[`shared/evaluation/grpo_reward.py`](../../src/inference_scaling/shared/evaluation/grpo_reward.py)。
+训练入口为 [`experiments/arllm/train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py)，TRL
+批量奖励适配器位于 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py)，默认数值参考值
+插件位于 [`shared/evaluation/numeric.py`](../../src/inference_scaling/shared/evaluation/numeric.py)。
 
 <a id="alg-power-mh"></a>
 ## 4. 幂分布后缀 MH
@@ -1223,19 +1225,57 @@ Hastings 比中抵消。Qwen2.5-1.5B 的三个随机种子组合消融中，`mul
 <a id="alg-rewards"></a>
 ## 15. 已实现的奖励信号
 
-条件 IS 与奖励 MH 接受任意有限序列奖励。GSM8K 实验提供下列实现：
+条件 IS 与奖励 MH 接受任意有限的逐序列奖励。算法层的统一签名为
+`reward(prompt_tokens, completion_tokens) -> float`；批量接口必须对每个序列计算同一个函数，且按输入顺序
+返回结果。数据集、参考值、文本解析和 verifier 服务位于该接口之外。
 
-| 奖励 | 定义或实现 | 作用范围 |
+| 奖励 | 定义或实现 | 概率或执行要求 |
 | --- | --- | --- |
-| 数值正确性 verifier | 解析最终数值，与标准答案比较，取 0/1 | 共享目标诊断；会读取标准答案 |
-| 累计自一致性（`cumulative self-consistency`） | 按已经评估的数值结果累计众数，匹配众数取 1 | 部署质量实验；奖励来源为生成结果 |
-| token 平均对数概率 | 选中 token 对数概率的平均值 | 置信度消融 |
-| 平均负熵 | $`\lvert y\rvert^{-1}\sum_t\sum_v p_t(v)\log p_t(v)`$ | 置信度消融 |
-| 自确定度（`self-certainty`） | $`-\lvert y\rvert^{-1}\sum_t \lvert V\rvert^{-1}\sum_v[\log\lvert V\rvert+\log p_t(v)]`$ | 置信度消融 |
+| 配置型 verifier | 本地工厂或外部服务对提示与完整生成给出标量；GSM8K 默认插件解析最终数值并与参考值比较 | verifier 输出有限实数；是否接收参考值由配置显式声明 |
+| 完整序列对数概率（`sequence_log_probability`） | $`c\log p(y\mid x)`$ | AR 后端能够按实际采样策略精确评分完整序列 |
+| 累计自一致性（`self_consistency`） | 按本批已经评估的数值结果累计众数，匹配众数取 1 | 奖励依赖同批样本，只用于普通条件 IS 与 Best-of-$`N`$ |
+| 固定众数（`frozen_consensus`） | 用独立初始估计样本确定众数，随后固定逐序列 0/1 奖励 | 可用于需要固定逐序列奖励的迭代条件 IS |
+| token 平均对数概率（`log_probability`） | $`\lvert y\rvert^{-1}\log p(y\mid x)`$，随后做组内归一化 | 置信度消融；不等于完整序列对数概率奖励 |
+| 平均负熵 | $`\lvert y\rvert^{-1}\sum_t\sum_v p_t(v)\log p_t(v)`$ | 需要完整词表概率 |
+| 自确定度（`self-certainty`） | $`-\lvert y\rvert^{-1}\sum_t \lvert V\rvert^{-1}\sum_v[\log\lvert V\rvert+\log p_t(v)]`$ | 需要完整词表概率 |
 
-后三类在每个候选选择步骤内，使用组内最小值和最大值对全部候选 rollout 做线性归一化。熵类奖励需要全词表概率，
-由精确 Transformers 评分后端计算。自一致性
-实现见 [`shared/evaluation/consensus.py`](../../src/inference_scaling/shared/evaluation/consensus.py)。
+完整序列对数概率奖励与式 (2) 直接对应。令
+
+```math
+r_{\log p}(x,y)=c\log p(y\mid x).
+```
+
+代入式 (1) 后，未归一化目标为
+
+```math
+p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
+=p(y\mid x)^{1+c/\tau}.
+```
+
+取 $`c=(\alpha-1)\tau`$ 即得到式 (2) 的 $`p^\alpha`$。Best-of-$`N`$ 已在生成时保存每个 token
+的对数概率，选择阶段直接求和，不增加模型前向计算；条件 IS 的 rollout 可能来自另一个 proposal，因此通过
+`SequenceLogProbabilityReward.batch` 调用主模型 `score_batch`。vLLM 只在能够精确评分所选温度、top-k 与
+top-p 策略时执行；否则要求配置精确评分后端并在缺失时终止。
+
+参数 `logprob_reward_scale` 对应 $`c`$，`reward_temperature` 对应 $`\tau`$。设置 $`c=1`$ 表示奖励确实为
+$`\log p`$，但目标指数是 $`1+1/\tau`$；它只在 $`\tau=1`$ 时等于 $`p^2`$。MH 已通过式 (2) 和
+`mh.alpha` 直接实现相同目标，不需要额外调用序列奖励评分。
+
+配置型 verifier 由 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py) 构造。独立 TOML
+中的 `factory` 指向可信本地工厂，`requires_reference` 决定实验适配层是否提供数据集参考值；MH、IS、replay
+和 dLLM 算法均只接收构造后的统一奖励回调。verifier 的名称、工厂与参数经哈希形成 `reward_version`，历史
+记录只有在提示、生成位置、采样策略和该版本均匹配时才可复用。GSM8K 的数值解析与默认参考值 verifier 位于
+[`shared/evaluation/numeric.py`](../../src/inference_scaling/shared/evaluation/numeric.py)，不属于数据加载器或
+算法实现。
+
+GRPO 使用 `ConfiguredTrainingVerifierReward` 把同一配置转换为 TRL 的批量回调，并记录奖励调用数、生成
+token 数和奖励均值。VRPO 偏好构造对每条生成调用同一 verifier，选择最高分与最低分文本；公开训练集解答
+只有在 `include_reference_completion = true` 时作为额外候选进入同一评分过程。关闭该字段后，偏好对只由
+模型生成与 verifier 分数确定。
+
+token 平均对数概率、平均负熵和自确定度在每个候选选择步骤内使用组内最小值和最大值做线性归一化；常数
+信号置零。该归一化使奖励依赖当前候选组，只作为有限候选置信度消融。自一致性实现见
+[`shared/evaluation/consensus.py`](../../src/inference_scaling/shared/evaluation/consensus.py)。
 
 <a id="alg-correctness-matrix"></a>
 ## 16. 正确性与近似来源

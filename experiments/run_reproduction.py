@@ -53,6 +53,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         ]
         if args.ar_config is not None:
             command.extend(("--config", str(args.ar_config)))
+        if getattr(args, "verifier_config", None) is not None:
+            command.extend(("--verifier-config", str(args.verifier_config)))
         if args.backend is not None:
             command.extend(("--backend", args.backend))
         ar_mh_suffix_schedule = getattr(args, "ar_mh_suffix_schedule", "multiscale")
@@ -126,6 +128,14 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                             dllm_config,
                             "--profile",
                             "full",
+                            *(
+                                []
+                                if getattr(args, "verifier_config", None) is None
+                                else [
+                                    "--verifier-config",
+                                    str(args.verifier_config),
+                                ]
+                            ),
                         ],
                         [
                             args.dllm_python,
@@ -168,6 +178,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 "--components",
                 *dllm_components,
             ]
+            if getattr(args, "verifier_config", None) is not None:
+                command.extend(("--verifier-config", str(args.verifier_config)))
             for flag, value in (
                 ("--limit", args.limit),
                 ("--ablation-limit", args.ablation_limit),
@@ -201,6 +213,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--tag", default="reproduction")
     parser.add_argument("--ar-config", type=Path)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument(
         "--ar-training-config", type=Path, default=Path("configs/gsm8k_grpo.toml")
     )
@@ -282,6 +295,9 @@ def main() -> None:
             "dllm_methods": args.dllm_methods,
             "components": args.components,
             "ar_mh_suffix_schedule": args.ar_mh_suffix_schedule,
+            "verifier_config": (
+                str(args.verifier_config) if args.verifier_config is not None else None
+            ),
             "python_executables": {
                 "controller": sys.executable,
                 "arllm": args.ar_python,

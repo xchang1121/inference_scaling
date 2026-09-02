@@ -17,6 +17,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import (
     IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES,
+    _configured_verifier_reward,
 )
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
@@ -39,7 +40,6 @@ from inference_scaling.dllm.replay import (
 )
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
-    GSM8KProblem,
     extract_numeric_answer,
     gsm8k_prompt,
     load_gsm8k,
@@ -47,6 +47,10 @@ from inference_scaling.shared.evaluation import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import (
+    TokenBatchReward,
+    replace_verifier_from_file,
+)
 
 IMPLEMENTATION_FILES = (
     *QUALITY_IMPLEMENTATION_FILES,
@@ -54,16 +58,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/replay.py",
     "src/inference_scaling/shared/importance.py",
 )
-
-
-def _reward_batch(backend: Any, problem: GSM8KProblem):
-    def evaluate(_prompt: TokenSequence, continuations: Sequence[TokenSequence]):
-        return [
-            float(extract_numeric_answer(backend.decode(tokens)) == problem.gold_answer)
-            for tokens in continuations
-        ]
-
-    return evaluate
 
 
 def _sample_candidates(
@@ -95,7 +89,7 @@ def _sample_candidates(
 def _run_fresh(
     backend: Any,
     prompt: TokenSequence,
-    problem: GSM8KProblem,
+    reward_batch: TokenBatchReward,
     config: dict[str, Any],
     seed: int,
 ) -> tuple[TokenSequence, dict[str, Any]]:
@@ -139,7 +133,7 @@ def _run_fresh(
             fresh_count=total_fresh,
             target_sampling=exact_sampling,
             behavior_sampling=None,
-            reward_batch=_reward_batch(backend, problem),
+            reward_batch=reward_batch,
             reward_temperature=float(conditional["reward_temperature"]),
             truncation=float(replay["truncation"]),
             seed=seeds.derive("dllm-replay-fresh-select", stage_index),
@@ -161,7 +155,7 @@ def _run_warm(
     backend: Any,
     proposal: Any,
     prompt: TokenSequence,
-    problem: GSM8KProblem,
+    reward_batch: TokenBatchReward,
     config: dict[str, Any],
     seed: int,
 ) -> tuple[TokenSequence, dict[str, Any]]:
@@ -214,7 +208,7 @@ def _run_warm(
             count_per_candidate=int(replay["history_rollouts"]),
             target_sampling=exact_sampling,
             behavior_sampling=exact_sampling,
-            reward_batch=_reward_batch(backend, problem),
+            reward_batch=reward_batch,
             seed=seeds.derive("dllm-replay-history", stage_index),
         )
         build_seconds += time.perf_counter() - started
@@ -252,7 +246,7 @@ def _run_warm(
             fresh_count=int(replay["fresh_rollouts"]),
             target_sampling=exact_sampling,
             behavior_sampling=exact_sampling,
-            reward_batch=_reward_batch(backend, problem),
+            reward_batch=reward_batch,
             reward_temperature=float(conditional["reward_temperature"]),
             truncation=float(replay["truncation"]),
             seed=seeds.derive("dllm-replay-online-select", stage_index),
@@ -313,7 +307,11 @@ def _run_warm(
     }
 
 
-def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def summarize(
+    records: Sequence[dict[str, Any]],
+    *,
+    verifier: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not records:
         raise ValueError("cannot summarize an empty replay benchmark")
     count = len(records)
@@ -365,7 +363,7 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "online_compute_reduction_vs_fresh_only": 1 - warm_online_flops / fresh_flops,
             "end_to_end_compute_reduction_vs_fresh_only": 1 - warm_end_flops / fresh_flops,
         },
-        "reward_scope": "public GSM8K gold verifier; separate from deployable quality results",
+        "reward_scope": verifier,
     }
 
 
@@ -381,10 +379,12 @@ def main() -> None:
     parser.add_argument("--tag", default="paired")
     parser.add_argument("--profile", choices=("smoke", "full"), default="full")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
+    replace_verifier_from_file(config, args.verifier_config)
     if args.limit is not None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
@@ -436,18 +436,21 @@ def main() -> None:
                     continue
                 prompt = backend.encode_chat(gsm8k_prompt(problem.question))
                 problem_seed = seeds.derive("dllm-replay-benchmark", problem.index)
+                reward_batch = _configured_verifier_reward(
+                    backend, problem, config
+                ).batch
 
                 fresh_before = backend.snapshot()
                 started = time.perf_counter()
                 fresh_tokens, fresh_info = _run_fresh(
-                    backend, prompt, problem, config, problem_seed
+                    backend, prompt, reward_batch, config, problem_seed
                 )
                 fresh_seconds = time.perf_counter() - started
                 fresh_delta = llada_snapshot_delta(fresh_before, backend.snapshot())
 
                 warm_started = time.perf_counter()
                 warm_tokens, warm_info = _run_warm(
-                    backend, proposal, prompt, problem, config, problem_seed
+                    backend, proposal, prompt, reward_batch, config, problem_seed
                 )
                 measured_warm_seconds = time.perf_counter() - warm_started
                 fresh_prediction = extract_numeric_answer(backend.decode(fresh_tokens))
@@ -483,7 +486,10 @@ def main() -> None:
                     f"warm={int(record['warm_replay']['correct'])}",
                     flush=True,
                 )
-        summary = {"fingerprint": fingerprint, **summarize(records)}
+        summary = {
+            "fingerprint": fingerprint,
+            **summarize(records, verifier=config["verifier"]),
+        }
         summary_path.write_text(
             json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
         )

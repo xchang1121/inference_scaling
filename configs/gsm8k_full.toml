@@ -79,7 +79,14 @@ rollout_design = "iid"
 block_size = 128
 reward_temperature = 0.1
 reward = "self_consistency"
+logprob_reward_scale = 1.0
 importance_log_ratio_clip = 10.0
+
+[verifier]
+provider = "python"
+name = "numeric_reference"
+factory = "inference_scaling.shared.evaluation.numeric:build_numeric_reference_verifier"
+requires_reference = true
 
 [matched_target]
 reward_temperature = 0.04

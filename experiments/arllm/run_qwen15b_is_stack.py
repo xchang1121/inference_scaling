@@ -29,6 +29,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 from experiments.arllm.gsm8k_reproduction import (
+    _configured_verifier_reward,
     _load_backend,
     _prompt_tokens,
     _snapshot_delta,
@@ -66,6 +67,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 
 
 IMPLEMENTATION_FILES = (
@@ -79,9 +81,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/arllm/replay.py",
     "src/inference_scaling/shared/importance.py",
 )
-REWARD_VERSION = "gsm8k-exact-is-stack-v1"
-
-
 @dataclass(frozen=True, slots=True)
 class ArmSpec:
     name: str
@@ -103,11 +102,11 @@ ARMS = (
 class _QueryState:
     problem_index: int
     prompt: TokenSequence
-    gold_answer: Any
     seeds: SeedStream
     config: BaseReplayConfig
     sampling: SamplingConfig
     reward: Callable[[TokenSequence, TokenSequence], float]
+    reward_version: str
     registry: BehaviorRegistry = field(default_factory=BehaviorRegistry)
     store: InMemoryReplayStore = field(default_factory=InMemoryReplayStore)
     generated: list[int] = field(default_factory=list)
@@ -223,19 +222,11 @@ def _execute(
         return [future.result() for future in futures]
 
 
-def _correctness_reward(raw_backend: Any, gold_answer: Any):
-    def reward(_prompt: TokenSequence, generated: TokenSequence) -> float:
-        return float(
-            extract_numeric_answer(raw_backend.decode(generated)) == gold_answer
-        )
-
-    return reward
-
-
 def _make_states(
     raw_backend: Any,
     problems: Sequence[Any],
     prompts: Sequence[TokenSequence],
+    verifier_config: dict[str, Any],
     *,
     root_seed: int,
     candidate_count: int,
@@ -259,20 +250,23 @@ def _make_states(
         ),
         truncation=truncation,
     )
-    return [
-        _QueryState(
-            problem_index=problem.index,
-            prompt=prompt,
-            gold_answer=problem.gold_answer,
-            seeds=SeedStream(
-                SeedStream(root_seed).derive("qwen15b-is-stack", problem.index)
-            ),
-            config=algorithm,
-            sampling=sampling,
-            reward=_correctness_reward(raw_backend, problem.gold_answer),
+    states: list[_QueryState] = []
+    for problem, prompt in zip(problems, prompts, strict=True):
+        reward = _configured_verifier_reward(raw_backend, problem, verifier_config)
+        states.append(
+            _QueryState(
+                problem_index=problem.index,
+                prompt=prompt,
+                seeds=SeedStream(
+                    SeedStream(root_seed).derive("qwen15b-is-stack", problem.index)
+                ),
+                config=algorithm,
+                sampling=sampling,
+                reward=reward,
+                reward_version=reward.version,
+            )
         )
-        for problem, prompt in zip(problems, prompts, strict=True)
-    ]
+    return states
 
 
 def _build_history(
@@ -310,7 +304,7 @@ def _build_history(
             state.prompt,
             generated_prefix,
             candidate.token_ids,
-            REWARD_VERSION,
+            state.reward_version,
         )
         for history_index in range(state.config.max_history_per_candidate):
             requests.append(
@@ -359,7 +353,7 @@ def _advance(
         config=state.config,
         base_sampling=state.sampling,
         reward=state.reward,
-        reward_version=REWARD_VERSION,
+        reward_version=state.reward_version,
         seeds=state.seeds,
         step_index=len(state.steps),
         candidate_samples=(built if candidate_reuse else None),
@@ -384,7 +378,7 @@ def _run_arm(
     raw_proposal: Any,
     problems: Sequence[Any],
     prompts: Sequence[TokenSequence],
-    config: Mapping[str, Any],
+    config: dict[str, Any],
     *,
     root_seed: int,
     workers: int,
@@ -408,6 +402,7 @@ def _run_arm(
         raw_backend,
         problems,
         prompts,
+        config,
         root_seed=root_seed,
         candidate_count=candidate_count,
         block_size=block_size,
@@ -853,6 +848,7 @@ def main() -> None:
     parser.add_argument("--fresh-rollouts", type=int, default=1)
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
     positive = (
         args.questions,
@@ -873,6 +869,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     config.setdefault("runtime", {})["backend"] = "transformers"
     config["runtime"]["dtype"] = args.dtype
     problems = select_problems(
@@ -896,7 +893,7 @@ def main() -> None:
         "candidate_count": args.candidate_count,
         "history_rollouts_per_candidate": args.history_rollouts,
         "fresh_rollouts_per_candidate": args.fresh_rollouts,
-        "reward": "fixed GSM8K exact-answer verifier for replay accounting",
+        "verifier": config["verifier"],
         "arms": [arm.name for arm in ARMS],
         "compute_definition": (
             "2 * model parameter count * observed forward token slots; Qwen 1.5B "

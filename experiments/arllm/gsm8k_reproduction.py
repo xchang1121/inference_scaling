@@ -45,6 +45,7 @@ from inference_scaling.arllm.config import (
     RewardMHConfig,
     SamplingConfig,
 )
+from inference_scaling.arllm.rewards import SequenceLogProbabilityReward
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     GSM8KProblem,
@@ -57,6 +58,13 @@ from inference_scaling.shared.evaluation import (
 )
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import (
+    TokenVerifierReward,
+    VerifierContext,
+    build_token_verifier_reward,
+    replace_verifier_from_file,
+    verifier_spec_from_config,
+)
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenSequence
 
 from experiments.shared.artifacts import (
@@ -78,9 +86,10 @@ REWARD_SOURCES = (
     "self_consistency",
     "frozen_consensus",
     "log_probability",
+    "sequence_log_probability",
     "negative_entropy",
     "self_certainty",
-    "exact",
+    "verifier",
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 IMPLEMENTATION_FILES = (
@@ -95,9 +104,12 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/arllm/backends/loader.py",
     "src/inference_scaling/shared/evaluation/consensus.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
+    "src/inference_scaling/shared/evaluation/numeric.py",
+    "src/inference_scaling/shared/verifier.py",
     "src/inference_scaling/experimental/shared/iterated_sir.py",
     "src/inference_scaling/experimental/shared/rqmc.py",
     "src/inference_scaling/arllm/config.py",
+    "src/inference_scaling/arllm/rewards.py",
     "src/inference_scaling/arllm/types.py",
 )
 
@@ -150,6 +162,24 @@ def _prompt_tokens(backend: Any, problem: GSM8KProblem) -> TokenSequence:
         add_generation_prompt=True,
     )
     return backend.encode(str(rendered), add_special_tokens=False)
+
+
+def _configured_verifier_reward(
+    backend: Any,
+    problem: GSM8KProblem,
+    config: dict[str, Any],
+) -> TokenVerifierReward:
+    """Bind the selected verifier to one item without exposing it to algorithms."""
+
+    spec = verifier_spec_from_config(config)
+    context = VerifierContext(
+        prompt=gsm8k_prompt(problem.question),
+        reference=(
+            _fraction_text(problem.gold_answer) if spec.requires_reference else None
+        ),
+        metadata={"benchmark": "gsm8k", "problem_index": problem.index},
+    )
+    return build_token_verifier_reward(config, context=context, decoder=backend.decode)
 
 
 def _load_backend(
@@ -295,6 +325,7 @@ def _run_best_of_n(
     seeds: SeedStream,
     problem_index: int,
     reward_source: str,
+    config: dict[str, Any],
 ) -> tuple[TokenSequence, dict[str, Any]]:
     sampling = SamplingConfig(
         temperature=temperature,
@@ -314,6 +345,7 @@ def _run_best_of_n(
     texts = [backend.decode(candidate.token_ids) for candidate in candidates]
     parsed_answers = [extract_numeric_answer(text) for text in texts]
     raw_rewards: tuple[float, ...] | None = None
+    verifier_reward: TokenVerifierReward | None = None
     if reward_source == "self_consistency":
         chosen = consensus_index(texts, [candidate.logprob for candidate in candidates])
         consensus = modal_answer(parsed_answers)
@@ -321,9 +353,10 @@ def _run_best_of_n(
             1.0 if consensus is not None and answer == consensus else 0.0
             for answer in parsed_answers
         )
-    elif reward_source == "exact":
-        selection_rewards = tuple(
-            float(answer == problem.gold_answer) for answer in parsed_answers
+    elif reward_source == "verifier":
+        verifier_reward = _configured_verifier_reward(backend, problem, config)
+        selection_rewards = verifier_reward.batch(
+            prompt, [candidate.token_ids for candidate in candidates]
         )
         chosen = max(
             range(len(candidates)),
@@ -332,6 +365,24 @@ def _run_best_of_n(
                 candidates[index].logprob,
                 -index,
             ),
+        )
+    elif reward_source == "sequence_log_probability":
+        model_reward = SequenceLogProbabilityReward(
+            backend,
+            sampling,
+            scale=float(
+                config["conditional_is"].get("logprob_reward_scale", 1.0)
+            ),
+        )
+        # Generation already returns exact log-probabilities under ``sampling``;
+        # reusing them avoids a second full-sequence model forward pass.
+        raw_rewards = tuple(
+            model_reward.scale * candidate.logprob for candidate in candidates
+        )
+        selection_rewards = raw_rewards
+        chosen = max(
+            range(len(candidates)),
+            key=lambda index: (selection_rewards[index], -index),
         )
     else:
         raw_rewards, selection_rewards = _confidence_rewards(
@@ -353,7 +404,13 @@ def _run_best_of_n(
         "candidate_count": samples,
         "selected_index": chosen,
         "reward_source": reward_source,
-        "uses_test_gold_oracle": reward_source == "exact",
+        "uses_test_gold_oracle": bool(
+            verifier_reward is not None
+            and verifier_reward.verifier.spec.requires_reference
+        ),
+        "verifier": (
+            verifier_reward.describe() if verifier_reward is not None else None
+        ),
         "reward_normalization": (
             "per-decision min-max over candidate completions"
             if reward_source
@@ -361,9 +418,14 @@ def _run_best_of_n(
             else None
         ),
         "selection_rewards": list(selection_rewards),
-        "raw_confidence_rewards": list(raw_rewards)
-        if raw_rewards is not None
-        else None,
+        "raw_reward_values": list(raw_rewards) if raw_rewards is not None else None,
+        "raw_confidence_rewards": (
+            list(raw_rewards)
+            if raw_rewards is not None
+            and reward_source
+            in {"log_probability", "negative_entropy", "self_certainty"}
+            else None
+        ),
         "answer_counts": _answer_counts(parsed_answers),
     }
 
@@ -539,6 +601,7 @@ def _run_method(
             reward_source=str(
                 config["conditional_is"].get("reward", "self_consistency")
             ),
+            config=config,
         )
     if method == "mh":
         mh = config["mh"]
@@ -581,9 +644,7 @@ def _run_method(
             absorbing_after=len(prompt),
         )
 
-        def exact_reward(_: TokenSequence, generated: TokenSequence) -> float:
-            prediction = extract_numeric_answer(backend.decode(generated))
-            return float(prediction == problem.gold_answer)
+        verifier_reward = _configured_verifier_reward(backend, problem, config)
 
         result = run_reward_mh_chain(
             absorbing,
@@ -596,11 +657,14 @@ def _run_method(
                 suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
             SamplingConfig(),
-            exact_reward,
+            verifier_reward,
             SeedStream(seed),
         )
         return _trim_eos(result.token_ids, backend.tokenizer.eos_token_id), {
-            "target": "base_probability_times_exp_exact_reward_over_temperature",
+            "target": "base_probability_times_exp_configured_verifier_over_temperature",
+            "reward_source": "verifier",
+            "verifier": verifier_reward.describe(),
+            "uses_test_gold_oracle": verifier_reward.verifier.spec.requires_reference,
             "reward_temperature": reward_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
@@ -630,7 +694,7 @@ def _run_method(
             rollout_backend = proposal_backend
         use_matched_target = method.startswith("verifier_")
         reward_source = (
-            "exact"
+            "verifier"
             if use_matched_target
             else str(
                 iterated.get("reward", "frozen_consensus")
@@ -640,7 +704,7 @@ def _run_method(
         )
         if reward_source not in REWARD_SOURCES:
             raise ValueError(f"unknown reward source {reward_source!r}")
-        use_exact_reward = reward_source == "exact"
+        use_verifier_reward = reward_source == "verifier"
         target_sampling_temperature = (
             1.0 if use_matched_target else sampling_temperature
         )
@@ -656,7 +720,7 @@ def _run_method(
             if method == "iterated_conditional_is":
                 raise ValueError(
                     "iterated_conditional_is requires a fixed pointwise reward; "
-                    "use frozen_consensus or exact"
+                    "use frozen_consensus, sequence_log_probability, or verifier"
                 )
             reward_batch = CumulativeConsensusReward(backend.decode)
         elif reward_source == "frozen_consensus":
@@ -672,11 +736,22 @@ def _run_method(
                 seeds=seeds,
                 problem_index=problem.index,
             )
-        elif reward_source not in {"exact"}:
+        elif reward_source == "sequence_log_probability":
+            model_reward = SequenceLogProbabilityReward(
+                backend,
+                SamplingConfig(
+                    temperature=target_sampling_temperature,
+                    eos_token_id=backend.tokenizer.eos_token_id,
+                ),
+                scale=float(conditional.get("logprob_reward_scale", 1.0)),
+            )
+            pointwise_reward = model_reward
+            reward_diagnostics["model_reward"] = model_reward.describe()
+        elif reward_source != "verifier":
             if method == "iterated_conditional_is":
                 raise ValueError(
                     "iterated_conditional_is currently accepts only fixed pointwise "
-                    "frozen_consensus or exact rewards"
+                    "frozen_consensus, sequence_log_probability, or verifier rewards"
                 )
 
             def confidence_reward(
@@ -697,9 +772,14 @@ def _run_method(
 
             reward_batch = confidence_reward
 
-        def exact_reward(_: TokenSequence, generated: TokenSequence) -> float:
-            prediction = extract_numeric_answer(backend.decode(generated))
-            return float(prediction == problem.gold_answer)
+        verifier_reward = (
+            _configured_verifier_reward(backend, problem, config)
+            if use_verifier_reward
+            else None
+        )
+        if verifier_reward is not None:
+            pointwise_reward = verifier_reward
+            reward_diagnostics["verifier"] = verifier_reward.describe()
 
         base_sampling = SamplingConfig(
             temperature=target_sampling_temperature,
@@ -708,7 +788,7 @@ def _run_method(
         cached_base = ScoreCachingBackend(backend)
         cached_rollout = ScoreCachingBackend(rollout_backend)
         if method == "iterated_conditional_is":
-            iterated_reward = exact_reward if use_exact_reward else pointwise_reward
+            iterated_reward = pointwise_reward
             if iterated_reward is None:
                 raise RuntimeError("iterated conditional IS did not construct a reward")
             result = run_iterated_conditional_is(
@@ -764,7 +844,7 @@ def _run_method(
                         conditional.get("rollout_evaluation_batch_size", 1)
                     ),
                 ),
-                exact_reward if use_exact_reward else pointwise_reward,
+                pointwise_reward,
                 SeedStream(seed),
                 base_sampling=base_sampling,
                 rollout_backend=cached_rollout,
@@ -814,9 +894,10 @@ def _run_method(
             "self_consistency": "cumulative_consensus",
             "frozen_consensus": "independent_pilot_frozen_consensus",
             "log_probability": "normalized_mean_log_probability",
+            "sequence_log_probability": "model_sequence_log_probability",
             "negative_entropy": "normalized_negative_entropy",
             "self_certainty": "normalized_self_certainty",
-            "exact": "exact_reward",
+            "verifier": "configured_verifier",
         }[reward_source]
         target_description = (
             f"base_probability_times_exp_{reward_target_name}_over_temperature"
@@ -855,8 +936,11 @@ def _run_method(
             conditional.get("apply_importance_correction", True)
         )
         diagnostics["sampling_temperature"] = target_sampling_temperature
-        diagnostics["uses_test_gold_oracle"] = reward_source == "exact"
-        diagnostics["matched_to_grpo_objective"] = use_matched_target
+        diagnostics["uses_test_gold_oracle"] = bool(
+            verifier_reward is not None
+            and verifier_reward.verifier.spec.requires_reference
+        )
+        diagnostics["uses_matched_reward_temperature"] = use_matched_target
         return result.token_ids, diagnostics
     raise ValueError(f"unknown method {method!r}")
 
@@ -993,6 +1077,7 @@ def _summary(
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     set_backend_override(config, args.backend)
     set_rl_adapter_override(config, getattr(args, "rl_adapter", None))
+    replace_verifier_from_file(config, getattr(args, "verifier_config", None))
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
     if args.max_new_tokens is not None:
@@ -1008,6 +1093,8 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config.setdefault("iterated_is", {})["reward"] = args.conditional_reward
     if args.reward_temperature is not None:
         config["conditional_is"]["reward_temperature"] = args.reward_temperature
+    if getattr(args, "logprob_reward_scale", None) is not None:
+        config["conditional_is"]["logprob_reward_scale"] = args.logprob_reward_scale
     if args.importance_log_ratio_clip is not None:
         value = args.importance_log_ratio_clip.strip().lower()
         parsed_clip = None if value == "none" else float(value)
@@ -1110,6 +1197,11 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--output-root", type=Path, default=Path("results/gsm8k"))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument(
+        "--verifier-config",
+        type=Path,
+        help="standalone TOML file whose [verifier] table replaces the default",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--sampling-temperature", type=float)
@@ -1119,11 +1211,19 @@ def main() -> None:
         "--conditional-reward",
         choices=REWARD_SOURCES,
         help=(
-            "reward used by Best-of-N and conditional methods; exact is a "
-            "test-gold oracle ablation"
+            "reward used by Best-of-N and conditional methods; verifier uses "
+            "the separately configured [verifier] component"
         ),
     )
     parser.add_argument("--reward-temperature", type=float)
+    parser.add_argument(
+        "--logprob-reward-scale",
+        type=float,
+        help=(
+            "c in r=c*log p(y|x); combined with reward temperature tau this "
+            "targets the power 1+c/tau"
+        ),
+    )
     parser.add_argument(
         "--importance-log-ratio-clip",
         help="positive symmetric clip or 'none' for exact untruncated weights",
@@ -1223,6 +1323,11 @@ def main() -> None:
             "rows_in_public_split": len(all_problems),
         },
         "model": _model_metadata(config, args.method),
+        "configured_verifier": (
+            verifier_spec_from_config(config).as_dict()
+            if "verifier" in config
+            else None
+        ),
         "proposal_model": (
             {
                 "local_path": str(config["models"]["proposal"]),

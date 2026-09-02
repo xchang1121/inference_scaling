@@ -49,6 +49,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 from experiments.shared.statistics import estimated_pass_at_k
 from experiments.shared.artifacts import load_jsonl as _load_jsonl
 
@@ -550,6 +551,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--methods", default=",".join(PASSK_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument(
         "--mh-suffix-schedule",
         choices=("uniform", "inverse_length", "multiscale"),
@@ -570,6 +572,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     if args.mh_suffix_schedule is not None:
         config["mh"]["suffix_schedule"] = args.mh_suffix_schedule
     set_backend_override(config, args.backend)

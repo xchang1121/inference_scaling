@@ -13,7 +13,7 @@ each candidate's future reward weighting under the rollout proposal itself.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import exp, isfinite, log
 
@@ -31,6 +31,7 @@ from inference_scaling.shared.stepwise import (
     run_stepwise_generation,
     stepwise_generation_step,
 )
+from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -39,10 +40,8 @@ from inference_scaling.arllm.types import (
     TokenSequence,
 )
 
-RewardFunction = Callable[[TokenSequence, TokenSequence], float]
-RewardBatchFunction = Callable[
-    [TokenSequence, Sequence[TokenSequence]], Sequence[float]
-]
+RewardFunction = TokenReward
+RewardBatchFunction = TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)

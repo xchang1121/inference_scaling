@@ -54,6 +54,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 
 
 IS_PASSK_METHODS = AR_IS_PASSK_METHODS
@@ -468,6 +469,7 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--tag", default="is-passk")
     parser.add_argument("--limit", type=int, default=32)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument("--draws", type=int, default=8)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--methods", default=",".join(IS_PASSK_METHODS))
@@ -487,6 +489,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit
     config["is_passk"] = {

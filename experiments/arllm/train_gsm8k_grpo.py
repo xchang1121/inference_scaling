@@ -35,10 +35,14 @@ from inference_scaling.shared.compute import (
 from inference_scaling.shared.evaluation import (
     GSM8K_TEST_SHA256,
     GSM8K_TRAIN_SHA256,
-    ExactNumericReward,
     gsm8k_prompt,
     load_gsm8k,
     select_problems,
+)
+from inference_scaling.shared.verifier import (
+    ConfiguredTrainingVerifierReward,
+    replace_verifier_from_file,
+    verifier_spec_from_config,
 )
 
 from experiments.shared.artifacts import (
@@ -198,6 +202,7 @@ def _resume_fingerprint(effective: dict[str, Any]) -> str:
 
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+    replace_verifier_from_file(config, getattr(args, "verifier_config", None))
     if args.output_dir is not None:
         config["model"]["output"] = str(args.output_dir)
     if args.train_limit is not None:
@@ -220,6 +225,7 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--num-generations", type=int)
     parser.add_argument("--max-completion-length", type=int)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument(
         "--resume",
         default="auto",
@@ -279,11 +285,16 @@ def main() -> None:
         "model": config["model"],
         "training": training,
         "lora": config["lora"],
+        "verifier": verifier_spec_from_config(config).as_dict(),
         "input_weight_sha256": actual_weight_hash,
         "input_metadata_sha256": checkpoint_metadata_hashes(base_path),
         "implementation_sha256": implementation_hashes(
             Path(__file__).resolve().parents[2],
-            entrypoints=("experiments/arllm/train_gsm8k_grpo.py",),
+            entrypoints=(
+                "experiments/arllm/train_gsm8k_grpo.py",
+                "src/inference_scaling/shared/verifier.py",
+                "src/inference_scaling/shared/evaluation/numeric.py",
+            ),
         ),
     }
     fingerprint = _resume_fingerprint(effective)
@@ -383,7 +394,10 @@ def main() -> None:
             "local_files_only": True,
         },
     )
-    reward = ExactNumericReward()
+    reward = ConfiguredTrainingVerifierReward(
+        verifier_spec_from_config(config),
+        reference_field="gold_answer",
+    )
     initialization_started = time.perf_counter()
     trainer = GRPOTrainer(
         model=str(base_path),
@@ -449,23 +463,37 @@ def main() -> None:
     state = trainer.state
     segment_rollouts = reward.snapshot(num_generations=int(training["num_generations"]))
     previous_rollouts = previous_cost.get("rollouts", {}) if previous_cost else {}
-    cumulative_rollouts = {
+    cumulative_rollouts: dict[str, Any] = {
         key: int(segment_rollouts[key]) + int(previous_rollouts.get(key, 0))
         for key in (
             "reward_calls",
             "generated_completions",
             "generated_prompt_groups",
             "generated_completion_tokens",
-            "parseable_completions",
-            "correct_completions",
         )
     }
-    cumulative_rollouts["observed_rollout_accuracy"] = (
-        cumulative_rollouts["correct_completions"]
-        / cumulative_rollouts["generated_completions"]
-        if cumulative_rollouts["generated_completions"]
-        else 0.0
+    cumulative_rollouts["reward_sum"] = float(segment_rollouts["reward_sum"]) + float(
+        previous_rollouts.get("reward_sum", 0.0)
     )
+    generated_completions = int(cumulative_rollouts["generated_completions"])
+    cumulative_rollouts["observed_mean_reward"] = (
+        float(cumulative_rollouts["reward_sum"]) / generated_completions
+        if generated_completions
+        else None
+    )
+    for aggregate, reducer in (
+        ("observed_minimum_reward", min),
+        ("observed_maximum_reward", max),
+    ):
+        values = [
+            float(value)
+            for value in (
+                previous_rollouts.get(aggregate),
+                segment_rollouts.get(aggregate),
+            )
+            if value is not None
+        ]
+        cumulative_rollouts[aggregate] = reducer(values) if values else None
     previous_wall_seconds = (
         float(
             previous_cost.get(
@@ -501,7 +529,7 @@ def main() -> None:
                 int(training["per_device_train_batch_size"])
                 * int(training["gradient_accumulation_steps"])
             ),
-            generated_completions=int(cumulative_rollouts["generated_completions"]),
+            generated_completions=generated_completions,
             total_parameters=total_parameters,
             trainable_parameters=trainable_parameters,
             optimizer_steps=int(state.global_step),
@@ -512,7 +540,7 @@ def main() -> None:
         primary_compute = (
             estimate_grpo_compute(
                 model_sequence_tokens=trainer_reported_model_tokens,
-                generated_completions=int(cumulative_rollouts["generated_completions"]),
+                generated_completions=generated_completions,
                 total_parameters=total_parameters,
                 trainable_parameters=trainable_parameters,
                 optimizer_steps=int(state.global_step),
@@ -520,11 +548,11 @@ def main() -> None:
                 reference_scoring=float(training["beta"]) != 0,
             ).as_dict()
             if trainer_reported_model_tokens
-            >= int(cumulative_rollouts["generated_completions"])
+            >= generated_completions
             else None
         )
     cost = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "complete",
         "resume_fingerprint": fingerprint,
         "initialization_seconds_excluded_from_training_cost": initialization_seconds,

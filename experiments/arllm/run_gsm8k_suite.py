@@ -30,6 +30,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=("smoke", "full"), default="full")
     parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument(
         "--mh-suffix-schedule",
         choices=("uniform", "inverse_length", "multiscale"),
@@ -72,9 +73,10 @@ def main() -> None:
         guidance_steps_values = (2,)
         reward_sources = (
             "log_probability",
+            "sequence_log_probability",
             "negative_entropy",
             "self_certainty",
-            "exact",
+            "verifier",
         )
         reward_methods = ("conditional_is",)
         temperatures = (0.7,)
@@ -90,9 +92,10 @@ def main() -> None:
         guidance_steps_values = (2, 8, 16)
         reward_sources = (
             "log_probability",
+            "sequence_log_probability",
             "negative_entropy",
             "self_certainty",
-            "exact",
+            "verifier",
         )
         reward_methods = (
             "best_of_n",
@@ -111,8 +114,15 @@ def main() -> None:
         (str(REPOSITORY_ROOT / "src"), str(REPOSITORY_ROOT), existing or "")
     ).rstrip(os.pathsep)
     common = ["--config", str(args.config), "--tag", args.tag]
+    if args.verifier_config is not None:
+        common.extend(("--verifier-config", str(args.verifier_config)))
     summary_common = ["--config", str(args.config), "--tag", args.tag]
     backend_args = [] if args.backend is None else ["--backend", args.backend]
+    verifier_args = (
+        []
+        if args.verifier_config is None
+        else ["--verifier-config", str(args.verifier_config)]
+    )
     rl_args = [] if args.rl_adapter is None else ["--rl-adapter", str(args.rl_adapter)]
     mh_args = (
         []
@@ -241,6 +251,7 @@ def main() -> None:
                 *backend_args,
                 *rl_args,
                 *mh_args,
+                *verifier_args,
             ],
             environment,
         )
@@ -261,6 +272,7 @@ def main() -> None:
                 "--output",
                 str(args.summary_root / f"{args.config.stem}_is_passk_{args.tag}.json"),
                 *backend_args,
+                *verifier_args,
             ],
             environment,
         )
@@ -272,6 +284,7 @@ def main() -> None:
             *backend_args,
             *rl_args,
             *mh_args,
+            *verifier_args,
             "--limit",
             str(args.ablation_limit),
         ]
@@ -502,6 +515,7 @@ def main() -> None:
             str(args.config),
             *backend_args,
             *rl_args,
+            *verifier_args,
             "--limit",
             str(args.ablation_limit),
         ]
@@ -617,6 +631,7 @@ def main() -> None:
             str(args.config),
             *backend_args,
             *rl_args,
+            *verifier_args,
             "--limit",
             str(args.ablation_limit),
         ]

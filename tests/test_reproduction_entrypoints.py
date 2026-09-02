@@ -144,6 +144,33 @@ def test_ar_training_output_is_reused_by_quality_passk_and_distribution(tmp_path
     assert distribution[distribution.index("--rl-adapter") + 1] == str(adapter)
 
 
+def test_verifier_configuration_is_routed_to_all_reward_consumers(tmp_path):
+    verifier = tmp_path / "verifier.toml"
+    ar_commands = build_ar_commands(
+        _ar_args(verifier_config=verifier, summary_root=tmp_path), Path.cwd()
+    )
+    by_script = {Path(command[1]).name: command for command in ar_commands}
+    for script in (
+        "run_gsm8k_suite.py",
+        "gsm8k_distribution_audit.py",
+        "benchmark_rollout_infra.py",
+    ):
+        command = by_script[script]
+        assert command[command.index("--verifier-config") + 1] == str(verifier)
+
+    paired = build_paired_commands(
+        _paired_args(verifier_config=verifier), Path.cwd()
+    )
+    ar_command = next(
+        command for command in paired if Path(command[1]).name == "run_arllm_suite.py"
+    )
+    dllm_command = next(
+        command for command in paired if Path(command[1]).name == "run_llada_suite.py"
+    )
+    assert ar_command[ar_command.index("--verifier-config") + 1] == str(verifier)
+    assert dllm_command[dllm_command.index("--verifier-config") + 1] == str(verifier)
+
+
 def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_path):
     commands: list[list[str]] = []
     monkeypatch.setattr(
@@ -234,7 +261,8 @@ def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
         "default-candidates-3-rollouts-3",
         "default-candidates-10-rollouts-1",
         "default-guidance-steps-2",
-        "default-conditional_is-reward-exact",
+        "default-conditional_is-reward-verifier",
+        "default-conditional_is-reward-sequence_log_probability",
         "default-beam-temperature-0.7",
         "default-budget-beam-4",
         "default-budget-best-of-n-4",

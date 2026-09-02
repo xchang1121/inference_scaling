@@ -121,6 +121,15 @@ def _config():
             "fresh_cost": 1.0,
             "design_rollouts": 2,
         },
+        "verifier": {
+            "provider": "python",
+            "name": "numeric_reference",
+            "factory": (
+                "inference_scaling.shared.evaluation.numeric:"
+                "build_numeric_reference_verifier"
+            ),
+            "requires_reference": True,
+        },
     }
 
 

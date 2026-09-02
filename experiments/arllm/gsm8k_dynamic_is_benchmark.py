@@ -26,6 +26,7 @@ from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
 from experiments.arllm.gsm8k_reproduction import (
+    _configured_verifier_reward,
     _file_sha256,
     _implementation_hashes,
     _fingerprint,
@@ -65,6 +66,7 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_dynamic_is_benchmark.py",
@@ -80,16 +82,6 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/arllm/config.py",
     "src/inference_scaling/arllm/types.py",
 )
-REWARD_VERSION = "gsm8k-exact-v1"
-
-
-def _correctness_reward(backend, gold):
-    def reward(_prompt, generated):
-        return float(extract_numeric_answer(backend.decode(generated)) == gold)
-
-    return reward
-
-
 def _sum_delta(
     left: dict[str, int | float], right: dict[str, int | float]
 ) -> dict[str, int | float]:
@@ -479,6 +471,7 @@ def _prepare_replay_cache(
     rollout_length: int,
     history_count: int,
     reward,
+    reward_version: str,
     seeds: SeedStream,
     step_index: int,
     method: str,
@@ -505,7 +498,7 @@ def _prepare_replay_cache(
         )
         if terminal:
             continue
-        key = ReplayKey(prompt, generated_prefix, sample.token_ids, REWARD_VERSION)
+        key = ReplayKey(prompt, generated_prefix, sample.token_ids, reward_version)
         for history_index in range(history_count):
             replay_requests.append(
                 ReplaySampleRequest(
@@ -559,7 +552,8 @@ def _run_method(
     backend,
     proposal_backend,
     prompt: tuple[int, ...],
-    gold,
+    reward,
+    reward_version: str,
     config: dict[str, Any],
     seeds: SeedStream,
 ) -> tuple[tuple[int, ...], dict[str, Any]]:
@@ -591,7 +585,6 @@ def _run_method(
     )
     registry = BehaviorRegistry([base_policy, history_policy])
     store = InMemoryReplayStore()
-    reward = _correctness_reward(backend, gold)
     history_cost = 1.0
     fresh_cost = 1.0 + proposal_backend.parameter_count / backend.parameter_count
 
@@ -649,6 +642,7 @@ def _run_method(
                     rollout_length=rollout_length,
                     history_count=history_count,
                     reward=reward,
+                    reward_version=reward_version,
                     seeds=seeds,
                     step_index=step_index,
                     method=method,
@@ -739,7 +733,7 @@ def _run_method(
                 config=algorithm,
                 base_sampling=base_sampling,
                 reward=reward,
-                reward_version=REWARD_VERSION,
+                reward_version=reward_version,
                 seeds=seeds,
                 step_index=step_index,
                 auxiliary_proposal=step_proposal,
@@ -777,7 +771,7 @@ def _run_method(
         candidate_reproduction_all &= reproduced
         eos = base_sampling.eos_token_id
         cache_keys = {
-            ReplayKey(prompt, tuple(generated), sample.token_ids, REWARD_VERSION)
+            ReplayKey(prompt, tuple(generated), sample.token_ids, reward_version)
             for sample in cache_samples
             if rollout_length > 0 and (eos is None or sample.token_ids[-1] != eos)
         }
@@ -801,7 +795,7 @@ def _run_method(
         available_hits = sum(
             not is_terminal
             and ReplayKey(
-                prompt, tuple(generated), candidate.token_ids, REWARD_VERSION
+                prompt, tuple(generated), candidate.token_ids, reward_version
             )
             in cache_keys
             for candidate, is_terminal in zip(step.candidates, terminal, strict=True)
@@ -970,10 +964,12 @@ def main() -> None:
     parser.add_argument("--aggregate-output", type=Path)
     parser.add_argument("--tag", default="default")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     with args.extension_config.open("rb") as source:
         extension_config = tomllib.load(source)
@@ -1021,7 +1017,7 @@ def main() -> None:
                 "history=one base-score equivalent per completion token; "
                 "fresh=one base generation plus one small-model score equivalent"
             ),
-            "reward": "GSM8K exact numeric verifier (oracle diagnostic)",
+            "verifier": config["verifier"],
         },
         "input_weight_sha256": {"base": base_hash, "proposal": proposal_hash},
         "input_metadata_sha256": input_artifacts["metadata_sha256"],
@@ -1110,6 +1106,7 @@ def main() -> None:
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
             prompt = _prompt_tokens(backend, problem)
+            verifier_reward = _configured_verifier_reward(backend, problem, config)
             method_results: dict[str, dict[str, Any]] = {}
             for method in METHODS:
                 seed = SeedStream(
@@ -1122,7 +1119,8 @@ def main() -> None:
                     backend=backend,
                     proposal_backend=proposal_backend,
                     prompt=prompt,
-                    gold=problem.gold_answer,
+                    reward=verifier_reward,
+                    reward_version=verifier_reward.version,
                     config=config,
                     seeds=seed,
                 )

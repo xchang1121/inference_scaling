@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
@@ -24,10 +24,9 @@ from inference_scaling.shared.importance import (
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.stepwise import normalize_log_weights
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import TokenBatchReward
 
-DiffusionReplayRewardBatch = Callable[
-    [TokenSequence, Sequence[TokenSequence]], Sequence[float]
-]
+DiffusionReplayRewardBatch = TokenBatchReward
 
 
 def _validate_exact_pair(

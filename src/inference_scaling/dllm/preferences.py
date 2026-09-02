@@ -1,59 +1,71 @@
-"""Verified preference-pair construction for GSM8K VRPO."""
+"""Model-independent preference-pair construction from verifier scores."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fractions import Fraction
+from math import isfinite
 from typing import Sequence
-
-from inference_scaling.shared.evaluation import extract_numeric_answer
 
 
 @dataclass(frozen=True, slots=True)
-class VerifiedPreferencePair:
+class PreferencePair:
     chosen: str
     rejected: str
     chosen_source: str
-    rejected_candidate_index: int
+    rejected_source: str
 
 
-def select_verified_preference_pair(
+def select_scored_preference_pair(
     *,
     candidate_texts: Sequence[str],
-    gold_solution: str,
-    gold_answer: Fraction,
-) -> VerifiedPreferencePair | None:
-    """Select a correct/incorrect pair without reading evaluation data.
+    candidate_rewards: Sequence[float],
+    reference_text: str | None = None,
+    reference_reward: float | None = None,
+) -> PreferencePair | None:
+    """Select the highest- and lowest-reward distinct completions.
 
-    A correct model rollout is preferred as the chosen completion.  If the
-    sampled group contains no correct rollout, the public training solution is
-    used as the chosen completion.  An all-correct group has no valid rejected
-    completion and is omitted.
+    A dataset-provided solution may be included as one more scored completion;
+    it is never assumed to be preferred without evaluation by the configured
+    verifier. Equal rewards contain no preference information and return
+    ``None``.
     """
 
     if not candidate_texts:
         raise ValueError("candidate_texts must be non-empty")
-    predictions = [extract_numeric_answer(text) for text in candidate_texts]
-    correct = [index for index, value in enumerate(predictions) if value == gold_answer]
-    incorrect = [index for index, value in enumerate(predictions) if value != gold_answer]
-    if not incorrect:
+    if len(candidate_texts) != len(candidate_rewards):
+        raise ValueError("candidate texts and rewards have different lengths")
+    if (reference_text is None) != (reference_reward is None):
+        raise ValueError("reference text and reward must be supplied together")
+    rewards = tuple(float(value) for value in candidate_rewards)
+    if any(not isfinite(value) for value in rewards):
+        raise ValueError("preference rewards must be finite")
+
+    entries = [
+        (text, reward, f"candidate:{index}")
+        for index, (text, reward) in enumerate(
+            zip(candidate_texts, rewards, strict=True)
+        )
+    ]
+    if reference_text is not None and reference_reward is not None:
+        value = float(reference_reward)
+        if not isfinite(value):
+            raise ValueError("reference reward must be finite")
+        entries.append((reference_text, value, "dataset_reference_completion"))
+
+    minimum = min(entry[1] for entry in entries)
+    maximum = max(entry[1] for entry in entries)
+    if minimum == maximum:
         return None
-    if correct:
-        chosen = candidate_texts[correct[0]]
-        chosen_source = f"verified_rollout:{correct[0]}"
-    else:
-        chosen = gold_solution
-        chosen_source = "public_training_solution"
-    rejected_index = incorrect[0]
-    rejected = candidate_texts[rejected_index]
-    if chosen == rejected:
-        raise RuntimeError("verified preference construction produced identical texts")
-    return VerifiedPreferencePair(
-        chosen=chosen,
-        rejected=rejected,
-        chosen_source=chosen_source,
-        rejected_candidate_index=rejected_index,
+    chosen = next(entry for entry in entries if entry[1] == maximum)
+    rejected = next(entry for entry in entries if entry[1] == minimum)
+    if chosen[0] == rejected[0]:
+        raise RuntimeError("verifier assigned different rewards to identical texts")
+    return PreferencePair(
+        chosen=chosen[0],
+        rejected=rejected[0],
+        chosen_source=chosen[2],
+        rejected_source=rejected[2],
     )
 
 
-__all__ = ["VerifiedPreferencePair", "select_verified_preference_pair"]
+__all__ = ["PreferencePair", "select_scored_preference_pair"]

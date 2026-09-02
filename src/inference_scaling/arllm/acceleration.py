@@ -31,6 +31,7 @@ from inference_scaling.arllm.types import (
     SequenceSample,
     TokenSequence,
 )
+from inference_scaling.shared.verifier import TokenReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,7 +415,7 @@ class StreamingRewardEvaluator:
         backend: AutoregressiveBackend,
         requests: Sequence[GenerationRequest],
         reward_inputs: Sequence[tuple[TokenSequence, TokenSequence]],
-        reward: Callable[[TokenSequence, TokenSequence], float],
+        reward: TokenReward,
         on_generation_complete: Callable[[Sequence[SequenceSample]], None] | None = None,
     ) -> tuple[list[SequenceSample], tuple[float, ...], StreamingRewardSnapshot]:
         if self._closed:

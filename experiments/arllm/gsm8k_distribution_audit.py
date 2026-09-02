@@ -37,6 +37,7 @@ from inference_scaling.arllm.backends import (
     set_backend_override,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 from experiments.shared.statistics import (
     bootstrap_answer_distance,
     jensen_shannon_bits,
@@ -364,6 +365,7 @@ def main() -> None:
     parser.add_argument("--draws", type=int, default=8)
     parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument(
         "--output", type=Path, default=Path("results/gsm8k_distribution_audit.json")
     )
@@ -378,6 +380,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     set_rl_adapter_override(config, args.rl_adapter)
     problems = select_problems(
@@ -486,18 +489,21 @@ def main() -> None:
             "base": "base_probability",
             "rl_sample": (
                 "finite-step GRPO approximation to "
-                "base_probability_times_exp_exact_reward_over_beta"
+                "base_probability_times_exp_numeric_training_reward_over_beta"
             ),
-            "verifier_mh": "base_probability_times_exp_exact_reward_over_beta",
+            "verifier_mh": (
+                "base_probability_times_exp_configured_verifier_over_beta"
+            ),
             "verifier_conditional_is": (
                 "finite-rollout approximation to "
-                "base_probability_times_exp_exact_reward_over_beta"
+                "base_probability_times_exp_configured_verifier_over_beta"
             ),
             "verifier_conditional_is_small_proposal": (
                 "clipped off-policy finite-rollout approximation to "
-                "base_probability_times_exp_exact_reward_over_beta"
+                "base_probability_times_exp_configured_verifier_over_beta"
             ),
         },
+        "configured_verifier": config["verifier"],
         "reward_temperature_beta": float(config["matched_target"]["reward_temperature"]),
         "methods": {
             method: {

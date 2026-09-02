@@ -11,7 +11,6 @@ from experiments.arllm.gsm8k_reproduction import (
 )
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
-    ExactNumericReward,
     GSM8KProblem,
     consensus_index,
     extract_numeric_answer,
@@ -32,28 +31,6 @@ def test_training_and_evaluation_share_one_prompt_contract() -> None:
     prompt = gsm8k_prompt("What is 2 + 3?")
     assert prompt.startswith("What is 2 + 3?")
     assert "#### <number>" in prompt
-
-
-def test_grpo_reward_uses_the_public_benchmark_parser_and_counts_tokens() -> None:
-    reward = ExactNumericReward()
-    values = reward(
-        [
-            [{"role": "assistant", "content": "work\n#### 5"}],
-            [{"role": "assistant", "content": "work\n#### 4"}],
-        ],
-        ["5", "5"],
-        [[1, 2, 3], [4, 5]],
-    )
-    assert values == [1.0, 0.0]
-    assert reward.snapshot(num_generations=2) == {
-        "reward_calls": 1,
-        "generated_completions": 2,
-        "generated_prompt_groups": 1,
-        "generated_completion_tokens": 5,
-        "parseable_completions": 2,
-        "correct_completions": 1,
-        "observed_rollout_accuracy": 0.5,
-    }
 
 
 def test_consensus_is_deterministic_and_uses_likelihood_for_representative() -> None:

@@ -24,6 +24,11 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
         if args.training_output is None
         else ["--rl-adapter", str(args.training_output)]
     )
+    verifier_args = (
+        []
+        if getattr(args, "verifier_config", None) is None
+        else ["--verifier-config", str(args.verifier_config)]
+    )
     commands: list[list[str]] = []
     include_training = args.stage in {"train", "all"}
     include_inference = args.stage in {"inference", "all"}
@@ -44,6 +49,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             str(args.training_config),
             "--resume",
             args.resume,
+            *verifier_args,
         ]
         if args.training_output is not None:
             command.extend(("--output-dir", str(args.training_output)))
@@ -94,6 +100,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             "--passk-draws",
             str(args.passk_draws),
             *adapter_args,
+            *verifier_args,
         ]
         mh_suffix_schedule = getattr(args, "mh_suffix_schedule", "multiscale")
         if mh_suffix_schedule is not None:
@@ -131,6 +138,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             "--output",
             str(args.summary_root / f"arllm_distribution_{args.tag}.json"),
             *adapter_args,
+            *verifier_args,
         ]
         if args.backend is not None:
             command.extend(("--backend", args.backend))
@@ -153,6 +161,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                     str(args.infra_limit),
                     "--output",
                     str(args.summary_root / f"arllm_rollout_infra_{args.tag}.json"),
+                    *verifier_args,
                 ],
                 [
                     sys.executable,
@@ -194,6 +203,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=("smoke", "full"), default="smoke")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--training-config", type=Path, default=Path("configs/gsm8k_grpo.toml"))
+    parser.add_argument("--verifier-config", type=Path)
     parser.add_argument("--tag", default="arllm-reproduction")
     parser.add_argument("--methods", nargs="+", choices=AR_METHODS)
     parser.add_argument("--components", nargs="+", choices=COMPONENTS)
@@ -291,6 +301,9 @@ def main() -> None:
             "tag": args.tag,
             "methods": args.methods,
             "components": args.components,
+            "verifier_config": (
+                str(args.verifier_config) if args.verifier_config is not None else None
+            ),
         },
         dry_run=args.dry_run,
         restart=args.restart,

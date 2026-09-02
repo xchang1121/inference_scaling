@@ -51,9 +51,9 @@ RTX 3090 统一配置：
 | 未校正 rollout 加权 | `conditional_is_small_proposal_uncorrected` | `conditional_is_reduced_layer_proposal_uncorrected` | 与上一行相同 | 省略 $`p/q`$；目标为[式 (12)](../methods/ALGORITHMS.md#alg-uncorrected-rollout) |
 | RL 参数随机采样 | `rl_sample` | `vrpo_sample` | GRPO 或 VRPO 训练后的参数 | 温度 1 |
 | RL 参数贪心解码 | `rl_greedy` | `vrpo_greedy` | GRPO 或 VRPO 训练后的参数 | 每一步取最大概率项 |
-| verifier-MH | `verifier_mh` | `verifier_mh` | 完整序列 MH proposal | 数值正确性奖励；完整 Hastings 比 |
-| 标准 verifier-IS | `verifier_conditional_is` | `verifier_conditional_is` | 主模型候选与 rollout | 数值正确性奖励；on-policy |
-| 低成本 proposal verifier-IS | `verifier_conditional_is_small_proposal` | `verifier_conditional_is_reduced_layer_proposal` | 主模型候选；低成本 rollout | 数值正确性奖励；乘 $`p/q`$ |
+| verifier-MH | `verifier_mh` | `verifier_mh` | 完整序列 MH proposal | 配置型 verifier；完整 Hastings 比 |
+| 标准 verifier-IS | `verifier_conditional_is` | `verifier_conditional_is` | 主模型候选与 rollout | 配置型 verifier；on-policy |
+| 低成本 proposal verifier-IS | `verifier_conditional_is_small_proposal` | `verifier_conditional_is_reduced_layer_proposal` | 主模型候选；低成本 rollout | 配置型 verifier；乘 $`p/q`$ |
 
 AR 的“低成本 proposal”指 Qwen2.5-0.5B；dLLM 对应 LLaDA 共享前缀层的低层 proposal。`unclipped`
 后缀表示不截断对数重要性概率比；`uncorrected` 后缀表示省略主模型轨迹重评分。replay 与动态候选的
@@ -68,8 +68,9 @@ AR 的“低成本 proposal”指 Qwen2.5-0.5B；dLLM 对应 LLaDA 共享前缀�
 | off-policy | 标准 IS、0.5B rollout proposal IS、未校正 rollout 加权 | 准确率、ESS、分模型 FLOPs |
 | replay 与动态候选 | 新生成、已有历史、动态 proposal、方差—成本分配 | 准确率、ESS、复用率、历史库构建/在线成本 |
 
-共享奖励和动态候选实验会读取测试集标准答案，因此只作为算法关系诊断。部署质量实验使用累计自一致性或
-模型置信度。
+已归档的共享奖励和动态候选结果采用默认数值参考值 verifier，会读取测试集标准答案，因此只作为算法关系
+诊断。新实验可通过 `--verifier-config` 替换奖励来源；配置声明 `requires_reference = false` 时不会向
+verifier 传入标准答案。部署质量实验使用累计自一致性或模型置信度。
 
 ## 奖励
 
@@ -78,11 +79,13 @@ AR 的“低成本 proposal”指 Qwen2.5-0.5B；dLLM 对应 LLaDA 共享前缀�
 | 数值正确性 | 解析最终数值，与标准答案比较，取 0/1 | 是 |
 | 累计自一致性（cumulative self-consistency） | 按已评估数值累计众数，匹配取 1 | 否 |
 | 固定众数奖励（代码名 `frozen consensus`） | 从独立的基础模型初始估计补全取数值众数，随后固定“是否匹配众数”的 0/1 奖励 | 否 |
-| token 平均对数概率 | 完整生成中各选中 token 对数概率的平均值 | 否 |
+| 完整序列对数概率（`sequence_log_probability`） | $`c\log p(y\mid x)`$；与奖励温度共同给出 $`p^{1+c/\tau}`$ 目标 | 否 |
+| token 平均对数概率（`log_probability`） | 完整生成中各选中 token 对数概率的平均值，并在候选组内归一化 | 否 |
 | 平均负熵 | 完整生成的逐 token 负熵均值 | 否 |
 | 自确定度（`self-certainty`） | 逐 token $`D_{\mathrm{KL}}(U\|p_{\mathrm{base}})`$ 均值 | 否 |
 
-后三种置信度奖励在每次候选决策内按最小值和最大值线性归一化；常数信号统一置零。完整词表评分计入
+token 平均对数概率、平均负熵与自确定度在每次候选决策内按最小值和最大值线性归一化；常数信号统一置零。
+完整序列对数概率保持原始求和值，不做候选组归一化。完整词表评分计入
 参与前向计算的 token 位置数和 FLOPs。
 
 ## 概率设置
@@ -289,7 +292,7 @@ AR 统一入口的 MH 后缀分布默认为 `multiscale`，并将同一设置传
 - 条件 IS：候选数 $`M`$、rollout 数 $`K`$、引导阶段数 $`I`$。
 - 迭代条件 IS：固定 9 个不同候选-rollout 状态，比较一次性大池与多轮有限池复用。
 - 搜索：Beam、Best-of-$`N`$ 与条件 IS 的质量—计算曲线。
-- 奖励：token 平均对数概率、平均负熵、自确定度、自一致性、使用标准答案的正确性。
+- 奖励：完整序列对数概率、token 平均对数概率、平均负熵、自确定度、自一致性、配置型 verifier。
 - off-policy：截断、未截断与未校正 rollout 加权。
 - 生成：温度 $`\{0.7,1.0,1.5\}`$，最大长度 $`\{128,256,512\}`$。
 - 执行：逐提示、连续批处理、纯新生成、已有历史 replay。

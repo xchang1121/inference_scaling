@@ -102,10 +102,16 @@ def _validate(
         uncorrected_record = _records_by_problem(uncorrected)[index]
         if weighted_record["question_sha256"] != uncorrected_record["question_sha256"]:
             raise ValueError(f"question hash mismatch for problem {index}")
-        if weighted_record["diagnostics"]["reward_source"] != "exact":
-            raise ValueError("weighted verifier run did not use exact reward")
-        if uncorrected_record["diagnostics"]["reward_source"] != "exact":
-            raise ValueError("uncorrected verifier run did not use exact reward")
+        if weighted_record["diagnostics"]["reward_source"] not in {
+            "exact",
+            "verifier",
+        }:
+            raise ValueError("weighted run did not use its configured verifier")
+        if uncorrected_record["diagnostics"]["reward_source"] not in {
+            "exact",
+            "verifier",
+        }:
+            raise ValueError("uncorrected run did not use its configured verifier")
     if int(uncorrected["summary"]["base_scored_tokens"]) != 0:
         raise ValueError("uncorrected verifier run performed base-model rescoring")
     if int(uncorrected["summary"]["base_score_forward_token_slots"]) != 0:
@@ -223,7 +229,7 @@ def build_report(
             "rollout_count_per_candidate": 3,
             "block_size": 48,
             "maximum_new_tokens": 192,
-            "reward": "exact numeric verifier reward",
+            "reward": "configured verifier reward",
             "reward_temperature": 0.04,
         },
         "methods": {

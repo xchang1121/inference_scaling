@@ -52,6 +52,8 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
+from experiments.arllm.gsm8k_reproduction import _configured_verifier_reward
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
 
 
@@ -517,15 +519,9 @@ def _algorithm_arm(
         def run_all() -> list[TokenSequence]:
             outputs: list[TokenSequence] = []
             for problem, prompt in zip(problems, prompts, strict=True):
-                def exact_reward(
-                    _prompt: TokenSequence,
-                    generated: TokenSequence,
-                    gold_answer=problem.gold_answer,
-                ) -> float:
-                    return float(
-                        extract_numeric_answer(raw.decode(generated))
-                        == gold_answer
-                    )
+                verifier_reward = _configured_verifier_reward(
+                    raw, problem, factory.config
+                )
 
                 problem_seed = SeedStream(seed).derive(
                     "infra", "algorithm", name, problem.index
@@ -541,7 +537,7 @@ def _algorithm_arm(
                             total_length=maximum,
                             reward_temperature=0.1,
                         ),
-                        exact_reward,
+                        verifier_reward,
                         SeedStream(problem_seed),
                         base_sampling=sampling,
                     )
@@ -575,7 +571,7 @@ def _algorithm_arm(
                                 1 if run_ahead is not None else 0
                             ),
                         ),
-                        exact_reward,
+                        verifier_reward,
                         SeedStream(problem_seed),
                         base_sampling=sampling,
                         streaming_rewards=(name == "progressive_streaming_runahead"),
@@ -617,7 +613,7 @@ def _algorithm_arm(
                             reward_temperature=0.1,
                             reuse_rollout_forest=name == "smc_reuse",
                         ),
-                        exact_reward,
+                        verifier_reward,
                         SeedStream(problem_seed),
                         base_sampling=sampling,
                         streaming_rewards=True,
@@ -732,6 +728,7 @@ def main() -> None:
     parser.add_argument("--particle-count", type=int, default=3)
     parser.add_argument("--branch-factor", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260812)
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
     if args.rollout_count < 2:
         raise ValueError("rollout-count must be at least two for a cost-matched pilot split")
@@ -743,6 +740,7 @@ def main() -> None:
 
     with args.config.open("rb") as stream:
         config = tomllib.load(stream)
+    replace_verifier_from_file(config, args.verifier_config)
     problems = select_problems(
         load_gsm8k(args.data), args.limit, seed=int(config["run"]["subset_seed"])
     )
@@ -799,7 +797,7 @@ def main() -> None:
                 "particle_count": args.particle_count,
                 "branch_factor": args.branch_factor,
                 "seed": args.seed,
-                "reward": "exact numeric verifier, used only for the algorithm diagnostic",
+                "verifier": factory.config["verifier"],
             },
             "decode_arms": [],
             "algorithm_arms": [],

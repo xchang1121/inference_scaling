@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 import numpy as np
 
@@ -29,11 +29,10 @@ from inference_scaling.shared.stepwise import (
     run_stepwise_generation,
 )
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
 
-DiffusionRewardFunction = Callable[[TokenSequence, TokenSequence], float]
-DiffusionRewardBatchFunction = Callable[
-    [TokenSequence, Sequence[TokenSequence]], Sequence[float]
-]
+DiffusionRewardFunction = TokenReward
+DiffusionRewardBatchFunction = TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)

@@ -204,7 +204,7 @@ def main() -> None:
                 "M x K candidate/rollout budget",
                 "guidance steps",
                 "accuracy-compute trade-off",
-                "log-probability, negative-entropy, self-certainty, self-consistency, and exact reward",
+                "model-score, self-consistency, and configured-verifier rewards",
                 "sampling temperature",
                 "small-proposal log-ratio clipping",
                 "generation length",

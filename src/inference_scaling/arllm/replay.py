@@ -21,6 +21,7 @@ from inference_scaling.arllm.types import (
     ScoreRequest,
     TokenSequence,
 )
+from inference_scaling.shared.verifier import TokenReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,7 +331,7 @@ def sample_replay_record(
     policy: BehaviorPolicy,
     key: ReplayKey,
     max_new_tokens: int,
-    reward: Callable[[TokenSequence, TokenSequence], float],
+    reward: TokenReward,
     *,
     seed: int,
     record_id: str,
@@ -345,7 +346,7 @@ def sample_replay_record(
 def sample_replay_records(
     policy: BehaviorPolicy,
     requests: Sequence[ReplaySampleRequest],
-    reward: Callable[[TokenSequence, TokenSequence], float],
+    reward: TokenReward,
 ) -> tuple[ReplayRecord, ...]:
     """Generate heterogeneous replay completions in one backend batch."""
 
@@ -400,7 +401,7 @@ def sample_replay_records(
 def sample_replay_records_brokered(
     policy: BehaviorPolicy,
     work: Sequence[ReplaySampleRequest | BrokeredReplayState],
-    reward: Callable[[TokenSequence, TokenSequence], float],
+    reward: TokenReward,
     broker: AsyncRolloutBroker,
     *,
     completion_target: int | None = None,

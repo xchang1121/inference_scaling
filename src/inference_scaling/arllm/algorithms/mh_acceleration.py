@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from math import isfinite, log
@@ -30,9 +30,10 @@ from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
 from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
+from inference_scaling.shared.verifier import TokenReward
 
 
-RewardFunction = Callable[[TokenSequence, TokenSequence], float]
+RewardFunction = TokenReward
 
 
 @dataclass(frozen=True, slots=True)

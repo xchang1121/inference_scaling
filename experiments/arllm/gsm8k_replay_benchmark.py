@@ -1,8 +1,9 @@
 """Measure off-policy rollout replay against a fresh-only matched baseline.
 
-This benchmark uses GSM8K's public answer as a verifier solely so stored reward
-values remain fixed.  Its accuracy is therefore reported separately from the
-self-consistency experiments in ``gsm8k_reproduction.py``.
+The reward comes from the independently configured verifier.  The default GSM8K
+profile selects a deterministic numeric-reference verifier so replayed values
+can be checked exactly; another verifier can be selected without changing the
+replay implementation.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
 from experiments.arllm.gsm8k_reproduction import (
+    _configured_verifier_reward,
     _fingerprint,
     _implementation_hashes,
     _fraction_text,
@@ -48,6 +50,7 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import replace_verifier_from_file
 from inference_scaling.arllm.types import GenerationRequest
 
 IMPLEMENTATION_FILES = (
@@ -64,17 +67,11 @@ IMPLEMENTATION_FILES = (
 )
 
 
-def _correctness_reward(backend, gold):
-    def reward(_prompt, generated):
-        return float(extract_numeric_answer(backend.decode(generated)) == gold)
-
-    return reward
-
-
 def _run_fresh(
     backend,
     prompt,
-    gold,
+    reward,
+    reward_version: str,
     config: dict[str, Any],
     seeds: SeedStream,
 ) -> tuple[tuple[int, ...], dict[str, Any]]:
@@ -105,8 +102,8 @@ def _run_fresh(
             generated_prefix=tuple(generated),
             config=algorithm,
             base_sampling=sampling,
-            reward=_correctness_reward(backend, gold),
-            reward_version="gsm8k-exact-v1",
+            reward=reward,
+            reward_version=reward_version,
             seeds=seeds,
             step_index=step_index,
         )
@@ -132,7 +129,8 @@ def _run_warm(
     backend,
     proposal_backend,
     prompt,
-    gold,
+    reward,
+    reward_version: str,
     config: dict[str, Any],
     seeds: SeedStream,
 ) -> tuple[tuple[int, ...], dict[str, Any]]:
@@ -159,7 +157,6 @@ def _run_warm(
     registry = BehaviorRegistry()
     registry.register(behavior)
     store = InMemoryReplayStore()
-    reward = _correctness_reward(backend, gold)
     generated: list[int] = []
     steps = []
     cache_build_seconds = 0.0
@@ -203,7 +200,7 @@ def _run_warm(
                     prompt,
                     generated_prefix,
                     candidate.token_ids,
-                    "gsm8k-exact-v1",
+                    reward_version,
                 )
                 for history_index in range(algorithm.max_history_per_candidate):
                     requests.append(
@@ -255,7 +252,7 @@ def _run_warm(
                 config=algorithm,
                 base_sampling=sampling,
                 reward=reward,
-                reward_version="gsm8k-exact-v1",
+                reward_version=reward_version,
                 seeds=seeds,
                 step_index=step_index,
                 candidate_samples=candidate_samples,
@@ -377,10 +374,12 @@ def main() -> None:
     )
     parser.add_argument("--tag", default="default")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
@@ -473,6 +472,7 @@ def main() -> None:
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
             prompt = _prompt_tokens(backend, problem)
+            verifier_reward = _configured_verifier_reward(backend, problem, config)
             seed = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("replay", problem.index)
             )
@@ -480,20 +480,25 @@ def main() -> None:
             fresh_before = backend.snapshot()
             (fresh_tokens, fresh_info), fresh_seconds = _timed(
                 lambda prompt=prompt,
-                gold_answer=problem.gold_answer,
-                seed=seed: _run_fresh(backend, prompt, gold_answer, config, seed)
+                reward=verifier_reward,
+                reward_version=verifier_reward.version,
+                seed=seed: _run_fresh(
+                    backend, prompt, reward, reward_version, config, seed
+                )
             )
             fresh_after = backend.snapshot()
             warm_base_before = backend.snapshot()
             warm_proposal_before = proposal.snapshot()
             (warm_tokens, warm_info), warm_total_seconds = _timed(
                 lambda prompt=prompt,
-                gold_answer=problem.gold_answer,
+                reward=verifier_reward,
+                reward_version=verifier_reward.version,
                 seed=seed: _run_warm(
                     backend,
                     proposal,
                     prompt,
-                    gold_answer,
+                    reward,
+                    reward_version,
                     config,
                     seed,
                 )

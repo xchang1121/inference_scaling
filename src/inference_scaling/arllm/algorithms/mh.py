@@ -11,7 +11,7 @@ algorithmic reproduction, not the later paged-KV runtime optimization.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
@@ -20,6 +20,7 @@ import numpy as np
 from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
 from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import TokenReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -630,7 +631,7 @@ def run_reward_mh_chain(
     prompt: TokenSequence,
     config: RewardMHConfig,
     proposal: SamplingConfig,
-    reward: Callable[[TokenSequence, TokenSequence], float],
+    reward: TokenReward,
     seeds: SeedStream,
     *,
     chain_id: int = 0,
@@ -756,7 +757,7 @@ def run_reward_mh_chains(
     prompt: TokenSequence,
     config: RewardMHConfig,
     proposal: SamplingConfig,
-    reward: Callable[[TokenSequence, TokenSequence], float],
+    reward: TokenReward,
     seeds: SeedStream,
     *,
     chains: int,

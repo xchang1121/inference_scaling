@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
@@ -11,11 +11,10 @@ from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRe
 from inference_scaling.shared.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
 
-DiffusionRewardFunction = Callable[[TokenSequence, TokenSequence], float]
-DiffusionRewardBatchFunction = Callable[
-    [TokenSequence, Sequence[TokenSequence]], Sequence[float]
-]
+DiffusionRewardFunction = TokenReward
+DiffusionRewardBatchFunction = TokenBatchReward
 
 
 def _mh_requests(

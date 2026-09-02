@@ -63,6 +63,13 @@ from inference_scaling.shared.evaluation import (
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import (
+    TokenVerifierReward,
+    VerifierContext,
+    build_token_verifier_reward,
+    replace_verifier_from_file,
+    verifier_spec_from_config,
+)
 from experiments.shared.methods import DLLM_DYNAMIC_METHODS, DLLM_METHODS
 
 METHODS = DLLM_METHODS
@@ -81,7 +88,26 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/config.py",
     "src/inference_scaling/dllm/dynamic_is.py",
     "src/inference_scaling/shared/budget.py",
+    "src/inference_scaling/shared/evaluation/numeric.py",
+    "src/inference_scaling/shared/verifier.py",
 )
+
+
+def _configured_verifier_reward(
+    backend: Any,
+    problem: GSM8KProblem,
+    config: dict[str, Any],
+) -> TokenVerifierReward:
+    spec = verifier_spec_from_config(config)
+    return build_token_verifier_reward(
+        config,
+        context=VerifierContext(
+            prompt=gsm8k_prompt(problem.question),
+            reference=(str(problem.gold_answer) if spec.requires_reference else None),
+            metadata={"benchmark": "gsm8k", "problem_index": problem.index},
+        ),
+        decoder=backend.decode,
+    )
 
 
 def _sample_one(
@@ -372,12 +398,9 @@ def run_method(
             "acceptance_rate": result.acceptance_rate,
         }
 
-    def exact_reward(_: TokenSequence, continuation: TokenSequence) -> float:
-        prediction = extract_numeric_answer(backend.decode(continuation))
-        return float(prediction == problem.gold_answer)
-
     if method == "verifier_mh":
         mh = config["mh"]
+        verifier_reward = _configured_verifier_reward(backend, problem, config)
         result = run_diffusion_reward_mh(
             backend=backend,
             prompt=prompt,
@@ -387,16 +410,18 @@ def run_method(
                 reward_temperature=float(mh["reward_temperature"]),
             ),
             sampling=generation_sampling,
-            reward=exact_reward,
+            reward=verifier_reward,
             seed=seeds.derive(method, problem.index),
         )
         return result.final.token_ids, {
-            "target": "base_reverse_process_times_exp_exact_reward_over_temperature",
+            "target": "base_reverse_process_times_exp_configured_verifier_over_temperature",
+            "reward_source": "verifier",
+            "verifier": verifier_reward.describe(),
             "updates": len(result.steps),
             "accepted": sum(step.accepted for step in result.steps),
             "acceptance_rate": result.acceptance_rate,
             "final_reward": result.final_reward,
-            "uses_test_gold_oracle": True,
+            "uses_test_gold_oracle": verifier_reward.verifier.spec.requires_reference,
         }
 
     conditional = config["conditional_is"]
@@ -404,6 +429,9 @@ def run_method(
     if reduced and proposal_backend is None:
         raise ValueError("reduced-layer conditional IS requires its proposal backend")
     verifier = method.startswith("verifier_")
+    verifier_reward = (
+        _configured_verifier_reward(backend, problem, config) if verifier else None
+    )
     uncorrected = method.endswith("_uncorrected")
     unclipped = method.endswith("_unclipped")
     rollout_backend = proposal_backend if reduced else backend
@@ -437,7 +465,7 @@ def run_method(
         target_rollout_backend=backend,
         target_rollout_sampling=exact_sampling,
         apply_importance_correction=apply_correction,
-        reward=exact_reward if verifier else None,
+        reward=verifier_reward,
         reward_batch=reward_batch,
         seed=seeds.derive(method, problem.index),
     )
@@ -448,8 +476,12 @@ def run_method(
             "rollout_source": (
                 "shared_prefix_layer_llada" if reduced else "full_llada_moe"
             ),
-            "reward_source": "exact_verifier" if verifier else "self_consistency",
-            "uses_test_gold_oracle": verifier,
+            "reward_source": "verifier" if verifier else "self_consistency",
+            "verifier": verifier_reward.describe() if verifier_reward else None,
+            "uses_test_gold_oracle": bool(
+                verifier_reward
+                and verifier_reward.verifier.spec.requires_reference
+            ),
             "apply_importance_correction": apply_correction,
             "importance_log_ratio_clip": clip,
             "target": (
@@ -649,6 +681,11 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
+        "--verifier-config",
+        type=Path,
+        help="standalone TOML file whose [verifier] table replaces the default",
+    )
+    parser.add_argument(
         "--set",
         dest="config_overrides",
         action="append",
@@ -661,6 +698,7 @@ def main() -> None:
     config, _ = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
     config = apply_config_overrides(config, args.config_overrides)
+    replace_verifier_from_file(config, args.verifier_config)
     if args.limit is not None:
         if args.limit <= 0:
             raise ValueError("--limit must be positive")

@@ -44,9 +44,23 @@ from inference_scaling.shared.stepwise import (
     stepwise_generation_step,
 )
 from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.verifier import (
+    ConfiguredTrainingVerifierReward,
+    ConfiguredVerifier,
+    TokenBatchReward,
+    TokenReward,
+    TokenVerifierReward,
+    VerifierContext,
+    VerifierInput,
+    VerifierSpec,
+    build_token_verifier_reward,
+    build_verifier,
+)
 
 __all__ = [
     "BudgetAllocation",
+    "ConfiguredTrainingVerifierReward",
+    "ConfiguredVerifier",
     "VarianceCostEstimate",
     "SMCForestConfig",
     "MetropolisHastingsDecision",
@@ -66,9 +80,17 @@ __all__ = [
     "RuntimeConfig",
     "SeedStream",
     "TokenSequence",
+    "TokenBatchReward",
+    "TokenReward",
+    "TokenVerifierReward",
+    "VerifierContext",
+    "VerifierInput",
+    "VerifierSpec",
     "apply_metropolis_hastings",
     "allocate_fresh_rollout_budget",
     "allocate_variance_cost_budget",
+    "build_token_verifier_reward",
+    "build_verifier",
     "corrected_replay_log_weight",
     "categorical_index_from_uniform",
     "logmeanexp",

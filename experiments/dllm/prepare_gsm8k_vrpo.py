@@ -28,7 +28,7 @@ from experiments.dllm.profiles import apply_execution_profile
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
 from inference_scaling.dllm.backends import load_llada_backend
-from inference_scaling.dllm.preferences import select_verified_preference_pair
+from inference_scaling.dllm.preferences import select_scored_preference_pair
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
@@ -37,6 +37,13 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import (
+    VerifierContext,
+    VerifierInput,
+    build_verifier,
+    replace_verifier_from_file,
+    verifier_spec_from_config,
+)
 
 IMPLEMENTATION_FILES = (
     "experiments/dllm/prepare_gsm8k_vrpo.py",
@@ -44,6 +51,8 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/preferences.py",
     "src/inference_scaling/dllm/backends/llada.py",
     "src/inference_scaling/dllm/backends/loader.py",
+    "src/inference_scaling/shared/verifier.py",
+    "src/inference_scaling/shared/evaluation/numeric.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
 )
 
@@ -59,16 +68,29 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--max-pairs", type=int)
     parser.add_argument("--candidate-pool-size", type=int)
+    parser.add_argument("--verifier-config", type=Path)
+    parser.add_argument(
+        "--include-reference-completion",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
+    replace_verifier_from_file(config, args.verifier_config)
+    verifier_spec = verifier_spec_from_config(config)
     training = config["vrpo_training"]
     output_path = args.output or Path(str(training["preference_data"]))
     manifest_path = args.manifest or Path(str(training["preference_manifest"]))
     max_pairs = int(args.max_pairs or training["preference_pairs"])
     pool_size = int(args.candidate_pool_size or training["candidate_pool_size"])
     generations = int(training["num_generations"])
+    include_reference_completion = (
+        bool(training.get("include_reference_completion", True))
+        if args.include_reference_completion is None
+        else args.include_reference_completion
+    )
     for name, value in (
         ("max_pairs", max_pairs),
         ("candidate_pool_size", pool_size),
@@ -94,6 +116,7 @@ def main() -> None:
         "max_pairs": max_pairs,
         "candidate_pool_size": pool_size,
         "num_generations": generations,
+        "include_reference_completion": include_reference_completion,
         "model_weight_sha256": actual_hashes,
         "model_metadata_sha256": checkpoint_metadata_hashes(model_dir),
         "implementation_sha256": implementation_hashes(
@@ -154,16 +177,48 @@ def main() -> None:
                 ]
                 samples = backend.sample_batch(requests)
                 texts = [backend.decode(sample.token_ids) for sample in samples]
-                pair = select_verified_preference_pair(
+                verifier = build_verifier(
+                    verifier_spec,
+                    context=VerifierContext(
+                        prompt=prompt_text,
+                        reference=(
+                            str(problem.gold_answer)
+                            if verifier_spec.requires_reference
+                            else None
+                        ),
+                        metadata={"benchmark": "gsm8k", "problem_index": problem.index},
+                    ),
+                )
+                scored_texts = (
+                    (*texts, problem.gold_solution)
+                    if include_reference_completion
+                    else tuple(texts)
+                )
+                verifier_rewards = verifier.score_batch(
+                    tuple(VerifierInput(prompt_text, text) for text in scored_texts)
+                )
+                pair = select_scored_preference_pair(
                     candidate_texts=texts,
-                    gold_solution=problem.gold_solution,
-                    gold_answer=problem.gold_answer,
+                    candidate_rewards=(
+                        verifier_rewards[:-1]
+                        if include_reference_completion
+                        else verifier_rewards
+                    ),
+                    reference_text=(
+                        problem.gold_solution if include_reference_completion else None
+                    ),
+                    reference_reward=(
+                        verifier_rewards[-1] if include_reference_completion else None
+                    ),
                 )
                 record: dict[str, Any] = {
                     "fingerprint": fingerprint,
                     "problem_index": problem.index,
                     "question": problem.question,
                     "gold_answer": str(problem.gold_answer),
+                    "reference_completion_verifier_reward": (
+                        verifier_rewards[-1] if include_reference_completion else None
+                    ),
                     "candidates": [
                         {
                             "draw": draw,
@@ -172,6 +227,7 @@ def main() -> None:
                                 str(prediction) if prediction is not None else None
                             ),
                             "correct": prediction == problem.gold_answer,
+                            "verifier_reward": verifier_rewards[draw],
                         }
                         for draw, (text, prediction) in enumerate(
                             (
@@ -182,7 +238,7 @@ def main() -> None:
                     ],
                 }
                 if pair is None:
-                    record["status"] = "skipped_all_correct"
+                    record["status"] = "skipped_equal_verifier_rewards"
                 else:
                     record.update(
                         status="pair",
@@ -190,7 +246,7 @@ def main() -> None:
                         chosen=pair.chosen,
                         rejected=pair.rejected,
                         chosen_source=pair.chosen_source,
-                        rejected_candidate_index=pair.rejected_candidate_index,
+                        rejected_source=pair.rejected_source,
                     )
                     pair_count += 1
                 output.write(json.dumps(record, ensure_ascii=False) + "\n")

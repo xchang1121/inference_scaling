@@ -50,6 +50,12 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.verifier import (
+    VerifierContext,
+    build_token_verifier_reward,
+    replace_verifier_from_file,
+    verifier_spec_from_config,
+)
 
 IMPLEMENTATION_FILES = (
     "experiments/dllm/benchmark_infra.py",
@@ -224,11 +230,16 @@ def _problem_groups(
     rollout_count = int(config["conditional_is"]["rollout_count"])
     seeds = SeedStream(seed)
 
-    def exact_reward_batch(_prompt, continuations):
-        return [
-            float(extract_numeric_answer(backend.decode(tokens)) == gold_answer)
-            for tokens in continuations
-        ]
+    verifier_spec = verifier_spec_from_config(config)
+    verifier_reward = build_token_verifier_reward(
+        config,
+        context=VerifierContext(
+            prompt=backend.decode(prompt),
+            reference=(str(gold_answer) if verifier_spec.requires_reference else None),
+        ),
+        decoder=backend.decode,
+    )
+    exact_reward_batch = verifier_reward.batch
 
     def surrogate_reward_batch(_prompt, continuations):
         return [
@@ -630,10 +641,12 @@ def main() -> None:
     parser.add_argument(
         "--output-root", type=Path, default=Path("results/dllm/gsm8k")
     )
+    parser.add_argument("--verifier-config", type=Path)
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)
     config = apply_execution_profile(config, args.profile)
+    replace_verifier_from_file(config, args.verifier_config)
     limit = args.limit or 1
     if limit <= 0:
         raise ValueError("--limit must be positive")
@@ -730,7 +743,7 @@ def main() -> None:
                 "wall clock, full-model and early-exit active FLOPs, forward calls, "
                 "reuse counts, exact reward calls, and deterministic path checks"
             ),
-            "reward_scope": "public GSM8K gold verifier; infrastructure diagnostic only",
+            "reward_scope": config["verifier"],
             **_aggregate(records),
         }
         summary_path.write_text(
