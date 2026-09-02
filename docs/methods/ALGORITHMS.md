@@ -368,7 +368,7 @@ K_\rho=\sum_{\ell=1}^{L}\rho(\ell)K_\ell,
 =\pi_\alpha.
 ```
 
-所以任何与当前序列无关的固定 $`\rho`$ 都保持同一目标分布。实现要求每个 $`\rho(\ell)>0`$，从而既能
+所以任何与当前序列无关的固定 $`\rho`$ 都保持同一目标分布。实现要求每个 $`\rho(\ell)\gt 0`$，从而既能
 执行局部更新，也保留整段重生成。温度 proposal 的逐前缀归一化常数进入 $`q_c`$ 的正反概率。
 
 实现提供三种分布：`uniform` 对所有长度等概率；`inverse_length` 取
@@ -441,7 +441,7 @@ A_r(y\to y')=\min\left\{1,
 
 当 $`q_c=p(\cdot\mid x,y_{1:c})`$ 时，基础模型与 proposal 项抵消，只剩
 $`\min\{1,e^{(r(y')-r(y))/\tau}\}`$。代码仍保留展开后的四项，因而同样支持任意可精确评分、具有完整
-支持集的温度 proposal。在固定最大长度、有限词表、有限奖励、全支持 proposal 且 $`\rho(L)>0`$ 时，
+支持集的温度 proposal。在固定最大长度、有限词表、有限奖励、全支持 proposal 且 $`\rho(L)\gt 0`$ 时，
 整段重生成使任意两个出发状态具有共同可达的下一状态，因而得到与式 (5) 相同的几何收敛直观解释。
 
 dLLM 的整段奖励 MH 从基础模型独立生成完整 proposal。基础轨迹概率在目标与 proposal 中抵消，因此共享核
@@ -518,12 +518,12 @@ $`v_{m1},\ldots,v_{mK}\in[0,1)^L`$，并在每个 token 位置执行 proposal �
 
 ```math
 u_{mk,t}=F^{-1}_{q,t}
-\left(v_{mk,t}\mid x,g,z_m,u_{mk,<t}\right).
+\left(v_{mk,t}\mid x,g,z_m,u_{mk,1:t-1}\right).
 ```
 
 <p align="right">式 (8-R1)</p>
 
-`arithmetic_lattice` 先抽取一个共享随机平移 $`\Delta_m\sim\operatorname{Unif}[0,1)`$，再构造一维格点
+`arithmetic_lattice` 先抽取一个共享随机平移 $`\Delta_m\sim\mathrm{Unif}[0,1)`$，再构造一维格点
 
 ```math
 a_{mk,1}=\left(\Delta_m+\frac{k}{K}\right)\bmod 1,
@@ -542,7 +542,7 @@ a_{mk,t+1}=
 
 <p align="right">式 (8-R3)</p>
 
-随机平移使每个带编号的 $`a_{mk,1}`$ 都服从 $`\operatorname{Unif}[0,1)`$。算术采样
+随机平移使每个带编号的 $`a_{mk,1}`$ 都服从 $`\mathrm{Unif}[0,1)`$。算术采样
 （Arithmetic Sampling）的递归
 区间映射将任一序列 $`u`$ 对应到长度恰为 $`q(u\mid x,g,z_m)`$ 的区间，因此每条 $`u_{mk}`$ 的边缘分布
 严格等于 rollout proposal。格点之间的距离固定为 $`1/K`$，其覆盖约束强于逐 token Sobol 在高维空间中的
@@ -617,8 +617,8 @@ U_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)b}{K}.
 若完整权重为 $`H_m\in[L_m,U_m]`$，固定 $`\eta`$ 时选择候选 $`j`$ 等价于
 
 ```math
-\sum_{i<j}H_i\leq\eta\sum_iH_i
-<\sum_{i\leq j}H_i.
+\sum_{i\lt j}H_i\leq\eta\sum_iH_i
+\lt\sum_{i\leq j}H_i.
 ```
 
 <p align="right">式 (8-E2)</p>
@@ -626,9 +626,9 @@ U_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)b}{K}.
 式 (8-E2) 对所有合法 $`H_i`$ 都成立，当且仅当
 
 ```math
-(1-\eta)\sum_{i<j}U_i-\eta\sum_{i\geq j}L_i\leq0,
+(1-\eta)\sum_{i\lt j}U_i-\eta\sum_{i\geq j}L_i\leq0,
 \qquad
-(1-\eta)\sum_{i\leq j}L_i-\eta\sum_{i>j}U_i>0.
+(1-\eta)\sum_{i\leq j}L_i-\eta\sum_{i\gt j}U_i\gt0.
 ```
 
 <p align="right">式 (8-E3)</p>
@@ -766,7 +766,7 @@ for update in range(updates):
 记基础候选 logits 为 $`\ell_{\mathrm{base}}(z)`$，使得
 
 ```math
-p(z\mid x,g)=\operatorname{Softmax}
+p(z\mid x,g)=\mathrm{softmax}
 \bigl(\ell_{\mathrm{base}}\bigr)_z,
 \qquad z\in\mathcal Z(x,g).
 ```
@@ -780,7 +780,7 @@ p(z\mid x,g)=\operatorname{Softmax}
 =\ell_{\mathrm{base}}(z)+\log\widehat h(z),
 \qquad
 \widehat P(z\mid x,g)
-=\operatorname{Softmax}\bigl(\ell_{\mathrm{adj}}\bigr)_z.
+=\mathrm{softmax}\bigl(\ell_{\mathrm{adj}}\bigr)_z.
 ```
 
 <p align="right">式 (8-L2)</p>
@@ -1488,18 +1488,44 @@ AR-LLM 的 `runtime.backend` 和命令行 `--backend` 使用同一组标识：
 当前 vLLM 后端用于 AR-LLM。dLLM 需要返回反向扩散轨迹、每一步的转移对数概率与可提交的分块状态，因此
 使用第 17.6 节的批量 Transformers 后端；公共算法接口和计算量统计不随执行引擎变化。
 
-幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $q$ 和基础模型概率 $p$。vLLM
-的常规输出只含 $q$，因而原路径在生成后还要对完整后缀执行一次 $p$ 的前向评分。为消除这次重复前向，
-本仓库在 vLLM 0.26 的同步 worker 中先从原始 logits 取出最终选中 token 的 $\log p$，再由原采样器产生
-token 与 $\log q$。worker 只向主进程
+#### 17.7.1 同步 MH 的双概率记录
+
+幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $`q`$ 和基础模型概率 $`p`$。vLLM
+的常规输出只含 $`q`$，因而原路径在生成后还要对完整后缀执行一次 $`p`$ 的前向评分。为消除这次重复前向，
+本仓库在 vLLM 0.26 的同步 worker 中先从原始 logits 取出最终选中 token 的 $`\log p`$，再由原采样器产生
+token 与 $`\log q`$。worker 只向主进程
 传回每步一个标量，不复制全词表 logits，也不修改 MH 接受率。`SequenceSample` 携带这组基础模型概率后，
 MH 的已有缓存分支会跳过整段重评分。
+
+设当前前缀为 $`h`$，新后缀为 $`s=(s_1,\ldots,s_\ell)`$。一次解码返回的两组标量分别累加为
+
+```math
+\log p(s\mid h)=\sum_{t=1}^{\ell}\log p(s_t\mid h,s_{\lt t}),
+\qquad
+\log q(s\mid h)=\sum_{t=1}^{\ell}\log q(s_t\mid h,s_{\lt t}).
+```
+
+$`p`$ 来自采样处理前的 logits，$`q`$ 来自温度、top-k 和 top-p 等处理后的实际采样分布。MH 接受率继续使用
+第 4 节的完整正反 proposal 比；融合只改变取得 $`\log p(s\mid h)`$ 的执行位置。
+
+```python
+raw_logprobs = logits.log_softmax(dim=-1, dtype=torch.float32)
+sample = sampler(logits)
+selected_reference = raw_logprobs.gather(-1, sample.sampled_token_ids)
+```
+
+| 概率记录路径 | proposal 解码 | 生成后的基础模型后缀评分 | 返回主进程的新增数据 |
+| --- | ---: | ---: | ---: |
+| 常规 vLLM | 1 次 | 1 次 | 无 |
+| MH 融合路径 | 1 次 | 0 次 | 每个生成 token 一个 FP32 标量 |
 
 该路径通过 `vllm.mh_fused_logprobs` 显式启用，当前约束为 `vllm-sync`、vLLM `0.26.x`、V1 model runner、
 无 speculative decoding。约束不满足时初始化直接报错，不会回退到不完整的概率。普通异步 vLLM、全词表
 熵统计和任意给定序列评分仍使用原实现。一次 MH 运行可在 backend delta 中核对
 `fused_reference_sequences`、`fused_reference_tokens` 和 `score_calls`；与常规 vLLM 的比较对象是同一模型、
 同一 proposal、同一随机种子及相同 MH 更新次数，差别仅为是否执行生成后的基础模型重评分。
+
+#### 17.7.2 运行配置
 
 24 GiB 单卡同时加载 1.5B 基础模型和 0.5B rollout proposal 模型的配置为：
 
