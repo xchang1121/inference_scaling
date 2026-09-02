@@ -121,6 +121,23 @@ python -m experiments.arllm.gsm8k_reproduction `
   --limit 1 --tag power-two-is
 ```
 
+AR-LLM 还支持 [Consilience](https://arxiv.org/abs/2608.09898) 的置信度轨迹奖励。它只读取同一模型逐 token
+的 top-$`K`$ 对数概率，不读取参考答案或外部 verifier。默认设置跳过序列开头 5%，分别取随后 20% 与末尾
+20% 的置信度均值，并计算“末段均值减去 3 倍首段均值”。该原始分数不做候选组内归一化，因此是固定的
+逐序列奖励，可直接进入条件 IS、迭代 IS 和 rollout replay：
+
+```powershell
+python -m experiments.arllm.gsm8k_reproduction `
+  --method conditional_is --conditional-reward consilience `
+  --consilience-top-k 5 --consilience-window-fraction 0.2 `
+  --consilience-skip-fraction 0.05 --consilience-initial-penalty 3 `
+  --limit 1 --tag consilience-is
+```
+
+Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理结束标记的模型可用
+`--consilience-reasoning-end-text` 排除标记及其后的最终结论；vLLM 路径需要配置 Transformers 精确评分后端。
+完整公式、实现边界与成本见[已实现的奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)。
+
 ## 文档
 
 | 文档 | 内容 |

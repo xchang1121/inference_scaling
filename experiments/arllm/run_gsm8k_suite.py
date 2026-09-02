@@ -76,6 +76,7 @@ def main() -> None:
             "sequence_log_probability",
             "negative_entropy",
             "self_certainty",
+            "consilience",
             "verifier",
         )
         reward_methods = ("conditional_is",)
@@ -95,6 +96,7 @@ def main() -> None:
             "sequence_log_probability",
             "negative_entropy",
             "self_certainty",
+            "consilience",
             "verifier",
         )
         reward_methods = (

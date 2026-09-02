@@ -72,6 +72,8 @@ class SequenceScoreStatistics:
     mean_logprob: float
     mean_negative_entropy: float
     mean_self_certainty: float
+    token_topk_confidences: tuple[float, ...] = ()
+    confidence_top_k: int | None = None
 
 
 class TransformersBackend:
@@ -195,13 +197,28 @@ class TransformersBackend:
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            trust_remote_code=trust_remote_code,
-            dtype=torch_dtype,
-        )
+        model_load_kwargs = {
+            "cache_dir": cache_dir,
+            "local_files_only": local_files_only,
+            "trust_remote_code": trust_remote_code,
+        }
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name_or_path,
+                dtype=torch_dtype,
+                **model_load_kwargs,
+            )
+        except TypeError as error:
+            if "unexpected keyword argument 'dtype'" not in str(error):
+                raise
+            # Transformers 4.x names this argument ``torch_dtype``; 5.x uses
+            # ``dtype``.  Supporting both keeps the AR backend usable from the
+            # dLLM-compatible test environment without changing model values.
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name_or_path,
+                torch_dtype=torch_dtype,
+                **model_load_kwargs,
+            )
         if adapter_name_or_path is not None:
             try:
                 from peft import PeftModel
@@ -1279,8 +1296,10 @@ class TransformersBackend:
     def score_statistics_batch(
         self,
         requests: Sequence[ScoreRequest],
+        *,
+        confidence_top_k: int | None = None,
     ) -> list[SequenceScoreStatistics]:
-        """Score continuations and return three confidence rewards.
+        """Score continuations and return model-distribution statistics.
 
         Entropy and self-certainty require a finite log-probability for every
         vocabulary item, so this diagnostic deliberately accepts only a
@@ -1289,6 +1308,8 @@ class TransformersBackend:
         """
 
         torch_module = _require_torch()
+        if confidence_top_k is not None and confidence_top_k <= 0:
+            raise ValueError("confidence_top_k must be positive")
         flattened: list[tuple[ScoreRequest, TokenSequence]] = [
             (request, continuation)
             for request in requests
@@ -1356,6 +1377,20 @@ class TransformersBackend:
                 negative_entropy = (probabilities * log_probs).sum(dim=-1)
                 vocabulary_size = log_probs.shape[-1]
                 self_certainty = -(math.log(vocabulary_size) + log_probs).mean(dim=-1)
+                if confidence_top_k is None:
+                    token_topk_confidences: tuple[float, ...] = ()
+                    effective_top_k = None
+                else:
+                    effective_top_k = min(confidence_top_k, vocabulary_size)
+                    top_logprobs = torch_module.topk(
+                        log_probs,
+                        effective_top_k,
+                        dim=-1,
+                    ).values
+                    topk_confidence = -top_logprobs.mean(dim=-1)
+                    token_topk_confidences = tuple(
+                        float(value) for value in topk_confidence.cpu().tolist()
+                    )
                 token_logprobs = tuple(
                     float(value) for value in selected.cpu().tolist()
                 )
@@ -1364,6 +1399,8 @@ class TransformersBackend:
                     mean_logprob=float(selected.mean().cpu()),
                     mean_negative_entropy=float(negative_entropy.mean().cpu()),
                     mean_self_certainty=float(self_certainty.mean().cpu()),
+                    token_topk_confidences=token_topk_confidences,
+                    confidence_top_k=effective_top_k,
                 )
 
         with self._statistics_lock:

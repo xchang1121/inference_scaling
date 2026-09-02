@@ -286,6 +286,7 @@ proposal。
 | --- | --- | --- |
 | beam search | [Freitag and Al-Onaizan (2017)](https://aclanthology.org/W17-3207/) | 作为确定性搜索基线 |
 | 自一致性（self-consistency） | [Wang et al. (2023)](https://openreview.net/pdf?id=1PL1NIMMrw) | 作为并行采样基线与可部署奖励信号 |
+| Consilience 置信度轨迹 | [Kong et al. (2026)](https://arxiv.org/abs/2608.09898)；[代码](https://github.com/LechengKong/consilience) | 由同一模型的 top-$`K`$ token 概率构造固定逐序列奖励，不使用外部 verifier |
 | Metropolis--Hastings | [Hastings (1970)](https://doi.org/10.1093/biomet/57.1.97) | 用于幂分布和显式奖励目标的后缀转移 |
 | 重要性采样与全支持混合分布 | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件奖励权重、外层候选修正和覆盖完整支持集的 proposal |
 | 迭代 SIR（iterated SIR） | [Samsonov et al. (2022)](https://papers.neurips.cc/paper_files/paper/2022/file/21c86d5b10cdc28664ccdadf0a29065a-Paper-Conference.pdf) | 将一次性有限 SIR 变为按迭代轮次收敛的有限池转移 |
@@ -1233,6 +1234,7 @@ Hastings 比中抵消。Qwen2.5-1.5B 的三个随机种子组合消融中，`mul
 | --- | --- | --- |
 | 配置型 verifier | 本地工厂或外部服务对提示与完整生成给出标量；GSM8K 默认插件解析最终数值并与参考值比较 | verifier 输出有限实数；是否接收参考值由配置显式声明 |
 | 完整序列对数概率（`sequence_log_probability`） | $`c\log p(y\mid x)`$ | AR 后端能够按实际采样策略精确评分完整序列 |
+| Consilience（`consilience`） | top-$`K`$ token 置信度的末段均值减去加权首段均值 | 需要逐 token 的 top-$`K`$ 概率；固定逐序列分数，可用于普通或迭代条件 IS |
 | 累计自一致性（`self_consistency`） | 按本批已经评估的数值结果累计众数，匹配众数取 1 | 奖励依赖同批样本，只用于普通条件 IS 与 Best-of-$`N`$ |
 | 固定众数（`frozen_consensus`） | 用独立初始估计样本确定众数，随后固定逐序列 0/1 奖励 | 可用于需要固定逐序列奖励的迭代条件 IS |
 | token 平均对数概率（`log_probability`） | $`\lvert y\rvert^{-1}\log p(y\mid x)`$，随后做组内归一化 | 置信度消融；不等于完整序列对数概率奖励 |
@@ -1260,6 +1262,38 @@ top-p 策略时执行；否则要求配置精确评分后端并在缺失时终�
 参数 `logprob_reward_scale` 对应 $`c`$，`reward_temperature` 对应 $`\tau`$。设置 $`c=1`$ 表示奖励确实为
 $`\log p`$，但目标指数是 $`1+1/\tau`$；它只在 $`\tau=1`$ 时等于 $`p^2`$。MH 已通过式 (2) 和
 `mh.alpha` 直接实现相同目标，不需要额外调用序列奖励评分。
+
+Consilience 对第 $`t`$ 个生成位置取得概率最高的 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，并定义
+
+```math
+c_t(x,y)=-\frac{1}{K}\sum_{j=1}^{K}
+\log p\!\left(v_{t,j}\mid x,y_{\lt t}\right).
+```
+
+若用于评分的序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
+$`W=\max\{1,\lfloor 0.2L\rfloor\}`$，则默认奖励为
+
+```math
+r_{\mathrm{Cns}}(x,y)=
+\frac{1}{W}\sum_{t=L-W+1}^{L}c_t(x,y)
+-3\frac{1}{W}\sum_{t=P+1}^{P+W}c_t(x,y).
+```
+
+短序列中，代码把 $`W`$ 限制为不超过 $`L-P`$；`consilience_window_tokens` 可把比例窗口替换为固定
+token 数。`consilience_top_k`、`consilience_window_fraction`、`consilience_skip_fraction`、
+`consilience_initial_penalty` 和 `consilience_reward_scale` 分别控制 $`K`$、窗口比例、跳过比例、首段系数和
+总尺度。对含有显式推理结束标记的模型，`consilience_reasoning_end_text` 使评分只覆盖标记之前的推理 token；
+Qwen2.5-1.5B-Instruct 的默认实验没有该标记，因而使用完整生成。
+
+[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards.py) 将一个批次的所有序列合并为一次
+`score_statistics_batch` 调用。Transformers 后端从同一组 logits 同时取得选中 token 概率、熵统计和
+top-$`K`$ 轨迹；vLLM 后端把该项交给配置的精确 Transformers 评分后端，并将评分 token 与 FLOPs 计入
+运行统计。Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列；条件 IS 使用
+$`p(y\mid x)\exp\{r_{\mathrm{Cns}}(x,y)/\tau\}`$ 作为固定目标。奖励不依赖同批的其他候选，历史 rollout
+在模型、采样策略和奖励参数版本一致时可按原有 IS/replay 公式复用。
+
+该分数衡量模型置信度随生成位置的变化，不构成正确性判定。增加候选数只加强对该分数的选择；任务准确率
+是否提高仍需在目标模型与任务上验证。当前结果目录没有把尚未运行的 Consilience 配置列为正式质量结果。
 
 配置型 verifier 由 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py) 构造。独立 TOML
 中的 `factory` 指向可信本地工厂，`requires_reference` 决定实验适配层是否提供数据集参考值；MH、IS、replay

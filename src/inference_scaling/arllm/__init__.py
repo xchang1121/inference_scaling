@@ -7,11 +7,15 @@ from inference_scaling.arllm.config import (
     RewardMHConfig,
     SamplingConfig,
 )
-from inference_scaling.arllm.rewards import SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards import (
+    ConsilienceReward,
+    SequenceLogProbabilityReward,
+)
 
 __all__ = [
     "BaseReplayConfig",
     "ConditionalISConfig",
+    "ConsilienceReward",
     "MHConfig",
     "RewardMHConfig",
     "SamplingConfig",

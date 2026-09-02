@@ -198,7 +198,7 @@ class _Fallback:
     def score_batch(self, requests):
         return [tuple(-0.5 for _ in continuation) for request in requests for continuation in request.continuations]
 
-    def score_statistics_batch(self, requests):
+    def score_statistics_batch(self, requests, **_kwargs):
         return [
             {"tokens": continuation}
             for request in requests

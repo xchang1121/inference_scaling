@@ -303,7 +303,8 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
     backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
 
     result = backend.score_statistics_batch(
-        [ScoreRequest((0,), ((0, 1),), SamplingConfig())]
+        [ScoreRequest((0,), ((0, 1),), SamplingConfig())],
+        confidence_top_k=2,
     )[0]
 
     assert result.token_logprobs == pytest.approx(np.log([0.5, 0.3]))
@@ -314,6 +315,10 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
     assert result.mean_self_certainty == pytest.approx(
         -np.mean(np.log(len(probabilities)) + np.log(probabilities))
     )
+    assert result.token_topk_confidences == pytest.approx(
+        [-np.mean(np.log([0.5, 0.3]))] * 2
+    )
+    assert result.confidence_top_k == 2
     snapshot = backend.snapshot()
     assert snapshot.scored_tokens == 2
     assert snapshot.score_forward_token_slots == 3
@@ -326,6 +331,17 @@ def test_confidence_statistics_reject_truncated_support() -> None:
     with pytest.raises(ValueError, match="full-support"):
         backend.score_statistics_batch(
             [ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))]
+        )
+
+
+def test_confidence_statistics_reject_nonpositive_top_k() -> None:
+    model = ConstantLogitModel([0.5, 0.3, 0.2])
+    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+
+    with pytest.raises(ValueError, match="confidence_top_k must be positive"):
+        backend.score_statistics_batch(
+            [ScoreRequest((0,), ((1,),), SamplingConfig())],
+            confidence_top_k=0,
         )
 
 

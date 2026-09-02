@@ -972,7 +972,12 @@ class VLLMBackend:
         )
         return slots, dense_forward_flops(self.parameter_count, slots)
 
-    def _run_delegated_score(self, requests: Sequence[ScoreRequest], method: str):
+    def _run_delegated_score(
+        self,
+        requests: Sequence[ScoreRequest],
+        method: str,
+        **kwargs: Any,
+    ):
         if self._scoring_backend is None:
             raise RuntimeError("an exact scoring backend is not configured")
         callback = getattr(self._scoring_backend, method, None)
@@ -983,7 +988,7 @@ class VLLMBackend:
         snapshot = getattr(self._scoring_backend, "snapshot", None)
         with self._delegated_score_lock:
             before = snapshot() if snapshot is not None else None
-            outputs = callback(requests)
+            outputs = callback(requests, **kwargs)
             after = snapshot() if snapshot is not None else None
         slots, flops = self._delegated_compute_delta(before, after, requests)
         return outputs, slots, flops
@@ -1063,7 +1068,12 @@ class VLLMBackend:
             self._delegated_estimated_dense_forward_flops += delegated_flops
         return results
 
-    def score_statistics_batch(self, requests: Sequence[ScoreRequest]) -> list[Any]:
+    def score_statistics_batch(
+        self,
+        requests: Sequence[ScoreRequest],
+        *,
+        confidence_top_k: int | None = None,
+    ) -> list[Any]:
         """Delegate full-vocabulary confidence statistics to the exact backend.
 
         Selected-token prompt log-probabilities are enough for IS and MH at the
@@ -1080,6 +1090,7 @@ class VLLMBackend:
         outputs, slots, flops = self._run_delegated_score(
             requests,
             "score_statistics_batch",
+            confidence_top_k=confidence_top_k,
         )
         if len(outputs) != len(flattened):
             raise RuntimeError("exact scoring backend returned an invalid result count")

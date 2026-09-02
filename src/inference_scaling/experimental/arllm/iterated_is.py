@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from inference_scaling.arllm.algorithms.conditional_is import (
     ConditionalCandidate,
+    RewardBatchFunction,
     RewardFunction,
     _sample_candidates,
     _validate_base_sampling,
@@ -82,15 +83,17 @@ def iterated_conditional_is_step(
     config: IteratedConditionalISConfig,
     base_sampling: SamplingConfig,
     rollout_sampling: SamplingConfig,
-    reward: RewardFunction,
+    reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
+    reward_batch: RewardBatchFunction | None = None,
 ) -> IteratedConditionalISStep:
     """Draw all fresh states in one batch, then apply finite-pool i-SIR updates.
 
-    The reward must be a fixed pointwise function of a completed sequence.
-    Batch-normalized or history-dependent rewards change the target while the
-    chain runs and therefore do not satisfy the i-SIR invariance argument.
+    The reward must be a fixed pointwise function of a completed sequence.  A
+    batched callback may vectorize that same function.  Batch-normalized or
+    history-dependent rewards change the target while the chain runs and
+    therefore do not satisfy the i-SIR invariance argument.
     """
 
     _validate_base_sampling(base_sampling)
@@ -124,6 +127,7 @@ def iterated_conditional_is_step(
         importance_log_ratio_clip=config.importance_log_ratio_clip,
         apply_importance_correction=config.apply_importance_correction,
         reward=reward,
+        reward_batch=reward_batch,
         seeds=seeds,
         step_index=step_index,
     )
@@ -165,12 +169,13 @@ def run_iterated_conditional_is(
     base_backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: IteratedConditionalISConfig,
-    reward: RewardFunction,
+    reward: RewardFunction | None,
     seeds: SeedStream,
     *,
     base_sampling: SamplingConfig | None = None,
     rollout_backend: AutoregressiveBackend | None = None,
     rollout_sampling: SamplingConfig | None = None,
+    reward_batch: RewardBatchFunction | None = None,
 ) -> IteratedConditionalISResult:
     """Generate a sequence with i-SIR at every autoregressive block."""
 
@@ -197,6 +202,7 @@ def run_iterated_conditional_is(
             base_sampling=base_sampling,
             rollout_sampling=rollout_sampling,
             reward=reward,
+            reward_batch=reward_batch,
             seeds=seeds,
             step_index=len(steps),
         )

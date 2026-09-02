@@ -263,6 +263,7 @@ def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
         "default-guidance-steps-2",
         "default-conditional_is-reward-verifier",
         "default-conditional_is-reward-sequence_log_probability",
+        "default-conditional_is-reward-consilience",
         "default-beam-temperature-0.7",
         "default-budget-beam-4",
         "default-budget-best-of-n-4",

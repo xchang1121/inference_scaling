@@ -2,9 +2,15 @@ from math import exp, log
 
 import pytest
 
-from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.backends import (
+    SequenceScoreStatistics,
+    TabularAutoregressiveBackend,
+)
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.rewards import SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards import (
+    ConsilienceReward,
+    SequenceLogProbabilityReward,
+)
 
 
 def test_sequence_log_probability_reward_sums_all_token_scores() -> None:
@@ -50,3 +56,107 @@ def test_log_probability_reward_reweighting_equals_power_distribution() -> None:
     )
 
     assert reward_target == pytest.approx(power_target)
+
+
+class _ConsilienceBackend:
+    model_id = "trajectory-model"
+
+    def __init__(self, trajectories: dict[tuple[int, ...], tuple[float, ...]]) -> None:
+        self.trajectories = trajectories
+        self.requests = []
+        self.confidence_top_k = None
+
+    def score_statistics_batch(self, requests, *, confidence_top_k=None):
+        self.requests.extend(requests)
+        self.confidence_top_k = confidence_top_k
+        return [
+            SequenceScoreStatistics(
+                token_logprobs=tuple(-1.0 for _ in continuation),
+                mean_logprob=-1.0,
+                mean_negative_entropy=-1.0,
+                mean_self_certainty=1.0,
+                token_topk_confidences=self.trajectories[tuple(continuation)],
+                confidence_top_k=confidence_top_k,
+            )
+            for request in requests
+            for continuation in request.continuations
+        ]
+
+
+def test_consilience_reward_uses_initial_and_final_confidence_windows() -> None:
+    completion = (1, 2, 3, 4, 5)
+    backend = _ConsilienceBackend({completion: (10.0, 8.0, 4.0, 2.0, 1.0)})
+    reward = ConsilienceReward(
+        backend,
+        SamplingConfig(),
+        top_k=3,
+        window_fraction=0.4,
+        skip_fraction=0.2,
+        initial_penalty=1.0,
+        scale=2.0,
+    )
+
+    # Skip the first token, average (8, 4), and compare with final (2, 1).
+    assert reward((9,), completion) == pytest.approx(2.0 * (1.5 - 6.0))
+    assert backend.confidence_top_k == 3
+    assert backend.requests[0].prefix == (9,)
+
+
+def test_consilience_reward_is_batch_order_invariant_and_pointwise() -> None:
+    first = (1, 2, 3, 4)
+    second = (5, 6, 7, 8)
+    backend = _ConsilienceBackend(
+        {
+            first: (6.0, 5.0, 2.0, 1.0),
+            second: (2.0, 2.0, 3.0, 4.0),
+        }
+    )
+    reward = ConsilienceReward(
+        backend,
+        window_fraction=0.5,
+        skip_fraction=0.0,
+        initial_penalty=1.0,
+    )
+
+    forward = reward.batch((), (first, second))
+    reverse = reward.batch((), (second, first))
+
+    assert forward == pytest.approx((-4.0, 1.5))
+    assert reverse == pytest.approx((forward[1], forward[0]))
+    assert len(backend.requests) == 2
+    assert all(len(request.continuations) == 2 for request in backend.requests)
+
+
+def test_consilience_reward_can_isolate_reasoning_before_a_token_marker() -> None:
+    full = (1, 2, 90, 91, 3, 4)
+    reasoning = (1, 2)
+    backend = _ConsilienceBackend({reasoning: (4.0, 1.0)})
+    reward = ConsilienceReward(
+        backend,
+        window_tokens=1,
+        skip_fraction=0.0,
+        initial_penalty=1.0,
+        reasoning_end_token_ids=(90, 91),
+    )
+
+    assert reward((), full) == pytest.approx(-3.0)
+    assert backend.requests[0].continuations == (reasoning,)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"top_k": 0}, "top_k"),
+        ({"window_fraction": 0.0}, "window_fraction"),
+        ({"window_tokens": 0}, "window_tokens"),
+        ({"skip_fraction": 1.0}, "skip_fraction"),
+        ({"initial_penalty": -1.0}, "initial_penalty"),
+        ({"scale": 0.0}, "scale"),
+        ({"reasoning_end_token_ids": ()}, "reasoning_end_token_ids"),
+    ],
+)
+def test_consilience_reward_validates_parameters(kwargs, message) -> None:
+    backend = _ConsilienceBackend({})
+
+    with pytest.raises(ValueError, match=message):
+        ConsilienceReward(backend, **kwargs)

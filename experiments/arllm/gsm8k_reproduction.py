@@ -45,7 +45,10 @@ from inference_scaling.arllm.config import (
     RewardMHConfig,
     SamplingConfig,
 )
-from inference_scaling.arllm.rewards import SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards import (
+    ConsilienceReward,
+    SequenceLogProbabilityReward,
+)
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     GSM8KProblem,
@@ -89,6 +92,7 @@ REWARD_SOURCES = (
     "sequence_log_probability",
     "negative_entropy",
     "self_certainty",
+    "consilience",
     "verifier",
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -273,6 +277,42 @@ def _confidence_rewards(
     return raw, _minmax_rewards(raw)
 
 
+def _consilience_reward(
+    backend: Any,
+    sampling: SamplingConfig,
+    config: dict[str, Any],
+) -> ConsilienceReward:
+    options = config["conditional_is"]
+    marker_text = options.get("consilience_reasoning_end_text")
+    marker: TokenSequence | None = None
+    if marker_text:
+        encode = getattr(backend.tokenizer, "encode", None)
+        if encode is None:
+            raise ValueError(
+                "Consilience reasoning isolation requires tokenizer.encode"
+            )
+        marker = tuple(int(token_id) for token_id in encode(
+            str(marker_text),
+            add_special_tokens=False,
+        ))
+        if not marker:
+            raise ValueError("Consilience reasoning delimiter encoded to no tokens")
+    window_tokens = options.get("consilience_window_tokens")
+    return ConsilienceReward(
+        backend,
+        sampling,
+        top_k=int(options.get("consilience_top_k", 5)),
+        window_fraction=float(options.get("consilience_window_fraction", 0.2)),
+        window_tokens=int(window_tokens) if window_tokens is not None else None,
+        skip_fraction=float(options.get("consilience_skip_fraction", 0.05)),
+        initial_penalty=float(
+            options.get("consilience_initial_penalty", 3.0)
+        ),
+        scale=float(options.get("consilience_reward_scale", 1.0)),
+        reasoning_end_token_ids=marker,
+    )
+
+
 def _frozen_consensus_reward(
     backend: Any,
     prompt: TokenSequence,
@@ -346,6 +386,7 @@ def _run_best_of_n(
     parsed_answers = [extract_numeric_answer(text) for text in texts]
     raw_rewards: tuple[float, ...] | None = None
     verifier_reward: TokenVerifierReward | None = None
+    model_reward_description: dict[str, object] | None = None
     if reward_source == "self_consistency":
         chosen = consensus_index(texts, [candidate.logprob for candidate in candidates])
         consensus = modal_answer(parsed_answers)
@@ -379,10 +420,27 @@ def _run_best_of_n(
         raw_rewards = tuple(
             model_reward.scale * candidate.logprob for candidate in candidates
         )
+        model_reward_description = model_reward.describe()
         selection_rewards = raw_rewards
         chosen = max(
             range(len(candidates)),
             key=lambda index: (selection_rewards[index], -index),
+        )
+    elif reward_source == "consilience":
+        model_reward = _consilience_reward(backend, sampling, config)
+        raw_rewards = model_reward.batch(
+            prompt,
+            [candidate.token_ids for candidate in candidates],
+        )
+        model_reward_description = model_reward.describe()
+        selection_rewards = raw_rewards
+        chosen = max(
+            range(len(candidates)),
+            key=lambda index: (
+                selection_rewards[index],
+                candidates[index].logprob,
+                -index,
+            ),
         )
     else:
         raw_rewards, selection_rewards = _confidence_rewards(
@@ -411,6 +469,7 @@ def _run_best_of_n(
         "verifier": (
             verifier_reward.describe() if verifier_reward is not None else None
         ),
+        "model_reward": model_reward_description,
         "reward_normalization": (
             "per-decision min-max over candidate completions"
             if reward_source
@@ -423,7 +482,12 @@ def _run_best_of_n(
             list(raw_rewards)
             if raw_rewards is not None
             and reward_source
-            in {"log_probability", "negative_entropy", "self_certainty"}
+            in {
+                "log_probability",
+                "negative_entropy",
+                "self_certainty",
+                "consilience",
+            }
             else None
         ),
         "answer_counts": _answer_counts(parsed_answers),
@@ -720,7 +784,8 @@ def _run_method(
             if method == "iterated_conditional_is":
                 raise ValueError(
                     "iterated_conditional_is requires a fixed pointwise reward; "
-                    "use frozen_consensus, sequence_log_probability, or verifier"
+                    "use frozen_consensus, sequence_log_probability, Consilience, "
+                    "or verifier"
                 )
             reward_batch = CumulativeConsensusReward(backend.decode)
         elif reward_source == "frozen_consensus":
@@ -745,13 +810,31 @@ def _run_method(
                 ),
                 scale=float(conditional.get("logprob_reward_scale", 1.0)),
             )
-            pointwise_reward = model_reward
+            if method == "iterated_conditional_is":
+                pointwise_reward = model_reward
+            else:
+                reward_batch = model_reward.batch
+            reward_diagnostics["model_reward"] = model_reward.describe()
+        elif reward_source == "consilience":
+            model_reward = _consilience_reward(
+                backend,
+                SamplingConfig(
+                    temperature=target_sampling_temperature,
+                    eos_token_id=backend.tokenizer.eos_token_id,
+                ),
+                config,
+            )
+            if method == "iterated_conditional_is":
+                pointwise_reward = model_reward
+            else:
+                reward_batch = model_reward.batch
             reward_diagnostics["model_reward"] = model_reward.describe()
         elif reward_source != "verifier":
             if method == "iterated_conditional_is":
                 raise ValueError(
                     "iterated_conditional_is currently accepts only fixed pointwise "
-                    "frozen_consensus, sequence_log_probability, or verifier rewards"
+                    "frozen_consensus, sequence_log_probability, Consilience, or "
+                    "verifier rewards"
                 )
 
             def confidence_reward(
@@ -789,7 +872,7 @@ def _run_method(
         cached_rollout = ScoreCachingBackend(rollout_backend)
         if method == "iterated_conditional_is":
             iterated_reward = pointwise_reward
-            if iterated_reward is None:
+            if iterated_reward is None and reward_batch is None:
                 raise RuntimeError("iterated conditional IS did not construct a reward")
             result = run_iterated_conditional_is(
                 cached_base,
@@ -807,6 +890,7 @@ def _run_method(
                 base_sampling=base_sampling,
                 rollout_backend=cached_rollout,
                 rollout_sampling=base_sampling,
+                reward_batch=reward_batch,
             )
         else:
             result = run_conditional_is(
@@ -897,6 +981,7 @@ def _run_method(
             "sequence_log_probability": "model_sequence_log_probability",
             "negative_entropy": "normalized_negative_entropy",
             "self_certainty": "normalized_self_certainty",
+            "consilience": "model_consilience",
             "verifier": "configured_verifier",
         }[reward_source]
         target_description = (
@@ -1101,6 +1186,18 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["conditional_is"]["reward_temperature"] = args.reward_temperature
     if getattr(args, "logprob_reward_scale", None) is not None:
         config["conditional_is"]["logprob_reward_scale"] = args.logprob_reward_scale
+    for argument, setting in (
+        ("consilience_top_k", "consilience_top_k"),
+        ("consilience_window_fraction", "consilience_window_fraction"),
+        ("consilience_window_tokens", "consilience_window_tokens"),
+        ("consilience_skip_fraction", "consilience_skip_fraction"),
+        ("consilience_initial_penalty", "consilience_initial_penalty"),
+        ("consilience_reward_scale", "consilience_reward_scale"),
+        ("consilience_reasoning_end_text", "consilience_reasoning_end_text"),
+    ):
+        value = getattr(args, argument, None)
+        if value is not None:
+            config["conditional_is"][setting] = value
     if args.importance_log_ratio_clip is not None:
         value = args.importance_log_ratio_clip.strip().lower()
         parsed_clip = None if value == "none" else float(value)
@@ -1236,6 +1333,19 @@ def main() -> None:
         help=(
             "c in r=c*log p(y|x); combined with reward temperature tau this "
             "targets the power 1+c/tau"
+        ),
+    )
+    parser.add_argument("--consilience-top-k", type=int)
+    parser.add_argument("--consilience-window-fraction", type=float)
+    parser.add_argument("--consilience-window-tokens", type=int)
+    parser.add_argument("--consilience-skip-fraction", type=float)
+    parser.add_argument("--consilience-initial-penalty", type=float)
+    parser.add_argument("--consilience-reward-scale", type=float)
+    parser.add_argument(
+        "--consilience-reasoning-end-text",
+        help=(
+            "optional model-specific delimiter after the reasoning phase; "
+            "the delimiter and final-answer tokens are excluded from the reward"
         ),
     )
     parser.add_argument(

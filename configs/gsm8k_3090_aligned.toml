@@ -80,6 +80,11 @@ block_size = 48
 reward_temperature = 0.1
 reward = "self_consistency"
 logprob_reward_scale = 1.0
+consilience_top_k = 5
+consilience_window_fraction = 0.2
+consilience_skip_fraction = 0.05
+consilience_initial_penalty = 3.0
+consilience_reward_scale = 1.0
 importance_log_ratio_clip = 10.0
 
 [iterated_is]

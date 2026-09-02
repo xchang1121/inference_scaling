@@ -152,6 +152,35 @@ def test_iterated_conditional_is_respects_total_length() -> None:
     assert result.reused_pool_entries == 6
 
 
+def test_iterated_conditional_is_batches_a_fixed_pointwise_reward() -> None:
+    calls: list[tuple[tuple[int, ...], ...]] = []
+
+    def reward_batch(_prompt, sequences):
+        batch = tuple(tuple(sequence) for sequence in sequences)
+        calls.append(batch)
+        return tuple(float(sum(sequence)) for sequence in batch)
+
+    result = run_iterated_conditional_is(
+        TabularAutoregressiveBackend({}, fallback=[0.5, 0.5]),
+        (),
+        IteratedConditionalISConfig(
+            pool_size=2,
+            updates=2,
+            rollout_count=2,
+            block_size=1,
+            total_length=2,
+        ),
+        None,
+        SeedStream(29),
+        reward_batch=reward_batch,
+    )
+
+    assert len(result.steps) == 2
+    assert len(calls) == 2
+    assert len(calls[0]) == 6
+    assert len(calls[1]) == 3
+
+
 def test_iterated_conditional_is_configuration_rejects_degenerate_pool() -> None:
     with pytest.raises(ValueError, match="pool_size"):
         IteratedConditionalISConfig(pool_size=1)
