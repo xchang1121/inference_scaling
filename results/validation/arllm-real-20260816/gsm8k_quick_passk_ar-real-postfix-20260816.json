@@ -1,7 +1,7 @@
 {
   "benchmark": "OpenAI GSM8K official test split",
   "compute_definition": "2 * model parameter count * observed padded forward token slots; each method uses the same continuous-batching worker count, and model loading and warmup are excluded from wall time",
-  "diversity_scope": "pass@k is the primary diversity diagnostic; distinct parsed numeric answers and full-output hashes are supplemental and do not identify semantic reasoning-path diversity",
+  "diversity_scope": "pass@k is the primary diversity diagnostic; distinct parsed numeric answers and full-output hashes are supplemental and do not establish distinct reasoning paths",
   "draws_per_problem": 2,
   "implementation_sha256": {
     "experiments/arllm/gsm8k_passk.py": "f141e7abe7c926a11fcd577febd3a7e4a1ca978b79f59cac4a3ed86b04b1931a",

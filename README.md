@@ -111,8 +111,8 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 因此目标为 $`p^\alpha`$ 时可取 $`c=(\alpha-1)\tau`$。`Best-of-N` 直接复用生成时保存的 token
 对数概率；条件 IS 与迭代 IS 通过后端的批量序列评分计算该奖励。这里的 $`p`$ 是配置实际采用的完整支持
 采样策略。直接设置 $`c=1`$ 时指数是 $`1+1/\tau`$，并不固定为 2；例如 $`\tau=0.1`$ 时指数为 11。
-MH 对同一目标直接使用 `mh --mh-alpha <alpha>`，无需把 logprob 再作为奖励评分一次。该奖励模式需要模型后端
-返回精确 token 对数概率，不能用于只返回文本的黑盒接口：
+MH 对同一目标直接使用 `mh --mh-alpha <alpha>`，无需把 logprob 再作为奖励评分一次。该奖励模式要求模型后端
+返回精确 token 对数概率：
 
 ```powershell
 python -m experiments.arllm.gsm8k_reproduction `
@@ -120,11 +120,6 @@ python -m experiments.arllm.gsm8k_reproduction `
   --reward-temperature 0.5 --logprob-reward-scale 0.5 `
   --limit 1 --tag power-two-is
 ```
-
-只有文本生成接口、无法读取 logprob 或外部 verifier 时，未知奖励目标的精确 IS 权重不可计算。仍可用同一个
-模型在独立上下文中产生二元检查、候选比较或文字化置信度，并把这些可重复观测转换为非负随机权重。该做法
-定义的是模型自评倾斜后的分布；它不等同于未知正确率目标。目标定义、SIR 收敛式、候选与检查预算、历史复用
-边界和相关文献见[只有文本生成接口时的统计边界](docs/methods/ALGORITHMS.md#151-只有文本生成接口时的统计边界)。
 
 ## 文档
 

@@ -670,7 +670,7 @@ def main() -> None:
         "diversity_scope": (
             "pass@k is the primary diversity diagnostic; distinct parsed numeric "
             "answers and full-output hashes are supplemental and do not identify "
-            "semantic reasoning-path diversity"
+            "distinct reasoning paths"
         ),
         "compute_definition": (
             "2 * model parameter count * observed padded forward token slots; each "
