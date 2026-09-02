@@ -148,7 +148,6 @@ Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理�
 | [推理执行与 rollout 复用](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
 | [Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md) | MH、IS 与 AR 执行候选的统一筛选、确认结果和默认组合决定 |
 | [GSM8K 集成检查](docs/validation/GSM8K_QUICK_VALIDATION.md) | 8 题端到端路径和 32 题批处理检查 |
-| [RTX 3090 复现记录](docs/validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分、KV、MH、IS 与 replay 检查 |
 | [AR-LLM 完整流程真机验证](docs/validation/ARLLM_FULL_ROUTE.md) | GRPO 与全部 AR 推理、复用和执行优化组件的真实模型检查 |
 | [机器可读结果](results/README.md) | 正式汇总、训练摘要和验证结果文件索引 |
 

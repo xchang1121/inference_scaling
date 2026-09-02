@@ -131,8 +131,7 @@ LoRA 适配器已写入模型检查点，并由 `rl_sample`、`rl_greedy`、pass
 | 最终两项修复的定向测试 | 34 passed |
 | dLLM 运行入口隔离测试 | 5 passed |
 
-Ruff 全仓检查和共享层 24 个文件的 mypy 检查均通过。仓库现有 `.venv` 未安装 pytest，本次没有修改该
-环境。所有真机子进程结束后没有残留 Python 进程；GPU
+Ruff 全仓检查和共享层 24 个文件的 mypy 检查均通过。所有真机子进程结束后没有残留 Python 进程；GPU
 占用回到桌面基线 1,862 MiB，可用显存 22,465 MiB。
 
 ## Qwen 默认路径回归（2026-08-23）

@@ -75,13 +75,11 @@
 | --- | --- | --- |
 | `training/gsm8k_grpo_training_summary.json` | 205 步 GRPO 的 token、FLOPs、显存、墙钟与适配器哈希 | 训练成本 |
 | `validation/gsm8k_quick_*_validated.json` | 主比较、replay、批处理和计算路径 | 集成检查 |
-| `validation/rtx3090_reproduction.json` | FP32 真实模型算法与后端结果 | 工程检查 |
-| `validation/rtx3090_backend_bfloat16.json` | BF16 概率与显存结果 | 精度检查 |
 | `validation/arllm-real-20260816/` | GRPO 低成本功能检查、全部 AR 推理组件与修复后真机检查 | 完整流程可用性 |
 | `validation/qwen-positive-default-smoke-20260823/` | multiscale MH、候选复用 replay、1.5B/0.5B 成本分别统计与异步输出一致性 | 默认路径回归 |
 
-对应记录见 [GSM8K 小规模集成检查](../docs/validation/GSM8K_QUICK_VALIDATION.md) 和
-[RTX 3090 复现记录](../docs/validation/RTX3090_REPRODUCTION.md)。完整 AR 入口的训练、推理与执行优化覆盖见
+小规模结果的执行记录见 [GSM8K 集成检查](../docs/validation/GSM8K_QUICK_VALIDATION.md)。完整 AR 入口的训练、
+推理与执行优化覆盖见
 [AR-LLM 完整流程真机验证](../docs/validation/ARLLM_FULL_ROUTE.md)。
 
 ## 结果文件状态

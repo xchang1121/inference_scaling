@@ -8,7 +8,6 @@
 | [推理执行与 rollout 复用](reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存与复用率结果 |
 | [Qwen2.5-1.5B 优化研究](reports/QWEN15B_OPTIMIZATION_STUDY.md) | 新增算法与执行候选的筛选协议、消融结果和默认组合决定 |
 | [GSM8K 集成检查](validation/GSM8K_QUICK_VALIDATION.md) | 小规模端到端工程检查 |
-| [RTX 3090 复现记录](validation/RTX3090_REPRODUCTION.md) | CUDA、概率评分与后端工程检查 |
 | [AR-LLM 完整流程真机验证](validation/ARLLM_FULL_ROUTE.md) | GRPO、全部推理组件、执行优化路径与修复后回归 |
 | [机器可读结果](../results/README.md) | 已纳入版本控制的汇总文件索引 |
 
