@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from math import isfinite, sqrt
 
 import numpy as np
+import numpy.typing as npt
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +77,9 @@ def allocate_fresh_rollout_budget(
 
 def _proportional_capped_counts(
     total: float,
-    coefficients: np.ndarray,
-    caps: np.ndarray,
-) -> np.ndarray:
+    coefficients: npt.NDArray[np.float64],
+    caps: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
     result = np.zeros_like(coefficients, dtype=np.float64)
     active = {index for index, coefficient in enumerate(coefficients) if coefficient > 0}
     remaining = min(float(total), float(caps.sum()))
