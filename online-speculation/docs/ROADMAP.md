@@ -144,3 +144,8 @@ Stage 6C 协议状态（2026-09-05）：2-test-seed stationary pilot 出现 TPF/
 的 repeated-query case study：4 train、5 validation、10 test；只按 validation mean TPF 选 0--4 快照，
 低于 0.2% gain 自动回退 zero。正式成功要求 nonzero selection、test TPF 和 frozen TPS 的 mean bootstrap
 下界都大于 1。范围明确限于同一 prompt 分布。
+
+Stage 6C 结果（2026-09-05）：安全与 nonzero selection 门通过，但 10 个新 seed 的 TPF mean ratio 为
+`0.98048 [0.94885, 1.01313]`，TPS 为 `0.98475 [0.94301, 1.02419]`；validation-to-test optimism gap
+达 4.21 个百分点，未来学习/系统门失败且无 break-even。下一阶段实现概率空间 static mixture，直接限制
+hard residual 的下尾风险，而不是继续扫描 validation threshold。

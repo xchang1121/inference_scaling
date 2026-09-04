@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "input_backend": "huggingface_pytorch_kv_cache_stream_fast_residual",
+  "input_checkpoint": {
+    "base_id": "IFM/K2-Horizon-0.9B",
+    "base_revision": "ee770e713760cf6350e4322cdbbff91a163b7d70",
+    "adapter_id": "IFM/K2-Horizon-0.9B-Uno",
+    "adapter_revision": "b0d8896a301a2f4bc755538b1234a35100da50d0",
+    "base_weight_sha256": "6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365",
+    "adapter_weight_sha256": "5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e"
+  },
+  "integrity": {
+    "run_counts_pass": true,
+    "output_lengths_checked": 58,
+    "output_lengths_pass": true,
+    "all_numeric_values_finite": true,
+    "frozen_design_pass": true,
+    "checkpoint_hash_and_revision_pass": true,
+    "routing_pass": true,
+    "persistent_isolation_records": 39,
+    "parameter_isolation_pass": true,
+    "training_state_continuity_pass": true,
+    "frozen_no_learning_pass": true,
+    "complete_validation_grid_pass": true,
+    "validation_ratio_fields_pass": true,
+    "zero_snapshot_exact_tpf_pass": true,
+    "selection_reproduction_pass": true,
+    "method_order_and_seed_partition_pass": true,
+    "selected_head_sha256_frozen_pass": true,
+    "amortization_reproduction_pass": true,
+    "safety_gate_pass": true
+  },
+  "bootstrap": {
+    "preregistered_primary_statistic": "arithmetic mean of paired ratios",
+    "robustness_statistic": "median of paired ratios",
+    "method": "paired percentile bootstrap",
+    "samples": 50000,
+    "seed": 20261005
+  },
+  "validation": {
+    "snapshot_mean_tpf_ratios": {
+      "0": 1.0,
+      "1": 1.0095589961474571,
+      "2": 1.0124125279385854,
+      "3": 1.0,
+      "4": 1.0225601280531544
+    },
+    "recomputed_selection": {
+      "best_validation_snapshot": 4,
+      "best_validation_mean_tpf_ratio": 1.0225601280531544,
+      "minimum_gain": 0.002,
+      "selection_threshold": 1.002,
+      "selected_snapshot": 4,
+      "nonzero_snapshot_selected": true
+    },
+    "validation_to_test_tpf_optimism_gap": 0.04208499036234614
+  },
+  "test_statistics": {
+    "paired_tpf_ratio": {
+      "mean": {
+        "estimate": 0.9804751376908083,
+        "ci_95_low": 0.9488493448205594,
+        "ci_95_high": 1.0131262607504294
+      },
+      "median": {
+        "estimate": 0.9759813373324764,
+        "ci_95_low": 0.9397180416202155,
+        "ci_95_high": 1.0231958762886597
+      }
+    },
+    "paired_decode_tps_ratio": {
+      "mean": {
+        "estimate": 0.9847515791169654,
+        "ci_95_low": 0.943011576910507,
+        "ci_95_high": 1.0241875441250545
+      },
+      "median": {
+        "estimate": 0.9737237297692294,
+        "ci_95_low": 0.9347407379153017,
+        "ci_95_high": 1.0573525147505853
+      }
+    },
+    "paired_acceptance_rate_delta": {
+      "mean": {
+        "estimate": -0.022325066273414445,
+        "ci_95_low": -0.056288430747290515,
+        "ci_95_high": 0.011972441324160006
+      },
+      "median": {
+        "estimate": -0.026931759074353967,
+        "ci_95_low": -0.06575031328320802,
+        "ci_95_high": 0.021928387070342892
+      }
+    },
+    "paired_peak_memory_delta_bytes": {
+      "mean": {
+        "estimate": 2830848.0,
+        "ci_95_low": 2774220.8,
+        "ci_95_high": 2894899.2
+      },
+      "median": {
+        "estimate": 2783232.0,
+        "ci_95_low": 2754560.0,
+        "ci_95_high": 2914560.0
+      }
+    },
+    "serving_time_saving_seconds": {
+      "mean": {
+        "estimate": -0.2781896600004984,
+        "ci_95_low": -0.94054821000027,
+        "ci_95_high": 0.34756398624927903
+      },
+      "median": {
+        "estimate": -0.4164118500011682,
+        "ci_95_low": -1.0393538999996963,
+        "ci_95_high": 0.839689599997655
+      }
+    }
+  },
+  "sign_tests": {
+    "tpf": {
+      "pairs": 10,
+      "wins": 3,
+      "losses": 6,
+      "ties": 1,
+      "non_ties": 9,
+      "two_sided_p_excluding_ties": 0.5078125
+    },
+    "decode_tps": {
+      "pairs": 10,
+      "wins": 4,
+      "losses": 6,
+      "ties": 0,
+      "non_ties": 10,
+      "two_sided_p_excluding_ties": 0.75390625
+    }
+  },
+  "training": {
+    "requests": 4,
+    "update_attempts": 17,
+    "update_rollbacks": 1,
+    "same_buffer_static_resets": 3,
+    "observed_training_increment_seconds": -2.7519891999982065,
+    "instrumented_training_cost_seconds": 0.538435863913939,
+    "mean_future_request_saving_seconds": -0.2781896600004984,
+    "observed_break_even_future_requests": null,
+    "instrumented_break_even_future_requests": null
+  },
+  "paired_observations": [
+    {
+      "repetition": 0,
+      "seed": 20461005,
+      "tpf_ratio": 1.010204081632653,
+      "decode_tps_ratio": 1.0622138584667324,
+      "acceptance_rate_delta": 0.01354024037730106,
+      "peak_memory_delta_bytes": 3009024.0,
+      "serving_time_saving_seconds": 0.9255916999973124
+    },
+    {
+      "repetition": 1,
+      "seed": 20462005,
+      "tpf_ratio": 0.9560975609756097,
+      "decode_tps_ratio": 0.9777251628184006,
+      "acceptance_rate_delta": -0.047619047619047616,
+      "peak_memory_delta_bytes": 2754560.0,
+      "serving_time_saving_seconds": -0.3539328000006208
+    },
+    {
+      "repetition": 2,
+      "seed": 20463005,
+      "tpf_ratio": 0.889952153110048,
+      "decode_tps_ratio": 0.8624678714096858,
+      "acceptance_rate_delta": -0.11951095262353545,
+      "peak_memory_delta_bytes": 2820096.0,
+      "serving_time_saving_seconds": -2.2836717999998655
+    },
+    {
+      "repetition": 3,
+      "seed": 20464005,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 0.9697222967200583,
+      "acceptance_rate_delta": 0.0,
+      "peak_memory_delta_bytes": 2754560.0,
+      "serving_time_saving_seconds": -0.47889090000171564
+    },
+    {
+      "repetition": 4,
+      "seed": 20465005,
+      "tpf_ratio": 1.0707070707070707,
+      "decode_tps_ratio": 1.0596257609398163,
+      "acceptance_rate_delta": 0.07309775930417683,
+      "peak_memory_delta_bytes": 2754560.0,
+      "serving_time_saving_seconds": 0.9102581000006467
+    },
+    {
+      "repetition": 5,
+      "seed": 20466005,
+      "tpf_ratio": 0.9950248756218905,
+      "decode_tps_ratio": 1.0391310910798277,
+      "acceptance_rate_delta": -0.0085157141375376,
+      "peak_memory_delta_bytes": 2754560.0,
+      "serving_time_saving_seconds": 0.6128056000015931
+    },
+    {
+      "repetition": 6,
+      "seed": 20467005,
+      "tpf_ratio": 1.0463917525773196,
+      "decode_tps_ratio": 1.0573525147505853,
+      "acceptance_rate_delta": 0.043856774140685784,
+      "peak_memory_delta_bytes": 2754560.0,
+      "serving_time_saving_seconds": 0.839689599997655
+    },
+    {
+      "repetition": 7,
+      "seed": 20468005,
+      "tpf_ratio": 0.9227053140096618,
+      "decode_tps_ratio": 0.9071882247145887,
+      "acceptance_rate_delta": -0.08388157894736842,
+      "peak_memory_delta_bytes": 2885632.0,
+      "serving_time_saving_seconds": -1.4829358999995748
+    },
+    {
+      "repetition": 8,
+      "seed": 20469005,
+      "tpf_ratio": 0.9569377990430622,
+      "decode_tps_ratio": 0.9622932511160145,
+      "acceptance_rate_delta": -0.04887033921764872,
+      "peak_memory_delta_bytes": 2811904.0,
+      "serving_time_saving_seconds": -0.5957718999998178
+    },
+    {
+      "repetition": 9,
+      "seed": 20470005,
+      "tpf_ratio": 0.9567307692307692,
+      "decode_tps_ratio": 0.9497957591539449,
+      "acceptance_rate_delta": -0.045347804011170334,
+      "peak_memory_delta_bytes": 3009024.0,
+      "serving_time_saving_seconds": -0.8750383000005968
+    }
+  ],
+  "decision": {
+    "safety_gate_pass": true,
+    "nonzero_selection_gate_pass": true,
+    "future_request_learning_gate_pass": false,
+    "frozen_serving_system_gate_pass": false,
+    "all_stage6c_gates_pass": false,
+    "tpf_mean_interval_excludes_one_as_harm": false,
+    "speed_mean_interval_excludes_one_as_harm": false,
+    "official_runtime_tested": false,
+    "full_uno_adapter_updated_online": false
+  },
+  "scope_warning": "This is one trained rank-8 residual on one repeated prompt, evaluated over ten new sampling seeds on the Windows HF fallback. The prompt and pipeline were tuned in an earlier pilot; only the seed stream is held out."
+}
