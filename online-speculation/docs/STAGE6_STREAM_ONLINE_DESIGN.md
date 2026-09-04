@@ -125,3 +125,7 @@ Stage 6A 的阶段门只有：状态确实跨请求连续、第二个请求的 i
 训练、验证、测试 seed 分别使用 `seed+[0, 100000, 200000]` 区间。zero snapshot 在 validation 上必须与
 static TPF 精确相等，否则说明两个执行路径或 RNG 语义不一致，结果不得继续解释。snapshot selection 与
 break-even 的纯函数回归测试已经覆盖 threshold、tie、fallback 和无正 savings 情形。
+
+单域工程 pilot 选中 snapshot 3，两个未见 test seed 的 TPF mean ratio 为 `1.01056`、TPS mean ratio 为
+`1.02038`；这只是进入正式实验的信号。新的 stationary stream 配置、全新 seed 分区和严格判定门已在
+[`STAGE6C_STREAM_UNO_PROTOCOL.md`](STAGE6C_STREAM_UNO_PROTOCOL.md) 中冻结。

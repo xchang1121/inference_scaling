@@ -48,6 +48,8 @@ Stage 6A 的[跨请求 Stream-Uno 设计](docs/STAGE6_STREAM_ONLINE_DESIGN.md)�
 将用严格 train/validation/test 请求流检验是否能在未来请求中摊销在线学习。
 可执行的 `hf_stream_uno.py` harness 已实现逐请求快照、validation-only 选择、zero fallback 和两种
 break-even 计算；pilot 与正式 test 结果将分开保存。
+stationary 英文 pilot 的 2 个 test seeds 给出正方向后，Stage 6C 的全新 seed、5-validation/10-test
+[预注册协议](docs/STAGE6C_STREAM_UNO_PROTOCOL.md)已经冻结；其成功范围刻意限制为 repeated-query stream。
 
 ## 目录
 
