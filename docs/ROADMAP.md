@@ -130,3 +130,8 @@ ratio `1.02194 [0.99665, 1.04774]`，学习门与系统门均失败。中文 pro
 反而获得最多 promotion，证明一窗口后才激活的 active-trajectory shadow TV 不能可靠预测下一窗口收益。
 下一阶段不再扫描 margin，而研究渐进 mixture 或跨请求 amortization。详见
 `STAGE5B_DEFERRED_ONLINE_RESULTS.md`。
+
+Stage 6A 状态（2026-09-05）：优先实现 OSD 式跨请求 persistent learner。runner 已增加显式外部 learner
+接口，并验证 config/shape/device/optimizer ownership；diagnostics 审计请求首尾 fast-weight L2。下一门是
+实现 train/validation/test stream harness，在 held-out future requests 上比较 frozen residual 与 static，
+并计算 observed/instrumented 两种 break-even。设计见 `STAGE6_STREAM_ONLINE_DESIGN.md`。

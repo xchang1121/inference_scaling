@@ -33,6 +33,10 @@ KL、reverse KL 和 JSD，并提出在服务低负载、有 spare FLOPs 时机�
 - buffer 允许批量更新、重放困难状态和把更新移出请求关键路径；
 - 多个 domain-specific drafts 可由 routing 选择。
 
+PMLR 正式版本报告在其模型/服务设定中 acceptance rate 增加 0.1--0.65、latency reduction 为
+1.42--2.17 倍；这些数字依赖独立小 draft、请求流和可用 spare FLOPs，不能直接移植成 Uno/3090 的预期值。
+本项目只采用其“跨 observed query stream 持久化与 replay”的实验单位。
+
 限制是其 draft 与 target 是两套模型，且主要按错误 token 收集；Uno 的共享 backbone 反传成本和状态管理不同。
 
 ### Test-Time Speculation（TTS，2026）
@@ -68,6 +72,10 @@ ensemble 以多学习率 learner 对抗非平稳 workload。对本项目最重�
 - 用 EMA gradient/low-rank optimizer state 近似 optimism；
 - 用少量学习率或 update-policy arms 做 controller ensemble；
 - 报告 static regret、dynamic regret proxy 和实际 tokens/s，检验理论 proxy 是否预测系统收益。
+
+官方仓库的 Ens-EAGLE/EAGLE-3 复现命令显式维护三份不同学习率 draft，并以 `chunk-size=40` 消费流数据；
+Opt-Hydra 则复用历史梯度作为 optimistic hint。这进一步说明 ensemble/chunk 的状态跨样本存在，而不是
+每个请求从 zero optimizer 重启。
 
 ## 3. 并行 drafter 与动态控制
 
@@ -159,3 +167,6 @@ request 结束可丢弃 $\delta_t$，domain 版本则经过 replay 验证后再�
 - H3：on-policy/discounted-tail supervision 在同等 update budget 下优于 full-canvas。
 - H4：自适应 stride 和 block size 比任一固定组合有更高端到端 throughput。
 - H5：纯 online cold start 在单请求内很难回本，但跨请求/domain replay 可以摊销；需要明确 break-even 请求数。
+
+Stage 4B/5B 已实证支持 H5 的前半句：request-local immediate 与 deferred 均未通过真机门。Stage 6 将把
+OSD 式 request stream 与 TTS 式 within-request update 分开报告，避免用一个含糊的“online”混合两种设定。
