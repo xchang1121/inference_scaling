@@ -59,6 +59,9 @@ Stage 7A 的[概率 mixture 设计](docs/STAGE7_STATIC_MIXTURE_DESIGN.md)已实�
 TPF ratio 只有 0.99493。Stage 7B 因而实现了
 [verifier-feedback adaptive mixture](docs/STAGE7B_ADAPTIVE_MIXTURE_DESIGN.md)：每个请求从 static 开始，
 只用已完成 verification 的 on-policy TV 证据控制下一轮 capped mixture；residual head 在评价请求中保持冻结。
+后续 [adaptive pilot](docs/STAGE7B_ADAPTIVE_MIXTURE_PILOT_RESULTS.md) 对全部非零快照的 validation TPF
+都低于 1，因而安全回退 zero；这证明 fail-safe 生效，却没有在线学习收益，Stage 8 转向 greedy target 来隔离
+stochastic trajectory shift。
 
 ## 目录
 
@@ -107,7 +110,7 @@ online-speculation/
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 完成；安全门通过、预注册性能门失败 |
 | 5 | future-validated controller 与真机验证 | 完成；安全门通过、TPF/TPS 主门失败 |
 | 6 | 跨请求 persistent learner 与 held-out stream | 完成；validation 收益未泛化到 test |
-| 7 | static-anchored 与 verifier-gated probability mixture | 7A/7B 实现完成；adaptive 真机 pilot 待运行 |
+| 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
 
 Stage 1 的正式验证命令：
 

@@ -28,3 +28,5 @@
   58 个真机生成记录；包含所有 snapshot score、validation-only selection、frozen head hash 和训练摊销。
 - `stage6c_stream_uno1b_rtx3090_hf_analysis.json`：重算 stream continuity、zero/frozen/selection 不变量和
   paired mean/median bootstrap；snapshot 4 的 validation gain 未泛化，TPF/TPS test 主门均失败。
+- `stage7_engineering_pilots_summary.json`：固定 `w=0.25` 与 verifier-EMA adaptive mixture 的小型工程
+  pilot 聚合；固定权重未推广，adaptive validation 回退 zero。该文件只生成下一假设，不作为正式确认性结果。
