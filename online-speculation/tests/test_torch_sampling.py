@@ -5,8 +5,9 @@ import torch
 from online_speculation.torch_sampling import (
     FilteredDistribution,
     SamplingConfig,
-    filtered_overlap,
     filtered_distribution,
+    filtered_overlap,
+    mixture_distribution,
     residual_distribution,
     verify_linear_filtered,
     verify_linear_greedy,
@@ -53,6 +54,32 @@ def test_filtered_overlap_handles_different_sparse_supports() -> None:
     torch.testing.assert_close(filtered_overlap(target, draft), torch.tensor([0.6]))
 
 
+def test_probability_mixture_preserves_union_mass_and_tv_convexity() -> None:
+    static = FilteredDistribution(
+        token_ids=torch.tensor([[0, 1], [0, 1], [0, 1]]),
+        probabilities=torch.tensor([[0.8, 0.2], [0.8, 0.2], [0.8, 0.2]]),
+    )
+    candidate = FilteredDistribution(
+        token_ids=torch.tensor([[1, 2], [1, 2], [1, 2]]),
+        probabilities=torch.tensor([[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]]),
+    )
+    mixed = mixture_distribution(static, candidate, candidate_weight=0.25)
+    assert torch.allclose(
+        mixed.probability_of(torch.tensor([0, 1, 2])),
+        torch.tensor([0.6, 0.275, 0.125]),
+    )
+
+    target = FilteredDistribution(
+        token_ids=torch.tensor([[0, 1, 2], [0, 1, 2], [0, 1, 2]]),
+        probabilities=torch.tensor([[0.2, 0.3, 0.5], [0.2, 0.3, 0.5], [0.2, 0.3, 0.5]]),
+    )
+    mixed_tv = 1.0 - filtered_overlap(target, mixed)
+    convex_bound = 0.75 * (1.0 - filtered_overlap(target, static)) + 0.25 * (
+        1.0 - filtered_overlap(target, candidate)
+    )
+    assert torch.all(mixed_tv <= convex_bound + 1e-7)
+
+
 def test_filtered_verifier_accepts_all_and_adds_lookahead() -> None:
     draft = _distribution([[0.6, 0.4], [0.3, 0.7]])
     target = _distribution([[0.6, 0.4], [0.3, 0.7]])
@@ -92,9 +119,7 @@ def test_greedy_verifier_commits_target_at_first_mismatch() -> None:
     result = verify_linear_greedy(
         free_token=2,
         spec_tokens=torch.tensor([1, 0, 2]),
-        target_logits=torch.tensor(
-            [[0.0, 2.0, 1.0], [0.0, 1.0, 2.0], [2.0, 1.0, 0.0]]
-        ),
+        target_logits=torch.tensor([[0.0, 2.0, 1.0], [0.0, 1.0, 2.0], [2.0, 1.0, 0.0]]),
         lookahead_logits=torch.tensor([0.0, 0.0, 1.0]),
     )
     assert result.committed == (2, 1, 2)
@@ -121,9 +146,6 @@ def test_verifier_rejects_distribution_that_did_not_sample_proposal() -> None:
 
 
 def test_public_adapter_key_maps_to_nested_peft_parameter() -> None:
-    assert _adapter_parameter_name(
-        "model.layers.7.self_attn.q_proj.lora_A.weight"
-    ) == (
-        "base_model.model.model.layers.7.self_attn.q_proj."
-        "lora_A.default.weight"
+    assert _adapter_parameter_name("model.layers.7.self_attn.q_proj.lora_A.weight") == (
+        "base_model.model.model.layers.7.self_attn.q_proj.lora_A.default.weight"
     )

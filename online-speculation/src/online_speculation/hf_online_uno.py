@@ -53,6 +53,7 @@ from .torch_sampling import (
     SamplingConfig,
     filtered_distribution,
     filtered_overlap,
+    mixture_distribution,
     verify_linear_filtered,
 )
 
@@ -120,6 +121,7 @@ class OnlineRuntimeConfig:
 @dataclass(frozen=True)
 class OnlineDiagnostics:
     activation_mode: str
+    proposal_mixture_weight: float
     reused_persistent_learner: bool
     initial_fast_weight_l2: float
     parameter_isolation: dict[str, int]
@@ -369,6 +371,7 @@ class HfOnlineUnoRunner:
         initialization_seed: int,
         config: OnlineRuntimeConfig,
         persistent_learner: FastResidualLearner | None = None,
+        proposal_mixture_weight: float = 1.0,
     ) -> OnlineRunResult:
         if max_new_tokens < 2:
             raise ValueError("online generation requires at least two output tokens.")
@@ -377,6 +380,22 @@ class HfOnlineUnoRunner:
                 "online fast residual currently requires stochastic sampling."
             )
         config.validate(vocabulary_size=self.runtime.vocab_size)
+        if not math.isfinite(proposal_mixture_weight) or not (
+            0.0 <= proposal_mixture_weight <= 1.0
+        ):
+            raise ValueError("proposal_mixture_weight must lie in [0, 1].")
+        if proposal_mixture_weight != 1.0:
+            if persistent_learner is None:
+                raise ValueError("probability mixtures require a persistent learner.")
+            if (
+                config.activation_mode != "immediate"
+                or config.update_stride <= max_new_tokens
+                or config.feedback_interval <= max_new_tokens
+            ):
+                raise ValueError(
+                    "non-unit proposal mixtures are currently frozen-only: disable "
+                    "feedback and updates beyond the maximum request length."
+                )
         reused_persistent_learner = persistent_learner is not None
         if persistent_learner is None:
             learner, isolation = self._new_learner(
@@ -409,7 +428,9 @@ class HfOnlineUnoRunner:
         lookaheads = 0
         buffer: list[ResidualFeedback] = []
         candidate: FastResidualLearner | None = None
-        active_is_static = initial_fast_weight_l2 == 0.0
+        active_is_static = (
+            initial_fast_weight_l2 == 0.0 or proposal_mixture_weight == 0.0
+        )
         update_reports: list[FastUpdateReport] = []
         promotion_events: list[dict[str, Any]] = []
         feedback_items_created = 0
@@ -496,7 +517,22 @@ class HfOnlineUnoRunner:
                         draft_logits[1:],
                     )
                 head_seconds_cpu += time.perf_counter() - head_start_time
-            draft_used = filtered_distribution(adjusted_logits, self.runtime.sampling)
+            candidate_distribution = filtered_distribution(
+                adjusted_logits,
+                self.runtime.sampling,
+            )
+            if active_is_static or proposal_mixture_weight == 1.0:
+                draft_used = candidate_distribution
+            else:
+                static_distribution = filtered_distribution(
+                    draft_logits[1:].float(),
+                    self.runtime.sampling,
+                )
+                draft_used = mixture_distribution(
+                    static_distribution,
+                    candidate_distribution,
+                    candidate_weight=proposal_mixture_weight,
+                )
             spec_tokens = draft_used.sample(generator)
             proposal = torch.cat(
                 (
@@ -708,7 +744,10 @@ class HfOnlineUnoRunner:
                         candidate = None
                 else:
                     report = learner.update(buffer)
-                    active_is_static = learner.fast_weight_l2() == 0.0
+                    active_is_static = (
+                        learner.fast_weight_l2() == 0.0
+                        or proposal_mixture_weight == 0.0
+                    )
                 _sync(self.runtime.device)
                 update_seconds += time.perf_counter() - update_start
                 update_reports.append(report)
@@ -721,7 +760,9 @@ class HfOnlineUnoRunner:
                 cycles_since_update = 0
             if config.decay_factor_per_cycle < 1.0:
                 learner.decay_toward_offline(config.decay_factor_per_cycle)
-                active_is_static = learner.fast_weight_l2() == 0.0
+                active_is_static = (
+                    learner.fast_weight_l2() == 0.0 or proposal_mixture_weight == 0.0
+                )
                 if candidate is not None:
                     candidate.decay_toward_offline(config.decay_factor_per_cycle)
 
@@ -743,9 +784,13 @@ class HfOnlineUnoRunner:
 
         metrics = self.runtime._metrics(
             method=(
-                "uno_deferred_fast_residual_hf_fallback"
-                if config.activation_mode == "deferred"
-                else "uno_online_fast_residual_hf_fallback"
+                "uno_frozen_probability_mixture_hf_fallback"
+                if proposal_mixture_weight != 1.0
+                else (
+                    "uno_deferred_fast_residual_hf_fallback"
+                    if config.activation_mode == "deferred"
+                    else "uno_online_fast_residual_hf_fallback"
+                )
             ),
             block_size=config.block_size,
             input_ids=input_ids,
@@ -764,6 +809,7 @@ class HfOnlineUnoRunner:
         applied = sum(not report.rolled_back for report in update_reports)
         diagnostics = OnlineDiagnostics(
             activation_mode=config.activation_mode,
+            proposal_mixture_weight=proposal_mixture_weight,
             reused_persistent_learner=reused_persistent_learner,
             initial_fast_weight_l2=initial_fast_weight_l2,
             parameter_isolation=isolation,

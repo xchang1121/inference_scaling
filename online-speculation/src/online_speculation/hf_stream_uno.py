@@ -167,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=8.0)
     parser.add_argument("--learning-rate", type=float, default=5e-3)
     parser.add_argument("--selection-minimum-gain", type=float, default=0.002)
+    parser.add_argument("--proposal-mixture-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--top-p", type=float, default=0.95)
@@ -192,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise ValueError("validation needs >=1 repetition and test needs >=2.")
     if args.max_new_tokens < 2:
         raise ValueError("max_new_tokens must be at least two.")
+    if not 0.0 <= args.proposal_mixture_weight <= 1.0:
+        raise ValueError("proposal_mixture_weight must lie in [0, 1].")
 
     model_path = args.model_path.resolve()
     adapter_path = args.adapter_path.resolve()
@@ -370,6 +373,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     initialization_seed=args.seed + 999_999,
                     config=frozen_config,
                     persistent_learner=snapshots[snapshot_index],
+                    proposal_mixture_weight=args.proposal_mixture_weight,
                 )
                 ratio = (
                     result.metrics.decoder_tokens_per_forward
@@ -400,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     selection["all_snapshot_tpf_ratio_summaries"] = {
         str(index): _summary(ratios) for index, ratios in snapshot_ratios.items()
     }
+    selection["proposal_mixture_weight"] = args.proposal_mixture_weight
     print(
         f"validation best={selection['best_validation_snapshot']} "
         f"ratio={selection['best_validation_mean_tpf_ratio']:.4f} "
@@ -439,6 +444,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 initialization_seed=args.seed + 999_999,
                 config=frozen_config,
                 persistent_learner=selected,
+                proposal_mixture_weight=args.proposal_mixture_weight,
             )
             if not static_first:
                 static_metrics = runtime.generate_uno(
@@ -536,6 +542,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         "claim_scope": {
             "sampling": "exact filtered linear Psi-Spec using each cycle's saved q",
             "state": "one persistent rank-r logit residual across ordered requests",
+            "proposal": (
+                "probability-space static/candidate mixture during frozen validation/test"
+            ),
             "selection": "validation TPF only; test is not used for checkpoint choice",
             "performance": "actual wall-clock on Windows HF fallback, not Nano-vLLM",
         },
@@ -577,6 +586,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "feedback_interval": args.feedback_interval,
             "feedback_top_k": args.feedback_top_k,
             "selection_minimum_gain": args.selection_minimum_gain,
+            "proposal_mixture_weight": args.proposal_mixture_weight,
             "fast": asdict(fast_config),
             "seed": args.seed,
             "seed_partitions": {
