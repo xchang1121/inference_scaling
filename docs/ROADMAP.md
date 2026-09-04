@@ -39,6 +39,11 @@ accepted prefix、residual correction 和 lookahead token。覆盖 greedy 与 st
 
 通过条件：至少一个非退化 workload 上 TPF>1；只有 wall-clock CI 显示 speedup 才称为“复现加速”。
 
+实际阶段门结果（2026-09-05）：公开 Uno-1B checkpoint 的 HF KV-cache 回退 backend 通过。
+$B=8$ 的 TPF median 1.401（paired bootstrap 95% CI [1.341, 1.432]），相对 AR 的 decode
+speedup median 1.352×（[1.250, 1.386]），10/10 配对运行胜出。官方 Nano-vLLM 因当前 Windows
+没有 Triton/FlashAttention 而未执行；该项保留为独立的 Linux 系统复现任务，不冒充已完成。
+
 ## Stage 3：在线学习仿真与成本 controller
 
 先在 tabular/小神经 proposer 上引入 distribution drift，比较 static、per-round、fixed-stride、adaptive-stride，

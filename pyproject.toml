@@ -17,9 +17,18 @@ dev = [
   "pytest>=8",
   "ruff>=0.16,<0.17",
 ]
+uno-hf = [
+  "accelerate>=1.14,<2",
+  "peft==0.20.0",
+  "safetensors>=0.8,<1",
+  "torch>=2.11,<3",
+  "transformers>=5.14,<6",
+]
 
 [project.scripts]
 online-speculation-preflight = "online_speculation.preflight:main"
+online-speculation-uno1b = "online_speculation.hf_uno:main"
+online-speculation-stage2-analysis = "online_speculation.stage2_analysis:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

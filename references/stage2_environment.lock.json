@@ -1,0 +1,29 @@
+{
+  "adapter": {
+    "file": "adapter_model.safetensors",
+    "id": "IFM/K2-Horizon-0.9B-Uno",
+    "revision": "b0d8896a301a2f4bc755538b1234a35100da50d0",
+    "sha256": "5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e",
+    "size_bytes": 223917616
+  },
+  "base": {
+    "file": "model-00000-of-00001.safetensors",
+    "id": "IFM/K2-Horizon-0.9B",
+    "revision": "ee770e713760cf6350e4322cdbbff91a163b7d70",
+    "sha256": "6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365",
+    "size_bytes": 2156600968
+  },
+  "fallback_runtime": {
+    "peft": "0.20.0",
+    "reason_for_transformers_5": "Pinned remote K2 code imports PreTrainedConfig, unavailable in 4.57.1.",
+    "transformers": ">=5.14,<6"
+  },
+  "official_runtime": {
+    "flash_attn": "2.8.3",
+    "platform": "Linux x86_64",
+    "python": ">=3.10,<3.11",
+    "torch": "2.11.0+cu128",
+    "triton": "3.6.0",
+    "uno_commit": "ed2ee36bb7a3aea8732ebc635b3f09490a032ea3"
+  }
+}

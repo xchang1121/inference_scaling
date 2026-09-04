@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-05T01:28:45+08:00",
+  "host": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.5",
+    "torch": "2.13.0+cu130",
+    "transformers": "5.16.1",
+    "gpu": "NVIDIA GeForce RTX 3090"
+  },
+  "upstream": {
+    "repository": "https://github.com/ifm-ai/uno",
+    "commit": "ed2ee36bb7a3aea8732ebc635b3f09490a032ea3"
+  },
+  "probes": [
+    {
+      "description": "Import the top-level nano_vllm_uno package from the pinned source tree.",
+      "returncode": 0,
+      "result": "success"
+    },
+    {
+      "description": "Import nano_vllm_uno.engine.model_runner, which is required to construct the official engine.",
+      "returncode": 1,
+      "exception": "ModuleNotFoundError: No module named 'triton'",
+      "import_chain": [
+        "nano_vllm_uno.engine.model_runner",
+        "nano_vllm_uno.engine.draft_tree",
+        "nano_vllm_uno.engine.tree_builder",
+        "triton"
+      ],
+      "result": "blocked_before_engine_construction"
+    }
+  ],
+  "required_official_environment": {
+    "platform": "Linux x86_64",
+    "python": ">=3.10,<3.11",
+    "torch": "2.11.0+cu128",
+    "transformers": "4.55.0",
+    "triton": "3.6.0",
+    "flash_attn": "2.8.3 for FA2 linear sampling"
+  },
+  "classification": {
+    "official_runtime_executed": false,
+    "blocker": "platform_and_native_kernel_prerequisites",
+    "gpu_memory_is_the_primary_blocker": false,
+    "installing_triton_alone_on_this_windows_environment_is_sufficient": false
+  }
+}
