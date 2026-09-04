@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch import nn
 
@@ -135,27 +136,36 @@ def test_feedback_weights_cover_full_on_policy_and_discounted_modes() -> None:
 
 
 def test_deferred_action_requires_future_margin_and_prefers_best_shadow() -> None:
-    assert choose_deferred_action(
-        active_tv=0.30,
-        candidate_tv=0.25,
-        static_tv=0.28,
-        promotion_margin=0.01,
-        reset_margin=0.01,
-    ) == "promote_candidate"
-    assert choose_deferred_action(
-        active_tv=0.30,
-        candidate_tv=0.29,
-        static_tv=0.20,
-        promotion_margin=0.01,
-        reset_margin=0.01,
-    ) == "reset_to_static"
-    assert choose_deferred_action(
-        active_tv=0.30,
-        candidate_tv=0.295,
-        static_tv=0.30,
-        promotion_margin=0.01,
-        reset_margin=0.01,
-    ) == "keep_active"
+    assert (
+        choose_deferred_action(
+            active_tv=0.30,
+            candidate_tv=0.25,
+            static_tv=0.28,
+            promotion_margin=0.01,
+            reset_margin=0.01,
+        )
+        == "promote_candidate"
+    )
+    assert (
+        choose_deferred_action(
+            active_tv=0.30,
+            candidate_tv=0.29,
+            static_tv=0.20,
+            promotion_margin=0.01,
+            reset_margin=0.01,
+        )
+        == "reset_to_static"
+    )
+    assert (
+        choose_deferred_action(
+            active_tv=0.30,
+            candidate_tv=0.295,
+            static_tv=0.30,
+            promotion_margin=0.01,
+            reset_margin=0.01,
+        )
+        == "keep_active"
+    )
 
 
 def test_online_runner_executes_real_cache_loop_and_updates_only_fast_head() -> None:
@@ -209,6 +219,7 @@ def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
             supervision="on_policy",
             activation_mode="deferred",
             feedback_interval=1,
+            candidate_evaluation_interval=2,
             promotion_margin=0.0,
             future_reset_margin=0.0,
             fast=FastResidualConfig(
@@ -223,6 +234,12 @@ def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
     assert result.metrics.output_tokens == 50
     assert result.metrics.method == "uno_deferred_fast_residual_hf_fallback"
     assert diagnostics.activation_mode == "deferred"
+    assert 0 < diagnostics.candidate_evaluation_cycles < result.metrics.cycles
+    assert (
+        diagnostics.active_head_evaluation_cycles + diagnostics.static_head_skip_cycles
+        == result.metrics.cycles
+    )
+    assert diagnostics.static_head_skip_cycles > 0
     assert diagnostics.candidate_promotion_attempts > 0
     assert len(diagnostics.promotion_events) == diagnostics.candidate_promotion_attempts
     assert (
@@ -231,6 +248,17 @@ def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
         + diagnostics.future_static_resets
         == diagnostics.candidate_promotion_attempts
     )
+
+
+def test_candidate_evaluation_interval_must_fit_update_window() -> None:
+    with pytest.raises(ValueError, match="candidate_evaluation_interval"):
+        OnlineRuntimeConfig(
+            block_size=4,
+            update_stride=2,
+            feedback_top_k=3,
+            candidate_evaluation_interval=3,
+            fast=FastResidualConfig(rank=2, alpha=2.0),
+        ).validate(vocabulary_size=6)
 
 
 def _fake_run(label: str, repetition: int, tps: float, tpf: float) -> dict:

@@ -72,6 +72,7 @@ class OnlineRuntimeConfig:
     decay_factor_per_cycle: float = 1.0
     activation_mode: ActivationMode = "immediate"
     feedback_interval: int = 1
+    candidate_evaluation_interval: int = 1
     promotion_margin: float = 0.002
     future_reset_margin: float = 0.005
     fast: FastResidualConfig = field(default_factory=FastResidualConfig)
@@ -95,6 +96,10 @@ class OnlineRuntimeConfig:
             raise ValueError(f"unknown activation mode: {self.activation_mode}.")
         if self.feedback_interval < 1 or self.feedback_interval > self.update_stride:
             raise ValueError("feedback_interval must lie in [1, update_stride].")
+        if not 1 <= self.candidate_evaluation_interval <= self.update_stride:
+            raise ValueError(
+                "candidate_evaluation_interval must lie in [1, update_stride]."
+            )
         if self.promotion_margin < 0 or self.future_reset_margin < 0:
             raise ValueError("deferred decision margins cannot be negative.")
         self.fast.validate()
@@ -105,6 +110,9 @@ class OnlineDiagnostics:
     activation_mode: str
     parameter_isolation: dict[str, int]
     feedback_cycles: int
+    candidate_evaluation_cycles: int
+    active_head_evaluation_cycles: int
+    static_head_skip_cycles: int
     feedback_items_created: int
     feedback_items_discarded_at_end: int
     update_attempts: int
@@ -147,10 +155,7 @@ def choose_deferred_action(
         raise ValueError("deferred TV evidence must be finite.")
     if promotion_margin < 0 or reset_margin < 0:
         raise ValueError("deferred decision margins cannot be negative.")
-    if (
-        candidate_tv + promotion_margin < active_tv
-        and candidate_tv <= static_tv
-    ):
+    if candidate_tv + promotion_margin < active_tv and candidate_tv <= static_tv:
         return "promote_candidate"
     if static_tv + reset_margin < active_tv and static_tv < candidate_tv:
         return "reset_to_static"
@@ -200,7 +205,9 @@ class HfOnlineUnoRunner:
         cuda_devices = []
         if device.type == "cuda":
             cuda_devices = [
-                device.index if device.index is not None else torch.cuda.current_device()
+                device.index
+                if device.index is not None
+                else torch.cuda.current_device()
             ]
         with torch.random.fork_rng(devices=cuda_devices):
             torch.manual_seed(initialization_seed)
@@ -312,7 +319,9 @@ class HfOnlineUnoRunner:
         if max_new_tokens < 2:
             raise ValueError("online generation requires at least two output tokens.")
         if self.runtime.sampling.temperature <= 0:
-            raise ValueError("online fast residual currently requires stochastic sampling.")
+            raise ValueError(
+                "online fast residual currently requires stochastic sampling."
+            )
         config.validate(vocabulary_size=self.runtime.vocab_size)
         learner, isolation = self._new_learner(
             config,
@@ -340,10 +349,14 @@ class HfOnlineUnoRunner:
         lookaheads = 0
         buffer: list[ResidualFeedback] = []
         candidate: FastResidualLearner | None = None
+        active_is_static = True
         update_reports: list[FastUpdateReport] = []
         promotion_events: list[dict[str, Any]] = []
         feedback_items_created = 0
         feedback_cycles = 0
+        candidate_evaluation_cycles = 0
+        active_head_evaluation_cycles = 0
+        static_head_skip_cycles = 0
         update_seconds = 0.0
         feedback_seconds = 0.0
         head_seconds_cpu = 0.0
@@ -396,8 +409,14 @@ class HfOnlineUnoRunner:
 
             draft_logits = draft_output.logits[0]
             hidden_rows = last_hidden[0, 1:]
-            free_token = int(self.runtime._sample_logits(draft_logits[0:1], generator).item())
-            if self.runtime.device.type == "cuda":
+            free_token = int(
+                self.runtime._sample_logits(draft_logits[0:1], generator).item()
+            )
+            if active_is_static:
+                static_head_skip_cycles += 1
+                adjusted_logits = draft_logits[1:].float()
+            elif self.runtime.device.type == "cuda":
+                active_head_evaluation_cycles += 1
                 head_start = torch.cuda.Event(enable_timing=True)
                 head_end = torch.cuda.Event(enable_timing=True)
                 head_start.record()
@@ -409,6 +428,7 @@ class HfOnlineUnoRunner:
                 head_end.record()
                 head_events.append((head_start, head_end))
             else:
+                active_head_evaluation_cycles += 1
                 head_start_time = time.perf_counter()
                 with torch.no_grad():
                     adjusted_logits = learner.corrected_logits(
@@ -448,7 +468,12 @@ class HfOnlineUnoRunner:
                 generator=generator,
             )
 
-            if config.activation_mode == "deferred" and candidate is not None:
+            if (
+                config.activation_mode == "deferred"
+                and candidate is not None
+                and (cycles + 1) % config.candidate_evaluation_interval == 0
+            ):
+                candidate_evaluation_cycles += 1
                 if self.runtime.device.type == "cuda":
                     candidate_start = torch.cuda.Event(enable_timing=True)
                     candidate_end = torch.cuda.Event(enable_timing=True)
@@ -474,9 +499,13 @@ class HfOnlineUnoRunner:
                     candidate_logits,
                     self.runtime.sampling,
                 )
-                static_distribution = filtered_distribution(
-                    draft_logits[1:].float(),
-                    self.runtime.sampling,
+                static_distribution = (
+                    draft_used
+                    if active_is_static
+                    else filtered_distribution(
+                        draft_logits[1:].float(),
+                        self.runtime.sampling,
+                    )
                 )
                 evidence_weights = torch.tensor(
                     feedback_weights(
@@ -512,7 +541,9 @@ class HfOnlineUnoRunner:
             _crop_cache_by(cache, config.block_size + 1 - len(committed))
             expected_cache_length = prefix_cache_length + len(committed)
             if _cache_length(cache) != expected_cache_length:
-                raise RuntimeError("online post-verification cache frontier is inconsistent.")
+                raise RuntimeError(
+                    "online post-verification cache frontier is inconsistent."
+                )
 
             if (cycles + 1) % config.feedback_interval == 0:
                 feedback_start = time.perf_counter()
@@ -544,19 +575,15 @@ class HfOnlineUnoRunner:
                 max(0, len(committed) - 1),
             )
             lookaheads += int(
-                verification.used_lookahead
-                and len(committed) == config.block_size + 1
+                verification.used_lookahead and len(committed) == config.block_size + 1
             )
             stopped = (
-                not self.runtime.ignore_stop and seed_token in self.runtime.stop_token_ids
+                not self.runtime.ignore_stop
+                and seed_token in self.runtime.stop_token_ids
             )
 
             will_continue = len(output_tokens) < max_new_tokens and not stopped
-            if (
-                will_continue
-                and buffer
-                and cycles_since_update >= config.update_stride
-            ):
+            if will_continue and buffer and cycles_since_update >= config.update_stride:
                 _sync(self.runtime.device)
                 update_start = time.perf_counter()
                 if config.activation_mode == "deferred":
@@ -584,9 +611,11 @@ class HfOnlineUnoRunner:
                         candidate_promotion_attempts += 1
                         if action == "promote_candidate":
                             learner = candidate
+                            active_is_static = learner.fast_weight_l2() == 0.0
                             candidate_promotions += 1
                         elif action == "reset_to_static":
                             learner.reset_to_offline()
+                            active_is_static = True
                             future_static_resets += 1
                         else:
                             candidate_rejections += 1
@@ -619,6 +648,7 @@ class HfOnlineUnoRunner:
                         candidate = None
                 else:
                     report = learner.update(buffer)
+                    active_is_static = learner.fast_weight_l2() == 0.0
                 _sync(self.runtime.device)
                 update_seconds += time.perf_counter() - update_start
                 update_reports.append(report)
@@ -631,6 +661,7 @@ class HfOnlineUnoRunner:
                 cycles_since_update = 0
             if config.decay_factor_per_cycle < 1.0:
                 learner.decay_toward_offline(config.decay_factor_per_cycle)
+                active_is_static = learner.fast_weight_l2() == 0.0
                 if candidate is not None:
                     candidate.decay_toward_offline(config.decay_factor_per_cycle)
 
@@ -640,14 +671,15 @@ class HfOnlineUnoRunner:
         decode_seconds = time.perf_counter() - decode_start
         head_forward_seconds = head_seconds_cpu
         if self.runtime.device.type == "cuda":
-            head_forward_seconds = sum(
-                start.elapsed_time(end) for start, end in head_events
-            ) / 1_000.0
+            head_forward_seconds = (
+                sum(start.elapsed_time(end) for start, end in head_events) / 1_000.0
+            )
         candidate_head_forward_seconds = candidate_head_seconds_cpu
         if self.runtime.device.type == "cuda":
-            candidate_head_forward_seconds = sum(
-                start.elapsed_time(end) for start, end in candidate_head_events
-            ) / 1_000.0
+            candidate_head_forward_seconds = (
+                sum(start.elapsed_time(end) for start, end in candidate_head_events)
+                / 1_000.0
+            )
 
         metrics = self.runtime._metrics(
             method=(
@@ -674,6 +706,9 @@ class HfOnlineUnoRunner:
             activation_mode=config.activation_mode,
             parameter_isolation=isolation,
             feedback_cycles=feedback_cycles,
+            candidate_evaluation_cycles=candidate_evaluation_cycles,
+            active_head_evaluation_cycles=active_head_evaluation_cycles,
+            static_head_skip_cycles=static_head_skip_cycles,
             feedback_items_created=feedback_items_created,
             feedback_items_discarded_at_end=len(buffer),
             update_attempts=len(update_reports),
@@ -838,9 +873,7 @@ def summarize_online_runs(
                 "update_fraction_of_decode": _summary(update_fractions),
                 "feedback_fraction_of_decode": _summary(feedback_fractions),
                 "head_fraction_of_decode": _summary(head_fractions),
-                "candidate_head_fraction_of_decode": _summary(
-                    candidate_head_fractions
-                ),
+                "candidate_head_fraction_of_decode": _summary(candidate_head_fractions),
                 "explicit_online_fraction_of_decode": _summary(
                     explicit_online_fractions
                 ),
@@ -887,6 +920,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="immediate",
     )
     parser.add_argument("--feedback-interval", type=int, default=1)
+    parser.add_argument("--candidate-evaluation-interval", type=int, default=1)
     parser.add_argument("--promotion-margin", type=float, default=0.002)
     parser.add_argument("--future-reset-margin", type=float, default=0.005)
     parser.add_argument("--rank", type=int, default=8)
@@ -924,9 +958,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     }
     if not args.skip_hash_check:
         if hashes["base_weight_sha256"] != BASE_WEIGHT_SHA256:
-            raise RuntimeError("base checkpoint SHA-256 does not match the pinned revision.")
+            raise RuntimeError(
+                "base checkpoint SHA-256 does not match the pinned revision."
+            )
         if hashes["adapter_weight_sha256"] != ADAPTER_WEIGHT_SHA256:
-            raise RuntimeError("Uno adapter SHA-256 does not match the pinned revision.")
+            raise RuntimeError(
+                "Uno adapter SHA-256 does not match the pinned revision."
+            )
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -1025,6 +1063,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                             decay_factor_per_cycle=args.decay_factor,
                             activation_mode=args.activation_mode,
                             feedback_interval=args.feedback_interval,
+                            candidate_evaluation_interval=(
+                                args.candidate_evaluation_interval
+                            ),
                             promotion_margin=args.promotion_margin,
                             future_reset_margin=args.future_reset_margin,
                             fast=fast_config,
@@ -1077,7 +1118,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "transformers": _package_version("transformers"),
             "peft": _package_version("peft"),
             "cuda_runtime": torch.version.cuda,
-            "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+            "gpu": torch.cuda.get_device_name(device)
+            if device.type == "cuda"
+            else None,
         },
         "sampling": {
             **asdict(sampling),
@@ -1100,6 +1143,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "decay_factor_per_cycle": args.decay_factor,
             "activation_mode": args.activation_mode,
             "feedback_interval": args.feedback_interval,
+            "candidate_evaluation_interval": (args.candidate_evaluation_interval),
             "promotion_margin": args.promotion_margin,
             "future_reset_margin": args.future_reset_margin,
             "fast": asdict(fast_config),
