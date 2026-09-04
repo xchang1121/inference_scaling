@@ -164,3 +164,8 @@ Stage 7B pilot 结果（2026-09-05）：4 个非零 snapshots 的 validation mea
 回退 zero；5 个 test TPF ratios 因而全部严格为 1。非零 snapshot advantage 的 lag-1 correlation 仅在
 `[-0.170, 0.231]`，不支持继续扫描 EMA/margin。下一阶段用 greedy target 固定 AR trajectory，单独检验
 跨请求 residual 能否对新的 Uno noise seeds 泛化。
+
+Stage 8 协议状态（2026-09-05）：两个 greedy 工程 pilots 给出小幅但不稳定的 TPF 正信号，因此在读取新数据
+前冻结 repeated-query confirmatory case study：4 train、5 validation、20 test，top-k 1、512 tokens，base
+seed `20262405`。validation-only snapshot 选择保持 0.2% zero fallback；正式门分别要求 TPF mean bootstrap
+下界大于 1、点估计至少 +0.5%，以及 TPS mean bootstrap 下界大于 1。TPF 通过而 TPS 失败只算学习成功。
