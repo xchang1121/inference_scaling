@@ -139,3 +139,8 @@ Stage 6A 状态（2026-09-05）：优先实现 OSD 式跨请求 persistent learn
 Stage 6B 实现状态（2026-09-05）：stream harness 已完成，保存 zero 与逐请求 snapshot，只凭 validation
 mean TPF 和固定 margin 选择，随后释放未选状态并在独立 seed 区间测试；training static pair 与显式 kernel
 计时共同给出 observed/instrumented break-even。先做单域工程 pilot，再冻结多模板正式协议。
+
+Stage 6C 协议状态（2026-09-05）：2-test-seed stationary pilot 出现 TPF/TPS 正方向后，冻结一个全新 seed
+的 repeated-query case study：4 train、5 validation、10 test；只按 validation mean TPF 选 0--4 快照，
+低于 0.2% gain 自动回退 zero。正式成功要求 nonzero selection、test TPF 和 frozen TPS 的 mean bootstrap
+下界都大于 1。范围明确限于同一 prompt 分布。

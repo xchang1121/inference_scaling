@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import platform
@@ -114,6 +115,16 @@ def _explicit_online_seconds(result: dict[str, Any]) -> float:
             "candidate_head_forward_seconds",
         )
     )
+
+
+def _head_sha256(learner: Any) -> str:
+    digest = hashlib.sha256()
+    for name, tensor in sorted(learner.head.state_dict().items()):
+        contiguous = tensor.detach().float().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(str(tuple(contiguous.shape)).encode("ascii"))
+        digest.update(contiguous.numpy().tobytes())
+    return digest.hexdigest()
 
 
 def _frozen_config(
@@ -397,6 +408,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
 
     selected = snapshots[selected_index].clone()
+    selected_fast_weight_l2 = selected.fast_weight_l2()
+    selected_head_sha256_before_test = _head_sha256(selected)
     del snapshots, persistent
     gc.collect()
     if device.type == "cuda":
@@ -480,6 +493,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         _explicit_online_seconds(run["persistent_train"]) for run in training_runs
     )
     mean_future_saving = float(np.mean(test_savings_seconds))
+    selected_head_sha256_after_test = _head_sha256(selected)
     analysis = {
         "validation_zero_snapshot_exact_tpf": all(
             math.isclose(value, 1.0, rel_tol=0.0, abs_tol=1e-12)
@@ -490,6 +504,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             "paired_tpf_ratio": _summary(test_tpf_ratios),
             "paired_decode_tps_ratio": _summary(test_speed_ratios),
             "serving_time_saving_seconds": _summary(test_savings_seconds),
+        },
+        "selected_snapshot_frozen": {
+            "fast_weight_l2": selected_fast_weight_l2,
+            "head_sha256_before_test": selected_head_sha256_before_test,
+            "head_sha256_after_test": selected_head_sha256_after_test,
+            "head_unchanged_during_test": (
+                selected_head_sha256_before_test == selected_head_sha256_after_test
+            ),
         },
         "amortization": {
             "observed_training_increment_seconds": observed_training_increment,
