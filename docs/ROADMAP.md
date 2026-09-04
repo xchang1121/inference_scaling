@@ -82,6 +82,11 @@ speedup median 1.352×（[1.250, 1.386]），10/10 配对运行胜出。官方 N
 安全不变量：base AR 和 offline Uno adapter 永不被 optimizer 持有；optimizer parameter IDs 在测试中白名单；
 任一 NaN、KL/TV 激增或吞吐下界恶化触发 rollback/disable-update。
 
+Stage 4A 状态（2026-09-05）：完成独立 low-rank logit residual learner。zero-init 保持 static logits，
+detached hidden + draft/target top-K union 构造稀疏 replay，transactional AdamW update 支持 static-shadow
+reset、held-out rollback、向 offline snapshot 衰减；optimizer/base parameter ID 白名单已由合成测试覆盖。
+下一门是接入真实 K2-Horizon-0.9B-Uno draft/verify loop，并计入 feedback、backward、optimizer 与同步时间。
+
 ## Stage 5：消融与最终判定
 
 核心矩阵：
