@@ -24,3 +24,7 @@
   运行；包含候选 shadow evidence、promote/keep/reset、zero-head skip、逐组件计时与完整 paired metrics。
 - `stage5b_deferred_online_uno1b_rtx3090_hf_analysis.json`：严格核验冻结设计、安全不变量，以配对均值为
   预注册主统计、配对中位数为稳健性统计；TPF 与 TPS 两个主门均未通过，并显示中文 workload 的明确退化。
+- `stage6c_stream_uno1b_rtx3090_hf.json`：4-train/5-validation/10-test stationary request stream 的
+  58 个真机生成记录；包含所有 snapshot score、validation-only selection、frozen head hash 和训练摊销。
+- `stage6c_stream_uno1b_rtx3090_hf_analysis.json`：重算 stream continuity、zero/frozen/selection 不变量和
+  paired mean/median bootstrap；snapshot 4 的 validation gain 未泛化，TPF/TPS test 主门均失败。

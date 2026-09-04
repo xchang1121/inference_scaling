@@ -50,6 +50,9 @@ Stage 6A 的[跨请求 Stream-Uno 设计](docs/STAGE6_STREAM_ONLINE_DESIGN.md)�
 break-even 计算；pilot 与正式 test 结果将分开保存。
 stationary 英文 pilot 的 2 个 test seeds 给出正方向后，Stage 6C 的全新 seed、5-validation/10-test
 [预注册协议](docs/STAGE6C_STREAM_UNO_PROTOCOL.md)已经冻结；其成功范围刻意限制为 repeated-query stream。
+正式[Stage 6C 结果](docs/STAGE6C_STREAM_UNO_RESULTS.md)显示选中快照的 validation TPF +2.26%，但 10 个新
+seed 的 test TPF 反而 -1.95%；head hash 与所有 frozen 审计通过。Stage 7 因此转向 static-anchored
+probability mixture，限制 hard activation 的 trajectory 尾部风险。
 
 ## 目录
 
