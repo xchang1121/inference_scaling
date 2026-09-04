@@ -14,7 +14,7 @@ import json
 import platform
 import statistics
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from importlib import metadata
 from pathlib import Path
@@ -182,9 +182,23 @@ class HfUnoRuntime:
             return torch.argmax(logits, dim=-1)
         return filtered_distribution(logits, self.sampling).sample(generator)
 
+    @contextmanager
     def _base_context(self):
+        """Disable PEFT adapters while preserving the inference-only freeze."""
+
         disable_adapter = getattr(self.model, "disable_adapter", None)
-        return disable_adapter() if callable(disable_adapter) else nullcontext()
+        if not callable(disable_adapter):
+            yield
+            return
+        try:
+            with disable_adapter():
+                yield
+        finally:
+            # PEFT restores its adapter trainability state on context exit. This
+            # runtime is inference-only, so fail-safe freezing must be restored
+            # before any post-verification online learner can run.
+            for parameter in self.model.parameters():
+                parameter.requires_grad_(False)
 
     def _prefill(
         self,

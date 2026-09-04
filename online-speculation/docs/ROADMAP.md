@@ -87,6 +87,12 @@ detached hidden + draft/target top-K union 构造稀疏 replay，transactional A
 reset、held-out rollback、向 offline snapshot 衰减；optimizer/base parameter ID 白名单已由合成测试覆盖。
 下一门是接入真实 K2-Horizon-0.9B-Uno draft/verify loop，并计入 feedback、backward、optimizer 与同步时间。
 
+Stage 4B 结果（2026-09-05）：真实 checkpoint 接入和安全门完成，但预注册性能门失败。`online_s10`
+paired TPF ratio 为 0.9796 [0.9470, 1.0000]，decode TPS ratio 为 0.9624
+[0.9533, 0.9819]；`online_s20` 分别为 1.0068 [0.9574, 1.0286] 和
+0.9860 [0.9243, 1.0075]，均不确定。45/45 固定长度，30/30 online parameter-isolation 记录通过。
+下一阶段将 same-buffer transactional update 改成跨未来窗口验证的 shadow candidate，再决定 promote/reset。
+
 ## Stage 5：消融与最终判定
 
 核心矩阵：

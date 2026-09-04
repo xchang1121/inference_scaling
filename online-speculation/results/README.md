@@ -16,3 +16,7 @@
 - `stage3_online_markov.json`：20 seeds × 8 strategies 的 exact $\Psi$-Spec 非平稳 Markov 仿真；
   包含预注册主检验、TV regret/TPF/合成 cost proxy 的配对 bootstrap、update-cost 敏感性、segment
   分解，以及一个代表 seed 的 trace/controller events。`gpu_timing=false` 是强制结论边界。
+- `stage4b_online_uno1b_rtx3090_hf.json`：真实 K2-Horizon-0.9B-Uno 上 static、online stride-10/20
+  的 45 条固定长度 GPU 运行；含逐 update loss/rollback/reset、参数隔离、时间分解、显存和原始生成。
+- `stage4b_online_uno1b_rtx3090_hf_analysis.json`：对 15 个 paired workload 的预注册判定、bootstrap、
+  exact sign-test 和逐 prompt 诊断；主策略学习门失败且 HF TPS 显著变慢，不能表述为 online speedup。
