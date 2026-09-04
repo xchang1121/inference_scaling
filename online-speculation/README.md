@@ -30,7 +30,9 @@ Stage 2 的 checkpoint、采样语义和正式运行矩阵见
 [Uno-1B 复现实验协议](docs/STAGE2_UNO1B_PROTOCOL.md)，实测结论见
 [Uno-1B 结果报告](docs/STAGE2_UNO1B_RESULTS.md)。Stage 3 的冻结设计见
 [在线仿真预注册协议](docs/STAGE3_ONLINE_SIMULATION_PROTOCOL.md)，结果、失败反例和 Online Uno v1
-设计见[在线仿真结果报告](docs/STAGE3_ONLINE_SIMULATION_RESULTS.md)。
+设计见[在线仿真结果报告](docs/STAGE3_ONLINE_SIMULATION_RESULTS.md)。真实模型 fast-weight 的结构、
+top-K surrogate、rollback 与冻结不变量见
+[Stage 4A fast residual 设计](docs/STAGE4_FAST_RESIDUAL_DESIGN.md)。
 
 ## 目录
 
@@ -76,7 +78,7 @@ online-speculation/
 | 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 完成 |
 | 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 完成 |
-| 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 待实现 |
+| 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 4A 独立 learner 完成；4B 真模型接入待完成 |
 | 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
 
 Stage 1 的正式验证命令：
