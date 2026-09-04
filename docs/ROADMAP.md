@@ -135,3 +135,7 @@ Stage 6A 状态（2026-09-05）：优先实现 OSD 式跨请求 persistent learn
 接口，并验证 config/shape/device/optimizer ownership；diagnostics 审计请求首尾 fast-weight L2。下一门是
 实现 train/validation/test stream harness，在 held-out future requests 上比较 frozen residual 与 static，
 并计算 observed/instrumented 两种 break-even。设计见 `STAGE6_STREAM_ONLINE_DESIGN.md`。
+
+Stage 6B 实现状态（2026-09-05）：stream harness 已完成，保存 zero 与逐请求 snapshot，只凭 validation
+mean TPF 和固定 margin 选择，随后释放未选状态并在独立 seed 区间测试；training static pair 与显式 kernel
+计时共同给出 observed/instrumented break-even。先做单域工程 pilot，再冻结多模板正式协议。
