@@ -70,5 +70,7 @@ proposal 是 mixture 时，它不再等于旧 $q_w$。在实现 mixture-aware re
 - `w=1` 的旧 request-local/deferred/stream 路径全部回归通过；
 - 真机 pilot 只用于选择一个后续固定 $w$，不能作为正式 test 结论。
 
-Stage 7B 先在全新工程 seed 上检查固定小权重（优先 $w=0.25$）。若它只把退化缩小到 0 而没有正信号，
-下一步是根据过去 verifier overlap 更新**标量** $w_t$，而不是改回 hard switch。
+后续固定 `w=0.25` 工程 pilot 的 validation mean TPF ratio 为 `1.05936`，但 5 个新 test seeds 的 mean
+只有 `0.99493`，说明它压低了 hard activation 的影响，却没有产生稳定学习收益。Stage 7B 因此根据过去
+verifier overlap 更新**下一轮**标量 $w_t$，而不是继续扫描固定权重或改回 hard switch；完整因果顺序和
+控制律见 [Stage 7B adaptive mixture 设计](STAGE7B_ADAPTIVE_MIXTURE_DESIGN.md)。

@@ -1,8 +1,9 @@
 """Real-checkpoint Online Uno prototype on the Hugging Face KV-cache fallback.
 
-The implementation adds a request-local low-rank logit residual after Uno's
-frozen diffusion draft.  Model forward passes remain inference-only; verifier
-feedback trains only the detached residual head after exact verification.
+The implementation supports a request-local low-rank residual, a persistent
+frozen residual, and a verifier-gated static/candidate probability mixture.
+Model forward passes remain inference-only; any feedback action occurs only
+after exact verification and can affect no earlier proposal.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from .hf_uno import (
     _sync,
     load_runtime,
 )
+from .mixture_controller import EmaMixtureConfig, VerifierEmaMixtureController
 from .stage2_analysis import bootstrap_interval
 from .torch_sampling import (
     SamplingConfig,
@@ -122,6 +124,11 @@ class OnlineRuntimeConfig:
 class OnlineDiagnostics:
     activation_mode: str
     proposal_mixture_weight: float
+    mixture_controller_enabled: bool
+    mixture_controller_seconds: float
+    mixture_weight_mean: float
+    mixture_weight_nonzero_cycles: int
+    mixture_controller_report: dict[str, object] | None
     reused_persistent_learner: bool
     initial_fast_weight_l2: float
     parameter_isolation: dict[str, int]
@@ -372,6 +379,7 @@ class HfOnlineUnoRunner:
         config: OnlineRuntimeConfig,
         persistent_learner: FastResidualLearner | None = None,
         proposal_mixture_weight: float = 1.0,
+        adaptive_mixture_config: EmaMixtureConfig | None = None,
     ) -> OnlineRunResult:
         if max_new_tokens < 2:
             raise ValueError("online generation requires at least two output tokens.")
@@ -384,7 +392,17 @@ class HfOnlineUnoRunner:
             0.0 <= proposal_mixture_weight <= 1.0
         ):
             raise ValueError("proposal_mixture_weight must lie in [0, 1].")
-        if proposal_mixture_weight != 1.0:
+        if adaptive_mixture_config is not None:
+            adaptive_mixture_config.validate()
+            if proposal_mixture_weight != 1.0:
+                raise ValueError(
+                    "adaptive and fixed non-unit proposal mixtures are mutually "
+                    "exclusive."
+                )
+        mixture_requested = (
+            adaptive_mixture_config is not None or proposal_mixture_weight != 1.0
+        )
+        if mixture_requested:
             if persistent_learner is None:
                 raise ValueError("probability mixtures require a persistent learner.")
             if (
@@ -396,6 +414,11 @@ class HfOnlineUnoRunner:
                     "non-unit proposal mixtures are currently frozen-only: disable "
                     "feedback and updates beyond the maximum request length."
                 )
+        mixture_controller = (
+            VerifierEmaMixtureController(adaptive_mixture_config)
+            if adaptive_mixture_config is not None
+            else None
+        )
         reused_persistent_learner = persistent_learner is not None
         if persistent_learner is None:
             learner, isolation = self._new_learner(
@@ -428,8 +451,8 @@ class HfOnlineUnoRunner:
         lookaheads = 0
         buffer: list[ResidualFeedback] = []
         candidate: FastResidualLearner | None = None
-        active_is_static = (
-            initial_fast_weight_l2 == 0.0 or proposal_mixture_weight == 0.0
+        active_is_static = initial_fast_weight_l2 == 0.0 or (
+            mixture_controller is None and proposal_mixture_weight == 0.0
         )
         update_reports: list[FastUpdateReport] = []
         promotion_events: list[dict[str, Any]] = []
@@ -444,6 +467,8 @@ class HfOnlineUnoRunner:
         candidate_head_seconds_cpu = 0.0
         head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         candidate_head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
+        mixture_controller_seconds = 0.0
+        mixture_weights_used: list[float] = []
         max_fast_weight_l2 = initial_fast_weight_l2
         candidate_promotion_attempts = 0
         candidate_promotions = 0
@@ -457,6 +482,17 @@ class HfOnlineUnoRunner:
         _sync(self.runtime.device)
         decode_start = time.perf_counter()
         while len(output_tokens) < max_new_tokens and not stopped:
+            cycle_number = cycles + 1
+            effective_mixture_weight = (
+                mixture_controller.weight
+                if mixture_controller is not None
+                else proposal_mixture_weight
+            )
+            mixture_weights_used.append(effective_mixture_weight)
+            controller_evaluation = (
+                mixture_controller is not None
+                and mixture_controller.should_evaluate(cycle_number)
+            )
             prefix_cache_length = _cache_length(cache)
             noise = torch.randint(
                 1,
@@ -493,7 +529,12 @@ class HfOnlineUnoRunner:
             free_token = int(
                 self.runtime._sample_logits(draft_logits[0:1], generator).item()
             )
-            if active_is_static:
+            skip_active_head = active_is_static or (
+                mixture_controller is not None
+                and effective_mixture_weight == 0.0
+                and not controller_evaluation
+            )
+            if skip_active_head:
                 static_head_skip_cycles += 1
                 adjusted_logits = draft_logits[1:].float()
             elif self.runtime.device.type == "cuda":
@@ -517,20 +558,35 @@ class HfOnlineUnoRunner:
                         draft_logits[1:],
                     )
                 head_seconds_cpu += time.perf_counter() - head_start_time
-            candidate_distribution = filtered_distribution(
+            active_distribution = filtered_distribution(
                 adjusted_logits,
                 self.runtime.sampling,
             )
-            if active_is_static or proposal_mixture_weight == 1.0:
-                draft_used = candidate_distribution
+            if skip_active_head:
+                static_expert_distribution = active_distribution
+                candidate_expert_distribution = active_distribution
             else:
-                static_distribution = filtered_distribution(
-                    draft_logits[1:].float(),
-                    self.runtime.sampling,
+                candidate_expert_distribution = active_distribution
+                static_expert_distribution = (
+                    filtered_distribution(
+                        draft_logits[1:].float(),
+                        self.runtime.sampling,
+                    )
+                    if mixture_controller is not None or proposal_mixture_weight != 1.0
+                    else active_distribution
                 )
+            if mixture_controller is not None:
                 draft_used = mixture_distribution(
-                    static_distribution,
-                    candidate_distribution,
+                    static_expert_distribution,
+                    candidate_expert_distribution,
+                    candidate_weight=effective_mixture_weight,
+                )
+            elif active_is_static or proposal_mixture_weight == 1.0:
+                draft_used = active_distribution
+            else:
+                draft_used = mixture_distribution(
+                    static_expert_distribution,
+                    candidate_expert_distribution,
                     candidate_weight=proposal_mixture_weight,
                 )
             spec_tokens = draft_used.sample(generator)
@@ -563,6 +619,43 @@ class HfOnlineUnoRunner:
                 lookahead=lookahead,
                 generator=generator,
             )
+
+            if controller_evaluation:
+                controller_start = time.perf_counter()
+                evidence_weights = torch.tensor(
+                    feedback_weights(
+                        speculative_tokens=config.block_size - 1,
+                        rejected_index=verification.rejected_index,
+                        supervision=config.supervision,
+                        tail_discount=config.tail_discount,
+                        position_discount=config.position_discount,
+                    ),
+                    device=self.runtime.device,
+                )
+                evidence_mass = evidence_weights.sum()
+                if float(evidence_mass.item()) <= 0.0:
+                    raise RuntimeError(
+                        "mixture controller received no verifier evidence."
+                    )
+                static_tv = 1.0 - filtered_overlap(
+                    target,
+                    static_expert_distribution,
+                )
+                candidate_tv = 1.0 - filtered_overlap(
+                    target,
+                    candidate_expert_distribution,
+                )
+                advantage = (
+                    torch.sum(evidence_weights * (static_tv - candidate_tv))
+                    / evidence_mass
+                )
+                if mixture_controller is None:
+                    raise RuntimeError("controller evaluation has no controller.")
+                mixture_controller.observe(
+                    cycle=cycle_number,
+                    advantage=float(advantage.item()),
+                )
+                mixture_controller_seconds += time.perf_counter() - controller_start
 
             if (
                 config.activation_mode == "deferred"
@@ -744,9 +837,8 @@ class HfOnlineUnoRunner:
                         candidate = None
                 else:
                     report = learner.update(buffer)
-                    active_is_static = (
-                        learner.fast_weight_l2() == 0.0
-                        or proposal_mixture_weight == 0.0
+                    active_is_static = learner.fast_weight_l2() == 0.0 or (
+                        mixture_controller is None and proposal_mixture_weight == 0.0
                     )
                 _sync(self.runtime.device)
                 update_seconds += time.perf_counter() - update_start
@@ -760,13 +852,22 @@ class HfOnlineUnoRunner:
                 cycles_since_update = 0
             if config.decay_factor_per_cycle < 1.0:
                 learner.decay_toward_offline(config.decay_factor_per_cycle)
-                active_is_static = (
-                    learner.fast_weight_l2() == 0.0 or proposal_mixture_weight == 0.0
+                active_is_static = learner.fast_weight_l2() == 0.0 or (
+                    mixture_controller is None and proposal_mixture_weight == 0.0
                 )
                 if candidate is not None:
                     candidate.decay_toward_offline(config.decay_factor_per_cycle)
 
-            del draft_output, verify_output, target, lookahead, draft_used
+            del (
+                draft_output,
+                verify_output,
+                target,
+                lookahead,
+                draft_used,
+                active_distribution,
+                static_expert_distribution,
+                candidate_expert_distribution,
+            )
 
         _sync(self.runtime.device)
         decode_seconds = time.perf_counter() - decode_start
@@ -784,12 +885,16 @@ class HfOnlineUnoRunner:
 
         metrics = self.runtime._metrics(
             method=(
-                "uno_frozen_probability_mixture_hf_fallback"
-                if proposal_mixture_weight != 1.0
+                "uno_adaptive_probability_mixture_hf_fallback"
+                if mixture_controller is not None
                 else (
-                    "uno_deferred_fast_residual_hf_fallback"
-                    if config.activation_mode == "deferred"
-                    else "uno_online_fast_residual_hf_fallback"
+                    "uno_frozen_probability_mixture_hf_fallback"
+                    if proposal_mixture_weight != 1.0
+                    else (
+                        "uno_deferred_fast_residual_hf_fallback"
+                        if config.activation_mode == "deferred"
+                        else "uno_online_fast_residual_hf_fallback"
+                    )
                 )
             ),
             block_size=config.block_size,
@@ -810,6 +915,19 @@ class HfOnlineUnoRunner:
         diagnostics = OnlineDiagnostics(
             activation_mode=config.activation_mode,
             proposal_mixture_weight=proposal_mixture_weight,
+            mixture_controller_enabled=mixture_controller is not None,
+            mixture_controller_seconds=mixture_controller_seconds,
+            mixture_weight_mean=(
+                float(statistics.fmean(mixture_weights_used))
+                if mixture_weights_used
+                else 0.0
+            ),
+            mixture_weight_nonzero_cycles=sum(
+                weight > 0.0 for weight in mixture_weights_used
+            ),
+            mixture_controller_report=(
+                mixture_controller.report() if mixture_controller is not None else None
+            ),
             reused_persistent_learner=reused_persistent_learner,
             initial_fast_weight_l2=initial_fast_weight_l2,
             parameter_isolation=isolation,

@@ -55,6 +55,10 @@ seed 的 test TPF 反而 -1.95%；head hash 与所有 frozen 审计通过。Stag
 probability mixture，限制 hard activation 的 trajectory 尾部风险。
 Stage 7A 的[概率 mixture 设计](docs/STAGE7_STATIC_MIXTURE_DESIGN.md)已实现：static/candidate 各自过滤后再
 在概率空间混合，实际 mixture 被原样保存给 exact verifier；当前只开放 frozen stream 评价。
+固定 `w=0.25` 工程 pilot 在 validation 上选择了 +5.94% TPF 的 snapshot，但 5 个新 test seeds 的 mean
+TPF ratio 只有 0.99493。Stage 7B 因而实现了
+[verifier-feedback adaptive mixture](docs/STAGE7B_ADAPTIVE_MIXTURE_DESIGN.md)：每个请求从 static 开始，
+只用已完成 verification 的 on-policy TV 证据控制下一轮 capped mixture；residual head 在评价请求中保持冻结。
 
 ## 目录
 
@@ -101,7 +105,9 @@ online-speculation/
 | 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 完成 |
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 完成；安全门通过、预注册性能门失败 |
-| 5 | future-validated controller、消融和最终报告 | 5A controller 完成；5B 真机验证待完成 |
+| 5 | future-validated controller 与真机验证 | 完成；安全门通过、TPF/TPS 主门失败 |
+| 6 | 跨请求 persistent learner 与 held-out stream | 完成；validation 收益未泛化到 test |
+| 7 | static-anchored 与 verifier-gated probability mixture | 7A/7B 实现完成；adaptive 真机 pilot 待运行 |
 
 Stage 1 的正式验证命令：
 
