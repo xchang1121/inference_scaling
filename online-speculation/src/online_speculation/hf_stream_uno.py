@@ -30,6 +30,7 @@ from .hf_uno import (
     _sha256,
     load_runtime,
 )
+from .mixture_controller import EmaMixtureConfig
 from .torch_sampling import SamplingConfig
 
 
@@ -107,12 +108,13 @@ def _package_version(name: str) -> str | None:
 def _explicit_online_seconds(result: dict[str, Any]) -> float:
     diagnostics = result["diagnostics"]
     return sum(
-        float(diagnostics[name])
+        float(diagnostics.get(name, 0.0))
         for name in (
             "update_seconds",
             "feedback_materialization_seconds",
             "head_forward_seconds",
             "candidate_head_forward_seconds",
+            "mixture_controller_seconds",
         )
     )
 
@@ -168,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=5e-3)
     parser.add_argument("--selection-minimum-gain", type=float, default=0.002)
     parser.add_argument("--proposal-mixture-weight", type=float, default=1.0)
+    parser.add_argument("--adaptive-mixture", action="store_true")
+    parser.add_argument("--mixture-max-weight", type=float, default=0.25)
+    parser.add_argument("--mixture-evaluation-interval", type=int, default=4)
+    parser.add_argument("--mixture-warmup-observations", type=int, default=2)
+    parser.add_argument("--mixture-ema-decay", type=float, default=0.75)
+    parser.add_argument("--mixture-activation-margin", type=float, default=0.0005)
+    parser.add_argument("--mixture-deactivation-margin", type=float, default=0.0005)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--top-p", type=float, default=0.95)
@@ -195,6 +204,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise ValueError("max_new_tokens must be at least two.")
     if not 0.0 <= args.proposal_mixture_weight <= 1.0:
         raise ValueError("proposal_mixture_weight must lie in [0, 1].")
+    if args.adaptive_mixture and args.proposal_mixture_weight != 1.0:
+        raise ValueError(
+            "--adaptive-mixture and a fixed non-unit mixture weight are mutually "
+            "exclusive."
+        )
+    adaptive_mixture_config = (
+        EmaMixtureConfig(
+            max_candidate_weight=args.mixture_max_weight,
+            evaluation_interval=args.mixture_evaluation_interval,
+            warmup_observations=args.mixture_warmup_observations,
+            ema_decay=args.mixture_ema_decay,
+            activation_margin=args.mixture_activation_margin,
+            deactivation_margin=args.mixture_deactivation_margin,
+        )
+        if args.adaptive_mixture
+        else None
+    )
+    if adaptive_mixture_config is not None:
+        adaptive_mixture_config.validate()
 
     model_path = args.model_path.resolve()
     adapter_path = args.adapter_path.resolve()
@@ -374,6 +402,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     config=frozen_config,
                     persistent_learner=snapshots[snapshot_index],
                     proposal_mixture_weight=args.proposal_mixture_weight,
+                    adaptive_mixture_config=adaptive_mixture_config,
                 )
                 ratio = (
                     result.metrics.decoder_tokens_per_forward
@@ -405,6 +434,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         str(index): _summary(ratios) for index, ratios in snapshot_ratios.items()
     }
     selection["proposal_mixture_weight"] = args.proposal_mixture_weight
+    selection["adaptive_mixture_config"] = (
+        asdict(adaptive_mixture_config) if adaptive_mixture_config is not None else None
+    )
     print(
         f"validation best={selection['best_validation_snapshot']} "
         f"ratio={selection['best_validation_mean_tpf_ratio']:.4f} "
@@ -445,6 +477,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 config=frozen_config,
                 persistent_learner=selected,
                 proposal_mixture_weight=args.proposal_mixture_weight,
+                adaptive_mixture_config=adaptive_mixture_config,
             )
             if not static_first:
                 static_metrics = runtime.generate_uno(
@@ -543,7 +576,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             "sampling": "exact filtered linear Psi-Spec using each cycle's saved q",
             "state": "one persistent rank-r logit residual across ordered requests",
             "proposal": (
-                "probability-space static/candidate mixture during frozen validation/test"
+                "verifier-gated adaptive probability mixture during frozen "
+                "validation/test"
+                if adaptive_mixture_config is not None
+                else "probability-space static/candidate mixture during frozen "
+                "validation/test"
             ),
             "selection": "validation TPF only; test is not used for checkpoint choice",
             "performance": "actual wall-clock on Windows HF fallback, not Nano-vLLM",
@@ -587,6 +624,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             "feedback_top_k": args.feedback_top_k,
             "selection_minimum_gain": args.selection_minimum_gain,
             "proposal_mixture_weight": args.proposal_mixture_weight,
+            "adaptive_mixture_config": (
+                asdict(adaptive_mixture_config)
+                if adaptive_mixture_config is not None
+                else None
+            ),
             "fast": asdict(fast_config),
             "seed": args.seed,
             "seed_partitions": {

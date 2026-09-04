@@ -152,5 +152,11 @@ hard residual 的下尾风险，而不是继续扫描 validation threshold。
 
 Stage 7A 状态（2026-09-05）：已实现 `q_w=(1-w)q_static+wq_candidate` 的 sparse 概率 mixture；重复 support
 id 的概率由 sampler/verifier 求和，保留 exactness。非单位权重暂只允许 frozen persistent 请求，防止现有
-old-q surrogate 与真实 mixture proposal 不一致。runner/harness 记录实际权重；下一步以 `w=0.25` 做工程
-pilot，再决定固定或 verifier-driven 标量权重。
+old-q surrogate 与真实 mixture proposal 不一致。固定 `w=0.25` pilot 的 validation TPF +5.94%，但 5 个
+新 test seeds 的 mean TPF 为 `0.99493`，不进入正式正结论。
+
+Stage 7B 实现状态（2026-09-05）：增加 per-request verifier-feedback EMA scalar gate。controller 从 static
+开始，每 4 cycles 在已经验证的 on-policy rows 上比较 pure static/candidate filtered TV；warmup 后只有正证据
+才令**下一轮**使用 capped `w=0.25` mixture，负证据则退回 static。head 在整个 frozen evaluation 请求中
+不更新；zero snapshot 保持逐 token/forward static 等价，实际每轮 $q_t$ 仍原样交给 exact verifier。下一步
+用新 seed 做小型工程 pilot，若正方向稳定，再独立冻结 Stage 7C 正式协议。

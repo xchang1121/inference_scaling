@@ -17,6 +17,7 @@ from online_speculation.hf_online_uno import (
     summarize_online_runs,
 )
 from online_speculation.hf_uno import HfUnoRuntime
+from online_speculation.mixture_controller import EmaMixtureConfig
 from online_speculation.torch_sampling import SamplingConfig
 
 
@@ -296,6 +297,98 @@ def test_persistent_frozen_probability_mixture_has_no_updates() -> None:
     assert result.diagnostics.final_fast_weight_l2 == before
 
 
+def test_adaptive_probability_mixture_uses_only_frozen_verifier_feedback() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    frozen = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=1_000,
+        feedback_interval=1_000,
+        candidate_evaluation_interval=1_000,
+        feedback_top_k=3,
+        fast=FastResidualConfig(
+            rank=2,
+            alpha=2.0,
+            learning_rate=0.01,
+            validation_stride=2,
+        ),
+    )
+    learner = runner.new_learner(frozen, initialization_seed=59)
+    with torch.no_grad():
+        learner.head.up.weight.fill_(0.05)
+    before = {
+        name: tensor.detach().clone()
+        for name, tensor in learner.head.state_dict().items()
+    }
+    result = runner.generate(
+        torch.tensor([[0, 1, 2]], dtype=torch.long),
+        max_new_tokens=30,
+        seed=61,
+        initialization_seed=999,
+        config=frozen,
+        persistent_learner=learner,
+        adaptive_mixture_config=EmaMixtureConfig(
+            max_candidate_weight=0.25,
+            evaluation_interval=2,
+            warmup_observations=1,
+            ema_decay=0.0,
+            activation_margin=0.0,
+            deactivation_margin=0.0,
+        ),
+    )
+    diagnostics = result.diagnostics
+    report = diagnostics.mixture_controller_report
+    assert result.metrics.method == "uno_adaptive_probability_mixture_hf_fallback"
+    assert diagnostics.mixture_controller_enabled
+    assert report is not None
+    assert report["observations"] == result.metrics.cycles // 2
+    assert all(event["cycle"] % 2 == 0 for event in report["events"])
+    assert 0.0 <= diagnostics.mixture_weight_mean <= 0.25
+    assert diagnostics.update_attempts == 0
+    assert diagnostics.feedback_items_created == 0
+    for name, tensor in learner.head.state_dict().items():
+        assert torch.equal(tensor, before[name])
+
+
+def test_adaptive_zero_snapshot_is_exact_static_path() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    frozen = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=1_000,
+        feedback_interval=1_000,
+        candidate_evaluation_interval=1_000,
+        feedback_top_k=3,
+        fast=FastResidualConfig(rank=2, alpha=2.0, validation_stride=2),
+    )
+    input_ids = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    static = runtime.generate_uno(
+        input_ids,
+        max_new_tokens=30,
+        block_size=4,
+        seed=73,
+    )
+    learner = runner.new_learner(frozen, initialization_seed=79)
+    adaptive = runner.generate(
+        input_ids,
+        max_new_tokens=30,
+        seed=73,
+        initialization_seed=999,
+        config=frozen,
+        persistent_learner=learner,
+        adaptive_mixture_config=EmaMixtureConfig(
+            evaluation_interval=2,
+            warmup_observations=1,
+        ),
+    )
+    report = adaptive.diagnostics.mixture_controller_report
+    assert adaptive.metrics.output_token_ids == static.output_token_ids
+    assert adaptive.metrics.decoder_forwards == static.decoder_forwards
+    assert report is not None
+    assert report["final_weight"] == 0.0
+    assert adaptive.diagnostics.mixture_weight_nonzero_cycles == 0
+
+
 def test_probability_mixture_rejects_learning_on_the_same_request() -> None:
     runtime = _runtime()
     runner = HfOnlineUnoRunner(runtime)
@@ -316,6 +409,31 @@ def test_probability_mixture_rejects_learning_on_the_same_request() -> None:
             config=config,
             persistent_learner=learner,
             proposal_mixture_weight=0.5,
+        )
+
+
+def test_adaptive_and_fixed_probability_mixtures_are_mutually_exclusive() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    frozen = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=1_000,
+        feedback_interval=1_000,
+        candidate_evaluation_interval=1_000,
+        feedback_top_k=3,
+        fast=FastResidualConfig(rank=2, alpha=2.0, validation_stride=2),
+    )
+    learner = runner.new_learner(frozen, initialization_seed=67)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        runner.generate(
+            torch.tensor([[0, 1, 2]], dtype=torch.long),
+            max_new_tokens=20,
+            seed=71,
+            initialization_seed=999,
+            config=frozen,
+            persistent_learner=learner,
+            proposal_mixture_weight=0.25,
+            adaptive_mixture_config=EmaMixtureConfig(),
         )
 
 
