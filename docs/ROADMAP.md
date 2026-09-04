@@ -149,3 +149,8 @@ Stage 6C 结果（2026-09-05）：安全与 nonzero selection 门通过，但 10
 `0.98048 [0.94885, 1.01313]`，TPS 为 `0.98475 [0.94301, 1.02419]`；validation-to-test optimism gap
 达 4.21 个百分点，未来学习/系统门失败且无 break-even。下一阶段实现概率空间 static mixture，直接限制
 hard residual 的下尾风险，而不是继续扫描 validation threshold。
+
+Stage 7A 状态（2026-09-05）：已实现 `q_w=(1-w)q_static+wq_candidate` 的 sparse 概率 mixture；重复 support
+id 的概率由 sampler/verifier 求和，保留 exactness。非单位权重暂只允许 frozen persistent 请求，防止现有
+old-q surrogate 与真实 mixture proposal 不一致。runner/harness 记录实际权重；下一步以 `w=0.25` 做工程
+pilot，再决定固定或 verifier-driven 标量权重。

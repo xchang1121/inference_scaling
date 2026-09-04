@@ -7,6 +7,7 @@ must still receive the distribution that actually sampled the proposal.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -95,6 +96,41 @@ def filtered_overlap(
     return torch.minimum(target.probabilities, q_on_target).sum(dim=1)
 
 
+def mixture_distribution(
+    static: FilteredDistribution,
+    candidate: FilteredDistribution,
+    *,
+    candidate_weight: float,
+) -> FilteredDistribution:
+    """Mix two sparse categorical distributions in probability space.
+
+    Duplicate token ids are intentionally retained. ``sample`` treats them as
+    equivalent categorical outcomes, while ``probability_of`` and overlap sum
+    their masses. This avoids a variable-width per-row coalescing kernel.
+    """
+
+    if static.rows != candidate.rows:
+        raise ValueError("mixture components must have the same number of rows.")
+    if static.token_ids.device != candidate.token_ids.device:
+        raise ValueError("mixture components must share one device.")
+    if not math.isfinite(candidate_weight) or not 0.0 <= candidate_weight <= 1.0:
+        raise ValueError("candidate_weight must lie in [0, 1].")
+    if candidate_weight == 0.0:
+        return static
+    if candidate_weight == 1.0:
+        return candidate
+    return FilteredDistribution(
+        token_ids=torch.cat((static.token_ids, candidate.token_ids), dim=1),
+        probabilities=torch.cat(
+            (
+                static.probabilities * (1.0 - candidate_weight),
+                candidate.probabilities * candidate_weight,
+            ),
+            dim=1,
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class VerificationResult:
     """Tokens committed by one linear Psi-Spec verification cycle."""
@@ -105,11 +141,15 @@ class VerificationResult:
     used_lookahead: bool
 
 
-def filtered_distribution(logits: Tensor, config: SamplingConfig) -> FilteredDistribution:
+def filtered_distribution(
+    logits: Tensor, config: SamplingConfig
+) -> FilteredDistribution:
     """Match Uno's top-k then top-p filtered categorical distribution."""
 
     if logits.ndim != 2:
-        raise ValueError(f"logits must have shape [rows, vocab], got {tuple(logits.shape)}.")
+        raise ValueError(
+            f"logits must have shape [rows, vocab], got {tuple(logits.shape)}."
+        )
     rows, vocab_size = logits.shape
     config.validate(int(vocab_size))
 

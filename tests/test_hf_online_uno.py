@@ -258,6 +258,67 @@ def test_immediate_learner_can_persist_across_requests() -> None:
     assert second.diagnostics.parameter_isolation["base_optimizer_overlap"] == 0
 
 
+def test_persistent_frozen_probability_mixture_has_no_updates() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    fast = FastResidualConfig(
+        rank=2,
+        alpha=2.0,
+        learning_rate=0.01,
+        validation_stride=2,
+    )
+    frozen = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=1_000,
+        feedback_interval=1_000,
+        candidate_evaluation_interval=1_000,
+        feedback_top_k=3,
+        fast=fast,
+    )
+    learner = runner.new_learner(frozen, initialization_seed=41)
+    with torch.no_grad():
+        learner.head.up.weight.fill_(0.05)
+    before = learner.fast_weight_l2()
+    result = runner.generate(
+        torch.tensor([[0, 1, 2]], dtype=torch.long),
+        max_new_tokens=20,
+        seed=43,
+        initialization_seed=999,
+        config=frozen,
+        persistent_learner=learner,
+        proposal_mixture_weight=0.25,
+    )
+    assert result.metrics.method == "uno_frozen_probability_mixture_hf_fallback"
+    assert result.diagnostics.proposal_mixture_weight == 0.25
+    assert result.diagnostics.update_attempts == 0
+    assert result.diagnostics.feedback_items_created == 0
+    assert result.diagnostics.initial_fast_weight_l2 == before
+    assert result.diagnostics.final_fast_weight_l2 == before
+
+
+def test_probability_mixture_rejects_learning_on_the_same_request() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    config = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=2,
+        feedback_interval=1,
+        feedback_top_k=3,
+        fast=FastResidualConfig(rank=2, alpha=2.0, validation_stride=2),
+    )
+    learner = runner.new_learner(config, initialization_seed=47)
+    with pytest.raises(ValueError, match="frozen-only"):
+        runner.generate(
+            torch.tensor([[0, 1, 2]], dtype=torch.long),
+            max_new_tokens=20,
+            seed=53,
+            initialization_seed=999,
+            config=config,
+            persistent_learner=learner,
+            proposal_mixture_weight=0.5,
+        )
+
+
 def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
     runtime = _runtime()
     result = HfOnlineUnoRunner(runtime).generate(

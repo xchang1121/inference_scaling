@@ -53,6 +53,8 @@ stationary 英文 pilot 的 2 个 test seeds 给出正方向后，Stage 6C 的�
 正式[Stage 6C 结果](docs/STAGE6C_STREAM_UNO_RESULTS.md)显示选中快照的 validation TPF +2.26%，但 10 个新
 seed 的 test TPF 反而 -1.95%；head hash 与所有 frozen 审计通过。Stage 7 因此转向 static-anchored
 probability mixture，限制 hard activation 的 trajectory 尾部风险。
+Stage 7A 的[概率 mixture 设计](docs/STAGE7_STATIC_MIXTURE_DESIGN.md)已实现：static/candidate 各自过滤后再
+在概率空间混合，实际 mixture 被原样保存给 exact verifier；当前只开放 frozen stream 评价。
 
 ## 目录
 
