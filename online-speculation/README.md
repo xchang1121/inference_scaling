@@ -42,6 +42,8 @@ shadow-candidate 改造见[真机在线结果报告](docs/STAGE4B_REAL_ONLINE_RE
 其跨未来窗口批准、exact filtered-overlap 动作和 feedback subsampling 设计见
 [Stage 5A deferred controller](docs/STAGE5_DEFERRED_CONTROLLER_DESIGN.md)；Stage 5B 的三工作负载真机判定参数
 已在[预注册协议](docs/STAGE5B_DEFERRED_ONLINE_PROTOCOL.md)中冻结。
+正式[结果报告](docs/STAGE5B_DEFERRED_ONLINE_RESULTS.md)显示所有安全门通过，但 TPF 与 TPS 主门均未通过；
+失败反例把下一版方向收敛到渐进 mixture 或跨请求摊销，而不是继续调 promotion margin。
 
 ## 目录
 

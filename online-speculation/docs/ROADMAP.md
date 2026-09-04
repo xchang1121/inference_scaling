@@ -124,3 +124,9 @@ Stage 5B 协议状态（2026-09-05）：2-seed 英文工程 pilot 后冻结 `str
 `candidate_evaluation_interval=4`、promotion margin `0.0005`。实现会在 active 仍为 zero residual 时跳过
 无效词表投影，并对 shadow future evaluation 降频。正式实验固定为 3 prompts × 5 paired repetitions ×
 512 tokens；判定规则已写入 `STAGE5B_DEFERRED_ONLINE_PROTOCOL.md`，正式数据不得反向修改协议。
+
+Stage 5B 结果（2026-09-05）：安全门通过；TPF mean ratio `0.99503 [0.98713, 1.00285]`，TPS mean
+ratio `1.02194 [0.99665, 1.04774]`，学习门与系统门均失败。中文 prompt 的 TPF 区间完全低于 1，且它
+反而获得最多 promotion，证明一窗口后才激活的 active-trajectory shadow TV 不能可靠预测下一窗口收益。
+下一阶段不再扫描 margin，而研究渐进 mixture 或跨请求 amortization。详见
+`STAGE5B_DEFERRED_ONLINE_RESULTS.md`。

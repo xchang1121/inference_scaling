@@ -20,3 +20,7 @@
   的 45 条固定长度 GPU 运行；含逐 update loss/rollback/reset、参数隔离、时间分解、显存和原始生成。
 - `stage4b_online_uno1b_rtx3090_hf_analysis.json`：对 15 个 paired workload 的预注册判定、bootstrap、
   exact sign-test 和逐 prompt 诊断；主策略学习门失败且 HF TPS 显著变慢，不能表述为 online speedup。
+- `stage5b_deferred_online_uno1b_rtx3090_hf.json`：future-validated deferred controller 的 30 条正式真机
+  运行；包含候选 shadow evidence、promote/keep/reset、zero-head skip、逐组件计时与完整 paired metrics。
+- `stage5b_deferred_online_uno1b_rtx3090_hf_analysis.json`：严格核验冻结设计、安全不变量，以配对均值为
+  预注册主统计、配对中位数为稳健性统计；TPF 与 TPS 两个主门均未通过，并显示中文 workload 的明确退化。
