@@ -44,6 +44,8 @@ shadow-candidate 改造见[真机在线结果报告](docs/STAGE4B_REAL_ONLINE_RE
 已在[预注册协议](docs/STAGE5B_DEFERRED_ONLINE_PROTOCOL.md)中冻结。
 正式[结果报告](docs/STAGE5B_DEFERRED_ONLINE_RESULTS.md)显示所有安全门通过，但 TPF 与 TPS 主门均未通过；
 失败反例把下一版方向收敛到渐进 mixture 或跨请求摊销，而不是继续调 promotion margin。
+Stage 6A 的[跨请求 Stream-Uno 设计](docs/STAGE6_STREAM_ONLINE_DESIGN.md)已加入 persistent learner 接口，
+将用严格 train/validation/test 请求流检验是否能在未来请求中摊销在线学习。
 
 ## 目录
 

@@ -205,6 +205,49 @@ def test_base_context_refreezes_parameters_after_adapter_restore() -> None:
     assert not next(runtime.model.parameters()).requires_grad
 
 
+def test_immediate_learner_can_persist_across_requests() -> None:
+    runtime = _runtime()
+    runner = HfOnlineUnoRunner(runtime)
+    config = OnlineRuntimeConfig(
+        block_size=4,
+        update_stride=2,
+        feedback_top_k=3,
+        supervision="on_policy",
+        fast=FastResidualConfig(
+            rank=2,
+            alpha=2.0,
+            learning_rate=0.01,
+            validation_stride=2,
+        ),
+    )
+    learner = runner.new_learner(config, initialization_seed=29)
+    first = runner.generate(
+        torch.tensor([[0, 1, 2]], dtype=torch.long),
+        max_new_tokens=20,
+        seed=31,
+        initialization_seed=999,
+        config=config,
+        persistent_learner=learner,
+    )
+    assert first.diagnostics.reused_persistent_learner
+    assert first.diagnostics.initial_fast_weight_l2 == 0.0
+    assert first.diagnostics.final_fast_weight_l2 > 0.0
+
+    second = runner.generate(
+        torch.tensor([[0, 1, 2]], dtype=torch.long),
+        max_new_tokens=20,
+        seed=37,
+        initialization_seed=999,
+        config=config,
+        persistent_learner=learner,
+    )
+    assert second.diagnostics.reused_persistent_learner
+    assert second.diagnostics.initial_fast_weight_l2 == (
+        first.diagnostics.final_fast_weight_l2
+    )
+    assert second.diagnostics.parameter_isolation["base_optimizer_overlap"] == 0
+
+
 def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
     runtime = _runtime()
     result = HfOnlineUnoRunner(runtime).generate(

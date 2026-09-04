@@ -108,6 +108,8 @@ class OnlineRuntimeConfig:
 @dataclass(frozen=True)
 class OnlineDiagnostics:
     activation_mode: str
+    reused_persistent_learner: bool
+    initial_fast_weight_l2: float
     parameter_isolation: dict[str, int]
     feedback_cycles: int
     candidate_evaluation_cycles: int
@@ -189,7 +191,7 @@ def feedback_weights(
 
 
 class HfOnlineUnoRunner:
-    """Attach a fresh fast residual learner to each generation request."""
+    """Run request-local or explicitly supplied persistent fast learners."""
 
     def __init__(self, runtime: HfUnoRuntime) -> None:
         self.runtime = runtime
@@ -225,6 +227,44 @@ class HfOnlineUnoRunner:
             optimizer=learner.optimizer,
         )
         return learner, isolation
+
+    def new_learner(
+        self,
+        config: OnlineRuntimeConfig,
+        *,
+        initialization_seed: int,
+    ) -> FastResidualLearner:
+        """Create an isolated learner that callers may retain across requests."""
+
+        config.validate(vocabulary_size=self.runtime.vocab_size)
+        learner, _ = self._new_learner(
+            config,
+            initialization_seed=initialization_seed,
+        )
+        return learner
+
+    def _validate_supplied_learner(
+        self,
+        learner: FastResidualLearner,
+        config: OnlineRuntimeConfig,
+    ) -> dict[str, int]:
+        if config.activation_mode != "immediate":
+            raise ValueError(
+                "persistent learners currently support immediate activation only."
+            )
+        if learner.config != config.fast:
+            raise ValueError("persistent learner and runtime fast configs differ.")
+        if learner.head.hidden_size != int(self.runtime.model.config.hidden_size):
+            raise ValueError("persistent learner hidden size differs from the model.")
+        if learner.head.vocabulary_size != self.runtime.vocab_size:
+            raise ValueError("persistent learner vocabulary differs from the model.")
+        if next(learner.head.parameters()).device != self.runtime.device:
+            raise ValueError("persistent learner must reside on the runtime device.")
+        return assert_optimizer_isolated(
+            base_model=self.runtime.model,
+            head=learner.head,
+            optimizer=learner.optimizer,
+        )
 
     def _draft_forward_with_last_hidden(
         self,
@@ -315,6 +355,7 @@ class HfOnlineUnoRunner:
         seed: int,
         initialization_seed: int,
         config: OnlineRuntimeConfig,
+        persistent_learner: FastResidualLearner | None = None,
     ) -> OnlineRunResult:
         if max_new_tokens < 2:
             raise ValueError("online generation requires at least two output tokens.")
@@ -323,10 +364,16 @@ class HfOnlineUnoRunner:
                 "online fast residual currently requires stochastic sampling."
             )
         config.validate(vocabulary_size=self.runtime.vocab_size)
-        learner, isolation = self._new_learner(
-            config,
-            initialization_seed=initialization_seed,
-        )
+        reused_persistent_learner = persistent_learner is not None
+        if persistent_learner is None:
+            learner, isolation = self._new_learner(
+                config,
+                initialization_seed=initialization_seed,
+            )
+        else:
+            learner = persistent_learner
+            isolation = self._validate_supplied_learner(learner, config)
+        initial_fast_weight_l2 = learner.fast_weight_l2()
         generator = _generator(self.runtime.device, seed)
         base_memory = (
             torch.cuda.memory_allocated(self.runtime.device)
@@ -349,7 +396,7 @@ class HfOnlineUnoRunner:
         lookaheads = 0
         buffer: list[ResidualFeedback] = []
         candidate: FastResidualLearner | None = None
-        active_is_static = True
+        active_is_static = initial_fast_weight_l2 == 0.0
         update_reports: list[FastUpdateReport] = []
         promotion_events: list[dict[str, Any]] = []
         feedback_items_created = 0
@@ -363,7 +410,7 @@ class HfOnlineUnoRunner:
         candidate_head_seconds_cpu = 0.0
         head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         candidate_head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
-        max_fast_weight_l2 = 0.0
+        max_fast_weight_l2 = initial_fast_weight_l2
         candidate_promotion_attempts = 0
         candidate_promotions = 0
         candidate_rejections = 0
@@ -704,6 +751,8 @@ class HfOnlineUnoRunner:
         applied = sum(not report.rolled_back for report in update_reports)
         diagnostics = OnlineDiagnostics(
             activation_mode=config.activation_mode,
+            reused_persistent_learner=reused_persistent_learner,
+            initial_fast_weight_l2=initial_fast_weight_l2,
             parameter_isolation=isolation,
             feedback_cycles=feedback_cycles,
             candidate_evaluation_cycles=candidate_evaluation_cycles,
