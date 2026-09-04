@@ -168,5 +168,8 @@ request 结束可丢弃 $\delta_t$，domain 版本则经过 replay 验证后再�
 - H4：自适应 stride 和 block size 比任一固定组合有更高端到端 throughput。
 - H5：纯 online cold start 在单请求内很难回本，但跨请求/domain replay 可以摊销；需要明确 break-even 请求数。
 
-Stage 4B/5B 已实证支持 H5 的前半句：request-local immediate 与 deferred 均未通过真机门。Stage 6 将把
-OSD 式 request stream 与 TTS 式 within-request update 分开报告，避免用一个含糊的“online”混合两种设定。
+Stage 4B/5B 已实证支持 H5 的前半句：request-local immediate 与 deferred 均未通过真机门。Stage 6/7 的
+stochastic request stream 也没有产生 held-out TPF 收益；verifier advantage 缺少下一轮预测性。Stage 8 在
+固定 target trajectory 的 greedy repeated-query case 上首次通过跨请求学习门：TPF +0.95%，95% CI 下界
+大于 1，但 TPS CI 跨 1。它支持 H5 的“历史 feedback 可复用”部分，同时说明摊销是否成立强烈依赖 trajectory
+repeatability 和 serving 实现开销。OSD 式 request stream 与 TTS 式 within-request update 始终分开报告。

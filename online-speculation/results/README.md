@@ -30,3 +30,7 @@
   paired mean/median bootstrap；snapshot 4 的 validation gain 未泛化，TPF/TPS test 主门均失败。
 - `stage7_engineering_pilots_summary.json`：固定 `w=0.25` 与 verifier-EMA adaptive mixture 的小型工程
   pilot 聚合；固定权重未推广，adaptive validation 回退 zero。该文件只生成下一假设，不作为正式确认性结果。
+- `stage8_greedy_stream_uno1b_rtx3090_hf.json`：预注册的 4-train/5-validation/20-test greedy request
+  stream；含 78 个配对/快照生成、完整 token IDs、parameter isolation、head hash 和训练成本。
+- `stage8_greedy_stream_uno1b_rtx3090_hf_analysis.json`：重算 Stage 8 全部安全门、validation-only 选择、
+  50,000 次 paired bootstrap 和 sign tests；TPF 学习门通过，HF wall-clock 系统门失败。
