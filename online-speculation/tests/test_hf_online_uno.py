@@ -11,6 +11,7 @@ from online_speculation.fast_residual import FastResidualConfig
 from online_speculation.hf_online_uno import (
     HfOnlineUnoRunner,
     OnlineRuntimeConfig,
+    _canonical_runtime_device,
     choose_deferred_action,
     feedback_weights,
     summarize_online_runs,
@@ -203,6 +204,15 @@ def test_base_context_refreezes_parameters_after_adapter_restore() -> None:
     with runtime._base_context():
         assert not next(runtime.model.parameters()).requires_grad
     assert not next(runtime.model.parameters()).requires_grad
+
+
+def test_logical_cuda_device_normalizes_to_concrete_current_index() -> None:
+    assert _canonical_runtime_device(
+        torch.device("cuda"),
+        current_cuda_index=0,
+    ) == torch.device("cuda:0")
+    assert _canonical_runtime_device(torch.device("cuda:1")) == torch.device("cuda:1")
+    assert _canonical_runtime_device(torch.device("cpu")) == torch.device("cpu")
 
 
 def test_immediate_learner_can_persist_across_requests() -> None:

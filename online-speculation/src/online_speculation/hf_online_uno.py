@@ -61,6 +61,18 @@ Supervision = Literal["full", "on_policy", "discounted_tail"]
 ActivationMode = Literal["immediate", "deferred"]
 
 
+def _canonical_runtime_device(
+    device: torch.device,
+    *,
+    current_cuda_index: int | None = None,
+) -> torch.device:
+    if device.type != "cuda" or device.index is not None:
+        return device
+    if current_cuda_index is None:
+        current_cuda_index = torch.cuda.current_device()
+    return torch.device("cuda", current_cuda_index)
+
+
 @dataclass(frozen=True)
 class OnlineRuntimeConfig:
     block_size: int = 8
@@ -258,7 +270,8 @@ class HfOnlineUnoRunner:
             raise ValueError("persistent learner hidden size differs from the model.")
         if learner.head.vocabulary_size != self.runtime.vocab_size:
             raise ValueError("persistent learner vocabulary differs from the model.")
-        if next(learner.head.parameters()).device != self.runtime.device:
+        expected_device = _canonical_runtime_device(self.runtime.device)
+        if next(learner.head.parameters()).device != expected_device:
             raise ValueError("persistent learner must reside on the runtime device.")
         return assert_optimizer_isolated(
             base_model=self.runtime.model,
