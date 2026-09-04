@@ -13,3 +13,6 @@
   bootstrap，并把 algorithmic、fallback wall-clock、official runtime 三种结论分开判定。
 - `stage2_official_runtime_probe.json`：锁定上游的顶层包可导入，但正式 `model_runner` 在当前
   Windows 环境因缺少 Triton 而阻塞的精确失败点。
+- `stage3_online_markov.json`：20 seeds × 8 strategies 的 exact $\Psi$-Spec 非平稳 Markov 仿真；
+  包含预注册主检验、TV regret/TPF/合成 cost proxy 的配对 bootstrap、update-cost 敏感性、segment
+  分解，以及一个代表 seed 的 trace/controller events。`gpu_timing=false` 是强制结论边界。
