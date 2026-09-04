@@ -110,3 +110,18 @@ $$
 
 Stage 6A 的阶段门只有：状态确实跨请求连续、第二个请求的 initial L2 等于第一个请求 final L2、optimizer
 仍只拥有 fast head、fresh 默认路径回归不变。通过后才写 stream benchmark harness。
+
+## 7. Stage 6B harness
+
+`hf_stream_uno.py` 已把上述切分变成一个不可混用的执行流程：
+
+1. training requests 中 persistent learner 边生成边更新，并与同 seed static 配对计时；
+2. 保存 zero snapshot 和每个 training request 后的 learner/optimizer snapshot；
+3. validation seeds 上只做 frozen proposal，按 mean TPF ratio 选 checkpoint，低于固定 gain threshold 则回退
+   zero snapshot；
+4. 释放未选快照后，在独立 test seed 区间只评估 selected snapshot 一次；
+5. 输出 frozen-serving TPF/TPS、observed training increment、instrumented online cost 和两个 break-even。
+
+训练、验证、测试 seed 分别使用 `seed+[0, 100000, 200000]` 区间。zero snapshot 在 validation 上必须与
+static TPF 精确相等，否则说明两个执行路径或 RNG 语义不一致，结果不得继续解释。snapshot selection 与
+break-even 的纯函数回归测试已经覆盖 threshold、tie、fallback 和无正 savings 情形。

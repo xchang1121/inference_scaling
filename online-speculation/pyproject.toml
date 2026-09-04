@@ -33,6 +33,7 @@ online-speculation-stage3-simulation = "online_speculation.online_simulation:mai
 online-speculation-online-uno1b = "online_speculation.hf_online_uno:main"
 online-speculation-stage4-analysis = "online_speculation.stage4_analysis:main"
 online-speculation-stage5-analysis = "online_speculation.stage5_analysis:main"
+online-speculation-stream-uno1b = "online_speculation.hf_stream_uno:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
