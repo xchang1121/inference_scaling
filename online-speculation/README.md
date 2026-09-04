@@ -13,12 +13,19 @@ tokens/s。
   32 张 H200；本机不适合原尺度训练。
 - 官方 Nano-vLLM Uno runtime 目前要求 Linux x86-64、Python 3.10、PyTorch 2.11、
   Triton 3.6 和 FlashAttention 2/3。当前 Windows 主机没有可用 WSL 发行版，因此正式性能
-  复现需要先准备 Linux/WSL2 环境；Windows 路线用于算法正确性和可微原型。
+  复现需要先准备 Linux/WSL2 环境；Windows 路线用于算法正确性、checkpoint 接受率/TPF 和
+  可微原型。Hugging Face 回退版保留 KV cache 和两次前向语义，但不把其 wall-clock 数字当作
+  官方 Nano-vLLM 性能。
 - 第一条正式性能路线选择公开的 `IFM/K2-Horizon-0.9B-Uno`，先比较同一 checkpoint 的
-  AR、Uno linear sampler，再决定是否投入 Qwen3-8B。
+  AR、Uno linear sampler，再决定是否投入 Qwen3-8B。checkpoint 级实验现已完成：HF KV-cache
+  回退 backend 上 $B=8$ 的 median TPF 为 1.401，paired median decode speedup 为 1.352×；
+  官方 Nano-vLLM 路线仍等待 Linux/WSL2。
 
 完整证据和边界见 [硬件与可复现性审计](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)，算法来源见
 [文献矩阵](docs/LITERATURE_REVIEW.md)，阶段门和成功判据见 [研究路线图](docs/ROADMAP.md)。
+Stage 2 的 checkpoint、采样语义和正式运行矩阵见
+[Uno-1B 复现实验协议](docs/STAGE2_UNO1B_PROTOCOL.md)，实测结论见
+[Uno-1B 结果报告](docs/STAGE2_UNO1B_RESULTS.md)。
 
 ## 目录
 
@@ -62,7 +69,7 @@ online-speculation/
 | --- | --- | --- |
 | 0 | 硬件审计、上游锁定、文献矩阵、实验阶段门 | 完成 |
 | 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 完成 |
-| 2 | 官方 Uno 1B 的 AR/linear sampler 真机基线 | 环境准备中 |
+| 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 待实现 |
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 待实现 |
 | 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
@@ -74,3 +81,17 @@ Stage 1 的正式验证命令：
   --samples 100000 --sequence-length 4 --vocabulary-size 3 --block-size 4 `
   --output .\online-speculation\results\stage1_lossless_validation.json
 ```
+
+Stage 2 的 Windows checkpoint 级回退命令（需要先按文档取得锁定权重）：
+
+```powershell
+.\.venv\Scripts\python -m online_speculation.hf_uno `
+  --model-path <K2-Horizon-0.9B目录> `
+  --adapter-path <K2-Horizon-0.9B-Uno目录> `
+  --block-sizes 2,4,8,16 --max-new-tokens 64 --repetitions 10 --ignore-stop `
+  --output .\online-speculation\results\stage2_uno1b_rtx3090_hf.json
+```
+
+该命令首先流式校验 2.16 GB base 和 224 MB adapter 的 SHA-256；然后验证 clean/seed 行
+不受 LoRA 影响、noise 行确实受到 LoRA 影响；最后交替测 AR 与各 block size。输出中的
+`execution_backend` 和 `claim_scope` 是防止把回退数据误写成官方内核复现的强制字段。
