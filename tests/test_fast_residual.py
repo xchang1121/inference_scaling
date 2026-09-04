@@ -183,6 +183,20 @@ def test_decay_moves_fast_weights_toward_offline_snapshot() -> None:
     assert torch.isclose(torch.tensor(learner.fast_weight_l2()), torch.tensor(before * 0.25))
 
 
+def test_clone_is_independent_but_keeps_true_zero_offline_anchor() -> None:
+    learner = _head()
+    with torch.no_grad():
+        learner.head.up.weight.fill_(1.0)
+    cloned = learner.clone()
+    assert cloned.fast_weight_l2() == learner.fast_weight_l2()
+    with torch.no_grad():
+        cloned.head.up.weight.add_(1.0)
+    assert not torch.allclose(cloned.head.up.weight, learner.head.up.weight)
+    cloned.reset_to_offline()
+    assert cloned.fast_weight_l2() == 0.0
+    assert torch.count_nonzero(cloned.head.up.weight).item() == 0
+
+
 def test_optimizer_isolation_fails_closed_if_base_is_trainable() -> None:
     learner = _head()
     base = nn.Linear(4, 4)

@@ -77,6 +77,24 @@ class FilteredDistribution:
         ).sum(dim=1)
 
 
+def filtered_overlap(
+    target: FilteredDistribution,
+    draft: FilteredDistribution,
+) -> Tensor:
+    """Return per-row ``sum_x min(p(x), q(x)) = 1 - TV(p, q)``."""
+
+    if target.rows != draft.rows:
+        raise ValueError("target and draft must have the same number of rows.")
+    if target.token_ids.device != draft.token_ids.device:
+        raise ValueError("target and draft supports must share one device.")
+    matches = target.token_ids.unsqueeze(2).eq(draft.token_ids.unsqueeze(1))
+    q_on_target = torch.sum(
+        matches * draft.probabilities.unsqueeze(1),
+        dim=2,
+    )
+    return torch.minimum(target.probabilities, q_on_target).sum(dim=1)
+
+
 @dataclass(frozen=True)
 class VerificationResult:
     """Tokens committed by one linear Psi-Spec verification cycle."""

@@ -10,6 +10,7 @@ from online_speculation.fast_residual import FastResidualConfig
 from online_speculation.hf_online_uno import (
     HfOnlineUnoRunner,
     OnlineRuntimeConfig,
+    choose_deferred_action,
     feedback_weights,
     summarize_online_runs,
 )
@@ -133,6 +134,30 @@ def test_feedback_weights_cover_full_on_policy_and_discounted_modes() -> None:
     ) == [1.0, 1.0, 0.25, 0.0625]
 
 
+def test_deferred_action_requires_future_margin_and_prefers_best_shadow() -> None:
+    assert choose_deferred_action(
+        active_tv=0.30,
+        candidate_tv=0.25,
+        static_tv=0.28,
+        promotion_margin=0.01,
+        reset_margin=0.01,
+    ) == "promote_candidate"
+    assert choose_deferred_action(
+        active_tv=0.30,
+        candidate_tv=0.29,
+        static_tv=0.20,
+        promotion_margin=0.01,
+        reset_margin=0.01,
+    ) == "reset_to_static"
+    assert choose_deferred_action(
+        active_tv=0.30,
+        candidate_tv=0.295,
+        static_tv=0.30,
+        promotion_margin=0.01,
+        reset_margin=0.01,
+    ) == "keep_active"
+
+
 def test_online_runner_executes_real_cache_loop_and_updates_only_fast_head() -> None:
     runtime = _runtime()
     result = HfOnlineUnoRunner(runtime).generate(
@@ -168,6 +193,44 @@ def test_base_context_refreezes_parameters_after_adapter_restore() -> None:
     with runtime._base_context():
         assert not next(runtime.model.parameters()).requires_grad
     assert not next(runtime.model.parameters()).requires_grad
+
+
+def test_deferred_runner_validates_candidate_on_future_verifier_rows() -> None:
+    runtime = _runtime()
+    result = HfOnlineUnoRunner(runtime).generate(
+        torch.tensor([[0, 1, 2]], dtype=torch.long),
+        max_new_tokens=50,
+        seed=13,
+        initialization_seed=23,
+        config=OnlineRuntimeConfig(
+            block_size=4,
+            update_stride=2,
+            feedback_top_k=3,
+            supervision="on_policy",
+            activation_mode="deferred",
+            feedback_interval=1,
+            promotion_margin=0.0,
+            future_reset_margin=0.0,
+            fast=FastResidualConfig(
+                rank=2,
+                alpha=2.0,
+                learning_rate=0.01,
+                validation_stride=2,
+            ),
+        ),
+    )
+    diagnostics = result.diagnostics
+    assert result.metrics.output_tokens == 50
+    assert result.metrics.method == "uno_deferred_fast_residual_hf_fallback"
+    assert diagnostics.activation_mode == "deferred"
+    assert diagnostics.candidate_promotion_attempts > 0
+    assert len(diagnostics.promotion_events) == diagnostics.candidate_promotion_attempts
+    assert (
+        diagnostics.candidate_promotions
+        + diagnostics.candidate_rejections
+        + diagnostics.future_static_resets
+        == diagnostics.candidate_promotion_attempts
+    )
 
 
 def _fake_run(label: str, repetition: int, tps: float, tpf: float) -> dict:

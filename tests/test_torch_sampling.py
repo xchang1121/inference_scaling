@@ -5,6 +5,7 @@ import torch
 from online_speculation.torch_sampling import (
     FilteredDistribution,
     SamplingConfig,
+    filtered_overlap,
     filtered_distribution,
     residual_distribution,
     verify_linear_filtered,
@@ -38,6 +39,18 @@ def test_residual_distribution_is_positive_part_of_p_minus_q() -> None:
     draft = _distribution([[0.1, 0.2, 0.7]])
     residual = residual_distribution(target, draft, 0)
     assert torch.allclose(residual.probabilities, torch.tensor([[1.0, 0.0, 0.0]]))
+
+
+def test_filtered_overlap_handles_different_sparse_supports() -> None:
+    target = FilteredDistribution(
+        token_ids=torch.tensor([[1, 3, 5]]),
+        probabilities=torch.tensor([[0.5, 0.3, 0.2]]),
+    )
+    draft = FilteredDistribution(
+        token_ids=torch.tensor([[0, 1, 5]]),
+        probabilities=torch.tensor([[0.4, 0.4, 0.2]]),
+    )
+    torch.testing.assert_close(filtered_overlap(target, draft), torch.tensor([0.6]))
 
 
 def test_filtered_verifier_accepts_all_and_adds_lookahead() -> None:

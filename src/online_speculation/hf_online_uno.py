@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import platform
 import statistics
 import time
@@ -51,11 +52,13 @@ from .stage2_analysis import bootstrap_interval
 from .torch_sampling import (
     SamplingConfig,
     filtered_distribution,
+    filtered_overlap,
     verify_linear_filtered,
 )
 
 
 Supervision = Literal["full", "on_policy", "discounted_tail"]
+ActivationMode = Literal["immediate", "deferred"]
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,10 @@ class OnlineRuntimeConfig:
     tail_discount: float = 0.25
     position_discount: float = 0.97
     decay_factor_per_cycle: float = 1.0
+    activation_mode: ActivationMode = "immediate"
+    feedback_interval: int = 1
+    promotion_margin: float = 0.002
+    future_reset_margin: float = 0.005
     fast: FastResidualConfig = field(default_factory=FastResidualConfig)
 
     def validate(self, *, vocabulary_size: int) -> None:
@@ -84,31 +91,70 @@ class OnlineRuntimeConfig:
             raise ValueError("position_discount must lie in (0, 1].")
         if not 0 <= self.decay_factor_per_cycle <= 1:
             raise ValueError("decay_factor_per_cycle must lie in [0, 1].")
+        if self.activation_mode not in ("immediate", "deferred"):
+            raise ValueError(f"unknown activation mode: {self.activation_mode}.")
+        if self.feedback_interval < 1 or self.feedback_interval > self.update_stride:
+            raise ValueError("feedback_interval must lie in [1, update_stride].")
+        if self.promotion_margin < 0 or self.future_reset_margin < 0:
+            raise ValueError("deferred decision margins cannot be negative.")
         self.fast.validate()
 
 
 @dataclass(frozen=True)
 class OnlineDiagnostics:
+    activation_mode: str
     parameter_isolation: dict[str, int]
+    feedback_cycles: int
     feedback_items_created: int
     feedback_items_discarded_at_end: int
     update_attempts: int
     updates_applied: int
     updates_rolled_back: int
     static_shadow_resets: int
+    candidate_promotion_attempts: int
+    candidate_promotions: int
+    candidate_rejections: int
+    future_static_resets: int
     head_forward_seconds: float
+    candidate_head_forward_seconds: float
     feedback_materialization_seconds: float
     update_seconds: float
     update_fraction_of_decode: float
     final_fast_weight_l2: float
     max_fast_weight_l2: float
     update_reports: tuple[dict[str, Any], ...]
+    promotion_events: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
 class OnlineRunResult:
     metrics: RunMetrics
     diagnostics: OnlineDiagnostics
+
+
+def choose_deferred_action(
+    *,
+    active_tv: float,
+    candidate_tv: float,
+    static_tv: float,
+    promotion_margin: float,
+    reset_margin: float,
+) -> str:
+    """Choose the best future-validated state with explicit improvement margins."""
+
+    values = (active_tv, candidate_tv, static_tv)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("deferred TV evidence must be finite.")
+    if promotion_margin < 0 or reset_margin < 0:
+        raise ValueError("deferred decision margins cannot be negative.")
+    if (
+        candidate_tv + promotion_margin < active_tv
+        and candidate_tv <= static_tv
+    ):
+        return "promote_candidate"
+    if static_tv + reset_margin < active_tv and static_tv < candidate_tv:
+        return "reset_to_static"
+    return "keep_active"
 
 
 def feedback_weights(
@@ -293,13 +339,26 @@ class HfOnlineUnoRunner:
         attempted_spec_tokens = 0
         lookaheads = 0
         buffer: list[ResidualFeedback] = []
+        candidate: FastResidualLearner | None = None
         update_reports: list[FastUpdateReport] = []
+        promotion_events: list[dict[str, Any]] = []
         feedback_items_created = 0
+        feedback_cycles = 0
         update_seconds = 0.0
         feedback_seconds = 0.0
         head_seconds_cpu = 0.0
+        candidate_head_seconds_cpu = 0.0
         head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
+        candidate_head_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         max_fast_weight_l2 = 0.0
+        candidate_promotion_attempts = 0
+        candidate_promotions = 0
+        candidate_rejections = 0
+        future_static_resets = 0
+        future_active_tv = torch.zeros((), device=self.runtime.device)
+        future_candidate_tv = torch.zeros((), device=self.runtime.device)
+        future_static_tv = torch.zeros((), device=self.runtime.device)
+        future_weight = torch.zeros((), device=self.runtime.device)
 
         _sync(self.runtime.device)
         decode_start = time.perf_counter()
@@ -389,6 +448,58 @@ class HfOnlineUnoRunner:
                 generator=generator,
             )
 
+            if config.activation_mode == "deferred" and candidate is not None:
+                if self.runtime.device.type == "cuda":
+                    candidate_start = torch.cuda.Event(enable_timing=True)
+                    candidate_end = torch.cuda.Event(enable_timing=True)
+                    candidate_start.record()
+                    with torch.no_grad():
+                        candidate_logits = candidate.corrected_logits(
+                            hidden_rows,
+                            draft_logits[1:],
+                        )
+                    candidate_end.record()
+                    candidate_head_events.append((candidate_start, candidate_end))
+                else:
+                    candidate_start_time = time.perf_counter()
+                    with torch.no_grad():
+                        candidate_logits = candidate.corrected_logits(
+                            hidden_rows,
+                            draft_logits[1:],
+                        )
+                    candidate_head_seconds_cpu += (
+                        time.perf_counter() - candidate_start_time
+                    )
+                candidate_distribution = filtered_distribution(
+                    candidate_logits,
+                    self.runtime.sampling,
+                )
+                static_distribution = filtered_distribution(
+                    draft_logits[1:].float(),
+                    self.runtime.sampling,
+                )
+                evidence_weights = torch.tensor(
+                    feedback_weights(
+                        speculative_tokens=config.block_size - 1,
+                        rejected_index=verification.rejected_index,
+                        supervision=config.supervision,
+                        tail_discount=config.tail_discount,
+                        position_discount=config.position_discount,
+                    ),
+                    device=self.runtime.device,
+                )
+                active_tv = 1.0 - filtered_overlap(target, draft_used)
+                candidate_tv = 1.0 - filtered_overlap(
+                    target,
+                    candidate_distribution,
+                )
+                static_tv = 1.0 - filtered_overlap(target, static_distribution)
+                future_active_tv += torch.sum(evidence_weights * active_tv)
+                future_candidate_tv += torch.sum(evidence_weights * candidate_tv)
+                future_static_tv += torch.sum(evidence_weights * static_tv)
+                future_weight += evidence_weights.sum()
+                del candidate_logits, candidate_distribution, static_distribution
+
             committed = list(verification.committed)
             if not self.runtime.ignore_stop:
                 committed = committed[
@@ -403,18 +514,20 @@ class HfOnlineUnoRunner:
             if _cache_length(cache) != expected_cache_length:
                 raise RuntimeError("online post-verification cache frontier is inconsistent.")
 
-            feedback_start = time.perf_counter()
-            round_feedback = self._materialize_feedback(
-                hidden_rows=hidden_rows,
-                base_logits=draft_logits[1:],
-                adjusted_logits=adjusted_logits,
-                target_logits=verify_logits[:-1],
-                rejected_index=verification.rejected_index,
-                config=config,
-            )
-            feedback_seconds += time.perf_counter() - feedback_start
-            feedback_items_created += len(round_feedback)
-            buffer.extend(round_feedback)
+            if (cycles + 1) % config.feedback_interval == 0:
+                feedback_start = time.perf_counter()
+                round_feedback = self._materialize_feedback(
+                    hidden_rows=hidden_rows,
+                    base_logits=draft_logits[1:],
+                    adjusted_logits=adjusted_logits,
+                    target_logits=verify_logits[:-1],
+                    rejected_index=verification.rejected_index,
+                    config=config,
+                )
+                feedback_seconds += time.perf_counter() - feedback_start
+                feedback_items_created += len(round_feedback)
+                feedback_cycles += 1
+                buffer.extend(round_feedback)
 
             output_tokens.extend(committed)
             seed_token = committed[-1]
@@ -446,15 +559,80 @@ class HfOnlineUnoRunner:
             ):
                 _sync(self.runtime.device)
                 update_start = time.perf_counter()
-                report = learner.update(buffer)
+                if config.activation_mode == "deferred":
+                    if candidate is not None:
+                        if float(future_weight.item()) <= 0:
+                            raise RuntimeError(
+                                "deferred candidate received no future evidence."
+                            )
+                        active_mean_tv = float(
+                            (future_active_tv / future_weight).item()
+                        )
+                        candidate_mean_tv = float(
+                            (future_candidate_tv / future_weight).item()
+                        )
+                        static_mean_tv = float(
+                            (future_static_tv / future_weight).item()
+                        )
+                        action = choose_deferred_action(
+                            active_tv=active_mean_tv,
+                            candidate_tv=candidate_mean_tv,
+                            static_tv=static_mean_tv,
+                            promotion_margin=config.promotion_margin,
+                            reset_margin=config.future_reset_margin,
+                        )
+                        candidate_promotion_attempts += 1
+                        if action == "promote_candidate":
+                            learner = candidate
+                            candidate_promotions += 1
+                        elif action == "reset_to_static":
+                            learner.reset_to_offline()
+                            future_static_resets += 1
+                        else:
+                            candidate_rejections += 1
+                        isolation = assert_optimizer_isolated(
+                            base_model=self.runtime.model,
+                            head=learner.head,
+                            optimizer=learner.optimizer,
+                        )
+                        promotion_events.append(
+                            {
+                                "cycle": cycles,
+                                "action": action,
+                                "future_rows_weight": float(future_weight.item()),
+                                "active_filtered_tv": active_mean_tv,
+                                "candidate_filtered_tv": candidate_mean_tv,
+                                "static_filtered_tv": static_mean_tv,
+                                "active_fast_weight_l2_after_action": (
+                                    learner.fast_weight_l2()
+                                ),
+                            }
+                        )
+                        candidate = None
+                    future_active_tv.zero_()
+                    future_candidate_tv.zero_()
+                    future_static_tv.zero_()
+                    future_weight.zero_()
+                    candidate = learner.clone()
+                    report = candidate.update(buffer)
+                    if report.rolled_back:
+                        candidate = None
+                else:
+                    report = learner.update(buffer)
                 _sync(self.runtime.device)
                 update_seconds += time.perf_counter() - update_start
                 update_reports.append(report)
-                max_fast_weight_l2 = max(max_fast_weight_l2, report.fast_weight_l2)
+                max_fast_weight_l2 = max(
+                    max_fast_weight_l2,
+                    report.fast_weight_l2,
+                    learner.fast_weight_l2(),
+                )
                 buffer.clear()
                 cycles_since_update = 0
             if config.decay_factor_per_cycle < 1.0:
                 learner.decay_toward_offline(config.decay_factor_per_cycle)
+                if candidate is not None:
+                    candidate.decay_toward_offline(config.decay_factor_per_cycle)
 
             del draft_output, verify_output, target, lookahead, draft_used
 
@@ -465,9 +643,18 @@ class HfOnlineUnoRunner:
             head_forward_seconds = sum(
                 start.elapsed_time(end) for start, end in head_events
             ) / 1_000.0
+        candidate_head_forward_seconds = candidate_head_seconds_cpu
+        if self.runtime.device.type == "cuda":
+            candidate_head_forward_seconds = sum(
+                start.elapsed_time(end) for start, end in candidate_head_events
+            ) / 1_000.0
 
         metrics = self.runtime._metrics(
-            method="uno_online_fast_residual_hf_fallback",
+            method=(
+                "uno_deferred_fast_residual_hf_fallback"
+                if config.activation_mode == "deferred"
+                else "uno_online_fast_residual_hf_fallback"
+            ),
             block_size=config.block_size,
             input_ids=input_ids,
             output_tokens=output_tokens,
@@ -484,7 +671,9 @@ class HfOnlineUnoRunner:
         )
         applied = sum(not report.rolled_back for report in update_reports)
         diagnostics = OnlineDiagnostics(
+            activation_mode=config.activation_mode,
             parameter_isolation=isolation,
+            feedback_cycles=feedback_cycles,
             feedback_items_created=feedback_items_created,
             feedback_items_discarded_at_end=len(buffer),
             update_attempts=len(update_reports),
@@ -493,7 +682,12 @@ class HfOnlineUnoRunner:
             static_shadow_resets=sum(
                 report.reset_to_offline for report in update_reports
             ),
+            candidate_promotion_attempts=candidate_promotion_attempts,
+            candidate_promotions=candidate_promotions,
+            candidate_rejections=candidate_rejections,
+            future_static_resets=future_static_resets,
             head_forward_seconds=head_forward_seconds,
+            candidate_head_forward_seconds=candidate_head_forward_seconds,
             feedback_materialization_seconds=feedback_seconds,
             update_seconds=update_seconds,
             update_fraction_of_decode=(
@@ -502,6 +696,7 @@ class HfOnlineUnoRunner:
             final_fast_weight_l2=learner.fast_weight_l2(),
             max_fast_weight_l2=max_fast_weight_l2,
             update_reports=tuple(asdict(report) for report in update_reports),
+            promotion_events=tuple(promotion_events),
         )
         return OnlineRunResult(metrics=metrics, diagnostics=diagnostics)
 
@@ -559,6 +754,7 @@ def summarize_online_runs(
         update_fractions = []
         feedback_fractions = []
         head_fractions = []
+        candidate_head_fractions = []
         explicit_online_fractions = []
         rollback_fractions = []
         reset_fractions = []
@@ -594,11 +790,16 @@ def summarize_online_runs(
             head_fractions.append(
                 float(diagnostics["head_forward_seconds"]) / decode_seconds
             )
+            candidate_head_seconds = float(
+                diagnostics.get("candidate_head_forward_seconds", 0.0)
+            )
+            candidate_head_fractions.append(candidate_head_seconds / decode_seconds)
             explicit_online_fractions.append(
                 (
                     float(diagnostics["update_seconds"])
                     + float(diagnostics["feedback_materialization_seconds"])
                     + float(diagnostics["head_forward_seconds"])
+                    + candidate_head_seconds
                 )
                 / decode_seconds
             )
@@ -637,6 +838,9 @@ def summarize_online_runs(
                 "update_fraction_of_decode": _summary(update_fractions),
                 "feedback_fraction_of_decode": _summary(feedback_fractions),
                 "head_fraction_of_decode": _summary(head_fractions),
+                "candidate_head_fraction_of_decode": _summary(
+                    candidate_head_fractions
+                ),
                 "explicit_online_fraction_of_decode": _summary(
                     explicit_online_fractions
                 ),
@@ -677,6 +881,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tail-discount", type=float, default=0.25)
     parser.add_argument("--position-discount", type=float, default=0.97)
     parser.add_argument("--decay-factor", type=float, default=1.0)
+    parser.add_argument(
+        "--activation-mode",
+        choices=("immediate", "deferred"),
+        default="immediate",
+    )
+    parser.add_argument("--feedback-interval", type=int, default=1)
+    parser.add_argument("--promotion-margin", type=float, default=0.002)
+    parser.add_argument("--future-reset-margin", type=float, default=0.005)
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--alpha", type=float, default=8.0)
     parser.add_argument("--learning-rate", type=float, default=5e-3)
@@ -775,8 +987,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
 
+    online_prefix = "deferred" if args.activation_mode == "deferred" else "online"
     methods: list[tuple[str, int | None]] = [("static", None)] + [
-        (f"online_s{stride}", stride) for stride in args.update_strides
+        (f"{online_prefix}_s{stride}", stride) for stride in args.update_strides
     ]
     runs: list[dict[str, Any]] = []
     for repetition in range(args.repetitions):
@@ -810,6 +1023,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                             tail_discount=args.tail_discount,
                             position_discount=args.position_discount,
                             decay_factor_per_cycle=args.decay_factor,
+                            activation_mode=args.activation_mode,
+                            feedback_interval=args.feedback_interval,
+                            promotion_margin=args.promotion_margin,
+                            future_reset_margin=args.future_reset_margin,
                             fast=fast_config,
                         ),
                     )
@@ -881,6 +1098,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             "tail_discount": args.tail_discount,
             "position_discount": args.position_discount,
             "decay_factor_per_cycle": args.decay_factor,
+            "activation_mode": args.activation_mode,
+            "feedback_interval": args.feedback_interval,
+            "promotion_margin": args.promotion_margin,
+            "future_reset_margin": args.future_reset_margin,
             "fast": asdict(fast_config),
             "bootstrap_samples": args.bootstrap_samples,
             "method_order": (
