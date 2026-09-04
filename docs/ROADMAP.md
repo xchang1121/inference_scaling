@@ -119,3 +119,8 @@ Stage 5A 状态（2026-09-05）：已实现 future-validated shadow candidate。
 用实际 filtered $1-TV$ 比较 active/candidate/zero 后才 promote/keep/reset；candidate clone 保留真实
 zero anchor 与 optimizer state。支持每 $K$ 轮采一批训练 feedback，以降低 Stage 4 的 1.2% 每轮
 materialization 成本。假模型端到端和 promote/reset/keep 单测通过后进入真实 checkpoint Stage 5B。
+
+Stage 5B 协议状态（2026-09-05）：2-seed 英文工程 pilot 后冻结 `stride=40`、`feedback_interval=4`、
+`candidate_evaluation_interval=4`、promotion margin `0.0005`。实现会在 active 仍为 zero residual 时跳过
+无效词表投影，并对 shadow future evaluation 降频。正式实验固定为 3 prompts × 5 paired repetitions ×
+512 tokens；判定规则已写入 `STAGE5B_DEFERRED_ONLINE_PROTOCOL.md`，正式数据不得反向修改协议。

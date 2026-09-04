@@ -54,17 +54,37 @@ counterfactual rollout。它比 same-buffer validation 更强，但正式文档�
 
 ## 成本控制
 
-训练窗口仍由 update stride 控制，但 feedback 不必每轮 materialize。新参数 `feedback_interval=K` 只在
-每 $K$ 轮保存一次 hidden/top-K union；candidate 的未来 overlap 则利用 verification 已有 logits 每轮
-累计。由此：
+训练窗口仍由 update stride 控制，但 feedback 不必每轮 materialize。参数 `feedback_interval=K` 只在
+每 $K$ 轮保存一次 hidden/top-K union；`candidate_evaluation_interval=J` 则只在每 $J$ 轮计算
+candidate/static 的完整 filtered distribution 和未来 overlap。为保证每个长度为 $S$ 的 future window
+至少有一个审计点，要求 $1\le J\le S$。由此：
 
 $$
-C_{online}\approx C_{active\ head}+C_{candidate\ shadow}
+C_{online}\approx \mathbb{1}[\delta_{active}\ne0]C_{active\ head}
++\frac{C_{candidate\ shadow}+C_{filtered\ overlap}}{J}
 +\frac{C_{feedback}}{K}+\frac{C_{clone+update}}{S}.
 $$
 
-Stage 5B pilot 将优先检查 `S=20/40, K=4`。第二个 head 的 full-logit matmul在 Stage 4 仅约 0.1% decode，
-而 feedback 每轮约 1.2%；稀疏采集应比盲目减少 rank 更有效。
+active 仍等于 zero/offline residual 时直接复用 base Uno logits，不执行无效的 full-vocabulary residual
+matmul；每次 promote/reset/update/decay 后重新维护这个状态，并记录 active-head evaluation 与 static-skip
+轮数。第二个 head 的 full-logit matmul在 Stage 4 仅约 0.1% decode，而 feedback 每轮约 1.2%；稀疏采集
+应比盲目减少 rank 更有效。
+
+## Stage 5B 工程 pilot（不作为正式证据）
+
+所有 pilot 只用了同一个英文 prompt、2 个 paired seeds 和 512 tokens，因此只用于选择成本参数：
+
+1. `S=20/40, K=4, margin=0.002, J=1`：没有 candidate 通过门，TPF 与 static 完全相同；
+2. `S=40, K=4, margin=0.0005, J=1`：每个 seed 各 promote 2 次，paired TPF ratio 点估计
+   `1.00268`，paired TPS ratio `0.97565`；
+3. 跳过 zero active head，并设 `J=4`：仍各 promote 2 次，TPF ratio `1.00268`
+   `[0.99510, 1.01026]`，TPS ratio `0.97453` `[0.96313, 0.98593]`，显式计时的在线部分中位数
+   约为 decode 的 `0.994%`。
+
+两个样本的区间没有推断价值；尤其不能从 pilot 声称算法提高 TPF。它只说明 `0.0005` 门限确实会让
+候选上线，而降低 shadow 频率并不足以消除端到端成本。正式配置在读取三 prompt 结果前冻结为
+`S=40, K=4, J=4, margin=0.0005`，协议见
+[`STAGE5B_DEFERRED_ONLINE_PROTOCOL.md`](STAGE5B_DEFERRED_ONLINE_PROTOCOL.md)。
 
 ## 状态与 optimizer
 

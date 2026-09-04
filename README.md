@@ -40,7 +40,8 @@ top-K surrogate、rollback 与冻结不变量见
 Stage 4B 的冻结矩阵见[真机在线协议](docs/STAGE4B_REAL_ONLINE_PROTOCOL.md)，正式负结果、prompt 分解与
 shadow-candidate 改造见[真机在线结果报告](docs/STAGE4B_REAL_ONLINE_RESULTS.md)。
 其跨未来窗口批准、exact filtered-overlap 动作和 feedback subsampling 设计见
-[Stage 5A deferred controller](docs/STAGE5_DEFERRED_CONTROLLER_DESIGN.md)。
+[Stage 5A deferred controller](docs/STAGE5_DEFERRED_CONTROLLER_DESIGN.md)；Stage 5B 的三工作负载真机判定参数
+已在[预注册协议](docs/STAGE5B_DEFERRED_ONLINE_PROTOCOL.md)中冻结。
 
 ## 目录
 
