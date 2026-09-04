@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "input_backend": "huggingface_pytorch_kv_cache_stream_fast_residual",
+  "input_checkpoint": {
+    "base_id": "IFM/K2-Horizon-0.9B",
+    "base_revision": "ee770e713760cf6350e4322cdbbff91a163b7d70",
+    "adapter_id": "IFM/K2-Horizon-0.9B-Uno",
+    "adapter_revision": "b0d8896a301a2f4bc755538b1234a35100da50d0",
+    "base_weight_sha256": "6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365",
+    "adapter_weight_sha256": "5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e"
+  },
+  "integrity": {
+    "run_counts_pass": true,
+    "output_lengths_checked": 78,
+    "output_lengths_pass": true,
+    "all_numeric_values_finite": true,
+    "frozen_design_pass": true,
+    "checkpoint_hash_and_revision_pass": true,
+    "routing_pass": true,
+    "persistent_isolation_records": 49,
+    "parameter_isolation_pass": true,
+    "training_state_continuity_pass": true,
+    "frozen_no_learning_pass": true,
+    "complete_validation_grid_pass": true,
+    "validation_ratio_fields_pass": true,
+    "zero_snapshot_exact_tpf_pass": true,
+    "selection_reproduction_pass": true,
+    "method_order_and_seed_partition_pass": true,
+    "selected_head_sha256_frozen_pass": true,
+    "paired_output_token_ids_equal_pass": true,
+    "all_greedy_target_token_ids_identical_pass": true,
+    "unique_greedy_target_sequences": 1,
+    "amortization_reproduction_pass": true,
+    "safety_gate_pass": true
+  },
+  "bootstrap": {
+    "preregistered_primary_statistic": "arithmetic mean of paired ratios",
+    "robustness_statistic": "median of paired ratios",
+    "method": "paired percentile bootstrap",
+    "samples": 50000,
+    "seed": 20262405
+  },
+  "validation": {
+    "snapshot_mean_tpf_ratios": {
+      "0": 1.0,
+      "1": 0.9881089616499338,
+      "2": 1.0081794428775281,
+      "3": 0.9930199004975124,
+      "4": 1.0000773877155786
+    },
+    "recomputed_selection": {
+      "best_validation_snapshot": 2,
+      "best_validation_mean_tpf_ratio": 1.0081794428775281,
+      "minimum_gain": 0.002,
+      "selection_threshold": 1.002,
+      "selected_snapshot": 2,
+      "nonzero_snapshot_selected": true
+    },
+    "validation_to_test_tpf_optimism_gap": -0.0013228638046562935
+  },
+  "test_statistics": {
+    "paired_tpf_ratio": {
+      "mean": {
+        "estimate": 1.0095023066821844,
+        "ci_95_low": 1.002678080091679,
+        "ci_95_high": 1.0162054730881438
+      },
+      "median": {
+        "estimate": 1.0076015254586683,
+        "ci_95_low": 1.0,
+        "ci_95_high": 1.0204604918890632
+      }
+    },
+    "paired_decode_tps_ratio": {
+      "mean": {
+        "estimate": 1.004278041565011,
+        "ci_95_low": 0.9871137707453596,
+        "ci_95_high": 1.0231931268778636
+      },
+      "median": {
+        "estimate": 0.998913850208939,
+        "ci_95_low": 0.9825869539144252,
+        "ci_95_high": 1.0060100503829217
+      }
+    },
+    "paired_acceptance_rate_delta": {
+      "mean": {
+        "estimate": 0.009765144282640479,
+        "ci_95_low": 0.0029688369686889393,
+        "ci_95_high": 0.01652296486394346
+      },
+      "median": {
+        "estimate": 0.010457173440944295,
+        "ci_95_low": 0.0,
+        "ci_95_high": 0.019170247198453477
+      }
+    },
+    "paired_peak_memory_delta_bytes": {
+      "mean": {
+        "estimate": 3342131.2,
+        "ci_95_low": 3329433.6,
+        "ci_95_high": 3354828.8
+      },
+      "median": {
+        "estimate": 3341312.0,
+        "ci_95_low": 3341312.0,
+        "ci_95_high": 3341312.0
+      }
+    },
+    "serving_time_saving_seconds": {
+      "mean": {
+        "estimate": 0.054188624999369495,
+        "ci_95_low": -0.21034277850102626,
+        "ci_95_high": 0.3476548183747491
+      },
+      "median": {
+        "estimate": -0.017647050000960007,
+        "ci_95_low": -0.26511344999926223,
+        "ci_95_high": 0.0943684999983816
+      }
+    }
+  },
+  "sign_tests": {
+    "tpf": {
+      "pairs": 20,
+      "wins": 12,
+      "losses": 3,
+      "ties": 5,
+      "non_ties": 15,
+      "two_sided_p_excluding_ties": 0.03515625
+    },
+    "decode_tps": {
+      "pairs": 20,
+      "wins": 9,
+      "losses": 11,
+      "ties": 0,
+      "non_ties": 20,
+      "two_sided_p_excluding_ties": 0.8238029479980469
+    }
+  },
+  "training": {
+    "requests": 4,
+    "update_attempts": 17,
+    "update_rollbacks": 1,
+    "same_buffer_static_resets": 3,
+    "observed_training_increment_seconds": 2.218828900004155,
+    "instrumented_training_cost_seconds": 0.5698578361627588,
+    "mean_future_request_saving_seconds": 0.054188624999369495,
+    "observed_break_even_future_requests": 41,
+    "instrumented_break_even_future_requests": 11
+  },
+  "paired_observations": [
+    {
+      "repetition": 0,
+      "seed": 20462405,
+      "tpf_ratio": 1.0051020408163265,
+      "decode_tps_ratio": 0.9659668458811083,
+      "acceptance_rate_delta": 0.005156202608431859,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.5422128999962297
+    },
+    {
+      "repetition": 1,
+      "seed": 20463405,
+      "tpf_ratio": 1.0205128205128204,
+      "decode_tps_ratio": 1.0053138143770453,
+      "acceptance_rate_delta": 0.02389646218760144,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.08425299999726121
+    },
+    {
+      "repetition": 2,
+      "seed": 20464405,
+      "tpf_ratio": 1.0307692307692309,
+      "decode_tps_ratio": 1.0700161836973137,
+      "acceptance_rate_delta": 0.028072682727643905,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 1.0546319999994012
+    },
+    {
+      "repetition": 3,
+      "seed": 20465405,
+      "tpf_ratio": 0.99,
+      "decode_tps_ratio": 0.9774060307649799,
+      "acceptance_rate_delta": -0.013693845474250843,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.34778670000014245
+    },
+    {
+      "repetition": 4,
+      "seed": 20466405,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 0.9384775617880411,
+      "acceptance_rate_delta": 0.0,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -1.0082316000043647
+    },
+    {
+      "repetition": 5,
+      "seed": 20467405,
+      "tpf_ratio": 1.0205128205128204,
+      "decode_tps_ratio": 0.9808892471078675,
+      "acceptance_rate_delta": 0.020691333982473248,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.2922407999976713
+    },
+    {
+      "repetition": 6,
+      "seed": 20468405,
+      "tpf_ratio": 1.0101010101010102,
+      "decode_tps_ratio": 0.9915206080575479,
+      "acceptance_rate_delta": 0.013693845474250843,
+      "peak_memory_delta_bytes": 3406848.0,
+      "serving_time_saving_seconds": -0.1307492000014463
+    },
+    {
+      "repetition": 7,
+      "seed": 20469405,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 0.984284660720983,
+      "acceptance_rate_delta": 0.0,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.23798610000085318
+    },
+    {
+      "repetition": 8,
+      "seed": 20470405,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 0.9499513009650425,
+      "acceptance_rate_delta": 0.0,
+      "peak_memory_delta_bytes": 3349504.0,
+      "serving_time_saving_seconds": -0.8384761999986949
+    },
+    {
+      "repetition": 9,
+      "seed": 20471405,
+      "tpf_ratio": 1.0204081632653061,
+      "decode_tps_ratio": 0.9925346929401324,
+      "acceptance_rate_delta": 0.017649160414433707,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.1162084000025061
+    },
+    {
+      "repetition": 10,
+      "seed": 20472405,
+      "tpf_ratio": 1.0357142857142858,
+      "decode_tps_ratio": 0.9981666742792973,
+      "acceptance_rate_delta": 0.036868686868686884,
+      "peak_memory_delta_bytes": 3406848.0,
+      "serving_time_saving_seconds": -0.02989489999890793
+    },
+    {
+      "repetition": 11,
+      "seed": 20473405,
+      "tpf_ratio": 1.0360824742268042,
+      "decode_tps_ratio": 1.1123186584396498,
+      "acceptance_rate_delta": 0.03639971507072348,
+      "peak_memory_delta_bytes": 3283968.0,
+      "serving_time_saving_seconds": 1.7067663999987417
+    },
+    {
+      "repetition": 12,
+      "seed": 20474405,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 1.006416360129317,
+      "acceptance_rate_delta": 0.0,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.10247049999816227
+    },
+    {
+      "repetition": 13,
+      "seed": 20475405,
+      "tpf_ratio": 1.015228426395939,
+      "decode_tps_ratio": 0.9996610261385807,
+      "acceptance_rate_delta": 0.01566756098060501,
+      "peak_memory_delta_bytes": 3275776.0,
+      "serving_time_saving_seconds": -0.0053992000030120835
+    },
+    {
+      "repetition": 14,
+      "seed": 20476405,
+      "tpf_ratio": 1.0205128205128204,
+      "decode_tps_ratio": 1.035001680683695,
+      "acceptance_rate_delta": 0.02191697191697195,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.5215835999988485
+    },
+    {
+      "repetition": 15,
+      "seed": 20477405,
+      "tpf_ratio": 0.98,
+      "decode_tps_ratio": 1.0056037406365261,
+      "acceptance_rate_delta": -0.017649160414433707,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.08626649999860092
+    },
+    {
+      "repetition": 16,
+      "seed": 20478405,
+      "tpf_ratio": 1.0,
+      "decode_tps_ratio": 1.0261479350664235,
+      "acceptance_rate_delta": 0.0011878430408782115,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.4097546000011789
+    },
+    {
+      "repetition": 17,
+      "seed": 20479405,
+      "tpf_ratio": 0.9848484848484849,
+      "decode_tps_ratio": 0.9729014554396694,
+      "acceptance_rate_delta": -0.015468920613095016,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": -0.4160550000015064
+    },
+    {
+      "repetition": 18,
+      "seed": 20480405,
+      "tpf_ratio": 1.0151515151515151,
+      "decode_tps_ratio": 1.0005732619319876,
+      "acceptance_rate_delta": 0.012573430897660498,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 0.008808800001133932
+    },
+    {
+      "repetition": 19,
+      "seed": 20481405,
+      "tpf_ratio": 1.0051020408163265,
+      "decode_tps_ratio": 1.0724090922550154,
+      "acceptance_rate_delta": 0.008340915984228092,
+      "peak_memory_delta_bytes": 3341312.0,
+      "serving_time_saving_seconds": 1.0744780999993964
+    }
+  ],
+  "decision": {
+    "safety_gate_pass": true,
+    "nonzero_selection_gate_pass": true,
+    "future_request_learning_statistical_gate_pass": true,
+    "future_request_learning_practical_gate_pass": true,
+    "greedy_online_learning_success": true,
+    "frozen_serving_system_gate_pass": false,
+    "all_stage8_gates_pass": false,
+    "tpf_mean_interval_excludes_one_as_harm": false,
+    "speed_mean_interval_excludes_one_as_harm": false,
+    "official_runtime_tested": false,
+    "full_uno_adapter_updated_online": false
+  },
+  "scope_warning": "This is one rank-8 logit residual trained on four repeated greedy requests and tested over twenty new Uno noise seeds on the Windows HF fallback. It does not establish stochastic, cross-prompt, official-runtime, or full-diffusion-adapter gains."
+}

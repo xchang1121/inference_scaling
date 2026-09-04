@@ -62,6 +62,9 @@ TPF ratio 只有 0.99493。Stage 7B 因而实现了
 后续 [adaptive pilot](docs/STAGE7B_ADAPTIVE_MIXTURE_PILOT_RESULTS.md) 对全部非零快照的 validation TPF
 都低于 1，因而安全回退 zero；这证明 fail-safe 生效，却没有在线学习收益，Stage 8 转向 greedy target 来隔离
 stochastic trajectory shift。
+正式 [Stage 8 结果](docs/STAGE8_GREEDY_STREAM_RESULTS.md)首次得到真实 checkpoint 上可确认的跨请求学习
+效果：20 个新 Uno noise seeds 的 mean TPF ratio 为 `1.00950 [1.00268, 1.01621]`，通过 +0.5% 实际
+幅度门，所有 greedy 输出逐 token 相同；但 TPS ratio `1.00428 [0.98711, 1.02319]`，尚未证明净加速。
 
 ## 目录
 
@@ -111,7 +114,7 @@ online-speculation/
 | 5 | future-validated controller 与真机验证 | 完成；安全门通过、TPF/TPS 主门失败 |
 | 6 | 跨请求 persistent learner 与 held-out stream | 完成；validation 收益未泛化到 test |
 | 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
-| 8 | greedy repeated-query online residual | 协议已冻结；正式新 seed 运行待完成 |
+| 8 | greedy repeated-query online residual | 完成；学习门通过、HF 系统门失败 |
 
 Stage 1 的正式验证命令：
 

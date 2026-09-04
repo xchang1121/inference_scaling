@@ -169,3 +169,8 @@ Stage 8 协议状态（2026-09-05）：两个 greedy 工程 pilots 给出小幅�
 前冻结 repeated-query confirmatory case study：4 train、5 validation、20 test，top-k 1、512 tokens，base
 seed `20262405`。validation-only snapshot 选择保持 0.2% zero fallback；正式门分别要求 TPF mean bootstrap
 下界大于 1、点估计至少 +0.5%，以及 TPS mean bootstrap 下界大于 1。TPF 通过而 TPS 失败只算学习成功。
+
+Stage 8 结果（2026-09-05）：snapshot 2 在 5-seed validation 上为 `1.00818` 并被选择；20 个新 noise
+seeds 的 mean TPF ratio 为 `1.00950 [1.00268, 1.01621]`，12 wins/3 losses/5 ties，统计与实际幅度
+门均通过。全部 78 个生成的 greedy token IDs 一致，参数隔离和 frozen hash 门通过。TPS ratio 为
+`1.00428 [0.98711, 1.02319]`，所以 online 学习效果成立，但当前 HF fallback 的系统净加速未成立。
