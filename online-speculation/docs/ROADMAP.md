@@ -114,3 +114,8 @@ paired TPF ratio 为 0.9796 [0.9470, 1.0000]，decode TPS ratio 为 0.9624
 - **系统成功**：计入 update 后的 tokens/s 显著超过 static Uno。
 
 若只达到前两级，结论必须写“online adaptation 有效但尚未净加速”，不能用接受率代替系统效果。
+
+Stage 5A 状态（2026-09-05）：已实现 future-validated shadow candidate。过去窗口只训练候选，下一窗口
+用实际 filtered $1-TV$ 比较 active/candidate/zero 后才 promote/keep/reset；candidate clone 保留真实
+zero anchor 与 optimizer state。支持每 $K$ 轮采一批训练 feedback，以降低 Stage 4 的 1.2% 每轮
+materialization 成本。假模型端到端和 promote/reset/keep 单测通过后进入真实 checkpoint Stage 5B。

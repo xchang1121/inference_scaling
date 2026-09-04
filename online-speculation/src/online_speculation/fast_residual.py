@@ -311,6 +311,16 @@ class FastResidualLearner:
         self.head.load_state_dict(self._offline_state)
         self.optimizer = self._new_optimizer()
 
+    def clone(self) -> "FastResidualLearner":
+        """Copy active parameters, optimizer state, and the true offline anchor."""
+
+        cloned = FastResidualLearner(copy.deepcopy(self.head), self.config)
+        cloned._offline_state = {
+            name: value.detach().clone() for name, value in self._offline_state.items()
+        }
+        cloned.optimizer.load_state_dict(copy.deepcopy(self.optimizer.state_dict()))
+        return cloned
+
     def decay_toward_offline(self, factor: float) -> None:
         if not 0 <= factor <= 1:
             raise ValueError("decay factor must lie in [0, 1].")

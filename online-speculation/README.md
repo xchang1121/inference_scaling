@@ -39,6 +39,8 @@ top-K surrogate、rollback 与冻结不变量见
 [Stage 4A fast residual 设计](docs/STAGE4_FAST_RESIDUAL_DESIGN.md)。
 Stage 4B 的冻结矩阵见[真机在线协议](docs/STAGE4B_REAL_ONLINE_PROTOCOL.md)，正式负结果、prompt 分解与
 shadow-candidate 改造见[真机在线结果报告](docs/STAGE4B_REAL_ONLINE_RESULTS.md)。
+其跨未来窗口批准、exact filtered-overlap 动作和 feedback subsampling 设计见
+[Stage 5A deferred controller](docs/STAGE5_DEFERRED_CONTROLLER_DESIGN.md)。
 
 ## 目录
 
@@ -85,7 +87,7 @@ online-speculation/
 | 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 完成 |
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 完成；安全门通过、预注册性能门失败 |
-| 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
+| 5 | future-validated controller、消融和最终报告 | 5A controller 完成；5B 真机验证待完成 |
 
 Stage 1 的正式验证命令：
 
