@@ -23,6 +23,10 @@ tokens/s。
 - exact $\Psi$-Spec 的非平稳仿真也已完成：预注册的 stride-10 discounted-tail 在线策略把
   TV regret 降低约 9.0%，TPF 提高 16.9%；在明确标注为合成的 update-cost proxy 下效率提高
   14.2%。这证明在线反馈有算法与成本空间，但尚不是 GPU online wall-clock 加速。
+- 真实 Uno-1B fast-residual 实验已经给出更严格的负结果：安全/冻结门通过，但预注册 stride-10
+  的 TPF ratio 为 0.980 [0.947, 1.000]，HF decode TPS ratio 为 0.962
+  [0.953, 0.982]，显著变慢；stride-20 结果跨 1。下一版必须用未来 feedback 延迟批准 candidate，
+  不能用同一批 held-out loss 假定 temporal generalization。
 
 完整证据和边界见 [硬件与可复现性审计](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)，算法来源见
 [文献矩阵](docs/LITERATURE_REVIEW.md)，阶段门和成功判据见 [研究路线图](docs/ROADMAP.md)。
@@ -33,6 +37,8 @@ Stage 2 的 checkpoint、采样语义和正式运行矩阵见
 设计见[在线仿真结果报告](docs/STAGE3_ONLINE_SIMULATION_RESULTS.md)。真实模型 fast-weight 的结构、
 top-K surrogate、rollback 与冻结不变量见
 [Stage 4A fast residual 设计](docs/STAGE4_FAST_RESIDUAL_DESIGN.md)。
+Stage 4B 的冻结矩阵见[真机在线协议](docs/STAGE4B_REAL_ONLINE_PROTOCOL.md)，正式负结果、prompt 分解与
+shadow-candidate 改造见[真机在线结果报告](docs/STAGE4B_REAL_ONLINE_RESULTS.md)。
 
 ## 目录
 
@@ -78,7 +84,7 @@ online-speculation/
 | 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 完成 |
 | 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 完成 |
-| 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 4A 独立 learner 完成；4B 真模型接入待完成 |
+| 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 完成；安全门通过、预注册性能门失败 |
 | 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
 
 Stage 1 的正式验证命令：

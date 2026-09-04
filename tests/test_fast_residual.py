@@ -8,6 +8,7 @@ from online_speculation.fast_residual import (
     FastResidualHead,
     FastResidualLearner,
     assert_optimizer_isolated,
+    feedback_batch_from_logits,
     feedback_from_logits,
 )
 
@@ -94,6 +95,39 @@ def test_feedback_uses_draft_target_union_and_detaches_old_distribution() -> Non
     assert not item.old_probabilities.requires_grad
     torch.testing.assert_close(item.target_probabilities.sum(), torch.tensor(1.0))
     torch.testing.assert_close(item.old_probabilities.sum(), torch.tensor(1.0))
+
+
+def test_batched_feedback_matches_single_row_construction() -> None:
+    hidden = torch.stack((torch.arange(4, dtype=torch.float32), torch.ones(4)))
+    base = torch.tensor(
+        [[4.0, 3.0, 2.0, 1.0, 0.0, -1.0], [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
+    )
+    target = torch.flip(base, dims=(1,))
+    batched = feedback_batch_from_logits(
+        hidden_rows=hidden,
+        base_logits=base,
+        adjusted_logits=base,
+        target_logits=target,
+        top_k=2,
+        temperature=1.0,
+        weights=[1.0, 0.0],
+    )
+    single = feedback_from_logits(
+        hidden=hidden[0],
+        base_logits=base[0],
+        adjusted_logits=base[0],
+        target_logits=target[0],
+        top_k=2,
+        temperature=1.0,
+    )
+    assert len(batched) == 1
+    assert batched[0].position == 0
+    torch.testing.assert_close(batched[0].hidden, single.hidden)
+    torch.testing.assert_close(batched[0].token_ids, single.token_ids)
+    torch.testing.assert_close(
+        batched[0].target_probabilities,
+        single.target_probabilities,
+    )
 
 
 def test_transactional_update_reduces_held_out_distillation_loss() -> None:

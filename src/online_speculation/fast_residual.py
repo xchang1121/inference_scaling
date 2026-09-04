@@ -147,6 +147,80 @@ def feedback_from_logits(
     )
 
 
+def feedback_batch_from_logits(
+    *,
+    hidden_rows: Tensor,
+    base_logits: Tensor,
+    adjusted_logits: Tensor,
+    target_logits: Tensor,
+    top_k: int,
+    temperature: float,
+    weights: Sequence[float],
+    positions: Sequence[int] | None = None,
+) -> list[ResidualFeedback]:
+    """Vectorized validation/top-k followed by variable-size union packing."""
+
+    if hidden_rows.ndim != 2:
+        raise ValueError("hidden_rows must have shape [rows, hidden].")
+    if base_logits.ndim != 2:
+        raise ValueError("base_logits must have shape [rows, vocabulary].")
+    if not (
+        base_logits.shape == adjusted_logits.shape == target_logits.shape
+        and hidden_rows.size(0) == base_logits.size(0)
+    ):
+        raise ValueError("batched feedback tensors have incompatible shapes.")
+    rows, vocabulary_size = base_logits.shape
+    if len(weights) != rows:
+        raise ValueError("one feedback weight is required per row.")
+    if positions is None:
+        positions = list(range(rows))
+    if len(positions) != rows:
+        raise ValueError("one feedback position is required per row.")
+    if top_k < 1 or temperature <= 0:
+        raise ValueError("top_k and temperature must be positive.")
+    finite = (
+        torch.isfinite(hidden_rows).all()
+        & torch.isfinite(base_logits).all()
+        & torch.isfinite(adjusted_logits).all()
+        & torch.isfinite(target_logits).all()
+    )
+    if not bool(finite.item()):
+        raise ValueError("batched feedback tensors must be finite.")
+
+    support_size = min(int(top_k), int(vocabulary_size))
+    draft_top_ids = torch.topk(adjusted_logits, support_size, dim=-1).indices
+    target_top_ids = torch.topk(target_logits, support_size, dim=-1).indices
+    feedback = []
+    for row, (weight, position) in enumerate(zip(weights, positions)):
+        if weight <= 0:
+            continue
+        token_ids = torch.unique(
+            torch.cat((draft_top_ids[row], target_top_ids[row])),
+            sorted=True,
+        )
+        selected_target = target_logits[row].index_select(0, token_ids).float()
+        selected_old = adjusted_logits[row].index_select(0, token_ids).float()
+        feedback.append(
+            ResidualFeedback(
+                hidden=hidden_rows[row].detach().float().clone(),
+                token_ids=token_ids.detach().clone(),
+                base_logits=(
+                    base_logits[row].index_select(0, token_ids).detach().float().clone()
+                ),
+                target_probabilities=(
+                    torch.softmax(selected_target / temperature, dim=0).detach().clone()
+                ),
+                old_probabilities=(
+                    torch.softmax(selected_old / temperature, dim=0).detach().clone()
+                ),
+                temperature=float(temperature),
+                weight=float(weight),
+                position=int(position),
+            )
+        )
+    return feedback
+
+
 class FastResidualHead(nn.Module):
     """A zero-initialized low-rank correction from hidden states to logits."""
 
@@ -252,11 +326,24 @@ class FastResidualLearner:
         if not items:
             raise ValueError("fast residual update requires feedback items.")
         device = next(self.head.parameters()).device
+        numeric_checks = []
         for item in items:
-            item.validate(
-                hidden_size=self.head.hidden_size,
-                vocabulary_size=self.head.vocabulary_size,
-            )
+            if item.hidden.ndim != 1 or item.hidden.numel() != self.head.hidden_size:
+                raise ValueError("feedback hidden state has the wrong shape.")
+            support = item.token_ids.numel()
+            if item.token_ids.ndim != 1 or support < 2:
+                raise ValueError("feedback support has the wrong shape.")
+            if item.token_ids.dtype != torch.long:
+                raise ValueError("feedback token_ids must use torch.long.")
+            for value in (
+                item.base_logits,
+                item.target_probabilities,
+                item.old_probabilities,
+            ):
+                if value.ndim != 1 or value.numel() != support:
+                    raise ValueError("feedback values do not match their support.")
+            if item.temperature <= 0 or item.weight <= 0:
+                raise ValueError("feedback temperature and weight must be positive.")
             tensors = (
                 item.hidden,
                 item.token_ids,
@@ -266,6 +353,39 @@ class FastResidualLearner:
             )
             if any(tensor.device != device for tensor in tensors):
                 raise ValueError("feedback and fast residual head must share one device.")
+            sorted_ids = torch.sort(item.token_ids).values
+            unique_ids = (
+                torch.ones((), device=device, dtype=torch.bool)
+                if support == 1
+                else torch.all(sorted_ids[1:] != sorted_ids[:-1])
+            )
+            numeric_checks.extend(
+                (
+                    torch.isfinite(item.hidden).all(),
+                    torch.isfinite(item.base_logits).all(),
+                    torch.isfinite(item.target_probabilities).all(),
+                    torch.isfinite(item.old_probabilities).all(),
+                    torch.all(
+                        (item.token_ids >= 0)
+                        & (item.token_ids < self.head.vocabulary_size)
+                    ),
+                    unique_ids,
+                    torch.all(item.target_probabilities >= 0),
+                    torch.all(item.old_probabilities >= 0),
+                    torch.isclose(
+                        item.target_probabilities.sum(),
+                        torch.ones((), device=device),
+                        atol=2e-5,
+                    ),
+                    torch.isclose(
+                        item.old_probabilities.sum(),
+                        torch.ones((), device=device),
+                        atol=2e-5,
+                    ),
+                )
+            )
+        if not bool(torch.stack(numeric_checks).all().item()):
+            raise ValueError("feedback numeric invariants failed.")
 
     def _loss_tensors(
         self,
@@ -274,33 +394,58 @@ class FastResidualLearner:
         include_old_q: bool,
         zero_correction: bool,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        weighted_kl = torch.zeros((), device=items[0].hidden.device)
-        weighted_tv = torch.zeros_like(weighted_kl)
-        weighted_old = torch.zeros_like(weighted_kl)
-        total_weight = 0.0
-        for item in items:
-            if zero_correction:
-                correction = torch.zeros_like(item.base_logits)
-            else:
-                correction = self.head.selected(item.hidden, item.token_ids)
-            log_q = torch.log_softmax(
-                (item.base_logits + correction) / item.temperature,
-                dim=0,
-            )
-            q = log_q.exp()
-            target = item.target_probabilities
-            old = item.old_probabilities
-            forward_kl = torch.sum(target * (torch.log(target.clamp_min(1e-12)) - log_q))
-            total_variation = 0.5 * torch.sum(torch.abs(target - q))
-            old_q_kl = torch.sum(old * (torch.log(old.clamp_min(1e-12)) - log_q))
-            weighted_kl = weighted_kl + item.weight * forward_kl
-            weighted_tv = weighted_tv + item.weight * total_variation
-            weighted_old = weighted_old + item.weight * old_q_kl
-            total_weight += item.weight
-        denominator = max(total_weight, 1e-12)
-        mean_kl = weighted_kl / denominator
-        mean_tv = weighted_tv / denominator
-        mean_old = weighted_old / denominator
+        rows = len(items)
+        max_support = max(item.token_ids.numel() for item in items)
+        device = items[0].hidden.device
+        token_ids = torch.zeros((rows, max_support), device=device, dtype=torch.long)
+        base_logits = torch.zeros((rows, max_support), device=device)
+        target = torch.zeros_like(base_logits)
+        old = torch.zeros_like(base_logits)
+        support_mask = torch.zeros(
+            (rows, max_support),
+            device=device,
+            dtype=torch.bool,
+        )
+        for row, item in enumerate(items):
+            support = item.token_ids.numel()
+            token_ids[row, :support] = item.token_ids
+            base_logits[row, :support] = item.base_logits
+            target[row, :support] = item.target_probabilities
+            old[row, :support] = item.old_probabilities
+            support_mask[row, :support] = True
+        hidden = torch.stack([item.hidden for item in items])
+        temperatures = torch.tensor(
+            [item.temperature for item in items],
+            device=device,
+        ).unsqueeze(1)
+        weights = torch.tensor([item.weight for item in items], device=device)
+        if zero_correction:
+            correction = torch.zeros_like(base_logits)
+        else:
+            features = self.head.features(hidden)
+            selected_up = self.head.up.weight[token_ids]
+            correction = torch.einsum("nr,nmr->nm", features, selected_up)
+            correction = correction * self.head.scale
+        adjusted = ((base_logits + correction) / temperatures).masked_fill(
+            ~support_mask,
+            -torch.inf,
+        )
+        log_q = torch.log_softmax(adjusted, dim=1)
+        q = torch.where(support_mask, log_q.exp(), 0.0)
+        safe_log_q = torch.where(support_mask, log_q, 0.0)
+        forward_kl_rows = torch.sum(
+            target * (torch.log(target.clamp_min(1e-12)) - safe_log_q),
+            dim=1,
+        )
+        tv_rows = 0.5 * torch.sum(torch.abs(target - q), dim=1)
+        old_q_kl_rows = torch.sum(
+            old * (torch.log(old.clamp_min(1e-12)) - safe_log_q),
+            dim=1,
+        )
+        denominator = weights.sum().clamp_min(1e-12)
+        mean_kl = torch.sum(weights * forward_kl_rows) / denominator
+        mean_tv = torch.sum(weights * tv_rows) / denominator
+        mean_old = torch.sum(weights * old_q_kl_rows) / denominator
         objective = (
             self.config.forward_kl_weight * mean_kl
             + self.config.tv_weight * mean_tv
