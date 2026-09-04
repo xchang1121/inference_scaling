@@ -61,8 +61,16 @@ online-speculation/
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | 0 | 硬件审计、上游锁定、文献矩阵、实验阶段门 | 完成 |
-| 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 待实现 |
+| 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 完成 |
 | 2 | 官方 Uno 1B 的 AR/linear sampler 真机基线 | 环境准备中 |
 | 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 待实现 |
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 待实现 |
 | 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
+
+Stage 1 的正式验证命令：
+
+```powershell
+.\.venv\Scripts\python -m online_speculation.lossless_validation `
+  --samples 100000 --sequence-length 4 --vocabulary-size 3 --block-size 4 `
+  --output .\online-speculation\results\stage1_lossless_validation.json
+```
