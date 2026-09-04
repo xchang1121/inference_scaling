@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "claim_scope": "engineering pilots only; not a preregistered confirmatory result",
+  "checkpoint": {
+    "base_weight_sha256": "6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365",
+    "adapter_weight_sha256": "5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e"
+  },
+  "host": {
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "python": "3.12.5",
+    "torch": "2.13.0+cu130",
+    "transformers": "5.16.1",
+    "peft": "0.20.0"
+  },
+  "shared_design": {
+    "training_requests": 4,
+    "validation_repetitions": 2,
+    "test_repetitions": 5,
+    "max_new_tokens": 512,
+    "block_size": 8,
+    "update_stride": 40,
+    "feedback_interval": 4,
+    "rank": 8,
+    "learning_rate": 0.005
+  },
+  "fixed_weight_0_25": {
+    "captured_at": "2026-09-05T04:15:47+08:00",
+    "seed": 20262005,
+    "selected_snapshot": 3,
+    "validation_mean_tpf_ratio": 1.0593579234972679,
+    "test_tpf_ratio": {
+      "mean": 0.994932865788512,
+      "median": 0.98989898989899,
+      "min": 0.911764705882353,
+      "max": 1.0547263681592038
+    },
+    "test_decode_tps_ratio": {
+      "mean": 1.034532021282215,
+      "median": 1.0335528291994835,
+      "min": 0.9659656894577534,
+      "max": 1.0874793395331392
+    },
+    "head_unchanged_during_test": true
+  },
+  "adaptive_ema_gate": {
+    "captured_at": "2026-09-05T04:35:46+08:00",
+    "seed": 20262105,
+    "controller": {
+      "max_candidate_weight": 0.25,
+      "evaluation_interval": 4,
+      "warmup_observations": 2,
+      "ema_decay": 0.75,
+      "activation_margin": 0.0005,
+      "deactivation_margin": 0.0005
+    },
+    "validation_mean_tpf_ratio_by_snapshot": {
+      "0": 1.0,
+      "1": 0.9688461538461539,
+      "2": 0.9900251256281407,
+      "3": 0.9899371859296484,
+      "4": 0.9901628222523744
+    },
+    "selected_snapshot": 0,
+    "test_tpf_ratio": {
+      "mean": 1.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "test_decode_tps_ratio": {
+      "mean": 1.0181702042305967,
+      "median": 1.0167600703121702,
+      "min": 0.9944808032714211,
+      "max": 1.034796915389169
+    },
+    "nonzero_validation_snapshot_lag1_advantage_correlation_range": [
+      -0.1696122069135522,
+      0.2307790938336872
+    ],
+    "nonzero_validation_snapshot_advantage_sign_persistence_range": [
+      0.4639175257731959,
+      0.5773195876288659
+    ],
+    "head_unchanged_during_test": true
+  },
+  "decision": {
+    "fixed_weight_learning_gate": false,
+    "adaptive_gate_selected_nonzero_snapshot": false,
+    "adaptive_gate_safe_fallback": true,
+    "promote_to_confirmatory_test": false,
+    "next_hypothesis": "greedy-target repeated-query stream to remove stochastic AR trajectory drift"
+  }
+}

@@ -158,5 +158,9 @@ old-q surrogate 与真实 mixture proposal 不一致。固定 `w=0.25` pilot 的
 Stage 7B 实现状态（2026-09-05）：增加 per-request verifier-feedback EMA scalar gate。controller 从 static
 开始，每 4 cycles 在已经验证的 on-policy rows 上比较 pure static/candidate filtered TV；warmup 后只有正证据
 才令**下一轮**使用 capped `w=0.25` mixture，负证据则退回 static。head 在整个 frozen evaluation 请求中
-不更新；zero snapshot 保持逐 token/forward static 等价，实际每轮 $q_t$ 仍原样交给 exact verifier。下一步
-用新 seed 做小型工程 pilot，若正方向稳定，再独立冻结 Stage 7C 正式协议。
+不更新；zero snapshot 保持逐 token/forward static 等价，实际每轮 $q_t$ 仍原样交给 exact verifier。
+
+Stage 7B pilot 结果（2026-09-05）：4 个非零 snapshots 的 validation mean TPF ratios 均低于 1，规则正确
+回退 zero；5 个 test TPF ratios 因而全部严格为 1。非零 snapshot advantage 的 lag-1 correlation 仅在
+`[-0.170, 0.231]`，不支持继续扫描 EMA/margin。下一阶段用 greedy target 固定 AR trajectory，单独检验
+跨请求 residual 能否对新的 Uno noise seeds 泛化。
