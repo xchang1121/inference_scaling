@@ -20,12 +20,17 @@ tokens/s。
   AR、Uno linear sampler，再决定是否投入 Qwen3-8B。checkpoint 级实验现已完成：HF KV-cache
   回退 backend 上 $B=8$ 的 median TPF 为 1.401，paired median decode speedup 为 1.352×；
   官方 Nano-vLLM 路线仍等待 Linux/WSL2。
+- exact $\Psi$-Spec 的非平稳仿真也已完成：预注册的 stride-10 discounted-tail 在线策略把
+  TV regret 降低约 9.0%，TPF 提高 16.9%；在明确标注为合成的 update-cost proxy 下效率提高
+  14.2%。这证明在线反馈有算法与成本空间，但尚不是 GPU online wall-clock 加速。
 
 完整证据和边界见 [硬件与可复现性审计](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)，算法来源见
 [文献矩阵](docs/LITERATURE_REVIEW.md)，阶段门和成功判据见 [研究路线图](docs/ROADMAP.md)。
 Stage 2 的 checkpoint、采样语义和正式运行矩阵见
 [Uno-1B 复现实验协议](docs/STAGE2_UNO1B_PROTOCOL.md)，实测结论见
-[Uno-1B 结果报告](docs/STAGE2_UNO1B_RESULTS.md)。
+[Uno-1B 结果报告](docs/STAGE2_UNO1B_RESULTS.md)。Stage 3 的冻结设计见
+[在线仿真预注册协议](docs/STAGE3_ONLINE_SIMULATION_PROTOCOL.md)，结果、失败反例和 Online Uno v1
+设计见[在线仿真结果报告](docs/STAGE3_ONLINE_SIMULATION_RESULTS.md)。
 
 ## 目录
 
@@ -70,7 +75,7 @@ online-speculation/
 | 0 | 硬件审计、上游锁定、文献矩阵、实验阶段门 | 完成 |
 | 1 | 可枚举的 lossless $\Psi$-Spec 核心与 Monte Carlo 分布检验 | 完成 |
 | 2 | Uno 1B AR/linear 真机基线 | checkpoint/HF 回退完成；官方内核待 Linux |
-| 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 待实现 |
+| 3 | 静态与在线 proposer 的可控仿真，验证更新收益/成本边界 | 完成 |
 | 4 | verifier-feedback 在线蒸馏和 fast-weight adapter | 待实现 |
 | 5 | 自适应 block/update controller、消融和最终报告 | 待实现 |
 
@@ -95,3 +100,14 @@ Stage 2 的 Windows checkpoint 级回退命令（需要先按文档取得锁定�
 该命令首先流式校验 2.16 GB base 和 224 MB adapter 的 SHA-256；然后验证 clean/seed 行
 不受 LoRA 影响、noise 行确实受到 LoRA 影响；最后交替测 AR 与各 block size。输出中的
 `execution_backend` 和 `claim_scope` 是防止把回退数据误写成官方内核复现的强制字段。
+
+Stage 3 的正式可控仿真命令：
+
+```powershell
+.\.venv\Scripts\python -m online_speculation.online_simulation `
+  --tokens 12000 --seeds 20 --block-size 8 --bootstrap-samples 30000 `
+  --output .\online-speculation\results\stage3_online_markov.json
+```
+
+该结果使用真实 Stage 2 forward 比例校准两次前向成本，但 online update 成本是透明的合成参数；JSON
+同时报告 $0$--$4\times$ update-cost 敏感性和 break-even multiplier。

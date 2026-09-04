@@ -29,6 +29,7 @@ uno-hf = [
 online-speculation-preflight = "online_speculation.preflight:main"
 online-speculation-uno1b = "online_speculation.hf_uno:main"
 online-speculation-stage2-analysis = "online_speculation.stage2_analysis:main"
+online-speculation-stage3-simulation = "online_speculation.online_simulation:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

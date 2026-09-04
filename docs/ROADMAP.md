@@ -60,6 +60,14 @@ speedup median 1.352×（[1.250, 1.386]），10/10 配对运行胜出。官方 N
 仅当收益下置信界高于 static baseline 上置信界时增加更新频率；低于时退避。block size 使用相同 reward
 或轻量 bandit，不用 acceptance 单指标决策。
 
+实际阶段门结果（2026-09-05）：完成。预注册 `stride10_discounted` 的 dynamic/static TV-regret ratio
+为 0.9098（95% CI [0.9083, 0.9106]），paired TPF ratio 为 1.1688
+（[1.1635, 1.1756]），中央合成成本下 efficiency ratio 为 1.1419
+（[1.1367, 1.1485]）。逐轮更新因 14.94% update cost 几乎不回本；第一版 adaptive controller 因把
+当前 fast-weight 收益误当成下一次 update 的边际收益而过度更新。return-to-domain 区间的效率降至 static
+的 0.8984，暴露出必须加入 change detection、fast-weight decay/snapshot rollback。GPU backward 尚未
+测试，不能把本阶段 proxy 写成真实系统加速。
+
 ## Stage 4：Online Uno fast weights
 
 最小实现次序：
