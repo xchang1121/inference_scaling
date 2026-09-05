@@ -137,7 +137,31 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 默认贪心；随机采样传 `SamplingConfig(temperature=1, top_k=50, top_p=0.95)`。
 EOS 要显式传本模型 `eos_id`；不传则按预算生成，不得把这一设置隐瞒成自然结束。
 
-## 6. 完整计时与文件生命周期
+## 6. 同条件三路评测
+
+当前 r=32 / FP32 离线起点在仓库外，已用训练集做 600 步训练；不能用上节 r=8 / BF16 的示例配置加载它。
+开发评测使用验证集中的连续前缀，不是重新编写的指令任务；保留测试集不用于选配置。
+
+```bash
+python -m blockspec benchmark \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-offline.pt \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --split-role validation --dtype float32 --prompts 4 --prompt-length 128 \
+  --tokens 128 --block-size 4 --repeats 2 --update-stride 32 --replay-blocks 1
+```
+
+按文件顺序取前 4 个足够长记录的前 128 项作为输入。默认贪心、固定输出预算，**不按 EOS 提前结束**；
+需要自然结束时显式加 `--eos-id 1`。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
+重复次数必须为正偶数：AR／静态／在线，再在线／静态／AR。每个在线请求流从同一离线起点开始，
+流内保留学习后的权重与 Adam 状态；静态版不学习。内核预热不改变正式起点，第一次真实 Adam 更新的分配成本仍计入。
+
+输出汇总 TPS、每轮输出数、更新时间、含 learner 初始化的 TPS、逐请求贪心一致性、峰值显存和输入／实现 SHA。
+输出不同会标为 `greedy_identical: false`，不会挑掉该样本再计算“等价加速”。`--progress` 可打印逐请求计数。
+实验结束恢复传入模型的适配器，不把调参过程的在线权重发布回检查点；默认只写 stdout。
+此处少量开发流用于选实现，不提供统计显著性或公开基准排名。
+
+## 7. 完整计时与文件生命周期
 
 `Generation.seconds` 从 prefill 前开始，包含生成、反馈、在线更新、清理本请求反馈和末尾 GPU 同步。
 不含加载模型、离线训练、编码提示、存取检查点和转回文字；产品级延迟须另计这些项目。

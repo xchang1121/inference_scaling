@@ -15,7 +15,7 @@ import torch
 from .decoding import Generation, _check, _prefill
 from .model import cache_length, trim_cache
 from .online import Feedback, synchronize
-from .sampling import SamplingConfig, draw, probabilities, validate_distribution
+from .sampling import SamplingConfig, draw, greedy_tokens, probabilities, sample_logits, validate_distribution
 
 
 @dataclass
@@ -35,13 +35,13 @@ class CandidateTree:
 
     def layout(self, prefix_length, *, device):
         count = len(self.tokens)
-        allowed = torch.zeros(count, prefix_length + count, device=device, dtype=torch.bool)
+        allowed = torch.zeros(count, prefix_length + count, dtype=torch.bool)
         allowed[:, :prefix_length] = True
         for node in range(count):
             allowed[node, [prefix_length + i for i in self.path(node)]] = True
         ids = torch.tensor([self.tokens], device=device)
         positions = torch.tensor([self.depths], device=device) + prefix_length
-        return ids, positions, allowed[None, None]
+        return ids, positions, allowed[None, None].to(device)
 
 
 def build_tree(root, q, *, top_k=4, prefix_budget=16):
@@ -53,7 +53,8 @@ def build_tree(root, q, *, top_k=4, prefix_budget=16):
     validate_distribution(q)
     if q.ndim != 2 or top_k < 1 or prefix_budget < 1 or not 0 <= root < q.shape[-1]:
         raise ValueError("invalid tree dimensions or root")
-    values, ids = q.detach().cpu().topk(min(top_k, q.shape[-1]), dim=-1, sorted=True)
+    values, ids = q.detach().topk(min(top_k, q.shape[-1]), dim=-1, sorted=True)
+    values, ids = values.cpu(), ids.cpu()
     tree = CandidateTree([root], [-1], [0], [0.0], [{}])
     frontier = []
     def expand(parent, path):
@@ -92,10 +93,24 @@ def traverse_target(tree, target, *, budget, eos_id=None, generator=None):
     validate_distribution(target)
     if target.ndim != 2 or target.shape[0] != len(tree.tokens) or budget < 1:
         raise ValueError("invalid tree target shape or token budget")
+    return _traverse(tree, lambda node: int(draw(target[node], generator)), budget, eos_id)
+
+
+def traverse_greedy(tree, target_ids, *, budget, eos_id=None):
+    if (target_ids.shape != (len(tree.tokens),) or budget < 1
+            or target_ids.dtype not in (torch.int32, torch.int64)):
+        raise ValueError("integer greedy target per tree node required")
+    targets = target_ids.tolist()
+    if any(t < 0 for t in targets):
+        raise ValueError("negative target id")
+    return _traverse(tree, lambda node: targets[node], budget, eos_id)
+
+
+def _traverse(tree, next_token, budget, eos_id):
     output, path, teachers = [tree.tokens[0]], [0], []
     node, matched = 0, 0
     while len(output) < budget and output[-1] != eos_id:
-        token = int(draw(target[node], generator))
+        token = next_token(node)
         teachers.append(node)
         output.append(token)
         child = tree.children[node].get(token)
@@ -144,7 +159,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         remaining = max_new_tokens - len(output)
         if remaining == 1:
             logits, cache = model(seed, cache=cache, return_cache=True)
-            output.append(int(draw(probabilities(logits[0, -1], sampling), generator)))
+            output.append(int(sample_logits(logits[0, -1], sampling, generator)))
             forwards += 1
             break
         b = min(block_size, remaining)
@@ -155,7 +170,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         old_cache = cache
         draft, temporary = model(inputs, cache=cache, adapter_mask=mask, return_cache=True)
         forwards += 1
-        root = int(draw(probabilities(draft[0, 0], sampling), generator))
+        root = int(sample_logits(draft[0, 0], sampling, generator))
         if root == eos_id:
             output.append(root)
             break
@@ -168,8 +183,11 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         ids, positions, allowed = tree.layout(prefix_length, device=prompt.device)
         teacher, verified = model(ids, positions=positions, allowed=allowed, cache=clean_cache, return_cache=True)
         forwards += 1
-        traversal = traverse_target(tree, probabilities(teacher[0], sampling), budget=remaining,
-                                    eos_id=eos_id, generator=generator)
+        if sampling.temperature == 0:
+            traversal = traverse_greedy(tree, greedy_tokens(teacher[0]), budget=remaining, eos_id=eos_id)
+        else:
+            traversal = traverse_target(tree, probabilities(teacher[0], sampling), budget=remaining,
+                                        eos_id=eos_id, generator=generator)
         output.extend(traversal.tokens)
         # Keep all new tokens except the last one, which is next round's seed.
         committed_path = traversal.path[:len(traversal.tokens) - 1]

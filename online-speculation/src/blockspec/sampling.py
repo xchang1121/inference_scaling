@@ -43,6 +43,19 @@ def probabilities(logits: Tensor, config: SamplingConfig) -> Tensor:
     return work.softmax(-1)
 
 
+def greedy_tokens(logits):
+    """Exact greedy specialization: no vocabulary-sized one-hot allocation."""
+    if logits.ndim < 1 or logits.shape[-1] < 1 or not torch.isfinite(logits).all():
+        raise ValueError("nonempty finite logits required")
+    return logits.argmax(-1)
+
+
+def sample_logits(logits, config=SamplingConfig(), generator=None):
+    if config.temperature == 0:
+        return greedy_tokens(logits)
+    return draw(probabilities(logits, config), generator)
+
+
 def validate_distribution(p):
     if p.ndim < 1 or p.shape[-1] < 1 or not torch.isfinite(p).all() or (p < 0).any():
         raise ValueError("probabilities must be finite and nonnegative")
@@ -74,6 +87,21 @@ class Verification:
     accepted: int
     rejected_at: int | None
     supervised: int
+
+
+def verify_greedy(proposed, target_ids):
+    """The p/q correction for two one-hot laws reduces to equality + replacement."""
+    if (proposed.ndim != 1 or target_ids.shape != (proposed.numel() + 1,)
+            or proposed.dtype not in (torch.int32, torch.int64)
+            or target_ids.dtype not in (torch.int32, torch.int64)):
+        raise ValueError("integer proposals[n] and greedy targets[n+1] required")
+    candidates, targets = proposed.tolist(), target_ids.tolist()
+    if any(t < 0 for t in candidates + targets):
+        raise ValueError("negative token id")
+    for i, token in enumerate(candidates):
+        if token != targets[i]:
+            return Verification(candidates[:i] + [targets[i]], i, i, i + 1)
+    return Verification(candidates + [targets[-1]], len(candidates), None, len(candidates))
 
 
 def verify_linear(proposed: Tensor, q: Tensor, p: Tensor, *, generator=None,

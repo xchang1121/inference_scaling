@@ -30,9 +30,10 @@ src/blockspec/
   data.py            独立序列数据合同
   corpus.py          有界公开数据、问题分组划分及来源校验
   validation.py      固定窗口与噪声的独立验证
+  benchmark.py       配对请求流、输出对照与包含续训成本的 TPS
   diagnostics.py     等价执行布局的逐层数值审计
   tokenizer.py       只读本地 tokenizer.json
-  cli.py             小模型与真实权重离线训练入口
+  cli.py             数据、训练、三路评测与小模型闭环入口
 tests/               概率、梯度、缓存、端到端及外部数值参照
 scripts/check_local_model.py  本地真实权重的有限集成检查
 docs/ALGORITHM.md     唯一持续维护的算法主报告

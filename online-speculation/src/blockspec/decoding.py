@@ -7,7 +7,8 @@ import torch
 
 from .model import trim_cache
 from .online import Feedback, synchronize
-from .sampling import SamplingConfig, draw, probabilities, verify_linear
+from .sampling import (SamplingConfig, draw, greedy_tokens, probabilities,
+                       sample_logits, verify_greedy, verify_linear)
 
 
 @dataclass
@@ -58,7 +59,7 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
     output = []
     for _ in range(max_new_tokens):
         logits, cache = model(seed, cache=cache, return_cache=True)
-        token = int(draw(probabilities(logits[0, -1], sampling), generator))
+        token = int(sample_logits(logits[0, -1], sampling, generator))
         output.append(token)
         seed = prompt.new_tensor([[token]])
         if token == eos_id:
@@ -97,7 +98,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         remaining = max_new_tokens - len(output)
         if remaining == 1:
             logits, cache = model(seed, cache=cache, return_cache=True)
-            output.append(int(draw(probabilities(logits[0, -1], sampling), generator)))
+            output.append(int(sample_logits(logits[0, -1], sampling, generator)))
             forwards += 1
             break
         b = min(block_size, remaining)
@@ -109,8 +110,11 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         old_cache = cache
         draft, temporary_cache = model(inputs, cache=cache, adapter_mask=mask, return_cache=True)
         forwards += 1
-        draft_distribution = probabilities(draft[0], sampling)
-        candidates = draw(draft_distribution, generator)
+        if sampling.temperature == 0:
+            candidates = greedy_tokens(draft[0])
+        else:
+            draft_distribution = probabilities(draft[0], sampling)
+            candidates = draw(draft_distribution, generator)
         root = int(candidates[0])
         if root == eos_id:
             output.append(root)
@@ -120,8 +124,11 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         clean_cache = trim_cache(temporary_cache, clean_length)
         teacher, verified_cache = model(candidates[None], cache=clean_cache, return_cache=True)
         forwards += 1
-        target = probabilities(teacher[0], sampling)
-        verified = verify_linear(candidates[1:], draft_distribution[1:], target, generator=generator)
+        if sampling.temperature == 0:
+            verified = verify_greedy(candidates[1:], greedy_tokens(teacher[0]))
+        else:
+            target = probabilities(teacher[0], sampling)
+            verified = verify_linear(candidates[1:], draft_distribution[1:], target, generator=generator)
         committed = [root] + verified.tokens
         if eos_id is not None and eos_id in committed:
             committed = committed[:committed.index(eos_id) + 1]
