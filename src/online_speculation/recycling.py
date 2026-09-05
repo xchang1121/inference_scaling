@@ -69,11 +69,12 @@ class RecyclingConfig:
     throughput_margin: float = 0.05
     exploration_trials: int = 2
     probe_interval: int = 16
+    noise_lora_scale: float = 1.0
 
     def validate(self) -> None:
         if self.block_size < 2:
             raise ValueError("recycling requires block_size >= 2")
-        if self.policy not in {"disabled", "always", "bounded", "tps"}:
+        if self.policy not in {"disabled", "always", "bounded", "tps", "warmstart", "scaled"}:
             raise ValueError("unknown recycling policy")
         if self.max_recycle_depth < 1 or self.min_candidates < 1:
             raise ValueError("depth and candidate bounds must be positive")
@@ -83,6 +84,8 @@ class RecyclingConfig:
             raise ValueError("throughput_margin must be finite and nonnegative")
         if self.exploration_trials < 1 or self.probe_interval < 1:
             raise ValueError("exploration and probe bounds must be positive")
+        if not math.isfinite(self.noise_lora_scale) or not 0 <= self.noise_lora_scale <= 1:
+            raise ValueError("noise_lora_scale must lie in [0, 1]")
 
 
 @dataclass
@@ -124,8 +127,10 @@ class RecyclingController:
     def decide(self, *, candidates: int, depth: int) -> tuple[bool, str]:
         self.decisions += 1
         config = self.config
-        if config.policy == "disabled":
+        if config.policy in {"disabled", "scaled"}:
             return False, "disabled"
+        if config.policy == "warmstart":
+            return False, "warmstart-refill"
         if candidates < config.min_candidates:
             return False, "empty-or-short-tail"
         if config.policy == "always":

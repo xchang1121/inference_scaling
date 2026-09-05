@@ -117,3 +117,20 @@ def test_stop_token_truncates_recycling_cycle_and_retains_valid_kv() -> None:
     assert result.metrics.output_token_ids[-1] in runtime.stop_token_ids
     assert not any(t in runtime.stop_token_ids for t in result.metrics.output_token_ids[:-1])
     assert runtime.model.last_cache.tokens == ids[0].tolist() + list(result.metrics.output_token_ids[:-1])
+
+
+@pytest.mark.parametrize("scale", [0.0, 0.5, 1.0])
+def test_warmstart_changes_noise_but_preserves_history_target_and_kv(scale) -> None:
+    ids = torch.tensor([[3, 5, 7]])
+    runtime = _runtime()
+    result = HfRecyclingUnoRunner(runtime).generate(
+        ids, max_new_tokens=43, seed=47,
+        config=RecyclingConfig(
+            block_size=8, policy="warmstart", noise_lora_scale=scale,
+        ),
+    )
+    reference = _runtime().generate_ar(ids, max_new_tokens=43, seed=0)
+    assert result.metrics.output_token_ids == reference.output_token_ids
+    assert result.diagnostics.get("warmstart_input_tokens", 0) > 0
+    assert result.diagnostics.get("recycle_cycles", 0) == 0
+    assert runtime.model.last_cache.tokens == ids[0].tolist() + list(reference.output_token_ids[:-1])

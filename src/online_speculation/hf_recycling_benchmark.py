@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import subprocess
 import time
 from collections import defaultdict
 from dataclasses import asdict
@@ -42,6 +43,13 @@ def _method(value: str) -> tuple[str, RecyclingConfig | None, int]:
         if block < 2:
             raise ValueError("static width must be at least two")
         return value, None, block
+    if parts[0] in {"warmstart", "scaled"} and len(parts) in {2, 3}:
+        config = RecyclingConfig(
+            block_size=int(parts[1]), policy=parts[0],
+            noise_lora_scale=float(parts[2]) if len(parts) == 3 else 1.0,
+        )
+        config.validate()
+        return value, config, config.block_size
     if parts[0] in {"always", "tps", "bounded", "disabled"} and len(parts) in {2, 3}:
         config = RecyclingConfig(
             block_size=int(parts[1]), policy=parts[0],
@@ -50,6 +58,15 @@ def _method(value: str) -> tuple[str, RecyclingConfig | None, int]:
         config.validate()
         return value, config, config.block_size
     raise ValueError("method must be static:B or POLICY:B[:DEPTH]")
+
+
+def gpu_snapshot() -> str:
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=temperature.gpu,clocks.sm,clocks.mem,power.draw,utilization.gpu",
+         "--format=csv,noheader"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    return result.stdout.strip()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -195,10 +212,12 @@ def main(argv: list[str] | None = None) -> None:
             if (rep + prompt_index) % 2:
                 order = list(reversed(order))
             for method in order:
+                gpu_before = gpu_snapshot()
                 result = run(method, ids, args.max_new_tokens, seed)
                 payload["records"].append({
                     "method": method[0], "workload": name, "prompt": prompt,
-                    "seed": seed, "method_order": [m[0] for m in order], **result,
+                    "seed": seed, "method_order": [m[0] for m in order],
+                    "gpu_before": gpu_before, "gpu_after": gpu_snapshot(), **result,
                 })
                 metric = result["metrics"]
                 print(f'{name} seed={seed} {method[0]} '
@@ -208,6 +227,9 @@ def main(argv: list[str] | None = None) -> None:
     payload["summary"] = summarize(
         payload["records"], samples=args.bootstrap_samples, seed=args.seed,
     )
+    if args.temperature > 0:
+        for summary in payload["summary"].values():
+            summary["greedy_token_ids_equal_to_baseline"] = None
     payload["completed"] = True
     save()
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2), flush=True)

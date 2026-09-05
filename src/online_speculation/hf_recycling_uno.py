@@ -115,8 +115,14 @@ class HfRecyclingUnoRunner:
                 outcome = HfReplayUnoRunner._static_cycle(
                     self, cache=cache, seed_token=seed_token,
                     block_size=config.block_size, generator=generator,
-                    retain_target_predictions=config.policy != "disabled",
+                    retain_target_predictions=config.policy not in {"disabled", "scaled"},
+                    noise_prefix=candidates if config.policy == "warmstart" else None,
+                    noise_lora_scale=config.noise_lora_scale,
                 )
+                if config.policy == "warmstart":
+                    counts["warmstart_input_tokens"] += min(
+                        candidate_count, config.block_size - 1,
+                    )
                 depth = 0
                 shapes[f"refill:{config.block_size}"] += 1
             committed = list(outcome.verification.committed)
