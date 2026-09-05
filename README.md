@@ -18,14 +18,14 @@
 
 ```text
 src/blockspec/
-  model.py           独立因果 Transformer、条件低秩层、KV
+  model.py           独立因果 Transformer、条件低秩层、KV、后段特征重放
   diffusion.py       离散噪声与预测—校正数学核
   distillation.py    干净／带噪配对布局与蒸馏损失
   training.py        离线课程与 KL 热身
   sampling.py        概率变换、拒绝接受与残差抽样
   decoding.py        真正 AR 基线、线性验证解码
   tree.py            前缀预算树、树注意力、精确目标路径遍历
-  online.py          全适配器重放、反向、更新与版本
+  online.py          原适配器全量／末层子集续训、反向、更新与版本
   checkpoint.py     自有格式、基座指纹、本地权重桥接
   data.py            独立序列数据合同
   corpus.py          有界公开数据、问题分组划分及来源校验

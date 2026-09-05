@@ -8,7 +8,7 @@ import time
 import torch
 
 from .distillation import divergence
-from .model import Cache, is_adapter
+from .model import Cache, DraftBoundary, is_adapter
 
 
 def synchronize(model):
@@ -23,11 +23,13 @@ class Feedback:
     cache: Cache | None            # base-only prefix before the seed
     teacher_logits: torch.Tensor  # [valid noise positions, vocabulary]
     valid: int                    # accepted positions + first rejection, if any
+    boundary: DraftBoundary | None = None
 
-    def detached(self):
-        cache = None if self.cache is None else tuple((k.detach(), v.detach()) for k, v in self.cache)
+    def detached(self, *, cache_start=0):
+        cache = None if self.cache is None else tuple((k.detach(), v.detach()) for k, v in self.cache[cache_start:])
         return Feedback(self.inputs.detach().clone(), cache,
-                        self.teacher_logits.detach().clone(), self.valid)
+                        self.teacher_logits.detach().clone(), self.valid,
+                        None if self.boundary is None else self.boundary.detached())
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class OnlineConfig:
     learning_rate: float = 1e-4
     loss: str = "l1"
     clip_norm: float = 1.0
+    train_last_layers: int | None = None
 
     def __post_init__(self):
         if self.stride < 1 or self.replay_blocks < 1:
@@ -45,6 +48,8 @@ class OnlineConfig:
             raise ValueError("finite positive optimizer scales required")
         if self.loss not in ("l1", "tv", "forward_kl", "reverse_kl"):
             raise ValueError("unknown online loss")
+        if self.train_last_layers is not None and (type(self.train_last_layers) is not int or self.train_last_layers < 1):
+            raise ValueError("a positive integer suffix size or None required")
 
 
 class OnlineLearner:
@@ -57,11 +62,26 @@ class OnlineLearner:
 
     def __init__(self, model, config=OnlineConfig()):
         self.model, self.config = model, config
+        count = model.config.num_hidden_layers
+        if config.train_last_layers is not None and config.train_last_layers > count:
+            raise ValueError("online suffix exceeds the number of model layers")
+        self.capture_layer = None if config.train_last_layers is None else count - config.train_last_layers
         model.train_adapters_only()
-        parameters = model.adapter_parameters()
-        if not parameters:
+        if self.capture_layer is not None:
+            for layer in model.model.layers[:self.capture_layer]:
+                for parameter in layer.parameters():
+                    parameter.requires_grad_(False)
+        self.parameters = [p for p in model.adapter_parameters() if p.requires_grad]
+        self._prefix_parameters = ([p for p in model.model.embed_tokens.parameters()] +
+                                   list(model.model.layers[:self.capture_layer].parameters())
+                                   if self.capture_layer is not None else [])
+        # In-place mutations of the frozen prefix invalidate all cached features.
+        # Replacing parameters or writing through .data is outside this learner's
+        # immutable-model contract, just as changing the target mid-request is.
+        self._prefix_versions = [p._version for p in self._prefix_parameters]
+        if not self.parameters:
             raise ValueError("online continuation needs trainable adapter parameters")
-        self.optimizer = torch.optim.AdamW(parameters, lr=config.learning_rate, weight_decay=0)
+        self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate, weight_decay=0)
         self.replay = deque(maxlen=config.replay_blocks)
         self.rounds, self.updates, self.version = 0, 0, 0
         self.update_seconds, self.last_loss = 0.0, None
@@ -77,16 +97,25 @@ class OnlineLearner:
                 raise ValueError("invalid replay dimensions")
             if feedback.teacher_logits.shape != (feedback.valid, self.model.config.vocab_size):
                 raise ValueError("teacher rows must match the valid prefix")
-            self.replay.append(feedback.detached())
+            if self.capture_layer is not None:
+                self._check_prefix()
+                if feedback.boundary is None or feedback.boundary.start_layer != self.capture_layer:
+                    raise ValueError("suffix continuation requires the matching draft boundary")
+            self.replay.append(feedback.detached(cache_start=self.capture_layer or 0))
         if may_update and self.replay and self.rounds % self.config.stride == 0:
             return self.update()
         return None
+
+    def _check_prefix(self):
+        if any(p.requires_grad or p._version != v for p, v in zip(self._prefix_parameters, self._prefix_versions)):
+            raise RuntimeError("frozen draft prefix changed; discard learner and cached boundaries")
 
     def update(self):
         if not self.replay:
             return None
         if any(p.requires_grad for n, p in self.model.named_parameters() if not is_adapter(n)):
             raise RuntimeError("the target/base model must stay frozen")
+        self._check_prefix()
         synchronize(self.model)
         start = time.perf_counter()
         self.optimizer.zero_grad(set_to_none=True)
@@ -95,16 +124,19 @@ class OnlineLearner:
         # Backward one sample at a time: do not retain R full activation graphs.
         with torch.enable_grad():
             for item in self.replay:
-                mask = torch.ones_like(item.inputs, dtype=torch.bool)
-                mask[:, 0] = False
-                logits = self.model(item.inputs, cache=item.cache, adapter_mask=mask)
+                if self.capture_layer is None:
+                    mask = torch.ones_like(item.inputs, dtype=torch.bool)
+                    mask[:, 0] = False
+                    logits = self.model(item.inputs, cache=item.cache, adapter_mask=mask)
+                else:
+                    logits = self.model.forward_suffix(item.boundary, cache=item.cache)
                 loss = divergence(logits[0, 1:1 + item.valid], item.teacher_logits,
                                   self.config.loss).sum() / positions
                 if not torch.isfinite(loss):
                     raise FloatingPointError("nonfinite online loss")
                 loss.backward()
                 total += float(loss.detach())
-        torch.nn.utils.clip_grad_norm_(self.model.adapter_parameters(), self.config.clip_norm,
+        torch.nn.utils.clip_grad_norm_(self.parameters, self.config.clip_norm,
                                        error_if_nonfinite=True)
         self.optimizer.step()
         synchronize(self.model)

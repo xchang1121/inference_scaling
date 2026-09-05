@@ -15,6 +15,23 @@ Cache = tuple[tuple[Tensor, Tensor], ...]
 
 
 @dataclass(frozen=True)
+class DraftBoundary:
+    """Input to a suffix of layers, captured during the ordinary draft pass."""
+
+    hidden: Tensor
+    positions: Tensor
+    allowed: Tensor
+    adapter_mask: Tensor | None
+    start_layer: int
+
+    def detached(self):
+        return DraftBoundary(self.hidden.detach().clone(), self.positions.detach().clone(),
+                             self.allowed.detach().clone(),
+                             None if self.adapter_mask is None else self.adapter_mask.detach().clone(),
+                             self.start_layer)
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     vocab_size: int = 32
     hidden_size: int = 64
@@ -247,13 +264,16 @@ class Decoder(nn.Module):
             self.lm_head.weight = self.model.embed_tokens.weight
 
     def forward(self, tokens, *, positions=None, allowed=None, adapter_mask=None,
-                cache: Cache | None = None, return_cache=False):
+                cache: Cache | None = None, return_cache=False, capture_layer=None):
         if tokens.ndim != 2 or tokens.shape[1] < 1:
             raise ValueError("tokens must have shape [batch, nonempty sequence]")
         b, length = tokens.shape
         prefix = cache_length(cache)
         if cache is not None and len(cache) != self.config.num_hidden_layers:
             raise ValueError("cache layer count differs from model")
+        if capture_layer is not None and (type(capture_layer) is not int or not return_cache
+                                           or not 0 <= capture_layer < self.config.num_hidden_layers):
+            raise ValueError("boundary capture needs return_cache and a valid layer")
         if positions is None:
             positions = torch.arange(prefix, prefix + length, device=tokens.device)[None].expand(b, -1)
         if positions.shape != tokens.shape:
@@ -269,12 +289,41 @@ class Decoder(nn.Module):
         hidden = self.model.embed_tokens(tokens)
         new_cache = []
         for i, layer in enumerate(self.model.layers):
+            if i == capture_layer:
+                boundary = DraftBoundary(hidden, positions, allowed, adapter_mask, i)
             hidden, kv = layer(hidden, positions, allowed, adapter_mask,
                                None if cache is None else cache[i])
             if return_cache:
                 new_cache.append(kv)
         logits = self.lm_head(self.model.norm(hidden))
+        if capture_layer is not None:
+            return logits, tuple(new_cache), boundary
         return (logits, tuple(new_cache)) if return_cache else logits
+
+    def forward_suffix(self, boundary: DraftBoundary, *, cache: Cache | None = None):
+        """Exact suffix recomputation, given a still-valid frozen-prefix boundary.
+
+        cache contains only this suffix's BASE prefix KV. The caller must freeze
+        all layers before start_layer for the lifetime of the captured boundary.
+        """
+        start = boundary.start_layer
+        if type(start) is not int or not 0 <= start < self.config.num_hidden_layers:
+            raise ValueError("boundary start must be an existing integer layer")
+        remaining = self.config.num_hidden_layers - start
+        if cache is not None and len(cache) != remaining:
+            raise ValueError("boundary/cache does not match the suffix layer count")
+        hidden = boundary.hidden
+        if hidden.ndim != 3 or hidden.shape[-1] != self.config.hidden_size or not hidden.shape[1]:
+            raise ValueError("invalid boundary hidden state")
+        length = hidden.shape[1]
+        if (boundary.positions.shape != hidden.shape[:2] or boundary.allowed.dtype != torch.bool
+                or boundary.allowed.shape[-2:] != (length, cache_length(cache) + length)
+                or (boundary.adapter_mask is not None and boundary.adapter_mask.shape != hidden.shape[:2])):
+            raise ValueError("boundary layout does not match replay dimensions")
+        for i in range(start, self.config.num_hidden_layers):
+            hidden, _ = self.model.layers[i](hidden, boundary.positions, boundary.allowed,
+                                            boundary.adapter_mask, None if cache is None else cache[i - start])
+        return self.lm_head(self.model.norm(hidden))
 
     def adapter_parameters(self):
         return [p for n, p in self.named_parameters() if is_adapter(n)]

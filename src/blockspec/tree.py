@@ -168,7 +168,10 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache
-        draft, temporary = model(inputs, cache=cache, adapter_mask=mask, return_cache=True)
+        capture = learner.capture_layer if learner is not None else None
+        result = model(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        draft, temporary = result[:2]
+        boundary = result[2] if capture is not None else None
         forwards += 1
         root = int(sample_logits(draft[0, 0], sampling, generator))
         if root == eos_id:
@@ -199,7 +202,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         done = len(output) >= max_new_tokens or output[-1] == eos_id
         if learner is not None:
             teacher_nodes = traversal.teachers[:b - 1]
-            feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes))
+            feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes), boundary)
             learner.observe(feedback, may_update=not done)
         if done:
             break

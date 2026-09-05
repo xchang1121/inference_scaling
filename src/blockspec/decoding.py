@@ -108,7 +108,10 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache
-        draft, temporary_cache = model(inputs, cache=cache, adapter_mask=mask, return_cache=True)
+        capture = learner.capture_layer if learner is not None else None
+        result = model(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        draft, temporary_cache = result[:2]
+        boundary = result[2] if capture is not None else None
         forwards += 1
         if sampling.temperature == 0:
             candidates = greedy_tokens(draft[0])
@@ -144,7 +147,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         seed = prompt.new_tensor([[output[-1]]])
         done = len(output) >= max_new_tokens or output[-1] == eos_id
         if learner is not None:
-            feedback = Feedback(inputs, old_cache, teacher[0, :used], used)
+            feedback = Feedback(inputs, old_cache, teacher[0, :used], used, boundary)
             learner.observe(feedback, may_update=not done)
         if done:
             break

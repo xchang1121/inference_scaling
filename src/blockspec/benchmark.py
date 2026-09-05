@@ -89,6 +89,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     original_requires_grad = {name: p.requires_grad for name, p in model.named_parameters()}
     original_dtypes = {name: p.dtype for name, p in model.named_parameters()}
     measurements, generated, setup, adapter_changes = {}, {}, {}, []
+    trainable = 0
     spec = generate_tree if config.sampler == "tree" else generate_speculative
     options = {"block_size": config.block_size}
     if config.sampler == "tree":
@@ -110,7 +111,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
         warm = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1,
                                                  learning_rate=online_config.learning_rate,
                                                  loss=online_config.loss,
-                                                 clip_norm=online_config.clip_norm))
+                                                 clip_norm=online_config.clip_norm,
+                                                 train_last_layers=online_config.train_last_layers))
         spec(model, prompts[0], max(4, config.warmup_tokens), **options, learner=warm,
              eos_id=config.eos_id, generator=rng(config.seed))
         del warm
@@ -128,6 +130,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                     synchronize(model)
                     start = time.perf_counter()
                     learner = OnlineLearner(model, online_config)
+                    trainable = sum(p.numel() for p in learner.parameters)
                     synchronize(model)
                     setup[(repeat, arm)] = time.perf_counter() - start
                 for request, prompt in enumerate(prompts):
@@ -182,6 +185,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             "repeats": repeats, "comparisons": comparisons,
             "greedy_identical": all(c["identical"] for c in comparisons),
             "online_adapter_changed_per_stream": adapter_changes,
+            "online_trainable_parameters": trainable,
             "base_unchanged": True, "adapter_restored": True, "peak_allocated_bytes": peak,
             "prompt_sha256": prompt_hashes,
             "scope": "balanced development continuation streams; no test-set or statistical-significance claim"}

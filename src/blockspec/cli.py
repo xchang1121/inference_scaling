@@ -156,6 +156,7 @@ def main():
     bench.add_argument("--warmup-tokens", type=int, default=8)
     bench.add_argument("--update-stride", type=int, default=32)
     bench.add_argument("--replay-blocks", type=int, default=1)
+    bench.add_argument("--online-last-layers", type=int, help="optional exact suffix replay; omit for full-adapter updates")
     bench.add_argument("--learning-rate", type=float, default=1e-4)
     bench.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
     bench.add_argument("--eos-id", type=int, help="omit for a declared fixed-token-budget measurement")
@@ -165,11 +166,13 @@ def main():
     args = parser.parse_args()
     if args.command == "benchmark":
         from .benchmark import BenchmarkConfig, benchmark_streams, continuation_prompts
+        implementation_sha = implementation_fingerprint()
         config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
                                  warmup_tokens=args.warmup_tokens, seed=args.seed, sampler=args.sampler,
                                  top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id)
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
-                                     learning_rate=args.learning_rate, loss=args.loss)
+                                     learning_rate=args.learning_rate, loss=args.loss,
+                                     train_last_layers=args.online_last_layers)
         if args.threads < 1:
             parser.error("positive threads required")
         torch.set_num_threads(args.threads)
@@ -191,7 +194,7 @@ def main():
         result = benchmark_streams(model, prompts, config, online_config, progress=progress)
         result.update(data_sha256=data_sha, split_role=args.split_role,
                       adapter_sha256=hashlib.sha256(args.adapter.read_bytes()).hexdigest(),
-                      implementation_sha256=implementation_fingerprint(), dtype=args.dtype,
+                      implementation_sha256_at_start=implementation_sha, dtype=args.dtype,
                       offline_training_config=metadata.get("training_config"),
                       device=torch.cuda.get_device_name() if str(args.device).startswith("cuda") else str(args.device))
         print(json.dumps(result), flush=True)
