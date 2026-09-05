@@ -83,13 +83,14 @@ uniform-noise block、TV/KL distillation、progressive block curriculum；只缩
 
 ### 路线 B：官方性能复现
 
-- 准备 Ubuntu 24.04 WSL2 或独立 Linux。
+- 准备 Ubuntu 22.04 WSL2 或独立 Linux；22.04 原生 Python 3.10，可避免额外解释器来源。
 - 在 Linux 文件系统而非 `/mnt/c` 创建 Python 3.10 环境。
 - 严格安装官方 cu128/FA2 版本，先运行 Uno 1B、FA2 linear sampler。
 - 固定 prompt tokens、generated tokens、warmup、seed、temperature、top-p/top-k 和 batch。
 - 同一进程分别测 AR 和 Uno，保存 commit、checkpoint revision、GPU clocks/功耗和 peak memory。
 
-安装 WSL/系统组件会改变主机配置且可能需要重启，本阶段不自动执行；算法工作不依赖它而继续推进。
+Stage 9 已在用户明确授权后启动；系统改动、重启边界和依赖版本见
+`STAGE9_WSL2_RUNTIME_PROTOCOL.md`。安装器仍不会自动重启或安装 Linux GPU driver。
 
 ## 7. 结论
 
