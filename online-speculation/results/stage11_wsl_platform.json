@@ -1,0 +1,12 @@
+{
+    "started_at":  "2026-09-05T02:43:51.1916599Z",
+    "feature":  "VirtualMachinePlatform",
+    "automatically_reboot":  false,
+    "stage":  "complete",
+    "before":  "Disabled",
+    "after":  "Enabled",
+    "restart_required":  true,
+    "succeeded":  true,
+    "failure":  null,
+    "finished_at":  "2026-09-05T02:44:07.6139245Z"
+}
