@@ -109,12 +109,12 @@ python -m blockspec train \
 ```
 
 上述配置已在本机 3090 执行，600 步由 150 步热身与 450 步纯 L1 训练组成。
-使用自己的纯文本 JSONL 时换数据路径并加 `--text-data`；已编码的当前数据无需该开关。
+纯文本 JSONL 通过 `--text-data` 启用文本编码；当前数据已经保存为 token 编号，直接使用上述命令。
 数据保存在仓库外。数据和噪声分别设随机种子。训练前后检查基座指纹；
-适配器检查点含模型配置、基座指纹，错误基座／精度会被拒绝。
+适配器检查点保存模型配置和基座指纹，加载器据此核对基座与精度。
 
 增加 `--validation-data /path/validation.jsonl --validation-every 100 --validation-batches 8`，
-可在训练前及每 100 步检查固定窗口、固定噪声上的学生／老师差异。训练与验证问题或样本重叠会拒绝启动。
+可在训练前及每 100 步检查固定窗口、固定噪声上的学生／老师差异。启动时校验训练与验证集合的独立性。
 检查点记录训练配置和输入文件 SHA，训练时间包含验证开销。加载时使用检查点对应的基座、秩和精度。
 
 诊断数值差异可运行 `python scripts/audit_model_precision.py --base /path/to/base`；
@@ -153,7 +153,7 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 ```
 
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
-若要限制后续训练成本，可用 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)`，
+`OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)` 提供末层续训配置，
 续训最后 4 层中的适配器，并复用起草的前段特征；其余适配器以固定权重参与起草。
 `train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见主报告 9.3。
 检查点保存权重，新建 learner 时初始化 Adam 状态。
@@ -178,8 +178,8 @@ python -m blockspec benchmark \
 ```
 
 按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
-需要自然结束时显式加 `--eos-id 1`。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
-重复次数必须为正偶数：AR／静态／在线，再在线／静态／AR。每个在线请求流从同一离线起点开始，
+`--eos-id 1` 启用结束标记。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
+重复次数取正偶数，每对按 AR／静态／在线、在线／静态／AR 的顺序运行。每个在线请求流从同一离线起点开始，
 在线流内保留学习后的权重与 Adam 状态，静态流保持离线权重。预热结束恢复正式起点，第一次 Adam 状态分配计入更新时间。
 
 输出汇总 TPS、每轮输出数、更新时间、含 learner 初始化的 TPS、逐请求贪心一致性、峰值显存和输入／实现 SHA。
@@ -187,22 +187,22 @@ python -m blockspec benchmark \
 加 `--online-last-layers 4` 测相同离线起点的末 4 层续训；会另外报告实际可训练参数数。
 全量续训使用默认设置，末层续训通过该参数选择可训练的层数。
 重跑主报告当前表格：在上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12 --online-last-layers 4`。
-保持树参数但去掉 `--online-last-layers 4`，就是主报告中另测的全适配器基线。
+全适配器树基线对应上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12`。
 
 加 `--execution cuda_graph` 启用同一个独立固定形状执行器，AR、静态和在线都使用它。
-本机当前表格使用此开关；默认 `eager` 仍是透明的普通执行对照。
+本机当前表格使用此开关；默认 `eager` 使用普通执行路径。
 图在预热和请求计时前准备，输出 `execution.setup_seconds_by_arm` 和 `tps_including_all_setup`，
 分别报告每个方法单独部署所需的图准备时间，以及包含图准备和 learner 初始化的流级 TPS。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
 执行配置为 FP32 CUDA、batch=1、TF32 关闭。
-长 prefill 普通执行，短查询使用预先准备的形状和历史容量；形状或容量越界时报错。
+长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。
 实验结束恢复传入模型的适配器，结果写入 stdout。
 
 ## 7. 完整计时与文件生命周期
 
 `Generation.seconds` 从 prefill 前开始，包含生成、反馈、在线更新、清理本请求反馈和末尾 GPU 同步。
 `update_seconds` 记录重放更新区域。learner 初始化和图准备单列，并计算包含这两项的流级 TPS。
-产品级延迟还需加上模型加载、提示编码、检查点存取和文本解码；离线训练时间单独记录。
+完整服务流程的延迟还包括模型加载、提示编码、检查点存取和文本解码；离线训练时间单独记录。
 
 比较时固定基座、离线起点、采样、精度、输出预算、缓存条件。预热后正反顺序成对运行，报告总 tokens / 总秒数。
 三路使用相同优化，测量期间独占实验 GPU。

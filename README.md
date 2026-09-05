@@ -23,7 +23,7 @@ src/blockspec/
   diffusion.py       离散噪声与预测—校正数学核
   distillation.py    干净／带噪配对布局与蒸馏损失
   training.py        离线课程与 KL 热身
-  sampling.py        概率变换、拒绝接受与残差抽样
+  sampling.py        概率变换、候选接受与残差抽样
   decoding.py        AR 基线、线性验证解码
   tree.py            前缀预算树、树注意力、精确目标路径遍历
   online.py          原适配器全量／末层子集续训、反向、更新与版本
@@ -33,7 +33,7 @@ src/blockspec/
   validation.py      固定窗口与噪声的独立验证
   benchmark.py       配对请求流、输出对照与包含续训成本的 TPS
   diagnostics.py     等价执行布局的逐层数值审计
-  tokenizer.py       只读本地 tokenizer.json
+  tokenizer.py       本地 tokenizer.json 解析
   cli.py             数据、训练、三路评测与小模型闭环入口
 tests/               概率、梯度、缓存、端到端及外部数值参照
 scripts/check_local_model.py  本地基座权重的集成检查
