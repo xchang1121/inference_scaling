@@ -1,0 +1,41 @@
+diff --git a/nano_vllm_uno/config.py b/nano_vllm_uno/config.py
+--- a/nano_vllm_uno/config.py
++++ b/nano_vllm_uno/config.py
+@@ -133,6 +133,7 @@
+             if (
+                 self.tree_verify_size is not None
+                 and self.attention_backend == "fa2"
++                and os.environ.get("UNO_EXPERIMENTAL_FA2_TREE", "0") != "1"
+             ):
+                 raise ValueError("tree verification requires FA3 or FA4")
+         self.cuda_graph_block_sizes = (
+diff --git a/nano_vllm_uno/engine/model_runner.py b/nano_vllm_uno/engine/model_runner.py
+--- a/nano_vllm_uno/engine/model_runner.py
++++ b/nano_vllm_uno/engine/model_runner.py
+@@ -62,5 +62,11 @@
+         self._use_flash_tree_attention = (
+-            config.attention_backend in {"fa3", "fa4"}
++            (
++                config.attention_backend in {"fa3", "fa4"}
++                or (
++                    config.attention_backend == "fa2"
++                    and os.environ.get("UNO_EXPERIMENTAL_FA2_TREE", "0") == "1"
++                )
++            )
+             and config.dtype != torch.float32
+         )
+ 
+diff --git a/nano_vllm_uno/layers/attention.py b/nano_vllm_uno/layers/attention.py
+--- a/nano_vllm_uno/layers/attention.py
++++ b/nano_vllm_uno/layers/attention.py
+@@ -595,5 +595,8 @@
+             if (
+-                self.attention_backend != "fa2"
++                (
++                    self.attention_backend != "fa2"
++                    or os.environ.get("UNO_EXPERIMENTAL_FA2_TREE", "0") == "1"
++                )
+                 and q.is_cuda
+                 and not use_torch_fp32_fallback
+                 and context.tree_prefix_seqlens is not None
+

@@ -1,0 +1,14 @@
+[
+  {"name":"english_lru_lfu","prompt":"Compare least-recently-used and least-frequently-used cache eviction. Give an access sequence where their choices differ, and explain when each is useful."},
+  {"name":"english_dns","prompt":"Explain how a browser resolves a domain name using DNS. Distinguish a recursive resolver from an authoritative server and explain the effect of TTL-based caching."},
+  {"name":"english_backpressure","prompt":"Explain backpressure in a producer-consumer pipeline. Describe a bounded queue design and compare blocking a producer with dropping old messages."},
+  {"name":"chinese_tcp","prompt":"解释 TCP 中流量控制与拥塞控制的区别。分别说明它们保护什么对象、使用什么反馈，以及发送窗口如何受到二者限制。"},
+  {"name":"chinese_crypto","prompt":"向初学者解释对称加密与非对称加密。说明两者的密钥管理差异，以及为什么实际通信会把它们结合起来使用。"},
+  {"name":"chinese_undo","prompt":"设计一个支持撤销和重做的文本编辑器。解释命令模式、两个栈如何维护，以及执行新操作后为什么要清空重做历史。"},
+  {"name":"code_lower_bound","prompt":"Implement a Python lower_bound function returning the first index whose value is at least a given target in a sorted list. Include empty-list and duplicate-value tests and explain the loop invariant."},
+  {"name":"code_toposort","prompt":"Write a Python topological sort using Kahn's algorithm. Detect a cycle, include isolated vertices, and show tests for a valid DAG and a cyclic graph."},
+  {"name":"code_rle","prompt":"Implement run-length encoding and decoding of a string in Python using pairs of characters and counts, not a delimiter-based string format. Include round-trip tests and handle an empty input."},
+  {"name":"math_geometric","prompt":"Derive a formula for 1 + 2 + 4 + ... + 2^n by subtracting two equations. Verify it for n=3, and explain how the formula changes for a general ratio r not equal to 1."},
+  {"name":"math_euclid","prompt":"Find gcd(252,105) using the Euclidean algorithm. Show every remainder step and explain why replacing (a,b) by (b,a mod b) preserves the greatest common divisor."},
+  {"name":"math_dice","prompt":"Two fair six-sided dice are rolled. Given that their sum is at least 10, what is the probability that at least one die shows 6? Enumerate the ordered outcomes and explain the conditional probability."}
+]
