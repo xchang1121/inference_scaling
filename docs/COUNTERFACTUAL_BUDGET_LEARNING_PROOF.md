@@ -3,6 +3,9 @@
 2026-09-05。仅设计与 CPU 数学工具，未纳入 R3E 冻结 held-out。
 当前 production-candidate controller 仍是 past-cost + draft-surrogate，不暗中更改它。
 
+后续独立候选 R6A 的实现、额外残差证明和参数冻结见
+[反馈校正协议](R6A_FEEDBACK_CORRECTED_TREE_PROTOCOL.md)。它不改变 R3E 的运行配置。
+
 ## 1. 为什么值得研究
 
 当前 controller 需要比较不同轮的接受长度与成本，而每轮上下文不同。

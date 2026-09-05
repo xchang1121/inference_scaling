@@ -43,12 +43,13 @@ def _method(value: str) -> tuple[str, RecyclingConfig | TreeConfig | None, int]:
     parts = value.split(":")
     if value == "ar":
         return value, None, 0
-    if parts[0] in {"tree", "treeonline", "treebudget", "treeadaptive"} and len(parts) in {3, 4}:
+    if parts[0] in {"tree", "treeonline", "treebudget", "treeadaptive", "treefeedback"} and len(parts) in {3, 4}:
         config = TreeConfig(
             block_size=int(parts[1]), nodes=int(parts[2]),
             top_k=int(parts[3]) if len(parts) == 4 else 4,
             online_rank=parts[0] in {"treeonline", "treeadaptive"},
-            node_budgets=(8, 16, 32) if parts[0] in {"treebudget", "treeadaptive"} else (),
+            node_budgets=(8, 16, 32) if parts[0] in {"treebudget", "treeadaptive", "treefeedback"} else (),
+            feedback_budget=parts[0] == "treefeedback",
         )
         config.validate()
         return value, config, config.block_size
@@ -227,6 +228,10 @@ def main(argv: list[str] | None = None) -> None:
         "design": {
             **vars(args), "model_path": str(args.model_path), "adapter_path": str(args.adapter_path),
             "output": str(args.output), "workloads": workloads,
+            "resolved_method_configs": {
+                name: {"block_size": block, "config": asdict(config) if config is not None else None}
+                for name, config, block in methods
+            },
             "sampling": asdict(sampling), "request_local": True,
             "method_order": "rotated and alternately reversed within paired seed",
             "fixed_output_tokens": True, "all_online_costs_inclusive": True,
@@ -276,7 +281,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     payload["secondary_summaries"] = {
         baseline: summarize(payload["records"], samples=args.bootstrap_samples, seed=args.seed, baseline_name=baseline)
-        for baseline in ("tree:8:16", "tree:8:32", "static:16", "ar")
+        for baseline in ("tree:8:16", "tree:8:32", "treebudget:8:32", "static:16", "ar")
         if baseline in {m[0] for m in methods}
     }
     if args.temperature > 0:

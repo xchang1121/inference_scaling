@@ -116,3 +116,13 @@ FP32 / Windows HF / batch=1 / HighQoS / 固定 256 输出 tokens。
   提醒我们将频繁在线控制的成本与更简单策略公平比较。
 
 以上方向均已有研究。R6A 是面向本机 Uno 的实现与验证候选，不主张新的在线学习定理。
+
+## 7. GPU 运行之前的实现审计
+
+参考实现已经通过 191 项 CPU/回归测试及 Ruff 检查。新增测试包括精确枚举的单遍嵌套反馈、
+propensity 校正创新方向、有界更新、缺失/重复反馈拒绝、独立 policy RNG、
+真实内容依赖 fake model 的 AR/KV/权重隔离与 EOS/输出预算截断。
+
+反馈更新放在 cycle 最后同步和成本标签时间戳之前；时间戳之后只有常数规模的成本记账，
+全部过程仍包含在完整 generate-call 的 TPS 分母内。新结果同时记录解析后的全部方法配置，
+并增加同 preferred=32 的旧 cost-only 控制器作为直接 secondary baseline。

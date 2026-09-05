@@ -33,6 +33,7 @@
 - [WSL 安装完成与重启恢复点](docs/STAGE11_WSL_PROGRESS.md)
 - [FA2/3090 树路径候选迁移与 attention 合并证明](docs/FA2_TREE_PORT_PLAN_AND_PROOF.md)
 - [下一版嵌套树反事实反馈证明（尚未进入 GPU 控制）](docs/COUNTERFACTUAL_BUDGET_LEARNING_PROOF.md)
+- [R6A 反馈校正控制器与冻结 pilot 协议](docs/R6A_FEEDBACK_CORRECTED_TREE_PROTOCOL.md)
 - [此前 recycling / warm-start 负结果](docs/STAGE11_RECYCLING_AND_WARMSTART_RESULTS.md)
 - [当前路线图](docs/ROADMAP.md)
 - [硬件和复现边界](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)
@@ -67,5 +68,6 @@ WSL 支持栈的下一步需要用户保存工作并重启 Windows，再运行
 
 - `src/online_speculation/tree_uno.py`：嵌套树、target-draw 遍历、rank 校准、在线成本预算。
 - `src/online_speculation/hf_tree_uno.py`：真实模型 ancestor mask、position、KV 路径整理。
+- `src/online_speculation/feedback_budget.py`：独立启用的 R6A propensity-corrected 残差控制器；旧 R3E 配置不变。
 - `src/online_speculation/hf_recycling_benchmark.py`：配对顺序、完整计时、聚类统计及静态树对照。
 - `patches/0001-experimental-fa2-tree.patch`：默认关闭的上游 FA2 树实验补丁，仅通过 apply-check，尚无 GPU 通过声明。

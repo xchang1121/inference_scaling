@@ -26,6 +26,9 @@ class TreeConfig:
     explore_each: int = 2
     probe_every: int = 24
     switch_margin: float = 0.02
+    feedback_budget: bool = False
+    feedback_exploration: float = 0.15
+    feedback_step_size: float = 0.05
 
     def validate(self) -> None:
         if self.block_size < 2 or self.nodes < 1 or self.top_k < 1:
@@ -45,6 +48,13 @@ class TreeConfig:
             raise ValueError("invalid cost learning controls")
         if not math.isfinite(self.switch_margin) or self.switch_margin < 0:
             raise ValueError("invalid switch margin")
+        if self.feedback_budget:
+            if not self.node_budgets:
+                raise ValueError("feedback control requires explicit node budgets")
+            if not 0 < self.feedback_exploration <= 1 or not 0 < self.feedback_step_size <= 1:
+                raise ValueError("invalid feedback exploration or step size")
+            if self.feedback_step_size * len(self.node_budgets) > self.feedback_exploration + 1e-12:
+                raise ValueError("feedback step exceeds the minimum coverage propensity")
 
 
 @dataclass(frozen=True)
