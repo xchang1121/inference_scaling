@@ -243,3 +243,33 @@ C_a-\rho^\star T_a+V(S_{t+1})-V(S_t)\mid S_t=s].
 本工作的可检验贡献候选是：Uno refill 与 verifier-tail recycling 的集成、
 可测吞吐控制和单张消费 GPU 的实现/评估。尾部重用、Jacobi、exact rejection sampling
 本身不是本项目首创。是否有论文级新颖性与泛化收益，需要后续证据决定。
+
+## 11. R3B：verifier warm-start 的扩展假设（结果前记录）
+
+R3 初始英文 pilot 显示 unconditional recycling 的 TPF 接近 1，低于 static Uno 约 1.4。
+因此记录一个不同的 proposal-state 更新：不用尾部直接取代 Uno draft，
+而是把它作为下一轮 diffusion forward 的噪声初始化。
+
+设当前 seed 对应输出位置 \(-1\)，过去 verifier 提供的候选为
+\(r_0,r_1,\ldots\)。将 draft 输入
+\([s,z_1,\ldots,z_{B-1}]\) 的前 \(M=\min(K,B-1)\) 个 noise 行替换为
+\([r_0,\ldots,r_{M-1}]\)，剩余 noise 仍按原始分布生成。
+候选 \(r_0\) 对应下一输出 token，所以必须放在 **输入行 1**，该行 logits 预测输出 token 1；
+base seed 行 0 仍产生 free token 0。
+
+可另外把 noise 行的 LoRA 系数设为固定 \(g\in\{0,0.5,1\}\)，只用于 pilot 消融。
+这些系数与候选在 forward 之前已确定，base seed/verify 的 LoRA 系数仍为零。
+保存的新 proposal law 为
+
+\[
+q_{t,i}(\cdot)=
+q_{\theta+g\phi_0,i}(\cdot\mid h_t,z_t^{\rm warm}),
+\]
+
+并用该实际 law 执行原始 \(\Psi\)-Spec 校正。因此定理三直接适用，
+不要求 warm-start noise 服从训练时的 uniform noise。分布外输入可能降低 draft 质量，
+这是性能问题，不是跳过验证的理由。
+
+候选只来自上一轮反馈，权重完全不更新；这种在线适配属于 proposal-state adaptation。
+它不是 online LoRA gradient descent。预定先比较固定 \(g=1,0.5,0\)，不预言哪个会更好。
+若出现正方向，再冻结新 held-out 矩阵。默认保留 \(g=1\)；pilot 不覆盖原 R3 记录。

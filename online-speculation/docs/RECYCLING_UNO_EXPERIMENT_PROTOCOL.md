@@ -55,3 +55,11 @@ TPS 选择依据包含在线计时，不以 TPF 选择后宣称 TPS 最优。
 recycle 的常用 K+1 形状，检查 eager fallback 比例。
 优化目标依次为：减少 forward、减少 host sync、减少候选更新和采样开销、
 降低无效 refill/recycle 探索。任何新设计都先记录再读取新 held-out 数据。
+
+### R3B 预定扩展
+
+初始 R3 英文数据提示 direct tail proposal 经常不够准确。
+在读取新结果前追加 warm-start 消融：B=8、同四个 pilot prompts、
+新 seeds、LoRA noise 系数 g=1/0.5/0，均保留两遍式 Uno verification。
+该组单独结果文件；每个活跃配置先预热至少 256 output tokens。
+绝对 TPS 随执行时段变化，下一版记录前后静态参考与 GPU clock 诊断。
