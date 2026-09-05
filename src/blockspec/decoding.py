@@ -41,24 +41,32 @@ def _check(model, prompt, max_new_tokens, eos_id):
         raise ValueError("invalid output budget or EOS token")
 
 
-def _prefill(model, prompt):
+def _inference_forward(model, executor):
+    if executor is None:
+        return model
+    executor.validate(model)
+    return executor._forward
+
+
+def _prefill(forward, prompt):
     if prompt.shape[1] == 1:
         return None
-    _, cache = model(prompt[:, :-1], return_cache=True)
+    _, cache = forward(prompt[:, :-1], return_cache=True)
     return trim_cache(cache, prompt.shape[1] - 1)
 
 
 @torch.no_grad()
 def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos_id=None,
-                generator=None):
+                generator=None, executor=None):
     _check(model, prompt, max_new_tokens, eos_id)
+    forward = _inference_forward(model, executor)
     synchronize(model)
     start = time.perf_counter()
-    cache = _prefill(model, prompt) if max_new_tokens else None
+    cache = _prefill(forward, prompt) if max_new_tokens else None
     seed = prompt[:, -1:]
     output = []
     for _ in range(max_new_tokens):
-        logits, cache = model(seed, cache=cache, return_cache=True)
+        logits, cache = forward(seed, cache=cache, return_cache=True)
         token = int(sample_logits(logits[0, -1], sampling, generator))
         output.append(token)
         seed = prompt.new_tensor([[token]])
@@ -71,7 +79,7 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
 @torch.no_grad()
 def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
                          sampling=SamplingConfig(), eos_id=None, generator=None,
-                         learner=None):
+                         learner=None, executor=None):
     """One clean root + B-1 independent noisy proposals, then base verification.
 
     cache always describes committed history excluding its last token. A replay
@@ -79,6 +87,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
     End-of-request updates are skipped; weights/optimizer persist, replay does not.
     """
     _check(model, prompt, max_new_tokens, eos_id)
+    forward = _inference_forward(model, executor)
     if block_size < 2:
         raise ValueError("speculative blocks require B>=2; use generate_ar for B=1")
     if learner is not None and learner.model is not model:
@@ -89,7 +98,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
     initial_update_seconds = learner.update_seconds if learner is not None else 0.0
     if learner is not None:
         learner.clear_replay()
-    cache = _prefill(model, prompt) if max_new_tokens else None
+    cache = _prefill(forward, prompt) if max_new_tokens else None
     seed = prompt[:, -1:]
     output, accepts = [], []
     rounds = forwards = accepted = proposed = 0
@@ -97,7 +106,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         rounds += 1
         remaining = max_new_tokens - len(output)
         if remaining == 1:
-            logits, cache = model(seed, cache=cache, return_cache=True)
+            logits, cache = forward(seed, cache=cache, return_cache=True)
             output.append(int(sample_logits(logits[0, -1], sampling, generator)))
             forwards += 1
             break
@@ -109,7 +118,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         mask[:, 0] = False
         old_cache = cache
         capture = learner.capture_layer if learner is not None else None
-        result = model(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        result = forward(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
         draft, temporary_cache = result[:2]
         boundary = result[2] if capture is not None else None
         forwards += 1
@@ -125,7 +134,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         # Only the seed's KV is clean. No adapted/noisy KV is ever committed.
         clean_length = prompt.shape[1] + len(output)
         clean_cache = trim_cache(temporary_cache, clean_length)
-        teacher, verified_cache = model(candidates[None], cache=clean_cache, return_cache=True)
+        teacher, verified_cache = forward(candidates[None], cache=clean_cache, return_cache=True)
         forwards += 1
         if sampling.temperature == 0:
             verified = verify_greedy(candidates[1:], greedy_tokens(teacher[0]))

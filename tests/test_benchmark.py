@@ -84,3 +84,23 @@ def test_benchmark_restores_adapter_on_exception():
 def test_invalid_benchmark_configuration(key, value):
     with pytest.raises(ValueError):
         replace(BenchmarkConfig(), **{key: value})
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph hardware required")
+@pytest.mark.parametrize("sampler", ["linear", "tree"])
+@pytest.mark.parametrize("last_layers", [None, 1])
+def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_layers):
+    torch.manual_seed(28)
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+                                head_dim=8, adapter_rank=2)).cuda().train_adapters_only()
+    result = benchmark_streams(model, [torch.tensor([[0, 1, 2]]), torch.tensor([[0, 2, 1]])],
+                               BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=12,
+                                               sampler=sampler, prefix_budget=5, execution="cuda_graph"),
+                               OnlineConfig(stride=1, replay_blocks=2, train_last_layers=last_layers))
+    assert result["greedy_identical"] and result["base_unchanged"] and result["adapter_restored"]
+    assert all(result["online_adapter_changed_per_stream"])
+    assert result["execution"]["capacity"] >= 3 + 12  # warmup may be longer than a measured request
+    for arm in result["arms"].values():
+        assert arm["engine_setup_seconds"] > 0
+        assert arm["tps_including_all_setup"] < arm["tps_including_learner_setup"] <= arm["tps"]

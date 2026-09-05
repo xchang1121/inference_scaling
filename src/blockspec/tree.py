@@ -12,8 +12,8 @@ import time
 
 import torch
 
-from .decoding import Generation, _check, _prefill
-from .model import cache_length, trim_cache
+from .decoding import Generation, _check, _inference_forward, _prefill
+from .model import PackedCache, cache_length, trim_cache
 from .online import Feedback, synchronize
 from .sampling import SamplingConfig, draw, greedy_tokens, probabilities, sample_logits, validate_distribution
 
@@ -143,13 +143,16 @@ def compact_tree_cache(cache, prefix_length, path):
                          prefix_length + torch.tensor(path, dtype=torch.long, device=device)))
     if not indices.numel():
         return None
+    if isinstance(cache, PackedCache):
+        return PackedCache(cache.packed.index_select(4, indices).detach())
     return tuple((k.index_select(2, indices).detach(), v.index_select(2, indices).detach()) for k, v in cache)
 
 
 @torch.no_grad()
 def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefix_budget=16,
-                  sampling=SamplingConfig(), eos_id=None, generator=None, learner=None):
+                  sampling=SamplingConfig(), eos_id=None, generator=None, learner=None, executor=None):
     _check(model, prompt, max_new_tokens, eos_id)
+    forward = _inference_forward(model, executor)
     if block_size < 2 or top_k < 1 or prefix_budget < 1:
         raise ValueError("invalid tree configuration")
     if learner is not None and learner.model is not model:
@@ -160,14 +163,14 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
     initial_seconds = learner.update_seconds if learner is not None else 0.0
     if learner is not None:
         learner.clear_replay()
-    cache = _prefill(model, prompt) if max_new_tokens else None
+    cache = _prefill(forward, prompt) if max_new_tokens else None
     seed, output, matches = prompt[:, -1:], [], []
     forwards = rounds = accepted = proposed = 0
     while len(output) < max_new_tokens:
         rounds += 1
         remaining = max_new_tokens - len(output)
         if remaining == 1:
-            logits, cache = model(seed, cache=cache, return_cache=True)
+            logits, cache = forward(seed, cache=cache, return_cache=True)
             output.append(int(sample_logits(logits[0, -1], sampling, generator)))
             forwards += 1
             break
@@ -178,7 +181,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         mask[:, 0] = False
         old_cache = cache
         capture = learner.capture_layer if learner is not None else None
-        result = model(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        result = forward(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
         draft, temporary = result[:2]
         boundary = result[2] if capture is not None else None
         forwards += 1
@@ -193,7 +196,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         prefix_length = prompt.shape[1] + len(output)
         clean_cache = trim_cache(temporary, prefix_length)
         ids, positions, allowed = tree.layout(prefix_length, device=prompt.device)
-        teacher, verified = model(ids, positions=positions, allowed=allowed, cache=clean_cache, return_cache=True)
+        teacher, verified = forward(ids, positions=positions, allowed=allowed, cache=clean_cache, return_cache=True)
         forwards += 1
         if sampling.temperature == 0:
             traversal = traverse_greedy(tree, greedy_tokens(teacher[0]), budget=remaining, eos_id=eos_id)
