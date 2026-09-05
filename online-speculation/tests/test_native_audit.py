@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import json
-import hashlib
 import runpy
 
 import pytest
@@ -78,30 +76,11 @@ def test_nan_timing_is_rejected():
         validate(data)
 
 
-@pytest.mark.parametrize("filename,expected", [
-    ("stage12_official_fa2_baseline.json", 32),
-    ("stage12_native_online_r7_pilot.json", 60),
-    ("stage12_native_shadow8.json", 24),
-])
-def test_real_completed_native_studies_preserve_the_full_matrix(filename, expected):
-    path = Path(__file__).resolve().parents[1] / "results" / filename
-    assert validate(json.loads(path.read_text(encoding="utf-8"))) == expected
-
-
-def test_gpu_shadow_preserves_same_width_outputs_and_official_stats():
-    path = Path(__file__).resolve().parents[1] / "results" / "stage12_native_shadow8.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    rows = payload["records"]
-    fixed = {(r["workload"], r["seed"]): r for r in rows if r["block_size"] == 8}
-    for row in rows:
-        if row["block_size"] == "shadow8":
-            reference = fixed[(row["workload"], row["seed"])]
-            assert row["output"] == reference["output"]
-            assert {c["width"] for c in row["online"]["cycles"]} == {8}
-
-
-@pytest.mark.parametrize("stem", ["stage12_official_fa2_baseline", "stage12_native_online_r7_pilot", "stage12_native_shadow8"])
-def test_published_raw_bytes_match_recorded_audit_digest(stem):
-    root = Path(__file__).resolve().parents[1] / "results"
-    audit = json.loads((root / (stem + "_audit.json")).read_text(encoding="utf-8"))
-    assert hashlib.sha256((root / (stem + ".json")).read_bytes()).hexdigest() == audit["source_sha256"]
+def test_shadow_audit_uses_synthetic_same_width_control():
+    data = fixture()
+    data["design"]["methods"][-1] = "shadow8"
+    data["records"][-1]["block_size"] = "shadow8"
+    result = summarize(data)
+    assert result["methods"]["shadow8"]["same_width_B8_token_matches"] == 1
+    data["records"][-1]["output"]["token_ids"][3] = 42
+    assert summarize(data)["methods"]["shadow8"]["same_width_B8_token_matches"] == 0

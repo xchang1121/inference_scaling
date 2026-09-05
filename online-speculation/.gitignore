@@ -8,7 +8,11 @@ __pycache__/
 cache/
 models/
 upstream/
-results/*
-!results/README.md
-!results/preflight_*.json
-!results/stage*.json
+results/
+reports/
+archive/
+*.egg-info/
+build/
+dist/
+*.part
+*.log

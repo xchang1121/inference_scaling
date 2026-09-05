@@ -1,13 +1,16 @@
-# R7：保留官方 Uno 热路径的原生在线块长学习
+# 当前实现：Uno 的在线块长控制器
 
-2026-09-05，在 Linux 原生模型测量结果产生前冻结本候选的设计。
-本轮响应[用户更新后的目标](CURRENT_ACCEPTANCE_CRITERIA.md)：行为和吞吐接近原 Uno 也有价值。
-这是在线 policy/statistics 学习，不是在线 diffusion LoRA SGD；不把这个区别隐藏在“online”名称中。
+对应 [native_online_policy.py](../scripts/native_online_policy.py)。本文仅描述当前维护的实现，不包含历史成绩或阶段记录。
 
-## 1. 设计动机与适用边界
+## 1. 在 Uno 上的改动与明确边界
 
-Windows HF 树控制器已经证明可以真正更新在线状态，但 R6A 的更新/探索没有带来净 TPS 改善。
-R7 先利用官方 FA2、CUDA graphs、融合验证器和紧凑 token 回传，保持主干推理代码不变。
+当前实现在线更新每个块长的收益/成本统计，**不更新 diffusion LoRA 或任何神经网络参数**。
+它保留为原生推理基线和调度控制器，不能当作“verifier 反馈 → backward → drafter 参数更新”的在线蒸馏实现。
+
+新增逻辑全部在 `NativeWidthPolicy` 和 `generate_online()` 中：choose 建立 pending action，
+执行原官方 step，observe 接收真实反馈，下一轮才允许更换块长。请求结束或异常时恢复原 step 和原参数。
+原版 FA2、CUDA graphs、融合验证器、紧凑 token 回传、模型、采样及 KV 管理均不修改。
+
 只在 `engine.step()` 的整个 draft–verify–commit 之间修改 `SamplingParams.diffusion_block_size`。
 它不是 KV page size，后者一直是 256，不能混淆。
 
@@ -16,10 +19,10 @@ batch=1、单 GPU、线性 Uno、预捕获 B∈{4,8,16}；默认锚点 B₀=8。
 先各探测一个 epoch，顺序 8→4→16；之后利用收益/成本 EMA，每 16 个自适应 epoch 刷新一个臂。
 EMA retention=0.75，替代锚点至少需要 3% 的估计优势。这是控制器超参，不是用户认可的“接近”门槛。
 
-R7 不重用一个 B 的接受长度来声称另一个 B 的反事实收益：噪声输入长度、RNG 消耗和数值 kernel
+当前控制器 不重用一个 B 的接受长度来声称另一个 B 的反事实收益：噪声输入长度、RNG 消耗和数值 kernel
 shape 会随 B 改变，不能直接假定实际 q_B=q_B′。此 pinned 线性实现使用 causal draft attention，
-并非此前误写的双向 attention；若另行构造共享噪声前缀，需要重新证明/测试可观测反馈条件。
-此前嵌套树上的 side-feedback 条件不能直接搬到线性块长。
+并非双向 attention；若另行构造共享噪声前缀，需要重新证明/测试可观测反馈条件。
+其他解码结构上的 side-feedback 条件不能直接搬到线性块长。
 
 ## 2. 在线更新方程及不变量
 
@@ -49,7 +52,7 @@ epoch e 的宽度 b，实际提交量 cᵢ∈{1,…,b+1}，观测耗时 dᵢ>0�
 ## 3. 自适应块长的分布保持证明
 
 令 F_t 包括过去已提交前缀、过往运行时间/接受反馈、policy 状态和过去随机性。
-在新一轮随机数产生之前选择 B_t∈F_t。固定 base 参数 θ；adapter φ 在 R7 也固定。
+在新一轮随机数产生之前选择 B_t∈F_t。固定 base 参数 θ；adapter φ 在 当前控制器 也固定。
 条件于 F_t、B_t 和本轮噪声 z，本轮 proposal q 是确定的分布；采样时保存的 q 在整轮
 accept/reject 中不能改写。q 可以与过去历史任意相关，但不能偷看本轮未来 verifier 随机性。
 
@@ -91,7 +94,7 @@ greedy 情况：若最大 logit 与第二名间距大于 2δ，且各 logit 误�
 
 ## 5. 吞吐、学习开销与不能证明的部分
 
-官方每轮已经把紧凑 committed payload 从 GPU 同步到 CPU，R7 不额外调用 CUDA synchronize。
+官方每轮已经把紧凑 committed payload 从 GPU 同步到 CPU，当前控制器 不额外调用 CUDA synchronize。
 观测 dᵢ 是选 B 开始到官方 step 返回的 exposed wall time，包含 choice 和官方回传，
 不含随后 observe 与 trace bookkeeping；后两者以及 controller 构造/序列化、wrapper 安装恢复、
 prefill、detokenization 全部包含在外层 E2E 定时。它不是精确分离的 GPU kernel 时间。
@@ -104,26 +107,15 @@ prefill、detokenization 全部包含在外层 E2E 定时。它不是精确分�
 
 只有 S≥U 时净收益才非负；提高 TPF 不足以证明这一点。理想固定状态下更新后的真实比率
 ρ₁、旧比率 ρ₀、未来剩余 H tokens、一次更新成本 U 的回本条件为
-H(1/ρ₀−1/ρ₁)>U。非平稳请求中这些量未知，R7 并未提供 regret 或全局最大 TPS 保证。
+H(1/ρ₀−1/ρ₁)>U。非平稳请求中这些量未知，当前控制器 并未提供 regret 或全局最大 TPS 保证。
 
 ## 6. 文献归因
 
 - [Uno 原文与官方实现](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)：
-  diffusion proposal、gated LoRA、Ψ-Spec、线性/树解码都属于原工作，不是 R7 创新。
+  diffusion proposal、gated LoRA、Ψ-Spec、线性/树解码都属于原工作，不是 当前控制器 创新。
 - [Speculative Decoding](https://proceedings.mlr.press/v202/leviathan23a.html)：
   accept/reject 和正残差校正的分布保持基础。
 - [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)：用部署反馈在线适配 draft 的先例；
-  R7 的受限动作是宽度，不是它的神经 drafter 蒸馏。
+  当前控制器 的受限动作是宽度，不是它的神经 drafter 蒸馏。
 - [Not a Bandit Problem / HedgeSpec](https://arxiv.org/abs/2510.20064)：
-  反馈可观测性需要单独证明；R7 没有借用完整反馈假设或引用其 regret 为自己的保证。
-
-## 7. 首轮工程实验协议
-
-先完成未修改官方基线。然后同一持久引擎、相同 FA2/BF16（以 Config 实际 dtype 为准）、
-graph shapes、采样参数、计时边界，比较 AR、固定 B=4/8/16、R7。采用已使用四个 pilot prompts，
-每题 3 repeats、max_new_tokens=256、每宽度/online 预热 128 tokens，seed 起点 20270025。
-每个 prompt/repetition 内旋转并反转 5 方法顺序，共 60 runs；R7 每请求重置。
-记录所有输出 IDs、official stats、controller traces/更新次数、预捕获 graph hits/misses、GPU 前后状态。
-报告 total returned tokens / total E2E seconds、配对时间比和 prompt 聚类 bootstrap（仅 4 clusters，
-区间不稳定，明确是工程 pilot），不得冒称 unseen confirmatory 或保证“接近”。
-失败必须保留 completed=false，修复后另建记录；任何参数修改另列候选/协议，不覆盖旧数据。
+  反馈可观测性需要单独证明；当前控制器 没有借用完整反馈假设或引用其 regret 为自己的保证。

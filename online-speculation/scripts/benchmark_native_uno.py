@@ -1,6 +1,6 @@
-"""Measure the pinned, unmodified Uno engine in a persistent WSL GPU process.
+"""Compare fixed-width and online Uno in the pinned native WSL GPU engine.
 
-Python 3.10 standalone entry point; does not install the Windows HF prototype.
+Python 3.10 standalone entry point; the online wrapper leaves upstream unchanged.
 """
 from __future__ import annotations
 

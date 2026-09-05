@@ -4,16 +4,15 @@
     "uno_1b_adapter": {
       "id": "IFM/K2-Horizon-0.9B-Uno",
       "revision": "b0d8896a301a2f4bc755538b1234a35100da50d0",
+      "weight_filename": "adapter_model.safetensors",
+      "weight_sha256": "5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e",
       "size_bytes": 223917616
     },
     "uno_1b_base": {
       "id": "IFM/K2-Horizon-0.9B",
-      "revision": "ee770e713760cf6350e4322cdbbff91a163b7d70"
-    },
-    "uno_qwen3_8b": {
-      "adapter_subfolder": "adapter",
-      "id": "s-sahoo/uno-qwen3-8B",
-      "revision": "b8a7577b3223bdcf2b3af0f2fc6e95258b3bbc29"
+      "revision": "ee770e713760cf6350e4322cdbbff91a163b7d70",
+      "weight_filename": "model-00000-of-00001.safetensors",
+      "weight_sha256": "6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365"
     }
   },
   "paper": {

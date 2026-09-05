@@ -1,4 +1,2 @@
 *.sh text eol=lf
 *.bash text eol=lf
-online-speculation/results/stage9_wsl_runtime.json text eol=lf
-online-speculation/results/stage12*.json text eol=lf
