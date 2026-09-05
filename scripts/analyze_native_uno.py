@@ -17,6 +17,8 @@ def validate(payload):
             or not payload["environment"]["tracked_source_clean"]):
         raise RuntimeError("study must complete with frozen parameters and clean source, no preemptions")
     design = payload["design"]
+    if payload.get("frozen_weights_before") != payload.get("frozen_weights_after"):
+        raise RuntimeError("frozen teacher/offline Uno hash mismatch")
     methods = {str(m) for m in design["methods"]}
     expected = {(name, design["seed"] + p * 100 + r, m)
                 for p, (name, _) in enumerate(design["workloads"])
@@ -38,6 +40,19 @@ def validate(payload):
             raise RuntimeError("incomplete committed token budget or invalid official stats")
         if row.get("online") is not None:
             diagnostic = row["online"]
+            if diagnostic.get("algorithm") == "last_mlp_online_lora":
+                events = diagnostic["events"]
+                if (diagnostic["teacher_weight_updates"] != 0
+                        or diagnostic["offline_uno_weight_updates"] != 0
+                        or diagnostic["cycles"] * 2 != stats["forwards"]
+                        or diagnostic["optimizer_steps"] != len(events)
+                        or diagnostic["model_weight_updates"] != len(events)
+                        or [e["version"] for e in events] != list(range(1, len(events) + 1))
+                        or any(not math.isfinite(e["kl_before"]) or e["grad_norm"] <= 0
+                               or e["right_norm"] <= 0 or not 1 <= e["rows"] <= 7
+                               or e["cycle"] % diagnostic["stride"] != 0 for e in events)):
+                    raise RuntimeError("invalid real online LoRA update audit")
+                continue
             policy, cycles = diagnostic["policy"], diagnostic["cycles"]
             if (policy["pending"] is not None or policy["optimizer_steps"] != 0
                     or policy["model_weight_updates"] != 0
@@ -81,6 +96,12 @@ def summarize(payload):
             summary["same_width_B8_token_matches"] = sum(
                 r["output"]["token_ids"] == pairs[(r["workload"], r["seed"], "8")]["output"]["token_ids"]
                 for r in selected)
+        if method == "fast8":
+            summary["same_width_B8_token_matches"] = sum(
+                r["output"]["token_ids"] == pairs[(r["workload"], r["seed"], "8")]["output"]["token_ids"]
+                for r in selected)
+            summary["optimizer_steps"] = sum(r["online"]["optimizer_steps"] for r in selected)
+            summary["update_seconds"] = sum(r["online"]["update_seconds"] for r in selected)
         if method == "online":
             summary["cycle_width_counts"] = dict(Counter(c["width"] for r in selected for c in r["online"]["cycles"]))
             summary["cycle_reasons"] = dict(Counter(c["reason"] for r in selected for c in r["online"]["cycles"]))
@@ -88,16 +109,17 @@ def summarize(payload):
             summary["instrumented_choice_update_seconds"] = sum(r["online"]["instrumented_choice_update_seconds"] for r in selected)
         summaries[method] = summary
     comparisons = {}
-    if "online" in methods:
+    adaptive = "fast8" if "fast8" in methods else "online"
+    if adaptive in methods:
         workloads = [n for n, _ in payload["design"]["workloads"]]
-        for comparator in [m for m in methods if m != "online"]:
+        for comparator in [m for m in methods if m != adaptive]:
             def ratio(selected_workloads, comparator=comparator):
                 online_tokens = online_seconds = fixed_tokens = fixed_seconds = 0
                 for name in selected_workloads:
                     for row in rows:
                         if row["workload"] != name:
                             continue
-                        if row["block_size"] == "online":
+                        if row["block_size"] == adaptive:
                             online_tokens += row["output_tokens"]
                             online_seconds += row["end_to_end_seconds"]
                         elif str(row["block_size"]) == comparator:
@@ -108,7 +130,7 @@ def summarize(payload):
             rng = random.Random(20270905)
             samples = sorted(ratio(rng.choices(workloads, k=len(workloads))) for _ in range(3000))
             paired = [pairs[(r["workload"], r["seed"], comparator)]["end_to_end_seconds"] / r["end_to_end_seconds"]
-                      for r in rows if r["block_size"] == "online"]
+                      for r in rows if r["block_size"] == adaptive]
             comparisons[comparator] = {"aggregate_tps_ratio": ratio(workloads),
                                        "prompt_cluster_bootstrap_95": [samples[74], samples[2924]],
                                        "paired_fixed_time_over_online_time": paired,

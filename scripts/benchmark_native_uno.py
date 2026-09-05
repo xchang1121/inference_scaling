@@ -54,13 +54,23 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--warmup-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=20270005)
-    parser.add_argument("--online", action="store_true", help="include frozen R7 request-local width policy")
+    parser.add_argument("--online", action="store_true", help="include request-local width policy (no gradient)")
     parser.add_argument("--shadow", action="store_true", help="fixed B=8 online wrapper control, no adaptive widths")
+    parser.add_argument("--fused-norm", action="store_true", help="fuse XLLM grouped RMSNorm; validate numerical differences")
+    parser.add_argument("--fast-weights", action="store_true", help="add real last-MLP online LoRA at fixed B=8")
+    parser.add_argument("--rank", type=int, default=8)
+    parser.add_argument("--update-stride", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=0.003)
+    parser.add_argument("--audit-fast", action="store_true", help="extra replay/change checks, included in TPS cost")
+    parser.add_argument("--workloads", default="english,chinese,code,math")
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
-    methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else [])
+    methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else []) + (["fast8"] if args.fast_weights else [])
+    workloads = [(name, prompt) for name, prompt in WORKLOADS if name in args.workloads.split(",")]
+    if not workloads or set(args.workloads.split(",")) != {name for name, _ in workloads}:
+        raise ValueError("select known workloads without empty entries")
     if len(set(blocks)) != len(blocks) or 1 not in blocks or min(blocks) < 1 or max(blocks) > 16:
         raise ValueError("distinct widths within 1..16 including AR width 1 required")
     if args.repetitions < 1 or min(args.max_new_tokens, args.warmup_tokens) < 2:
@@ -69,11 +79,13 @@ def main():
         raise ValueError("R7 requires captured and measured static widths 4,8,16")
     if args.shadow and 8 not in blocks:
         raise ValueError("shadow control requires measured static width 8")
+    if args.fast_weights and (8 not in blocks or args.online or args.shadow):
+        raise ValueError("fast LoRA requires B=8 and is evaluated separately from width policies")
     payload = {
         "schema_version": 1, "scope": "official-runtime engineering baseline; not confirmatory",
-        "backend": "unmodified pinned Nano-vLLM Uno / WSL2 / FA2 / CUDA graphs",
+        "backend": "pinned Nano-vLLM Uno / WSL2 / FA2 / CUDA graphs; optional scoped runtime extensions",
         "design": {**{k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
-                   "workloads": WORKLOADS, "blocks": blocks, "methods": methods, "temperature": 0.0, "batch_size": 1,
+                   "workloads": workloads, "blocks": blocks, "methods": methods, "temperature": 0.0, "batch_size": 1,
                    "noise_mode": "random_uniform", "ignore_eos": True,
                    "e2e_scope": "full official generate call including prefill and detokenization; excludes model initialization, shared prompt encoding, GPU snapshots and JSON I/O",
                    "order": "rotated and alternately reversed within prompt/repetition"},
@@ -99,6 +111,7 @@ def main():
         import torch
         from generation import format_chat_prompt
         from nano_vllm_uno import LLM, SamplingParams
+        from native_fast_weights import extended_runner, frozen_digest, generate_fast
         from native_online_policy import NativeWidthPolicy, generate_online
 
         payload["environment"] = {
@@ -112,6 +125,7 @@ def main():
         config = dict(
             attention_backend="fa2", max_num_seqs=1, max_model_len=2048,
             max_num_batched_tokens=2048, gpu_memory_utilization=0.5,
+            num_kvcache_blocks=32,
             max_diffusion_block_size=max(blocks), cuda_graph_block_sizes=sorted(blocks),
             cuda_graph_batch_sizes=[1], fail_on_preemption=True, torch_compile=False,
             hf_local_files_only=True, gated_lora_path=str(args.adapter),
@@ -120,7 +134,9 @@ def main():
         payload["stage"] = "initializing_engine"
         save()
         start = time.perf_counter()
-        engine = LLM(model=str(args.base), **config)
+        with extended_runner(fused_norm=args.fused_norm, fast_weights=args.fast_weights,
+                             rank=args.rank, stride=args.update_stride, lr=args.learning_rate):
+            engine = LLM(model=str(args.base), **config)
         torch.cuda.synchronize()
         payload["model_initialization_seconds"] = time.perf_counter() - start
         payload["model_dtype"] = str(engine.config.dtype)
@@ -128,7 +144,9 @@ def main():
         for parameter in engine.model_runner.model.parameters():
             parameter.requires_grad_(False)
         payload["parameters_frozen"] = all(not p.requires_grad for p in engine.model_runner.model.parameters())
-        encoded = [(name, format_chat_prompt(engine.tokenizer, [{"role": "user", "content": prompt}])[0]) for name, prompt in WORKLOADS]
+        payload["fused_norm_count"] = engine.model_runner.fused_norm_count
+        payload["frozen_weights_before"] = frozen_digest(engine.model_runner.model)
+        encoded = [(name, format_chat_prompt(engine.tokenizer, [{"role": "user", "content": prompt}])[0]) for name, prompt in workloads]
         if any(len(ids) >= engine.config.kvcache_block_size for _, ids in encoded):
             raise RuntimeError("This short-prompt baseline requires no reusable full prefix-cache pages")
 
@@ -137,7 +155,7 @@ def main():
             params = SamplingParams(
                 temperature=0.0, top_k=32, top_p=0.95, max_tokens=budget,
                 ignore_eos=True, stop_token_ids=[64019, 1], mask_token_id=64256,
-                noise_mode="random_uniform", diffusion_block_size=8 if width in ("online", "shadow8") else width,
+                noise_mode="random_uniform", diffusion_block_size=8 if width in ("online", "shadow8", "fast8") else width,
             )
             torch.cuda.synchronize()
             started = time.perf_counter()
@@ -145,6 +163,8 @@ def main():
             if width in ("online", "shadow8"):
                 policy = NativeWidthPolicy(widths=(8,)) if width == "shadow8" else NativeWidthPolicy()
                 output, diagnostics = generate_online(engine, ids, params, budget, policy)
+            elif width == "fast8":
+                output, diagnostics = generate_fast(engine, ids, params, budget, audit=args.audit_fast)
             else:
                 output = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])[0]
             torch.cuda.synchronize()
@@ -180,6 +200,9 @@ def main():
                     print(f"{name} seed={seed} B={width} TPS={record['e2e_tps']:.2f} stats={output['stats']}", flush=True)
         payload["engine_stats"] = engine.get_stats()
         payload["parameters_frozen_after"] = all(not p.requires_grad for p in engine.model_runner.model.parameters())
+        payload["frozen_weights_after"] = frozen_digest(engine.model_runner.model)
+        if payload["frozen_weights_before"] != payload["frozen_weights_after"]:
+            raise RuntimeError("Frozen teacher/offline Uno tensor bytes changed")
         payload["peak_memory_bytes"] = torch.cuda.max_memory_allocated()
         payload["stage"] = "complete"
         payload["completed"] = True

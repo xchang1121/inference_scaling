@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "online-speculation"
 version = "0.2.0"
-description = "Request-local online width control for the pinned native Uno engine."
+description = "Native Uno inference optimization and request-local online LoRA distillation."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -15,7 +15,7 @@ dev = ["pytest>=8", "ruff>=0.16,<0.17"]
 
 [tool.setuptools]
 package-dir = {"" = "scripts"}
-py-modules = ["native_online_policy"]
+py-modules = ["native_online_policy", "native_fast_weights", "native_norm"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

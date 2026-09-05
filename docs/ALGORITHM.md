@@ -1,121 +1,171 @@
-# 当前实现：Uno 的在线块长控制器
+# Online Uno：当前实现与证明
 
-对应 [native_online_policy.py](../scripts/native_online_policy.py)。本文仅描述当前维护的实现，不包含历史成绩或阶段记录。
+主实现为 `native_fast_weights.py`；`native_norm.py` 是独立的推理优化。
+这里的在线算法**实际更新神经网络参数**，不再以块长控制器代替在线蒸馏。
+仅支持锁定的 K2-Horizon / XLLM、单 GPU、batch=1、线性 Uno；默认 B=8。
 
-## 1. 在 Uno 上的改动与明确边界
+## 1. 冻结 Uno，在线学习最后一层的低秩增量
 
-当前实现在线更新每个块长的收益/成本统计，**不更新 diffusion LoRA 或任何神经网络参数**。
-它保留为原生推理基线和调度控制器，不能当作“verifier 反馈 → backward → drafter 参数更新”的在线蒸馏实现。
-
-新增逻辑全部在 `NativeWidthPolicy` 和 `generate_online()` 中：choose 建立 pending action，
-执行原官方 step，observe 接收真实反馈，下一轮才允许更换块长。请求结束或异常时恢复原 step 和原参数。
-原版 FA2、CUDA graphs、融合验证器、紧凑 token 回传、模型、采样及 KV 管理均不修改。
-
-只在 `engine.step()` 的整个 draft–verify–commit 之间修改 `SamplingParams.diffusion_block_size`。
-它不是 KV page size，后者一直是 256，不能混淆。
-
-batch=1、单 GPU、线性 Uno、预捕获 B∈{4,8,16}；默认锚点 B₀=8。
-每请求新建状态，没有跨题训练或用将来的答案指导本轮选择。每个 epoch 连续执行 2 cycles：
-先各探测一个 epoch，顺序 8→4→16；之后利用收益/成本 EMA，每 16 个自适应 epoch 刷新一个臂。
-EMA retention=0.75，替代锚点至少需要 3% 的估计优势。这是控制器超参，不是用户认可的“接近”门槛。
-
-当前控制器 不重用一个 B 的接受长度来声称另一个 B 的反事实收益：噪声输入长度、RNG 消耗和数值 kernel
-shape 会随 B 改变，不能直接假定实际 q_B=q_B′。此 pinned 线性实现使用 causal draft attention，
-并非双向 attention；若另行构造共享噪声前缀，需要重新证明/测试可观测反馈条件。
-其他解码结构上的 side-feedback 条件不能直接搬到线性块长。
-
-## 2. 在线更新方程及不变量
-
-epoch e 的宽度 b，实际提交量 cᵢ∈{1,…,b+1}，观测耗时 dᵢ>0，m=2：
+冻结 AR 参数 θ 和离线 Uno adapter φ₀。最后一层 MLP down projection 新增
+φₜ=(Aₜ,Cₜ)，A∈R^(r×5120)、C∈R^(1536×r)，r=8，共 53,248 个参数。
+对某行，a 是 down projection 输入，u 是原 Uno 的输出，s 是最后一次 residual：
 
 \[
- u_e=m^{-1}\sum_i c_i,\quad v_e=m^{-1}\sum_i d_i,
- \qquad
- \mu^c_b\leftarrow\beta\mu^c_b+(1-\beta)u_e,
- \quad\mu^d_b\leftarrow\beta\mu^d_b+(1-\beta)v_e.
+ d_t=C_t A_t a,\qquad \widetilde u_t=u+m d_t,\qquad
+ h_t=\operatorname{RMSNorm}(\widetilde u_t+s),\qquad
+ q_t=\operatorname{softmax}(W_{head}h_t).
 \]
 
-第一次观测用 β=0，之后 β=.75。其他臂完全不更新。评分 s_b=μᶜ_b/μᵈ_b；
-除探索外取最大评分，若它未超过 (1+.03)s_B₀ 则选 B₀。请求尾部使用实际截断提交量；
-不足一个 epoch 的统计只记录，不给下一请求带入状态，也不伪造一个完整 epoch。
+m 直接使用官方 gated LoRA mask：draft noise 行为 1，causal seed 为 0；
+prefill、verify 的 OFF 路径根本不执行新增分支。C₀=0，A₀ 为固定种子、
+标准差 1/√5120 的随机矩阵。因此初始增量为零，且 C 的梯度不因双零初始化消失。
+初始化不消耗生成使用的随机数流。
 
-**凸组合性质。** 初值为合法观测，0≤β<1。归纳可得 μᶜ_b∈[1,b+1]、μᵈ_b>0，
-因此评分有限正数（实现同时拒绝 NaN/Inf/非正时间）。这不证明评分无偏或策略最优。
+训练参数为 FP32，服务参数为独立 BF16 固定地址张量。每个完整 cycle 内服务版本不变；
+commit 返回后才执行 Adam、梯度裁剪（范数上限 1）、copy_ 发布。
+学习率默认 .003，每 8 个 cycles 更新一次，仅用该轮数据；最后一轮不再付训练成本。
+每请求重置参数和 optimizer，不跨请求学习，不保存新的模型 checkpoint。
 
-**探索上界。** E 个完整 epoch，K=3；前 K 个为初始化。之后刷新数恰为
-⌊max(0,E−K)/16⌋。因此探索 epoch 数≤K+⌊max(0,E−K)/16⌋。
-它仅约束探索次数，不限制每次探索的性能损失；不能由此推出 TPS 损失≤1/16。
+## 2. 为什么不需要重跑整个 teacher 或 student
 
-每轮有 pending action，只有对应宽度的反馈可清除 pending。选择→完整验证→反馈之后
-才能下一次选择；测试覆盖重复选择、错误归属、非法时间和 reset 边界。
-
-## 3. 自适应块长的分布保持证明
-
-令 F_t 包括过去已提交前缀、过往运行时间/接受反馈、policy 状态和过去随机性。
-在新一轮随机数产生之前选择 B_t∈F_t。固定 base 参数 θ；adapter φ 在 当前控制器 也固定。
-条件于 F_t、B_t 和本轮噪声 z，本轮 proposal q 是确定的分布；采样时保存的 q 在整轮
-accept/reject 中不能改写。q 可以与过去历史任意相关，但不能偷看本轮未来 verifier 随机性。
-
-对任一位置的目标 p、proposal q，定义 a(y)=min(1,p(y)/q(y))，q(y)=0 的分支不会被 q 采到。
-拒绝总质量
+**特征闭合命题。** 条件于本轮已经确定的 prefix、噪声和冻结权重，a、u、s 都不依赖 φₜ。
+因为增量插在最后一个 MLP 的 down projection 输出处，其前面的计算没有可训练参数。
+因此对于本轮损失 L，链式法则给出
 
 \[
- Z=1-\sum_y\min\{p(y),q(y)\}
-   =\sum_y[p(y)-q(y)]_+=D_{TV}(p,q).
+ \nabla_{\phi}L
+ =\frac{\partial L}{\partial q}\frac{\partial q}{\partial h}
+   \frac{\partial h}{\partial\widetilde u}
+   \frac{\partial\widetilde u}{\partial\phi},
 \]
 
-Z>0 时 correction r(x)=[p(x)−q(x)]₊/Z；则提交 x 的总概率
+右边只需缓存 a、u、s、重算低秩分支、最后 RMSNorm 和 LM head。
+不需要对 28 层 transformer 反传，也不需要额外 teacher forward。
+这是固定当前前缀的蒸馏梯度，不是对产生前缀的整个随机生成过程求导。
+
+服务时在 CUDA graph 中把 a、u、s 写入小型静态缓冲区。OFF verify graph 不覆盖它们。
+需要更新时保存 verifier logits，commit 后复制成普通（非 inference-mode）张量交给 autograd。
+重放保留完整 B 行，先计算再取 loss mask；过早切成 k 行可能改变 BF16 GEMM kernel。
+审计可比较重放与真实 draft logits；即使数学闭合，也不把有限精度差异默认为零。
+
+**KV 隔离命题。** 每层 K/V 均在该层 attention 内生成；最后 MLP 之后没有 attention。
+新增 φ 不参与任何本轮 KV 的计算。因此改变 φ 不要求刷新已提交 prefix 的 KV。
+不同 φ 可以通过不同 proposal 改变将来的采样路径，但这不等于污染已有 KV。
+官方 draft 噪声 KV 回滚、verify 提交、`num_cached_tokens=len(seq)−1` 均不改动。
+
+## 3. Teacher 对齐和拒绝后的屏蔽
+
+官方一轮 draft 输入为 [seed,z₁,…,z_(B−1)]，输出 [y₀,y₁,…,y_(B−1)]，
+y₀ 由 seed 的 base 路径采样。verify 输入为 [y₀,y₁,…]。
+**student 第 i 个 noise 行对应 verify 第 i−1 行**（i=1,…,B−1），不能同索引直接对齐。
+
+若在 noise 位置 J 首次拒绝，只有 i≤J 的 teacher 条件使用真实将提交的历史；
+i>J 的 teacher 看到了不会提交的 rejected token。当前算法屏蔽这部分，不把它当作 on-policy 监督。
+
+设该轮实际提交 c 个 token。无截断时 c=2+K，K 是连续接受的 noise 数，
+包含 clean root 和 correction / lookahead。取
 
 \[
- q(x)a(x)+Zr(x)=\min\{p(x),q(x)\}+[p(x)-q(x)]_+=p(x).
+ k=\min(B-1,c-1),\quad w_i=\mathbf1(1\le i\le k).
 \]
 
-Z=0 时 p=q、全部接受。按位置从左到右归纳，接受前缀后下一位置的 p 使用真正已提交的条件；
-拒绝处输出 correction 并停止本轮，全部接受则由正确 target 条件采样 lookahead。
-Uno causal seed 行和 verify 行 LoRA OFF，noise 行 LoRA ON；控制器不修改这个隔离关系。
+发生拒绝时 c=J+1，所以 k=J；全部接受时 k=B−1。
+输出预算截断只减小 c，因此这个 mask 最多更保守，不引入拒绝后的历史。
+只有一个 token 的尾轮 k=0，不训练。这个 mask 是可观测的实际反馈，不是反事实接受估计。
 
-固定任意条件历史时每轮的每个提交位置都服从 target kernel。跨轮对 F_t 再做条件期望，
-自适应 B_t 的混合仍给出同一 target；停止于 EOS 或固定长度只是截取该过程。
-若使用 top-k/top-p/temperature，p 指施加同样采样变换后的目标，而不是未过滤的原始 softmax。
-这是一条条件于官方固定 B 实现正确的组合定理，不是对所有 GPU kernel 的形式化认证。
-
-**KV 边界归纳。** 官方解码后 invariant 是 num_cached_tokens=len(seq)−1。
-新 B 仅决定 scheduler scratch reservation 和已捕获 block graph；旧已提交 KV 不变。
-draft 后回滚到 len(seq)，verify 后提交并再次回滚到新 len(seq)−1。
-因为不在轮内改变 B、不动 position IDs、LoRA mask、噪声 KV 回滚或残差分布，下一轮保持相同 invariant。
-
-## 4. 数值精度与“行为相近”
-
-数学 exactness 不等于 BF16 bitwise 一致。不同 B 的矩阵/attention kernel 形状可能产生不同 logits。
-若同一历史的数值 kernel 与理想 p 的 TV 距离至多 ε_j，则 maximal coupling 加 union bound 给出
-长度 T 的序列 TV ≤min(1,Σ_j ε_j)。本项目没有测出这些 ε_j，因此该式不是数值保证。
-greedy 情况：若最大 logit 与第二名间距大于 2δ，且各 logit 误差≤δ，argmax 不变；否则可能分叉。
-真实测试须保存每个 token、首个差异和文本，不能从理论等式直接声称硬件输出逐 token 一样。
-
-## 5. 吞吐、学习开销与不能证明的部分
-
-官方每轮已经把紧凑 committed payload 从 GPU 同步到 CPU，当前控制器 不额外调用 CUDA synchronize。
-观测 dᵢ 是选 B 开始到官方 step 返回的 exposed wall time，包含 choice 和官方回传，
-不含随后 observe 与 trace bookkeeping；后两者以及 controller 构造/序列化、wrapper 安装恢复、
-prefill、detokenization 全部包含在外层 E2E 定时。它不是精确分离的 GPU kernel 时间。
-
-记固定长度 N，原版成本 T₀，在线节省 S、增加更新和探索成本 U，则
+当前使用温度 τ=1 的全词表 forward KL：
 
 \[
- \frac{TPS_{online}}{TPS_0}=\frac{T_0}{T_0-S+U}.
+ L_t(\phi)=\frac1k\sum_{i=1}^{k}
+ D_{KL}\left(\operatorname{softmax}(\ell^p_{i-1}/\tau)
+ \middle\|\operatorname{softmax}(\ell^q_i(\phi)/\tau)\right).
 \]
 
-只有 S≥U 时净收益才非负；提高 TPF 不足以证明这一点。理想固定状态下更新后的真实比率
-ρ₁、旧比率 ρ₀、未来剩余 H tokens、一次更新成本 U 的回本条件为
-H(1/ρ₀−1/ρ₁)>U。非平稳请求中这些量未知，当前控制器 并未提供 regret 或全局最大 TPS 保证。
+p stop-gradient，仅更新 A、C。对 logits 的梯度为 (q−p)/(kτ)，
+令 gᵢ=∂L/∂ũᵢ，则实数模型下 ∇C=Σᵢgᵢ(Aaᵢ)ᵀ、∇A=ΣᵢCᵀgᵢaᵢᵀ。
+混合精度训练使用 cast 的常规 autograd 梯度；不是对离散浮点舍入函数的真实导数。
 
-## 6. 文献归因
+Pinsker 给出 TV(p,q)≤√(KL(p‖q)/2)，而逐位置标准拒绝采样接受概率为 1−TV(p,q)。
+这个联系只对同一对分布成立。当前 greedy 解码用 τ=0、训练用 τ=1，KL 是平滑代理，
+不能把它降低直接等同于 greedy 接受率提高；更不能据此断言未来样本或整个 block 的收益。
+mask 的数据分布也依赖当前 drafter，没有无偏全轨迹梯度或 regret 保证。
 
-- [Uno 原文与官方实现](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)：
-  diffusion proposal、gated LoRA、Ψ-Spec、线性/树解码都属于原工作，不是 当前控制器 创新。
-- [Speculative Decoding](https://proceedings.mlr.press/v202/leviathan23a.html)：
-  accept/reject 和正残差校正的分布保持基础。
-- [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)：用部署反馈在线适配 draft 的先例；
-  当前控制器 的受限动作是宽度，不是它的神经 drafter 蒸馏。
-- [Not a Bandit Problem / HedgeSpec](https://arxiv.org/abs/2510.20064)：
-  反馈可观测性需要单独证明；当前控制器 没有借用完整反馈假设或引用其 regret 为自己的保证。
+## 4. 在线更新仍可保持 speculative decoding 的目标分布
+
+令 Fₜ 包括过去已提交前缀、所有过去反馈和当前 φₜ。本轮开始前 φₜ 已确定，
+条件于 Fₜ 和本轮噪声，各 proposal 分布 q 固定。接受/拒绝使用**生成时的 q**，
+不能使用更新后的 q。代码在整个官方 step 返回以后才发布 φₜ₊₁。
+
+对任一位置的目标 p、proposal q，令 a(y)=min(1,p(y)/q(y))，
+q(y)=0 的事件不会由 q 采到。拒绝概率
+
+\[
+ Z=1-\sum_y\min(p(y),q(y))=\sum_y[p(y)-q(y)]_+=TV(p,q).
+\]
+
+Z>0 时，correction r(x)=[p(x)−q(x)]₊/Z，因而
+
+\[
+ \Pr(X=x\mid F_t,\text{有效前缀})
+ =q(x)a(x)+Zr(x)=\min(p(x),q(x))+[p(x)-q(x)]_+=p(x).
+\]
+
+Z=0 时 p=q、全部接受。按 block 内位置归纳，accepted prefix 后使用正确 target 条件；
+首次拒绝处输出 correction 并结束该轮，全部接受则使用正确 lookahead。
+再对 Fₜ 取条件期望、按轮归纳，φₜ 如何依赖**过去**反馈不会改变 target 分布。
+训练数据包含当前拒绝信息也没问题，因为它只影响下一轮。
+top-k/top-p/temperature 必须按官方实现对 p/q 一致变换后再验证。
+
+这是条件于官方固定参数验证器正确的组合定理，不是所有 GPU kernel 的形式化认证。
+greedy 的对应论证是只接受 target argmax 一致的 prefix，拒绝处输出 target argmax。
+BF16 不同形状可能具有不同的数值 target，不能用实数证明宣称逐 token bitwise 相等。
+
+## 5. 独立推理优化：融合 grouped RMSNorm
+
+native_norm 将多次逐元素运算和 reduction 融合成一个 Triton kernel。
+保留上游显式舍入位置：
+
+1. FP32 residual 加法，转换回 BF16；
+2. FP32 分组均方与 rsqrt，归一化后转换回 BF16；
+3. 乘 norm weight，输出 BF16。
+
+关闭 FP fusion 以避免合并表达式改变这些位置。仍可能因 reduction 顺序、rsqrt 实现而有差异，
+所以测试残差精确相等、归一化误差，并在生成层报告实际 token 差异。
+数学上每组为 w⊙v/√(mean(v²)+ε)，融合前后相同；有限精度相同则须实测。
+融合同时用于 teacher/draft，是系统优化，不记作在线学习带来的增益。
+
+## 6. TPS 的验收和收益边界
+
+理想稳定区间下，静态每轮平均提交 g₀、成本 C₀，在线提交 g₁、额外推理成本 δ、
+每 S 轮训练成本 U，则忽略边界时
+
+\[
+ \frac{TPS_{online}}{TPS_{static}}
+ \approx\frac{g_1}{g_0}\frac{C_0}{C_0+\delta+U/S}.
+\]
+
+因此需要 g₁/g₀>1+(δ+U/S)/C₀ 才有净收益。实测使用整个 generate 的时间，
+包括 reset、特征缓存、teacher 复制、backward、optimizer、同步发布、prefill 和 detokenization。
+审计额外重放也计时；它不属于正常优化版本，比较时要注明是否启用。
+
+默认比较原生基线、融合后的静态 Uno、同样融合路径上的 online LoRA。
+fast-weights 引擎的静态 B=8 已包含零增量分支与特征缓存，另测无 fast-weights 的融合引擎
+才可评估新增分支全部成本。权重字节 hash 在计时外比较，包含 base 和 packed/unpacked Uno，排除 KV。
+四个旧 prompts 只用于开发，不称为 held-out，也不从训练 loss 或单次 TPS 宣称论文级收益。
+
+## 7. 保留的块长控制器与归因
+
+native_online_policy 保留作独立调度对照：B∈{4,8,16}，锚点 8，2 cycles/epoch，
+提交量/耗时 EMA retention=.75，切换门槛 3%，每 16 个适应 epoch 刷新一个臂。
+只用真实执行宽度反馈，不更新神经参数；它不是本页的 online LoRA，也不与其首轮评估混合。
+
+- [Uno / 官方锁定源码](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)：
+  gated diffusion LoRA、two-pass proposal/verification、采样与 KV 管理由原工作提供。
+- [Leviathan et al., Speculative Decoding](https://proceedings.mlr.press/v202/leviathan23a.html)：
+  accept/reject 与正残差校正的分布保持基础。
+- [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)：部署反馈在线适配 drafter 的先例。
+- [Test-Time Speculation, Appendix C](https://arxiv.org/html/2605.09329v2)：
+  verifier 监督、strided updates 和反传成本权衡。当前只重放最后 MLP 的闭合路径是本项目的受限改造，
+  不是对 TTS 报告的收益或异步实现的复现。
+- [PyTorch numerical accuracy](https://docs.pytorch.org/docs/2.11/notes/numerical_accuracy.html)：
+  数学等价的批量/切片计算不保证浮点 bitwise 相同。
