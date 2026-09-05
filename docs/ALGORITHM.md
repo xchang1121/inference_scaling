@@ -23,7 +23,8 @@ prefill、verify 的 OFF 路径根本不执行新增分支。C₀=0，A₀ 为�
 
 训练参数为 FP32，服务参数为独立 BF16 固定地址张量。每个完整 cycle 内服务版本不变；
 commit 返回后才执行 Adam、梯度裁剪（范数上限 1）、copy_ 发布。
-学习率默认 .003，每 8 个 cycles 更新一次，仅用该轮数据；最后一轮不再付训练成本。
+学习率默认 .001，每 S=16 个 cycles 更新一次，用该间隔最后 R=4 轮的有效数据；
+R≤S 且更新后清空缓冲区，保证同一批样本都由当前参数版本生成。最后一轮不再付训练成本。
 每请求重置参数和 optimizer，不跨请求学习，不保存新的模型 checkpoint。
 
 ## 2. 为什么不需要重跑整个 teacher 或 student
@@ -39,13 +40,33 @@ commit 返回后才执行 Adam、梯度裁剪（范数上限 1）、copy_ 发布
    \frac{\partial\widetilde u}{\partial\phi},
 \]
 
-右边只需缓存 a、u、s、重算低秩分支、最后 RMSNorm 和 LM head。
+右边只需缓存 a、u、s、重算低秩分支和最后 RMSNorm，并通过冻结的 LM head 传回梯度。
 不需要对 28 层 transformer 反传，也不需要额外 teacher forward。
 这是固定当前前缀的蒸馏梯度，不是对产生前缀的整个随机生成过程求导。
 
+**复用 draft logits 的梯度命题。** 令 M 为这次更新所有有效行数，τ=1。
+保存实际服务 logits ℓᑫ，q=softmax(ℓᑫ)，p 为对应 verifier 分布。LM head 固定，
+由 softmax 与 KL 的导数直接得到
+
+\[
+ \frac{\partial L}{\partial\ell_i^q}=\frac{q_i-p_i}{M},\qquad
+ g_i^h=W_{head}^{\mathsf T}\frac{q_i-p_i}{M},\qquad
+ \nabla_\phi L=\sum_i J_{h_i,\phi}^{\mathsf T}g_i^h.
+\]
+
+因此把 gʰ 当作外部上游梯度传给重放 hidden 的 backward，和完整 KL 反传的**一阶梯度**相同，
+无需再做训练端 LM-head forward 或 softmax backward。这里 detach q 不会丢失一阶梯度：
+q−p 正是已经求出的上游导数；我们不是要对这个导数再求二阶导。
+实数模型的等式由链式法则给出，测试另与普通 autograd 对照；BF16 的梯度 cast 与 matmul
+仍有有限精度边界。诊断中的 head 重放仅在 `--audit-fast` 打开时执行。
+
+该捷径严格要求缓存 q 的参数版本等于当前版本。代码记录每个样本的 version，过期则报错；
+不是把任意历史 q 都当成当前 q。a、u、s 虽然不依赖新 φ，历史 logits 却依赖，必须区分。
+
 服务时在 CUDA graph 中把 a、u、s 写入小型静态缓冲区。OFF verify graph 不覆盖它们。
-需要更新时保存 verifier logits，commit 后复制成普通（非 inference-mode）张量交给 autograd。
-重放保留完整 B 行，先计算再取 loss mask；过早切成 k 行可能改变 BF16 GEMM kernel。
+被选中的轮次保存 draft 和 verifier logits，commit 后复制特征成普通（非 inference-mode）张量。
+缓冲区只保留最近 R 个 blocks，无全轨迹记录。重放保留每个 block 的 B 行，计算 hidden 后
+再取 loss mask；合并 R 个 blocks 可能改变 GEMM shape，但梯度中的 q 使用实际缓存的服务 logits。
 审计可比较重放与真实 draft logits；即使数学闭合，也不把有限精度差异默认为零。
 
 **KV 隔离命题。** 每层 K/V 均在该层 attention 内生成；最后 MLP 之后没有 attention。
@@ -73,7 +94,7 @@ i>J 的 teacher 看到了不会提交的 rejected token。当前算法屏蔽这�
 输出预算截断只减小 c，因此这个 mask 最多更保守，不引入拒绝后的历史。
 只有一个 token 的尾轮 k=0，不训练。这个 mask 是可观测的实际反馈，不是反事实接受估计。
 
-当前使用温度 τ=1 的全词表 forward KL：
+单轮使用温度 τ=1 的全词表 forward KL：
 
 \[
  L_t(\phi)=\frac1k\sum_{i=1}^{k}
@@ -81,7 +102,8 @@ i>J 的 teacher 看到了不会提交的 rejected token。当前算法屏蔽这�
  \middle\|\operatorname{softmax}(\ell^q_i(\phi)/\tau)\right).
 \]
 
-p stop-gradient，仅更新 A、C。对 logits 的梯度为 (q−p)/(kτ)，
+当前批量更新把最近 R 轮所有有效项相加，再除以总有效行数 M=Σk，而非等权平均每轮 loss。
+p stop-gradient，仅更新 A、C。单轮对 logits 的梯度为 (q−p)/(kτ)，
 令 gᵢ=∂L/∂ũᵢ，则实数模型下 ∇C=Σᵢgᵢ(Aaᵢ)ᵀ、∇A=ΣᵢCᵀgᵢaᵢᵀ。
 混合精度训练使用 cast 的常规 autograd 梯度；不是对离散浮点舍入函数的真实导数。
 
@@ -145,7 +167,7 @@ native_norm 将多次逐元素运算和 reduction 融合成一个 Triton kernel�
 \]
 
 因此需要 g₁/g₀>1+(δ+U/S)/C₀ 才有净收益。实测使用整个 generate 的时间，
-包括 reset、特征缓存、teacher 复制、backward、optimizer、同步发布、prefill 和 detokenization。
+包括 reset、特征/分布缓存、梯度矩阵乘、backward、optimizer、同步发布、prefill 和 detokenization。
 审计额外重放也计时；它不属于正常优化版本，比较时要注明是否启用。
 
 默认比较原生基线、融合后的静态 Uno、同样融合路径上的 online LoRA。
@@ -165,7 +187,7 @@ native_online_policy 保留作独立调度对照：B∈{4,8,16}，锚点 8，2 c
   accept/reject 与正残差校正的分布保持基础。
 - [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)：部署反馈在线适配 drafter 的先例。
 - [Test-Time Speculation, Appendix C](https://arxiv.org/html/2605.09329v2)：
-  verifier 监督、strided updates 和反传成本权衡。当前只重放最后 MLP 的闭合路径是本项目的受限改造，
+  verifier 监督、strided updates 和反传成本权衡。当前末层闭合重放、同版本微批和解析 head 梯度是本项目的受限改造，
   不是对 TTS 报告的收益或异步实现的复现。
 - [PyTorch numerical accuracy](https://docs.pytorch.org/docs/2.11/notes/numerical_accuracy.html)：
   数学等价的批量/切片计算不保证浮点 bitwise 相同。

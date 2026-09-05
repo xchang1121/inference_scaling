@@ -37,7 +37,7 @@ python scripts/benchmark_native_uno.py \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
   --blocks 1,8 --fused-norm --fast-weights \
-  --update-stride 8 --learning-rate 0.003 --rank 8 \
+  --update-stride 16 --replay-blocks 4 --learning-rate 0.001 --rank 8 \
   --repetitions 3 --max-new-tokens 512 --warmup-tokens 128 \
   --output results/native_run.json
 
@@ -76,13 +76,15 @@ B=1 是原引擎 AR 对照；B=8 是固定块长 Uno；`fast8` 是真正的在�
 ```python
 from native_fast_weights import extended_runner, generate_fast
 
-with extended_runner(fused_norm=True, fast_weights=True, rank=8, stride=8, lr=0.003):
+with extended_runner(fused_norm=True, fast_weights=True, rank=8, stride=16,
+                     replay_blocks=4, lr=0.001):
     engine = LLM(model=base_path, **config)  # config 见 benchmark_native_uno.py
 output, diagnostics = generate_fast(engine, prompt_ids, params, budget=512)
 ```
 
 引擎必须为单 GPU、batch=1、线性 XLLM Uno，预捕获 B=8，params 使用同一 B。
 每个请求自动重置新增参数，不并发共享 engine/wrapper，不做异步训练。
+R≤S：只收集每个更新间隔最后 R 轮，更新后清空；不同参数版本的 logits 不允许混用。
 作为库可在项目目录 `pip install -e .`，仅安装当前模块；GPU 依赖仍由 WSL 环境提供。
 
 ## 单元测试

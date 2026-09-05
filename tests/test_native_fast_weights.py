@@ -98,10 +98,10 @@ def test_serving_gate_keeps_seed_and_verifier_unchanged():
         assert torch.equal(s.features[:4], a)
         assert torch.equal(s.before_delta[:4], reference)
         assert torch.equal(s.residual[:4], residual)
-        saved = s.features.clone()
+        saved = s.features[:4].clone()
         context.lora_enabled = False
         assert torch.equal(down(a * 2), reference * 2)
-        assert torch.equal(s.features, saved)  # verify never overwrites draft cache
+        assert torch.equal(s.features[:4], saved)  # verify never overwrites draft cache
         assert torch.equal(down.weight, frozen)
 
 
@@ -154,6 +154,49 @@ def test_wrapper_publishes_only_after_commit_and_skips_final_update():
     assert events == [("commit", 0), ("update", 2), ("commit", 1)]
     assert audit["version"] == 1
     assert engine.step == original_step and engine.model_runner.two_pass_decoder.run_block == original_block
+
+
+def test_bounded_multi_block_update_has_real_gradients_and_clears_buffer():
+    s = state()
+    s.replay_blocks = 2
+    torch.manual_seed(50)
+    for _ in range(3):
+        s.features.normal_()
+        s.before_delta.normal_()
+        s.residual.normal_()
+        s.last_teacher = torch.randn(7, 20)
+        with torch.no_grad():
+            s.last_draft = s.logits(s.features, s.before_delta, s.residual)[1:]
+        s.remember(2, 8)
+    assert len(s.examples) == 2
+    s.update(2, block_size=8, audit=True)
+    assert s.version == 1 and not s.examples
+    assert s.events[0]["rows"] == 4 and s.events[0]["replay_blocks"] == 2
+    assert s.events[0]["grad_norm"] > 0
+    assert s.events[0]["same_features_logit_change"] > 0
+
+
+def test_analytic_head_gradient_matches_full_kl_autograd():
+    torch.manual_seed(81)
+    hidden = torch.randn(5, 8, requires_grad=True)
+    weight = torch.randn(20, 8)
+    teacher = torch.randn(5, 20)
+    logits = hidden @ weight.T
+    reference_loss = torch.nn.functional.kl_div(logits.log_softmax(-1), teacher.softmax(-1), reduction="batchmean")
+    reference_gradient, = torch.autograd.grad(reference_loss, hidden)
+    loss, gradient = module.distillation_signal(logits.detach(), teacher, weight)
+    torch.testing.assert_close(loss, reference_loss)
+    torch.testing.assert_close(gradient, reference_gradient)
+
+
+def test_cached_logits_from_old_weight_version_are_rejected():
+    s = state()
+    s.last_teacher = torch.zeros(7, 20)
+    s.last_draft = torch.zeros(7, 20)
+    s.remember(2, 8)
+    s.version += 1
+    with pytest.raises(RuntimeError, match="stale"):
+        s.update(2, block_size=8)
 
 
 @pytest.mark.skipif(sys.platform != "linux" or not torch.cuda.is_available(), reason="WSL CUDA/Triton test")

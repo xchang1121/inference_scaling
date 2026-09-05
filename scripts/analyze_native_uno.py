@@ -49,7 +49,7 @@ def validate(payload):
                         or diagnostic["model_weight_updates"] != len(events)
                         or [e["version"] for e in events] != list(range(1, len(events) + 1))
                         or any(not math.isfinite(e["kl_before"]) or e["grad_norm"] <= 0
-                               or e["right_norm"] <= 0 or not 1 <= e["rows"] <= 7
+                               or e["right_norm"] <= 0 or not 1 <= e["rows"] <= 7 * diagnostic.get("replay_blocks", 1)
                                or e["cycle"] % diagnostic["stride"] != 0 for e in events)):
                     raise RuntimeError("invalid real online LoRA update audit")
                 continue
@@ -137,7 +137,7 @@ def summarize(payload):
                                        "paired_geomean_time_ratio": math.exp(sum(map(math.log, paired)) / len(paired))}
     return {"valid_runs": len(rows), "methods": summaries, "online_over_fixed": comparisons,
             "gpu_after_counts": dict(Counter(r["gpu_after"] for r in rows)),
-            "scope": "engineering pilot; four reused prompt clusters; not confirmatory; no retroactive equivalence margin",
+            "scope": f"engineering pilot; {len(payload['design']['workloads'])} reused prompt clusters; not confirmatory; no retroactive equivalence margin",
             "bitwise_exactness_is_not_inferred_from_theory": True}
 
 
