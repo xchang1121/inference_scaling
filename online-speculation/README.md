@@ -1,12 +1,13 @@
 # Online Uno
 
 在 RTX 3090 24 GB 上研究端到端吞吐优先的在线 speculative decoding。
-当前主线是 **Recycling Uno**：复用上一轮 verifier 的尾部预测作为下一轮确定性候选，
-以一遍 base-model verification 扩展输出；需要新候选时再调用两遍式 Uno。
-用已经完成的 cycle 的真实耗时和提交 token 数在线决定是否复用、何时 refill。
+当前主线是 **Budgeted Online Tree Uno**：一次 Uno draft 产生多个位置的候选，
+用前缀闭合树覆盖多个可能 continuation，再通过 ancestor-only target attention 验证。
+在线更新的是实际成本统计与验证节点预算；另有独立的在线 rank 校准消融。
 
 新设计不要求首请求重复，也不需要先训练 residual head。任何候选都重新验证。
 目标是提升包含在线控制和候选更新成本后的 TPS；数学正确性与系统加速分别检验。
+没有在线更新 base/LoRA 网络权重。Uno 官方本身已有静态树，树验证不是本项目首创。
 
 ## 当前状态
 
@@ -14,14 +15,21 @@
 | --- | --- |
 | 硬件 | RTX 3090 24 GB，i7-12700K，32 GB RAM |
 | 静态基线 | Uno 0.9B，Windows HF KV-cache，B=8 对 AR median decode speedup 1.352× |
-| 官方 Linux runtime | WSL 安装中断后重新准备官方 MSI；尚未运行官方 Nano-vLLM 基线 |
-| Recycling Uno | 设计与证明先行，随后实现、pilot、独立 held-out 评估 |
+| WSL | Microsoft 签名/hash 验证通过，WSL 2.7.13.0 与虚拟机平台已安装；**等待 Windows 重启** |
+| 官方 Linux runtime | Ubuntu/CUDA/PyTorch/Triton/FA2 和未修改官方 Nano-vLLM 基线仍待重启后验证 |
+| 在线预算树 pilot | FP32：48.74 TPS vs linear B=8 的 41.27 TPS（+18.09%）；vs fixed tree 47.86 TPS 仅 +1.84% |
+| 独立评估 | 12 新 prompts × 5 repetitions × 6 methods，协议已冻结；运行结果另报，不把 pilot 当结论 |
+| Recycling / warm-start | 已实现并测试，但没有可靠 TPS 收益，退出默认主线；负结果保留 |
 | 旧在线 residual/retrieval 试验 | 已归档；其中 residual 无可靠 TPS 收益，精确重复 retrieval 仅是工程上界 |
 
 ## 当前文档
 
-- [新算法与数学证明](docs/RECYCLING_UNO_DESIGN_AND_PROOFS.md)
-- [新实验协议](docs/RECYCLING_UNO_EXPERIMENT_PROTOCOL.md)
+- [当前树算法与数学证明](docs/BUDGETED_TREE_UNO_DESIGN_AND_PROOFS.md)
+- [稳定 QoS pilot 与在线收益边界](docs/STAGE11_HIGHQOS_TREE_PILOT_RESULTS.md)
+- [独立 held-out 协议](docs/TREE_HELDOUT_PROTOCOL_20260905.md)
+- [WSL 安装完成与重启恢复点](docs/STAGE11_WSL_PROGRESS.md)
+- [FA2/3090 树路径候选迁移与 attention 合并证明](docs/FA2_TREE_PORT_PLAN_AND_PROOF.md)
+- [此前 recycling / warm-start 负结果](docs/STAGE11_RECYCLING_AND_WARMSTART_RESULTS.md)
 - [当前路线图](docs/ROADMAP.md)
 - [硬件和复现边界](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)
 - [Uno 静态基线](docs/STAGE2_UNO1B_RESULTS.md)
@@ -32,7 +40,7 @@
 
 1. verifier 的 base 权重和离线 Uno adapter 固定；每一轮用实际的旧 proposal law 验证。
 2. 在线状态只由过去反馈决定；未验证的尾部预测只是候选，不能直接提交。
-3. TPS 分母包括 controller、同步、候选维护和在线学习时间；请求结束维护另报 inclusive E2E。
+3. TPS 分母包括初始化、controller、同步、候选维护、在线学习和请求结束操作的完整生成调用。
 4. pilot 用于设计；confirmatory test 冻结配置与新 prompts/seeds。报告全部 workload 及负结果。
 5. 每一阶段保存代码、结果和数学/实验文档，并直接 commit + push。
 
@@ -46,3 +54,10 @@
 ```
 
 模型和安装包保存在被忽略的目录；版本锁、摘要结果和证明进入 Git。
+
+## 核心实现
+
+- `src/online_speculation/tree_uno.py`：嵌套树、target-draw 遍历、rank 校准、在线成本预算。
+- `src/online_speculation/hf_tree_uno.py`：真实模型 ancestor mask、position、KV 路径整理。
+- `src/online_speculation/hf_recycling_benchmark.py`：配对顺序、完整计时、聚类统计及静态树对照。
+- `patches/0001-experimental-fa2-tree.patch`：默认关闭的上游 FA2 树实验补丁，仅通过 apply-check，尚无 GPU 通过声明。
