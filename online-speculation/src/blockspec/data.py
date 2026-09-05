@@ -1,9 +1,30 @@
 """Explicit JSONL data contract: one independent sequence per record, no packing."""
 
 import json
+import hashlib
 from pathlib import Path
 
 import torch
+
+
+def assert_split_files_disjoint(training_path, validation_path):
+    """Reject question-group overlap and exact record overlap before fitting."""
+    def identities(path):
+        keys = set()
+        with Path(path).open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get("group_sha256"):
+                    keys.add("group:" + record["group_sha256"])
+                content = record.get("input_ids", record.get("text"))
+                if content is not None:
+                    digest = hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
+                    keys.add("content:" + digest)
+        return keys
+    if identities(training_path).intersection(identities(validation_path)):
+        raise ValueError("training and validation overlap by question or exact content")
 
 
 def load_sequences(path, vocab_size, *, tokenizer=None):

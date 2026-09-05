@@ -13,6 +13,14 @@ from .model import Decoder, ModelConfig, is_adapter
 FORMAT = "blockspec-v1"
 
 
+def implementation_fingerprint():
+    digest = hashlib.sha256()
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        digest.update(path.name.encode() + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+    return digest.hexdigest()
+
+
 def base_fingerprint(model):
     digest = hashlib.sha256()
     for name, value in sorted(model.state_dict().items()):
@@ -67,6 +75,10 @@ def load_checkpoint(path, *, model=None, device="cpu", dtype=None):
             raise ValueError("adapter belongs to different base weights or base dtype")
         expected = {n: p for n, p in model.state_dict().items() if is_adapter(n)}
         _validate_state(expected, payload["state"])
+        # Do not round saved FP32 master adapters through the base's BF16 dtype.
+        for name, parameter in model.named_parameters():
+            if is_adapter(name):
+                parameter.data = parameter.data.to(payload["state"][name].dtype)
         model.load_state_dict(payload["state"], strict=False)
     else:
         if model is not None:

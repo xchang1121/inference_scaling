@@ -62,6 +62,19 @@ PYTHONPATH=src python scripts/check_local_model.py \
 
 ## 4. 用自己的数据训练全适配器
 
+要准备当前小规模公开数据子集，可运行：
+
+```bash
+python -m blockspec prepare \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --output /home/singm/online-speculation-work/data/blockspec_ot3_small --page-size 8
+```
+
+该目录在本机已存在，可以直接复用；重新准备须选择新目录，不覆盖。
+`prepare` 需要 `.[data]` 依赖，使用本地聊天模板；保存 train／validation／test 三个数据文件及来源 manifest。
+按问题分组防止同题不同答案跨集合。`test.jsonl` 暂不参与训练和参数选择。
+这是常规可复用准备入口，不生成下载临时脚本或残留原始响应。
+
 本地 JSONL 一行一个独立样本，二选一：
 
 ```json
@@ -86,6 +99,13 @@ python -m blockspec train \
 这是 3090 上保守的起步配置，不承诺已收敛或最优。1000 步包含热身，不额外增加。
 数据不默认上传、不入 Git。数据和噪声分别设随机种子。训练前后检查基座指纹；
 适配器检查点含模型配置、基座指纹，错误基座／精度会被拒绝。
+
+增加 `--validation-data /path/validation.jsonl --validation-every 100 --validation-batches 8`，
+可在训练前及每 100 步检查固定窗口、固定噪声上的学生／老师差异。训练与验证问题或样本重叠会拒绝启动。
+检查点记录训练配置和输入文件 SHA，完整训练时间包含验证开销。更换精度不是无损加载同一适配器的默认操作。
+
+诊断数值差异可运行 `python scripts/audit_model_precision.py --base /path/to/base`；
+默认仅打印摘要，`--trace` 逐层打印，也不写文件。该命令只作定位，不作为 TPS 基准。
 
 ## 5. 接进后续请求
 

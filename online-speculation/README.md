@@ -28,6 +28,9 @@ src/blockspec/
   online.py          全适配器重放、反向、更新与版本
   checkpoint.py     自有格式、基座指纹、本地权重桥接
   data.py            独立序列数据合同
+  corpus.py          有界公开数据、问题分组划分及来源校验
+  validation.py      固定窗口与噪声的独立验证
+  diagnostics.py     等价执行布局的逐层数值审计
   tokenizer.py       只读本地 tokenizer.json
   cli.py             小模型与真实权重离线训练入口
 tests/               概率、梯度、缓存、端到端及外部数值参照
