@@ -14,21 +14,25 @@
 | 项目 | 证据与状态 |
 | --- | --- |
 | 硬件 | RTX 3090 24 GB，i7-12700K，32 GB RAM |
-| 静态基线 | Uno 0.9B，Windows HF KV-cache，B=8 对 AR median decode speedup 1.352× |
+| 静态基线 | Uno 0.9B，Windows HF KV-cache；早期静态复现与本轮完整生成计时分别保留 |
 | WSL | Microsoft 签名/hash 验证通过，WSL 2.7.13.0 与虚拟机平台已安装；**等待 Windows 重启** |
 | 官方 Linux runtime | Ubuntu/CUDA/PyTorch/Triton/FA2 和未修改官方 Nano-vLLM 基线仍待重启后验证 |
 | 在线预算树 pilot | FP32：48.74 TPS vs linear B=8 的 41.27 TPS（+18.09%）；vs fixed tree 47.86 TPS 仅 +1.84% |
-| 独立评估 | 12 新 prompts × 5 repetitions × 6 methods，协议已冻结；运行结果另报，不把 pilot 当结论 |
+| 独立评估 | 360/360 完成；300 个 speculative 输出全部逐 token 等于 AR；频率门未通过，整组仅作描述性工程测量 |
+| held-out TPS | linear B=8：42.41；fixed tree N=16：48.35；fixed tree N=32：50.60；online budget：49.58 |
+| 在线收益边界 | 相对 linear +16.89%，相对 fixed N=16 +2.53%，但相对更强的 fixed N=32 -2.02%；尚无正式在线额外收益结论 |
 | Recycling / warm-start | 已实现并测试，但没有可靠 TPS 收益，退出默认主线；负结果保留 |
 | 旧在线 residual/retrieval 试验 | 已归档；其中 residual 无可靠 TPS 收益，精确重复 retrieval 仅是工程上界 |
 
 ## 当前文档
 
 - [当前树算法与数学证明](docs/BUDGETED_TREE_UNO_DESIGN_AND_PROOFS.md)
+- [完整 held-out 结果、审计与收益边界](docs/STAGE11_TREE_HELDOUT_RESULTS.md)
 - [稳定 QoS pilot 与在线收益边界](docs/STAGE11_HIGHQOS_TREE_PILOT_RESULTS.md)
 - [独立 held-out 协议](docs/TREE_HELDOUT_PROTOCOL_20260905.md)
 - [WSL 安装完成与重启恢复点](docs/STAGE11_WSL_PROGRESS.md)
 - [FA2/3090 树路径候选迁移与 attention 合并证明](docs/FA2_TREE_PORT_PLAN_AND_PROOF.md)
+- [下一版嵌套树反事实反馈证明（尚未进入 GPU 控制）](docs/COUNTERFACTUAL_BUDGET_LEARNING_PROOF.md)
 - [此前 recycling / warm-start 负结果](docs/STAGE11_RECYCLING_AND_WARMSTART_RESULTS.md)
 - [当前路线图](docs/ROADMAP.md)
 - [硬件和复现边界](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)
@@ -54,6 +58,10 @@
 ```
 
 模型和安装包保存在被忽略的目录；版本锁、摘要结果和证明进入 Git。
+
+当前观察到的最快配置是 `tree:8:32`，不是在线 controller；该选择不构成全局最大 TPS 保证。
+WSL 支持栈的下一步需要用户保存工作并重启 Windows，再运行
+`scripts/resume_wsl_after_reboot.ps1`。Ubuntu 与 Linux GPU kernels 尚未在本机验证。
 
 ## 核心实现
 

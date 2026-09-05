@@ -1,6 +1,6 @@
 # 下一轮候选：用同一 verifier 的嵌套树反馈学习预算
 
-2026-09-05。仅设计与 CPU 数学工具，不纳入正在运行的冻结 held-out。
+2026-09-05。仅设计与 CPU 数学工具，未纳入 R3E 冻结 held-out。
 当前 production-candidate controller 仍是 past-cost + draft-surrogate，不暗中更改它。
 
 ## 1. 为什么值得研究
