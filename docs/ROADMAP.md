@@ -174,3 +174,18 @@ Stage 8 结果（2026-09-05）：snapshot 2 在 5-seed validation 上为 `1.0081
 seeds 的 mean TPF ratio 为 `1.00950 [1.00268, 1.01621]`，12 wins/3 losses/5 ties，统计与实际幅度
 门均通过。全部 78 个生成的 greedy token IDs 一致，参数隔离和 frozen hash 门通过。TPS ratio 为
 `1.00428 [0.98711, 1.02319]`，所以 online 学习效果成立，但当前 HF fallback 的系统净加速未成立。
+
+## Stage 9：WSL2 与官方 Uno 性能栈
+
+用户明确授权在本机安装 WSL 和所需支持库。环境冻结为 Ubuntu 22.04、Python 3.10、PyTorch 2.11
+cu128、Triton 3.6、FA2 2.8.3，以及 `ifm-ai/uno@ed2ee36`。RTX 3090 只复现 linear FA2 路径；
+不构建 Hopper FA3，也不在 WSL 安装 Linux NVIDIA driver。
+
+阶段拆成三个独立提交：
+
+1. 系统审计、可复核的提升权限安装器和 restart checkpoint；
+2. Linux ext4 venv、GPU/import/kernel smoke 与机器可读 manifest；
+3. 同进程、配对、预热后的 Uno-1B AR/linear static baseline。
+
+通过条件和完整命令边界见 `STAGE9_WSL2_RUNTIME_PROTOCOL.md`。只有第三步 wall-clock CI 显示收益，才把
+此前 Windows HF fallback 的“checkpoint 加速趋势”升级为“官方 runtime 加速复现”。

@@ -65,6 +65,9 @@ stochastic trajectory shift。
 正式 [Stage 8 结果](docs/STAGE8_GREEDY_STREAM_RESULTS.md)首次得到真实 checkpoint 上可确认的跨请求学习
 效果：20 个新 Uno noise seeds 的 mean TPF ratio 为 `1.00950 [1.00268, 1.01621]`，通过 +0.5% 实际
 幅度门，所有 greedy 输出逐 token 相同；但 TPS ratio `1.00428 [0.98711, 1.02319]`，尚未证明净加速。
+Stage 9 已按用户授权启动 [WSL2 与官方运行时迁移协议](docs/STAGE9_WSL2_RUNTIME_PROTOCOL.md)：选择原生
+Python 3.10 的 Ubuntu 22.04、cu128/FA2 linear 路径，并明确禁止在 WSL 安装 Linux NVIDIA driver。
+系统安装、Linux runtime 和官方静态基线将作为三个独立提交；Windows 若要求重启则停在人工检查点。
 
 ## 目录
 
@@ -115,6 +118,7 @@ online-speculation/
 | 6 | 跨请求 persistent learner 与 held-out stream | 完成；validation 收益未泛化到 test |
 | 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
 | 8 | greedy repeated-query online residual | 完成；学习门通过、HF 系统门失败 |
+| 9 | WSL2、官方 cu128/FA2 runtime 与 Nano-vLLM Uno-1B 基线 | 进行中；协议和审计安装器已冻结 |
 
 Stage 1 的正式验证命令：
 
