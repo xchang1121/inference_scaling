@@ -1,247 +1,498 @@
-# Online Uno：当前实现与证明
+# 分块起草、验证解码与在线蒸馏：从概率基础到完整管线
 
-主实现为 `native_fast_weights.py`，`native_update_graph.py` 捕获完整更新路径；
-`native_norm.py` 是独立的推理优化。
-这里的在线算法**实际更新神经网络参数**，不再以块长控制器代替在线蒸馏。
-仅支持锁定的 K2-Horizon / XLLM、单 GPU、batch=1、线性 Uno；默认 B=8。
+本文是本项目唯一的算法主报告。实现或结论变化时修改相应章节，不另建阶段报告和失败结果档案。
+命令见 [RUNNING.md](RUNNING.md)，实现目录见 [README](../README.md)。
 
-## 1. 冻结 Uno，在线学习最后一层的低秩增量
+**来源与归属。** 条件低秩适配、块去噪蒸馏和两遍验证解码的研究起点是
+[Uno：Unlocking Lossless Speedups in LLMs via Discrete Diffusion](https://arxiv.org/abs/2609.04010)。
+本项目据此独立编写实现、重新推导概率关系，并用可枚举问题、数值微分和其他实现验证；
+不把调用作者训练器／推理引擎称为独立复刻，不把原论文的方法冒称为原创。
+后文使用中性技术名称，不反复用论文名代替解释。
 
-冻结 AR 参数 θ 和离线 Uno adapter φ₀。最后一层 MLP down projection 新增
-φₜ=(Aₜ,Cₜ)，A∈R^(r×5120)、C∈R^(1536×r)，r=8，共 53,248 个参数。
-对某行，a 是 down projection 输入，u 是原 Uno 的输出，s 是最后一次 residual：
+主线是：**已有自回归基座 → 从零初始化草稿适配器 → 离线蒸馏 → 验证解码 → 推理中的适配器续训**。
+这里从零初始化的是适配器，不是重新训练一个通用语言模型。在线阶段默认已有离线适配器，
+不声称解决了“随机适配器在单个短请求内免费学出加速”的冷启动问题。
 
-\[
- d_t=C_t A_t a,\qquad \widetilde u_t=u+m d_t,\qquad
- h_t=\operatorname{RMSNorm}(\widetilde u_t+s),\qquad
- q_t=\operatorname{softmax}(W_{head}h_t).
-\]
+## 1. 我们究竟要改变什么
 
-m 直接使用官方 gated LoRA mask：draft noise 行为 1，causal seed 为 0；
-prefill、verify 的 OFF 路径根本不执行新增分支。C₀=0，A₀ 为固定种子、
-标准差 1/√5120 的随机矩阵。因此初始增量为零，且 C 的梯度不因双零初始化消失。
-初始化不消耗生成使用的随机数流。
+token 是词表中的一个编号，可能表示一个字、词的一部分或标点。语言模型看到的是整数序列。
+给定已经确定的文本 h，模型给出“下一个 token 是什么”的概率。
+设词表为 $\mathcal V=\{0,\ldots,V-1\}$，基座概率记为 $p_\theta(v\mid h)$：
 
-训练参数为 FP32，服务参数为独立 BF16 固定地址张量。每个完整 cycle 内服务版本不变；
-commit 返回后才执行 Adam、梯度裁剪（范数上限 1）、copy_ 发布。
-学习率默认 .001，每 S=16 个 cycles 更新一次，用该间隔最后 R=4 轮的有效数据；
-R≤S 且更新后清空缓冲区，保证同一批样本都由当前参数版本生成。最后一轮不再付训练成本。
-每请求重置参数和 optimizer，不跨请求学习，不保存新的模型 checkpoint。
+- $\theta$ 是基座权重，离线蒸馏和在线续训都不修改它。
+- p 是最终输出应服从的目标概率表。
+- $q_\phi$ 是草稿概率表，由另外一组可训练参数 $\phi$ 控制，可以不准确。
 
-## 2. 为什么不需要重跑整个 teacher 或 student
+例如词表只有 A、B、C，$p=(0.2,0.5,0.3)$ 表示反复抽样时，长期频率约为 20%、50%、30%。
+这不是说每五次必有一次 A，也不是一定选概率最大的 B。
 
-**特征闭合命题。** 条件于本轮已经确定的 prefix、噪声和冻结权重，a、u、s 都不依赖 φₜ。
-因为增量插在最后一个 MLP 的 down projection 输出处，其前面的计算没有可训练参数。
-因此对于本轮损失 L，链式法则给出
+模型先输出任意实数 $l_v$，称为 logits，再变成概率：
 
-\[
- \nabla_{\phi}L
- =\frac{\partial L}{\partial q}\frac{\partial q}{\partial h}
-   \frac{\partial h}{\partial\widetilde u}
-   \frac{\partial\widetilde u}{\partial\phi},
-\]
+```math
+p_v=\frac{\exp(l_v)}{\sum_{u\in\mathcal V}\exp(l_u)}.                  \tag{1}
+```
 
-右边只需缓存 a、u、s、重算低秩分支和最后 RMSNorm，并通过冻结的 LM head 传回梯度。
-不需要对 28 层 transformer 反传，也不需要额外 teacher forward。
-这是固定当前前缀的蒸馏梯度，不是对产生前缀的整个随机生成过程求导。
+这叫 softmax，分母保证所有概率和为 1。温度 $\tau>0$ 时用 $l_v/\tau$；温度为零另行定义为贪心：
+选最大 logit，概率表变成一个 1 和其余 0。top-k 只保留最大的 k 项；top-p 保留按概率降序累计达到
+阈值的最短前缀，再归一化。实现保留使累计概率跨过阈值的那一项。
 
-**复用 draft logits 的梯度命题。** 令 M 为这次更新所有有效行数，τ=1。
-保存实际服务 logits ℓᑫ，q=softmax(ℓᑫ)，p 为对应 verifier 分布。LM head 固定，
-由 softmax 与 KL 的导数直接得到
+**正确性中的目标包含这些采样设置。** 不能从截断分布抽候选，却用未经截断的概率校正。
+[sampling.py](../src/blockspec/sampling.py) 在抽样之前构造真正使用的概率表。
 
-\[
- \frac{\partial L}{\partial\ell_i^q}=\frac{q_i-p_i}{M},\qquad
- g_i^h=W_{head}^{\mathsf T}\frac{q_i-p_i}{M},\qquad
- \nabla_\phi L=\sum_i J_{h_i,\phi}^{\mathsf T}g_i^h.
-\]
+## 2. 自回归为什么串行，验证为什么可以并行
 
-因此把 gʰ 当作外部上游梯度传给重放 hidden 的 backward，和完整 KL 反传的**一阶梯度**相同，
-无需再做训练端 LM-head forward 或 softmax backward。这里 detach q 不会丢失一阶梯度：
-q−p 正是已经求出的上游导数；我们不是要对这个导数再求二阶导。
-实数模型的等式由链式法则给出，测试另与普通 autograd 对照；BF16 的梯度 cast 与 matmul
-仍有有限精度边界。诊断中的 head 重放仅在 `--audit-fast` 打开时执行。
+自回归（AR）是逐项生成，每一步依赖之前的输出。乘法法则给出：
 
-该捷径严格要求缓存 q 的参数版本等于当前版本。代码记录每个样本的 version，过期则报错；
-不是把任意历史 q 都当成当前 q。a、u、s 虽然不依赖新 φ，历史 logits 却依赖，必须区分。
+```math
+p_\theta(y_1,\ldots,y_n\mid h)
+=\prod_{i=1}^n p_\theta(y_i\mid h,y_1,\ldots,y_{i-1}).                \tag{2}
+```
 
-服务时在 CUDA graph 中把 a、u、s 写入小型静态缓冲区。OFF verify graph 不覆盖它们。
-被选中的轮次保存 draft 和 verifier logits，commit 后复制特征成普通（非 inference-mode）张量。
-缓冲区只保留最近 R 个 blocks，无全轨迹记录。重放保留每个 block 的 B 行，计算 hidden 后
-再取 loss mask；合并 R 个 blocks 可能改变 GEMM shape，但梯度中的 q 使用实际缓存的服务 logits。
-审计可比较重放与真实 draft logits；即使数学闭合，也不把有限精度差异默认为零。
+这不是说各 token 独立：第二项的条件已经包含第一项。正常生成必须先知道 $y_1$，才知道第二步输入。
+但如果别人已经提出 A、B、C，可以把它们一次送进模型，让每个位置只读取自己的前缀。
+一遍前向就得到这条候选路径上所有位置的“下一项概率”。
 
-**KV 隔离命题。** 每层 K/V 均在该层 attention 内生成；最后 MLP 之后没有 attention。
-新增 φ 不参与任何本轮 KV 的计算。因此改变 φ 不要求刷新已提交 prefix 的 KV。
-不同 φ 可以通过不同 proposal 改变将来的采样路径，但这不等于污染已有 KV。
-官方 draft 噪声 KV 回滚、verify 提交、`num_cached_tokens=len(seq)−1` 均不改动。
+这个读取规则叫因果注意力。它不意味着模型在这一遍里先抽 A 再抽 B，只表示算 A 位置时不能偷看 B。
+因此“把未来多项先猜出来，再一起验证”有机会减少串行前向次数。
 
-## 3. Teacher 对齐和拒绝后的屏蔽
+最容易错的偏移是：**输入位置 j 的 logits 预测 j+1 的 token，不预测输入位置 j 自己。**
+干净分支、带噪分支和验证分支都保持这一约定。
 
-官方一轮 draft 输入为 [seed,z₁,…,z_(B−1)]，输出 [y₀,y₁,…,y_(B−1)]，
-y₀ 由 seed 的 base 路径采样。verify 输入为 [y₀,y₁,…]。
-**student 第 i 个 noise 行对应 verify 第 i−1 行**（i=1,…,B−1），不能同索引直接对齐。
+### 2.1 模型中的矩阵在做什么
 
-若在 noise 位置 J 首次拒绝，只有 i≤J 的 teacher 条件使用真实将提交的历史；
-i>J 的 teacher 看到了不会提交的 rejected token。当前算法屏蔽这部分，不把它当作 on-policy 监督。
+嵌入表把 token 编号变成向量 x，线性层是 $Wx$。注意力产生查询、键、值三类向量：
 
-设该轮实际提交 c 个 token。无截断时 c=2+K，K 是连续接受的 noise 数，
-包含 clean root 和 correction / lookahead。取
+```math
+Q=XW_Q^\top,\quad K=XW_K^\top,\quad V=XW_V^\top,
+\qquad H=\operatorname{softmax}\left(\frac{QK^\top}{\sqrt d}+M\right)V. \tag{3}
+```
 
-\[
- k=\min(B-1,c-1),\quad w_i=\mathbf1(1\le i\le k).
-\]
+这里 $\top$ 表示矩阵转置。允许读取的位置在 M 中是 0，不允许的是负无穷，softmax 后对应权重为零。
+多头注意力并行使用多组这样的向量；GQA 让多个查询头共享键和值，减少缓存。
 
-发生拒绝时 c=J+1，所以 k=J；全部接受时 k=B−1。
-输出预算截断只减小 c，因此这个 mask 最多更保守，不引入拒绝后的历史。
-只有一个 token 的尾轮 k=0，不训练。这个 mask 是可观测的实际反馈，不是反事实接受估计。
+RMSNorm 按均方根缩放向量，再乘权重：
 
-单轮使用温度 τ=1 的全词表 forward KL：
+```math
+\operatorname{RMSNorm}(x)_i
+=w_ix_i\left(\frac1d\sum_j x_j^2+\epsilon\right)^{-1/2}.              \tag{4}
+```
 
-\[
- L_t(\phi)=\frac1k\sum_{i=1}^{k}
- D_{KL}\left(\operatorname{softmax}(\ell^p_{i-1}/\tau)
- \middle\|\operatorname{softmax}(\ell^q_i(\phi)/\tau)\right).
-\]
+前馈层为 $W_{down}[\operatorname{SiLU}(W_{gate}x)\odot(W_{up}x)]$，
+$\odot$ 是逐项相乘，$\operatorname{SiLU}(a)=a/(1+e^{-a})$；残差连接把子层输出加回输入。
+这就是本项目独立模型的主要部件，不需要把 Transformer 当一个不可解释的黑盒。
 
-当前批量更新把最近 R 轮所有有效项相加，再除以总有效行数 M=Σk，而非等权平均每轮 loss。
-p stop-gradient，仅更新 A、C。单轮对 logits 的梯度为 (q−p)/(kτ)，
-令 gᵢ=∂L/∂ũᵢ，则实数模型下 ∇C=Σᵢgᵢ(Aaᵢ)ᵀ、∇A=ΣᵢCᵀgᵢaᵢᵀ。
-混合精度训练使用 cast 的常规 autograd 梯度；不是对离散浮点舍入函数的真实导数。
+位置编码对成对分量做旋转，角度为“位置 × 频率”，基础频率 $\omega_j=\vartheta^{-2j/d}$。
+当前本地基座使用 YaRN：按维度平滑混合原频率和除以扩展倍数后的频率，并应用配置中的幅度因子。
+频率始终保持 FP32，不随模型转为 BF16；RMSNorm 乘权重前后的舍入位置也按架构显式区分。
+[model.py](../src/blockspec/model.py) 实现这些运算，测试另外用显式注意力方程和小型 Qwen3 作数值参照。
 
-Pinsker 给出 TV(p,q)≤√(KL(p‖q)/2)，而逐位置标准拒绝采样接受概率为 1−TV(p,q)。
-这个联系只对同一对分布成立。当前 greedy 解码用 τ=0、训练用 τ=1，KL 是平滑代理，
-不能把它降低直接等同于 greedy 接受率提高；更不能据此断言未来样本或整个 block 的收益。
-mask 的数据分布也依赖当前 drafter，没有无偏全轨迹梯度或 regret 保证。
+## 3. 同一个基座怎样变成草稿模型
 
-## 4. 在线更新仍可保持 speculative decoding 的目标分布
+把原线性层扩展成：
 
-令 Fₜ 包括过去已提交前缀、所有过去反馈和当前 φₜ。本轮开始前 φₜ 已确定，
-条件于 Fₜ 和本轮噪声，各 proposal 分布 q 固定。接受/拒绝使用**生成时的 q**，
-不能使用更新后的 q。代码在整个官方 step 返回以后才发布 φₜ₊₁。
+```math
+f_\phi(x,m)=Wx+msBAx,\quad s=\alpha/r,
+\qquad A\in\mathbb R^{r\times d_{in}},\ B\in\mathbb R^{d_{out}\times r}. \tag{5}
+```
 
-对任一位置的目标 p、proposal q，令 a(y)=min(1,p(y)/q(y))，
-q(y)=0 的事件不会由 q 采到。拒绝概率
+$m=0$ 关适配器，$m=1$ 开适配器。r 是秩，远小于输入、输出维度时，新增参数只有
+$r(d_{in}+d_{out})$，而原矩阵有 $d_{out}d_{in}$ 项。
+低秩参数化来自 [LoRA](https://arxiv.org/abs/2106.09685)，按 token 开关用于隔离干净和带噪计算。
 
-\[
- Z=1-\sum_y\min(p(y),q(y))=\sum_y[p(y)-q(y)]_+=TV(p,q).
-\]
+A 初始化为小随机矩阵、B 初始化为零，因此最初 $BA=0$。但这不代表最初已经会起草：
+基座过去读的是真历史，现在学生位置读的是噪声。
+默认每层 Q、K、V、O、gate、up、down 七种投影都有适配器，没有另一个独立小模型。
+起草时种子位置关，噪声位置开；验证时全部关。
 
-Z>0 时，correction r(x)=[p(x)−q(x)]₊/Z，因而
+若损失对层输出的导数为 g，链式法则给出：
 
-\[
- \Pr(X=x\mid F_t,\text{有效前缀})
- =q(x)a(x)+Zr(x)=\min(p(x),q(x))+[p(x)-q(x)]_+=p(x).
-\]
+```math
+\nabla_B L=ms\,g(Ax)^\top,\qquad
+\nabla_A L=ms\,B^\top gx^\top.                                      \tag{6}
+```
 
-Z=0 时 p=q、全部接受。按 block 内位置归纳，accepted prefix 后使用正确 target 条件；
-首次拒绝处输出 correction 并结束该轮，全部接受则使用正确 lookahead。
-再对 Fₜ 取条件期望、按轮归纳，φₜ 如何依赖**过去**反馈不会改变 target 分布。
-训练数据包含当前拒绝信息也没问题，因为它只影响下一轮。
-top-k/top-p/temperature 必须按官方实现对 p/q 一致变换后再验证。
+这解释了首步 A 的梯度可能为零，而 B 仍可开始学习。数值微分测试通过对参数做小的正负扰动，
+比较损失差商与自动求导，检验这个公式和实际低秩实现一致。
 
-这是条件于官方固定参数验证器正确的组合定理，不是所有 GPU kernel 的形式化认证。
-greedy 的对应论证是只接受 target argmax 一致的 prefix，拒绝处输出 target argmax。
-BF16 不同形状可能具有不同的数值 target，不能用实数证明宣称逐 token bitwise 相等。
+## 4. 离散噪声、逆向后验与一步去噪
 
-## 5. 独立推理优化：融合 grouped RMSNorm
+这里扩散不是图像处理，而是用随机 token 逐渐替换原 token，再从上下文预测干净分布。
+设原 token 是 x，噪声概率表为 $\pi$，保留率 $a_t\in[0,1]$ 随时间 t 下降：
 
-native_norm 将多次逐元素运算和 reduction 融合成一个 Triton kernel。
-保留上游显式舍入位置：
+```math
+\Pr(z_t=v\mid x)=a_t\mathbf1[v=x]+(1-a_t)\pi_v.                       \tag{7}
+```
 
-1. FP32 residual 加法，转换回 BF16；
-2. FP32 分组均方与 rsqrt，归一化后转换回 BF16；
-3. 乘 norm weight，输出 BF16。
+$\mathbf1$ 为指示函数：条件成立取 1，否则取 0。实现方法是以概率 $a_t$ 保留 x，否则按 $\pi$ 重抽。
+重抽也可能抽回 x，因此保留率不是最终与 x 相同的概率。均匀 $\pi$、$a_t=0$ 就是从全词表抽纯噪声。
 
-关闭 FP fusion 以避免合并表达式改变这些位置。仍可能因 reduction 顺序、rsqrt 实现而有差异，
-所以测试残差精确相等、归一化误差，并在生成层报告实际 token 差异。
-数学上每组为 w⊙v/√(mean(v²)+ε)，融合前后相同；有限精度相同则须实测。
-融合同时用于 teacher/draft，是系统优化，不记作在线学习带来的增益。
+### 4.1 贝叶斯公式一步一步算回去
 
-## 6. TPS 的验收和收益边界
+较干净时刻 s 和较噪时刻 t 满足 $a_s>a_t$，令 $\rho=a_t/a_s$。
+从 $z_s$ 再以保留率 $\rho$ 做一次相同的替换，仍得到式 (7) 的边缘分布。
+已观察到 $z_t=u$，中间 token 为 v 的后验是：
 
-理想稳定区间下，静态每轮平均提交 g₀、成本 C₀，在线提交 g₁、额外推理成本 δ、
-每 S 轮训练成本 U，则忽略边界时
+```math
+\Pr(z_s=v\mid z_t=u,x)=
+\frac{[\rho\mathbf1[v=u]+(1-\rho)\pi_u]
+      [a_s\mathbf1[v=x]+(1-a_s)\pi_v]}
+     {\sum_w[\rho\mathbf1[w=u]+(1-\rho)\pi_u]
+      [a_s\mathbf1[w=x]+(1-a_s)\pi_w]}.                              \tag{8}
+```
 
-\[
- \frac{TPS_{online}}{TPS_{static}}
- \approx\frac{g_1}{g_0}\frac{C_0}{C_0+\delta+U/S}.
-\]
+分子的第一项是“假设中间为 v，看到 u 的可能性”，第二项是“中间原本为 v 的可能性”。
+分母对所有中间状态求和，使结果总和为 1。这就是有限词表中的贝叶斯公式。
 
-因此需要 g₁/g₀>1+(δ+U/S)/C₀ 才有净收益。实测使用整个 generate 的时间，
-包括 reset、特征/分布缓存、梯度矩阵乘、backward、optimizer、同步发布、prefill 和 detokenization。
-审计额外重放也计时；它不属于正常优化版本，比较时要注明是否启用。
+不知道 x 时，用模型预测软向量 $q_\phi$ 替代它的 one-hot 向量，得到一种可计算的插入式逆向核。
+归一化是非线性的：**代入一个软向量不普遍等于先对每个 x 算后验再取平均**。
+代码只声称 one-hot 情形是精确贝叶斯后验，软向量情形是所选择的模型参数化。
 
-默认比较原生基线、融合后的静态 Uno、同样融合路径上的 online LoRA。
-在 fast-weights 引擎内，`8` 是包含零增量分支与特征缓存的控制组；`plain8` 才是
-完全不执行新分支的静态 Uno；`fast8` 是实际在线学习。三者在同一进程内交错测量。
-令 C 为无分支成本、δ 为分支成本。在理想稳定区间中，对零分支基线和真正静态基线的比值满足
+### 4.2 预测—校正混合为什么退化成一次前向
 
-\[
- R_{zero}=\frac{g_1}{g_0}\frac{C+\delta}{C+\delta+U/S},\qquad
- R_{plain}=R_{zero}\frac{C}{C+\delta}.
-\]
+令 $R_{s,t}$ 表示式 (8) 的插入式核，$R_{0,t}$ 表示其中 $a_s=1$ 的干净预测。混合核写成：
 
-因此只比较 `fast8/8` 不足以证明新增分支全部回本。主要净收益比较必须是 `fast8/plain8`，
-保留 `8` 仅用于分离在线更新成本与新分支成本，不把 baseline overhead 当作算法收益。
-每个 prompt 的相邻两次 repetition 使用互为反序的完整方法列表。若有 K 个方法，
-某方法两次的位置索引之和总为 K−1，故每种方法在该配对内的平均位次均为 (K−1)/2。
-这排除固定的早/晚出场偏差，不消除任意非线性热漂移、方法间 carryover 或测量噪声；仍报告置信区间。
-审计验证实际记录的顺序确实配对；奇数 repetitions 的末次不配对，不宣称完整平衡。
+```math
+\Psi_{s,t}=\kappa R_{s,t}+(1-\kappa)[a_sR_{0,t}+(1-a_s)\pi],
+\qquad 0\le\kappa\le1.                                               \tag{9}
+```
 
-**无分支对照构造。** 在同一冻结模型上额外捕获一组图；捕获时 Python 路径直接跳过
-新增 matmul、addition 和特征缓存。图有独立 pool/output，模型权重、KV workspace 与原组相同。
-只有 idle 请求边界才能同时切换 graph runner 和 eager 路径开关，`finally` 必须恢复二者。
-仅把服务参数设零或改变 Python 布尔值不能删除已捕获图中的算子，所以那不构成无分支对照。
-各图串行执行，无跨 pool 的中间值依赖；每轮输入由正常 staging 写入公共 workspace。
-测试验证无分支图不读新增增量、不写特征缓存，在线图仍使用新增参数；生成测试另检查 token 一致性。
-额外对照图的捕获时间计入 initialization，不计入任何方法的稳态 TPS，生产接入默认不捕获这组图。
+两个概率向量的凸组合仍然非负、和为 1。特别地，完全噪声一步回到干净端点 $a_t=0,a_s=1$ 时，
+式 (8) 第一项成为与 v 无关的 $\pi_u$，归一化后消掉，因此：
 
-权重字节 hash 在计时外比较，包含 base 和 packed/unpacked Uno，排除 KV。
-四个旧 prompts 只用于开发，不称为 held-out，也不从训练 loss 或单次 TPS 宣称论文级收益。
+```math
+R_{0,1}=q_\phi,\qquad\Psi_{0,1}=q_\phi.                              \tag{10}
+```
 
-## 7. 固定形状的训练 CUDA graph
+这解释了主加速路径为什么只需一次学生前向，不必真的执行很多去噪步骤。
+[diffusion.py](../src/blockspec/diffusion.py) 实现式 (7)–(10)，测试穷举三项词表中的中间状态。
+当前尚未把多步去噪接成文本入口，尤其不把“关闭 AR 验证的生成”说成仍保持原目标分布。
 
-更新使用固定 N=RB 行缓冲区，而有效行数随接受长度变化。令 vⱼ∈{0,1} 为有效行 mask，
-seed、拒绝后的行和未填满的 slots 都为 0。M=Σvⱼ>0 时：
+## 5. 离线训练：数据、注意力布局和蒸馏目标
 
-\[
- L=\frac1M\sum_{j=1}^{N}v_j KL(p_j\|q_j),\qquad
- \frac{\partial L}{\partial\ell^q_j}=\frac{v_j}{M}(q_j-p_j).
-\]
+干净数据为 $x_0,\ldots,x_{L-1}$，老师是冻结基座给出的下一项概率：
 
-去掉 v=0 的项便是原有效样本均值，因而 padding 不改变实数目标或梯度。
-RMSNorm 和新增 MLP 分支都逐行计算，无效行的零梯度不会流入有效行。
-实际训练始终要求至少一个有效样本；初始化 warmup 使用全零 mask、M 的分母 clamp 为 1，
-其零梯度仅用于预热，随后把参数、Adam moments 和 step 全部清零/复位。
+```math
+p_j=p_\theta(\cdot\mid x_0,\ldots,x_j).                              \tag{11}
+```
 
-图中包含解析 head 梯度、末层反传、梯度裁剪、fused Adam 和 BF16 服务权重 copy。
-特征与 logits 直接写入固定缓冲区，不在每次更新时重新 cat 或构造动态索引。
-CUDA graph 不捕获 CPU 接受判断：仍先完成原生 commit，再检查样本版本，最后重放更新图。
-使用独立 graph memory pool，不与 serving graph 并发重放；图外仅一次 metrics 回传屏障。
-若 loss、梯度范数或新参数非有限值，重置并中止请求，不让后续 draft 使用坏参数。
+学生看干净前缀和带噪块，产生 $q_j$。两边相同位置 j 的 logits 都预测 j+1。
+训练比较整张概率表，不把随机噪声或错误候选当成正确标签，所以不需要额外人工分类标签。
 
-**重置不变量。** 设捕获读写地址集合为 P。请求重置只执行 copy_/zero_，
-不替换参数、grad、Adam moments 或 GPU step 张量，故地址集合仍为 P；其值恢复为
-A=A₀、C=0、moments=0、step=0。按更新次数归纳，下一请求仍从同一初始优化状态开始。
-测试同时检查地址不变、两次相同请求重放的参数逐 bit 一致，以及与 eager Adam 的数值接近。
-eager 路径保留为梯度/更新对照，不是性能默认路径。浮点融合和 reduction 的差异仍适用第 4 节边界。
+### 5.1 同一遍前向的干净／带噪两条路径
 
-## 8. 保留的块长控制器与归因
+输入拼成 $[x,z]$，长度为 2L，两边的位置编号重复 0 到 L−1。
+定义块起点 $b(j)=B\lfloor j/B\rfloor$，读取规则为：
 
-native_online_policy 保留作独立调度对照：B∈{4,8,16}，锚点 8，2 cycles/epoch，
-提交量/耗时 EMA retention=.75，切换门槛 3%，每 16 个适应 epoch 刷新一个臂。
-只用真实执行宽度反馈，不更新神经参数；它不是本页的 online LoRA，也不与其首轮评估混合。
+| 查询 | 可读的干净位置 | 可读的带噪位置 | 适配器 |
+| --- | --- | --- | --- |
+| 干净 j | $0\le k\le j$ | 无 | 关 |
+| 带噪 j | $k<b(j)$ | $b(j)\le k\le j$ | 开 |
 
-- [Uno / 官方锁定源码](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)：
-  gated diffusion LoRA、two-pass proposal/verification、采样与 KV 管理由原工作提供。
-- [Leviathan et al., Speculative Decoding](https://proceedings.mlr.press/v202/leviathan23a.html)：
-  accept/reject 与正残差校正的分布保持基础。
-- [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)：部署反馈在线适配 drafter 的先例。
-- [Test-Time Speculation, Appendix C](https://arxiv.org/html/2605.09329v2)：
-  verifier 监督、strided updates 和反传成本权衡。当前末层闭合重放、同版本微批和解析 head 梯度是本项目的受限改造，
-  不是对 TTS 报告的收益或异步实现的复现。
-- [PyTorch numerical accuracy](https://docs.pytorch.org/docs/2.11/notes/numerical_accuracy.html)：
-  数学等价的批量/切片计算不保证浮点 bitwise 相同。
-- [PyTorch CUDA graphs](https://docs.pytorch.org/docs/2.11/notes/cuda.html#cuda-graphs) /
-  [Adam capturable](https://docs.pytorch.org/docs/2.11/generated/torch.optim.Adam.html)：
-  固定地址、side-stream warmup、禁止图内 CPU 同步和可捕获 optimizer 的实现约束。
+两边第一项 BOS（序列起始 token）都保持干净、关适配器、不计学生损失。
+当前采用固定长度、无 padding 的独立样本，不隐式拼接不同记录。
+即使最后一行后没有观测文本，老师仍能给合法的下一项分布，所以蒸馏不需要额外目标 token。
+
+这使干净分支等于普通 AR 老师；每个学生块等于“先缓存此前的干净块，再单独算当前噪声块”。
+这两项等价都有数值测试，而不是仅检查输出看起来像正常文字。
+[distillation.py](../src/blockspec/distillation.py) 明确构造 mask、位置编号和有效损失行。
+
+### 5.2 四种差异函数
+
+```math
+\begin{aligned}
+D_{TV}(p,q)&=\tfrac12\sum_v|p_v-q_v|,\\
+L_1(p,q)&=\sum_v|p_v-q_v|=2D_{TV}(p,q),\\
+D_{KL}(q\Vert p)&=\sum_vq_v\log(q_v/p_v),\\
+D_{KL}(p\Vert q)&=\sum_vp_v\log(p_v/q_v).                             \tag{12}
+\end{aligned}
+```
+
+TV 是总变差距离，描述两张概率表有多少质量不重叠；KL 是相对熵，两个方向不相同。
+代码区分 `l1`、`tv`、`reverse_kl`（学生到老师）、`forward_kl`（老师到学生）。
+原研究未除以 2 的绝对差目标对应这里的 `l1`，不能无意中改变混合损失比例。
+
+训练优化样本与随机噪声上的平均差异：
+
+```math
+\min_\phi\ \mathbb E_{x,z}
+\left[\frac1{L-1}\sum_{j=1}^{L-1}D(p_j,q_{\phi,j})\right],\qquad\theta\text{ 固定}. \tag{13}
+```
+
+学生有梯度，老师停止梯度。支持 2、4、6、8 等小块到大块的课程，反向 KL 热身之后改为 L1，
+也可以选单一目标。热身计入总步数，数据与噪声各用独立随机数生成器。
+配置可复现不等于对所有模型最优。[training.py](../src/blockspec/training.py) 提供实际课程入口。
+
+### 5.3 冷启动为何可能难，数据为何不是随便什么都一样
+
+softmax 的导数为 $\partial q_i/\partial l_j=q_i(\mathbf1[i=j]-q_j)$。代入式 (12)：
+
+```math
+\frac{\partial D_{KL}(p\Vert q)}{\partial l_j}=q_j-p_j,\qquad
+\frac{\partial D_{TV}(p,q)}{\partial l_j}
+=\tfrac12q_j\left[s_j-\sum_iq_i s_i\right],\quad s_i=\operatorname{sign}(q_i-p_i). \tag{14}
+```
+
+正确方向的 $q_j$ 很小时，TV 梯度还乘这个小值，可能很弱；前向 KL 不必先把它提高就能得到明显负梯度。
+等号位置 TV 选取合法次梯度。这解释热身动机，不证明某个热身一定更好；接受长度和总时间仍须实测。
+
+老师还看到了块内真历史，学生并没有。对固定学生可见信息 c，最小化平均前向 KL 的解为：
+
+```math
+q^*(v\mid c)=\mathbb E[p(v\mid\text{老师历史})\mid c].                \tag{15}
+```
+
+推导：去掉与 q 无关的项，平均 KL 剩下 $-\sum_v\bar p_v\log q_v$。
+加上约束 $\sum_vq_v=1$ 的乘子 $\lambda$，求导得到 $-\bar p_v/q_v+\lambda=0$，
+求和得 $\lambda=1$，所以 $q=\bar p$。同一可见前缀若有不同合理后续，平均分布不可能同时等于每条真历史的老师分布。
+
+因此数据的作用是提供“在哪些上下文模仿老师”。离线上下文和线上上下文不同，训练损失无法保证线上接受率。
+从“能在某架构上定义蒸馏目标”也不能推出“任意模型都能同样加速”。
+
+## 6. 一轮两遍的解码对齐
+
+已提交历史 h 长度为 L，最后一项叫种子 s。缓存仅含前 L−1 项，不含 s。
+块长 B 包含一个干净根 token 和 B−1 个噪声起草位置：
+
+| 步骤 | 输入 | 输出概率的含义 | 留下的状态 |
+| --- | --- | --- | --- |
+| 起草 | `[s,z1,…,z(B−1)]` | 第 0 行给根；第 i 行给候选 i | 只保留干净 s 的 KV |
+| 验证 | `[y0,y1,…,y(B−1)]` | 第 i−1 行验证 yi；最后一行给全接受时额外 token | 基座真实路径 KV |
+| 更新，可选 | 起草输入、原缓存、有效老师 logits | 重算学生梯度 | 下一轮的适配器版本 |
+
+根 $y_0$ 从适配器关的第 0 行抽，因此已经服从目标。后续 $y_i\sim q_i$ 来自带噪位置，
+条件于本轮噪声独立抽样，不读取彼此实际抽出的 token。老师则读取真候选路径：
+$p_i=p_\theta(\cdot\mid h,y_0,\ldots,y_{i-1})$。
+
+**输入噪声 z 不是输出候选 y。** 线上重放必须保存 z，否则学生前向的条件就被换掉了。
+[decoding.py](../src/blockspec/decoding.py) 实现这一对齐，并提供逐 token 一次前向的真实 AR 基线。
+
+## 7. 猜错了，为什么仍能保持目标分布
+
+候选 $Y\sim q$，再抽独立均匀数 $U\in[0,1)$，按下式接受：
+
+```math
+a(Y)=\min\{1,p_Y/q_Y\},\qquad U<a(Y).                               \tag{16}
+```
+
+若拒绝，从残差分布抽替代 token：
+
+```math
+r_v=\frac{(p_v-q_v)_+}{Z},\qquad Z=\sum_u(p_u-q_u)_+,
+\qquad a_+=\max(a,0).                                                \tag{17}
+```
+
+这是 [精确投机解码](https://proceedings.mlr.press/v202/leviathan23a.html) 的关键校正。下面重新证明。
+直接接受 v 的概率为 $q_va(v)=\min(p_v,q_v)$。因为两张表总和相同，正差与负差总量相同：
+
+```math
+\sum_v(p_v-q_v)_+=\sum_v(q_v-p_v)_+
+=1-\sum_v\min(p_v,q_v)=D_{TV}(p,q)=Z.                                \tag{18}
+```
+
+因此总拒绝概率为 Z，最终输出 v 的概率正好是：
+
+```math
+\Pr(\text{输出 }v)=\min(p_v,q_v)+Zr_v
+=\min(p_v,q_v)+(p_v-q_v)_+=p_v.                                     \tag{19}
+```
+
+例如 $p=(0.2,0.5,0.3)$、$q=(0.6,0.1,0.3)$，直接接受质量是 $(0.2,0.1,0.3)$，
+总拒绝质量 0.4，拒绝后只补 B，最终就得到 p。
+
+当 $q_v=0$ 时 v 不可能作为候选被抽中，不需要对它计算比例；残差仍能补给 v 概率质量。
+这里不要求 q 覆盖 p 的全部支持集，与普通重要性加权不同。p=q 时 Z=0，拒绝事件不可能，不能强行除以零。
+
+### 7.1 多步、EOS 与贪心
+
+按顺序验证，第一处拒绝后发出替代 token 并结束本轮。更深的老师 logits 仍依赖被拒绝的旧 token，不能继续提交。
+全部接受时，从最后一行额外抽一项，此时它的条件正是真实提交的历史。
+对第一项应用式 (19)，条件于第一项再对第二项应用，逐项归纳就得到式 (2)。
+遇到 EOS 或长度预算停止只是不再读取后面的随机变量，不改变已经返回的前缀分布。
+
+贪心时 p 为 one-hot，错误候选必被换成正确贪心项，故精确算术下与 AR 逐 token 一致。
+但 GPU 的批形状和运算顺序会产生浮点差异，可能交换非常接近的两个 logits。
+数学证明不是所有低精度内核逐位相同的保证，真实权重还必须记录数值差异。
+
+## 8. 缓存隔离的证明
+
+KV cache 保存每层历史位置的键和值，后续无需重复编码历史。
+**`detach()` 只断梯度，不会把错误或过时的缓存变正确。**
+
+轮开始的不变量是：缓存等于固定基座、适配器全关计算已提交历史前 L−1 项的结果。
+种子 s 的适配器关，且因果注意力读不到未来噪声。逐层归纳：其嵌入只依赖 s；前层干净表示和缓存只依赖基座；
+下一层仍只依赖这些量。因此种子的所有 KV 与本轮适配器参数无关，可保留；噪声位置的 KV 全部丢弃。
+
+验证全部关适配器，第一次拒绝之前的路径正是真实历史。拒绝后的缓存不提交；替代 token 或全接受后的额外 token
+尚未缓存。因此提交后仍只保留到“新历史倒数第二项”，新最后一项成为下一轮种子，不变量继续成立。
+全接受、第一处拒绝、部分接受、EOS、短尾都有测试。
+
+如果让种子双向读取未来噪声，或修改基座，证明就失效。更新任意层适配器本身不破坏它，
+只要永远只保留关适配器得到的基座缓存。
+当前采用函数式缓存和 `torch.cat`，不是已经优化的分页缓存或静态 CUDA 图。
+重放容量有限，但前缀切片可能持有底层存储，长前缀还需专门内存优化。
+
+## 9. 在线续训：真正的输入、目标和更新
+
+线上主题、风格、长度可能偏离离线数据。可以用刚完成的验证 logits 继续训练草稿，免去额外教师前向。
+用验证反馈训练提议模型的相关工作包括 [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)
+和 [Test-Time Speculation](https://arxiv.org/abs/2605.09329)。这里独立实现全适配器同步重放版，不继承它们的速度结论。
+
+### 9.1 哪些位置有有效监督
+
+每个反馈保存：干净种子与噪声输入、种子之前的基座 KV、老师 logits。
+如果接受 k 个噪声候选，第 k+1 个拒绝，保留前 k+1 行；全部接受则保留全部 B−1 行。
+拒绝位置的老师历史仍完全正确，是重要训练信号；更深位置已偏离提交路径，当前不训练它们。
+EOS 或长度预算提前停止时，监督行也按实际返回前缀截断。请求结束不再做一次无法改善其后续输出的更新。
+
+### 9.2 全适配器重放，而不是免费反向
+
+维护最多 R 个反馈块，每 S 轮最多更新一次。反馈集合为 $\mathcal B_t$，$m_{bi}$ 指示有效位置：
+
+```math
+L_t(\phi)=\frac{\sum_{b\in\mathcal B_t}\sum_i
+ m_{bi}D(p_{bi},q_\phi(\cdot\mid c_b,z_b)_i)}{\sum_{b,i}m_{bi}},
+\qquad \phi\leftarrow\operatorname{AdamW}(\phi,\nabla_\phi L_t).       \tag{20}
+```
+
+老师停止梯度；学生用当前参数重新计算。旧反馈组成经验训练目标，不声称是当前策略的无偏样本；
+也不把旧 q 当作能直接反传的当前计算图。每块依次前向、反向，避免同时保留 R 份完整激活，裁剪后再更新。
+
+默认 R=4、S=16、学习率 $10^{-4}$、L1 损失。继续训练的是离线那组 A、B，
+不是块长控制器或新加的一小组输出偏置。[online.py](../src/blockspec/online.py) 有真实学生前向、backward 和 optimizer step。
+同一 learner 的权重、Adam 状态跨请求保留；请求结束释放反馈和 KV。磁盘当前只保存权重，重建 learner 新建 Adam，
+不声称磁盘恢复等于逐步完全相同的训练恢复。
+
+## 10. 适配器一直变，为什么正确性仍成立
+
+令 $\mathcal F_t$ 包括第 t 轮开始前的历史、过去反馈、随机数和参数版本。
+条件于这些已有信息，本轮参数 $\phi_t$ 已经确定。再固定本轮噪声，就固定了提议概率表 $q_t$。
+式 (16)–(19) 对任何这样的 q 都成立。
+
+先用本轮原 q 完成接受／拒绝，再计算 $\phi_{t+1}$，不会倒过来改变已完成的抽样。
+对各种可能的过去取平均（全概率公式），本轮输出仍服从相同基座条件分布；逐轮归纳得到完整序列结论。
+这不要求损失每步下降：坏更新可以让速度变差，但合法校正下不应把输出变成另一个模型的分布。
+
+以下行为会破坏证明：
+
+- 用旧 q 抽样，却更新之后用新 q 作为接受率分母。
+- 第一处拒绝后仍提交旧路径的后续候选。
+- 保留受适配器影响的噪声 KV，并当成新参数下的干净缓存。
+- 更新基座，却仍宣称输出保持更新前基座分布。
+
+当前是同步版本，没有参数发布竞争。异步训练不能只加线程，必须版本化快照，确保候选、概率和修正使用同一版本，
+且 optimizer 不同时覆盖服务正在读取的参数。
+
+## 11. 树路径和多步扩展的明确边界
+
+线性方案每个位置抽一项。低 batch 时可以增加候选，把前缀按 $\sum_i\log q_i(y_i)$ 排序，
+保留有限个前缀，用树注意力一起验证。每个树节点只读共同历史和祖先，不读兄弟；位置编号按深度，不按数组编号。
+
+确定性 top-k 树不等于从原 q 独立抽样的多条序列，不能直接把线性 p/q 公式套到所有树节点。
+一个精确备选是在已验证的节点从目标 p 抽下一项：树里有对应子节点就继续，没有就发出该 token 并结束。
+对于任何固定树，每一次抽样本来就是目标条件分布；树只决定一次能复用多少已算好的 logits。
+该遍历适用于贪心和随机目标，但不能冒称等于论文某个多候选随机拒绝内核。
+
+第一阶段执行入口是线性路径。树构建、树验证、缓存压缩及在线目标对齐作为下一独立可测试阶段接入。
+式 (9) 的多步数学核已经实现；无验证的质量扩展不是目标分布不变的主加速路径。
+
+## 12. 参数少不代表训练便宜
+
+单项 token 通过一个 $d_{in}\to d_{out}$ 线性层，基座前向约有 $2d_{in}d_{out}$ 次浮点运算，
+低秩附加前向约有 $2r(d_{in}+d_{out})$ 次。
+但为更新前面层适配器，梯度还需穿过后面冻结层：虽然不用求 W 的梯度，仍可能求输入梯度 $W^\top g$。
+
+在线成本还包括学生重放前向、激活存储、词表投影、概率损失、Adam 状态读写、反馈复制和同步。
+**当前只复用教师信号，没有免费得到学生反向。** `update_seconds` 只是更新区域；净 TPS 必须看完整生成耗时。
+
+### 12.1 从接受长度到净收益条件
+
+令 K 为一轮接受的噪声候选数。完整非 EOS 轮产生 $N=2+K$ 个 token，用两遍前向；全接受时 N=B+1。
+非负整数的尾和公式给出：
+
+```math
+\mathbb E[N]=2+\sum_{i=1}^{B-1}\Pr(K\ge i).                           \tag{21}
+```
+
+证明：每个整数 k 都等于 $\sum_i\mathbf1[k\ge i]$，两边取平均即可。
+单位置接受率是 $1-D_{TV}(p,q)$，但连续 i 项全接受通常不等于“总体平均接受率的 i 次方”，
+因为历史与位置难度相关；只有额外作独立同率近似时才可这么估计。
+
+设 AR 每项平均耗时 $C_A$；每轮起草、验证、调度分别为 $C_D,C_V,C_H$；一次更新为 $C_U$，
+平均 S 轮更新一次。忽略短尾、假设稳定工作负载：
+
+```math
+TPS_{static}\approx\frac{\mathbb E[N]}{C_D+C_V+C_H},\qquad
+TPS_{online}\approx\frac{\mathbb E[N_{on}]}{C_D+C_V+C_H+C_U/S}.         \tag{22}
+```
+
+在线超过 AR 需要：
+
+```math
+\mathbb E[N_{on}]C_A>C_D+C_V+C_H+C_U/S.                               \tag{23}
+```
+
+若在线不改变其余推理成本，超过静态版还需：
+
+```math
+\frac{\mathbb E[N_{on}]}{\mathbb E[N_{static}]}
+>1+\frac{C_U/S}{C_D+C_V+C_H}.                                        \tag{24}
+```
+
+这解释“接受更多，却更慢”。这些是成本模型，不替代预热、成对顺序、完整计时的实验。
+prefill、EOS 短尾、学习过渡期、GPU 争用都须在真实测量中处理。
+
+## 13. 当前实现和验证证据
+
+主体为 `src/blockspec`，不用作者模型、训练或推理代码。读取本地 safetensors 时显式检查结构，
+未知家族和未实现特性直接拒绝，不执行远程模型代码。接口可用不是任意模型等价的证明。
+
+| 内容 | 实现 | 验证 |
+| --- | --- | --- |
+| 因果模型、条件低秩层、KV | `model.py` | 显式注意力、缓存／全量、不同 head_dim、数值微分 |
+| 噪声与逆向核 | `diffusion.py` | 小词表穷举后验、一步退化 |
+| 配对蒸馏、课程 | `distillation.py`、`training.py` | 老师隔离、分块等价、基座不变、损失日程 |
+| 验证解码 | `sampling.py`、`decoding.py` | 支持集不重叠、拒绝、全接受、EOS、短尾 |
+| 在线续训 | `online.py` | 真更新、有效位置、基座不变、跨请求版本延续 |
+| 检查点与数据 | `checkpoint.py`、`data.py` | 权重存取、错误基座拒绝、禁止覆盖、独立样本 |
+| 全流程 | `python -m blockspec demo` | 小基座→适配器→保存加载→静态／在线输出一致 |
+
+基础阶段在 WSL2 / PyTorch 2.11.0+cu128 上 **71 项测试通过**，含小型 Qwen3 数值参照。
+小型周期序列可以验证损失下降、参数更新和输出保持，但不能作为自然语言加速证据。
+当前没有足够证据宣称新的独立在线实现已超过优化过的 AR 基线。
+
+真实权重有限检查使用本地 K2-Horizon-0.9B 基座，不加载发布的草稿适配器。
+实际基座参数为 1,078,285,824，r=8 全适配器为 6,995,968。BF16 已完成少量离线和在线更新，基座指纹不变，
+但配对与独立老师的 logits 出现差异，贪心输出也未完全一致，故不能把这一低精度路径标成严格数值复现。
+FP32 对照已完成：该 32-token 检查的 AR、静态和在线输出一致，配对老师最大绝对误差约 $4.96\times10^{-5}$，
+argmax 一致；在线执行 7 次更新，基座指纹不变，峰值已分配显存约 4.45 GiB。
+这把差异定位到数值精度／批形状相关路径，而非小模型中已验证的数学对齐；尚需逐层低精度审计进一步确定来源。
+四步离线训练仅验证链路，不代表适配器已收敛，且本次静态和在线均未超过 AR。
+具体检查命令在运行说明中，不另存结果档案。
+
+## 14. 后续实验设计与文档更新规则
+
+按以下顺序推进，直接更新本节状态，不另建平行报告：
+
+1. 真实基座数值：核对干净 logits、配对布局、KV 与精度，确认误差来源。
+2. 离线收敛：分开训练文本与未用于调参的验证文本，同时看损失和连续接受长度。
+3. 独立推理优化：处理 KV 分配、CPU／GPU 同步和投影调用，逐项对照参考实现。
+4. 同条件三基线：真正 AR、固定离线适配器、从相同检查点出发的在线续训。
+5. 在线净收益：按请求顺序测累计 tokens／累计秒数，包含学习成本，检查主题迁移。
+6. 树路径：补概率、兄弟隔离、缓存压缩和反馈对齐测试，再比较净 TPS。
+
+所有方法固定精度、采样设置、提示、预算和 KV 条件，预热后正反顺序成对运行。AR 也必须获得相同内核优化，
+不能把慢 AR 和快在线引擎的差额全归因于算法。随机采样比较统计分布，不强求同种子同一句话；贪心逐项检查。
+开发十二提示只是工程输入，不是公开 benchmark，反复看过后不能改称新 held-out。
+
+原始结果、训练数据、权重、日志和 profiler 不入 Git。主报告只保留当前设计的结论、条件和验证入口。
+失败设计最多解释原因和出处；弃用代码删除，历史由 Git 追溯，不复制到 archive。
+
+## 15. 弃用设计与尚未完成的范围
+
+旧主线通过外部引擎调用现成适配器，再加很小的末层在线增量。它没有独立复刻离线训练，
+也不能代表全适配器续训，因此退出当前实现；此前速度不迁移到本项目的新成绩中。
+纯 L1 的极短随机适配器启动检查学习较弱，保留 KL 热身及其原理，不保存失败扫描产物。
+
+尚未完成大规模蒸馏、批量服务、异步训练、全部树采样内核和论文全套基准。
+数学正确性不提供训练收敛、吞吐提升、有限精度逐位一致或任意架构迁移保证。
+进展按实现、数值验证、真实训练与性能证据逐项填写，不把未来计划写成已有成果。

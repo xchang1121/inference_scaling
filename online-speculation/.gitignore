@@ -7,6 +7,12 @@ __pycache__/
 .hf-overrides/
 cache/
 models/
+data/
+datasets/
+profiler/
+*.pt
+*.safetensors
+*.trace.json
 upstream/
 results/
 reports/

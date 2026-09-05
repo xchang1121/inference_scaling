@@ -4,22 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "online-speculation"
-version = "0.2.0"
-description = "Native Uno inference optimization and request-local online LoRA distillation."
+version = "0.3.0"
+description = "Independent block diffusion distillation, verified decoding, and online continuation."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["torch>=2.5", "numpy>=1.26", "safetensors>=0.4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.16,<0.17"]
+hf = ["transformers>=4.55"]
+text = ["tokenizers>=0.21"]
 
-[tool.setuptools]
-package-dir = {"" = "scripts"}
-py-modules = ["native_online_policy", "native_fast_weights", "native_norm", "native_update_graph"]
+[project.scripts]
+blockspec = "blockspec.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 target-version = "py310"

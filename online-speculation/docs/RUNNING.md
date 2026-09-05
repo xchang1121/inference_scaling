@@ -1,124 +1,128 @@
-# 当前原生推理优化与 Online Uno 的运行说明
+# 运行与验证
 
-## 环境
+数学和设计只有一份：[ALGORITHM.md](ALGORITHM.md)。这里保留可执行入口及其适用范围。
 
-模型推理使用本机已安装的 WSL2 / Ubuntu 22.04，发行版名 `Ubuntu-22.04`、Linux 用户 `singm`。
+## 1. 本机环境
 
-| 内容 | 路径 / 版本 |
-| --- | --- |
-| Python 环境 | `/home/singm/.venvs/uno-cu128`，Python 3.10 |
-| 官方 Uno | `/home/singm/online-speculation-work/uno` |
-| base | `/home/singm/online-speculation-work/models/K2-Horizon-0.9B` |
-| Uno adapter | `/home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno` |
-| 完整 wheel 缓存 | `/home/singm/.cache/uno-wheels` |
-| PyTorch / CUDA runtime | `2.11.0+cu128` / `12.8` |
-| Triton / FlashAttention / Transformers | `3.6.0` / `2.8.3` / `4.55.0` |
+本机 RTX 3090 24GB，WSL2 发行版名 `Ubuntu-22.04`，Linux 用户 `singm`。
+已有环境 `/home/singm/.venvs/uno-cu128`，PyTorch 2.11.0+cu128 / Python 3.10。
+主体不需要作者引擎、FlashAttention 或 Triton 扩展；当前使用 PyTorch SDPA。
+不重新安装 WSL，也不安装 Linux 显示驱动。
 
-源码 commit、模型 revision 和权重 SHA 见 [upstream.lock.json](../references/upstream.lock.json)。
-基准启动前校验源码 commit、tracked clean 状态及两份权重 SHA。
-当前代码不依赖已删除的 Windows HF 原型，也不依赖任何历史实验 JSON。
-
-`bootstrap_uno_runtime.sh` 仅用于重建环境，不是每轮实验都要执行的下载脚本。
-依次传入已有官方源码、项目、base、adapter 的来源目录和自检输出路径；
-它将所需文件复制到 Linux 工作目录，校验 [wheel locks](../config/)，建立 venv 并运行 runtime smoke。
-系统需已有 `python3.10-venv`、`git`、`rsync`、`curl`、`jq`；不会安装 Linux NVIDIA 显示驱动。
-WSL、当前模型与官方源码、完整依赖包不是实验记录，清理不卸载这些运行依赖。
-
-## 运行入口
-
-以下在 WSL Bash 中执行：
+以下在 WSL Bash 中运行：
 
 ```bash
 cd /mnt/c/Users/singm/Desktop/hw/akg_related/inference_scaling/online-speculation
 source /home/singm/.venvs/uno-cu128/bin/activate
-
-python scripts/benchmark_native_uno.py \
-  --source /home/singm/online-speculation-work/uno \
-  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
-  --blocks 1,8 --fused-norm --fast-weights \
-  --training-backend cuda_graph \
-  --update-stride 16 --replay-blocks 4 --learning-rate 0.001 --rank 8 \
-  --repetitions 2 --max-new-tokens 512 --warmup-tokens 128 \
-  --output results/native_run.json
-
-python scripts/analyze_native_uno.py \
-  --input results/native_run.json --output results/native_run_audit.json
+python -m pip install -e '.[dev,text,hf]'
+python -m pytest -q
 ```
 
-这是四个内置 prompts 的工程检查入口，不是完整论文复现或独立 held-out 评估。
-`results/` 全部被 Git 忽略，没有默认提交例外。运行时使用新文件名，不覆盖已有结果。
-源码树不保存旧成绩、失败轨迹或结果归档。
+若暂不安装 editable 包，可在命令前加 `PYTHONPATH=src`；测试配置本身已加入 `src`。
+`hf` 是可选数值测试参照，不作为生成后端。本次没有创建下载临时脚本。
+现有模型和依赖不是失败实验产物，清理不会卸载它们。
 
-B=1 是原引擎 AR 对照；未启用 fast weights 时，B=8 是固定块长 Uno。
-启用 `--fast-weights` 后自动交错测量四种方法：`1`、`8`（零增量分支控制）、
-`plain8`（实际无新增分支的静态 Uno）、`fast8`（真正在线 LoRA）。
-**完整净收益使用 `fast8/plain8`**；`fast8/8` 只分离训练增量成本，不能替代主比较。
-同模型额外捕获无分支图，避免用不同进程、时间段的运行来估计微小分支开销。
-每个 prompt 的相邻两次 repetition 使用正反成对顺序，每组在配对内的平均出场位次相同。
-性能比较用偶数 repetitions；单次 smoke 仍可运行，审计会标记没有完整的顺序配对。
-在上述命令基础上，去掉 `--fast-weights` 测不含新 LoRA 分支的融合版本；
-再去掉 `--fused-norm` 测原生基线。三种配置使用同一 32-page KV 容量、同样 prompts/种子/预算。
-`--audit-fast` 开启额外的重放 logits 检查，检查成本也计入 TPS，仅作功能验证。
-初次 smoke 可以用 `--workloads english --repetitions 1 --max-new-tokens 128`。
+## 2. 小模型全闭环
 
-新增评估输入为 `config/evaluation_prompts.json`，12 个事先固定的人工设计 prompts，
-与四个开发 prompts 不重复；不是公开论文 benchmark，也不是模型预训练数据意义的 held-out。
-使用 `--prompt-file config/evaluation_prompts.json --repetitions 2 --max-new-tokens 1024 --seed 20270909`。
-未指定 `--workloads` 时运行整个所选 suite；可以按名称筛选。结果记录 prompt 文件 SHA 和代码 SHA。
-该 suite 在首次评估后已见过，之后的重复测量不再宣称新的 held-out 验证。
+```bash
+python -m blockspec demo --device cuda \
+  --base-steps 120 --adapter-steps 900 --loss forward_kl \
+  --block-size 4 --tokens 128 --checkpoint models/cycle.pt
+```
 
-默认更新 backend 为 `cuda_graph`；`--training-backend eager` 保留普通更新对照。
-`--profile-update` 仅剖析一次预热后的更新并输出算子表，该运行不作为 TPS 证据，不生成 profiler trace 档案。
+输出只写 stdout。若指定检查点，只保存该文件，不生成结果文档。
+`models/` 被 Git 忽略，已有检查点不覆盖。前向 KL 是这个合成启动检查的设置，不是论文默认配方；
+真实离线入口可用反向 KL 热身接 L1。
 
-旧 `--online` 选项仅指块长统计控制器，需要 `--blocks 1,4,8,16`；
-`--shadow` 是固定 B=8 的控制器包装对照。这两者不与 `--fast-weights` 混合评估。
+顺序为：训练 AR 小基座、冻结基座、训练草稿适配器、验证存取、生成固定／在线结果。
+检查基座指纹不变、贪心输出一致、在线参数变化。周期数据的难度和启动成本都不代表真实语言模型，
+stdout 的 TPS 仅用于排查数量级。
 
-基准使用 batch=1、BF16、FA2、预捕获 CUDA graph、temperature=0、ignore_eos=True。
-完整生成计时包含新增参数/optimizer 重置、特征缓存、teacher 复制、backward、Adam、同步发布，
-以及 wrapper 安装恢复、prefill、decode、detokenization；
-模型初始化、共同 prompt 编码、GPU 快照和 JSON 写盘单独排除。
-保存输出 token IDs、文本及反馈，不因输出不同就剔除样本。
+## 3. 真实权重有限检查
 
-官方 prefill 的第一个 token 不进入 decode stats，因此 `accepts=max_new_tokens−1`；
-每个 decode cycle 的 `forwards` 增加 2。TPF 和 E2E TPS 的分母不能混用。
-审计检查完整矩阵、冻结权重字节 hash、无抢占、合法时间及更新次数/提交统计对账。
-少量 prompts 的聚类 bootstrap 只作描述，不能证明稳定额外收益。
+本机已有基座 `/home/singm/online-speculation-work/models/K2-Horizon-0.9B`，
+来源 revision 和权重 SHA 见 [upstream.lock.json](../references/upstream.lock.json)。
+**不加载已经发布的草稿适配器。**
 
-## 接入自己的请求
+```bash
+PYTHONPATH=src python scripts/check_local_model.py \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --dtype float32 --tokens 32 --train-steps 4
+```
 
-按基准脚本导入官方 `LLM`，在构造模型之前安装 extension，才能让 CUDA graph 捕获新分支：
+脚本经本项目 Transformer 生成少量训练轨迹，执行离线更新，再比较三种解码和基座指纹。
+报告配对老师与普通老师的数值误差、贪心是否一致、更新次数和峰值显存，默认不写文件。
+四步训练只能验证链路，不能称为“训练充分的适配器性能”。
+可用 `--dtype bfloat16` 检查低精度路径，但需明确处理批形状导致的数值差异，不能预设逐 token 一致。
+
+接口明确接入 dense K2-Horizon 和 Qwen3 结构；未知架构、MoE、量化、滑动窗口、部分旋转、门控注意力会拒绝。
+不要改 `model_type` 绕过检查。新增架构先补数值参照测试。
+
+## 4. 用自己的数据训练全适配器
+
+本地 JSONL 一行一个独立样本，二选一：
+
+```json
+{"input_ids": [10, 25, 37, 16, 8]}
+{"text": "一段已经按实际部署格式整理好的足够长的文本……"}
+```
+
+编号必须属于基座词表。文本需 `--text-data`，仅解析 `tokenizer.json`，不执行远程代码、不自动套聊天模板。
+部署的角色标记、思考标记和语言风格应在训练文本中明确匹配。样本长度至少为 `sequence-length - 1`；
+训练随机取连续片段再加指定 BOS，不把不同样本拼在一起。
+
+```bash
+python -m blockspec train \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --data /path/outside/repo/train.jsonl --text-data \
+  --output models/current-adapter.pt --device cuda --dtype bfloat16 \
+  --rank 8 --steps 1000 --warmup-steps 100 --warmup-loss reverse_kl \
+  --loss l1 --batch-size 1 --sequence-length 128 --blocks 2,4,6,8 \
+  --learning-rate 0.0001 --bos-id 0 --seed 314159
+```
+
+这是 3090 上保守的起步配置，不承诺已收敛或最优。1000 步包含热身，不额外增加。
+数据不默认上传、不入 Git。数据和噪声分别设随机种子。训练前后检查基座指纹；
+适配器检查点含模型配置、基座指纹，错误基座／精度会被拒绝。
+
+## 5. 接进后续请求
 
 ```python
-from native_fast_weights import extended_runner, generate_fast
+import torch
+from blockspec.checkpoint import load_hf_base, load_checkpoint, save_checkpoint
+from blockspec.decoding import generate_ar, generate_speculative
+from blockspec.online import OnlineConfig, OnlineLearner
+from blockspec.tokenizer import LocalTokenizer
 
-with extended_runner(fused_norm=True, fast_weights=True, rank=8, stride=16,
-                     replay_blocks=4, lr=0.001, training_backend="cuda_graph"):
-    engine = LLM(model=base_path, **config)  # config 见 benchmark_native_uno.py
-output, diagnostics = generate_fast(engine, prompt_ids, params, budget=512)
+base = "/home/singm/online-speculation-work/models/K2-Horizon-0.9B"
+model = load_hf_base(base, rank=8, dtype=torch.bfloat16, device="cuda")
+model, _ = load_checkpoint("models/current-adapter.pt", model=model, device="cuda")
+tokenizer = LocalTokenizer(base)
+learner = OnlineLearner(model, OnlineConfig(stride=16, replay_blocks=4, learning_rate=1e-4))
+for text in ["Explain binary search.", "Now explain its loop invariant."]:
+    prompt = torch.tensor([[0] + tokenizer.encode(text)], device="cuda")
+    output = generate_speculative(model, prompt, 128, block_size=8, learner=learner)
+    print(tokenizer.decode(output.tokens))
+    print(output.summary())
+save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 ```
 
-引擎必须为单 GPU、batch=1、线性 XLLM Uno，预捕获 B=8，params 使用同一 B。
-每个请求自动重置新增参数，不并发共享 engine/wrapper，不做异步训练。
-CUDA 更新图在引擎初始化时捕获；其初始化成本与原生推理图捕获一样单独记录，未摊入稳态 TPS。
-生产 API 的 `capture_plain=False` 不分配额外对照图；基准自动设为 True，
-需要手动比较时可以传入 `capture_plain=True`，再在 idle 状态使用 `with plain_uno(engine):`。
-它会切换真实 graph runner，退出作用域后恢复；不能在该作用域内调用 `generate_fast`。
-请求内 reset 和每次更新全部计入 E2E；warmup / capture 后复位 Adam 状态，绝不带入预热学习。
-R≤S：只收集每个更新间隔最后 R 轮，更新后清空；不同参数版本的 logits 不允许混用。
-作为库可在项目目录 `pip install -e .`，仅安装当前模块；GPU 依赖仍由 WSL 环境提供。
+同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
+重新构造 learner 新建 optimizer。磁盘当前保存权重，不恢复 Adam 动量。
+不传 learner 是静态适配器；`generate_ar` 是每 token 一次前向的非投机基线。
+默认贪心；随机采样传 `SamplingConfig(temperature=1, top_k=50, top_p=0.95)`。
+EOS 要显式传本模型 `eos_id`；不传则按预算生成，不得把这一设置隐瞒成自然结束。
 
-## 单元测试
+## 6. 完整计时与文件生命周期
 
-测试使用合成引擎/合成记录及小型张量，覆盖 mask、梯度、参数发布与重置；不依赖历史结果。
-在父仓库 PowerShell 中：
+`Generation.seconds` 从 prefill 前开始，包含生成、反馈、在线更新、清理本请求反馈和末尾 GPU 同步。
+不含加载模型、离线训练、编码提示、存取检查点和转回文字；产品级延迟须另计这些项目。
+`update_seconds` 仅为重放更新区域，不能代替净开销。learner 的一次初始化在请求前，冷启动评测须单列。
 
-```powershell
-.venv/Scripts/python.exe -B -m pytest -p no:cacheprovider online-speculation/tests -q
-.venv/Scripts/python.exe -m ruff check --no-cache online-speculation
-```
+比较时固定基座、离线起点、采样、精度、输出预算、缓存条件。预热后正反顺序成对运行，报告总 tokens / 总秒数，
+不是每条 TPS 的算术平均。AR 也使用相同优化。不要在另一项 GPU 训练同时运行时测速度。
+合成模型单次结果不作为论文性能证据。
 
-WSL 中安装 `python -m pip install pytest` 后，运行 `python -m pytest tests -q` 可额外执行
-CUDA 融合 norm 的四组数值测试。Windows 会跳过这些 Triton 测试。
-
-实现原理、梯度/特征闭合、KV 隔离、分布保持条件和有限精度边界见 [ALGORITHM.md](ALGORITHM.md)。
+只提交当前代码、测试、必要配置、主报告和本说明。原始结果、下载中间文件、权重、日志不提交。
+失败设计最多在主报告解释原因；无效实现删除，由 Git 历史追溯，不复制进 archive。
+只清理已确认由本项目产生且无用的目标，不删除不明缓存或系统安装材料。
