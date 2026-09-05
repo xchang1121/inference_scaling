@@ -34,3 +34,6 @@
   stream；含 78 个配对/快照生成、完整 token IDs、parameter isolation、head hash 和训练成本。
 - `stage8_greedy_stream_uno1b_rtx3090_hf_analysis.json`：重算 Stage 8 全部安全门、validation-only 选择、
   50,000 次 paired bootstrap 和 sign tests；TPF 学习门通过，HF wall-clock 系统门失败。
+- `stage10b_replay_uno1b_rtx3090_hf_pilot.json`：一次 verifier-confirmed cache-build request 后的
+  exact-repeat 工程上界；记录 5 个 alternating static/replay pairs、greedy AR token 等价、真实 KV/forward
+  计数、cache build cost、TPF/TPS bootstrap 与摊销。它是 Windows HF pilot，不是预注册或官方 runtime 结果。
