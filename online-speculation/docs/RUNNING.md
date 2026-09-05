@@ -32,7 +32,7 @@ python -m blockspec demo --device cuda \
 
 输出只写 stdout。若指定检查点，只保存该文件，不生成结果文档。
 `models/` 被 Git 忽略，已有检查点不覆盖。前向 KL 是这个合成启动检查的设置，不是论文默认配方；
-真实离线入口可用反向 KL 热身接 L1。
+真实离线入口默认反向 KL＋L1 联合热身，再接纯 L1；纯 KL 热身须显式选择。
 
 顺序为：训练 AR 小基座、冻结基座、训练草稿适配器、验证存取、生成固定／在线结果。
 检查基座指纹不变、贪心输出一致、在线参数变化。周期数据的难度和启动成本都不代表真实语言模型，
@@ -91,7 +91,7 @@ python -m blockspec train \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --data /path/outside/repo/train.jsonl --text-data \
   --output models/current-adapter.pt --device cuda --dtype bfloat16 \
-  --rank 8 --steps 1000 --warmup-steps 100 --warmup-loss reverse_kl \
+  --rank 8 --steps 1000 --warmup-steps 100 --warmup-loss reverse_kl_l1 \
   --loss l1 --batch-size 1 --sequence-length 128 --blocks 2,4,6,8 \
   --learning-rate 0.0001 --bos-id 0 --seed 314159
 ```
@@ -106,6 +106,16 @@ python -m blockspec train \
 
 诊断数值差异可运行 `python scripts/audit_model_precision.py --base /path/to/base`；
 默认仅打印摘要，`--trace` 逐层打印，也不写文件。该命令只作定位，不作为 TPS 基准。
+
+可选的固定公开实现契约对照：
+
+```bash
+python scripts/audit_sampler_reference.py \
+  --source /mnt/c/Users/singm/Desktop/hw/akg_related/.tmp_uno_upstream
+```
+
+这只读取本机已有参照仓库的固定 Git 对象，不下载、不导入作者模型或服务引擎，不写文件。
+它检查 CPU 树构建和给定目标 token 的遍历；不是将运行作者代码充当本项目的性能复现。
 
 ## 5. 接进后续请求
 

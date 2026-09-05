@@ -7,7 +7,9 @@ import torch
 from blockspec.decoding import generate_ar
 from blockspec.model import Decoder, ModelConfig, cache_length
 from blockspec.online import OnlineConfig, OnlineLearner
-from blockspec.tree import build_tree, compact_tree_cache, generate_tree, traverse_greedy, traverse_target
+from blockspec.sampling import SamplingConfig
+from blockspec.tree import (build_tree, compact_tree_cache, generate_tree, traverse_greedy,
+                            traverse_target, tree_scores)
 
 
 def tiny():
@@ -105,3 +107,40 @@ def test_tree_greedy_specialization_equals_one_hot_traversal():
         ids = torch.tensor(targets)
         p = torch.nn.functional.one_hot(ids, 2).float()
         assert traverse_greedy(tree, ids, budget=4) == traverse_target(tree, p, budget=4)
+
+
+@pytest.mark.parametrize("temperature", [0., .5, 1., 2.])
+def test_tree_scores_respect_positive_temperature_without_target_filters(temperature):
+    logits = torch.tensor([[2., 1., -.5], [.2, 2.1, -.3]], dtype=torch.float64)
+    scores = tree_scores(logits, SamplingConfig(temperature=temperature, top_k=1, top_p=.1))
+    torch.testing.assert_close(scores, (logits / (temperature or 1.)).softmax(-1), atol=0, rtol=0)
+    assert (scores > 0).all()  # Target truncation must not collapse the candidate tree.
+
+
+def test_tree_traversal_full_two_token_law_including_exit_and_resume(monkeypatch):
+    # Root=0; only the child labelled 1 is retained. Emitting 0 or 2 must exit
+    # the tree and resume ordinary target sampling, without renormalizing p.
+    tree = build_tree(0, torch.tensor([[.1, .8, .1]]), top_k=1, prefix_budget=2)
+    first = torch.tensor([.2, .5, .3], dtype=torch.float64)
+    second = torch.tensor([[.6, .1, .3], [.2, .7, .1], [.1, .4, .5]], dtype=torch.float64)
+    target = torch.stack((first, second[1]))
+    joint = torch.zeros(3, 3, dtype=torch.float64)
+    for a, b in itertools.product(range(3), repeat=2):
+        forced, encountered = iter((a, b)), []
+        def chosen(p, generator, forced=forced, encountered=encountered):
+            token = next(forced)
+            encountered.append(p[token])
+            return torch.tensor(token)
+        monkeypatch.setattr("blockspec.tree.draw", chosen)
+        result = traverse_target(tree, target, budget=3)
+        assert result.tokens[:2] == [0, a]
+        probability = torch.stack(encountered).prod()
+        if len(result.tokens) == 2:
+            assert a != 1
+            emitted = result.tokens[1:] + [b]
+            probability *= second[a, b]
+        else:
+            assert a == 1
+            emitted = result.tokens[1:]
+        joint[tuple(emitted)] += probability
+    torch.testing.assert_close(joint, first[:, None] * second, atol=1e-15, rtol=1e-15)

@@ -18,6 +18,15 @@ from .online import Feedback, synchronize
 from .sampling import SamplingConfig, draw, greedy_tokens, probabilities, sample_logits, validate_distribution
 
 
+def tree_scores(logits, sampling=SamplingConfig()):
+    """Untruncated soft scores: target temperature if positive, one if greedy.
+
+    Candidate top-k is applied by build_tree; target top-k/top-p filters affect
+    the target samples, not this tree ranking law. Scores are never p/q ratios.
+    """
+    return probabilities(logits, SamplingConfig(temperature=sampling.temperature or 1.0))
+
+
 @dataclass
 class CandidateTree:
     tokens: list[int]
@@ -179,7 +188,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
             break
         # Soft scores remain useful even when the TARGET is greedy. The chosen
         # tree law is not used as a denominator in any rejection calculation.
-        q = probabilities(draft[0, 1:], SamplingConfig(temperature=1))
+        q = tree_scores(draft[0, 1:], sampling)
         tree = build_tree(root, q, top_k=top_k, prefix_budget=prefix_budget)
         prefix_length = prompt.shape[1] + len(output)
         clean_cache = trim_cache(temporary, prefix_length)

@@ -7,6 +7,9 @@ import torch
 from .diffusion import corrupt
 
 
+LOSS_KINDS = ("l1", "tv", "forward_kl", "reverse_kl", "reverse_kl_l1")
+
+
 @dataclass
 class PairedBatch:
     tokens: torch.Tensor
@@ -50,6 +53,7 @@ def divergence(student_logits, teacher_logits, kind="l1"):
 
     l1 is twice mathematical TV, matching the reference paper's unhalved loss.
     reverse_kl means KL(student || teacher); forward_kl means KL(teacher || student).
+    reverse_kl_l1 is the paper's alpha=beta=1 warm-up, not KL alone or KL+TV.
     """
     if student_logits.shape != teacher_logits.shape:
         raise ValueError("student/teacher logit shapes differ")
@@ -57,6 +61,8 @@ def divergence(student_logits, teacher_logits, kind="l1"):
     log_q = student_logits.to(dtype).log_softmax(-1)
     log_p = teacher_logits.detach().to(dtype).log_softmax(-1)
     q, p = log_q.exp(), log_p.exp()
+    if kind == "reverse_kl_l1":
+        return (q * (log_q - log_p)).sum(-1) + (q - p).abs().sum(-1)
     if kind == "reverse_kl":
         return (q * (log_q - log_p)).sum(-1)
     if kind == "forward_kl":
