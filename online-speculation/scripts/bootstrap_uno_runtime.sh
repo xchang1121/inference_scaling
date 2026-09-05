@@ -74,8 +74,10 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install torch==2.11.0 \
+python -m pip install --upgrade pip 'setuptools<82' wheel
+python "${PROJECT_SOURCE}/scripts/download_verified_wheel.py" \
+  --lock "${PROJECT_SOURCE}/config/torch_wheel.lock.json" --cache-dir "${WHEEL_DIR}"
+python -m pip install "${WHEEL_DIR}/torch-2.11.0+cu128-cp310-cp310-manylinux_2_28_x86_64.whl" \
   --index-url https://download.pytorch.org/whl/cu128
 
 mapfile -t flash_wheels < <(find "${WHEEL_DIR}" -maxdepth 1 -type f \

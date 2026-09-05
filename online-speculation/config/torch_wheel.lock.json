@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "checked_on": "2026-09-05",
+  "provenance": "SHA-256 from the official cu128 torch index; also matches x-amz-meta-checksum-sha256 on the official CloudFront/S3 endpoint. The pip-selected R2 endpoint repeatedly stalled on this host.",
+  "index": "https://download.pytorch.org/whl/cu128/torch/",
+  "index_url": "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl",
+  "url": "https://download.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl",
+  "filename": "torch-2.11.0+cu128-cp310-cp310-manylinux_2_28_x86_64.whl",
+  "bytes": 820206653,
+  "sha256": "72d53f3176a69cc20710c4ecb95f7dc4c6ba10c4e4eda45b8396ee79ee40f75a"
+}
