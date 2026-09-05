@@ -83,3 +83,15 @@ top-k/top-p 有不连续集合选择，不能把这个未过滤界直接搬到�
 说明数学等价的 batch/slice 运算不保证 bitwise 相同；这支持检验假设，不替代本机诊断证据。
 [Uno pinned source](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)
 提供 causal mask、KV staging、gated LoRA 和 graph 路径的被测实现。
+
+## R7D2 执行路径修正（第一次运行后、数值结果分析前）
+
+首次 `stage12_r7d_numerical_probe.json` 完成了 576 次 probe，但最终路径检查失败，
+保持 `completed=false`：官方 `capture()` 只为 B>1 捕获 enabled-LoRA graph。
+因此 B=1 的 zero/noise mask 人造冗余条件在 requested-graph 下实际走 eager，
+每个历史有 8 次这样的 fallback。真实官方 AR/B=1 采用 LoRA OFF，不受此测试条件影响。
+
+修正仅是显式验证/标记这条路径，没有改动模型、输入、mask、B 或任何数值结果。
+重跑使用新文件 `stage12_r7d2_numerical_probe.json`；预期每历史实际 graph 40 次、eager 56 次，
+总计 graph 240、eager 336。对 B=1 enabled-mask 的 requested-graph/eager 对照只能称为
+两个 eager 调用，不作为 graph 等价性的证据。首轮失败记录完整保留，不改写为成功。
