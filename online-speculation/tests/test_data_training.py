@@ -1,9 +1,10 @@
 import json
+import sys
 
 import pytest
 import torch
 
-from blockspec.checkpoint import base_fingerprint
+from blockspec.checkpoint import adapter_state, base_fingerprint, load_checkpoint
 from blockspec.data import load_sequences, sample_batch
 from blockspec.distillation import divergence
 from blockspec.model import Decoder, ModelConfig
@@ -56,3 +57,59 @@ def test_joint_warmup_value_and_gradient_are_reverse_kl_plus_unhalved_l1():
     assert g[1] is None
     assert not torch.isclose(combined, (divergence(student, teacher, "reverse_kl") +
                                         divergence(student, teacher, "tv")).sum())
+
+
+@pytest.mark.parametrize("alpha", [None, 32.0])
+def test_training_cli_preserves_adapter_scale_through_checkpoint(alpha, tmp_path, monkeypatch, capsys):
+    from blockspec import cli
+
+    loaded = []
+
+    def tiny_base(directory, *, rank, alpha=None, device, dtype):
+        torch.manual_seed(713)
+        model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                     num_hidden_layers=1, num_attention_heads=2,
+                                     num_key_value_heads=1, head_dim=8, adapter_rank=rank,
+                                     adapter_alpha=float(rank) if alpha is None else alpha)).to(device, dtype)
+        loaded.append(model)
+        return model
+
+    monkeypatch.setattr(cli, "load_hf_base", tiny_base)
+    data = tmp_path / "train.jsonl"
+    data.write_text(json.dumps({"input_ids": [0, 1, 2, 3, 4, 5, 6, 7]}) + "\n", encoding="utf-8")
+    output = tmp_path / "adapter.pt"
+    arguments = ["blockspec", "train", "--base", str(tmp_path), "--data", str(data),
+                 "--output", str(output), "--device", "cpu", "--dtype", "float32",
+                 "--rank", "2", "--steps", "4", "--warmup-steps", "1", "--threads", "1",
+                 "--sequence-length", "8", "--blocks", "2,4,6,8"]
+    if alpha is not None:
+        arguments.extend(["--alpha", str(alpha)])
+    monkeypatch.setattr(sys, "argv", arguments)
+    cli.main()
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["training_tokens"] == 32
+    trained = loaded[0]
+    payload = torch.load(output, weights_only=True)
+    assert trained.config.adapter_alpha == (2.0 if alpha is None else alpha)
+    assert payload["config"]["adapter_alpha"] == trained.config.adapter_alpha
+    target = tiny_base(tmp_path, rank=2, alpha=trained.config.adapter_alpha, device="cpu", dtype=torch.float32)
+    restored, metadata = load_checkpoint(output, model=target)
+    assert metadata["training_config"]["blocks"] == (2, 4, 6, 8)
+    assert base_fingerprint(trained) == base_fingerprint(restored)
+    for name, value in adapter_state(trained).items():
+        torch.testing.assert_close(adapter_state(restored)[name], value, atol=0, rtol=0)
+    clean = torch.tensor([[0, 1, 2, 3]])
+    active = torch.ones_like(clean, dtype=torch.bool)
+    torch.testing.assert_close(restored(clean, adapter_mask=active), trained(clean, adapter_mask=active),
+                               atol=0, rtol=0)
+    validation = tmp_path / "validation.jsonl"
+    validation.write_text(json.dumps({"input_ids": [0, 3, 2, 1, 6, 7, 4, 5]}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["blockspec", "benchmark", "--base", str(tmp_path),
+                                     "--adapter", str(output), "--data", str(validation), "--device", "cpu",
+                                     "--prompts", "1", "--prompt-length", "3", "--tokens", "8",
+                                     "--warmup-tokens", "4", "--threads", "1", "--update-stride", "1"])
+    cli.main()
+    benchmark = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert loaded[-1].config.adapter_alpha == trained.config.adapter_alpha
+    assert benchmark["greedy_identical"] and benchmark["base_unchanged"] and benchmark["adapter_restored"]
+    assert all(benchmark["online_adapter_changed_per_stream"])
