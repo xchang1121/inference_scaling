@@ -1,13 +1,16 @@
 """Small executable end-to-end pipeline; no imported research implementation."""
 
 import argparse
+from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 
 import torch
 
-from .checkpoint import adapter_state, base_fingerprint, load_checkpoint, load_hf_base, save_checkpoint
-from .data import load_sequences
+from .checkpoint import (adapter_state, base_fingerprint, implementation_fingerprint,
+                         load_checkpoint, load_hf_base, save_checkpoint)
+from .data import assert_split_files_disjoint, load_sequences
 from .decoding import generate_ar, generate_speculative
 from .distillation import offline_step, paired_loss
 from .model import Decoder, ModelConfig
@@ -124,7 +127,28 @@ def main():
     train.add_argument("--text-data", action="store_true", help="use local HF tokenizer for text records")
     train.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
     train.add_argument("--warmup-loss", choices=["forward_kl", "reverse_kl"], default="reverse_kl")
+    train.add_argument("--validation-data", type=Path)
+    train.add_argument("--validation-every", type=int, default=100)
+    train.add_argument("--validation-batches", type=int, default=4)
+    train.add_argument("--threads", type=int, default=4)
+    prepare = sub.add_parser("prepare", help="fetch a bounded public dataset subset with question-group splits")
+    prepare.add_argument("--base", type=Path, required=True, help="local tokenizer and chat template")
+    prepare.add_argument("--output", type=Path, required=True)
+    prepare.add_argument("--offsets", help="comma-separated source row offsets; default spans the corpus")
+    prepare.add_argument("--page-size", type=int, default=8)
+    prepare.add_argument("--max-tokens", type=int, default=8192)
+    prepare.add_argument("--seed", type=int, default=314159)
     args = parser.parse_args()
+    if args.command == "prepare":
+        from .corpus import DEFAULT_OFFSETS, prepare_snapshot
+        from .tokenizer import LocalTokenizer
+        manifest = prepare_snapshot(args.output, LocalTokenizer(args.base),
+                                     offsets=tuple(map(int, args.offsets.split(","))) if args.offsets else DEFAULT_OFFSETS,
+                                     page_size=args.page_size, max_tokens=args.max_tokens, seed=args.seed,
+                                     progress=lambda row: print(json.dumps(row), flush=True))
+        print(json.dumps({"output": str(args.output), "splits": manifest["splits"],
+                          "questions": manifest["unique_questions"], "domains": manifest["domains"]}), flush=True)
+        return
     if args.command == "train":
         if args.output.exists():
             parser.error("output already exists; choose a new checkpoint path")
@@ -132,7 +156,16 @@ def main():
                                 sequence_length=args.sequence_length,
                                 blocks=tuple(int(b) for b in args.blocks.split(",")),
                                 learning_rate=args.learning_rate, warmup_steps=args.warmup_steps,
-                                warmup_loss=args.warmup_loss, loss=args.loss, seed=args.seed)
+                                warmup_loss=args.warmup_loss, loss=args.loss, seed=args.seed,
+                                validation_every=args.validation_every)
+        if args.threads < 1 or args.validation_batches < 1:
+            parser.error("threads and validation batches must be positive")
+        if args.validation_data:
+            assert_split_files_disjoint(args.data, args.validation_data)
+        data_sha = hashlib.sha256(args.data.read_bytes()).hexdigest()
+        validation_sha = hashlib.sha256(args.validation_data.read_bytes()).hexdigest() if args.validation_data else None
+        implementation_sha = implementation_fingerprint()
+        torch.set_num_threads(args.threads)
         torch.manual_seed(args.seed)
         model = load_hf_base(args.base, rank=args.rank, device=args.device, dtype=getattr(torch, args.dtype))
         fingerprint = base_fingerprint(model)
@@ -141,14 +174,24 @@ def main():
             from .tokenizer import LocalTokenizer
             tokenizer = LocalTokenizer(args.base)
         data = load_sequences(args.data, model.config.vocab_size, tokenizer=tokenizer)
+        validation = None
+        if args.validation_data:
+            from .validation import FixedValidation
+            validation_data = load_sequences(args.validation_data, model.config.vocab_size, tokenizer=tokenizer)
+            validation = FixedValidation(validation_data, vocab_size=model.config.vocab_size,
+                                           blocks=config.blocks, batches=args.validation_batches,
+                                           length=config.sequence_length, bos_id=args.bos_id)
         def progress(stats):
-            if stats["step"] == 1 or stats["step"] % 25 == 0 or stats["step"] == args.steps:
+            if "validation" in stats or stats["step"] == 1 or stats["step"] % 25 == 0 or stats["step"] == args.steps:
                 print(json.dumps(stats), flush=True)
-        result = train_adapter(model, data, config, bos_id=args.bos_id, progress=progress)
+        result = train_adapter(model, data, config, bos_id=args.bos_id, progress=progress, validation=validation)
         if base_fingerprint(model) != fingerprint:
             raise RuntimeError("offline training changed frozen base weights")
         save_checkpoint(args.output, model, adapter_only=True,
-                        metadata={"training": result, "base_source": str(args.base), "seed": args.seed})
+                        metadata={"training": result, "training_config": asdict(config),
+                                  "base_source": str(args.base), "seed": args.seed,
+                                  "train_data_sha256": data_sha, "validation_data_sha256": validation_sha,
+                                  "implementation_sha256_at_start": implementation_sha})
         print(json.dumps({"checkpoint": str(args.output), **result}), flush=True)
         return
     if min(args.base_steps, args.adapter_steps, args.rank, args.tokens, args.threads) < 1:
