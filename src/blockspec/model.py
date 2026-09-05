@@ -298,8 +298,17 @@ class Decoder(nn.Module):
         return rotary_embeddings(positions, self.model.layers[0].self_attn.frequencies,
                                   dtype, self.config.rope_attention_factor)
 
+    def _project(self, hidden, logit_range):
+        if logit_range is not None:
+            if (not isinstance(logit_range, tuple) or len(logit_range) != 2
+                    or any(type(i) is not int for i in logit_range)
+                    or not 0 <= logit_range[0] < logit_range[1] <= hidden.shape[1]):
+                raise ValueError("logit range must be a nonempty start/end interval within the input")
+            hidden = hidden[:, logit_range[0]:logit_range[1]]
+        return self.lm_head(self.model.norm(hidden))
+
     def forward(self, tokens, *, positions=None, allowed=None, adapter_mask=None,
-                cache: Cache | None = None, return_cache=False, capture_layer=None):
+                cache: Cache | None = None, return_cache=False, capture_layer=None, logit_range=None):
         if tokens.ndim != 2 or tokens.shape[1] < 1:
             raise ValueError("tokens must have shape [batch, nonempty sequence]")
         b, length = tokens.shape
@@ -331,12 +340,12 @@ class Decoder(nn.Module):
                                None if cache is None else cache[i], rotary)
             if return_cache:
                 new_cache.append(kv)
-        logits = self.lm_head(self.model.norm(hidden))
+        logits = self._project(hidden, logit_range)
         if capture_layer is not None:
             return logits, tuple(new_cache), boundary
         return (logits, tuple(new_cache)) if return_cache else logits
 
-    def forward_suffix(self, boundary: DraftBoundary, *, cache: Cache | None = None):
+    def forward_suffix(self, boundary: DraftBoundary, *, cache: Cache | None = None, logit_range=None):
         """Exact suffix recomputation, given a still-valid frozen-prefix boundary.
 
         cache contains only this suffix's BASE prefix KV. The caller must freeze
@@ -360,7 +369,7 @@ class Decoder(nn.Module):
         for i in range(start, self.config.num_hidden_layers):
             hidden, _ = self.model.layers[i](hidden, boundary.positions, boundary.allowed,
                                             boundary.adapter_mask, None if cache is None else cache[i - start], rotary)
-        return self.lm_head(self.model.norm(hidden))
+        return self._project(hidden, logit_range)
 
     def adapter_parameters(self):
         return [p for n, p in self.named_parameters() if is_adapter(n)]

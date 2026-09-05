@@ -156,6 +156,8 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)` 提供末层续训配置，
 续训最后 4 层中的适配器，并复用起草的前段特征；其余适配器以固定权重参与起草。
 `train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见主报告 9.3。
+词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导见主报告 9.4。
+`optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；两者的更新核对见主报告 9.5。
 检查点保存权重，新建 learner 时初始化 Adam 状态。
 `learner=None` 对应静态适配器；`generate_ar` 每 token 执行一次前向。
 树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
@@ -174,20 +176,24 @@ python -m blockspec benchmark \
   --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-paper.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
   --split-role validation --dtype float32 --prompts 8 --prompt-length 256 \
-  --tokens 256 --block-size 4 --repeats 2 --warmup-tokens 32 --update-stride 32 --replay-blocks 1
+  --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
+  --sampler tree --top-k 4 --prefix-budget 12 --execution cuda_graph \
+  --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
+  --loss forward_kl --learning-rate 0.0003 --optimizer auto
 ```
 
 按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
-`--eos-id 1` 启用结束标记。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
+`--eos-id 1` 启用结束标记。上面命令对应主报告当前表格；`--sampler linear` 切换线性路径。
 重复次数取正偶数，每对按 AR／静态／在线、在线／静态／AR 的顺序运行。每个在线请求流从同一离线起点开始，
 在线流内保留学习后的权重与 Adam 状态，静态流保持离线权重。预热结束恢复正式起点，第一次 Adam 状态分配计入更新时间。
 
 输出汇总 TPS、每轮输出数、更新时间、含 learner 初始化的 TPS、逐请求贪心一致性、峰值显存和输入／实现 SHA。
 输出差异标为 `greedy_identical: false`。`--progress` 打印逐请求计数。
-加 `--online-last-layers 4` 测相同离线起点的末 4 层续训；会另外报告实际可训练参数数。
-全量续训使用默认设置，末层续训通过该参数选择可训练的层数。
-重跑主报告当前表格：在上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12 --online-last-layers 4`。
-全适配器树基线对应上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12`。
+`trajectories` 返回按请求顺序排列的累计 TPS、每轮输出、学习耗时和适配器版本；图准备费用归入第一轮重复。
+`--loss forward_kl` 使用老师到学生的 KL，`--loss l1` 使用概率差的绝对值总和。
+`--optimizer auto` 自动选择执行后端，输出 `online_optimizer` 给出实际选择；`--optimizer standard` 提供标准 AdamW 对照。
+`--online-last-layers 4` 选择末 4 层续训，输出报告实际可训练参数数。
+删除命令中的 `--online-last-layers 4` 参数即可测全适配器续训。
 
 加 `--execution cuda_graph` 启用同一个独立固定形状执行器，AR、静态和在线都使用它。
 本机当前表格使用此开关；默认 `eager` 使用普通执行路径。

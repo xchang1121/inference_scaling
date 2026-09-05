@@ -5,6 +5,7 @@
 通用张量运算使用 PyTorch，基座权重从本地 safetensors 接入。
 
 当前管线包含线性验证、目标路径树、全适配器／末层在线续训和 GPU 图执行。
+在线重放按监督位置计算词表投影，CUDA 上使用融合参数更新；评测沿请求流跟踪接受长度、累计耗时和参数版本。
 验证覆盖概率推导、梯度、KV 缓存、完整基座外部数值对照，以及 RTX 3090 上的三路 TPS 评测。
 
 ## 先读哪一份
@@ -31,7 +32,7 @@ src/blockspec/
   data.py            独立序列数据合同
   corpus.py          有界公开数据、问题分组划分及来源校验
   validation.py      固定窗口与噪声的独立验证
-  benchmark.py       配对请求流、输出对照与包含续训成本的 TPS
+  benchmark.py       配对请求流、累计学习轨迹与包含续训成本的 TPS
   diagnostics.py     等价执行布局的逐层数值审计
   tokenizer.py       本地 tokenizer.json 解析
   cli.py             数据、训练、三路评测与小模型闭环入口
