@@ -17,6 +17,11 @@ Ubuntu 首次安装后已是 WSL2。原 bootstrap 无条件执行 `--set-version
 现在先解析 `wsl --list --verbose`，仅在版本不是 2 时转换；缺失或无法解析时明确退出。
 随后重新验证 uname 与 GPU 均成功，不删除、不重新注册该发行版。
 
+第一次 apt 更新遇到 archive.ubuntu.com:80 连接超时，基础索引缺失，随后 ninja-build 无候选。
+同一官方域名的 HTTPS 以及 security 官方 HTTPS 均实际返回 200。bootstrap 因此只将官方源 URL
+从 HTTP 升级为 HTTPS，原配置备份为 /etc/apt/sources.list.online-uno-original；保留 APT 签名校验，
+未修改 Windows 的代理、DNS 或 VPN。增加 update --error-on=any，防止索引失败被当成成功继续。
+
 ## 后续检查点
 
 系统 apt 包 -> 非 root 用户/隔离 Python 3.10 venv -> cu128 PyTorch/FA2/Triton ->
