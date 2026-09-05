@@ -21,15 +21,17 @@ def test_ratio_of_sums_is_distinct_from_average_paired_ratio():
 
 
 def test_unpaired_rows_are_not_silently_included_in_paired_denominator():
-    data = [_row("static:8", "a", 10), _row("tree:8:16", "a", 5), _row("tree:8:16", "missing", 100)]
-    result = summarize(data, samples=100, seed=1)["tree:8:16"]
-    assert result["pairs"] == 1
+    data = [_row("static:8", p, 10) for p in ("a", "b")]
+    data += [_row("tree:8:16", p, 5) for p in ("a", "b")]
+    data += [_row("tree:8:16", "missing", 100)]
+    result = summarize(data, samples=1000, seed=1)["tree:8:16"]
+    assert result["pairs"] == 2
     assert result["ratio_of_total_e2e_seconds"] == 2
     assert result["absolute_e2e_tps"] == 4
 
 
 def test_static_tree_secondary_baseline_and_ar_parser():
-    data = [_row("static:8", "a", 10), _row("tree:8:16", "a", 5), _row("treebudget:8:16", "a", 4)]
-    result = summarize(data, samples=100, seed=1, baseline_name="tree:8:16")
+    data = [_row(m, p, t) for m, t in (("static:8", 10), ("tree:8:16", 5), ("treebudget:8:16", 4)) for p in ("a", "b")]
+    result = summarize(data, samples=1000, seed=1, baseline_name="tree:8:16")
     assert result["treebudget:8:16"]["ratio_of_total_e2e_seconds"] == 1.25
     assert _method("ar") == ("ar", None, 0)
