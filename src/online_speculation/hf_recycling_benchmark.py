@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from .hf_recycling_uno import HfRecyclingUnoRunner
+from .hf_tree_uno import HfTreeUnoRunner
 from .hf_replay_benchmark import _intervals
 from .hf_uno import (
     ADAPTER_REVISION, ADAPTER_WEIGHT_SHA256, BASE_REVISION, BASE_WEIGHT_SHA256,
@@ -22,6 +23,7 @@ from .hf_uno import (
 )
 from .recycling import RecyclingConfig
 from .torch_sampling import SamplingConfig
+from .tree_uno import TreeConfig
 
 
 PILOT_WORKLOADS = (
@@ -36,8 +38,16 @@ PILOT_WORKLOADS = (
 )
 
 
-def _method(value: str) -> tuple[str, RecyclingConfig | None, int]:
+def _method(value: str) -> tuple[str, RecyclingConfig | TreeConfig | None, int]:
     parts = value.split(":")
+    if parts[0] in {"tree", "treeonline"} and len(parts) in {3, 4}:
+        config = TreeConfig(
+            block_size=int(parts[1]), nodes=int(parts[2]),
+            top_k=int(parts[3]) if len(parts) == 4 else 4,
+            online_rank=parts[0] == "treeonline",
+        )
+        config.validate()
+        return value, config, config.block_size
     if parts[0] == "static" and len(parts) == 2:
         block = int(parts[1])
         if block < 2:
@@ -154,6 +164,7 @@ def main(argv: list[str] | None = None) -> None:
         mask_token_id=64256, stop_token_ids=[64019, 1], ignore_stop=True,
     )
     runner = HfRecyclingUnoRunner(runtime)
+    tree_runner = HfTreeUnoRunner(runtime)
     encoded = [(name, prompt, runtime.encode_prompt(prompt)) for name, prompt in workloads]
 
     def run(method, ids, budget, seed):
@@ -162,6 +173,8 @@ def main(argv: list[str] | None = None) -> None:
             return {"metrics": asdict(runtime.generate_uno(
                 ids, max_new_tokens=budget, block_size=block, seed=seed,
             )), "diagnostics": {}}
+        if isinstance(config, TreeConfig):
+            return asdict(tree_runner.generate(ids, max_new_tokens=budget, seed=seed, config=config))
         return asdict(runner.generate(
             ids, max_new_tokens=budget, seed=seed, config=config,
         ))
