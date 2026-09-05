@@ -145,6 +145,8 @@ class HfReplayUnoRunner:
         block_size: int,
         generator: torch.Generator,
         retain_target_predictions: bool = False,
+        noise_prefix: Tensor | None = None,
+        noise_lora_scale: float = 1.0,
     ) -> _CycleOutcome:
         runtime = self.runtime
         prefix_cache_length = _cache_length(cache)
@@ -162,6 +164,9 @@ class HfReplayUnoRunner:
                 dtype=torch.long,
                 generator=generator,
             )
+            if noise_prefix is not None:
+                prefix_count = min(noise_prefix.numel(), block_size - 1)
+                noise[0, :prefix_count] = noise_prefix[:prefix_count]
             draft_input = torch.cat((seed_tensor, noise), dim=1)
         else:
             draft_input = seed_tensor
@@ -171,6 +176,8 @@ class HfReplayUnoRunner:
             device=runtime.device,
             dtype=torch.float32,
         )
+        if noise_lora_scale != 1.0:
+            lora_mask *= noise_lora_scale
         lora_mask[:, 0] = 0.0
         runtime.router.set_token_mask(lora_mask)
         with torch.inference_mode():
