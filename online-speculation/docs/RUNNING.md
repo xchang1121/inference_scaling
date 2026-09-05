@@ -1,13 +1,12 @@
 # 运行与验证
 
-数学和设计只有一份：[ALGORITHM.md](ALGORITHM.md)。这里保留可执行入口及其适用范围。
+数学推导与算法设计见 [ALGORITHM.md](ALGORITHM.md)。本说明提供环境配置、运行命令和测量方法。
 
 ## 1. 本机环境
 
 本机 RTX 3090 24GB，WSL2 发行版名 `Ubuntu-22.04`，Linux 用户 `singm`。
 已有环境 `/home/singm/.venvs/uno-cu128`，PyTorch 2.11.0+cu128 / Python 3.10。
-主体不需要作者引擎、FlashAttention 或 Triton 扩展；当前使用 PyTorch SDPA。
-不重新安装 WSL，也不安装 Linux 显示驱动。
+注意力使用 PyTorch SDPA。
 
 以下在 WSL Bash 中运行：
 
@@ -18,9 +17,8 @@ python -m pip install -e '.[dev,text,hf]'
 python -m pytest -q
 ```
 
-若暂不安装 editable 包，可在命令前加 `PYTHONPATH=src`；测试配置本身已加入 `src`。
-`hf` 是可选数值测试参照，不作为生成后端。本次没有创建下载临时脚本。
-现有模型和依赖不是失败实验产物，清理不会卸载它们。
+也可通过命令前的 `PYTHONPATH=src` 使用源码；测试配置已加入 `src`。
+`hf` 提供可选数值参照。
 
 ## 2. 小模型全闭环
 
@@ -30,19 +28,17 @@ python -m blockspec demo --device cuda \
   --block-size 4 --tokens 128 --checkpoint models/cycle.pt
 ```
 
-输出只写 stdout。若指定检查点，只保存该文件，不生成结果文档。
-`models/` 被 Git 忽略，已有检查点不覆盖。前向 KL 是这个合成启动检查的设置，不是论文默认配方；
-真实离线入口默认反向 KL＋L1 联合热身，再接纯 L1；纯 KL 热身须显式选择。
+结果写入 stdout；`--checkpoint` 指定保存位置，使用新文件名。`models/` 被 Git 忽略。
+此周期序列示例使用前向 KL；真实离线入口默认反向 KL＋L1 联合热身，再接纯 L1。
 
 顺序为：训练 AR 小基座、冻结基座、训练草稿适配器、验证存取、生成固定／在线结果。
-检查基座指纹不变、贪心输出一致、在线参数变化。周期数据的难度和启动成本都不代表真实语言模型，
-stdout 的 TPS 仅用于排查数量级。
+检查基座指纹、贪心输出和在线参数更新，并打印各阶段耗时。
 
-## 3. 真实权重有限检查
+## 3. 真实权重检查
 
 本机已有基座 `/home/singm/online-speculation-work/models/K2-Horizon-0.9B`，
 来源 revision 和权重 SHA 见 [upstream.lock.json](../references/upstream.lock.json)。
-**不加载已经发布的草稿适配器。**
+草稿适配器由本项目训练。
 
 ```bash
 PYTHONPATH=src python scripts/check_local_model.py \
@@ -51,14 +47,30 @@ PYTHONPATH=src python scripts/check_local_model.py \
 ```
 
 脚本经本项目 Transformer 生成少量训练轨迹，执行离线更新，再比较三种解码和基座指纹。
-报告配对老师与普通老师的数值误差、贪心是否一致、更新次数和峰值显存，默认不写文件。
-四步训练只能验证链路，不能称为“训练充分的适配器性能”。
-可用 `--dtype bfloat16` 检查低精度路径，但需明确处理批形状导致的数值差异，不能预设逐 token 一致。
-加 `--sampler tree` 检查独立目标路径树；它使用精确的目标分布遍历，不假装确定性 top-k 树来自原 q 的独立抽样。
+stdout 报告配对／普通老师的数值误差、贪心一致性、更新次数和峰值显存。
+四步训练用于集成检查；`--dtype bfloat16` 用于定位低精度和批形状带来的差异。
+`--sampler tree` 切换为从目标分布逐节点抽样的树路径。
 小模型 `demo` 也支持同一个 `--sampler tree` 开关。
 
-接口明确接入 dense K2-Horizon 和 Qwen3 结构；未知架构、MoE、量化、滑动窗口、部分旋转、门控注意力会拒绝。
-不要改 `model_type` 绕过检查。新增架构先补数值参照测试。
+权重接口接入 dense K2-Horizon 和 Qwen3，加载时校验模型结构。新增架构时配套添加数值参照测试。
+
+完整基座外部数值参照使用隔离的依赖目录：
+
+```bash
+# 首次配置时安装；本机已有此目录，可直接运行下面的校验命令。
+python -m pip install --target /home/singm/online-speculation-work/oracle-transformers515 \
+  --only-binary=:all: --no-cache-dir transformers==5.15.0
+PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
+  HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 python scripts/audit_hf_reference.py \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --prompts 4 --prompt-length 128 --tokens 32 --execution cuda_graph --require-same-argmax
+```
+
+该脚本执行经过 hash 核对的本地基座作者模型，与本项目 `Decoder` 对照。
+代码和配置按 LF 换行核对，权重逐字节核对，索引指向已校验的分片。结果写入 stdout。
+默认 logits 最大误差阈值为 0.0005、TV 为 0.0001；上述命令还要求 argmax 全部相同，超出门槛时以错误码退出。
+`--execution eager` 使用普通执行路径。移位短窗口检查大位置编号的计算，校验输入取自开发集。
 
 ## 4. 用自己的数据训练全适配器
 
@@ -70,10 +82,9 @@ python -m blockspec prepare \
   --output /home/singm/online-speculation-work/data/blockspec_ot3_small --page-size 8
 ```
 
-该目录在本机已存在，可以直接复用；重新准备须选择新目录，不覆盖。
+该目录在本机已存在，可以直接复用；重新准备时选择新目录。
 `prepare` 需要 `.[data]` 依赖，使用本地聊天模板；保存 train／validation／test 三个数据文件及来源 manifest。
-按问题分组防止同题不同答案跨集合。`test.jsonl` 暂不参与训练和参数选择。
-这是常规可复用准备入口，不生成下载临时脚本或残留原始响应。
+同题的所有答案归入同一集合。训练、参数选择、最终评测分别使用 train、validation、test。
 
 本地 JSONL 一行一个独立样本，二选一：
 
@@ -82,9 +93,9 @@ python -m blockspec prepare \
 {"text": "一段已经按实际部署格式整理好的足够长的文本……"}
 ```
 
-编号必须属于基座词表。文本需 `--text-data`，仅解析 `tokenizer.json`，不执行远程代码、不自动套聊天模板。
+编号属于基座词表。文本输入加 `--text-data`，通过本地 `tokenizer.json` 编码；聊天模板由输入文本提供。
 部署的角色标记、思考标记和语言风格应在训练文本中明确匹配。样本长度至少为 `sequence-length - 1`；
-训练随机取连续片段再加指定 BOS，不把不同样本拼在一起。
+训练从每个独立样本随机取连续片段，再加指定 BOS。
 
 ```bash
 python -m blockspec train \
@@ -97,17 +108,17 @@ python -m blockspec train \
   --learning-rate 0.0003 --validation-every 100 --validation-batches 8 --bos-id 0 --seed 314159
 ```
 
-这是当前 3090 上已执行的有界配置，不承诺已收敛或最优。600 步包含热身，不额外增加。
+上述配置已在本机 3090 执行，600 步由 150 步热身与 450 步纯 L1 训练组成。
 使用自己的纯文本 JSONL 时换数据路径并加 `--text-data`；已编码的当前数据无需该开关。
-数据不默认上传、不入 Git。数据和噪声分别设随机种子。训练前后检查基座指纹；
+数据保存在仓库外。数据和噪声分别设随机种子。训练前后检查基座指纹；
 适配器检查点含模型配置、基座指纹，错误基座／精度会被拒绝。
 
 增加 `--validation-data /path/validation.jsonl --validation-every 100 --validation-batches 8`，
 可在训练前及每 100 步检查固定窗口、固定噪声上的学生／老师差异。训练与验证问题或样本重叠会拒绝启动。
-检查点记录训练配置和输入文件 SHA，完整训练时间包含验证开销。更换精度不是无损加载同一适配器的默认操作。
+检查点记录训练配置和输入文件 SHA，训练时间包含验证开销。加载时使用检查点对应的基座、秩和精度。
 
 诊断数值差异可运行 `python scripts/audit_model_precision.py --base /path/to/base`；
-默认仅打印摘要，`--trace` 逐层打印，也不写文件。该命令只作定位，不作为 TPS 基准。
+默认打印摘要，`--trace` 逐层打印，用于定位最早出现数值差异的运算。
 
 可选的固定公开实现契约对照：
 
@@ -116,8 +127,7 @@ python scripts/audit_sampler_reference.py \
   --source /mnt/c/Users/singm/Desktop/hw/akg_related/.tmp_uno_upstream
 ```
 
-这只读取本机已有参照仓库的固定 Git 对象，不下载、不导入作者模型或服务引擎，不写文件。
-它检查 CPU 树构建和给定目标 token 的遍历；不是将运行作者代码充当本项目的性能复现。
+脚本读取固定 Git 对象，对照 CPU 树构建与给定目标 token 的遍历，向 stdout 打印节点和路径检查结果。
 
 ## 5. 接进后续请求
 
@@ -144,19 +154,19 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
 若要限制后续训练成本，可用 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)`，
-仅续训最后 4 层中原有的适配器，并复用起草的前段特征；其余离线适配器仍参与起草但不再学习。
-不指定 `train_last_layers` 才是全适配器续训。冻结前段被修改时需丢弃 learner，不能复用旧特征；数学条件见主报告 9.3。
-重新构造 learner 新建 optimizer。磁盘当前保存权重，不恢复 Adam 动量。
-不传 learner 是静态适配器；`generate_ar` 是每 token 一次前向的非投机基线。
+续训最后 4 层中的适配器，并复用起草的前段特征；其余适配器以固定权重参与起草。
+`train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见主报告 9.3。
+检查点保存权重，新建 learner 时初始化 Adam 状态。
+`learner=None` 对应静态适配器；`generate_ar` 每 token 执行一次前向。
 树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
-`top_k` 和 `prefix_budget`（含根节点的预算）参数。树模式的 `proposed` 统计非根节点数，不是线性块长度。
+`top_k` 和 `prefix_budget`（含根节点的预算）参数。树模式的 `proposed` 统计根节点之外的候选节点总数。
 默认贪心；随机采样传 `SamplingConfig(temperature=1, top_k=50, top_p=0.95)`。
-EOS 要显式传本模型 `eos_id`；不传则按预算生成，不得把这一设置隐瞒成自然结束。
+`eos_id=None` 按固定预算生成；设置本模型的 `eos_id` 可在结束标记处停止。
 
 ## 6. 同条件三路评测
 
-当前 r=32 / FP32 联合热身离线起点在仓库外，已用训练集做 600 步训练；不能用其他秩／精度直接加载它。
-开发评测使用验证集中的连续前缀，不是重新编写的指令任务；保留测试集不用于选配置。
+当前离线起点在仓库外，使用 r=32 / FP32 加载，训练配置为 600 步联合热身课程。
+开发评测使用验证集中的连续前缀；test 集留给配置确定后的评测。
 
 ```bash
 python -m blockspec benchmark \
@@ -167,30 +177,35 @@ python -m blockspec benchmark \
   --tokens 256 --block-size 4 --repeats 2 --warmup-tokens 32 --update-stride 32 --replay-blocks 1
 ```
 
-按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算，**不按 EOS 提前结束**；
+按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
 需要自然结束时显式加 `--eos-id 1`。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
 重复次数必须为正偶数：AR／静态／在线，再在线／静态／AR。每个在线请求流从同一离线起点开始，
-流内保留学习后的权重与 Adam 状态；静态版不学习。内核预热不改变正式起点，第一次真实 Adam 更新的分配成本仍计入。
+在线流内保留学习后的权重与 Adam 状态，静态流保持离线权重。预热结束恢复正式起点，第一次 Adam 状态分配计入更新时间。
 
 输出汇总 TPS、每轮输出数、更新时间、含 learner 初始化的 TPS、逐请求贪心一致性、峰值显存和输入／实现 SHA。
-输出不同会标为 `greedy_identical: false`，不会挑掉该样本再计算“等价加速”。`--progress` 可打印逐请求计数。
+输出差异标为 `greedy_identical: false`。`--progress` 打印逐请求计数。
 加 `--online-last-layers 4` 测相同离线起点的末 4 层续训；会另外报告实际可训练参数数。
-去掉此参数便是全量续训，不能把两个实验称为同一训练目标的纯内核提速。
+全量续训使用默认设置，末层续训通过该参数选择可训练的层数。
 重跑主报告当前表格：在上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12 --online-last-layers 4`。
 保持树参数但去掉 `--online-last-layers 4`，就是主报告中另测的全适配器基线。
-实验结束恢复传入模型的适配器，不把调参过程的在线权重发布回检查点；默认只写 stdout。
-此处少量开发流用于选实现，不提供统计显著性或公开基准排名。
+
+加 `--execution cuda_graph` 启用同一个独立固定形状执行器，AR、静态和在线都使用它。
+本机当前表格使用此开关；默认 `eager` 仍是透明的普通执行对照。
+图在预热和请求计时前准备，输出 `execution.setup_seconds_by_arm` 和 `tps_including_all_setup`，
+分别报告每个方法单独部署所需的图准备时间，以及包含图准备和 learner 初始化的流级 TPS。
+请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
+执行配置为 FP32 CUDA、batch=1、TF32 关闭。
+长 prefill 普通执行，短查询使用预先准备的形状和历史容量；形状或容量越界时报错。
+实验结束恢复传入模型的适配器，结果写入 stdout。
 
 ## 7. 完整计时与文件生命周期
 
 `Generation.seconds` 从 prefill 前开始，包含生成、反馈、在线更新、清理本请求反馈和末尾 GPU 同步。
-不含加载模型、离线训练、编码提示、存取检查点和转回文字；产品级延迟须另计这些项目。
-`update_seconds` 仅为重放更新区域，不能代替净开销。learner 的一次初始化在请求前，冷启动评测须单列。
+`update_seconds` 记录重放更新区域。learner 初始化和图准备单列，并计算包含这两项的流级 TPS。
+产品级延迟还需加上模型加载、提示编码、检查点存取和文本解码；离线训练时间单独记录。
 
-比较时固定基座、离线起点、采样、精度、输出预算、缓存条件。预热后正反顺序成对运行，报告总 tokens / 总秒数，
-不是每条 TPS 的算术平均。AR 也使用相同优化。不要在另一项 GPU 训练同时运行时测速度。
-合成模型单次结果不作为论文性能证据。
+比较时固定基座、离线起点、采样、精度、输出预算、缓存条件。预热后正反顺序成对运行，报告总 tokens / 总秒数。
+三路使用相同优化，测量期间独占实验 GPU。
 
-只提交当前代码、测试、必要配置、主报告和本说明。原始结果、下载中间文件、权重、日志不提交。
-失败设计最多在主报告解释原因；无效实现删除，由 Git 历史追溯，不复制进 archive。
-只清理已确认由本项目产生且无用的目标，不删除不明缓存或系统安装材料。
+仓库保存代码、测试、配置、主报告和运行说明。权重与数据存放于仓库外，结果通过 stdout 查看。
+设计取舍在主报告相关章节简述，代码历史通过 Git 追溯。
