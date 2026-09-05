@@ -109,6 +109,13 @@ def expected_keys():
     return {key(*args) for args in itertools.product(EXECUTIONS, WIDTHS, MODES, (0, 1), (0, 1))}
 
 
+def expected_graph_hit(probe_key):
+    execution, width, mode, _, _ = probe_key.split("/")
+    # Official capture() intentionally omits enabled-LoRA B=1 graphs. These
+    # artificial all-zero-mask controls fall back to eager, unlike real AR.
+    return int(execution == "graph" and (width != "B1" or mode == "off"))
+
+
 def validate(payload):
     if not payload.get("completed") or payload.get("error") or payload.get("stage") != "complete":
         raise ValueError("diagnostic is incomplete")
@@ -123,7 +130,7 @@ def validate(payload):
         for probe_key, probe in row["probes"].items():
             if not probe["prefix_kv_unchanged"]:
                 raise ValueError("prefix KV was modified")
-            expected_graph_hits = int(probe_key.startswith("graph/"))
+            expected_graph_hits = expected_graph_hit(probe_key)
             if probe["graph_hits"] != expected_graph_hits or probe["graph_misses"] != 1 - expected_graph_hits:
                 raise ValueError("unexpected execution path")
         expected_pairs = {"width": 18, "future": 24, "repeat": 48, "graph_eager": 12, "mask": 16}
@@ -247,6 +254,7 @@ def probe_context(engine, item, context_index, fp32_weight):
                 "prefix_kv_unchanged": True, "native_logits": logit_summary(logits),
                 "graph_hits": runner.cuda_graph_hits - graph_before[0],
                 "graph_misses": runner.cuda_graph_misses - graph_before[1],
+                "actual_execution": "graph" if runner.cuda_graph_hits > graph_before[0] else "eager",
                 "single_bf16_head": logit_summary(single_bf16), "single_fp32_head": logit_summary(single_fp32),
                 "native_vs_single_bf16_head": logit_distance(logits.cpu(), single_bf16.cpu()),
                 "native_vs_single_fp32_head": logit_distance(logits.cpu(), single_fp32.cpu()),
@@ -279,7 +287,7 @@ def main():
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a diagnostic record")
-    payload = {"schema_version": 1, "scope": "R7D forced-context numerical diagnostic, not performance/quality evaluation",
+    payload = {"schema_version": 2, "scope": "R7D forced-context numerical diagnostic, not performance/quality evaluation",
                "completed": False, "stage": "preflight", "error": None, "contexts": []}
     args.output.parent.mkdir(parents=True, exist_ok=True)
 

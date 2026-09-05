@@ -63,3 +63,11 @@ def test_incomplete_diagnostics_cannot_be_reported_as_complete():
     with pytest.raises(ValueError, match="incomplete"):
         MODULE.validate({"completed": False})
 
+
+def test_official_graph_capture_omits_artificial_b1_lora_masks():
+    assert sum(MODULE.expected_graph_hit(k) for k in MODULE.expected_keys()) == 40
+    assert MODULE.expected_graph_hit("graph/B1/off/f0/r0") == 1
+    assert MODULE.expected_graph_hit("graph/B1/zero/f0/r0") == 0
+    assert MODULE.expected_graph_hit("graph/B1/noise/f1/r1") == 0
+    assert MODULE.expected_graph_hit("graph/B8/zero/f0/r0") == 1
+    assert MODULE.expected_graph_hit("eager/B8/off/f0/r0") == 0
