@@ -64,7 +64,7 @@ PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
   HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 python scripts/audit_hf_reference.py \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --prompts 4 --prompt-length 128 --tokens 32 --execution cuda_graph --require-same-argmax
+  --prompts 4 --prompt-length 512 --tokens 64 --execution cuda_graph --require-same-argmax
 ```
 
 该脚本执行经过 hash 核对的本地基座作者模型，与本项目 `Decoder` 对照。
@@ -200,6 +200,7 @@ python -m blockspec benchmark \
 图在预热和请求计时前准备，输出 `execution.setup_seconds_by_arm` 和 `tps_including_all_setup`，
 分别报告每个方法单独部署所需的图准备时间，以及包含图准备和 learner 初始化的流级 TPS。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
+图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存等价性和张量规模见主报告 8.2。
 执行配置为 FP32 CUDA、batch=1、TF32 关闭。
 长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。
 实验结束恢复传入模型的适配器，结果写入 stdout。

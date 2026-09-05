@@ -1,10 +1,9 @@
 """Fixed-shape inference on our Decoder, optionally replayed as CUDA graphs.
 
-No alternate attention/model implementation is imported. Private padded KV is
-mutable, but every returned cache, logit tensor and draft feature owns a fresh
-snapshot. Online replay therefore keeps the original functional-cache contract.
-This first executor is batch-one, fixed-capacity and FP32 on CUDA, not a paged
-server. Long prefill stays eager; all measured decode arms use the same engine.
+Private padded KV workspaces serve the attention layers. Each returned cache,
+logit tensor and draft feature owns a fresh snapshot for functional online replay.
+The executor uses batch-one, fixed-capacity FP32 CUDA graphs and eager long
+prefill. AR, static speculation and online continuation share this engine.
 """
 
 import time
@@ -49,7 +48,10 @@ class _ForwardSlot:
                             adapter_mask=self.mask, cache=self.cache, return_cache=True,
                             capture_layer=self.capture_layer)
         self.logits = output[0]
-        self.output_cache = torch.stack([torch.stack(layer) for layer in output[1]])
+        # Attention returns the input prefix followed by this query's KV.
+        # Pack the new rows; the input workspace already holds the prefix.
+        self.new_cache = torch.stack([torch.stack([kv[..., self.capacity:, :] for kv in layer])
+                                      for layer in output[1]])
         self.boundary = output[2] if self.capture_layer is not None else None
 
     @torch.no_grad()
@@ -73,9 +75,8 @@ class _ForwardSlot:
             self.run()
         else:
             self.graph.replay()
-        # Remove masked holes and own the result BEFORE another graph replay.
-        packed = torch.cat((self.output_cache[..., :prefix, :],
-                            self.output_cache[..., self.capacity:, :]), dim=4).detach()
+        # Joining the valid input prefix and new rows creates an owned snapshot.
+        packed = torch.cat((self.past[..., :prefix, :], self.new_cache), dim=4).detach()
         result = (self.logits.clone(), PackedCache(packed))
         if self.boundary is not None:
             boundary = DraftBoundary(self.boundary.hidden.clone(), positions.clone(), allowed.clone(),
