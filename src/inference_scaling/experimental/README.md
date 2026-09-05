@@ -1,6 +1,6 @@
 # 非默认研究实现
 
-本目录保存已经实现并测试、但未进入默认执行路径的算法。保留这些实现是为了复现实验结论和继续研究；调用方必须使用 `inference_scaling.experimental` 下的完整模块路径显式导入。
+本目录保存通过实现测试的可选算法。调用方使用 `inference_scaling.experimental` 下的完整模块路径显式导入。
 
 当前包括：
 
@@ -8,4 +8,5 @@
 - 有界提前停止、随机化 QMC rollout 设计和逐轮 SIR 公共算子；
 - Qwen2.5-0.5B 草稿模型的精确推测解码实验实现。
 
-默认入口只调度已经在 Qwen2.5-1.5B 消融中产生正收益的方法。完整实验结论与采用条件见 [`docs/reports/RTX3090_ROLLOUT_INFRA.md`](../../../docs/reports/RTX3090_ROLLOUT_INFRA.md) 和 [`results/arllm/qwen15b_optimization/attempt_registry.json`](../../../results/arllm/qwen15b_optimization/attempt_registry.json)。
+算法原理、使用约束和非默认方案的简要记录集中在[算法文档](../../../docs/methods/ALGORITHMS.md#alg-nondefault-notes)。
+默认组件由 `experiments/shared/components.py` 定义；运行结果保存在 Git 忽略的 `results/` 目录。

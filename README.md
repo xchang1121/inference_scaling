@@ -35,7 +35,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 ```
 
 该闭式解按照奖励重新分配基础模型已有完整序列的概率质量。仓库直接对这一
-分布进行采样或近似，主要实现三条路径：
+分布进行采样或近似，提供以下路径：
 
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
@@ -143,40 +143,23 @@ Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理�
 | 文档 | 内容 |
 | --- | --- |
 | [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | 默认 Qwen MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
-| [GSM8K 实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据、模型、预算、指标、成本比较基准、命令和结果文件 |
-| [方法质量与计算量](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 准确率、pass@k、共享奖励、off-policy、replay 与消融 |
-| [推理执行与 rollout 复用](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 墙钟、FLOPs、吞吐、缓存成本和复用率 |
-| [Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md) | MH、IS 与 AR 执行候选的统一筛选、确认结果和默认组合决定 |
-| [GSM8K 集成检查](docs/validation/GSM8K_QUICK_VALIDATION.md) | 8 题端到端路径和 32 题批处理检查 |
-| [AR-LLM 完整流程真机验证](docs/validation/ARLLM_FULL_ROUTE.md) | GRPO 与全部 AR 推理、复用和执行优化组件的真实模型检查 |
-| [机器可读结果](results/README.md) | 正式汇总、训练摘要和验证结果文件索引 |
+| [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据配置、方法标识、训练与推理命令、统计量和输出目录 |
+| [非默认方案记录](docs/methods/ALGORITHMS.md#alg-nondefault-notes) | 已筛选方案的主要成本问题与适用条件 |
 
-## 实现与结果状态
+## 实现范围
 
-| 模型族 | 模型与训练对照 | 推理组件 | 状态 |
+| 模型族 | 模型与训练对照 | 推理组件 | 执行接口 |
 | --- | --- | --- | --- |
-| AR-LLM | Qwen2.5-1.5B 主模型与 GRPO；0.5B 仅作 proposal/rollout | 默认启用组件及显式研究消融 | RTX 3090 正式结果已纳入版本控制；两种模型的计算量分开记录 |
-| dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 通用实现、统一 CLI 和轻量测试 | 本轮不运行正式实验；入口供后续大显存机器使用 |
+| AR-LLM | Qwen2.5-1.5B 主模型与 GRPO；0.5B 可作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；两种模型的计算量分别记录 |
+| dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 分块生成、轨迹 MH、条件 IS 与 replay | 批量 Transformers；提供轻量测试和大显存机器入口 |
 | 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算量记录 | AR/dLLM 共用同一实现 |
 
-AR-LLM 的 32 题实验中，标准条件 IS 为 65.625%，GRPO 参数随机采样为 68.750%；共享正确性奖励下，
-verifier-MH 与 verifier-IS 分别为 78.125% 和 75.000%。这些数值只概括已完成的 Qwen/RTX 3090
-实验，完整设置、区间和成本见[质量报告](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)。批处理、流式奖励、
-replay、MH 预取与 SMC 的墙钟、FLOPs 和复用率见[执行报告](docs/reports/RTX3090_ROLLOUT_INFRA.md)。
-dLLM 正式运行会把按相同统计定义生成的结果写入 `results/reproduction/dllm/<tag>/`；状态表分别记录预检与正式结果。
+统一入口默认使用 `multiscale` 后缀 MH。replay 要求历史记录与当前提示、模型和采样策略匹配；IS 的最终估计
+记录还必须尚未使用。候选缓存与连续批处理可复用已有请求，历史库构建成本单独统计。具体执行顺序见
+[默认 MH 与 IS](docs/methods/ALGORITHMS.md#alg-qwen-default-mh)。
 
-当前优化研究只运行 Qwen2.5-1.5B 自回归路线；dLLM 保留实现与入口，不参与该轮消融。候选状态、收益判据
-和每次决定见[Qwen2.5-1.5B 优化研究](docs/reports/QWEN15B_OPTIMIZATION_STUDY.md)。当前 MH 墙钟组合使用
-`multiscale` 后缀调度；存在同一提示、同一策略版本的冻结历史库时再启用冻结历史混合 proposal。三个随机种子
-组合实验的在线墙钟因子为 `0.357×`，主模型 FLOPs 因子为 `1.002×`。0.5B 精确推测解码
-在本机未降低墙钟，默认关闭。
-
-IS 推荐在线路径在存在匹配且尚未使用的历史记录时使用候选缓存与连续批处理。三个随机种子的组合实验相对已启用
-连续批处理的纯新生成路径（`fresh-only`），墙钟、1.5B FLOPs 和 1.5B＋0.5B 总 FLOPs 因子分别为
-`0.754×`、`0.744×` 和 `0.907×`。如果历史记录需要为当前请求新建，则使用连续批处理的纯新生成路径，
-并单列历史库构建成本。专用
-`run_qwen15b_is_stack.py` 入口执行这一组合；根级 `full` 复现当前将 `replay` 与 `async` 作为独立实验组件
-调度，不提供长期运行服务中的请求级自动切换。
+版本控制保留代码、配置、测试和使用文档。运行产生的原始数据、汇总、日志和清单写入 `results/`，由 Git
+统一忽略。此前的实验报告与筛选记录已移除，非默认方案的结论保留在算法文档中。
 
 ## 安装
 
@@ -252,7 +235,7 @@ python -m experiments.arllm.gsm8k_reproduction \
 ## 统一复现入口
 
 [`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理，默认只运行 AR-LLM。
-本轮已验证范围使用 Qwen2.5-1.5B；dLLM 必须通过 `--family dllm` 或 `--family both` 显式选择。两个 Python 路径分别
+AR 默认配置使用 Qwen2.5-1.5B；dLLM 通过 `--family dllm` 或 `--family both` 显式选择。两个 Python 路径分别
 指向上述解释器。AR 的低成本功能检查（`smoke`）使用 1 题、缩短预算和一次 GRPO 更新。显式选择 dLLM 时，`smoke` 执行
 CPU VRPO 反向传播、临时 LoRA 保存与重新加载检查；真实 LLaDA 推理子进程结束后释放模型显存。
 
@@ -303,13 +286,13 @@ python experiments\run_reproduction.py `
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印子命令，不启动训练或推理 |
 
-`full` 默认调度已经纳入正式复现的 `quality`、`matched_target`、`replay`、`async`、`passk` 和
+`full` 默认调度 `quality`、`matched_target`、`replay`、`async`、`passk` 和
 `distribution`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
 `--components` 中显式指定时运行；它们用于研究消融或特定后端验证。dLLM 使用分块 beam、反向轨迹 MH、
 低层 proposal、轨迹 replay、分块 SMC 与 VRPO 对应 AR 的 token 级方法。
 AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。replay 入口将建库时已经生成的基础模型候选
 直接交给在线选择，避免第二次生成同一候选；连续批处理仍由 `async` 组件和执行后端承担。
-方法标识、配对关系与各组件统计量见[实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
+方法标识、配对关系与各组件统计量见[运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
 
 两侧也可独立启动：
 
@@ -323,7 +306,7 @@ AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。repla
 
 所有入口写入命令清单和已完成子任务数。模型族入口位于 `experiments/arllm/` 与 `experiments/dllm/`，仓库根级
 实验目录只保留成对调度入口。完整统计定义见
-[GSM8K 实验设计](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
+[运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
 
 ## 测试与目录
 
@@ -345,7 +328,8 @@ python -m pytest
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
 | `tests/` | 分布、实现一致性和结果处理测试 |
-| `docs/` | 算法与实现、实验协议、报告和验证记录 |
-| `results/` | 纳入版本控制的机器可读汇总 |
+| `docs/` | 算法原理与实现、运行与评测说明 |
+| `results/` | 运行时生成的原始数据、汇总和清单，Git 忽略 |
+| `online-speculation/` | 独立的在线推测解码项目，使用其目录内的说明与入口 |
 
 公共算法接口位于 `inference_scaling.shared`；模型特定代码只负责生成状态、proposal 与概率评分。

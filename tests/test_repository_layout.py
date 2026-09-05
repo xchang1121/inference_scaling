@@ -77,11 +77,11 @@ def test_experiment_root_contains_only_the_paired_entrypoint():
 
 def test_ar_experiment_paths_resolve_from_the_repository_root():
     from experiments.arllm.gsm8k_reproduction import REPOSITORY_ROOT
-    from experiments.arllm.plot_gsm8k_passk import ROOT as PLOT_ROOT
+    from experiments.arllm.run_arllm_suite import REPOSITORY_ROOT as SUITE_ROOT
 
     expected = Path.cwd().resolve()
     assert REPOSITORY_ROOT == expected
-    assert PLOT_ROOT == expected
+    assert SUITE_ROOT == expected
 
 
 def test_ar_adapter_override_updates_every_identity_field(tmp_path):

@@ -2,9 +2,8 @@
 
 本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节先给出当前 Qwen2.5-1.5B 默认 MH 与 IS 路径的
 完整数据流；后续各节再分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、KV 复用、
-异步奖励、vLLM 和计算量统计统一列在第 17 节。实验数值见
-[GSM8K 方法质量与计算量](../reports/GSM8K_3090_ALIGNED_RESULTS.md)和
-[推理执行与 rollout 复用](../reports/RTX3090_ROLLOUT_INFRA.md)。
+异步奖励、vLLM 和计算量统计统一列在第 17 节。[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)
+说明统一入口和统计方式；非默认方案的筛选结论集中在[第 19 节](#alg-nondefault-notes)。
 
 ## 1. 统一记号与实现边界
 
@@ -109,7 +108,7 @@ $`\log q(y\mid y')`$。共享核计算
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | AR token 对数似然 / dLLM 掩码证据下界（ELBO） |
 
 表中的相对源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
-默认入口仅调度 Qwen2.5-1.5B 消融中确认产生正收益的路径。表中位于 `experimental/` 的实现以及动态
+默认组件由 `experiments/shared/components.py` 定义。表中位于 `experimental/` 的实现以及动态
 候选、分阶段 IS、SMC、两阶段延迟接受和草稿模型专项实验均需显式选择，不会随 `full` 自动运行。
 
 ### 2.1 当前 Qwen2.5-1.5B 默认执行规则
@@ -117,8 +116,7 @@ $`\log q(y\mid y')`$。共享核计算
 当前默认设置区分算法设计与执行调度。算法设计决定候选、概率、权重、接受随机数和 replay 数据；执行调度
 只合并已经确定的生成与评分请求。统一入口将多尺度后缀配置 `multiscale` 传给 MH，并默认调度 `replay` 与
 `async` 组件；
-专用组合入口 `run_qwen15b_is_stack.py` 验证 replay、候选复用和连续批处理的联合路径。根级复现入口当前将
-这些组件作为独立实验调度；持续运行服务中的请求级自动路由尚未接入。冻结的历史记录只有在提示、模型、采样策略、
+根级复现入口将这些组件作为独立任务调度；持续运行服务中的请求级自动路由尚未接入。冻结的历史记录只有在提示、模型、采样策略、
 奖励版本和生成位置全部匹配时才进入 replay 路径；其他请求执行新生成路径。在线成本只把运行前已经存在且
 匹配的历史记录计作可复用资源，临时构建历史库的成本单列。
 
@@ -171,8 +169,9 @@ Hastings 比中使用完整正反概率，因此两项可以组合。直观上�
 主要入口为
 [`run_mh_chain`](../../src/inference_scaling/arllm/algorithms/mh.py)、
 [`run_mh_chains_batched`](../../src/inference_scaling/arllm/algorithms/mh.py)和
-[`run_reward_mh_chain_replay_proposal`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py)；组合消融入口为
-[`run_qwen15b_mh_stack.py`](../../experiments/arllm/run_qwen15b_mh_stack.py)。
+[`run_reward_mh_chain_replay_proposal`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py)。
+执行比较可通过统一入口的 `infra` 组件调用
+[`benchmark_is_mh_reuse.py`](../../experiments/arllm/benchmark_is_mh_reuse.py)。
 
 <a id="alg-qwen-default-is"></a>
 #### 2.1.2 默认条件 IS 与已有历史 replay
@@ -246,38 +245,38 @@ proposal。
 主要入口为
 [`conditional_is_step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、
 [`base_replay_step`](../../src/inference_scaling/arllm/algorithms/base_replay.py)和
-[`TruncatedReplayRolloutWeightProvider`](../../src/inference_scaling/shared/importance.py)；组合消融入口为
-[`run_qwen15b_is_stack.py`](../../experiments/arllm/run_qwen15b_is_stack.py)。
+[`TruncatedReplayRolloutWeightProvider`](../../src/inference_scaling/shared/importance.py)。
+统一入口的 `replay` 与 `async` 组件分别调用
+[`gsm8k_replay_benchmark.py`](../../experiments/arllm/gsm8k_replay_benchmark.py)和
+[`gsm8k_async_benchmark.py`](../../experiments/arllm/gsm8k_async_benchmark.py)。
 
 ### 2.2 核心符号、配置字段与成本影响
 
-“质量配置”指 `configs/gsm8k_3090_aligned.toml`；“组合消融”指本轮 Qwen 组合路径的受控实验。组合消融的
-较短长度只用于比较执行成本，不替代质量配置。
+具体数值由 `configs/` 和 CLI 参数给出；下表说明参数的算法含义与计算成本。
 
-| 符号 | 配置或参数 | 作用 | 增大后的主要影响 | 当前 Qwen 设置 |
-| --- | --- | --- | --- | --- |
-| $`L`$ | `generation.max_new_tokens` / `total_length` | 最大生成长度 | 扩大可生成范围，同时增加生成、评分和 KV 成本 | 质量配置 192；MH 组合消融 32；IS 组合消融 64 |
-| $`B`$ | `mh.block_size` / `conditional_is.block_size` | 每个生成阶段提交的生成块长度 | 候选选择步骤减少，但每次候选或后缀更长 | 质量配置：MH 12、IS 48；IS 组合消融 32 |
-| $`n`$ | `mh.steps_per_block` / `--steps` | 每个阶段的 MH 更新数 | 有限链误差通常下降，proposal 与奖励调用线性增加 | 质量配置 3；MH 组合消融 8 |
-| $`C_{\rm chain}`$ | `mh.chains` / `--chains` | 独立 MH 链数 | 增加独立样本与并行度，计算近似线性增加 | 质量路径 1；MH 组合消融 4 |
-| $`\alpha`$ | `mh.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低 MH 接受率 | 质量配置 4 |
-| $`\tau`$ | `reward_temperature` | 奖励相对基础概率的尺度 | 减小后奖励差异在权重或接受率中更强 | 条件 IS 0.1；matched target 0.04；MH 组合消融 0.3 |
-| $`M`$ | `conditional_is.candidate_count` | 每步基础模型候选数 | 候选覆盖改善，候选和 rollout 成本增加 | 质量配置 8；IS 组合消融 4 |
-| $`K`$ | `conditional_is.rollout_count` | 每个候选的普通 rollout 数 | 条件权重噪声通常下降，补全成本线性增加 | 质量配置 3；组合消融的新样本对照使用 $`H+F=2`$ |
-| $`H`$ | `replay.history_rollouts` / `max_history_per_candidate` | 每个候选最多使用的历史样本数 | 历史复用增加；目标评分、库存和匹配约束增加 | 质量配置 2；IS 组合消融 1 |
-| $`F`$ | `replay.fresh_rollouts` | 独立新样本数 | 截断 replay 校正更稳定，同时增加 1.5B rollout | 质量配置与 IS 组合消融均为 1 |
-| $`R`$ | `reserve_rollouts` | 候选提交后写入未来最终估计集的独立记录数 | 增加未来库存和当前建库成本；不参与本轮权重 | 当前正式配置 0 |
-| $`c`$ | `replay.truncation` | 式 (14) 的历史样本截断常数 | 历史项更接近完整比值，独立新样本的贡献下降；方差可能增大 | 8 |
-| $`\lambda`$ | `auxiliary_mixture` 或 `history_mixture` | 混合分布中辅助或历史 proposal 的比例 | 命中率可能上升，但完整混合分布概率仍必须计算 | 动态候选默认 0.25；MH 组合消融 0.7 |
-| — | `sampling.temperature` | 定义实际生成 proposal $`q`$ | 改变候选多样性、接受率和重要性概率比 | 1.0 |
-| — | `sampling.top_p` / `top_k` | 限制 proposal 支持集 | 硬截断可能破坏 MH 与 IS 的支持条件 | 1.0 / `None` |
-| — | `importance_log_ratio_clip` | 普通 off-policy IS 的对数概率比截断 | 方差下降但改变目标 | 质量配置 10；精确目标诊断应关闭 |
-| — | `reward_version` 与 replay 匹配键 | 标识奖励、提示、前缀和候选的匹配关系 | 版本变化使旧的最终估计记录失配 | 运行入口固定并写入结果文件 |
-| — | `runtime.max_batch_size`、`max_batch_tokens`、`max_score_batch_size` | 每次生成和评分调用的批量 | GPU 利用率提高；填充与峰值显存可能增加 | 3090 配置为 24、12288、12 |
+| 符号 | 配置或参数 | 作用 | 增大后的主要影响 |
+| --- | --- | --- | --- |
+| $`L`$ | `generation.max_new_tokens` / `total_length` | 最大生成长度 | 增加生成、评分和 KV 成本 |
+| $`B`$ | `mh.block_size` / `conditional_is.block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
+| $`n`$ | `mh.steps_per_block` | 每个阶段的 MH 更新数 | 减小有限链误差，增加 proposal 与奖励调用 |
+| $`\alpha`$ | `mh.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低接受率 |
+| $`\tau`$ | `reward_temperature` | 奖励相对基础概率的尺度 | 减弱奖励差异对权重和接受率的影响 |
+| $`M`$ | `conditional_is.candidate_count` | 每步基础模型候选数 | 改善候选覆盖，增加候选和 rollout 成本 |
+| $`K`$ | `conditional_is.rollout_count` | 每个候选的 rollout 数 | 减少条件权重噪声，增加补全成本 |
+| $`H`$ | `replay.history_rollouts` / `max_history_per_candidate` | 最多使用的历史样本数 | 增加复用量、概率评分和库存需求 |
+| $`F`$ | `replay.fresh_rollouts` | 独立新样本数 | 改善新样本校正估计，增加基础模型 rollout |
+| $`R`$ | `reserve_rollouts` | 提交后为未来预留的独立样本数 | 增加未来库存与当前建库成本 |
+| $`c`$ | `replay.truncation` | 历史样本截断常数 | 历史项更接近完整比值，方差可能增大 |
+| $`\lambda`$ | `auxiliary_mixture` / `history_mixture` | 辅助 proposal 的比例 | 改变覆盖与命中率，仍需完整混合概率 |
+| — | `sampling.temperature` | 实际生成 proposal 的温度 | 改变多样性、接受率和重要性概率比 |
+| — | `sampling.top_p` / `top_k` | proposal 支持集范围 | 放宽范围可保留更多候选；硬截断须满足支持条件 |
+| — | `importance_log_ratio_clip` | 对数概率比截断阈值 | 减弱截断；精确目标诊断应关闭截断 |
+| — | `reward_version` | 奖励与 replay 匹配版本 | 版本改变时历史记录失配 |
+| — | `runtime.max_batch_size` / `max_batch_tokens` / `max_score_batch_size` | 生成与评分批量 | 提高 GPU 利用率，也可能增加填充与峰值显存 |
 
 统一 CLI 的 `--ar-mh-suffix-schedule` 与 AR 套件的 `--mh-suffix-schedule` 默认值均为
-`multiscale`。底层 `MHConfig`、`RewardMHConfig` 和历史 TOML 保留 `uniform`，用于独立调用时维持旧基线；
-统一入口会显式覆盖这些历史配置。实验报告记录最终生效值；TOML 只表示被入口覆盖前的配置。
+`multiscale`。底层 `MHConfig`、`RewardMHConfig` 和 TOML 使用 `uniform` 作为基线；
+统一入口显式覆盖后缀调度，运行清单记录最终生效配置。
 
 <a id="alg-sources"></a>
 ### 2.3 方法来源
@@ -325,10 +324,10 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励或自一�
 
 ### 3.2 GRPO 对照
 
-已归档的 GRPO 对照使用同一基础模型和默认 GSM8K 数值参考值 verifier 进行参数训练；训练入口也可通过
+GRPO 对照使用同一基础模型和默认 GSM8K 数值参考值 verifier 进行参数训练；训练入口也可通过
 独立 `[verifier]` 配置替换奖励。若忽略参数化限制，一个带 KL
 正则的理想策略优化问题具有式 (1) 的形式；实际 GRPO 只通过有限 rollout、组内相对优势和有限梯度更新去近似
-该目标。报告分别列出训练 FLOPs 与训练后采样 FLOPs；单次推理成本指训练完成后的生成成本。
+该目标。训练 FLOPs 与训练后采样 FLOPs 分别统计；单次推理成本指训练完成后的生成成本。
 
 训练得到固定策略 $`p_{\theta_{\mathrm{GRPO}}}`$。实验分别采用温度 1 随机采样和逐 token 最大概率
 （argmax）解码。
@@ -376,10 +375,6 @@ $`\rho(\ell)\propto 1/\ell`$；`multiscale` 将 10% 概率均匀分给全部长�
 $`1,2,4,\ldots,L`$ 中的不同长度。后两者减少平均 proposal token 数；`multiscale` 同时提高 2 的幂长度和
 完整后缀的采样频率。统一 CLI 默认选择 `multiscale`；底层配置类和历史 TOML 的默认值仍为
 `uniform`，用于与既有基线设置保持一致。
-
-Qwen2.5-1.5B 的优化组合采用经 32 题、4 次独立重复确认的 `multiscale`。确认结果与速度优先的
-`inverse_length` 配置见
-[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#mh-后缀长度-proposal)。
 
 实现按 `block_size` 逐步扩展到 $`L`$，并在每个长度执行 `steps_per_block` 次后缀更新。最终长度上的有限更新
 结果仍含 MCMC 误差。由于切点 $`c=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、
@@ -593,9 +588,8 @@ Transformers 与表格后端使用 float64 累积概率执行两种逆 CDF。RQM
 [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。方法依据见
 [Arithmetic Sampling](https://proceedings.mlr.press/v202/vilnis23a.html)、
 [QuasiMoTTo](https://arxiv.org/abs/2607.01179)以及 RQMC 与重要性采样组合的
-[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。逐 token Sobol
-在 Qwen2.5-1.5B 的首轮筛选中未通过收益门槛；随机平移等距格点使用同一入口单独登记并筛选，数值见
-[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
+[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。
+默认使用 `iid`；两种 RQMC 设计的筛选结论见[非默认方案记录](#alg-nondefault-notes)。
 
 <a id="alg-bounded-is"></a>
 ### 6.2 有界权重下的精确提前停止
@@ -656,9 +650,7 @@ if decision is not None:
 公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py)，AR 分批 rollout
 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。分批执行可能重复前缀
 预填充；因此实际收益由跳过的 rollout 比例、批次数、参与前向计算的 token 位置数、FLOPs 和墙钟共同决定。
-Qwen2.5-1.5B 筛选保持 16/16 成对输出一致并跳过 8.27% rollout，但重复执行前缀预填充使 FLOPs 增加 16.4%，
-故默认关闭；完整数值见
-[Qwen2.5-1.5B 优化研究](../reports/QWEN15B_OPTIMIZATION_STUDY.md#rollout-方差与提前停止)。
+该功能默认关闭，筛选结论见[非默认方案记录](#alg-nondefault-notes)。
 
 <a id="alg-iterated-is"></a>
 ### 6.3 迭代条件 IS
@@ -895,8 +887,7 @@ p(z\mid x,g)\,
 <p align="right">式 (12)</p>
 
 式 (12) 使用 1.5B 候选、0.5B 补全和奖励权重，主模型重评分成本为 0。该路径记为“未校正 rollout
-加权”。两种路径的质量与分模型 FLOPs 见
-[1.5B 重评分消融](../reports/GSM8K_3090_ALIGNED_RESULTS.md#15b-rescoring-ablation)。
+加权”。比较时分别记录两个模型的生成与评分 FLOPs，并明确两种路径对应的目标分布。
 
 <a id="alg-base-replay"></a>
 ## 8. 基础模型候选上的 rollout replay
@@ -981,8 +972,6 @@ store.add_evaluation(independent_reserve_record)
 多请求执行时，缓存构建和在线选择按候选选择步骤分成两个阶段。每个阶段内部可合并不同提示的兼容
 生成与评分请求；阶段边界保证缓存构建、在线 1.5B 计算和在线 0.5B 辅助计算可以分别统计。正式 replay
 概率实验使用 FP32；低精度 logits 可能随批量形状出现足以影响保存概率复核的数值差异。
-Qwen2.5-1.5B 的候选缓存与连续批处理组合消融见
-[IS replay 执行组合](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-is-stack)。
 统一复现入口的 `replay` 组件已经传入建库候选，并分别记录在线主模型、在线辅助模型、建库主模型和建库
 辅助模型 FLOPs。无匹配历史记录时，`base_replay_step` 返回空预留标识，算法使用纯新生成路径。
 
@@ -1174,8 +1163,7 @@ if log(u1) <= stage_one:
     accepted = log(u2) <= stage_two
 ```
 
-该路径减少精确奖励调用，proposal 生成 FLOPs 保持不变；对应消融见
-[两阶段延迟接受](../reports/RTX3090_ROLLOUT_INFRA.md#infra-report-delayed-acceptance)。
+该路径减少精确奖励调用，proposal 生成 FLOPs 保持不变。适用条件是精确奖励成本较高，且近似奖励能够提前排除一部分 proposal。
 
 <a id="alg-replay-mh"></a>
 ## 14. 冻结历史混合 proposal 的 MH
@@ -1218,10 +1206,7 @@ K_{\rho}^{\mathrm{replay}}
 ```
 
 实现对实际抽到的长度计算新旧后缀在完整混合分布下的概率。长度选择概率在正向和反向提议中相同，仍在
-Hastings 比中抵消。Qwen2.5-1.5B 的三个随机种子组合消融中，`multiscale + frozen replay` 相对
-`uniform + base` 的在线墙钟因子为 `0.357×`；主模型 FLOPs 因子为 `1.002×`。历史库的构建成本单列，
-没有匹配历史时使用基础模型 proposal。完整设置见
-[多尺度后缀与冻结 replay 的组合](../reports/QWEN15B_OPTIMIZATION_STUDY.md#qwen15b-mh-stack)。
+Hastings 比中抵消。历史库构建、在线生成和概率评分的成本分别记录；无匹配历史时使用基础模型 proposal。
 
 <a id="alg-rewards"></a>
 ## 15. 已实现的奖励信号
@@ -1293,7 +1278,7 @@ $`p(y\mid x)\exp\{r_{\mathrm{Cns}}(x,y)/\tau\}`$ 作为固定目标。奖励不�
 在模型、采样策略和奖励参数版本一致时可按原有 IS/replay 公式复用。
 
 该分数衡量模型置信度随生成位置的变化，不构成正确性判定。增加候选数只加强对该分数的选择；任务准确率
-是否提高仍需在目标模型与任务上验证。当前结果目录没有把尚未运行的 Consilience 配置列为正式质量结果。
+是否提高仍需在目标模型与任务上验证。
 
 配置型 verifier 由 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py) 构造。独立 TOML
 中的 `factory` 指向可信本地工厂，`requires_reference` 决定实验适配层是否提供数据集参考值；MH、IS、replay
@@ -1406,9 +1391,8 @@ logits，再对各 token 执行上述接受与残差抽样。每个请求使用�
 裁剪到已接受前缀，避免后续请求读取被拒绝位置。目标模型与草稿模型参与前向计算的 token 位置数、FLOPs 和峰值显存
 分别记录。
 
-Transformers 的 `assisted generation` 接口目前只支持批量大小为 1；批量请求由普通目标模型批处理执行。RTX 3090
-上的 Qwen2.5-0.5B 草稿模型消融中，最短草稿 $`K=2`$ 的墙钟因子为 `1.058×`，1.5B FLOPs 因子为
-`1.055×`，合计 FLOPs 因子为 `1.439×`，因此该后端默认关闭。实现位于
+Transformers 的 `assisted generation` 接口目前只支持批量大小为 1；批量请求由普通目标模型批处理执行。
+小模型草稿后端默认关闭，筛选结论见[非默认方案记录](#alg-nondefault-notes)。实现位于
 [`draft_model_speculation.py`](../../src/inference_scaling/experimental/arllm/draft_model_speculation.py)。
 
 `AsyncRolloutBroker` 将长生成拆成固定 token 块。达到所需完整轨迹数后，过量提交产生的部分轨迹保存
@@ -1643,7 +1627,7 @@ logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、C
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/importance.py)、[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
-| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | 本轮不运行 dLLM 实验 | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
+| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | — | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
 | 动态候选与预算 | [`budget.py`](../../src/inference_scaling/shared/budget.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
@@ -1654,3 +1638,23 @@ logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、C
 
 有限状态测试核对转移概率、权重恒等式、样本状态管理和批处理随机数序列；真实模型实验核对模型概率、token
 轨迹、分模型 FLOPs 和墙钟。
+
+<a id="alg-nondefault-notes"></a>
+## 19. 非默认方案记录
+
+以下结论来自 Qwen2.5-1.5B、公开 GSM8K 与 RTX 3090 的小规模筛选，适用范围限于当时的预算和后端。
+算法实现与正确性测试保留在相应模块；旧原始数据、逐轮记录、结果图和专用筛选脚本已清理。
+
+| 方案 | 比较对象 | 观察与采用条件 |
+| --- | --- | --- |
+| 多轮 i-SIR | 普通条件 IS、相同候选-rollout 状态预算的一次性大池 | 额外轮次的质量—成本收益不足，保持显式可选 |
+| Sobol 与算术格点 rollout | 相同候选数与 rollout 数的 IID | 部分权重离散度下降，准确率未提高，墙钟与 FLOPs 略增；默认 IID |
+| 有界精确提前停止 | 完成全部 rollout | 成对输出一致，跳过的补全未抵消额外批次与前缀预填充；默认关闭 |
+| 0.5B 草稿模型推测解码 | 1.5B 普通生成 | 草稿接受率较高，但验证与小模型成本使墙钟和总 FLOPs 增加；默认关闭 |
+| 历史 token 树及无条件历史树 | 普通自回归 rollout | 验证成本增加，墙钟收益不稳定；按请求命中率单独评估 |
+| 初始样本后再分配 rollout | 固定 rollout 数 | 初始估计与额外调用增加墙钟和 FLOPs；保持显式可选 |
+| 方差—成本预算分配 | 固定分配 | 筛选中未形成质量或墙钟收益，设计样本增加 FLOPs；保持显式可选 |
+| Transformers 部分 rollout 恢复 | 重新生成 | 墙钟下降，但重新预填充使 FLOPs 明显增加；需要结合前缀缓存评估 |
+
+流式奖励、两阶段延迟接受和 MH 预取依赖奖励延迟：奖励计算足够慢时可减少串行等待，预取同时增加未采用
+分支的计算。已有历史 replay 的收益以匹配缓存为前提；为当前请求新建历史库的成本应计入首次查询。
