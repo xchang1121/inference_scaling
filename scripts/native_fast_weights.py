@@ -75,6 +75,7 @@ class FastWeights:
         generator = torch.Generator(device=device).manual_seed(seed)
         self.initial_left = torch.randn(rank, input_size, generator=generator,
                                         device=device, dtype=torch.float32) / math.sqrt(input_size)
+        self.enabled = True  # capture-time switch, not a runtime GPU predicate
         self.left = nn.Parameter(self.initial_left.clone())
         self.right = nn.Parameter(torch.zeros(hidden_size, rank, device=device, dtype=torch.float32))
         # Outside the base model: never register fast weights under frozen Uno.
@@ -143,7 +144,7 @@ class FastWeights:
         def down_forward(a):
             u = original_down(a)
             context = get_context()
-            if context.lora_enabled:
+            if self.enabled and context.lora_enabled:
                 n = a.shape[0]
                 self.features[:n].copy_(a)
                 self.before_delta[:n].copy_(u)
@@ -153,7 +154,7 @@ class FastWeights:
             return u
 
         def norm_forward(x, residual=None):
-            if get_context().lora_enabled:
+            if self.enabled and get_context().lora_enabled:
                 self.residual[:x.shape[0]].copy_(residual)
             return original_norm(x, residual)
 
@@ -245,7 +246,7 @@ class FastWeights:
 
 @contextmanager
 def extended_runner(*, fused_norm=False, fast_weights=False, rank=8, stride=16, lr=0.001,
-                    replay_blocks=4, training_backend="cuda_graph"):
+                    replay_blocks=4, training_backend="cuda_graph", capture_plain=False):
     """Scoped construction hook; pinned source files remain unchanged.
 
     Single-thread, single-GPU XLLM only. Install before warmup and graph capture.
@@ -255,6 +256,34 @@ def extended_runner(*, fused_norm=False, fast_weights=False, rank=8, stride=16, 
     original = llm_engine.ModelRunner
 
     class Runner(original):
+        @torch.inference_mode()
+        def capture_cudagraph(self):
+            super().capture_cudagraph()
+            self.plain_block_graph_runner = None
+            if capture_plain and self.fast_weights is not None:
+                # Separate graph pool/output, same read-only model and workspace.
+                # This captures NO fast matmul, addition, or feature copies.
+                graph_type = type(self.block_graph_runner)
+                plain = graph_type(self.config, self.block_size, self.model, self.block_workspace)
+                self.fast_weights.enabled = False
+                try:
+                    plain.capture()
+                    if plain.graph_pool == self.block_graph_runner.graph_pool:
+                        raise RuntimeError("plain and online graph pools must be isolated")
+                    self.plain_block_graph_runner = plain
+                except BaseException:
+                    plain.close()
+                    raise
+                finally:
+                    self.fast_weights.enabled = True
+
+        def exit(self):
+            plain = getattr(self, "plain_block_graph_runner", None)
+            if plain is not None:
+                plain.close()
+                self.plain_block_graph_runner = None
+            super().exit()
+
         def warmup_model(self):
             if self.world_size != 1 or self.config.max_num_seqs != 1 or self.config.tree_verify_size:
                 raise ValueError("extensions require TP=1, batch=1, linear Uno")
@@ -287,6 +316,27 @@ def extended_runner(*, fused_norm=False, fast_weights=False, rank=8, stride=16, 
         llm_engine.ModelRunner = original
 
 
+@contextmanager
+def plain_uno(engine):
+    """Request-boundary reference: actual no-fast-weight graph, not zero weights.
+
+    Python's enabled flag alone cannot change an already captured CUDA graph.
+    This scope switches the runner too; only the single-thread idle engine is safe.
+    """
+    runner = engine.model_runner
+    plain = getattr(runner, "plain_block_graph_runner", None)
+    if plain is None or runner.fast_weights is None:
+        raise RuntimeError("plain Uno graphs must be captured during initialization")
+    if engine.scheduler.waiting or engine.scheduler.running:
+        raise RuntimeError("plain Uno switch requires an idle engine")
+    original, enabled = runner.block_graph_runner, runner.fast_weights.enabled
+    runner.block_graph_runner, runner.fast_weights.enabled = plain, False
+    try:
+        yield
+    finally:
+        runner.block_graph_runner, runner.fast_weights.enabled = original, enabled
+
+
 def frozen_digest(model):
     """Exact parameter+buffer byte hash; exclude KV, include unpacked/packed Uno.
 
@@ -305,6 +355,8 @@ def generate_fast(engine, ids, params, budget, *, learn=True, audit=False):
     state = engine.model_runner.fast_weights
     if state is None or params.diffusion_block_size < 2:
         raise ValueError("fast weights must be installed before graph capture; B >= 2")
+    if not state.enabled:
+        raise RuntimeError("online learning cannot use the plain reference graph")
     if engine.scheduler.waiting or engine.scheduler.running:
         raise RuntimeError("request-local online wrapper requires an idle engine")
     state.reset()

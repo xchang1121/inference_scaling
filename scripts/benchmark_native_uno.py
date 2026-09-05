@@ -59,6 +59,13 @@ def select_workloads(prompt_file=None, selected=None):
     return workloads
 
 
+def paired_method_order(methods, prompt_index, repetition):
+    """Each adjacent repetition pair has complementary positions for every arm."""
+    offset = (prompt_index + repetition // 2) % len(methods)
+    order = list(methods[offset:]) + list(methods[:offset])
+    return list(reversed(order)) if repetition % 2 else order
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
@@ -89,7 +96,7 @@ def main():
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
-    methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else []) + (["fast8"] if args.fast_weights else [])
+    methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else []) + (["plain8", "fast8"] if args.fast_weights else [])
     workloads = select_workloads(args.prompt_file, args.workloads)
     if len(set(blocks)) != len(blocks) or 1 not in blocks or min(blocks) < 1 or max(blocks) > 16:
         raise ValueError("distinct widths within 1..16 including AR width 1 required")
@@ -107,8 +114,12 @@ def main():
         "design": {**{k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                    "workloads": workloads, "blocks": blocks, "methods": methods, "temperature": 0.0, "batch_size": 1,
                    "noise_mode": "random_uniform", "ignore_eos": True,
+                   "method_roles": {"1": "AR reference", "8": "zero fast-branch control" if args.fast_weights else "static Uno",
+                                    "plain8": "static Uno without fast matmuls/addition/feature caching",
+                                    "fast8": "Online Uno including all branch, feedback, reset and update costs"},
                    "e2e_scope": "full official generate call including prefill and detokenization; excludes model initialization, shared prompt encoding, GPU snapshots and JSON I/O",
-                   "order": "rotated and alternately reversed within prompt/repetition"},
+                   "order": "prompt-local reversed pairs; rotated between prompts and repetition pairs",
+                   "order_pairing": "reverse_adjacent_repetitions"},
         "completed": False, "stage": "preflight", "records": [], "error": None,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +142,7 @@ def main():
         import torch
         from generation import format_chat_prompt
         from nano_vllm_uno import LLM, SamplingParams
-        from native_fast_weights import extended_runner, frozen_digest, generate_fast
+        from native_fast_weights import extended_runner, frozen_digest, generate_fast, plain_uno
         from native_online_policy import NativeWidthPolicy, generate_online
 
         payload["environment"] = {
@@ -162,11 +173,14 @@ def main():
         start = time.perf_counter()
         with extended_runner(fused_norm=args.fused_norm, fast_weights=args.fast_weights,
                              rank=args.rank, stride=args.update_stride, lr=args.learning_rate,
-                             replay_blocks=args.replay_blocks, training_backend=args.training_backend):
+                             replay_blocks=args.replay_blocks, training_backend=args.training_backend,
+                             capture_plain=args.fast_weights):
             engine = LLM(model=str(args.base), **config)
         torch.cuda.synchronize()
         payload["model_initialization_seconds"] = time.perf_counter() - start
         payload["model_dtype"] = str(engine.config.dtype)
+        plain_graphs = getattr(engine.model_runner, "plain_block_graph_runner", None)
+        payload["plain_control_graphs"] = len(plain_graphs.graphs) if plain_graphs is not None else 0
         if args.profile_update:
             if not args.fast_weights:
                 raise ValueError("--profile-update requires --fast-weights")
@@ -202,7 +216,7 @@ def main():
             params = SamplingParams(
                 temperature=0.0, top_k=32, top_p=0.95, max_tokens=budget,
                 ignore_eos=True, stop_token_ids=[64019, 1], mask_token_id=64256,
-                noise_mode="random_uniform", diffusion_block_size=8 if width in ("online", "shadow8", "fast8") else width,
+                noise_mode="random_uniform", diffusion_block_size=8 if width in ("online", "shadow8", "plain8", "fast8") else width,
             )
             torch.cuda.synchronize()
             started = time.perf_counter()
@@ -212,6 +226,9 @@ def main():
                 output, diagnostics = generate_online(engine, ids, params, budget, policy)
             elif width == "fast8":
                 output, diagnostics = generate_fast(engine, ids, params, budget, audit=args.audit_fast)
+            elif width == "plain8":
+                with plain_uno(engine):
+                    output = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])[0]
             else:
                 output = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])[0]
             torch.cuda.synchronize()
@@ -227,10 +244,7 @@ def main():
         for prompt_index, (name, ids) in enumerate(encoded):
             for rep in range(args.repetitions):
                 seed = args.seed + prompt_index * 100 + rep
-                offset = (prompt_index + rep) % len(methods)
-                order = methods[offset:] + methods[:offset]
-                if (prompt_index + rep) % 2:
-                    order = list(reversed(order))
+                order = paired_method_order(methods, prompt_index, rep)
                 for width in order:
                     before = gpu_snapshot()
                     graph_before = (engine.model_runner.cuda_graph_hits, engine.model_runner.cuda_graph_misses)
