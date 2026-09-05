@@ -142,6 +142,9 @@ Delta E[C] > (E[C_T] / E[time_T]) Delta E[time]。
 ## 9. 文献归因
 
 - [Uno](https://arxiv.org/abs/2609.04010)：共享 base 与 gated diffusion LoRA。
+  锁定官方代码本身也已包含 linear/tree sampling；其 README 的树启动示例使用 FA3。
+  因此本项目连“将树接到 Uno”也不应宣称首创。当前额外部分是 HF/3090 的参考实现、
+  请求内 rank 校准和实测预算策略，需与官方静态 tree 单独比较。
 - [Speculative Decoding](https://arxiv.org/abs/2211.17192)：分布保持的背景与标准单候选校正。
 - [BASTION](https://arxiv.org/abs/2605.29727)，[官方代码](https://github.com/kaist-ai-osi-lab/BASTION)：
   block-diffusion logits 的预算树构建与硬件成本控制，是本轮最直接的既有工作。
@@ -151,3 +154,28 @@ Delta E[C] > (E[C_T] / E[time_T]) Delta E[time]。
 
 潜在可研究差异：共享权重 Uno 的成本结构、请求内 rank 校准、低预算消费 GPU 的完整开销控制。
 这些只是研究问题；是否有新颖性和论文级收益，尚待实验与更完整相关工作比较。
+
+## 10. R3D：在线预算的具体实现（结果前记录）
+
+由第一次 tree smoke 可见 N=32 的接受长度更高，但部分任务 TPS 下降。
+增加两个独立消融：treebudget（只学成本、固定 rank 评分）与 treeadaptive（同时学 rank 与成本）。
+候选预算固定为 8/16/32，preferred=16；每个请求对每个预算先探索两次，
+以后每 24 cycles 做一次轮换 probe。所有探索均计入请求耗时。
+
+每次 draft 后构造包含 spine 的最大树；其前 N 个节点天然 prefix-closed。
+已测成本 c_N 用 EMA(beta=0.8) 更新，评分为
+
+S_t(N) = [2 + sum_(u in T_N, u != root) w_t(u)] / c_(t,N)。
+
+选择评分最大预算；若它不比 preferred 预算高 2%，保留 preferred。
+每次验证结束才更新 rank 与 c_N；有预算学习时，在 KV 整理后额外 synchronize，
+让 GPU 尾部整理进入这个 cycle 的成本标签。额外同步属于算法成本，不能从 TPS 分母扣除。
+固定树不需要额外 cost-label 同步；对照保持其本来更低的运行成本。
+
+两种在线状态不更新 target，也不重新使用已抽样节点的随机变量，故定理 A/B 直接适用。
+固定预算的替代目标最优性不等于这个估计式的真实最优性；没有宣称 bandit regret 界，
+也没有证明对非平稳请求的 TPS 改善。采用有限候选而非连续 convex 假设。
+
+下一组首先使用进程显式 HighQoS，保持所有方法相同系统设置；比较 static B=4/8、
+frozen tree N=16、online-rank N=16、treebudget、treeadaptive。
+仍是既有四个 pilot prompts、新 seeds、三次配对；频率异常则降级为诊断数据。

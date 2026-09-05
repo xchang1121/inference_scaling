@@ -21,6 +21,11 @@ class TreeConfig:
     online_rank: bool = False
     prior_strength: float = 8.0
     decay: float = 0.98
+    node_budgets: tuple[int, ...] = ()
+    cost_ema: float = 0.8
+    explore_each: int = 2
+    probe_every: int = 24
+    switch_margin: float = 0.02
 
     def validate(self) -> None:
         if self.block_size < 2 or self.nodes < 1 or self.top_k < 1:
@@ -31,6 +36,15 @@ class TreeConfig:
             raise ValueError("prior_strength must be finite and positive")
         if not 0 < self.decay <= 1:
             raise ValueError("decay must lie in (0, 1]")
+        if self.node_budgets:
+            if len(set(self.node_budgets)) != len(self.node_budgets) or self.nodes not in self.node_budgets:
+                raise ValueError("budgets must be distinct and contain the preferred nodes")
+            if min(self.node_budgets) < (self.block_size if self.include_spine else 1):
+                raise ValueError("invalid adaptive node budget")
+        if not 0 <= self.cost_ema < 1 or self.explore_each < 1 or self.probe_every < 1:
+            raise ValueError("invalid cost learning controls")
+        if not math.isfinite(self.switch_margin) or self.switch_margin < 0:
+            raise ValueError("invalid switch margin")
 
 
 @dataclass(frozen=True)
@@ -168,3 +182,50 @@ class RankCalibrator:
 
     def snapshot(self) -> dict[str, object]:
         return {"observations": self.observations, "counts": self.counts, "totals": self.totals}
+
+
+class TreeBudgetController:
+    """Finite-budget surrogate/observed-cost policy, never a global TPS guarantee."""
+    def __init__(self, config: TreeConfig) -> None:
+        self.config = config
+        self.budgets = config.node_budgets or (config.nodes,)
+        self.order = (config.nodes,) + tuple(n for n in self.budgets if n != config.nodes)
+        self.counts = dict.fromkeys(self.budgets, 0)
+        self.seconds: dict[int, float] = {}
+        self.tokens: dict[int, float] = {}
+        self.cycles = self.probes = 0
+
+    def choose(self, full_tree: CandidateTree) -> tuple[int, str]:
+        if not self.config.node_budgets:
+            return self.config.nodes, "fixed"
+        for budget in self.order:
+            if self.counts[budget] < self.config.explore_each:
+                return budget, "initial_probe"
+        if self.cycles % self.config.probe_every == 0:
+            budget = self.order[self.probes % len(self.order)]
+            self.probes += 1
+            return budget, "periodic_probe"
+        scores = {
+            n: (2 + sum(x.weight for x in full_tree.nodes[1:n])) / self.seconds[n]
+            for n in self.budgets
+        }
+        best = max(self.order, key=lambda n: scores[n])
+        if scores[best] < scores[self.config.nodes] * (1 + self.config.switch_margin):
+            return self.config.nodes, "preferred_within_margin"
+        return best, "predicted_tps"
+
+    def observe(self, budget: int, *, tokens: int, seconds: float) -> None:
+        if budget not in self.counts or tokens < 1 or not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("invalid completed-cycle feedback")
+        beta = self.config.cost_ema if budget in self.seconds else 0.0
+        self.seconds[budget] = beta * self.seconds.get(budget, 0) + (1 - beta) * seconds
+        self.tokens[budget] = beta * self.tokens.get(budget, 0) + (1 - beta) * tokens
+        self.counts[budget] += 1
+        self.cycles += 1
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "counts": self.counts, "seconds_ema": self.seconds, "tokens_ema": self.tokens,
+            "observed_tokens_per_second": {n: self.tokens[n] / self.seconds[n] for n in self.seconds},
+            "selection": "current tree coverage surrogate / past completed-cycle cost",
+        }

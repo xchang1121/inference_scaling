@@ -98,7 +98,7 @@ def main():
     chunks = [(start, min(start + 1024 * 1024, end)) for a, end in gaps for start in range(a, end, 1024 * 1024)]
     print(f"Missing {sum(b-a for a,b in chunks)} bytes in {len(chunks)} bounded ranges", flush=True)
     total = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         futures = [executor.submit(download, chunk) for chunk in chunks]
         for index, future in enumerate(concurrent.futures.as_completed(futures), 1):
             total += future.result()

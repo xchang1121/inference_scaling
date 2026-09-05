@@ -13,7 +13,9 @@ from .hf_uno import (
     HfUnoRuntime, RunMetrics, _cache_length, _crop_cache_by,
     _first_stop_length, _generator, _sync,
 )
-from .tree_uno import CandidateTree, RankCalibrator, TreeConfig, build_tree, walk_target_draws
+from .tree_uno import (
+    CandidateTree, RankCalibrator, TreeBudgetController, TreeConfig, build_tree, walk_target_draws,
+)
 
 
 def tree_attention_mask(tree: CandidateTree, prefix_length: int, *, device: torch.device) -> Tensor:
@@ -75,6 +77,7 @@ class HfTreeUnoRunner:
         runtime = self.runtime
         generator = _generator(runtime.device, seed)
         calibrator = RankCalibrator(config)
+        controller = TreeBudgetController(config)
         memory_before = torch.cuda.memory_allocated(runtime.device) if runtime.device.type == "cuda" else 0
         if runtime.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(runtime.device)
@@ -83,11 +86,13 @@ class HfTreeUnoRunner:
         stopped = not runtime.ignore_stop and seed_token in runtime.stop_token_ids
         cycles = accepted = attempted = lookaheads = 0
         shapes: Counter[str] = Counter()
+        reasons: Counter[str] = Counter()
         online_seconds = compact_seconds = 0.0
         _sync(runtime.device)
         decode_start = time.perf_counter()
         with torch.inference_mode():
             while len(output_tokens) < max_new_tokens and not stopped:
+                cycle_start = time.perf_counter()
                 prefix_before = _cache_length(cache)
                 noise = torch.randint(
                     1, runtime.mask_token_id, (1, config.block_size - 1),
@@ -110,8 +115,10 @@ class HfTreeUnoRunner:
                 k = min(config.top_k, logits.size(-1))
                 if k != config.top_k:
                     raise ValueError("tree top_k exceeds the vocabulary")
-                values, ids = logits.topk(k, dim=-1, sorted=True)
-                probabilities = torch.exp(values - torch.logsumexp(logits, dim=-1, keepdim=True))
+                _, ids = logits.topk(k, dim=-1, sorted=True)
+                # Softmax's shifted reduction avoids cancellation when a large
+                # dominant logit makes exp(top - logsumexp) sum slightly > 1.
+                probabilities = torch.softmax(logits, dim=-1).gather(-1, ids)
                 # One small transfer supplies the free token, ranks and masses.
                 packed = torch.cat((free.double(), ids.reshape(-1).double(), probabilities.reshape(-1).double()))
                 host = packed.tolist()
@@ -120,10 +127,13 @@ class HfTreeUnoRunner:
                 candidate_ids = [list(map(int, host[1+d*k:1+(d+1)*k])) for d in range(width)]
                 offset = 1 + width * k
                 prior = [host[offset+d*k:offset+(d+1)*k] for d in range(width)]
-                tree = build_tree(
+                full_tree = build_tree(
                     int(host[0]), candidate_ids, calibrator.weights(prior),
-                    nodes=config.nodes, include_spine=config.include_spine,
+                    nodes=max(config.node_budgets or (config.nodes,)), include_spine=config.include_spine,
                 )
+                budget, reason = controller.choose(full_tree)
+                tree = CandidateTree(full_tree.nodes[:budget])
+                reasons[reason] += 1
                 count = len(tree.nodes)
                 tree_inputs = torch.tensor([[n.token for n in tree.nodes]], device=runtime.device)
                 positions = torch.tensor([[prefix_length + n.depth for n in tree.nodes]], device=runtime.device)
@@ -159,6 +169,11 @@ class HfTreeUnoRunner:
                 accepted += min(len(walk.path_indices) - 1, max(0, len(committed) - 1))
                 attempted += max(0, len(committed) - 1)
                 lookaheads += int(walk.used_leaf_lookahead and len(committed) == len(walk.committed))
+                if config.node_budgets:
+                    # Include asynchronous tail compaction in the cost label.
+                    # This extra sync is controller overhead, not excluded time.
+                    _sync(runtime.device)
+                controller.observe(budget, tokens=len(committed), seconds=time.perf_counter() - cycle_start)
         _sync(runtime.device)
         decode_seconds = time.perf_counter() - decode_start
         metrics = runtime._metrics(
@@ -172,6 +187,8 @@ class HfTreeUnoRunner:
         return TreeRunResult(metrics, {
             "tree_shapes": dict(shapes), "online_host_seconds": online_seconds,
             "kv_compact_host_seconds": compact_seconds, "rank_calibrator": calibrator.snapshot(),
+            "budget_controller": controller.snapshot(), "budget_reasons": dict(reasons),
+            "cycle_sync_for_cost": bool(config.node_budgets),
             "all_online_costs_in_decode": True, "request_local": True, "optimizer_steps": 0,
             "model_parameters_frozen": all(not p.requires_grad for p in runtime.model.parameters()),
             "exactness": "one target draw per reached tree node; computed-distribution scope",
