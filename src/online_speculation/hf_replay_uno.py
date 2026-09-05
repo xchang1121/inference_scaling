@@ -78,6 +78,7 @@ class ReplayDiagnostics:
     replay_lookaheads: int
     static_lookaheads: int
     lookup_seconds: float
+    cache_update_seconds: float
     route_reason_counts: dict[str, int]
     cache_records_added: int
     cache_before: dict[str, Any]
@@ -481,11 +482,14 @@ class HfReplayUnoRunner:
         _sync(runtime.device)
         decode_seconds = time.perf_counter() - decode_start
         cache_records_added = 0
+        cache_update_seconds = 0.0
         if config.observe_after_request:
+            cache_update_start = time.perf_counter()
             cache_records_added = self.replay_cache.observe_sequence(
                 prompt_tokens=prompt_tokens,
                 verified_completion_tokens=output_tokens,
             )
+            cache_update_seconds = time.perf_counter() - cache_update_start
         cache_after = asdict(self.replay_cache.stats())
 
         metrics = runtime._metrics(
@@ -527,6 +531,7 @@ class HfReplayUnoRunner:
             replay_lookaheads=replay_lookaheads,
             static_lookaheads=static_lookaheads,
             lookup_seconds=lookup_seconds,
+            cache_update_seconds=cache_update_seconds,
             route_reason_counts=dict(sorted(route_reasons.items())),
             cache_records_added=cache_records_added,
             cache_before=cache_before,

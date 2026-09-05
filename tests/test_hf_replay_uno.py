@@ -10,6 +10,7 @@ from online_speculation.hf_replay_uno import (
     HfReplayUnoRunner,
     ReplayRuntimeConfig,
 )
+from online_speculation.hf_replay_benchmark import _break_even_requests
 from online_speculation.hf_uno import HfUnoRuntime
 from online_speculation.replay_cache import (
     CostAwareReplayRouter,
@@ -157,6 +158,7 @@ def test_empty_cache_path_is_bitwise_static_uno_for_greedy() -> None:
     assert hybrid.diagnostics.replay_cycles == 0
     assert hybrid.diagnostics.static_cycles == hybrid.metrics.cycles
     assert hybrid.diagnostics.cache_records_added > 0
+    assert hybrid.diagnostics.cache_update_seconds >= 0.0
 
 
 def test_empty_cache_path_preserves_static_stochastic_random_state() -> None:
@@ -293,3 +295,9 @@ def test_runner_rejects_cross_namespace_cache_router_pair() -> None:
         assert "namespaces" in str(error)
     else:
         raise AssertionError("cross-namespace replay state was accepted")
+
+
+def test_break_even_accounts_for_one_time_cache_build_cost() -> None:
+    assert _break_even_requests(one_time_overhead=-0.1, mean_future_saving=0.2) == 0
+    assert _break_even_requests(one_time_overhead=0.41, mean_future_saving=0.2) == 3
+    assert _break_even_requests(one_time_overhead=0.4, mean_future_saving=0.0) is None

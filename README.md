@@ -73,7 +73,10 @@ Python 3.10 的 Ubuntu 22.04、cu128/FA2 linear 路径，并明确禁止在 WSL 
 以一遍 AR verification 替代 Uno 两遍 forward，miss 时回退 Uno；delta proposal 仍走 exact correction。
 除 cache、past-only cost router 和枚举证明外，HF reference 已接入真实 KV cache、greedy/filtered stochastic
 校正及逐轮混合路径；空 cache 与 static Uno 的 token/RNG/forward 行为回归相同，错误命中仍与 greedy AR
-逐 token 等价。官方 Nano-vLLM 分支和 CUDA-time controller 仍待 Stage 9 WSL runtime。
+逐 token 等价。首个 [RTX 3090 exact-repeat 工程 pilot](docs/STAGE10B_VERIFIER_REPLAY_PILOT_RESULTS.md)
+达到 TPF `5.275× [5.200, 5.350]`、decode TPS `5.254× [5.018, 5.494]`、端到端 TPS
+`4.988× [4.755, 5.238]`，5/5 与 greedy AR token 相同；这是 HF fallback 的重复轨迹上界，不是论文级或
+开放域结论。官方 Nano-vLLM 分支、近重复/mixed-domain 和 CUDA-time controller 仍待后续阶段。
 
 ## 目录
 
@@ -125,7 +128,7 @@ online-speculation/
 | 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
 | 8 | greedy repeated-query online residual | 完成；学习门通过、HF 系统门失败 |
 | 9 | WSL2、官方 cu128/FA2 runtime 与 Nano-vLLM Uno-1B 基线 | 进行中；协议和审计安装器已冻结 |
-| 10 | verifier replay 一遍式 fast path + static Uno fallback | HF 真实 KV 路径完成；Nano-vLLM/CUDA-time 集成待 Stage 9 |
+| 10 | verifier replay 一遍式 fast path + static Uno fallback | HF exact-repeat pilot 显著加速；泛化/官方 runtime 进行中 |
 
 Stage 1 的正式验证命令：
 

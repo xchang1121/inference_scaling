@@ -205,3 +205,10 @@ Uno 的 token IDs、forward count、RNG trajectory 回归相同，错误 cache �
 通过。详细推导、REST/CREST/DReSD/RACER 归因和正式 workload 边界见
 `STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md`。WSL 就绪后仍须把该分支迁入官方 Nano-vLLM runtime 并加入真实
 CUDA-time controller；完成工程 pilot 后才能冻结 confirmatory protocol。
+
+Stage 10B HF engineering pilot（2026-09-05）：一个 cache-build request 后冻结 exact repeated trajectory，
+5 个新 Uno noise seeds 上 replay 每次以 16 个 base forward 生成 127 decoder tokens（TPF 7.9375），static
+Uno 需 82--86 forwards。paired TPF ratio 为 `5.275 [5.200, 5.350]`，decode TPS ratio 为
+`5.254 [5.018, 5.494]`，end-to-end TPS ratio 为 `4.988 [4.755, 5.238]`；5/5 与 greedy AR token IDs
+完全相同，一次 cache indexing 只用 3.85 ms。该结果是 exact-repeat/HF fallback 上界，明确不作为论文级
+收益。下一实现加入 causal delayed within-request replay，再用 near-repeat/mixed-domain pilot 冻结正式协议。

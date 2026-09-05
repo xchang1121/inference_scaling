@@ -36,6 +36,7 @@ online-speculation-stage5-analysis = "online_speculation.stage5_analysis:main"
 online-speculation-stream-uno1b = "online_speculation.hf_stream_uno:main"
 online-speculation-stage6-analysis = "online_speculation.stage6_analysis:main"
 online-speculation-stage8-analysis = "online_speculation.stage8_analysis:main"
+online-speculation-replay-uno1b = "online_speculation.hf_replay_benchmark:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
