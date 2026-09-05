@@ -41,11 +41,12 @@ PILOT_WORKLOADS = (
 
 def _method(value: str) -> tuple[str, RecyclingConfig | TreeConfig | None, int]:
     parts = value.split(":")
-    if parts[0] in {"tree", "treeonline"} and len(parts) in {3, 4}:
+    if parts[0] in {"tree", "treeonline", "treebudget", "treeadaptive"} and len(parts) in {3, 4}:
         config = TreeConfig(
             block_size=int(parts[1]), nodes=int(parts[2]),
             top_k=int(parts[3]) if len(parts) == 4 else 4,
-            online_rank=parts[0] == "treeonline",
+            online_rank=parts[0] in {"treeonline", "treeadaptive"},
+            node_budgets=(8, 16, 32) if parts[0] in {"treebudget", "treeadaptive"} else (),
         )
         config.validate()
         return value, config, config.block_size

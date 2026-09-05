@@ -7,7 +7,7 @@ from collections import defaultdict
 import pytest
 
 from online_speculation.tree_uno import (
-    RankCalibrator, TreeConfig, build_tree, walk_target_draws,
+    RankCalibrator, TreeBudgetController, TreeConfig, build_tree, walk_target_draws,
 )
 
 
@@ -83,3 +83,21 @@ def test_invalid_sibling_labels_or_probabilities_rejected() -> None:
         build_tree(0, [[1, 2]], [[0.8, 0.7]], nodes=2)
     with pytest.raises(ValueError):
         TreeConfig(nodes=4).validate()
+
+
+def test_budget_selection_uses_only_completed_cost_and_current_tree() -> None:
+    config = TreeConfig(block_size=2, nodes=2, node_budgets=(2, 3, 4), explore_each=1, probe_every=100)
+    config.validate()
+    controller = TreeBudgetController(config)
+    tree = build_tree(9, [[0, 1, 2]], [[0.6, 0.2, 0.1]], nodes=4)
+    assert controller.choose(tree) == (2, "initial_probe")
+    assert not controller.snapshot()["seconds_ema"]
+    controller.observe(2, tokens=2, seconds=1)
+    assert controller.choose(tree) == (3, "initial_probe")
+    controller.observe(3, tokens=3, seconds=1)
+    controller.observe(4, tokens=4, seconds=10)
+    # Observed TPS alone would not distinguish this from the target-coverage
+    # score; the costly largest tree must not win merely for greater TPF.
+    assert controller.choose(tree) == (3, "predicted_tps")
+    with pytest.raises(ValueError):
+        controller.observe(3, tokens=1, seconds=0)

@@ -128,3 +128,17 @@ def test_tree_eos_truncation_keeps_no_speculative_tokens_after_stop():
     assert result.metrics.output_token_ids[-1] in runtime.stop_token_ids
     assert not any(t in runtime.stop_token_ids for t in result.metrics.output_token_ids[:-1])
     assert runtime.model.last_cache.tokens == ids[0].tolist() + list(result.metrics.output_token_ids[:-1])
+
+
+@pytest.mark.parametrize("online_rank", [False, True])
+def test_adaptive_budget_preserves_ar_and_explores_only_declared_actions(online_rank):
+    ids = torch.tensor([[3, 5, 7]])
+    runtime = _runtime()
+    config = TreeConfig(nodes=16, node_budgets=(8, 16, 32), online_rank=online_rank)
+    result = HfTreeUnoRunner(runtime).generate(ids, max_new_tokens=83, seed=59, config=config)
+    reference = _runtime().generate_ar(ids, max_new_tokens=83, seed=0)
+    assert result.metrics.output_token_ids == reference.output_token_ids
+    assert runtime.model.last_cache.tokens == ids[0].tolist() + list(result.metrics.output_token_ids[:-1])
+    assert set(result.diagnostics["tree_shapes"]) == {"8", "16", "32"}
+    assert result.diagnostics["cycle_sync_for_cost"]
+    assert all(n >= config.explore_each for n in result.diagnostics["budget_controller"]["counts"].values())
