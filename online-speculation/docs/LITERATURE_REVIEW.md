@@ -86,6 +86,20 @@ Opt-Hydra 则复用历史梯度作为 optimistic hint。这进一步说明 ensem
 | [SpecDec++](https://arxiv.org/abs/2405.19715) | 从 token-level acceptance proxy 决定候选长度；用于比较 EMA-TV controller |
 | [Learning to Draft](https://arxiv.org/abs/2603.01639) | 直接优化 draft+verify cycle throughput，而非 acceptance-length proxy | 支持本项目把 wall-clock reward 作为最终 controller 目标 |
 
+### Retrieval speculation 与在线 replay
+
+| 工作 | 已验证结论 | 对下一版的约束 |
+| --- | --- | --- |
+| [REST](https://arxiv.org/abs/2311.08252) | 从 datastore 检索相似 continuation，无 draft model 也能 lossless speculation；7B/13B 单 batch 报告 1.62--2.36x | verifier-replay 必须按 REST 衍生工作归因；一遍 retrieval path 是主要系统对照 |
+| [CREST](https://arxiv.org/abs/2408.04678) | 只保留较小、常见 n-grams 可用少 10.6--13.5x 存储匹配 REST accepted length | cache 必须有 key/alternative bound，并消融常见短 suffix 与长 suffix |
+| [DReSD](https://arxiv.org/abs/2502.15572) | contextual dense retrieval 可改善 exact sparse match 的覆盖率，但引入 embedding/ANN 成本 | 3090 第一版先 exact suffix；只有 miss 分析证明值得才加入 dense index |
+| [RACER](https://arxiv.org/abs/2604.14885) | exact retrieved pattern 与 logit future cues 可组合，缓解单一路径覆盖不足 | cache-hit/Uno-miss 的分层不是无先例；需比较 fallback 与 mixture 两种组合 |
+
+本项目 Stage 10 的区别仅限定为实现问题：datastore 由**时间上更早、同一服务 verifier 已确认**的请求在线
+填充；命中时绕开 Uno diffusion forward，未命中时回退 static/frozen-residual Uno。它不是 response cache，
+也不把已有 retrieval drafting 重新命名成理论原创。详细 exactness 和一遍 KV 路径见
+`STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md`。
+
 ## 4. 本项目相对已有工作的新增问题
 
 ### 4.1 本轮旧 proposal 不变量
@@ -167,6 +181,8 @@ request 结束可丢弃 $\delta_t$，domain 版本则经过 replay 验证后再�
 - H3：on-policy/discounted-tail supervision 在同等 update budget 下优于 full-canvas。
 - H4：自适应 stride 和 block size 比任一固定组合有更高端到端 throughput。
 - H5：纯 online cold start 在单请求内很难回本，但跨请求/domain replay 可以摊销；需要明确 break-even 请求数。
+- H6：对可重复轨迹，verifier-populated retrieval fast path 能以零 backward、少一次 model forward，把 Stage 8
+  的学习收益转成显著 TPS；在 mixed stream 中 past-only controller 能限制错误命中的下尾损失。
 
 Stage 4B/5B 已实证支持 H5 的前半句：request-local immediate 与 deferred 均未通过真机门。Stage 6/7 的
 stochastic request stream 也没有产生 held-out TPF 收益；verifier advantage 缺少下一轮预测性。Stage 8 在

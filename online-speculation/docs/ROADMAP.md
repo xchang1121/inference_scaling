@@ -189,3 +189,16 @@ cu128、Triton 3.6、FA2 2.8.3，以及 `ifm-ai/uno@ed2ee36`。RTX 3090 只复�
 
 通过条件和完整命令边界见 `STAGE9_WSL2_RUNTIME_PROTOCOL.md`。只有第三步 wall-clock CI 显示收益，才把
 此前 Windows HF fallback 的“checkpoint 加速趋势”升级为“官方 runtime 加速复现”。
+
+## Stage 10：Verifier-Replay Uno
+
+Stage 8 的 neural residual 已证明 repeated greedy trajectory 上有小幅 held-out TPF 收益，但没有稳定 TPS。
+单 GPU 下一版优先把过去 verifier-confirmed continuation 变成 deterministic retrieval proposal；高置信命中
+只做一次 base AR block verification，miss 回退 static/frozen-residual Uno，从系统层直接省去 diffusion
+draft forward 和 online backward。
+
+Stage 10A 已实现 bounded exact-suffix cache、frequency confidence、past-only TPF router、delta proposal 和
+greedy correction oracle。任意 categorical target 对 delta cache proposal 的枚举输出律严格等于 target；
+详细推导、REST/CREST/DReSD/RACER 归因和正式 workload 边界见
+`STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md`。Stage 10B 必须在 WSL 官方 Nano-vLLM runtime 中实现一遍 KV
+路径并加入真实 CUDA-time controller，完成工程 pilot 后才能冻结 Stage 10C confirmatory protocol。
