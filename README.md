@@ -69,9 +69,11 @@ Stage 9 已按用户授权启动 [WSL2 与官方运行时迁移协议](docs/STAG
 Python 3.10 的 Ubuntu 22.04、cu128/FA2 linear 路径，并明确禁止在 WSL 安装 Linux NVIDIA driver。
 系统安装、Linux runtime 和官方静态基线将作为三个独立提交；Windows 若要求重启则停在人工检查点。
 为解决 Stage 8 “TPF 有收益、TPS 未确认”的瓶颈，Stage 10 同步实现了
-[Verifier-Replay Uno](docs/STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md) 的纯逻辑核心：过去 verifier-confirmed
-continuation 命中时将以一遍 AR verification 替代 Uno 两遍 forward，miss 时回退 Uno；delta proposal
-仍走 exact correction。当前 cache、past-only cost router 和枚举正确性测试已完成，官方 runtime 分支待 WSL。
+[Verifier-Replay Uno](docs/STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md)：过去 verifier-confirmed continuation 命中时
+以一遍 AR verification 替代 Uno 两遍 forward，miss 时回退 Uno；delta proposal 仍走 exact correction。
+除 cache、past-only cost router 和枚举证明外，HF reference 已接入真实 KV cache、greedy/filtered stochastic
+校正及逐轮混合路径；空 cache 与 static Uno 的 token/RNG/forward 行为回归相同，错误命中仍与 greedy AR
+逐 token 等价。官方 Nano-vLLM 分支和 CUDA-time controller 仍待 Stage 9 WSL runtime。
 
 ## 目录
 
@@ -123,7 +125,7 @@ online-speculation/
 | 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
 | 8 | greedy repeated-query online residual | 完成；学习门通过、HF 系统门失败 |
 | 9 | WSL2、官方 cu128/FA2 runtime 与 Nano-vLLM Uno-1B 基线 | 进行中；协议和审计安装器已冻结 |
-| 10 | verifier replay 一遍式 fast path + static Uno fallback | 纯逻辑核心完成；Nano-vLLM 集成待 Stage 9 runtime |
+| 10 | verifier replay 一遍式 fast path + static Uno fallback | HF 真实 KV 路径完成；Nano-vLLM/CUDA-time 集成待 Stage 9 |
 
 Stage 1 的正式验证命令：
 

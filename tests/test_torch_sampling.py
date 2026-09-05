@@ -11,6 +11,8 @@ from online_speculation.torch_sampling import (
     residual_distribution,
     verify_linear_filtered,
     verify_linear_greedy,
+    verify_replay_filtered,
+    verify_replay_greedy,
 )
 from online_speculation.hf_uno import _adapter_parameter_name
 
@@ -125,6 +127,57 @@ def test_greedy_verifier_commits_target_at_first_mismatch() -> None:
     assert result.committed == (2, 1, 2)
     assert result.accepted_spec_tokens == 1
     assert result.rejected_index == 1
+
+
+def test_replay_filtered_accepts_prefix_then_uses_exact_delta_residual() -> None:
+    target = _distribution([[0.8, 0.2], [0.3, 0.7]])
+    lookahead = _distribution([[0.0, 1.0]])
+    result = verify_replay_filtered(
+        spec_tokens=torch.tensor([0, 0]),
+        target=target,
+        lookahead=lookahead,
+        accept_uniforms=torch.tensor([0.5, 0.5]),
+    )
+    assert result.committed == (0, 1)
+    assert result.accepted_spec_tokens == 1
+    assert result.rejected_index == 1
+    assert not result.used_lookahead
+
+
+def test_replay_filtered_all_accept_adds_target_lookahead_without_free_token() -> None:
+    target = _distribution([[1.0, 0.0], [0.0, 1.0]])
+    lookahead = _distribution([[1.0, 0.0]])
+    result = verify_replay_filtered(
+        spec_tokens=torch.tensor([0, 1]),
+        target=target,
+        lookahead=lookahead,
+        accept_uniforms=torch.tensor([0.999, 0.999]),
+    )
+    assert result.committed == (0, 1, 0)
+    assert result.accepted_spec_tokens == 2
+    assert result.used_lookahead
+
+
+def test_replay_greedy_commits_first_target_mismatch_or_lookahead() -> None:
+    rejected = verify_replay_greedy(
+        spec_tokens=torch.tensor([1, 0, 2]),
+        target_logits=torch.tensor(
+            [[0.0, 2.0, 1.0], [0.0, 1.0, 2.0], [2.0, 1.0, 0.0]]
+        ),
+        lookahead_logits=torch.tensor([0.0, 0.0, 1.0]),
+    )
+    assert rejected.committed == (1, 2)
+    assert rejected.accepted_spec_tokens == 1
+    assert rejected.rejected_index == 1
+
+    accepted = verify_replay_greedy(
+        spec_tokens=torch.tensor([1, 2]),
+        target_logits=torch.tensor([[0.0, 2.0, 1.0], [0.0, 1.0, 2.0]]),
+        lookahead_logits=torch.tensor([3.0, 0.0, 1.0]),
+    )
+    assert accepted.committed == (1, 2, 0)
+    assert accepted.accepted_spec_tokens == 2
+    assert accepted.used_lookahead
 
 
 def test_verifier_rejects_distribution_that_did_not_sample_proposal() -> None:

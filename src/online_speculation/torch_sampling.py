@@ -307,3 +307,119 @@ def verify_linear_greedy(
         rejected_index=None,
         used_lookahead=True,
     )
+
+
+def verify_replay_filtered(
+    *,
+    spec_tokens: Tensor,
+    target: FilteredDistribution,
+    lookahead: FilteredDistribution,
+    generator: torch.Generator | None = None,
+    accept_uniforms: Tensor | None = None,
+) -> VerificationResult:
+    """Verify deterministic cache proposals with exact Psi-Spec correction.
+
+    The replay proposal at row ``i`` is the point mass
+    ``q_i = delta(spec_tokens[i])``.  A proposal is therefore accepted with
+    probability ``p_i(spec_tokens[i])``.  On rejection, ``residual_distribution``
+    samples ``[p_i - q_i]_+`` and restores the target distribution exactly.
+
+    Unlike :func:`verify_linear_filtered`, this function has no unverified
+    ``free_token``.  Every returned token is produced by the one-pass AR replay
+    verifier itself.
+    """
+
+    spec_tokens = spec_tokens.reshape(-1).to(target.token_ids.device, dtype=torch.long)
+    if spec_tokens.numel() < 1:
+        raise ValueError("at least one replay proposal is required.")
+    if target.rows != spec_tokens.numel():
+        raise ValueError("target rows must equal the number of replay proposals.")
+    if lookahead.rows != 1:
+        raise ValueError("lookahead must contain exactly one row.")
+
+    draft_used = FilteredDistribution(
+        token_ids=spec_tokens.unsqueeze(1),
+        probabilities=torch.ones(
+            (spec_tokens.numel(), 1),
+            device=target.probabilities.device,
+            dtype=target.probabilities.dtype,
+        ),
+    )
+    p_sample_prob = target.probability_of(spec_tokens)
+    if accept_uniforms is None:
+        accept_uniforms = torch.rand(
+            spec_tokens.numel(),
+            device=p_sample_prob.device,
+            dtype=p_sample_prob.dtype,
+            generator=generator,
+        )
+    else:
+        accept_uniforms = accept_uniforms.reshape(-1).to(p_sample_prob.device)
+        if accept_uniforms.numel() != spec_tokens.numel():
+            raise ValueError("accept_uniforms must match the number of replay proposals.")
+        if bool(torch.any((accept_uniforms < 0) | (accept_uniforms >= 1)).item()):
+            raise ValueError("accept_uniforms must lie in [0, 1).")
+
+    committed: list[int] = []
+    for row, token in enumerate(spec_tokens.tolist()):
+        if bool((accept_uniforms[row] < p_sample_prob[row]).item()):
+            committed.append(int(token))
+            continue
+        correction = residual_distribution(target, draft_used, row).sample(generator)
+        committed.append(int(correction.item()))
+        return VerificationResult(
+            committed=tuple(committed),
+            accepted_spec_tokens=row,
+            rejected_index=row,
+            used_lookahead=False,
+        )
+
+    committed.append(int(lookahead.sample(generator).item()))
+    return VerificationResult(
+        committed=tuple(committed),
+        accepted_spec_tokens=spec_tokens.numel(),
+        rejected_index=None,
+        used_lookahead=True,
+    )
+
+
+def verify_replay_greedy(
+    *,
+    spec_tokens: Tensor,
+    target_logits: Tensor,
+    lookahead_logits: Tensor,
+) -> VerificationResult:
+    """Verify deterministic replay proposals under greedy target decoding."""
+
+    spec_tokens = spec_tokens.reshape(-1)
+    if spec_tokens.numel() < 1:
+        raise ValueError("at least one replay proposal is required.")
+    if target_logits.ndim != 2 or target_logits.size(0) != spec_tokens.numel():
+        raise ValueError("target logits rows must match replay proposals.")
+    if lookahead_logits.ndim not in (1, 2):
+        raise ValueError("lookahead logits must be one vocabulary row.")
+    if lookahead_logits.numel() != target_logits.size(1):
+        raise ValueError("lookahead and target vocabulary sizes differ.")
+
+    target_tokens = torch.argmax(target_logits, dim=-1)
+    committed: list[int] = []
+    for row, (proposal, target_token) in enumerate(
+        zip(spec_tokens.tolist(), target_tokens.tolist())
+    ):
+        if int(proposal) == int(target_token):
+            committed.append(int(proposal))
+            continue
+        committed.append(int(target_token))
+        return VerificationResult(
+            committed=tuple(committed),
+            accepted_spec_tokens=row,
+            rejected_index=row,
+            used_lookahead=False,
+        )
+    committed.append(int(torch.argmax(lookahead_logits).item()))
+    return VerificationResult(
+        committed=tuple(committed),
+        accepted_spec_tokens=spec_tokens.numel(),
+        rejected_index=None,
+        used_lookahead=True,
+    )
