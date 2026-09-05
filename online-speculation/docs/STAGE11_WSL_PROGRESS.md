@@ -10,7 +10,7 @@
 - 修复 Windows PowerShell 5.1 参数默认值求值时 PSScriptRoot 为空的问题，
   路径改在脚本主体初始化。保留状态检查点和错误信息，避免后台失败无证据。
 
-## 正在准备
+## WSL 本体安装已完成
 
 官方 WSL 2.7.13 x64 MSI：
 [Microsoft WSL release](https://github.com/microsoft/WSL/releases/tag/2.7.13)。
@@ -26,9 +26,15 @@ GitHub release 大连接出现 TLS reset、长时间低速和超时。
 MSI 安装脚本额外要求有效 Microsoft Authenticode 签名，使用 /qn /norestart，
 将每一步、退出码与 restart_required 保存到 JSON。
 
+2026-09-05 03:00 UTC：完整文件 SHA-256 通过，Authenticode Valid，签名方 Microsoft Corporation。
+管理员 MSI 安装退出码 0，结果：[stage11_wsl_install.json](../results/stage11_wsl_install.json)。
+安装后 wsl --version 返回 WSL 2.7.13.0、kernel 6.18.33.2-2、WSLg 1.0.73.2。
+wsl --status 默认版本为 2，但明确表示虚拟化尚未激活，WSL2 不能启动；尚无 Linux 分发版。
+这是与 restart_required=true 一致的实际运行阻塞，不是仅凭安装器消息推测。
+
 ## 仍未完成
 
-完整 MSI 安装、Windows 重启、Ubuntu 分发版初始化、Linux CUDA/PyTorch/Triton/FA2 smoke，
+Windows 重启、Ubuntu 分发版初始化、Linux CUDA/PyTorch/Triton/FA2 smoke，
 以及官方 Nano-vLLM Uno baseline。因此不能将本阶段 Windows HF 结果称为官方完整复现。
 
 重启是已确认的外部步骤。完成下载和当前实验后，先 push 恢复点，再请用户自行重启；

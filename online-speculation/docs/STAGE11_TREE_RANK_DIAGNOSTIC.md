@@ -8,8 +8,10 @@
 1. 系统频率在同一 prompt 的配对方法之间切换，静态 TPS 在约 15–40 范围变化。
    因此不得从混合状态的 paired ratio 得出算法速度结论。
 2. 后半组一次 fixed-tree 构建触发 rank sub-probability 检查。
-   原计算 exp(top_logit - logsumexp(all_logits)) 在 dominant logits 下有 FP32 消减误差，
-   top-K 的和可能略高于 1。实现改用稳定 full-vocabulary softmax 后 gather top-K，
+   可复现的候选数值原因是 exp(top_logit - logsumexp(all_logits)) 的 FP32 消减误差：
+   合成 logits [1000,999,0] 产生概率和 1.0000293，而稳定 softmax 为 1.0。
+   原失败未保存导致检查失败的具体 logits，因此还不能把它的根因完全锁定为这一机制。
+   实现改用稳定 full-vocabulary softmax 后 gather top-K，
    不采用“删去该 seed”或取消所有合法性检查的办法。
 
 后续组使用新 seeds、修复的概率计算、显式进程 HighQoS。所有方法仍共享相同 target/adapter。
