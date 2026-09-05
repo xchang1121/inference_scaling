@@ -36,7 +36,7 @@ def validate(payload):
         # Official _run_prefill emits one token but does NOT update seq.stats.
         if stats["forwards"] < 1 or stats["accepts"] != design["max_new_tokens"] - 1:
             raise RuntimeError("incomplete committed token budget or invalid official stats")
-        if row["block_size"] == "online":
+        if row.get("online") is not None:
             diagnostic = row["online"]
             policy, cycles = diagnostic["policy"], diagnostic["cycles"]
             if (policy["pending"] is not None or policy["optimizer_steps"] != 0
@@ -77,6 +77,10 @@ def summarize(payload):
                    "ar_exact_matches": len(selected) - len(mismatches), "ar_mismatches": mismatches,
                    "cuda_graph_hits": sum(r["cuda_graph_hits"] for r in selected),
                    "cuda_graph_misses": sum(r["cuda_graph_misses"] for r in selected)}
+        if method == "shadow8":
+            summary["same_width_B8_token_matches"] = sum(
+                r["output"]["token_ids"] == pairs[(r["workload"], r["seed"], "8")]["output"]["token_ids"]
+                for r in selected)
         if method == "online":
             summary["cycle_width_counts"] = dict(Counter(c["width"] for r in selected for c in r["online"]["cycles"]))
             summary["cycle_reasons"] = dict(Counter(c["reason"] for r in selected for c in r["online"]["cycles"]))
