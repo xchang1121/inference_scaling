@@ -89,14 +89,16 @@ python -m blockspec prepare \
 ```bash
 python -m blockspec train \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --data /path/outside/repo/train.jsonl --text-data \
-  --output models/current-adapter.pt --device cuda --dtype bfloat16 \
-  --rank 8 --steps 1000 --warmup-steps 100 --warmup-loss reverse_kl_l1 \
-  --loss l1 --batch-size 1 --sequence-length 128 --blocks 2,4,6,8 \
-  --learning-rate 0.0001 --bos-id 0 --seed 314159
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/train.jsonl \
+  --validation-data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --output models/current-adapter.pt --device cuda --dtype float32 \
+  --rank 32 --steps 600 --warmup-steps 150 --warmup-loss reverse_kl_l1 \
+  --loss l1 --batch-size 2 --sequence-length 128 --blocks 2,4 \
+  --learning-rate 0.0003 --validation-every 100 --validation-batches 8 --bos-id 0 --seed 314159
 ```
 
-这是 3090 上保守的起步配置，不承诺已收敛或最优。1000 步包含热身，不额外增加。
+这是当前 3090 上已执行的有界配置，不承诺已收敛或最优。600 步包含热身，不额外增加。
+使用自己的纯文本 JSONL 时换数据路径并加 `--text-data`；已编码的当前数据无需该开关。
 数据不默认上传、不入 Git。数据和噪声分别设随机种子。训练前后检查基座指纹；
 适配器检查点含模型配置、基座指纹，错误基座／精度会被拒绝。
 
@@ -127,8 +129,9 @@ from blockspec.online import OnlineConfig, OnlineLearner
 from blockspec.tokenizer import LocalTokenizer
 
 base = "/home/singm/online-speculation-work/models/K2-Horizon-0.9B"
-model = load_hf_base(base, rank=8, dtype=torch.bfloat16, device="cuda")
-model, _ = load_checkpoint("models/current-adapter.pt", model=model, device="cuda")
+model = load_hf_base(base, rank=32, dtype=torch.float32, device="cuda")
+model, _ = load_checkpoint("/home/singm/online-speculation-work/models/blockspec-r32-fp32-paper.pt",
+                           model=model, device="cuda")
 tokenizer = LocalTokenizer(base)
 learner = OnlineLearner(model, OnlineConfig(stride=16, replay_blocks=4, learning_rate=1e-4))
 for text in ["Explain binary search.", "Now explain its loop invariant."]:
@@ -152,19 +155,19 @@ EOS 要显式传本模型 `eos_id`；不传则按预算生成，不得把这一�
 
 ## 6. 同条件三路评测
 
-当前 r=32 / FP32 离线起点在仓库外，已用训练集做 600 步训练；不能用上节 r=8 / BF16 的示例配置加载它。
+当前 r=32 / FP32 联合热身离线起点在仓库外，已用训练集做 600 步训练；不能用其他秩／精度直接加载它。
 开发评测使用验证集中的连续前缀，不是重新编写的指令任务；保留测试集不用于选配置。
 
 ```bash
 python -m blockspec benchmark \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-offline.pt \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-paper.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --split-role validation --dtype float32 --prompts 4 --prompt-length 128 \
-  --tokens 128 --block-size 4 --repeats 2 --update-stride 32 --replay-blocks 1
+  --split-role validation --dtype float32 --prompts 8 --prompt-length 256 \
+  --tokens 256 --block-size 4 --repeats 2 --warmup-tokens 32 --update-stride 32 --replay-blocks 1
 ```
 
-按文件顺序取前 4 个足够长记录的前 128 项作为输入。默认贪心、固定输出预算，**不按 EOS 提前结束**；
+按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算，**不按 EOS 提前结束**；
 需要自然结束时显式加 `--eos-id 1`。`--sampler tree --prefix-budget 16 --top-k 4` 切换树路径。
 重复次数必须为正偶数：AR／静态／在线，再在线／静态／AR。每个在线请求流从同一离线起点开始，
 流内保留学习后的权重与 Adam 状态；静态版不学习。内核预热不改变正式起点，第一次真实 Adam 更新的分配成本仍计入。
@@ -174,6 +177,7 @@ python -m blockspec benchmark \
 加 `--online-last-layers 4` 测相同离线起点的末 4 层续训；会另外报告实际可训练参数数。
 去掉此参数便是全量续训，不能把两个实验称为同一训练目标的纯内核提速。
 重跑主报告当前表格：在上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12 --online-last-layers 4`。
+保持树参数但去掉 `--online-last-layers 4`，就是主报告中另测的全适配器基线。
 实验结束恢复传入模型的适配器，不把调参过程的在线权重发布回检查点；默认只写 stdout。
 此处少量开发流用于选实现，不提供统计显著性或公开基准排名。
 
