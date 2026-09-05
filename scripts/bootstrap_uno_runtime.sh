@@ -11,6 +11,8 @@ readonly UNO_COMMIT="ed2ee36bb7a3aea8732ebc635b3f09490a032ea3"
 readonly BASE_SHA256="6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365"
 readonly ADAPTER_SHA256="5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e"
 readonly FA_WHEEL_URL="https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp310-cp310-linux_x86_64.whl"
+readonly EXPECTED_FA_SHA256="9001c730642cdc1ea44ed8130b0dc80e763519d6efc01e4de44b0700a0dfa13d"
+readonly EXPECTED_FA_BYTES="253651546"
 
 if [[ "${EUID}" -eq 0 ]]; then
   echo "Run the Python runtime bootstrap as the non-root WSL user" >&2
@@ -89,6 +91,10 @@ if [[ "${#flash_wheels[@]}" -ne 1 ]]; then
 fi
 readonly FLASH_WHEEL="${flash_wheels[0]}"
 readonly FLASH_WHEEL_SHA256="$(sha256sum "${FLASH_WHEEL}" | cut -d ' ' -f 1)"
+if [[ "${FLASH_WHEEL_SHA256}" != "${EXPECTED_FA_SHA256}" || "$(stat --format=%s "${FLASH_WHEEL}")" != "${EXPECTED_FA_BYTES}" ]]; then
+  echo "Pinned FlashAttention release asset failed SHA-256 or length verification; refusing installation" >&2
+  exit 1
+fi
 
 python -m pip install "${FLASH_WHEEL}"
 python -m pip install --editable "${UNO_DIR}"
@@ -102,4 +108,3 @@ python "${PROJECT_SOURCE}/scripts/wsl_runtime_smoke.py" \
   --flash-wheel-sha256 "${FLASH_WHEEL_SHA256}"
 
 echo "Uno WSL runtime bootstrap completed: ${VENV_DIR}"
-
