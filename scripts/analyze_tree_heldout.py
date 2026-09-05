@@ -47,6 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--candidate", default="treebudget:8:16")
     args = parser.parse_args()
     raw = args.input.read_bytes()
     payload = json.loads(raw)
@@ -55,6 +56,8 @@ def main():
     grouped = defaultdict(list)
     for row in records:
         grouped[row["method"]].append(row)
+    if args.candidate not in grouped:
+        raise ValueError("requested candidate is absent from the frozen study")
     ar = {(r["workload"], r["seed"]): r for r in grouped["ar"]}
     table, differences, post_low = {}, [], []
     for method, rows in grouped.items():
@@ -73,7 +76,8 @@ def main():
             if memory_clock(row["gpu_after"]) < 9000:
                 post_low.append({"method": method, "workload": row["workload"], "seed": row["seed"], "snapshot": row["gpu_after"]})
     result = {
-        "schema_version": 1, "raw_file": str(args.input), "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "schema_version": 2, "raw_file": str(args.input), "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "study_scope": payload["scope"], "candidate_method": args.candidate,
         "runs": len(records), "expected_runs": expected, "removed_runs": 0,
         "table": table, "token_differences_from_ar": differences,
         "all_token_ids_equal_to_ar": not differences,
@@ -81,16 +85,23 @@ def main():
         "low_post_clock_records": post_low,
         "low_post_clock_exclusively_ar": bool(post_low) and all(r["method"] == "ar" for r in post_low),
         "confirmatory_clock_gate_passed": not post_low,
-        "timing_scope": (
+        "timing_scope": "Pilot/design-selection data; never a confirmatory claim. " if payload["scope"] == "pilot" else (
             "Conservative downgrade under preregistered clock rule; descriptive held-out measurements only. "
             "AR-associated state differences are recorded, not excluded or proven causal."
             if post_low else "Passed the recorded post-run memory-clock stability check."
         ),
-        "online_comparisons": {
-            name: payload["secondary_summaries"][name]["treebudget:8:16"]
-            for name in ("ar", "static:16", "tree:8:16", "tree:8:32")
+        "candidate_diagnostics": {
+            "all_parameters_frozen": all(r["diagnostics"]["model_parameters_frozen"] for r in grouped[args.candidate]),
+            "all_optimizer_steps_zero": all(r["diagnostics"]["optimizer_steps"] == 0 for r in grouped[args.candidate]),
+            "all_feedback_completed": all(not r["diagnostics"]["budget_controller"].get("pending_feedback", False) for r in grouped[args.candidate]),
+            "tree_shapes": dict(sum((Counter(r["diagnostics"]["tree_shapes"]) for r in grouped[args.candidate]), Counter())),
+            "selection_reasons": dict(sum((Counter(r["diagnostics"]["budget_reasons"]) for r in grouped[args.candidate]), Counter())),
         },
-        "online_vs_linear8": payload["summary"]["treebudget:8:16"],
+        "online_comparisons": {
+            name: comparisons[args.candidate]
+            for name, comparisons in payload["secondary_summaries"].items() if args.candidate in comparisons
+        },
+        "online_vs_linear8": payload["summary"][args.candidate],
     }
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(json.dumps({k: result[k] for k in ("runs", "table", "all_token_ids_equal_to_ar", "confirmatory_clock_gate_passed")}, indent=2))

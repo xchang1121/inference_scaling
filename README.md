@@ -21,6 +21,7 @@
 | 独立评估 | 360/360 完成；300 个 speculative 输出全部逐 token 等于 AR；频率门未通过，整组仅作描述性工程测量 |
 | held-out TPS | linear B=8：42.41；fixed tree N=16：48.35；fixed tree N=32：50.60；online budget：49.58 |
 | 在线收益边界 | 相对 linear +16.89%，相对 fixed N=16 +2.53%，但相对更强的 fixed N=32 -2.02%；尚无正式在线额外收益结论 |
+| R6A 反馈校正 pilot | 72/72 完成、输出等于 AR；46.85 TPS < 同组 cost-only 48.45 < fixed N=32 49.63，保持默认关闭 |
 | Recycling / warm-start | 已实现并测试，但没有可靠 TPS 收益，退出默认主线；负结果保留 |
 | 旧在线 residual/retrieval 试验 | 已归档；其中 residual 无可靠 TPS 收益，精确重复 retrieval 仅是工程上界 |
 
@@ -32,8 +33,9 @@
 - [独立 held-out 协议](docs/TREE_HELDOUT_PROTOCOL_20260905.md)
 - [WSL 安装完成与重启恢复点](docs/STAGE11_WSL_PROGRESS.md)
 - [FA2/3090 树路径候选迁移与 attention 合并证明](docs/FA2_TREE_PORT_PLAN_AND_PROOF.md)
-- [下一版嵌套树反事实反馈证明（尚未进入 GPU 控制）](docs/COUNTERFACTUAL_BUDGET_LEARNING_PROOF.md)
+- [嵌套树反事实反馈基础证明](docs/COUNTERFACTUAL_BUDGET_LEARNING_PROOF.md)
 - [R6A 反馈校正控制器与冻结 pilot 协议](docs/R6A_FEEDBACK_CORRECTED_TREE_PROTOCOL.md)
+- [R6A 完整结果：正确性通过、性能改进失败](docs/R6A_FEEDBACK_TREE_RESULTS.md)
 - [此前 recycling / warm-start 负结果](docs/STAGE11_RECYCLING_AND_WARMSTART_RESULTS.md)
 - [当前路线图](docs/ROADMAP.md)
 - [硬件和复现边界](docs/HARDWARE_REPRODUCIBILITY_AUDIT.md)

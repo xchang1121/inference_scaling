@@ -12,7 +12,7 @@
 | R3E | 12 新 prompts × 5 repeats 独立 held-out | 360/360 完成、token 一致；在线 49.58 TPS < fixed N=32 的 50.60，且计时频率门未过，仅作描述性测量 |
 | R4 | WSL2 + cu128/FA2/Triton + pinned Nano-vLLM | WSL 本体/组件已装，等待重启；Linux kernel smoke 和官方基线未完成 |
 | R5 | FA2 树路径候选、固定 CUDA graph 形状与减少同步 | 补丁仅默认关闭、apply-check 通过；必须先跑官方未修改基线 |
-| R6A | 嵌套树 counterfactual feedback | 数学与独立参考实现完成；CPU/回归 191 测试通过，pilot 协议已冻结，尚无 GPU 新收益声明 |
+| R6A | 嵌套树 counterfactual feedback | 72/72 pilot 完成；正确性通过，46.85 TPS < fixed N=32 49.63，性能未过，不提升为默认 |
 
 R2/R3 在 Windows 可用环境进行；R4 并行准备系统依赖。重启若为必要外部条件，
 记录明确状态并继续不依赖重启的算法工作。
