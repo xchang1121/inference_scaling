@@ -104,7 +104,7 @@ $a\approx1$ 时上界为 8 tokens/forward。这只是调度直觉，正式决策
 
 已实现的 `VerifierReplayCache` 遵循以下约束：
 
-- 只在一个请求完整结束后接收 `prompt + verified completion`，未结束请求不可见；
+- 全局 cache 只在一个请求完整结束后接收 `prompt + verified completion`，未结束请求对其他请求不可见；
 - 为 completion 每个位置保存长度 `min_suffix..max_suffix` 的 exact suffix 到后续 continuation 的计数；
 - lookup 从最长 suffix 向短 suffix 搜索，按出现频率、continuation 长度和 token tuple 确定性打破并列；
 - 要求最小 observation 和经验 confidence；
@@ -113,6 +113,29 @@ $a\approx1$ 时上界为 8 tokens/forward。这只是调度直觉，正式决策
 - 不持久化自然语言或反解 token；正式用户流实验前仍需单独制定隐私、TTL 和跨租户隔离政策。
 
 这不是 response cache：任何命中内容都要被当前 target model 逐 block 验证，绝不直接返回旧答案。
+
+### 5.1 因果延迟的 request-local overlay
+
+exact-repeat pilot 证明跨请求 replay 的系统上界后，Stage 10C 增加了可选的
+`CausalVerifierReplaySession`。令当前已经由 target committed 的序列为 $x_{1:t}$，最大 proposal horizon
+为 $K$。位置 $s$ 的映射
+
+```math
+x_{s-L:s-1}\mapsto x_{s:s+K-1}
+```
+
+只有在 $s+K-1\le t$ 后才进入当前 request 的 private overlay；换言之，proposal 的每个 token 都已完整
+存在于 verifier-confirmed past，不含任何尚未生成的未来。当前 request lookup 同时查 private overlay 和已关闭的
+global cache。请求成功结束时才把 overlay 原子式 merge 到 global cache；异常或显式 discard 时全局状态完全不变。
+
+这允许首个长回答复用其自身早先出现过的公式、代码片段、列表模板或模型 repetition，同时保留两层保证：
+
+1. **分布保证不依赖检索正确。** private proposal 仍是 $q=\delta_c$，必须经过同一个 exact verifier；
+2. **请求隔离。** 并发请求不能观察尚未结束请求的 partial tokens，只有所属 request 能读取自己的 verified past。
+
+实现不会重复发布同一 start position：`append_verified` 只推进一个单调 `next_start` frontier，`close` 补齐不足
+$K$ 的 tail continuations。分块 append 后 merge 的 cache entries、counts 和 lookup 结果由测试证明与一次性
+`observe_sequence` 完全相同。
 
 ## 6. Past-only 成本路由
 
@@ -178,7 +201,16 @@ $q_i=\delta_{c_i}$、实际旧 proposal law 和 $[p-q]_+$ correction。空 cache
 event 代替 TPF-only router、并验证 fused FA2/Nano-vLLM 性能，仍依赖 Stage 9 WSL runtime，不在这里提前
 宣称官方系统收益。
 
-### Stage 10C：预注册实验
+### Stage 10C：首请求因果 replay（已实现核心）
+
+- request-local overlay 与 global closed-request cache 分离；
+- 满 horizon 后才能在本请求 lookup，绝不索引未验证未来；
+- 成功结束 merge，discard/异常不发布；
+- HF runner 可在每次 commit 后更新 overlay，更新时间计入 decode 与独立 diagnostics；
+- 周期 Markov fake model 的首请求同时出现 static 和 replay cycles，输出仍与 greedy AR 完全相同；
+- chunked session 与 bulk closed request cache 的 keys/counts/lookups 回归相同。
+
+### Stage 10D：预注册实验
 
 工程 pilot 只允许确定协议参数，不进入正结论。之后用全新请求/seed 冻结：
 

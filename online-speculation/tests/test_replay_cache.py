@@ -53,6 +53,69 @@ def test_replay_cache_exposes_only_closed_verified_requests() -> None:
     assert later.matched_suffix_length == 6
 
 
+def test_causal_session_exposes_only_fully_verified_local_horizons() -> None:
+    cache = _cache(max_continuation_length=4)
+    prompt = (10, 11, 12, 13)
+    session = cache.begin_causal_session(prompt_tokens=prompt)
+
+    assert session.append_verified((20, 21, 22)) == 0
+    assert session.local_records == 0
+    assert cache.lookup(prompt, max_tokens=4) is None
+    assert session.lookup(prompt, max_tokens=4) is None
+
+    assert session.append_verified((23,)) > 0
+    local = session.lookup(prompt, max_tokens=4)
+    assert local is not None
+    assert local.token_ids == (20, 21, 22, 23)
+    # An in-flight request remains invisible to other requests.
+    assert cache.lookup(prompt, max_tokens=4) is None
+
+    published = session.close(publish=True)
+    assert published > 0
+    assert session.closed
+    global_candidate = cache.lookup(prompt, max_tokens=4)
+    assert global_candidate is not None
+    assert global_candidate.token_ids == (20, 21, 22, 23)
+    with pytest.raises(RuntimeError):
+        session.append_verified((24,))
+    with pytest.raises(RuntimeError):
+        session.lookup(prompt, max_tokens=4)
+
+
+def test_causal_session_chunking_matches_bulk_closed_request_index() -> None:
+    prompt = (1, 2, 3, 4)
+    completion = (5, 6, 7, 8, 9, 10)
+    bulk = _cache(max_entries=1_000, max_continuation_length=4)
+    causal = _cache(max_entries=1_000, max_continuation_length=4)
+    bulk_records = bulk.observe_sequence(
+        prompt_tokens=prompt,
+        verified_completion_tokens=completion,
+    )
+    session = causal.begin_causal_session(prompt_tokens=prompt)
+    session.append_verified(completion[:2])
+    session.append_verified(completion[2:5])
+    session.append_verified(completion[5:])
+    causal_records = session.close(publish=True)
+
+    assert causal_records == bulk_records
+    assert causal.stats() == bulk.stats()
+    for prefix_length in range(len(completion)):
+        context = prompt + completion[:prefix_length]
+        assert causal.lookup(context, max_tokens=4) == bulk.lookup(
+            context,
+            max_tokens=4,
+        )
+
+
+def test_discarded_causal_session_never_updates_global_cache() -> None:
+    cache = _cache(max_continuation_length=2)
+    session = cache.begin_causal_session(prompt_tokens=(1, 2, 3))
+    session.append_verified((4, 5, 6))
+    assert session.local_records > 0
+    assert session.close(publish=False) == 0
+    assert cache.stats().entries == 0
+
+
 def test_cache_uses_frequency_confidence_and_longest_match() -> None:
     cache = _cache(min_confidence=0.6)
     prompt = (1, 2, 3, 4)
