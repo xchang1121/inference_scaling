@@ -73,6 +73,34 @@ def test_padded_execution_prefill_cache_tree_and_owned_outputs(device):
     close_cache(compact, compact_tree_cache(expected_cache, 2, [0, 2, 4]))
 
 
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA graph hardware required"))])
+@pytest.mark.parametrize("adapted", [False, True])
+@torch.no_grad()
+def test_query_only_cache_packing_preserves_empty_short_and_full_prefixes(device, adapted):
+    model, engine = example(device)
+    ids = torch.tensor([[1, 4, 2]], device=device)
+    mask = torch.tensor([[False, True, True]], device=device) if adapted else None
+    capture = 2 if adapted else None
+    slot = engine.slots[(3, adapted, capture)]
+    c = model.config
+    for length in (0, 2, engine.capacity):
+        prefix_ids = (torch.arange(length, device=device) % c.vocab_size)[None]
+        past = model(prefix_ids, return_cache=True)[1] if length else None
+        output = engine(ids, cache=past, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        assert slot.new_cache.shape == (c.num_hidden_layers, 2, 1, c.num_key_value_heads, 3, c.head_dim)
+        expected = model(ids, cache=past, adapter_mask=mask, return_cache=True, capture_layer=capture)
+        torch.testing.assert_close(output[0], expected[0], rtol=2e-5, atol=2e-6)
+        close_cache(output[1], expected[1])
+        assert output[1].packed.shape[-2] == length + ids.shape[1]
+        if length:
+            for actual, original in zip(output[1], past):
+                torch.testing.assert_close(tuple(kv[..., :length, :] for kv in actual), original, atol=0, rtol=0)
+        snapshot = output[1].packed.clone()
+        engine(ids.flip(-1), adapter_mask=mask, return_cache=True, capture_layer=capture)
+        torch.testing.assert_close(output[1].packed, snapshot, atol=0, rtol=0)
+
+
 @pytest.mark.parametrize("generate", [generate_speculative, generate_tree])
 @pytest.mark.parametrize("last_layers", [None, 1])
 def test_padded_online_is_real_continuation_with_immutable_feedback(generate, last_layers):
