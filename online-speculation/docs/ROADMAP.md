@@ -198,7 +198,10 @@ Stage 8 的 neural residual 已证明 repeated greedy trajectory 上有小幅 he
 draft forward 和 online backward。
 
 Stage 10A 已实现 bounded exact-suffix cache、frequency confidence、past-only TPF router、delta proposal 和
-greedy correction oracle。任意 categorical target 对 delta cache proposal 的枚举输出律严格等于 target；
-详细推导、REST/CREST/DReSD/RACER 归因和正式 workload 边界见
-`STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md`。Stage 10B 必须在 WSL 官方 Nano-vLLM runtime 中实现一遍 KV
-路径并加入真实 CUDA-time controller，完成工程 pilot 后才能冻结 Stage 10C confirmatory protocol。
+greedy correction oracle。任意 categorical target 对 delta cache proposal 的枚举输出律严格等于 target。
+Stage 10B 的 HF reference 已接通真实 KV cache：命中执行一遍 base verifier，miss/拒绝执行原样两遍 Uno，
+并在 greedy/stochastic 两种模式下实现 exact correction、逐 commit rollback 和独立计数。空 cache 与 static
+Uno 的 token IDs、forward count、RNG trajectory 回归相同，错误 cache 仍输出 greedy AR，当前全项目 89 tests
+通过。详细推导、REST/CREST/DReSD/RACER 归因和正式 workload 边界见
+`STAGE10_VERIFIER_REPLAY_UNO_DESIGN.md`。WSL 就绪后仍须把该分支迁入官方 Nano-vLLM runtime 并加入真实
+CUDA-time controller；完成工程 pilot 后才能冻结 confirmatory protocol。

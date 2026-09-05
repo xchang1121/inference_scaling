@@ -157,14 +157,26 @@ $q_w=(1-w)q_{Uno}+w\delta_c$，但 mixture 需要运行 Uno draft，不能消除
 - 单 token 枚举证明任意 target $p$ 下输出仍精确等于 $p$；
 - cache closure、冲突 continuation、LRU/alternative bounds 和 controller 回归测试。
 
-### Stage 10B：官方 Nano-vLLM 一遍分支
+### Stage 10B：真实 KV-cache 一遍分支
 
-- 在 `TwoPassDecoder.run_cycle` 前做 batch-1 cache lookup；
-- 命中时用 `[uncached seed, replay...]` 调用已有 `run_block` 一次；
+- 先在 HF checkpoint runtime 完成 batch-1 cache lookup、真实 KV rollback 与两路径逐轮混合；
+- 命中时用 `[uncached seed, replay...]` 调用 base model 一次；
 - verifier payload 去掉已存在的 seed token，再按 commit length rollback KV；
 - greedy 后实现 filtered stochastic delta verifier；
 - stats 明确区分 `uno_forwards`、`replay_forwards`、hits、accepted prefix 和 lookup time；
 - cache miss 的输出、forward count 和 random state 与上游 static path 回归等价。
+
+HF reference 状态（2026-09-05）：上述路径已在 `hf_replay_uno.py` 实现。它在每一轮 lookup 后用
+past-only router 选择一遍 replay 或两遍 static Uno，统一按实际 commit length 将 KV frontier 回滚到
+“最后一个 token 尚未进入 cache”的不变量。greedy 使用逐 token argmax 比较；filtered stochastic 使用
+$q_i=\delta_{c_i}$、实际旧 proposal law 和 $[p-q]_+$ correction。空 cache 在 greedy 和 stochastic 两种模式下
+分别回归为与 `generate_uno` 完全相同的 token IDs、forward count 和 RNG trajectory；错误 cache continuation
+回归测试验证首次 mismatch correction 后仍与 greedy AR 逐 token 相同；越界 token 在进入 embedding 前被
+拒绝。当前全项目 `89` 个测试通过。
+
+该完成状态只属于 Hugging Face reference backend。把相同分支移入上游 `TwoPassDecoder.run_cycle`、用 CUDA
+event 代替 TPF-only router、并验证 fused FA2/Nano-vLLM 性能，仍依赖 Stage 9 WSL runtime，不在这里提前
+宣称官方系统收益。
 
 ### Stage 10C：预注册实验
 
@@ -186,4 +198,3 @@ $q_w=(1-w)q_{Uno}+w\delta_c$，但 mixture 需要运行 Uno draft，不能消除
 - [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)
 - [Test-Time Speculation](https://arxiv.org/abs/2605.09329)
 - [Online Spec / When Drafts Evolve](https://arxiv.org/abs/2603.12617v2)
-
