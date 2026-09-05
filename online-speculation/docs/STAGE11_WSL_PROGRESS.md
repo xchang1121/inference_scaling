@@ -40,4 +40,9 @@ Windows 重启、Ubuntu 分发版初始化、Linux CUDA/PyTorch/Triton/FA2 smoke
 重启是已确认的外部步骤。完成下载和当前实验后，先 push 恢复点，再请用户自行重启；
 恢复时读取此文档和 stage11_wsl_install.json，不重置模型/代码/实验记录。
 
+已提供 scripts/resume_wsl_after_reboot.ps1：先验证上次成功安装之后确实发生过重启，
+否则在任何发行版/软件安装之前退出。该保护已在 Windows PowerShell 5.1 下实测。
+重启后它会先安装缺失的 Ubuntu-22.04，再检查 Linux 能启动，最后调用已有 bootstrap。
+该后半段仍未在本机运行，不能把脚本准备完成视为 Linux 支持栈已安装。
+
 官方安装依据：[Microsoft WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install)。
