@@ -1,6 +1,7 @@
 # Online Uno：当前实现与证明
 
-主实现为 `native_fast_weights.py`；`native_norm.py` 是独立的推理优化。
+主实现为 `native_fast_weights.py`，`native_update_graph.py` 捕获完整更新路径；
+`native_norm.py` 是独立的推理优化。
 这里的在线算法**实际更新神经网络参数**，不再以块长控制器代替在线蒸馏。
 仅支持锁定的 K2-Horizon / XLLM、单 GPU、batch=1、线性 Uno；默认 B=8。
 
@@ -175,7 +176,34 @@ fast-weights 引擎的静态 B=8 已包含零增量分支与特征缓存，另�
 才可评估新增分支全部成本。权重字节 hash 在计时外比较，包含 base 和 packed/unpacked Uno，排除 KV。
 四个旧 prompts 只用于开发，不称为 held-out，也不从训练 loss 或单次 TPS 宣称论文级收益。
 
-## 7. 保留的块长控制器与归因
+## 7. 固定形状的训练 CUDA graph
+
+更新使用固定 N=RB 行缓冲区，而有效行数随接受长度变化。令 vⱼ∈{0,1} 为有效行 mask，
+seed、拒绝后的行和未填满的 slots 都为 0。M=Σvⱼ>0 时：
+
+\[
+ L=\frac1M\sum_{j=1}^{N}v_j KL(p_j\|q_j),\qquad
+ \frac{\partial L}{\partial\ell^q_j}=\frac{v_j}{M}(q_j-p_j).
+\]
+
+去掉 v=0 的项便是原有效样本均值，因而 padding 不改变实数目标或梯度。
+RMSNorm 和新增 MLP 分支都逐行计算，无效行的零梯度不会流入有效行。
+实际训练始终要求至少一个有效样本；初始化 warmup 使用全零 mask、M 的分母 clamp 为 1，
+其零梯度仅用于预热，随后把参数、Adam moments 和 step 全部清零/复位。
+
+图中包含解析 head 梯度、末层反传、梯度裁剪、fused Adam 和 BF16 服务权重 copy。
+特征与 logits 直接写入固定缓冲区，不在每次更新时重新 cat 或构造动态索引。
+CUDA graph 不捕获 CPU 接受判断：仍先完成原生 commit，再检查样本版本，最后重放更新图。
+使用独立 graph memory pool，不与 serving graph 并发重放；图外仅一次 metrics 回传屏障。
+若 loss、梯度范数或新参数非有限值，重置并中止请求，不让后续 draft 使用坏参数。
+
+**重置不变量。** 设捕获读写地址集合为 P。请求重置只执行 copy_/zero_，
+不替换参数、grad、Adam moments 或 GPU step 张量，故地址集合仍为 P；其值恢复为
+A=A₀、C=0、moments=0、step=0。按更新次数归纳，下一请求仍从同一初始优化状态开始。
+测试同时检查地址不变、两次相同请求重放的参数逐 bit 一致，以及与 eager Adam 的数值接近。
+eager 路径保留为梯度/更新对照，不是性能默认路径。浮点融合和 reduction 的差异仍适用第 4 节边界。
+
+## 8. 保留的块长控制器与归因
 
 native_online_policy 保留作独立调度对照：B∈{4,8,16}，锚点 8，2 cycles/epoch，
 提交量/耗时 EMA retention=.75，切换门槛 3%，每 16 个适应 epoch 刷新一个臂。
@@ -191,3 +219,6 @@ native_online_policy 保留作独立调度对照：B∈{4,8,16}，锚点 8，2 c
   不是对 TTS 报告的收益或异步实现的复现。
 - [PyTorch numerical accuracy](https://docs.pytorch.org/docs/2.11/notes/numerical_accuracy.html)：
   数学等价的批量/切片计算不保证浮点 bitwise 相同。
+- [PyTorch CUDA graphs](https://docs.pytorch.org/docs/2.11/notes/cuda.html#cuda-graphs) /
+  [Adam capturable](https://docs.pytorch.org/docs/2.11/generated/torch.optim.Adam.html)：
+  固定地址、side-stream warmup、禁止图内 CPU 同步和可捕获 optimizer 的实现约束。

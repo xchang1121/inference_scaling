@@ -14,6 +14,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | [native_fast_weights.py](scripts/native_fast_weights.py) | 新增 LoRA、特征重放、teacher 对齐、梯度更新、轮间发布、请求重置 |
+| [native_update_graph.py](scripts/native_update_graph.py) | 固定地址的完整更新 CUDA graph、可捕获 Adam、有界反馈缓冲区 |
 | [native_norm.py](scripts/native_norm.py) | 保留 BF16 舍入位置的融合 grouped RMSNorm |
 | [native_online_policy.py](scripts/native_online_policy.py) | 独立块长控制器对照，不训练模型 |
 | [benchmark_native_uno.py](scripts/benchmark_native_uno.py) | 同引擎比较 AR、固定块长 Uno、在线 Uno 和固定宽度 shadow |
@@ -31,6 +32,7 @@
 - 只在完整验证并提交后更新 53,248 个新增参数；轮内不修改生成时的 proposal 分布。
 - 默认全词表 KL、学习率 .001、每 16 cycles 用最后 4 轮反馈更新一次；不是重新训练全部原始 Uno adapter。
 - 复用实际 draft logits，直接算冻结 LM head 的梯度，不再为训练多做一次词表投影。
+- 默认把梯度、反传与 Adam 一起用 CUDA graph 重放；eager 更新仅保留作对照。
 - 没有跨请求训练或树解码改动，不声称已证明在线学习一定提高净 TPS。
 - 数学上的分布保持以固定块长 Uno 正确为前提；BF16 不同执行形状的逐 token 一致性仍需单独检验。
 
@@ -39,12 +41,17 @@
 
 ## 简短进展
 
-- 2026-09-05：末层在线 LoRA、融合 norm、解析 head 梯度和有界同版本微批已实现，WSL 全部 38 项测试通过。
+- 2026-09-05：末层在线 LoRA、融合 norm、解析 head 梯度、同版本微批与完整更新图已实现，WSL 全部 46 项测试通过。
   系统优化开发测试（4 prompts × 3 次 × 512 tokens）：原生静态 B8 **225.47 TPS**，融合后 **258.14 TPS**。
   两配置分进程测量，受时间/负载漂移影响，不把 14.49% 当作确认性收益。
-- 当前在线配置测试（4 prompts × 2 次 × 512 tokens）：静态对照 **258.02 TPS / TPF 1.3755**，
-  在线 **251.88 TPS / TPF 1.3801**，88 次真实更新。更新开销全计入后仍约 **−2.38% TPS**；
-  8/8 次在线输出与同引擎静态 B8 的全部 512 tokens 相同，teacher / 原 Uno 字节 hash 不变。
-  这是可运行的在线算法，**尚无稳定的在线额外加速**。开发 prompts 已重复使用，不能称 held-out。
+- 当前 CUDA-graph 在线配置在预先固定的 12 个新 prompts × 2 次 × 1,024 tokens 上：
+  静态 **286.40 TPS / TPF 1.5480**，在线 **287.31 TPS / TPF 1.5587**。
+  净 TPS **+0.32%**，prompt-cluster bootstrap 95% 区间约 **[−0.77%, +1.42%]**，
+  尚不能宣布稳定额外收益。24/24 次与同引擎静态 B8 的 1,024 tokens 相同；477 次真实更新，
+  teacher / 原 Uno 字节 hash 不变、无抢占或 backbone graph miss。
+  更新平均约 **1.00 ms**（原 eager 开发检查约 3.3 ms）；完整 reset/训练/同步均计入 TPS。
+  新输入见 `config/evaluation_prompts.json`，是独立于四道开发题的人工测试，不冒充公开 benchmark。
 - 已弃用的开发配置：`cbb49c8` 的 R1/S8/lr=.003，在线 −4.46%；同模块 R4/S8/lr=.001，
   完整 head 重放和解析梯度两次检查均未回本。只保留此处结论与可重跑的参数，不保留旧分支或中间结果档案。
+- `fa4d7c1` 的 eager R4/S16 更新在四道开发题上 −2.38%；本轮 profile 确认一次更新有 109 次
+  kernel launch，GPU 算子约 0.51 ms，推动了完整更新图的实现。Profiler 总耗时不当作普通延迟。

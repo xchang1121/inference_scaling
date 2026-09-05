@@ -37,6 +37,7 @@ python scripts/benchmark_native_uno.py \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
   --blocks 1,8 --fused-norm --fast-weights \
+  --training-backend cuda_graph \
   --update-stride 16 --replay-blocks 4 --learning-rate 0.001 --rank 8 \
   --repetitions 3 --max-new-tokens 512 --warmup-tokens 128 \
   --output results/native_run.json
@@ -54,6 +55,14 @@ B=1 是原引擎 AR 对照；B=8 是固定块长 Uno；`fast8` 是真正的在�
 再去掉 `--fused-norm` 测原生基线。三种配置使用同一 32-page KV 容量、同样 prompts/种子/预算。
 `--audit-fast` 开启额外的重放 logits 检查，检查成本也计入 TPS，仅作功能验证。
 初次 smoke 可以用 `--workloads english --repetitions 1 --max-new-tokens 128`。
+
+新增评估输入为 `config/evaluation_prompts.json`，12 个事先固定的人工设计 prompts，
+与四个开发 prompts 不重复；不是公开论文 benchmark，也不是模型预训练数据意义的 held-out。
+使用 `--prompt-file config/evaluation_prompts.json --repetitions 2 --max-new-tokens 1024 --seed 20270909`。
+未指定 `--workloads` 时运行整个所选 suite；可以按名称筛选。结果记录 prompt 文件 SHA 和代码 SHA。
+
+默认更新 backend 为 `cuda_graph`；`--training-backend eager` 保留普通更新对照。
+`--profile-update` 仅剖析一次预热后的更新并输出算子表，该运行不作为 TPS 证据，不生成 profiler trace 档案。
 
 旧 `--online` 选项仅指块长统计控制器，需要 `--blocks 1,4,8,16`；
 `--shadow` 是固定 B=8 的控制器包装对照。这两者不与 `--fast-weights` 混合评估。
@@ -77,13 +86,15 @@ B=1 是原引擎 AR 对照；B=8 是固定块长 Uno；`fast8` 是真正的在�
 from native_fast_weights import extended_runner, generate_fast
 
 with extended_runner(fused_norm=True, fast_weights=True, rank=8, stride=16,
-                     replay_blocks=4, lr=0.001):
+                     replay_blocks=4, lr=0.001, training_backend="cuda_graph"):
     engine = LLM(model=base_path, **config)  # config 见 benchmark_native_uno.py
 output, diagnostics = generate_fast(engine, prompt_ids, params, budget=512)
 ```
 
 引擎必须为单 GPU、batch=1、线性 XLLM Uno，预捕获 B=8，params 使用同一 B。
 每个请求自动重置新增参数，不并发共享 engine/wrapper，不做异步训练。
+CUDA 更新图在引擎初始化时捕获；其初始化成本与原生推理图捕获一样单独记录，未摊入稳态 TPS。
+请求内 reset 和每次更新全部计入 E2E；warmup / capture 后复位 Adam 状态，绝不带入预热学习。
 R≤S：只收集每个更新间隔最后 R 轮，更新后清空；不同参数版本的 logits 不允许混用。
 作为库可在项目目录 `pip install -e .`，仅安装当前模块；GPU 依赖仍由 WSL 环境提供。
 
