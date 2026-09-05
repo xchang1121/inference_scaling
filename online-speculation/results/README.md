@@ -13,6 +13,8 @@
   21 次 AR post-run memory clock 降低，按照预注册规则整组降级为描述性工程测量，
   `confirmatory_clock_gate_passed=false`；不能把 completed=true 等同于正式 TPS 成功。
 - `stage11_tree_rank_fp32_pilot.json`：频率切换并触发概率检查的失败，completed=false，不能用于 TPS 声明。
+- `stage11_tree_feedback_fp32_pilot.json` / `stage11_tree_feedback_audit.json`：R6A 完整 72-run pilot；
+  正确性通过，但反馈校正低于同组静态树和旧控制器，保留负结果，不是新的 held-out。
 - `stage11_wsl_install.json`：WSL 本体安装成功，但 restart_required=true 不代表 Linux runtime 已验证。
 
 完整 held-out 在线预算树为 49.58 TPS，线性 B=8 为 42.41 TPS，固定 N=32 树为 50.60 TPS。
