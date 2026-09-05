@@ -137,7 +137,7 @@ def summarize(payload):
                                        "paired_geomean_time_ratio": math.exp(sum(map(math.log, paired)) / len(paired))}
     return {"valid_runs": len(rows), "methods": summaries, "online_over_fixed": comparisons,
             "gpu_after_counts": dict(Counter(r["gpu_after"] for r in rows)),
-            "scope": f"engineering pilot; {len(payload['design']['workloads'])} reused prompt clusters; not confirmatory; no retroactive equivalence margin",
+            "scope": f"engineering pilot; {len(payload['design']['workloads'])} prompt clusters; not confirmatory; no retroactive equivalence margin",
             "bitwise_exactness_is_not_inferred_from_theory": True}
 
 

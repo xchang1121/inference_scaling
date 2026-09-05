@@ -15,7 +15,7 @@ dev = ["pytest>=8", "ruff>=0.16,<0.17"]
 
 [tool.setuptools]
 package-dir = {"" = "scripts"}
-py-modules = ["native_online_policy", "native_fast_weights", "native_norm"]
+py-modules = ["native_online_policy", "native_fast_weights", "native_norm", "native_update_graph"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

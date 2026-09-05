@@ -199,6 +199,78 @@ def test_cached_logits_from_old_weight_version_are_rejected():
         s.update(2, block_size=8)
 
 
+def test_masked_signal_matches_unpadded_rows():
+    torch.manual_seed(151)
+    draft, teacher, head = torch.randn(8, 20), torch.randn(8, 20), torch.randn(20, 8)
+    valid = torch.tensor([0., 1., 1., 0., 0., 1., 0., 0.])
+    loss, gradient = module.distillation_signal(draft, teacher, head, valid)
+    ref_loss, ref_gradient = module.distillation_signal(draft[valid.bool()], teacher[valid.bool()], head)
+    torch.testing.assert_close(loss, ref_loss)
+    torch.testing.assert_close(gradient[valid.bool()], ref_gradient)
+    assert not torch.count_nonzero(gradient[~valid.bool()])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph update")
+def test_captured_update_matches_eager_and_reset_preserves_addresses(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    torch.manual_seed(719)
+    head = torch.randn(128, 32, device="cuda")
+    norm = torch.ones(32, device="cuda")
+    eager = module.FastWeights(64, 32, norm, head, rank=4, max_block=8, stride=8, replay_blocks=2)
+    captured = module.FastWeights(64, 32, norm, head, rank=4, max_block=8, stride=8,
+                                 replay_blocks=2, training_backend="cuda_graph")
+    pointer = captured.serve_right.data_ptr()
+    state_pointers = [v.data_ptr() for d in captured.optimizer.state.values() for v in d.values()]
+    first_left = first_right = None
+    for request in range(2):
+        eager.reset()
+        captured.reset()
+        torch.manual_seed(811)
+        for _ in range(3):
+            for rows in (2, 4):
+                a, u, r = torch.randn(8, 64, device="cuda"), torch.randn(8, 32, device="cuda"), torch.randn(8, 32, device="cuda")
+                teacher = torch.randn(7, 128, device="cuda")
+                for s in (eager, captured):
+                    s.features.copy_(a)
+                    s.before_delta.copy_(u)
+                    s.residual.copy_(r)
+                    s.last_teacher = teacher
+                    with torch.no_grad():
+                        s.last_draft = s.logits(a, u, r)[1:]
+                    s.remember(rows, 8)
+            eager.update(4, block_size=8)
+            captured.update(4, block_size=8, audit=True)
+            torch.testing.assert_close(captured.left, eager.left, rtol=0.002, atol=2e-5)
+            torch.testing.assert_close(captured.right, eager.right, rtol=0.002, atol=2e-5)
+        assert captured.version == 3 and captured.events[-1]["grad_norm"] > 0
+        assert captured.events[-1]["same_features_logit_change"] > 0
+        if request == 0:
+            first_left, first_right = captured.left.detach().clone(), captured.right.detach().clone()
+        else:
+            torch.testing.assert_close(captured.left, first_left, rtol=0, atol=0)
+            torch.testing.assert_close(captured.right, first_right, rtol=0, atol=0)
+    assert captured.serve_right.data_ptr() == pointer
+    assert state_pointers == [v.data_ptr() for d in captured.optimizer.state.values() for v in d.values()]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph update")
+def test_captured_nonfinite_update_aborts_and_clears(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    s = module.FastWeights(16, 8, torch.ones(8, device="cuda"), torch.zeros(32, 8, device="cuda"),
+                           rank=2, max_block=8, training_backend="cuda_graph")
+    s.features.zero_()
+    s.before_delta.zero_()
+    s.residual.zero_()
+    s.last_teacher = torch.zeros(7, 32, device="cuda")
+    s.last_draft = torch.full_like(s.last_teacher, float("nan"))
+    s.remember(2, 8)
+    with pytest.raises(FloatingPointError, match="abort"):
+        s.update(2, block_size=8)
+    assert s.version == 0 and not s.examples
+    assert not torch.count_nonzero(s.serve_right)
+    assert torch.isfinite(s.serve_left).all()
+
+
 @pytest.mark.skipif(sys.platform != "linux" or not torch.cuda.is_available(), reason="WSL CUDA/Triton test")
 @pytest.mark.parametrize("rows,groups,has_residual", [(1, 1, False), (8, 1, True), (53, 3, True), (16, 2, False)])
 def test_fused_norm_cast_points(rows, groups, has_residual):

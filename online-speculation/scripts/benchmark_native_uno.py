@@ -43,6 +43,22 @@ def gpu_snapshot():
     return command(["nvidia-smi", "--query-gpu=temperature.gpu,clocks.sm,clocks.mem,power.draw,utilization.gpu", "--format=csv,noheader"])
 
 
+def select_workloads(prompt_file=None, selected=None):
+    suite = json.loads(prompt_file.read_text(encoding="utf-8")) if prompt_file else WORKLOADS
+    if (not isinstance(suite, (list, tuple)) or not suite
+            or any(not isinstance(row, (list, tuple)) or len(row) != 2
+                   or any(not isinstance(v, str) or not v.strip() for v in row) for row in suite)
+            or len({row[0] for row in suite}) != len(suite)):
+        raise ValueError("prompt suite requires unique nonempty [name, prompt] pairs")
+    if selected is None:
+        return suite
+    names = selected.split(",")
+    workloads = [row for row in suite if row[0] in names]
+    if len(names) != len(set(names)) or set(names) != {name for name, _ in workloads}:
+        raise ValueError("select known workloads without empty or repeated entries")
+    return workloads
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
@@ -63,7 +79,10 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--replay-blocks", type=int, default=4, help="last R blocks per update, 1 <= R <= stride")
     parser.add_argument("--audit-fast", action="store_true", help="extra replay/change checks, included in TPS cost")
-    parser.add_argument("--workloads", default="english,chinese,code,math")
+    parser.add_argument("--profile-update", action="store_true", help="profile one warmed online update; diagnostic run only")
+    parser.add_argument("--training-backend", choices=("eager", "cuda_graph"), default="cuda_graph")
+    parser.add_argument("--workloads", help="comma-separated names, default all prompts in the chosen suite")
+    parser.add_argument("--prompt-file", type=Path, help="fixed JSON list of [name, prompt] pairs")
     args = parser.parse_args()
     if not 1 <= args.replay_blocks <= args.update_stride:
         raise ValueError("1 <= replay blocks <= update stride required")
@@ -71,9 +90,7 @@ def main():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
     methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else []) + (["fast8"] if args.fast_weights else [])
-    workloads = [(name, prompt) for name, prompt in WORKLOADS if name in args.workloads.split(",")]
-    if not workloads or set(args.workloads.split(",")) != {name for name, _ in workloads}:
-        raise ValueError("select known workloads without empty entries")
+    workloads = select_workloads(args.prompt_file, args.workloads)
     if len(set(blocks)) != len(blocks) or 1 not in blocks or min(blocks) < 1 or max(blocks) > 16:
         raise ValueError("distinct widths within 1..16 including AR width 1 required")
     if args.repetitions < 1 or min(args.max_new_tokens, args.warmup_tokens) < 2:
@@ -127,8 +144,10 @@ def main():
         }
         payload["implementation_sha256"] = {
             name: sha256(Path(__file__).parent / name) for name in
-            ("benchmark_native_uno.py", "native_fast_weights.py", "native_norm.py")
+            ("benchmark_native_uno.py", "native_fast_weights.py", "native_norm.py", "native_update_graph.py")
         }
+        if args.prompt_file:
+            payload["prompt_file_sha256"] = sha256(args.prompt_file)
         config = dict(
             attention_backend="fa2", max_num_seqs=1, max_model_len=2048,
             max_num_batched_tokens=2048, gpu_memory_utilization=0.5,
@@ -143,11 +162,29 @@ def main():
         start = time.perf_counter()
         with extended_runner(fused_norm=args.fused_norm, fast_weights=args.fast_weights,
                              rank=args.rank, stride=args.update_stride, lr=args.learning_rate,
-                             replay_blocks=args.replay_blocks):
+                             replay_blocks=args.replay_blocks, training_backend=args.training_backend):
             engine = LLM(model=str(args.base), **config)
         torch.cuda.synchronize()
         payload["model_initialization_seconds"] = time.perf_counter() - start
         payload["model_dtype"] = str(engine.config.dtype)
+        if args.profile_update:
+            if not args.fast_weights:
+                raise ValueError("--profile-update requires --fast-weights")
+            state = engine.model_runner.fast_weights
+            original_update = state.update
+
+            def profile_update(*update_args, **update_kwargs):
+                if state.version != 1 or "update_profile" in payload:
+                    return original_update(*update_args, **update_kwargs)
+                with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
+                                                       torch.profiler.ProfilerActivity.CUDA]) as profiler:
+                    result = original_update(*update_args, **update_kwargs)
+                payload["update_profile"] = profiler.key_averages().table(sort_by="self_cpu_time_total", row_limit=15)
+                print(payload["update_profile"], flush=True)
+                return result
+
+            state.update = profile_update
+            payload["scope"] = "instrumented update profile; not throughput evidence"
         # Metadata-only freeze, no value changes or replacement of model code.
         for parameter in engine.model_runner.model.parameters():
             parameter.requires_grad_(False)
@@ -157,6 +194,8 @@ def main():
         encoded = [(name, format_chat_prompt(engine.tokenizer, [{"role": "user", "content": prompt}])[0]) for name, prompt in workloads]
         if any(len(ids) >= engine.config.kvcache_block_size for _, ids in encoded):
             raise RuntimeError("This short-prompt baseline requires no reusable full prefix-cache pages")
+        if any(len(ids) + max(args.max_new_tokens, args.warmup_tokens) + max(blocks) > config["max_model_len"] for _, ids in encoded):
+            raise ValueError("prompt and output budget exceed the configured context window")
 
         def generate(ids, width, budget, seed):
             torch.manual_seed(seed)
