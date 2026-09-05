@@ -1,0 +1,548 @@
+{
+  "schema_version": 1,
+  "raw_file": "online-speculation\\results\\stage11_tree_heldout_fp32.json",
+  "raw_sha256": "96dc0db1472989deaa47bb665fc102dad6c05a1374eb3a8b6b50f3ff5eb9c3ee",
+  "runs": 360,
+  "expected_runs": 360,
+  "removed_runs": 0,
+  "table": {
+    "static:8": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 181.07537039997987,
+      "absolute_e2e_tps": 42.413277868964414,
+      "aggregate_decode_tpf": 1.4670773969965345
+    },
+    "ar": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 278.1683173000056,
+      "absolute_e2e_tps": 27.609183082187936,
+      "aggregate_decode_tpf": 1.0
+    },
+    "static:16": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 182.97964289999072,
+      "absolute_e2e_tps": 41.97188210820576,
+      "aggregate_decode_tpf": 1.4670773969965345
+    },
+    "tree:8:16": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 158.83598009999696,
+      "absolute_e2e_tps": 48.35176510488978,
+      "aggregate_decode_tpf": 1.6993755575379126
+    },
+    "tree:8:32": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 151.78606550001132,
+      "absolute_e2e_tps": 50.59752998208803,
+      "aggregate_decode_tpf": 1.7762237762237763
+    },
+    "treebudget:8:16": {
+      "runs": 60,
+      "total_tokens": 7680,
+      "total_seconds": 154.91308119999303,
+      "absolute_e2e_tps": 49.57618775967091,
+      "aggregate_decode_tpf": 1.734182976786527
+    }
+  },
+  "token_differences_from_ar": [],
+  "all_token_ids_equal_to_ar": true,
+  "post_run_memory_clocks_by_method": {
+    "static:8": {
+      "9501": 60
+    },
+    "ar": {
+      "9501": 39,
+      "5001": 21
+    },
+    "static:16": {
+      "9501": 60
+    },
+    "tree:8:16": {
+      "9501": 60
+    },
+    "tree:8:32": {
+      "9501": 60
+    },
+    "treebudget:8:16": {
+      "9501": 60
+    }
+  },
+  "low_post_clock_records": [
+    {
+      "method": "ar",
+      "workload": "english_lru_lfu",
+      "seed": 20268007,
+      "snapshot": "54, 1320 MHz, 5001 MHz, 108.31 W, 32 %"
+    },
+    {
+      "method": "ar",
+      "workload": "english_lru_lfu",
+      "seed": 20268008,
+      "snapshot": "54, 1185 MHz, 5001 MHz, 136.45 W, 43 %"
+    },
+    {
+      "method": "ar",
+      "workload": "english_dns",
+      "seed": 20268105,
+      "snapshot": "57, 1470 MHz, 5001 MHz, 155.32 W, 30 %"
+    },
+    {
+      "method": "ar",
+      "workload": "english_dns",
+      "seed": 20268109,
+      "snapshot": "56, 1425 MHz, 5001 MHz, 155.64 W, 49 %"
+    },
+    {
+      "method": "ar",
+      "workload": "english_backpressure",
+      "seed": 20268208,
+      "snapshot": "56, 1470 MHz, 5001 MHz, 140.26 W, 46 %"
+    },
+    {
+      "method": "ar",
+      "workload": "chinese_tcp",
+      "seed": 20268309,
+      "snapshot": "56, 1530 MHz, 5001 MHz, 141.45 W, 48 %"
+    },
+    {
+      "method": "ar",
+      "workload": "chinese_crypto",
+      "seed": 20268408,
+      "snapshot": "56, 1485 MHz, 5001 MHz, 125.52 W, 38 %"
+    },
+    {
+      "method": "ar",
+      "workload": "chinese_undo",
+      "seed": 20268505,
+      "snapshot": "56, 1365 MHz, 5001 MHz, 140.62 W, 39 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_lower_bound",
+      "seed": 20268606,
+      "snapshot": "55, 1485 MHz, 5001 MHz, 118.10 W, 45 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_lower_bound",
+      "seed": 20268607,
+      "snapshot": "56, 1470 MHz, 5001 MHz, 133.48 W, 44 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_lower_bound",
+      "seed": 20268608,
+      "snapshot": "55, 1410 MHz, 5001 MHz, 139.68 W, 41 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_toposort",
+      "seed": 20268705,
+      "snapshot": "56, 1365 MHz, 5001 MHz, 150.76 W, 50 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_toposort",
+      "seed": 20268709,
+      "snapshot": "56, 1500 MHz, 5001 MHz, 143.49 W, 47 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_rle",
+      "seed": 20268807,
+      "snapshot": "56, 1365 MHz, 5001 MHz, 139.70 W, 37 %"
+    },
+    {
+      "method": "ar",
+      "workload": "code_rle",
+      "seed": 20268809,
+      "snapshot": "56, 1455 MHz, 5001 MHz, 139.44 W, 38 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_geometric",
+      "seed": 20268909,
+      "snapshot": "56, 1320 MHz, 5001 MHz, 131.36 W, 45 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_euclid",
+      "seed": 20269006,
+      "snapshot": "55, 1470 MHz, 5001 MHz, 132.91 W, 40 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_euclid",
+      "seed": 20269007,
+      "snapshot": "56, 1290 MHz, 5001 MHz, 148.40 W, 29 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_euclid",
+      "seed": 20269009,
+      "snapshot": "56, 1320 MHz, 5001 MHz, 148.94 W, 43 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_dice",
+      "seed": 20269105,
+      "snapshot": "56, 1500 MHz, 5001 MHz, 139.07 W, 44 %"
+    },
+    {
+      "method": "ar",
+      "workload": "math_dice",
+      "seed": 20269107,
+      "snapshot": "56, 1260 MHz, 5001 MHz, 133.59 W, 45 %"
+    }
+  ],
+  "low_post_clock_exclusively_ar": true,
+  "confirmatory_clock_gate_passed": false,
+  "timing_scope": "Conservative downgrade under preregistered clock rule; descriptive held-out measurements only. AR-associated state differences are recorded, not excluded or proven causal.",
+  "online_comparisons": {
+    "ar": {
+      "pairs": 60,
+      "baseline": "ar",
+      "absolute_e2e_tps": 49.57618775967091,
+      "ratio_of_total_e2e_seconds": 1.7956412405282278,
+      "paired_e2e_speedup": {
+        "mean": {
+          "estimate": 1.8240233364107845,
+          "ci_95_low": 1.766090729498246,
+          "ci_95_high": 1.8848619885791658
+        },
+        "median": {
+          "estimate": 1.7955557211674154,
+          "ci_95_low": 1.7421947178535482,
+          "ci_95_high": 1.8450388029921654
+        },
+        "min": 1.4057173560173744,
+        "max": 2.425578438241068
+      },
+      "prompt_cluster_mean_speedup": {
+        "mean": {
+          "estimate": 1.8240233364107847,
+          "ci_95_low": 1.7091338161088745,
+          "ci_95_high": 1.9483442887316866
+        },
+        "median": {
+          "estimate": 1.79380245472421,
+          "ci_95_low": 1.6720128774248137,
+          "ci_95_high": 1.9468083079470193
+        },
+        "min": 1.4800290457783258,
+        "max": 2.2065797125291757
+      },
+      "prompt_cluster_ratio_of_sums_speedup": {
+        "estimate": 1.7956412405282278,
+        "ci_95_low": 1.6884077546423224,
+        "ci_95_high": 1.9164117988295177
+      },
+      "paired_tpf_ratio": {
+        "mean": {
+          "estimate": 1.7578433586430176,
+          "ci_95_low": 1.7059366635408122,
+          "ci_95_high": 1.809926388765478
+        },
+        "median": {
+          "estimate": 1.7162162162162162,
+          "ci_95_low": 1.6710526315789473,
+          "ci_95_high": 1.7890873015873017
+        },
+        "min": 1.351063829787234,
+        "max": 2.267857142857143
+      },
+      "greedy_token_ids_equal_to_baseline": true,
+      "per_workload_e2e_speedup": {
+        "english_lru_lfu": 1.821073652769075,
+        "english_dns": 1.6328996391552633,
+        "english_backpressure": 1.874176083897177,
+        "chinese_tcp": 1.6870651671849024,
+        "chinese_crypto": 1.4800290457783258,
+        "chinese_undo": 2.0194405319968616,
+        "code_lower_bound": 1.6569605876647249,
+        "code_toposort": 1.7699822995585806,
+        "code_rle": 1.7186046474418901,
+        "math_geometric": 2.2065797125291757,
+        "math_euclid": 1.8176226098898394,
+        "math_dice": 2.2038460590635998
+      }
+    },
+    "static:16": {
+      "pairs": 60,
+      "baseline": "static:16",
+      "absolute_e2e_tps": 49.57618775967091,
+      "ratio_of_total_e2e_seconds": 1.1811761891415982,
+      "paired_e2e_speedup": {
+        "mean": {
+          "estimate": 1.1859460785809937,
+          "ci_95_low": 1.1622573881589078,
+          "ci_95_high": 1.209228503123585
+        },
+        "median": {
+          "estimate": 1.1917029861073873,
+          "ci_95_low": 1.1609932296083842,
+          "ci_95_high": 1.2273367812839377
+        },
+        "min": 0.9969764869725135,
+        "max": 1.3768284232569457
+      },
+      "prompt_cluster_mean_speedup": {
+        "mean": {
+          "estimate": 1.1859460785809934,
+          "ci_95_low": 1.1499121089860873,
+          "ci_95_high": 1.218646805996089
+        },
+        "median": {
+          "estimate": 1.2018104517019808,
+          "ci_95_low": 1.1445209460919656,
+          "ci_95_high": 1.227039474905601
+        },
+        "min": 1.051508417780244,
+        "max": 1.2682646325516735
+      },
+      "prompt_cluster_ratio_of_sums_speedup": {
+        "estimate": 1.1811761891415982,
+        "ci_95_low": 1.1449503647170798,
+        "ci_95_high": 1.2154364759423903
+      },
+      "paired_tpf_ratio": {
+        "mean": {
+          "estimate": 1.1853162072243426,
+          "ci_95_low": 1.1675927560763226,
+          "ci_95_high": 1.2028335902236567
+        },
+        "median": {
+          "estimate": 1.1909722222222223,
+          "ci_95_low": 1.1634920634920634,
+          "ci_95_high": 1.2105263157894737
+        },
+        "min": 1.0,
+        "max": 1.3333333333333333
+      },
+      "greedy_token_ids_equal_to_baseline": true,
+      "per_workload_e2e_speedup": {
+        "english_lru_lfu": 1.1174270568049713,
+        "english_dns": 1.051508417780244,
+        "english_backpressure": 1.1975839991218373,
+        "chinese_tcp": 1.2682646325516735,
+        "chinese_crypto": 1.1792331424813107,
+        "chinese_undo": 1.2153718260624933,
+        "code_lower_bound": 1.1108949769255356,
+        "code_toposort": 1.2387071237487088,
+        "code_rle": 1.206036904282124,
+        "math_geometric": 1.21048558656637,
+        "math_euclid": 1.17161483537896,
+        "math_dice": 1.2642244412676926
+      }
+    },
+    "tree:8:16": {
+      "pairs": 60,
+      "baseline": "tree:8:16",
+      "absolute_e2e_tps": 49.57618775967091,
+      "ratio_of_total_e2e_seconds": 1.0253232255766669,
+      "paired_e2e_speedup": {
+        "mean": {
+          "estimate": 1.0287833448676609,
+          "ci_95_low": 1.0124730966476023,
+          "ci_95_high": 1.0449404541886511
+        },
+        "median": {
+          "estimate": 1.025076305223362,
+          "ci_95_low": 1.0100635350038414,
+          "ci_95_high": 1.041145215997465
+        },
+        "min": 0.8916823090173422,
+        "max": 1.173304645746895
+      },
+      "prompt_cluster_mean_speedup": {
+        "mean": {
+          "estimate": 1.0287833448676609,
+          "ci_95_low": 1.0077781572509958,
+          "ci_95_high": 1.0478399304591597
+        },
+        "median": {
+          "estimate": 1.0233386463478413,
+          "ci_95_low": 1.0117952107692214,
+          "ci_95_high": 1.0617067622589667
+        },
+        "min": 0.9435116321407655,
+        "max": 1.0781525017423725
+      },
+      "prompt_cluster_ratio_of_sums_speedup": {
+        "estimate": 1.0253232255766669,
+        "ci_95_low": 1.004544115226808,
+        "ci_95_high": 1.043787372157866
+      },
+      "paired_tpf_ratio": {
+        "mean": {
+          "estimate": 1.0225333990676093,
+          "ci_95_low": 1.0116106021304156,
+          "ci_95_high": 1.0329776616531274
+        },
+        "median": {
+          "estimate": 1.025320512820513,
+          "ci_95_low": 1.0,
+          "ci_95_high": 1.03125
+        },
+        "min": 0.9024390243902439,
+        "max": 1.1071428571428572
+      },
+      "greedy_token_ids_equal_to_baseline": true,
+      "per_workload_e2e_speedup": {
+        "english_lru_lfu": 1.0236523786515392,
+        "english_dns": 0.9435116321407655,
+        "english_backpressure": 1.0658557135579652,
+        "chinese_tcp": 1.057557810959968,
+        "chinese_crypto": 1.0096737525740322,
+        "chinese_undo": 1.0781525017423725,
+        "code_lower_bound": 1.0230249140441436,
+        "code_toposort": 1.0224374245071903,
+        "code_rle": 1.0245319270536748,
+        "math_geometric": 1.0075491732510946,
+        "math_euclid": 1.0139166689644106,
+        "math_dice": 1.0755362409647735
+      }
+    },
+    "tree:8:32": {
+      "pairs": 60,
+      "baseline": "tree:8:32",
+      "absolute_e2e_tps": 49.57618775967091,
+      "ratio_of_total_e2e_seconds": 0.9798143857461287,
+      "paired_e2e_speedup": {
+        "mean": {
+          "estimate": 0.9819223689427863,
+          "ci_95_low": 0.9686437039273179,
+          "ci_95_high": 0.9944328788384803
+        },
+        "median": {
+          "estimate": 0.9959347128312641,
+          "ci_95_low": 0.9704545716993132,
+          "ci_95_high": 1.0019154191589097
+        },
+        "min": 0.8398092120788483,
+        "max": 1.062252021180794
+      },
+      "prompt_cluster_mean_speedup": {
+        "mean": {
+          "estimate": 0.9819223689427861,
+          "ci_95_low": 0.9679227348804021,
+          "ci_95_high": 0.996338250324883
+        },
+        "median": {
+          "estimate": 0.9815518487514916,
+          "ci_95_low": 0.9671911342242835,
+          "ci_95_high": 0.996266524129602
+        },
+        "min": 0.9403077214145498,
+        "max": 1.032715078978161
+      },
+      "prompt_cluster_ratio_of_sums_speedup": {
+        "estimate": 0.9798143857461287,
+        "ci_95_low": 0.9658195399551599,
+        "ci_95_high": 0.9938037367510211
+      },
+      "paired_tpf_ratio": {
+        "mean": {
+          "estimate": 0.9769864562474276,
+          "ci_95_low": 0.967644074714333,
+          "ci_95_high": 0.9852988293919398
+        },
+        "median": {
+          "estimate": 1.0,
+          "ci_95_low": 0.9743421052631579,
+          "ci_95_high": 1.0
+        },
+        "min": 0.8684210526315789,
+        "max": 1.0256410256410258
+      },
+      "greedy_token_ids_equal_to_baseline": true,
+      "per_workload_e2e_speedup": {
+        "english_lru_lfu": 0.9403077214145498,
+        "english_dns": 0.9417436211284596,
+        "english_backpressure": 0.9612585608172847,
+        "chinese_tcp": 0.9974084131839914,
+        "chinese_crypto": 0.9824848582074646,
+        "chinese_undo": 0.9806188392955187,
+        "code_lower_bound": 0.9934937383035282,
+        "code_toposort": 0.9748191979330871,
+        "code_rle": 0.9731237076312823,
+        "math_geometric": 0.9951246350752125,
+        "math_euclid": 1.0099700553448947,
+        "math_dice": 1.032715078978161
+      }
+    }
+  },
+  "online_vs_linear8": {
+    "pairs": 60,
+    "baseline": "static:8",
+    "absolute_e2e_tps": 49.57618775967091,
+    "ratio_of_total_e2e_seconds": 1.1688836668751768,
+    "paired_e2e_speedup": {
+      "mean": {
+        "estimate": 1.173293399272084,
+        "ci_95_low": 1.1496858855935421,
+        "ci_95_high": 1.1962148719297956
+      },
+      "median": {
+        "estimate": 1.1637103836977174,
+        "ci_95_low": 1.1368895720284344,
+        "ci_95_high": 1.201289006392301
+      },
+      "min": 0.985644984230795,
+      "max": 1.3696282745360804
+    },
+    "prompt_cluster_mean_speedup": {
+      "mean": {
+        "estimate": 1.173293399272084,
+        "ci_95_low": 1.1357635089981302,
+        "ci_95_high": 1.209939900490921
+      },
+      "median": {
+        "estimate": 1.1746458312893817,
+        "ci_95_low": 1.1349096659816102,
+        "ci_95_high": 1.2211009535851378
+      },
+      "min": 1.0431601278730525,
+      "max": 1.2903316509274512
+    },
+    "prompt_cluster_ratio_of_sums_speedup": {
+      "estimate": 1.1688836668751768,
+      "ci_95_low": 1.1306350407498653,
+      "ci_95_high": 1.2069643823523961
+    },
+    "paired_tpf_ratio": {
+      "mean": {
+        "estimate": 1.1853162072243426,
+        "ci_95_low": 1.1675927560763226,
+        "ci_95_high": 1.2028335902236567
+      },
+      "median": {
+        "estimate": 1.1909722222222223,
+        "ci_95_low": 1.1634920634920634,
+        "ci_95_high": 1.2105263157894737
+      },
+      "min": 1.0,
+      "max": 1.3333333333333333
+    },
+    "greedy_token_ids_equal_to_baseline": true,
+    "per_workload_e2e_speedup": {
+      "english_lru_lfu": 1.138313986379959,
+      "english_dns": 1.0431601278730525,
+      "english_backpressure": 1.2012942227912782,
+      "chinese_tcp": 1.2903316509274512,
+      "chinese_crypto": 1.1315053455832618,
+      "chinese_undo": 1.2092793528663357,
+      "code_lower_bound": 1.0948768837032563,
+      "code_toposort": 1.22617245919833,
+      "code_rle": 1.2160294479719456,
+      "math_geometric": 1.1479974397874855,
+      "math_euclid": 1.139666787157883,
+      "math_dice": 1.2408930870247699
+    }
+  }
+}
