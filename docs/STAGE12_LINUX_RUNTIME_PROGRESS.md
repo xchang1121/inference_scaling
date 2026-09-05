@@ -36,6 +36,19 @@ pip 进程 PID 401（退出 143）。这不是安装成功，也不是因一次�
 Content-Range 与长度，最后以锁文件中的完整 SHA-256 验证；已有 NVIDIA 依赖缓存不删除。
 未关闭 TLS 或更换到非官方 PyTorch 镜像。仅完整文件校验成功后才允许 pip 安装。
 
+该 820,206,653-byte PyTorch wheel 现已通过锁定 SHA-256，分段续传完成。
+重新检查 pip cache 时发现只有约 4.9 MiB 元数据，**并没有可恢复的大型 NVIDIA wheel 缓存**；
+不能把此前下载输出直接视为安装或持久缓存成功。依赖的有效完成状态以之后 pip exit 0 为准。
+
+WSL 到 github.com/pypi.nvidia.com 部分连接超时，而 Windows 同域名 HTTPS 可达。
+临时 TLS passthrough helper 仅绑定 Windows WSL adapter 172.31.128.1:18743，
+只允许 Ubuntu 当前 IP 172.31.134.151、仅 CONNECT:443 到硬编码的 PyPI/NVIDIA/PyTorch/GitHub
+软件源白名单、最多存活 30 分钟。只对本次安装命令注入 HTTPS_PROXY，不改变全局代理、VPN、
+DNS 或 TLS 校验；结束后主动关闭。经该通道官方 NVIDIA URL 返回 200，大型依赖恢复约 12 MB/s。
+
+FA2 普通下载同样缓慢；保留约 4 MiB 连续前缀后改用相同 hash-locked 分段续传。
+所有被中断下载的前缀仍在 task cache 中；没有删除实验数据或模型。
+
 ## 后续检查点
 
 系统 apt 包 -> 非 root 用户/隔离 Python 3.10 venv -> cu128 PyTorch/FA2/Triton ->
