@@ -78,7 +78,7 @@ Windows 重启、Ubuntu 和 Linux kernel smoke 已完成，无需沿用旧重启
 临时下载/转发源脚本已清理、转发已关闭；分片删除被策略拦截而保留缓存。
 原生模型基线与在线 pilot 以 Stage 12 的实际记录为准。
 
-最终回归：215 tests passed、Ruff 通过、Linux pip check 通过。原始 JSON 与数学/结果文档均已提交。
+最终回归：218 tests passed、Ruff 通过、Linux pip check 通过。原始 JSON 与数学/结果文档均已提交。
 
 ## 核心实现
 

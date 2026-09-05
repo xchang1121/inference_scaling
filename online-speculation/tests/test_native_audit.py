@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import hashlib
 import runpy
 
 import pytest
@@ -97,3 +98,10 @@ def test_gpu_shadow_preserves_same_width_outputs_and_official_stats():
             reference = fixed[(row["workload"], row["seed"])]
             assert row["output"] == reference["output"]
             assert {c["width"] for c in row["online"]["cycles"]} == {8}
+
+
+@pytest.mark.parametrize("stem", ["stage12_official_fa2_baseline", "stage12_native_online_r7_pilot", "stage12_native_shadow8"])
+def test_published_raw_bytes_match_recorded_audit_digest(stem):
+    root = Path(__file__).resolve().parents[1] / "results"
+    audit = json.loads((root / (stem + "_audit.json")).read_text(encoding="utf-8"))
+    assert hashlib.sha256((root / (stem + ".json")).read_bytes()).hexdigest() == audit["source_sha256"]
