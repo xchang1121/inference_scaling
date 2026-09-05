@@ -50,6 +50,7 @@ class ReplayRuntimeConfig:
 
     block_size: int = 8
     observe_after_request: bool = True
+    causal_within_request: bool = False
 
     def validate(self) -> None:
         if self.block_size < 1:
@@ -79,6 +80,8 @@ class ReplayDiagnostics:
     static_lookaheads: int
     lookup_seconds: float
     cache_update_seconds: float
+    causal_session_enabled: bool
+    causal_records_created: int
     route_reason_counts: dict[str, int]
     cache_records_added: int
     cache_before: dict[str, Any]
@@ -328,6 +331,11 @@ class HfReplayUnoRunner:
 
         prompt_tokens = tuple(int(token) for token in input_ids[0].tolist())
         cache_before = asdict(self.replay_cache.stats())
+        causal_session = (
+            self.replay_cache.begin_causal_session(prompt_tokens=prompt_tokens)
+            if config.causal_within_request
+            else None
+        )
         cache, seed_token, prefill_seconds = runtime._prefill(input_ids, generator)
         output_tokens = [seed_token]
         stopped = not runtime.ignore_stop and seed_token in runtime.stop_token_ids
@@ -352,16 +360,26 @@ class HfReplayUnoRunner:
         replay_lookaheads = 0
         static_lookaheads = 0
         lookup_seconds = 0.0
+        cache_update_seconds = 0.0
         route_reasons: Counter[str] = Counter()
 
         _sync(runtime.device)
         decode_start = time.perf_counter()
+        if causal_session is not None:
+            cache_update_start = time.perf_counter()
+            causal_session.append_verified((seed_token,))
+            cache_update_seconds += time.perf_counter() - cache_update_start
         while len(output_tokens) < max_new_tokens and not stopped:
             prefix_cache_length = _cache_length(cache)
             candidate = None
             if config.block_size > 1:
                 lookup_start = time.perf_counter()
-                candidate = self.replay_cache.lookup(
+                lookup_source = (
+                    causal_session
+                    if causal_session is not None
+                    else self.replay_cache
+                )
+                candidate = lookup_source.lookup(
                     prompt_tokens + tuple(output_tokens),
                     max_tokens=config.block_size - 1,
                 )
@@ -446,6 +464,10 @@ class HfReplayUnoRunner:
             )
 
             output_tokens.extend(committed)
+            if causal_session is not None:
+                cache_update_start = time.perf_counter()
+                causal_session.append_verified(committed)
+                cache_update_seconds += time.perf_counter() - cache_update_start
             seed_token = committed[-1]
             stopped = not runtime.ignore_stop and seed_token in runtime.stop_token_ids
             cycles += 1
@@ -482,8 +504,15 @@ class HfReplayUnoRunner:
         _sync(runtime.device)
         decode_seconds = time.perf_counter() - decode_start
         cache_records_added = 0
-        cache_update_seconds = 0.0
-        if config.observe_after_request:
+        causal_records_created = 0
+        if causal_session is not None:
+            cache_update_start = time.perf_counter()
+            cache_records_added = causal_session.close(
+                publish=config.observe_after_request,
+            )
+            cache_update_seconds += time.perf_counter() - cache_update_start
+            causal_records_created = causal_session.local_records
+        elif config.observe_after_request:
             cache_update_start = time.perf_counter()
             cache_records_added = self.replay_cache.observe_sequence(
                 prompt_tokens=prompt_tokens,
@@ -532,6 +561,8 @@ class HfReplayUnoRunner:
             static_lookaheads=static_lookaheads,
             lookup_seconds=lookup_seconds,
             cache_update_seconds=cache_update_seconds,
+            causal_session_enabled=causal_session is not None,
+            causal_records_created=causal_records_created,
             route_reason_counts=dict(sorted(route_reasons.items())),
             cache_records_added=cache_records_added,
             cache_before=cache_before,

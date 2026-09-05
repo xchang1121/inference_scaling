@@ -212,3 +212,9 @@ Uno 需 82--86 forwards。paired TPF ratio 为 `5.275 [5.200, 5.350]`，decode T
 `5.254 [5.018, 5.494]`，end-to-end TPS ratio 为 `4.988 [4.755, 5.238]`；5/5 与 greedy AR token IDs
 完全相同，一次 cache indexing 只用 3.85 ms。该结果是 exact-repeat/HF fallback 上界，明确不作为论文级
 收益。下一实现加入 causal delayed within-request replay，再用 near-repeat/mixed-domain pilot 冻结正式协议。
+
+Stage 10C causal core（2026-09-05）：已实现 request-local verified-past overlay。长度 $K$ 的 continuation
+只有在全部 token 已由 target commit 后才可供当前请求检索；全局 cache 在请求 close 前保持不变，discard
+不发布。runner 把增量 indexing 计入 decode 时间和独立 diagnostics。分块 session 与 bulk close 的 cache
+结果完全一致，周期 fake model 在空全局 cache 的首请求中实际走过 replay fast path且逐 token 等于 greedy AR。
+下一门是在真实 Uno-1B 上测量首请求 repetition workload，并据此决定 suffix/horizon/router 参数。

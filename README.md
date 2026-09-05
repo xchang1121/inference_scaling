@@ -76,7 +76,9 @@ Python 3.10 的 Ubuntu 22.04、cu128/FA2 linear 路径，并明确禁止在 WSL 
 逐 token 等价。首个 [RTX 3090 exact-repeat 工程 pilot](docs/STAGE10B_VERIFIER_REPLAY_PILOT_RESULTS.md)
 达到 TPF `5.275× [5.200, 5.350]`、decode TPS `5.254× [5.018, 5.494]`、端到端 TPS
 `4.988× [4.755, 5.238]`，5/5 与 greedy AR token 相同；这是 HF fallback 的重复轨迹上界，不是论文级或
-开放域结论。官方 Nano-vLLM 分支、近重复/mixed-domain 和 CUDA-time controller 仍待后续阶段。
+开放域结论。下一版 request-local causal overlay 也已实现：只有完整落入 verifier-confirmed past 的 continuation
+才对所属请求可见，请求结束才 merge 到全局；因此首个请求可复用自身重复片段而不泄露未完成请求。官方
+Nano-vLLM 分支、近重复/mixed-domain 和 CUDA-time controller 仍待后续阶段。
 
 ## 目录
 

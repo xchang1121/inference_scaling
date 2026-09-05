@@ -196,6 +196,33 @@ class VerifierReplayCache:
     def clear(self) -> None:
         self._entries.clear()
 
+    def begin_causal_session(
+        self,
+        *,
+        prompt_tokens: Sequence[int],
+    ) -> CausalVerifierReplaySession:
+        """Create a request-local overlay populated only by verified past tokens."""
+
+        return CausalVerifierReplaySession(
+            global_cache=self,
+            prompt_tokens=prompt_tokens,
+        )
+
+    def _merge_from(self, source: VerifierReplayCache) -> int:
+        """Merge a closed request-local overlay without exposing it early."""
+
+        if source is self:
+            raise ValueError("cannot merge a replay cache into itself")
+        if source.namespace != self.namespace or source.config != self.config:
+            raise ValueError("replay cache merge requires identical namespace and config")
+        records = 0
+        for key, counter in source._entries.items():
+            for continuation, count in counter.items():
+                for _ in range(count):
+                    self._record(key, continuation)
+                    records += 1
+        return records
+
     def stats(self) -> ReplayCacheStats:
         return ReplayCacheStats(
             namespace=self.namespace,
@@ -205,6 +232,135 @@ class VerifierReplayCache:
             evicted_entries=self._evicted_entries,
             evicted_alternatives=self._evicted_alternatives,
         )
+
+
+class CausalVerifierReplaySession:
+    """Request-local cache overlay with a strict verified-past publication lag.
+
+    The global cache remains unchanged until :meth:`close` publishes the
+    overlay.  During the request, a continuation becomes locally visible only
+    after all of its tokens have already been committed by the target model.
+    Thus an in-flight request can exploit repetitions in its own verified past
+    without revealing partial request state to concurrent requests.
+    """
+
+    def __init__(
+        self,
+        *,
+        global_cache: VerifierReplayCache,
+        prompt_tokens: Sequence[int],
+    ) -> None:
+        self.global_cache = global_cache
+        self.prompt_tokens = _tokens(
+            prompt_tokens,
+            name="prompt_tokens",
+            allow_empty=False,
+        )
+        self._local_cache = VerifierReplayCache(
+            namespace=global_cache.namespace,
+            config=global_cache.config,
+        )
+        self._sequence = list(self.prompt_tokens)
+        self._next_start = len(self.prompt_tokens)
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def verified_completion_tokens(self) -> int:
+        return len(self._sequence) - len(self.prompt_tokens)
+
+    @property
+    def local_records(self) -> int:
+        return self._local_cache.stats().observations
+
+    def _record_start(self, start: int) -> int:
+        continuation = tuple(
+            self._sequence[
+                start : start + self.global_cache.config.max_continuation_length
+            ]
+        )
+        if not continuation:
+            return 0
+        maximum = min(self.global_cache.config.max_suffix_length, start)
+        records = 0
+        for suffix_length in range(
+            self.global_cache.config.min_suffix_length,
+            maximum + 1,
+        ):
+            key = tuple(self._sequence[start - suffix_length : start])
+            self._local_cache._record(key, continuation)
+            records += 1
+        return records
+
+    def append_verified(self, token_ids: Sequence[int]) -> int:
+        """Append committed target tokens and publish only full local horizons."""
+
+        if self._closed:
+            raise RuntimeError("cannot append to a closed causal replay session")
+        tokens = _tokens(
+            token_ids,
+            name="verified_token_ids",
+            allow_empty=False,
+        )
+        self._sequence.extend(tokens)
+        records = 0
+        horizon = self.global_cache.config.max_continuation_length
+        while self._next_start + horizon <= len(self._sequence):
+            records += self._record_start(self._next_start)
+            self._next_start += 1
+        return records
+
+    def lookup(
+        self,
+        context_tokens: Sequence[int],
+        *,
+        max_tokens: int,
+        min_tokens: int = 1,
+    ) -> ReplayCandidate | None:
+        """Query the private verified-past overlay and the closed global cache."""
+
+        if self._closed:
+            raise RuntimeError("cannot query a closed causal replay session")
+        local = self._local_cache.lookup(
+            context_tokens,
+            max_tokens=max_tokens,
+            min_tokens=min_tokens,
+        )
+        global_candidate = self.global_cache.lookup(
+            context_tokens,
+            max_tokens=max_tokens,
+            min_tokens=min_tokens,
+        )
+        if local is None:
+            return global_candidate
+        if global_candidate is None:
+            return local
+        return max(
+            (local, global_candidate),
+            key=lambda candidate: (
+                candidate.matched_suffix_length,
+                candidate.observations,
+                candidate.confidence,
+                len(candidate.token_ids),
+                candidate.token_ids,
+            ),
+        )
+
+    def close(self, *, publish: bool = True) -> int:
+        """Seal tail continuations and optionally atomically publish the overlay."""
+
+        if self._closed:
+            raise RuntimeError("causal replay session is already closed")
+        while self._next_start < len(self._sequence):
+            self._record_start(self._next_start)
+            self._next_start += 1
+        self._closed = True
+        if not publish:
+            return 0
+        return self.global_cache._merge_from(self._local_cache)
 
 
 @dataclass(frozen=True)

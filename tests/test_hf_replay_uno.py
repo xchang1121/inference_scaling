@@ -209,6 +209,50 @@ def test_second_greedy_request_uses_one_forward_replay_and_matches_ar() -> None:
     assert second.diagnostics.replay_tokens_per_forward > 1.0
 
 
+def test_first_request_can_replay_only_from_its_verified_causal_past() -> None:
+    input_ids = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    runner = _runner(temperature=0.0)
+    result = runner.generate(
+        input_ids,
+        max_new_tokens=41,
+        seed=111,
+        config=ReplayRuntimeConfig(
+            block_size=4,
+            causal_within_request=True,
+        ),
+    )
+    ar = _runtime(temperature=0.0).generate_ar(
+        input_ids,
+        max_new_tokens=41,
+        seed=999,
+    )
+    assert result.metrics.output_token_ids == ar.output_token_ids
+    assert result.diagnostics.causal_session_enabled
+    assert result.diagnostics.causal_records_created > 0
+    assert result.diagnostics.replay_cycles > 0
+    assert result.diagnostics.static_cycles > 0
+    assert result.diagnostics.cache_before["entries"] == 0
+    assert result.diagnostics.cache_after["entries"] > 0
+
+
+def test_request_local_replay_can_be_used_without_publishing_partial_state() -> None:
+    input_ids = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    runner = _runner(temperature=0.0)
+    result = runner.generate(
+        input_ids,
+        max_new_tokens=41,
+        seed=112,
+        config=ReplayRuntimeConfig(
+            block_size=4,
+            observe_after_request=False,
+            causal_within_request=True,
+        ),
+    )
+    assert result.diagnostics.replay_cycles > 0
+    assert result.diagnostics.cache_records_added == 0
+    assert result.diagnostics.cache_after["entries"] == 0
+
+
 def test_wrong_replay_is_corrected_and_then_falls_back_losslessly() -> None:
     namespace = "tiny-markov@v1|greedy"
     replay_cache = VerifierReplayCache(
