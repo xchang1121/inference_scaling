@@ -55,17 +55,20 @@ def main():
     parser.add_argument("--warmup-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=20270005)
     parser.add_argument("--online", action="store_true", help="include frozen R7 request-local width policy")
+    parser.add_argument("--shadow", action="store_true", help="fixed B=8 online wrapper control, no adaptive widths")
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
-    methods = blocks + (["online"] if args.online else [])
+    methods = blocks + (["online"] if args.online else []) + (["shadow8"] if args.shadow else [])
     if len(set(blocks)) != len(blocks) or 1 not in blocks or min(blocks) < 1 or max(blocks) > 16:
         raise ValueError("distinct widths within 1..16 including AR width 1 required")
     if args.repetitions < 1 or min(args.max_new_tokens, args.warmup_tokens) < 2:
         raise ValueError("positive repetitions and at least two output tokens required")
     if args.online and not {4, 8, 16} <= set(blocks):
         raise ValueError("R7 requires captured and measured static widths 4,8,16")
+    if args.shadow and 8 not in blocks:
+        raise ValueError("shadow control requires measured static width 8")
     payload = {
         "schema_version": 1, "scope": "official-runtime engineering baseline; not confirmatory",
         "backend": "unmodified pinned Nano-vLLM Uno / WSL2 / FA2 / CUDA graphs",
@@ -134,13 +137,14 @@ def main():
             params = SamplingParams(
                 temperature=0.0, top_k=32, top_p=0.95, max_tokens=budget,
                 ignore_eos=True, stop_token_ids=[64019, 1], mask_token_id=64256,
-                noise_mode="random_uniform", diffusion_block_size=8 if width == "online" else width,
+                noise_mode="random_uniform", diffusion_block_size=8 if width in ("online", "shadow8") else width,
             )
             torch.cuda.synchronize()
             started = time.perf_counter()
             diagnostics = None
-            if width == "online":
-                output, diagnostics = generate_online(engine, ids, params, budget, NativeWidthPolicy())
+            if width in ("online", "shadow8"):
+                policy = NativeWidthPolicy(widths=(8,)) if width == "shadow8" else NativeWidthPolicy()
+                output, diagnostics = generate_online(engine, ids, params, budget, policy)
             else:
                 output = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])[0]
             torch.cuda.synchronize()
