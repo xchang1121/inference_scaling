@@ -218,3 +218,11 @@ Stage 10C causal core（2026-09-05）：已实现 request-local verified-past ov
 不发布。runner 把增量 indexing 计入 decode 时间和独立 diagnostics。分块 session 与 bulk close 的 cache
 结果完全一致，周期 fake model 在空全局 cache 的首请求中实际走过 replay fast path且逐 token 等于 greedy AR。
 下一门是在真实 Uno-1B 上测量首请求 repetition workload，并据此决定 suffix/horizon/router 参数。
+
+Stage 10C engineering pilot（2026-09-05）：按 exact suffix length 分桶会对 8/10 等相邻坏命中重复探索，
+因此实现宽 match-length reliability bucket。`min_suffix=8` 的 aggregate TPF 为 1.0253，但 decode TPS
+为 0.9796；code template 因一次坏探索 TPF 降至约 0.9869。保守 `min_suffix=16` 消除 code 坏命中，
+aggregate TPF 为 `1.01584 [1.00000, 1.03744]`，TPS 为 `1.00267 [0.96873, 1.03957]`，仍未通过系统门。
+自然 repetition 单独 TPF +4.75%，TPS 约 1。9/9 causal 与 paired static token IDs 相同；一个 workload 的
+static block Uno 与 one-token AR 在第 3 token 出现 BF16 kernel-shape argmax 分叉，已作为独立数值诊断，
+不误归因给 online replay。后续固定 min suffix 16，转向 temporal near-repeat/mixed-domain stream。

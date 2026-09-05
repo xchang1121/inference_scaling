@@ -245,6 +245,50 @@ def test_cost_router_exploits_replay_above_static_tpf() -> None:
     assert decision.reason == "exploit"
 
 
+def test_cost_router_can_share_failure_evidence_across_match_lengths() -> None:
+    router = CostAwareReplayRouter(
+        namespace="model@revision|greedy",
+        config=ReplayRouteConfig(
+            min_match_length=8,
+            min_proposal_tokens=1,
+            exploration_trials_per_match_length=1,
+            probe_interval=100,
+            ema_decay=0.0,
+            throughput_margin=0.0,
+            match_length_bucket_width=32,
+        ),
+    )
+    router.observe_static(committed_tokens=4, forwards=2)
+    first = ReplayCandidate(
+        token_ids=(1, 2, 3),
+        matched_suffix_length=8,
+        observations=1,
+        total_observations=1,
+        confidence=1.0,
+        namespace="model@revision|greedy",
+    )
+    second = ReplayCandidate(
+        token_ids=(4, 5, 6),
+        matched_suffix_length=10,
+        observations=1,
+        total_observations=1,
+        confidence=1.0,
+        namespace="model@revision|greedy",
+    )
+    explored = router.decide(first)
+    assert explored.use_replay
+    assert explored.match_length_bucket == 8
+    router.observe_replay(
+        matched_suffix_length=8,
+        committed_tokens=1,
+        forwards=1,
+    )
+    shared = router.decide(second)
+    assert not shared.use_replay
+    assert shared.reason == "below-margin"
+    assert shared.match_length_bucket == 8
+
+
 @pytest.mark.parametrize(
     ("probability", "proposals", "expected"),
     ((0.0, 7, 1.0), (0.5, 1, 1.5), (1.0, 7, 8.0)),

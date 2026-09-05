@@ -80,6 +80,8 @@ class ReplayDiagnostics:
     static_lookaheads: int
     lookup_seconds: float
     cache_update_seconds: float
+    cache_update_in_decode_seconds: float
+    cache_close_seconds: float
     causal_session_enabled: bool
     causal_records_created: int
     route_reason_counts: dict[str, int]
@@ -361,6 +363,8 @@ class HfReplayUnoRunner:
         static_lookaheads = 0
         lookup_seconds = 0.0
         cache_update_seconds = 0.0
+        cache_update_in_decode_seconds = 0.0
+        cache_close_seconds = 0.0
         route_reasons: Counter[str] = Counter()
 
         _sync(runtime.device)
@@ -368,7 +372,9 @@ class HfReplayUnoRunner:
         if causal_session is not None:
             cache_update_start = time.perf_counter()
             causal_session.append_verified((seed_token,))
-            cache_update_seconds += time.perf_counter() - cache_update_start
+            elapsed = time.perf_counter() - cache_update_start
+            cache_update_seconds += elapsed
+            cache_update_in_decode_seconds += elapsed
         while len(output_tokens) < max_new_tokens and not stopped:
             prefix_cache_length = _cache_length(cache)
             candidate = None
@@ -467,7 +473,9 @@ class HfReplayUnoRunner:
             if causal_session is not None:
                 cache_update_start = time.perf_counter()
                 causal_session.append_verified(committed)
-                cache_update_seconds += time.perf_counter() - cache_update_start
+                elapsed = time.perf_counter() - cache_update_start
+                cache_update_seconds += elapsed
+                cache_update_in_decode_seconds += elapsed
             seed_token = committed[-1]
             stopped = not runtime.ignore_stop and seed_token in runtime.stop_token_ids
             cycles += 1
@@ -510,7 +518,8 @@ class HfReplayUnoRunner:
             cache_records_added = causal_session.close(
                 publish=config.observe_after_request,
             )
-            cache_update_seconds += time.perf_counter() - cache_update_start
+            cache_close_seconds = time.perf_counter() - cache_update_start
+            cache_update_seconds += cache_close_seconds
             causal_records_created = causal_session.local_records
         elif config.observe_after_request:
             cache_update_start = time.perf_counter()
@@ -518,7 +527,8 @@ class HfReplayUnoRunner:
                 prompt_tokens=prompt_tokens,
                 verified_completion_tokens=output_tokens,
             )
-            cache_update_seconds = time.perf_counter() - cache_update_start
+            cache_close_seconds = time.perf_counter() - cache_update_start
+            cache_update_seconds = cache_close_seconds
         cache_after = asdict(self.replay_cache.stats())
 
         metrics = runtime._metrics(
@@ -561,6 +571,8 @@ class HfReplayUnoRunner:
             static_lookaheads=static_lookaheads,
             lookup_seconds=lookup_seconds,
             cache_update_seconds=cache_update_seconds,
+            cache_update_in_decode_seconds=cache_update_in_decode_seconds,
+            cache_close_seconds=cache_close_seconds,
             causal_session_enabled=causal_session is not None,
             causal_records_created=causal_records_created,
             route_reason_counts=dict(sorted(route_reasons.items())),

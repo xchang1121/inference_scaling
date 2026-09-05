@@ -159,6 +159,8 @@ def test_empty_cache_path_is_bitwise_static_uno_for_greedy() -> None:
     assert hybrid.diagnostics.static_cycles == hybrid.metrics.cycles
     assert hybrid.diagnostics.cache_records_added > 0
     assert hybrid.diagnostics.cache_update_seconds >= 0.0
+    assert hybrid.diagnostics.cache_update_in_decode_seconds == 0.0
+    assert hybrid.diagnostics.cache_update_seconds == hybrid.diagnostics.cache_close_seconds
 
 
 def test_empty_cache_path_preserves_static_stochastic_random_state() -> None:
@@ -229,6 +231,11 @@ def test_first_request_can_replay_only_from_its_verified_causal_past() -> None:
     assert result.metrics.output_token_ids == ar.output_token_ids
     assert result.diagnostics.causal_session_enabled
     assert result.diagnostics.causal_records_created > 0
+    assert result.diagnostics.cache_update_in_decode_seconds > 0.0
+    assert result.diagnostics.cache_update_seconds == (
+        result.diagnostics.cache_update_in_decode_seconds
+        + result.diagnostics.cache_close_seconds
+    )
     assert result.diagnostics.replay_cycles > 0
     assert result.diagnostics.static_cycles > 0
     assert result.diagnostics.cache_before["entries"] == 0

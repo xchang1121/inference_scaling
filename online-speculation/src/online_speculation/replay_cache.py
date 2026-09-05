@@ -354,12 +354,13 @@ class CausalVerifierReplaySession:
 
         if self._closed:
             raise RuntimeError("causal replay session is already closed")
+        if not publish:
+            self._closed = True
+            return 0
         while self._next_start < len(self._sequence):
             self._record_start(self._next_start)
             self._next_start += 1
         self._closed = True
-        if not publish:
-            return 0
         return self.global_cache._merge_from(self._local_cache)
 
 
@@ -372,6 +373,7 @@ class ReplayRouteConfig:
     probe_interval: int = 64
     ema_decay: float = 0.9
     throughput_margin: float = 0.02
+    match_length_bucket_width: int = 1
 
     def validate(self) -> None:
         if self.min_match_length < 1 or self.min_proposal_tokens < 1:
@@ -386,6 +388,8 @@ class ReplayRouteConfig:
             raise ValueError("ema_decay must lie in [0, 1)")
         if self.throughput_margin < 0.0:
             raise ValueError("throughput_margin cannot be negative")
+        if self.match_length_bucket_width < 1:
+            raise ValueError("match_length_bucket_width must be positive")
 
 
 @dataclass(frozen=True)
@@ -395,6 +399,7 @@ class ReplayRouteDecision:
     static_tokens_per_forward: float | None
     replay_tokens_per_forward: float | None
     match_length: int
+    match_length_bucket: int
     decision_index: int
 
 
@@ -423,6 +428,13 @@ class CostAwareReplayRouter:
             return value
         return self.config.ema_decay * old + (1.0 - self.config.ema_decay) * value
 
+    def _bucket_key(self, matched_suffix_length: int) -> int:
+        base = self.config.min_match_length
+        distance = max(0, matched_suffix_length - base)
+        return base + (
+            distance // self.config.match_length_bucket_width
+        ) * self.config.match_length_bucket_width
+
     def observe_static(self, *, committed_tokens: int, forwards: int = 2) -> None:
         if committed_tokens < 1 or forwards < 1:
             raise ValueError("static observations must have positive work")
@@ -438,7 +450,10 @@ class CostAwareReplayRouter:
     ) -> None:
         if matched_suffix_length < 1 or committed_tokens < 1 or forwards < 1:
             raise ValueError("replay observations must have positive work")
-        bucket = self._buckets.setdefault(matched_suffix_length, _RouteBucket())
+        bucket = self._buckets.setdefault(
+            self._bucket_key(matched_suffix_length),
+            _RouteBucket(),
+        )
         bucket.trials += 1
         bucket.replay_tpf_ema = self._ema(
             bucket.replay_tpf_ema,
@@ -449,10 +464,8 @@ class CostAwareReplayRouter:
         if candidate.namespace != self.namespace:
             raise ValueError("candidate and router namespaces differ")
         self._decision_index += 1
-        bucket = self._buckets.setdefault(
-            candidate.matched_suffix_length,
-            _RouteBucket(),
-        )
+        bucket_key = self._bucket_key(candidate.matched_suffix_length)
+        bucket = self._buckets.setdefault(bucket_key, _RouteBucket())
 
         use_replay = False
         reason = "ineligible"
@@ -477,6 +490,8 @@ class CostAwareReplayRouter:
         elif self._decision_index - bucket.last_probe_decision >= self.config.probe_interval:
             use_replay = True
             reason = "periodic-probe"
+        else:
+            reason = "below-margin"
 
         if use_replay:
             bucket.last_probe_decision = self._decision_index
@@ -486,6 +501,7 @@ class CostAwareReplayRouter:
             static_tokens_per_forward=self._static_tpf_ema,
             replay_tokens_per_forward=bucket.replay_tpf_ema,
             match_length=candidate.matched_suffix_length,
+            match_length_bucket=bucket_key,
             decision_index=self._decision_index,
         )
 

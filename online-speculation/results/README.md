@@ -37,3 +37,7 @@
 - `stage10b_replay_uno1b_rtx3090_hf_pilot.json`：一次 verifier-confirmed cache-build request 后的
   exact-repeat 工程上界；记录 5 个 alternating static/replay pairs、greedy AR token 等价、真实 KV/forward
   计数、cache build cost、TPF/TPS bootstrap 与摊销。它是 Windows HF pilot，不是预注册或官方 runtime 结果。
+- `stage10c_causal_replay_uno1b_rtx3090_hf_pilot.json`：空 global cache 的首请求 causal overlay，
+  `min_suffix=8` 和宽 reliability bucket；显示自然 repetition 收益、code 一次坏探索及 aggregate TPS 负结果。
+- `stage10c_causal_replay_uno1b_rtx3090_hf_min16_pilot.json`：保守 suffix 消融；另外两类 workload TPF
+  零损回退，自然 repetition TPF +4.75%，但 aggregate TPS 区间仍跨 1。
