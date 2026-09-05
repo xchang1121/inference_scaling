@@ -16,7 +16,7 @@
 | 硬件 | RTX 3090 24 GB，i7-12700K，32 GB RAM |
 | 静态基线 | Uno 0.9B，Windows HF KV-cache；早期静态复现与本轮完整生成计时分别保留 |
 | WSL | Windows 已重启；WSL2 + Ubuntu 22.04.5 正常运行，Linux nvidia-smi 已识别 RTX 3090 |
-| 官方 Linux runtime | Python 3.10/系统编译依赖、ext4 源码/模型已就绪；cu128/FA2 安装与 kernel smoke 进行中 |
+| 官方 Linux runtime | 已完成；Python 3.10、torch 2.11/cu128、Triton 3.6、FA2 2.8.3，14 项检查含 GPU forward/backward 全通过 |
 | R7 原生在线候选 | 不改官方模型/decoder，只在线学习块长；13 项 CPU 单测通过，已冻结 GPU pilot 协议，尚待实测 |
 | 在线预算树 pilot | FP32：48.74 TPS vs linear B=8 的 41.27 TPS（+18.09%）；vs fixed tree 47.86 TPS 仅 +1.84% |
 | 独立评估 | 360/360 完成；300 个 speculative 输出全部逐 token 等于 AR；频率门未通过，整组仅作描述性工程测量 |
@@ -68,8 +68,9 @@
 模型和安装包保存在被忽略的目录；版本锁、摘要结果和证明进入 Git。
 
 当前观察到的最快配置是 `tree:8:32`，不是在线 controller；该选择不构成全局最大 TPS 保证。
-Windows 重启和 Ubuntu 安装已经完成，无需沿用旧重启请求。Linux GPU kernels 与官方完整基线
-以 Stage 12 的实际记录为准；在 kernel smoke 成功前不把运行时标记完成。
+Windows 重启、Ubuntu 和 Linux kernel smoke 已完成，无需沿用旧重启请求。
+临时下载/转发源脚本已清理、转发已关闭；分片删除被策略拦截而保留缓存。
+原生模型基线与在线 pilot 以 Stage 12 的实际记录为准。
 
 ## 核心实现
 

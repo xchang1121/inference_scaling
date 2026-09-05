@@ -10,7 +10,6 @@ readonly RESULT_PATH="${5:?Pass the mounted runtime-result JSON path}"
 readonly UNO_COMMIT="ed2ee36bb7a3aea8732ebc635b3f09490a032ea3"
 readonly BASE_SHA256="6392cc67c8dcc7aef1575f94ecdf3c7113b7d0e8f4e7058c4c3c74d4d876c365"
 readonly ADAPTER_SHA256="5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e"
-readonly FA_WHEEL_URL="https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp310-cp310-linux_x86_64.whl"
 readonly EXPECTED_FA_SHA256="9001c730642cdc1ea44ed8130b0dc80e763519d6efc01e4de44b0700a0dfa13d"
 readonly EXPECTED_FA_BYTES="253651546"
 
@@ -74,16 +73,49 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
+# Permanent reproducible entry point. One-off range/tunnel helpers were removed
+# after installation. Existing verified wheels support offline reuse.
+fetch_locked_wheel() {
+  local lock_file="${1}" filename expected_bytes expected_sha download_url wheel_path
+  filename="$(jq --exit-status --raw-output .filename "${lock_file}")"
+  expected_bytes="$(jq --exit-status --raw-output .bytes "${lock_file}")"
+  expected_sha="$(jq --exit-status --raw-output .sha256 "${lock_file}")"
+  download_url="$(jq --exit-status --raw-output .url "${lock_file}")"
+  if [[ "${filename}" != "$(basename "${filename}")" || "${download_url}" != https://* ]]; then
+    echo "Invalid locked filename or HTTPS source" >&2
+    return 1
+  fi
+  wheel_path="${WHEEL_DIR}/${filename}"
+  if [[ ! -e "${wheel_path}" ]]; then
+    curl --fail --location --proto '=https' --proto-redir '=https' \
+      --retry 4 --retry-all-errors --connect-timeout 15 --speed-time 60 --speed-limit 1024 \
+      --continue-at - --output "${wheel_path}.download.part" "${download_url}"
+    if [[ "$(stat --format=%s "${wheel_path}.download.part")" != "${expected_bytes}" || \
+          "$(sha256sum "${wheel_path}.download.part" | cut -d ' ' -f 1)" != "${expected_sha}" ]]; then
+      echo "Downloaded wheel does not match lock; preserved, not installed" >&2
+      return 1
+    fi
+    mv --no-clobber -- "${wheel_path}.download.part" "${wheel_path}"
+  fi
+  if [[ "$(stat --format=%s "${wheel_path}")" != "${expected_bytes}" || \
+        "$(sha256sum "${wheel_path}" | cut -d ' ' -f 1)" != "${expected_sha}" ]]; then
+    echo "Saved wheel does not match lock; preserved, not installed" >&2
+    return 1
+  fi
+  echo "VERIFIED ${filename} ${expected_sha}"
+}
+
 python -m pip install --upgrade pip 'setuptools<82' wheel
-python "${PROJECT_SOURCE}/scripts/download_verified_wheel.py" \
-  --lock "${PROJECT_SOURCE}/config/torch_wheel.lock.json" --cache-dir "${WHEEL_DIR}"
+fetch_locked_wheel "${PROJECT_SOURCE}/config/torch_wheel.lock.json"
+fetch_locked_wheel "${PROJECT_SOURCE}/config/triton_wheel.lock.json"
 python -m pip install "${WHEEL_DIR}/torch-2.11.0+cu128-cp310-cp310-manylinux_2_28_x86_64.whl" \
-  --index-url https://download.pytorch.org/whl/cu128
+  "${WHEEL_DIR}/triton-3.6.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" \
+  --find-links "${WHEEL_DIR}" --index-url https://download.pytorch.org/whl/cu128
 
 mapfile -t flash_wheels < <(find "${WHEEL_DIR}" -maxdepth 1 -type f \
   -name 'flash_attn-2.8.3*cp310*linux_x86_64.whl' -print)
 if [[ "${#flash_wheels[@]}" -eq 0 ]]; then
-  python -m pip download --no-deps --dest "${WHEEL_DIR}" "${FA_WHEEL_URL}"
+  fetch_locked_wheel "${PROJECT_SOURCE}/config/flash_attn_wheel.lock.json"
   mapfile -t flash_wheels < <(find "${WHEEL_DIR}" -maxdepth 1 -type f \
     -name 'flash_attn-2.8.3*cp310*linux_x86_64.whl' -print)
 fi

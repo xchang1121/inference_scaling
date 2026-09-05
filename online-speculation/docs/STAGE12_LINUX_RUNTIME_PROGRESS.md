@@ -56,3 +56,31 @@ FA2 普通下载同样缓慢；保留约 4 MiB 连续前缀后改用相同 hash-
 在这些步骤实际通过之前，不把 Linux runtime 标记为完成。
 
 验收以[用户更新后的口径](CURRENT_ACCEPTANCE_CRITERIA.md)为准；保留 exactness 与完整开销记录。
+
+## 实际完成：2026-09-05 13:23 +08:00
+
+完整 bootstrap 退出码 0，pip check 通过。机器可读证据：
+[stage9_wsl_runtime.json](../results/stage9_wsl_runtime.json)（沿用预先约定的文件名）。
+所有 14 项 checks 均为 true，包括 Python 3.10、Linux x86_64、固定 Uno revision、
+RTX 3090/SM 8.6、torch 2.11.0+cu128、Triton 3.6.0、FA2 2.8.3、Transformers 4.55.0、
+没有安装 Linux NVIDIA display driver，以及 FA2 forward/backward finite。
+kernel smoke shape=[2,128,8,64]，FP16，loss=0.07520008087158203。
+这完成运行时验证，还不是模型基线或论文速度复现。
+
+Triton 188,103,592 bytes 的官方索引/S3 SHA-256 一致。中断其 R2 慢连接前，先把所有完整
+NVIDIA 临时 wheel 按 ZIP CRC 校验保存，再保存 Triton 前缀；续传完成后从本地安装。
+三个关键 wheel 的来源/大小/SHA 锁保留在 config，pip freeze 记录安装来源及版本。
+
+## 用户要求的临时工具清理
+
+安装验证完成后关闭临时 Windows 转发进程，确认 18743 不再监听。
+移除一次性 `download_verified_wheel.py`、`preserve_pip_downloads.py`、`wsl_package_tunnel.py`
+及只服务于已删除下载器的测试。曾提交的脚本可从 Git 历史恢复。
+正式 bootstrap 改为系统 curl + jq，继续保留 HTTPS、SHA-256/长度校验和普通断点续传，
+不依赖已删除的临时 Python helper。
+
+Windows 侧重复下载前缀已经移除。临时 Python 源脚本已删除，但其少量 bytecode cache 尚存。
+三个已验证 wheel 的 .parts 目录与 .prefix.part 清理先遇到 shell quoting 错误；改用
+PowerShell 严格路径检查后的 UNC 删除命令被执行策略拦截，未执行。不绕过该限制，
+约 1.18 GiB Linux 分片暂保留，**不能声称已回收该空间**。已完成的完整 wheel、模型、venv、
+官方源码及所有实验数据均保留；分片不是实验原始证据，不影响离线模型实验。
