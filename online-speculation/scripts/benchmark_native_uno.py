@@ -59,11 +59,14 @@ def main():
     parser.add_argument("--fused-norm", action="store_true", help="fuse XLLM grouped RMSNorm; validate numerical differences")
     parser.add_argument("--fast-weights", action="store_true", help="add real last-MLP online LoRA at fixed B=8")
     parser.add_argument("--rank", type=int, default=8)
-    parser.add_argument("--update-stride", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=0.003)
+    parser.add_argument("--update-stride", type=int, default=16)
+    parser.add_argument("--learning-rate", type=float, default=0.001)
+    parser.add_argument("--replay-blocks", type=int, default=4, help="last R blocks per update, 1 <= R <= stride")
     parser.add_argument("--audit-fast", action="store_true", help="extra replay/change checks, included in TPS cost")
     parser.add_argument("--workloads", default="english,chinese,code,math")
     args = parser.parse_args()
+    if not 1 <= args.replay_blocks <= args.update_stride:
+        raise ValueError("1 <= replay blocks <= update stride required")
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
@@ -122,6 +125,10 @@ def main():
             "gpu": torch.cuda.get_device_name(0), "uno_commit": revision,
             "tracked_source_clean": not dirty, "checkpoint_sha256": hashes,
         }
+        payload["implementation_sha256"] = {
+            name: sha256(Path(__file__).parent / name) for name in
+            ("benchmark_native_uno.py", "native_fast_weights.py", "native_norm.py")
+        }
         config = dict(
             attention_backend="fa2", max_num_seqs=1, max_model_len=2048,
             max_num_batched_tokens=2048, gpu_memory_utilization=0.5,
@@ -135,7 +142,8 @@ def main():
         save()
         start = time.perf_counter()
         with extended_runner(fused_norm=args.fused_norm, fast_weights=args.fast_weights,
-                             rank=args.rank, stride=args.update_stride, lr=args.learning_rate):
+                             rank=args.rank, stride=args.update_stride, lr=args.learning_rate,
+                             replay_blocks=args.replay_blocks):
             engine = LLM(model=str(args.base), **config)
         torch.cuda.synchronize()
         payload["model_initialization_seconds"] = time.perf_counter() - start
