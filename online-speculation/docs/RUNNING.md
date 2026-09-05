@@ -1,4 +1,4 @@
-# 当前原生基线与在线控制器的运行说明
+# 当前原生推理优化与 Online Uno 的运行说明
 
 ## 环境
 
@@ -36,8 +36,9 @@ python scripts/benchmark_native_uno.py \
   --source /home/singm/online-speculation-work/uno \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
-  --blocks 1,4,8,16 --online --shadow \
-  --repetitions 2 --max-new-tokens 128 --warmup-tokens 128 \
+  --blocks 1,8 --fused-norm --fast-weights \
+  --update-stride 8 --learning-rate 0.003 --rank 8 \
+  --repetitions 3 --max-new-tokens 512 --warmup-tokens 128 \
   --output results/native_run.json
 
 python scripts/analyze_native_uno.py \
@@ -48,40 +49,45 @@ python scripts/analyze_native_uno.py \
 `results/` 全部被 Git 忽略，没有默认提交例外。运行时使用新文件名，不覆盖已有结果。
 源码树不保存旧成绩、失败轨迹或结果归档。
 
-B=1 是原引擎 AR 对照；B=4/8/16 是固定块长 Uno；`--online` 使用当前块长控制器；
-`--shadow` 让同一 wrapper 只选择 B=8，检查外围包装是否改变固定宽度行为。
-**这里的 online 是策略统计更新，不是在线 LoRA 训练。**
+B=1 是原引擎 AR 对照；B=8 是固定块长 Uno；`fast8` 是真正的在线 LoRA。
+在上述命令基础上，去掉 `--fast-weights` 测不含新 LoRA 分支的融合版本；
+再去掉 `--fused-norm` 测原生基线。三种配置使用同一 32-page KV 容量、同样 prompts/种子/预算。
+`--audit-fast` 开启额外的重放 logits 检查，检查成本也计入 TPS，仅作功能验证。
+初次 smoke 可以用 `--workloads english --repetitions 1 --max-new-tokens 128`。
+
+旧 `--online` 选项仅指块长统计控制器，需要 `--blocks 1,4,8,16`；
+`--shadow` 是固定 B=8 的控制器包装对照。这两者不与 `--fast-weights` 混合评估。
 
 基准使用 batch=1、BF16、FA2、预捕获 CUDA graph、temperature=0、ignore_eos=True。
-完整生成计时包含控制器构造和更新、wrapper 安装恢复、prefill、decode、detokenization；
+完整生成计时包含新增参数/optimizer 重置、特征缓存、teacher 复制、backward、Adam、同步发布，
+以及 wrapper 安装恢复、prefill、decode、detokenization；
 模型初始化、共同 prompt 编码、GPU 快照和 JSON 写盘单独排除。
 保存输出 token IDs、文本及反馈，不因输出不同就剔除样本。
 
 官方 prefill 的第一个 token 不进入 decode stats，因此 `accepts=max_new_tokens−1`；
 每个 decode cycle 的 `forwards` 增加 2。TPF 和 E2E TPS 的分母不能混用。
-审计检查完整矩阵、参数冻结、无抢占、合法时间及策略反馈/提交统计对账。
+审计检查完整矩阵、冻结权重字节 hash、无抢占、合法时间及更新次数/提交统计对账。
 少量 prompts 的聚类 bootstrap 只作描述，不能证明稳定额外收益。
 
 ## 接入自己的请求
 
-`NativeWidthPolicy` 与 `generate_online` 都位于 [native_online_policy.py](../scripts/native_online_policy.py)。
-按基准脚本构造空闲 `LLM`、对应 chat formatter 的 prompt_ids 和 SamplingParams 后调用：
+按基准脚本导入官方 `LLM`，在构造模型之前安装 extension，才能让 CUDA graph 捕获新分支：
 
 ```python
-from native_online_policy import NativeWidthPolicy, generate_online
+from native_fast_weights import extended_runner, generate_fast
 
-output, diagnostics = generate_online(
-    engine, prompt_ids, params, budget=128, policy=NativeWidthPolicy()
-)
+with extended_runner(fused_norm=True, fast_weights=True, rank=8, stride=8, lr=0.003):
+    engine = LLM(model=base_path, **config)  # config 见 benchmark_native_uno.py
+output, diagnostics = generate_fast(engine, prompt_ids, params, budget=512)
 ```
 
-引擎必须为单 GPU、batch=1、线性 Uno，预捕获所有允许块长，最大块长至少为 16。
-每个请求新建 policy，不复用状态，不并发共享同一个 engine/wrapper。
-作为库可在项目目录 `pip install -e .`，只安装当前控制器模块，不带回旧 HF 原型命令。
+引擎必须为单 GPU、batch=1、线性 XLLM Uno，预捕获 B=8，params 使用同一 B。
+每个请求自动重置新增参数，不并发共享 engine/wrapper，不做异步训练。
+作为库可在项目目录 `pip install -e .`，仅安装当前模块；GPU 依赖仍由 WSL 环境提供。
 
 ## 单元测试
 
-当前测试使用合成引擎/合成记录，不依赖历史结果，也不产生新的 GPU 实验成绩。
+测试使用合成引擎/合成记录及小型张量，覆盖 mask、梯度、参数发布与重置；不依赖历史结果。
 在父仓库 PowerShell 中：
 
 ```powershell
@@ -89,4 +95,7 @@ output, diagnostics = generate_online(
 .venv/Scripts/python.exe -m ruff check --no-cache online-speculation
 ```
 
-实现原理、EMA 更新、数学分布保持条件和有限精度边界见 [ALGORITHM.md](ALGORITHM.md)。
+WSL 中安装 `python -m pip install pytest` 后，运行 `python -m pytest tests -q` 可额外执行
+CUDA 融合 norm 的四组数值测试。Windows 会跳过这些 Triton 测试。
+
+实现原理、梯度/特征闭合、KV 隔离、分布保持条件和有限精度边界见 [ALGORITHM.md](ALGORITHM.md)。
