@@ -116,6 +116,8 @@ def main():
     train.add_argument("--device", default="cuda")
     train.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     train.add_argument("--rank", type=int, default=8)
+    train.add_argument("--alpha", type=float,
+                       help="adapter scaling numerator; alpha/rank multiplies each low-rank branch (default: rank)")
     train.add_argument("--steps", type=int, default=1000)
     train.add_argument("--warmup-steps", type=int, default=100)
     train.add_argument("--batch-size", type=int, default=1)
@@ -235,7 +237,8 @@ def main():
         implementation_sha = implementation_fingerprint()
         torch.set_num_threads(args.threads)
         torch.manual_seed(args.seed)
-        model = load_hf_base(args.base, rank=args.rank, device=args.device, dtype=getattr(torch, args.dtype))
+        model = load_hf_base(args.base, rank=args.rank, alpha=args.alpha,
+                             device=args.device, dtype=getattr(torch, args.dtype))
         fingerprint = base_fingerprint(model)
         tokenizer = None
         if args.text_data:

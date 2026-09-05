@@ -103,15 +103,17 @@ python -m blockspec train \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/train.jsonl \
   --validation-data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
   --output models/current-adapter.pt --device cuda --dtype float32 \
-  --rank 32 --steps 600 --warmup-steps 150 --warmup-loss reverse_kl_l1 \
-  --loss l1 --batch-size 2 --sequence-length 128 --blocks 2,4 \
-  --learning-rate 0.0003 --validation-every 100 --validation-batches 8 --bos-id 0 --seed 314159
+  --rank 32 --alpha 32 --steps 1200 --warmup-steps 300 --warmup-loss reverse_kl_l1 \
+  --loss l1 --batch-size 2 --sequence-length 256 --blocks 2,4,6,8 \
+  --learning-rate 0.0003 --validation-every 300 --validation-batches 8 --bos-id 0 --seed 314159
 ```
 
-上述配置已在本机 3090 执行，600 步由 150 步热身与 450 步纯 L1 训练组成。
+上述配置已在本机 3090 执行，1,200 步由 300 步热身与 900 步纯 L1 训练组成，四种块长各训练 300 步。
 纯文本 JSONL 通过 `--text-data` 启用文本编码；当前数据已经保存为 token 编号，直接使用上述命令。
 数据保存在仓库外。数据和噪声分别设随机种子。训练前后检查基座指纹；
 适配器检查点保存模型配置和基座指纹，加载器据此核对基座与精度。
+`--alpha` 控制低秩分支的缩放 $\alpha/r$，默认取 `--rank` 的值。
+评测入口从检查点恢复秩与缩放；通过 Python 直接构造基座时，将相同的值传给 `load_hf_base(rank=..., alpha=...)`。
 
 增加 `--validation-data /path/validation.jsonl --validation-every 100 --validation-batches 8`，
 可在训练前及每 100 步检查固定窗口、固定噪声上的学生／老师差异。启动时校验训练与验证集合的独立性。
@@ -140,7 +142,7 @@ from blockspec.tokenizer import LocalTokenizer
 
 base = "/home/singm/online-speculation-work/models/K2-Horizon-0.9B"
 model = load_hf_base(base, rank=32, dtype=torch.float32, device="cuda")
-model, _ = load_checkpoint("/home/singm/online-speculation-work/models/blockspec-r32-fp32-paper.pt",
+model, _ = load_checkpoint("/home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt",
                            model=model, device="cuda")
 tokenizer = LocalTokenizer(base)
 learner = OnlineLearner(model, OnlineConfig(stride=16, replay_blocks=4, learning_rate=1e-4))
@@ -169,17 +171,17 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 
 ## 6. 同条件三路评测
 
-当前离线起点在仓库外，使用 r=32 / FP32 加载，训练配置为 600 步联合热身课程。
+当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载，训练配置为 1,200 步的 2→4→6→8 课程。
 开发评测使用验证集中的连续前缀；test 集留给配置确定后的评测。
 
 ```bash
 python -m blockspec benchmark \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-paper.pt \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
   --split-role validation --dtype float32 --prompts 8 --prompt-length 256 \
   --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
-  --sampler tree --top-k 4 --prefix-budget 12 --execution cuda_graph \
+  --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
   --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
   --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed
 ```

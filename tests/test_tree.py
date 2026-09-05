@@ -101,6 +101,48 @@ def test_tree_target_sampling_probabilities_do_not_depend_on_tree_scores(monkeyp
     torch.testing.assert_close(law, p[0], atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("budget", [1, 2, 3, 5])
+@pytest.mark.parametrize("eos_id", [None, 0, 2])
+def test_expected_output_length_equals_reachable_node_mass(budget, eos_id, monkeypatch):
+    tree = build_tree(2, torch.tensor([[.6, .3, .1], [.2, .3, .5]], dtype=torch.float64),
+                      top_k=2, prefix_budget=6)
+    target = torch.tensor([[.2, .5, .3], [.6, .1, .3], [.1, .4, .5],
+                           [.4, .4, .2], [.3, .2, .5], [.7, .2, .1]], dtype=torch.float64)
+    terminals = []
+
+    def enumerate_draws(node, output, mass):
+        if len(output) == budget or output[-1] == eos_id:
+            terminals.append((output, mass))
+            return
+        for token in range(target.shape[-1]):
+            path, probability = output + [token], mass * target[node, token]
+            child = tree.children[node].get(token)
+            if child is None:
+                terminals.append((path, probability))
+            else:
+                enumerate_draws(child, path, probability)
+
+    enumerate_draws(0, [tree.tokens[0]], torch.tensor(1.0, dtype=torch.float64))
+    measured = torch.tensor(0.0, dtype=torch.float64)
+    total_mass = torch.tensor(0.0, dtype=torch.float64)
+    for output, mass in terminals:
+        draws = iter(output[1:])
+        monkeypatch.setattr("blockspec.tree.draw",
+                            lambda distribution, generator, draws=draws: torch.tensor(next(draws)))
+        actual = traverse_target(tree, target, budget=budget, eos_id=eos_id)
+        assert actual.tokens == output
+        measured += len(actual.tokens) * mass
+        total_mass += mass
+    reach = torch.ones(len(tree.tokens), dtype=torch.float64)
+    for node in range(1, len(tree.tokens)):
+        parent = tree.parents[node]
+        reach[node] = reach[parent] * target[parent, tree.tokens[node]] * (tree.tokens[parent] != eos_id)
+    expected = 1 + sum(reach[node] for node in range(len(tree.tokens))
+                       if tree.depths[node] <= budget - 2 and tree.tokens[node] != eos_id)
+    torch.testing.assert_close(total_mass, torch.ones_like(total_mass), atol=1e-15, rtol=1e-15)
+    torch.testing.assert_close(measured, torch.as_tensor(expected, dtype=torch.float64), atol=1e-15, rtol=1e-15)
+
+
 def test_tree_greedy_specialization_equals_one_hot_traversal():
     tree = build_tree(0, torch.tensor([[.6, .4], [.3, .7]]), top_k=2, prefix_budget=6)
     for targets in itertools.product(range(2), repeat=len(tree.tokens)):

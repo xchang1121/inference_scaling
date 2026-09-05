@@ -106,8 +106,9 @@ def test_clean_seed_kv_survives_arbitrary_adapter_updates():
                 torch.testing.assert_close(a, e, atol=2e-15, rtol=2e-14)
 
 
-def test_gated_lowrank_gradient_against_finite_differences():
-    layer = GatedLinear(3, 4, 2, 2).double()
+@pytest.mark.parametrize("alpha", [2.0, 32.0])
+def test_gated_lowrank_gradient_against_finite_differences(alpha):
+    layer = GatedLinear(3, 4, 2, alpha).double()
     a = torch.randn(2, 3, dtype=torch.float64, requires_grad=True)
     b = torch.randn(4, 2, dtype=torch.float64, requires_grad=True)
     x = torch.randn(1, 2, 3, dtype=torch.float64, requires_grad=True)
