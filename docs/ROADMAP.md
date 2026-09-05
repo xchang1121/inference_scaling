@@ -10,7 +10,7 @@
 | R3A/B | Recycling / warm-start pilot | 已结束：没有可靠净收益，负结果保留 |
 | R3C/D | Packed tree + rank/cost budget 在线消融 | 已实现；HighQoS pilot 对线性约 +18%，对固定树仅约 +1.84% |
 | R3E | 12 新 prompts × 5 repeats 独立 held-out | 360/360 完成、token 一致；在线 49.58 TPS < fixed N=32 的 50.60，且计时频率门未过，仅作描述性测量 |
-| R4 | WSL2 + cu128/FA2/Triton + pinned Nano-vLLM | Windows 已重启，Ubuntu/RTX 3090/Python 3.10 已验证；wheel 下载恢复中，kernel smoke 和官方基线未完成 |
+| R4 | WSL2 + cu128/FA2/Triton + pinned Nano-vLLM | 环境已完整安装；14 项 checks 含 FA2 GPU forward/backward 全通过，官方模型基线待测 |
 | R5 | FA2 树路径候选、固定 CUDA graph 形状与减少同步 | 补丁仅默认关闭、apply-check 通过；必须先跑官方未修改基线 |
 | R6A | 嵌套树 counterfactual feedback | 72/72 pilot 完成；正确性通过，46.85 TPS < fixed N=32 49.63，性能未过，不提升为默认 |
 | R7 | 原生 Uno 请求内块长学习 | 设计/证明/实现、13 项 CPU 单测已完成；GPU pilot 协议已冻结，待运行时安装结束 |
