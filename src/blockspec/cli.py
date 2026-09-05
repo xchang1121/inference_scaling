@@ -161,6 +161,8 @@ def main():
     bench.add_argument("--loss", choices=LOSS_KINDS, default="l1")
     bench.add_argument("--optimizer", choices=["auto", "standard", "fused"], default="auto",
                        help="online AdamW execution; auto selects fused on CUDA")
+    bench.add_argument("--feedback-execution", choices=["windowed", "all"], default="windowed",
+                       help="collect decoder feedback in the update window, or on every round")
     bench.add_argument("--eos-id", type=int, help="omit for a declared fixed-token-budget measurement")
     bench.add_argument("--seed", type=int, default=271828)
     bench.add_argument("--threads", type=int, default=4)
@@ -177,7 +179,8 @@ def main():
                                  execution=args.execution)
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
                                      learning_rate=args.learning_rate, loss=args.loss,
-                                     train_last_layers=args.online_last_layers, optimizer=args.optimizer)
+                                     train_last_layers=args.online_last_layers, optimizer=args.optimizer,
+                                     feedback_execution=args.feedback_execution)
         if args.threads < 1:
             parser.error("positive threads required")
         torch.set_num_threads(args.threads)

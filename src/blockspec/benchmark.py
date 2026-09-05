@@ -18,7 +18,7 @@ from .tree import generate_tree
 
 
 _TOTAL_FIELDS = ("tokens", "seconds", "decode_forwards", "rounds", "accepted", "proposed",
-                 "updates", "update_seconds")
+                 "updates", "update_seconds", "feedback_blocks")
 
 
 @dataclass(frozen=True)
@@ -139,9 +139,13 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             executor.prepare(clean + static_draft + online_draft)
             ar_keys = {(1, False, None)} | {(p.shape[1] - 1, False, None) for p in prompts
                                             if 1 <= p.shape[1] - 1 <= maximum}
-            needed = {"ar": ar_keys, "static": clean + static_draft, "online": clean + online_draft}
+            online_keys = clean + online_draft
+            if (online_config.feedback_execution == "windowed"
+                    and online_config.replay_blocks < online_config.stride):
+                online_keys += static_draft
+            needed = {"ar": ar_keys, "static": clean + static_draft, "online": online_keys}
             # Charge each arm for the signatures required by its standalone deployment.
-            engine_cost = {arm: sum(executor.signature_seconds[k] for k in keys) for arm, keys in needed.items()}
+            engine_cost = {arm: sum(executor.signature_seconds[k] for k in set(keys)) for arm, keys in needed.items()}
             execution_info.update(setup_seconds=executor.setup_seconds, signatures=len(executor.slots),
                                   capacity=executor.capacity, setup_seconds_by_arm=engine_cost)
             options["executor"] = executor
@@ -155,7 +159,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                                                  loss=online_config.loss,
                                                  clip_norm=online_config.clip_norm,
                                                  train_last_layers=online_config.train_last_layers,
-                                                 optimizer=online_config.optimizer))
+                                                 optimizer=online_config.optimizer,
+                                                 feedback_execution=online_config.feedback_execution))
         spec(model, prompts[0], max(4, config.warmup_tokens), **options, learner=warm,
              eos_id=config.eos_id, generator=rng(config.seed))
         del warm

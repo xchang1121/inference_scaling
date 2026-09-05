@@ -161,6 +161,7 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
     start = time.perf_counter()
     initial_updates = learner.updates if learner is not None else 0
     initial_seconds = learner.update_seconds if learner is not None else 0.0
+    initial_feedback = learner.feedback_blocks if learner is not None else 0
     if learner is not None:
         learner.clear_replay()
     cache = _prefill(forward, prompt) if max_new_tokens else None
@@ -180,7 +181,8 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache
-        capture = learner.capture_layer if learner is not None else None
+        collect = learner is not None and learner.needs_decoder_feedback
+        capture = learner.capture_layer if collect else None
         result = forward(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
         draft, temporary = result[:2]
         boundary = result[2] if capture is not None else None
@@ -214,8 +216,11 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         done = len(output) >= max_new_tokens or output[-1] == eos_id
         if learner is not None:
             teacher_nodes = traversal.teachers[:b - 1]
-            feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes), boundary)
-            learner.observe(feedback, may_update=not done)
+            if collect:
+                feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes), boundary)
+                learner.observe(feedback, may_update=not done)
+            else:
+                learner._skip_decoder_feedback(len(teacher_nodes))
         if done:
             break
     if learner is not None:
@@ -223,4 +228,5 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
     synchronize(model)
     return Generation(output, time.perf_counter() - start, forwards, rounds, accepted, proposed,
                       learner.updates - initial_updates if learner is not None else 0,
-                      learner.update_seconds - initial_seconds if learner is not None else 0.0, matches)
+                      learner.update_seconds - initial_seconds if learner is not None else 0.0, matches,
+                      learner.feedback_blocks - initial_feedback if learner is not None else 0)

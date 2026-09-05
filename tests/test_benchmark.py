@@ -21,8 +21,8 @@ def test_aggregate_counts_all_time_not_mean_tps():
 
 
 def test_trajectory_accumulates_in_order_with_one_learner_initialization():
-    rows = [Generation([1] * 10, 1, 4, 2, accepted=6, updates=1, update_seconds=.2).summary(),
-            Generation([1] * 30, 9, 12, 6, accepted=18, updates=2, update_seconds=.3).summary()]
+    rows = [Generation([1] * 10, 1, 4, 2, accepted=6, updates=1, update_seconds=.2, feedback_blocks=1).summary(),
+            Generation([1] * 30, 9, 12, 6, accepted=18, updates=2, update_seconds=.3, feedback_blocks=2).summary()]
     rows[0].update(adapter_version_start=0, adapter_version=1, last_update_loss=.7)
     rows[1].update(adapter_version_start=1, adapter_version=3, last_update_loss=.4)
     actual = stream_trajectory(rows, setup_seconds=2, engine_setup_seconds=3)
@@ -32,6 +32,7 @@ def test_trajectory_accumulates_in_order_with_one_learner_initialization():
     assert end["tps_including_all_setup"] == 40 / 15
     assert end["tokens_per_round"] == 5 and end["requests"] == 2
     assert end["updates"] == 3 and end["update_seconds"] == .5
+    assert end["feedback_blocks"] == 3
     assert [row["adapter_version"] for row in actual] == [1, 3]
     assert actual[0]["cumulative"]["tokens"] == 10
     assert "cumulative" not in rows[0]
@@ -152,3 +153,31 @@ def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_lay
             result["arms"][arm]["engine_setup_seconds"])
         for trace in result["trajectories"]:
             assert trace["arms"][arm][-1]["cumulative"] == result["repeats"][trace["repeat"]][arm]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph hardware required")
+@pytest.mark.parametrize("feedback_execution", ["windowed", "all"])
+@pytest.mark.parametrize("last_layers", [None, 1])
+def test_windowed_benchmark_charges_both_needed_draft_signatures(monkeypatch, feedback_execution, last_layers):
+    from blockspec.execution import FixedShapeExecutor
+    original = FixedShapeExecutor.prepare
+
+    def measured_signatures(self, signatures):
+        original(self, signatures)
+        self.signature_seconds = {key: 1.0 + (key[2] is not None) for key in self.slots}
+        self.setup_seconds = sum(self.signature_seconds.values())
+
+    monkeypatch.setattr(FixedShapeExecutor, "prepare", measured_signatures)
+    torch.manual_seed(71)
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, adapter_rank=2)).cuda()
+    result = benchmark_streams(model, [torch.tensor([[0, 1, 2]])],
+                               BenchmarkConfig(tokens=20, block_size=3, warmup_tokens=8,
+                                               sampler="tree", prefix_budget=5, execution="cuda_graph"),
+                               OnlineConfig(stride=4, replay_blocks=1, train_last_layers=last_layers,
+                                            feedback_execution=feedback_execution))
+    cost = 7 if last_layers is None else 11 if feedback_execution == "windowed" else 9
+    assert result["execution"]["setup_seconds_by_arm"] == {"ar": 2, "static": 7, "online": cost}
+    for trace in result["trajectories"]:
+        assert trace["arms"]["online"][-1]["cumulative"]["feedback_blocks"] == (
+            result["repeats"][trace["repeat"]]["online"]["feedback_blocks"])

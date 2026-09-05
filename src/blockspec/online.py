@@ -41,16 +41,19 @@ class OnlineConfig:
     clip_norm: float = 1.0
     train_last_layers: int | None = None
     optimizer: str = "auto"
+    feedback_execution: str = "windowed"
 
     def __post_init__(self):
-        if self.stride < 1 or self.replay_blocks < 1:
-            raise ValueError("positive update stride and replay capacity required")
+        if any(type(v) is not int or v < 1 for v in (self.stride, self.replay_blocks)):
+            raise ValueError("positive integer update stride and replay capacity required")
         if not all(math.isfinite(v) and v > 0 for v in (self.learning_rate, self.clip_norm)):
             raise ValueError("finite positive optimizer scales required")
         if self.loss not in LOSS_KINDS:
             raise ValueError("unknown online loss")
         if self.optimizer not in ("auto", "standard", "fused"):
             raise ValueError("unknown optimizer execution")
+        if self.feedback_execution not in ("windowed", "all"):
+            raise ValueError("unknown feedback execution")
         if self.train_last_layers is not None and (type(self.train_last_layers) is not int or self.train_last_layers < 1):
             raise ValueError("a positive integer suffix size or None required")
 
@@ -90,7 +93,24 @@ class OnlineLearner:
                                            fused=True if use_fused else None)
         self.replay = deque(maxlen=config.replay_blocks)
         self.rounds, self.updates, self.version = 0, 0, 0
+        self.feedback_blocks = 0
         self.update_seconds, self.last_loss = 0.0, None
+
+    @property
+    def needs_decoder_feedback(self):
+        """Collect the next positive-feedback decoder round when an update uses it."""
+        until_update = self.config.stride - self.rounds % self.config.stride
+        return self.config.feedback_execution == "all" or until_update <= self.config.replay_blocks
+
+    def _skip_decoder_feedback(self, valid):
+        """Advance a positive-feedback round outside its update's replay window.
+
+        The synchronous decoders provide a valid target on every observed round
+        and clear replay at request boundaries. Generic callers use observe().
+        """
+        if type(valid) is not int or valid < 1 or self.needs_decoder_feedback:
+            raise ValueError("a positive-feedback decoder round outside the replay window is required")
+        self.rounds += 1
 
     def clear_replay(self):
         """Release request-specific KV and targets; keep learned weights/optimizer."""
@@ -108,6 +128,7 @@ class OnlineLearner:
                 if feedback.boundary is None or feedback.boundary.start_layer != self.capture_layer:
                     raise ValueError("suffix continuation requires the matching draft boundary")
             self.replay.append(feedback.detached(cache_start=self.capture_layer or 0))
+            self.feedback_blocks += 1
         if may_update and self.replay and self.rounds % self.config.stride == 0:
             return self.update()
         return None

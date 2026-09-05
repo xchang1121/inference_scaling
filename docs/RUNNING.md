@@ -158,6 +158,8 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 `train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见主报告 9.3。
 词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导见主报告 9.4。
 `optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；两者的更新核对见主报告 9.5。
+`feedback_execution="windowed"` 按更新需求安排采集窗口，`all` 使用逐轮采集。两者的更新等价性见主报告 9.6。
+`observe()` 接口逐次接收显式反馈；窗口化由线性／树解码器调度，参数与 Adam 状态跨请求续用。
 检查点保存权重，新建 learner 时初始化 Adam 状态。
 `learner=None` 对应静态适配器；`generate_ar` 每 token 执行一次前向。
 树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
@@ -179,7 +181,7 @@ python -m blockspec benchmark \
   --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
   --sampler tree --top-k 4 --prefix-budget 12 --execution cuda_graph \
   --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
-  --loss forward_kl --learning-rate 0.0003 --optimizer auto
+  --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed
 ```
 
 按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
@@ -192,6 +194,7 @@ python -m blockspec benchmark \
 `trajectories` 返回按请求顺序排列的累计 TPS、每轮输出、学习耗时和适配器版本；图准备费用归入第一轮重复。
 `--loss forward_kl` 使用老师到学生的 KL，`--loss l1` 使用概率差的绝对值总和。
 `--optimizer auto` 自动选择执行后端，输出 `online_optimizer` 给出实际选择；`--optimizer standard` 提供标准 AdamW 对照。
+`--feedback-execution all` 提供逐轮采集对照；`feedback_blocks` 给出实际保存的反馈块数，并计入累计轨迹。
 `--online-last-layers 4` 选择末 4 层续训，输出报告实际可训练参数数。
 删除命令中的 `--online-last-layers 4` 参数即可测全适配器续训。
 
@@ -200,6 +203,7 @@ python -m blockspec benchmark \
 图在预热和请求计时前准备，输出 `execution.setup_seconds_by_arm` 和 `tps_including_all_setup`，
 分别报告每个方法单独部署所需的图准备时间，以及包含图准备和 learner 初始化的流级 TPS。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
+末层窗口化采集使用带分界特征和普通起草两组图；自建执行器时在 `prepare()` 中准备这两组查询形状。
 图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存等价性和张量规模见主报告 8.2。
 执行配置为 FP32 CUDA、batch=1、TF32 关闭。
 长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。

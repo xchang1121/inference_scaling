@@ -22,6 +22,7 @@ class Generation:
     updates: int = 0
     update_seconds: float = 0.0
     accepted_per_round: list[int] = field(default_factory=list)
+    feedback_blocks: int = 0
 
     @property
     def tps(self):
@@ -31,7 +32,8 @@ class Generation:
         return {"tokens": len(self.tokens), "seconds": self.seconds, "tps": self.tps,
                 "decode_forwards": self.decode_forwards, "rounds": self.rounds,
                 "accepted": self.accepted, "proposed": self.proposed,
-                "updates": self.updates, "update_seconds": self.update_seconds}
+                "updates": self.updates, "update_seconds": self.update_seconds,
+                "feedback_blocks": self.feedback_blocks}
 
 
 def _check(model, prompt, max_new_tokens, eos_id):
@@ -96,6 +98,7 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
     start = time.perf_counter()
     initial_updates = learner.updates if learner is not None else 0
     initial_update_seconds = learner.update_seconds if learner is not None else 0.0
+    initial_feedback = learner.feedback_blocks if learner is not None else 0
     if learner is not None:
         learner.clear_replay()
     cache = _prefill(forward, prompt) if max_new_tokens else None
@@ -117,7 +120,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache
-        capture = learner.capture_layer if learner is not None else None
+        collect = learner is not None and learner.needs_decoder_feedback
+        capture = learner.capture_layer if collect else None
         result = forward(inputs, cache=cache, adapter_mask=mask, return_cache=True, capture_layer=capture)
         draft, temporary_cache = result[:2]
         boundary = result[2] if capture is not None else None
@@ -156,8 +160,11 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         seed = prompt.new_tensor([[output[-1]]])
         done = len(output) >= max_new_tokens or output[-1] == eos_id
         if learner is not None:
-            feedback = Feedback(inputs, old_cache, teacher[0, :used], used, boundary)
-            learner.observe(feedback, may_update=not done)
+            if collect:
+                feedback = Feedback(inputs, old_cache, teacher[0, :used], used, boundary)
+                learner.observe(feedback, may_update=not done)
+            else:
+                learner._skip_decoder_feedback(used)
         if done:
             break
     if learner is not None:
@@ -167,4 +174,4 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
     return Generation(output, elapsed, forwards, rounds, accepted, proposed,
                       (learner.updates - initial_updates) if learner is not None else 0,
                       (learner.update_seconds - initial_update_seconds) if learner is not None else 0.0,
-                      accepts)
+                      accepts, learner.feedback_blocks - initial_feedback if learner is not None else 0)
