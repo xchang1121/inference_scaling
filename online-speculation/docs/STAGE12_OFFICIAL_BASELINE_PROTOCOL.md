@@ -21,6 +21,8 @@ TPS 为完整官方 generate-call 返回 token 数 / 墙钟时间，包含 prefi
 不含模型加载/graph 初始捕获、共用 prompt 编码、GPU 状态查询、JSON I/O；初始化时间另报。
 官方 finalize_output 会去掉末尾 stop tokens，即使 ignore_eos 为 true，因此同时记录实际返回长度，
 不得假定一定返回 128 个 IDs。原始 decoder stats 不重写，TPF 根据其原语义解释。
+源码检查确认：prefill 会提交一个 token，但不更新 seq.stats；因此 official stats 的
+accepts/forwards 是 decode-only TPF，完整预算 128 对应 accepts=127。外层 TPS 仍包含 prefill。
 
 该组是工程复现基线，不是新的 confirmatory study。逐 token 对比 AR，BF16/不同 kernel shape
 若出现差异必须记录首差异，不能把理论 exactness 等同于 bitwise 一致。
