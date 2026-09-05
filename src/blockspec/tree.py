@@ -1,0 +1,193 @@
+"""Prefix-budget trees and exact target-path traversal (not multiguess p/q).
+
+The tree is a computation schedule: at every reached node we sample the BASE
+distribution, then reuse a verified child if present. A deterministic top-k
+tree is never mislabeled as iid samples from the original proposal law.
+"""
+
+from dataclasses import dataclass
+import heapq
+import math
+import time
+
+import torch
+
+from .decoding import Generation, _check, _prefill
+from .model import cache_length, trim_cache
+from .online import Feedback, synchronize
+from .sampling import SamplingConfig, draw, probabilities, validate_distribution
+
+
+@dataclass
+class CandidateTree:
+    tokens: list[int]
+    parents: list[int]
+    depths: list[int]
+    scores: list[float]
+    children: list[dict[int, int]]
+
+    def path(self, node):
+        result = []
+        while node >= 0:
+            result.append(node)
+            node = self.parents[node]
+        return list(reversed(result))
+
+    def layout(self, prefix_length, *, device):
+        count = len(self.tokens)
+        allowed = torch.zeros(count, prefix_length + count, device=device, dtype=torch.bool)
+        allowed[:, :prefix_length] = True
+        for node in range(count):
+            allowed[node, [prefix_length + i for i in self.path(node)]] = True
+        ids = torch.tensor([self.tokens], device=device)
+        positions = torch.tensor([self.depths], device=device) + prefix_length
+        return ids, positions, allowed[None, None]
+
+
+def build_tree(root, q, *, top_k=4, prefix_budget=16):
+    """Best-first enumeration of top prefix PRODUCTS. Budget includes the root.
+
+    Products cannot increase on extension, so a best-first heap gives globally
+    highest-scoring retained prefixes without enumerating K**depth full leaves.
+    """
+    validate_distribution(q)
+    if q.ndim != 2 or top_k < 1 or prefix_budget < 1 or not 0 <= root < q.shape[-1]:
+        raise ValueError("invalid tree dimensions or root")
+    values, ids = q.detach().cpu().topk(min(top_k, q.shape[-1]), dim=-1, sorted=True)
+    tree = CandidateTree([root], [-1], [0], [0.0], [{}])
+    frontier = []
+    def expand(parent, path):
+        depth = tree.depths[parent]
+        if depth >= q.shape[0]:
+            return
+        for probability, token in zip(values[depth].tolist(), ids[depth].tolist()):
+            if probability > 0:
+                score = tree.scores[parent] + math.log(probability)
+                child_path = path + (token,)
+                heapq.heappush(frontier, (-score, child_path, parent, token))
+    expand(0, ())
+    while frontier and len(tree.tokens) < prefix_budget:
+        negative_score, path, parent, token = heapq.heappop(frontier)
+        node = len(tree.tokens)
+        tree.tokens.append(token)
+        tree.parents.append(parent)
+        tree.depths.append(tree.depths[parent] + 1)
+        tree.scores.append(-negative_score)
+        tree.children.append({})
+        tree.children[parent][token] = node
+        expand(node, path)
+    return tree
+
+
+@dataclass
+class TreeTraversal:
+    tokens: list[int]
+    path: list[int]
+    teachers: list[int]
+    matched: int
+
+
+def traverse_target(tree, target, *, budget, eos_id=None, generator=None):
+    """Sample p at reached nodes; return path nodes and their teacher row indices."""
+    validate_distribution(target)
+    if target.ndim != 2 or target.shape[0] != len(tree.tokens) or budget < 1:
+        raise ValueError("invalid tree target shape or token budget")
+    output, path, teachers = [tree.tokens[0]], [0], []
+    node, matched = 0, 0
+    while len(output) < budget and output[-1] != eos_id:
+        token = int(draw(target[node], generator))
+        teachers.append(node)
+        output.append(token)
+        child = tree.children[node].get(token)
+        if child is None:
+            break
+        matched += 1
+        node = child
+        path.append(node)
+    return TreeTraversal(output, path, teachers, matched)
+
+
+def compact_tree_cache(cache, prefix_length, path):
+    """Gather exactly the committed ancestral path, never sibling KV rows."""
+    total = cache_length(cache)
+    if cache is None or not 0 <= prefix_length <= total:
+        raise ValueError("invalid tree cache prefix")
+    if len(set(path)) != len(path) or any(n < 0 or prefix_length + n >= total for n in path):
+        raise ValueError("invalid tree path indices")
+    device = cache[0][0].device
+    indices = torch.cat((torch.arange(prefix_length, device=device),
+                         prefix_length + torch.tensor(path, dtype=torch.long, device=device)))
+    if not indices.numel():
+        return None
+    return tuple((k.index_select(2, indices).detach(), v.index_select(2, indices).detach()) for k, v in cache)
+
+
+@torch.no_grad()
+def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefix_budget=16,
+                  sampling=SamplingConfig(), eos_id=None, generator=None, learner=None):
+    _check(model, prompt, max_new_tokens, eos_id)
+    if block_size < 2 or top_k < 1 or prefix_budget < 1:
+        raise ValueError("invalid tree configuration")
+    if learner is not None and learner.model is not model:
+        raise ValueError("learner and decoder must share a model")
+    synchronize(model)
+    start = time.perf_counter()
+    initial_updates = learner.updates if learner is not None else 0
+    initial_seconds = learner.update_seconds if learner is not None else 0.0
+    if learner is not None:
+        learner.clear_replay()
+    cache = _prefill(model, prompt) if max_new_tokens else None
+    seed, output, matches = prompt[:, -1:], [], []
+    forwards = rounds = accepted = proposed = 0
+    while len(output) < max_new_tokens:
+        rounds += 1
+        remaining = max_new_tokens - len(output)
+        if remaining == 1:
+            logits, cache = model(seed, cache=cache, return_cache=True)
+            output.append(int(draw(probabilities(logits[0, -1], sampling), generator)))
+            forwards += 1
+            break
+        b = min(block_size, remaining)
+        noise = torch.randint(model.config.vocab_size, (1, b - 1), device=prompt.device, generator=generator)
+        inputs = torch.cat((seed, noise), dim=1)
+        mask = torch.ones_like(inputs, dtype=torch.bool)
+        mask[:, 0] = False
+        old_cache = cache
+        draft, temporary = model(inputs, cache=cache, adapter_mask=mask, return_cache=True)
+        forwards += 1
+        root = int(draw(probabilities(draft[0, 0], sampling), generator))
+        if root == eos_id:
+            output.append(root)
+            break
+        # Soft scores remain useful even when the TARGET is greedy. The chosen
+        # tree law is not used as a denominator in any rejection calculation.
+        q = probabilities(draft[0, 1:], SamplingConfig(temperature=1))
+        tree = build_tree(root, q, top_k=top_k, prefix_budget=prefix_budget)
+        prefix_length = prompt.shape[1] + len(output)
+        clean_cache = trim_cache(temporary, prefix_length)
+        ids, positions, allowed = tree.layout(prefix_length, device=prompt.device)
+        teacher, verified = model(ids, positions=positions, allowed=allowed, cache=clean_cache, return_cache=True)
+        forwards += 1
+        traversal = traverse_target(tree, probabilities(teacher[0], sampling), budget=remaining,
+                                    eos_id=eos_id, generator=generator)
+        output.extend(traversal.tokens)
+        # Keep all new tokens except the last one, which is next round's seed.
+        committed_path = traversal.path[:len(traversal.tokens) - 1]
+        cache = compact_tree_cache(verified, prefix_length, committed_path)
+        seed = prompt.new_tensor([[output[-1]]])
+        accepted += traversal.matched
+        proposed += len(tree.tokens) - 1
+        matches.append(traversal.matched)
+        done = len(output) >= max_new_tokens or output[-1] == eos_id
+        if learner is not None:
+            teacher_nodes = traversal.teachers[:b - 1]
+            feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes))
+            learner.observe(feedback, may_update=not done)
+        if done:
+            break
+    if learner is not None:
+        learner.clear_replay()
+    synchronize(model)
+    return Generation(output, time.perf_counter() - start, forwards, rounds, accepted, proposed,
+                      learner.updates - initial_updates if learner is not None else 0,
+                      learner.update_seconds - initial_seconds if learner is not None else 0.0, matches)

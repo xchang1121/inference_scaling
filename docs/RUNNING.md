@@ -54,6 +54,8 @@ PYTHONPATH=src python scripts/check_local_model.py \
 报告配对老师与普通老师的数值误差、贪心是否一致、更新次数和峰值显存，默认不写文件。
 四步训练只能验证链路，不能称为“训练充分的适配器性能”。
 可用 `--dtype bfloat16` 检查低精度路径，但需明确处理批形状导致的数值差异，不能预设逐 token 一致。
+加 `--sampler tree` 检查独立目标路径树；它使用精确的目标分布遍历，不假装确定性 top-k 树来自原 q 的独立抽样。
+小模型 `demo` 也支持同一个 `--sampler tree` 开关。
 
 接口明确接入 dense K2-Horizon 和 Qwen3 结构；未知架构、MoE、量化、滑动窗口、部分旋转、门控注意力会拒绝。
 不要改 `model_type` 绕过检查。新增架构先补数值参照测试。
@@ -110,6 +112,8 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
 重新构造 learner 新建 optimizer。磁盘当前保存权重，不恢复 Adam 动量。
 不传 learner 是静态适配器；`generate_ar` 是每 token 一次前向的非投机基线。
+树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
+`top_k` 和 `prefix_budget`（含根节点的预算）参数。树模式的 `proposed` 统计非根节点数，不是线性块长度。
 默认贪心；随机采样传 `SamplingConfig(temperature=1, top_k=50, top_p=0.95)`。
 EOS 要显式传本模型 `eos_id`；不传则按预算生成，不得把这一设置隐瞒成自然结束。
 

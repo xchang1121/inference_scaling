@@ -281,6 +281,7 @@ class Decoder(nn.Module):
 
     def train_adapters_only(self):
         for name, parameter in self.named_parameters():
+            parameter.grad = None
             parameter.requires_grad_(is_adapter(name))
             if is_adapter(name) and parameter.dtype in (torch.float16, torch.bfloat16):
                 parameter.data = parameter.data.float()
@@ -288,6 +289,7 @@ class Decoder(nn.Module):
 
     def train_base_only(self):
         for name, parameter in self.named_parameters():
+            parameter.grad = None
             parameter.requires_grad_(not is_adapter(name))
         return self
 

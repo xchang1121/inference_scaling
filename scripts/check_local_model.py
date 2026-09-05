@@ -15,6 +15,7 @@ from blockspec.distillation import paired_batch
 from blockspec.online import OnlineConfig, OnlineLearner
 from blockspec.tokenizer import LocalTokenizer
 from blockspec.training import TrainingConfig, train_adapter
+from blockspec.tree import generate_tree
 
 
 def main():
@@ -24,6 +25,7 @@ def main():
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--tokens", type=int, default=32)
     parser.add_argument("--train-steps", type=int, default=4)
+    parser.add_argument("--sampler", choices=["linear", "tree"], default="linear")
     args = parser.parse_args()
     torch.set_num_threads(4)
     torch.manual_seed(20260905)
@@ -58,16 +60,17 @@ def main():
                                              warmup_steps=min(2, args.train_steps)))
     assert base_fingerprint(model) == frozen
     initial = adapter_state(model)
+    generate = generate_tree if args.sampler == "tree" else generate_speculative
     ar = generate_ar(model, prompt, args.tokens)
-    static = generate_speculative(model, prompt, args.tokens, block_size=4,
+    static = generate(model, prompt, args.tokens, block_size=4,
                                   generator=torch.Generator(device=args.device).manual_seed(43))
     learner = OnlineLearner(model, OnlineConfig(stride=2, replay_blocks=1, learning_rate=1e-4,
                                                loss="forward_kl"))
-    online = generate_speculative(model, prompt, args.tokens, block_size=4, learner=learner,
+    online = generate(model, prompt, args.tokens, block_size=4, learner=learner,
                                   generator=torch.Generator(device=args.device).manual_seed(43))
     assert base_fingerprint(model) == frozen
     changed = any(not torch.equal(value, adapter_state(model)[key]) for key, value in initial.items())
-    print(json.dumps({"stage": "integration", "training": training, "ar": ar.summary(),
+    print(json.dumps({"stage": "integration", "sampler": args.sampler, "training": training, "ar": ar.summary(),
                       "static": static.summary(), "online": online.summary(),
                       "greedy_identical": ar.tokens == static.tokens == online.tokens,
                       "base_unchanged": True, "online_adapter_changed": changed,

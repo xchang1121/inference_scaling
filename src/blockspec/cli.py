@@ -13,6 +13,7 @@ from .distillation import offline_step, paired_loss
 from .model import Decoder, ModelConfig
 from .online import OnlineConfig, OnlineLearner
 from .training import TrainingConfig, train_adapter
+from .tree import generate_tree
 
 
 def toy_sequences(count, length, vocab, *, device, generator):
@@ -70,19 +71,20 @@ def demo(args):
             assert torch.equal(value, adapter_state(loaded)[name])
         model = loaded.train_adapters_only()
     prompt = train[:1, :5]
+    generate = generate_tree if args.sampler == "tree" else generate_speculative
     ar = generate_ar(model, prompt, args.tokens)
-    static = generate_speculative(model, prompt, args.tokens, block_size=args.block_size,
+    static = generate(model, prompt, args.tokens, block_size=args.block_size,
                                   generator=torch.Generator(device=device).manual_seed(args.seed + 2))
     learner = OnlineLearner(model, OnlineConfig(stride=args.update_stride, replay_blocks=2,
                                                learning_rate=0.001, loss=args.loss))
     original_adapter = adapter_state(model)
-    online = generate_speculative(model, prompt, args.tokens, block_size=args.block_size,
+    online = generate(model, prompt, args.tokens, block_size=args.block_size,
                                   generator=torch.Generator(device=device).manual_seed(args.seed + 2),
                                   learner=learner)
     assert ar.tokens == static.tokens == online.tokens, "greedy outputs differ"
     assert base_fingerprint(model) == frozen, "online training changed base weights"
     changed = any(not torch.equal(v, adapter_state(model)[k]) for k, v in original_adapter.items())
-    print(json.dumps({"stage": "decode", "ar": ar.summary(), "static": static.summary(),
+    print(json.dumps({"stage": "decode", "sampler": args.sampler, "ar": ar.summary(), "static": static.summary(),
                       "online": online.summary(), "greedy_identical": True,
                       "base_unchanged": True, "online_adapter_changed": changed,
                       "scope": "synthetic correctness smoke; not a speed claim"}), flush=True)
@@ -99,6 +101,7 @@ def main():
     run.add_argument("--adapter-steps", type=int, default=240)
     run.add_argument("--rank", type=int, default=8)
     run.add_argument("--block-size", type=int, default=4)
+    run.add_argument("--sampler", choices=["linear", "tree"], default="linear")
     run.add_argument("--tokens", type=int, default=128)
     run.add_argument("--update-stride", type=int, default=8)
     run.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
