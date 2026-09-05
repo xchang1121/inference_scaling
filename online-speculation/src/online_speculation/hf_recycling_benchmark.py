@@ -41,6 +41,8 @@ PILOT_WORKLOADS = (
 
 def _method(value: str) -> tuple[str, RecyclingConfig | TreeConfig | None, int]:
     parts = value.split(":")
+    if value == "ar":
+        return value, None, 0
     if parts[0] in {"tree", "treeonline", "treebudget", "treeadaptive"} and len(parts) in {3, 4}:
         config = TreeConfig(
             block_size=int(parts[1]), nodes=int(parts[2]),
@@ -102,16 +104,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def summarize(records: list[dict], *, samples: int, seed: int) -> dict:
+def summarize(records: list[dict], *, samples: int, seed: int, baseline_name: str | None = None) -> dict:
     groups: dict[str, list[dict]] = defaultdict(list)
     for record in records:
         groups[record["method"]].append(record)
-    baseline_name = next(name for name in groups if name.startswith("static:"))
+    baseline_name = baseline_name or next(name for name in groups if name.startswith("static:"))
+    if baseline_name not in groups:
+        raise ValueError("requested baseline is absent")
     baseline = {(r["workload"], r["seed"]): r for r in groups[baseline_name]}
     summary = {}
     for name, rows in groups.items():
         ratios, tpf, by_prompt = [], [], defaultdict(list)
         paired_base_seconds = []
+        paired_rows = []
+        prompt_times = defaultdict(lambda: [0.0, 0.0])
         all_equal = True
         for row in rows:
             base = baseline.get((row["workload"], row["seed"]))
@@ -121,19 +127,32 @@ def summarize(records: list[dict], *, samples: int, seed: int) -> dict:
             ratios.append(ratio)
             by_prompt[row["workload"]].append(ratio)
             paired_base_seconds.append(base["metrics"]["end_to_end_seconds"])
+            paired_rows.append(row)
+            prompt_times[row["workload"]][0] += base["metrics"]["end_to_end_seconds"]
+            prompt_times[row["workload"]][1] += row["metrics"]["end_to_end_seconds"]
             tpf.append(row["metrics"]["decoder_tokens_per_forward"] / base["metrics"]["decoder_tokens_per_forward"])
             all_equal &= row["metrics"]["output_token_ids"] == base["metrics"]["output_token_ids"]
         if not ratios:
             continue
         prompt_means = [float(np.mean(values)) for values in by_prompt.values()]
-        total_seconds = sum(r["metrics"]["end_to_end_seconds"] for r in rows)
+        total_seconds = sum(r["metrics"]["end_to_end_seconds"] for r in paired_rows)
+        cluster_times = np.array(list(prompt_times.values()))
+        rng = np.random.default_rng(seed + 3)
+        cluster_indices = rng.integers(0, len(cluster_times), size=(samples, len(cluster_times)))
+        draws = cluster_times[cluster_indices].sum(axis=1)
+        cluster_speedups = draws[:, 0] / draws[:, 1]
         summary[name] = {
             "pairs": len(ratios),
             "baseline": baseline_name,
-            "absolute_e2e_tps": sum(r["metrics"]["output_tokens"] for r in rows) / total_seconds,
+            "absolute_e2e_tps": sum(r["metrics"]["output_tokens"] for r in paired_rows) / total_seconds,
             "ratio_of_total_e2e_seconds": sum(paired_base_seconds) / total_seconds,
             "paired_e2e_speedup": _intervals(ratios, samples=samples, seed=seed),
             "prompt_cluster_mean_speedup": _intervals(prompt_means, samples=samples, seed=seed+1),
+            "prompt_cluster_ratio_of_sums_speedup": {
+                "estimate": sum(paired_base_seconds) / total_seconds,
+                "ci_95_low": float(np.quantile(cluster_speedups, 0.025)),
+                "ci_95_high": float(np.quantile(cluster_speedups, 0.975)),
+            },
             "paired_tpf_ratio": _intervals(tpf, samples=samples, seed=seed+2),
             "greedy_token_ids_equal_to_baseline": all_equal,
             "per_workload_e2e_speedup": {k: float(np.mean(v)) for k, v in by_prompt.items()},
@@ -173,6 +192,8 @@ def main(argv: list[str] | None = None) -> None:
 
     def run(method, ids, budget, seed):
         name, config, block = method
+        if name == "ar":
+            return {"metrics": asdict(runtime.generate_ar(ids, max_new_tokens=budget, seed=seed)), "diagnostics": {}}
         if config is None:
             return {"metrics": asdict(runtime.generate_uno(
                 ids, max_new_tokens=budget, block_size=block, seed=seed,
@@ -253,9 +274,17 @@ def main(argv: list[str] | None = None) -> None:
     payload["summary"] = summarize(
         payload["records"], samples=args.bootstrap_samples, seed=args.seed,
     )
+    payload["secondary_summaries"] = {
+        baseline: summarize(payload["records"], samples=args.bootstrap_samples, seed=args.seed, baseline_name=baseline)
+        for baseline in ("tree:8:16", "tree:8:32", "static:16", "ar")
+        if baseline in {m[0] for m in methods}
+    }
     if args.temperature > 0:
         for summary in payload["summary"].values():
             summary["greedy_token_ids_equal_to_baseline"] = None
+        for secondary in payload["secondary_summaries"].values():
+            for summary in secondary.values():
+                summary["greedy_token_ids_equal_to_baseline"] = None
     payload["completed"] = True
     save()
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2), flush=True)
