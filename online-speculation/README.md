@@ -1,9 +1,10 @@
 # Online Uno
 
 在 RTX 3090 24 GB 上研究端到端吞吐优先的在线 speculative decoding。
-当前主线是 **Budgeted Online Tree Uno**：一次 Uno draft 产生多个位置的候选，
-用前缀闭合树覆盖多个可能 continuation，再通过 ancestor-only target attention 验证。
-在线更新的是实际成本统计与验证节点预算；另有独立的在线 rank 校准消融。
+当前原生运行主线是 **R7 Native Online Uno**：保留官方 FA2/CUDA-graph draft/verify，
+在请求内用真实接受量与耗时在线学习投机块长。更新成本计入完整 TPS。
+之前的 Budgeted Online Tree Uno / ancestor-only HF 树实现保留作独立研究与证据，
+不把不同 backend、dtype、长度的绝对 TPS 混作算法收益。
 
 新设计不要求首请求重复，也不需要先训练 residual head。任何候选都重新验证。
 目标是提升包含在线控制和候选更新成本后的 TPS；数学正确性与系统加速分别检验。
@@ -14,10 +15,11 @@
 | 项目 | 证据与状态 |
 | --- | --- |
 | 硬件 | RTX 3090 24 GB，i7-12700K，32 GB RAM |
-| 静态基线 | Uno 0.9B，Windows HF KV-cache；早期静态复现与本轮完整生成计时分别保留 |
+| 静态原生基线 | Uno 0.9B / BF16 / FA2，32/32 runs：128-token AR 184.37 TPS，官方 B=8 225.07 TPS |
 | WSL | Windows 已重启；WSL2 + Ubuntu 22.04.5 正常运行，Linux nvidia-smi 已识别 RTX 3090 |
 | 官方 Linux runtime | 已完成；Python 3.10、torch 2.11/cu128、Triton 3.6、FA2 2.8.3，14 项检查含 GPU forward/backward 全通过 |
-| R7 原生在线候选 | 不改官方模型/decoder，只在线学习块长；13 项 CPU 单测通过，已冻结 GPU pilot 协议，尚待实测 |
+| R7 原生在线 | 60/60 runs：256-token R7 211.31 TPS，原 B=8 208.98 TPS，AR 185.76 TPS；对 B8 +1.11%，区间跨 1，尚无稳定额外加速结论 |
+| 原生行为控制 | 同块长 shadow8 与官方 B8：8/8 对 tokens/text/stats 完全一致，TPS 约 -0.77%；动态跨 B 仍有输出分叉 |
 | 在线预算树 pilot | FP32：48.74 TPS vs linear B=8 的 41.27 TPS（+18.09%）；vs fixed tree 47.86 TPS 仅 +1.84% |
 | 独立评估 | 360/360 完成；300 个 speculative 输出全部逐 token 等于 AR；频率门未通过，整组仅作描述性工程测量 |
 | held-out TPS | linear B=8：42.41；fixed tree N=16：48.35；fixed tree N=32：50.60；online budget：49.58 |
@@ -32,6 +34,9 @@
 - [已重启后的 WSL/Ubuntu/CUDA 进度](docs/STAGE12_LINUX_RUNTIME_PROGRESS.md)
 - [未修改官方 FA2 基线协议](docs/STAGE12_OFFICIAL_BASELINE_PROTOCOL.md)
 - [R7 原生在线块长：设计、分布保持与成本证明](docs/R7_NATIVE_ONLINE_DESIGN_AND_PROOFS.md)
+- [官方原生基线与跨 B 行为差异](docs/STAGE12_OFFICIAL_BASELINE_RESULTS.md)
+- [R7 原生在线 60-run 完整结果](docs/STAGE12_NATIVE_ONLINE_RESULTS.md)
+- [固定 B8 在线框架行为控制](docs/STAGE12_SHADOW_CONTROL_RESULTS.md)
 - [当前树算法与数学证明](docs/BUDGETED_TREE_UNO_DESIGN_AND_PROOFS.md)
 - [完整 held-out 结果、审计与收益边界](docs/STAGE11_TREE_HELDOUT_RESULTS.md)
 - [稳定 QoS pilot 与在线收益边界](docs/STAGE11_HIGHQOS_TREE_PILOT_RESULTS.md)
@@ -67,10 +72,13 @@
 
 模型和安装包保存在被忽略的目录；版本锁、摘要结果和证明进入 Git。
 
-当前观察到的最快配置是 `tree:8:32`，不是在线 controller；该选择不构成全局最大 TPS 保证。
+Windows HF 实验中观察到的最快配置是 `tree:8:32`；该结果不能直接与 Linux/BF16 实验比较。
+R7 已达到接近原 Uno 吞吐的工程目标，尚未证明稳定额外加速、任务质量等价或全局最大 TPS。
 Windows 重启、Ubuntu 和 Linux kernel smoke 已完成，无需沿用旧重启请求。
 临时下载/转发源脚本已清理、转发已关闭；分片删除被策略拦截而保留缓存。
 原生模型基线与在线 pilot 以 Stage 12 的实际记录为准。
+
+最终回归：215 tests passed、Ruff 通过、Linux pip check 通过。原始 JSON 与数学/结果文档均已提交。
 
 ## 核心实现
 
