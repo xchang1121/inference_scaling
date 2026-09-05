@@ -1,0 +1,12 @@
+{
+    "captured_at":  "2026-09-05T03:29:22.1727535Z",
+    "read_only_system_checks":  true,
+    "failure":  null,
+    "firmware_virtualization":  true,
+    "slat":  true,
+    "hypervisor_present":  false,
+    "last_boot":  "2026-09-04T14:59:08.5000000Z",
+    "virtual_machine_platform":  "Enabled",
+    "bcd_exit_code":  0,
+    "explicit_hypervisor_launch_type":  null
+}

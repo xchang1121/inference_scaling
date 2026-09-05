@@ -45,4 +45,9 @@ Windows 重启、Ubuntu 分发版初始化、Linux CUDA/PyTorch/Triton/FA2 smoke
 重启后它会先安装缺失的 Ubuntu-22.04，再检查 Linux 能启动，最后调用已有 bootstrap。
 该后半段仍未在本机运行，不能把脚本准备完成视为 Linux 支持栈已安装。
 
+补充只读管理员启动审计：[stage11_wsl_boot_audit.json](../results/stage11_wsl_boot_audit.json)。
+firmware virtualization=true、SLAT=true、hypervisor_present=false、VirtualMachinePlatform=Enabled；
+BCD 查询成功，未发现显式 hypervisorlaunchtype 值。没有修改 BIOS 或启动配置。
+重启后若仍无法启动，将重新检查 hypervisor/BCD，不假定本次重启一定解决所有后续问题。
+
 官方安装依据：[Microsoft WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install)。
