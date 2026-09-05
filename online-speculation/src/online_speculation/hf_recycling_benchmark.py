@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> None:
             encoded[0][2], max_new_tokens=4, block_size=width, seed=args.seed - 2,
         )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "scope": args.scope,
         "backend": "Windows HF KV-cache; not official Nano-vLLM",
@@ -204,6 +204,7 @@ def main(argv: list[str] | None = None) -> None:
             "sampling": asdict(sampling), "request_local": True,
             "method_order": "rotated and alternately reversed within paired seed",
             "fixed_output_tokens": True, "all_online_costs_inclusive": True,
+            "e2e_timer": "full generation call, including init/close/text decode; excludes shared prompt encoding and benchmark I/O",
         },
         "records": [],
         "completed": False,
@@ -226,7 +227,14 @@ def main(argv: list[str] | None = None) -> None:
                 order = list(reversed(order))
             for method in order:
                 gpu_before = gpu_snapshot()
+                call_start = time.perf_counter()
                 result = run(method, ids, args.max_new_tokens, seed)
+                torch.cuda.synchronize(runtime.device)
+                call_seconds = time.perf_counter() - call_start
+                metric = result["metrics"]
+                metric["prefill_plus_decode_seconds"] = metric["end_to_end_seconds"]
+                metric["end_to_end_seconds"] = call_seconds
+                metric["end_to_end_tokens_per_second"] = metric["output_tokens"] / call_seconds
                 payload["records"].append({
                     "method": method[0], "workload": name, "prompt": prompt,
                     "seed": seed, "method_order": [m[0] for m in order],
