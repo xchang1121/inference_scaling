@@ -47,7 +47,7 @@ def test_suffix_logits_and_every_trainable_gradient_equal_full_recomputation(las
         torch.testing.assert_close(original, cached, atol=0, rtol=0)
 
 
-def test_reused_boundary_remains_exact_across_multiple_suffix_updates():
+def test_reused_boundary_matches_full_projection_across_multiple_suffix_updates():
     model, inputs, mask, cache = example()
     oracle = copy.deepcopy(model)
     learner = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1, train_last_layers=1,
@@ -74,7 +74,10 @@ def test_reused_boundary_remains_exact_across_multiple_suffix_updates():
         torch.nn.utils.clip_grad_norm_(parameters, 1.0, error_if_nonfinite=True)
         optimizer.step()
         for n, p in model.named_parameters():
-            torch.testing.assert_close(p, dict(oracle.named_parameters())[n], atol=0, rtol=0)
+            # Selecting supervised rows changes the GEMM shape; compare FP64
+            # updates at rounding precision and keep frozen weights bitwise exact.
+            tolerance = 1e-14 if p.requires_grad else 0
+            torch.testing.assert_close(p, dict(oracle.named_parameters())[n], atol=tolerance, rtol=tolerance)
     assert len(learner.replay[0].cache) == 1
     assert learner.replay[0].boundary.hidden.grad_fn is None
     assert base_fingerprint(model) == frozen

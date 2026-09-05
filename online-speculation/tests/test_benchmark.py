@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from blockspec.benchmark import (BenchmarkConfig, aggregate, benchmark_streams,
-                                compare_tokens, continuation_prompts)
+                                compare_tokens, continuation_prompts, stream_trajectory)
 from blockspec.checkpoint import adapter_state, base_fingerprint
 from blockspec.decoding import Generation
 from blockspec.model import Decoder, ModelConfig
@@ -18,6 +18,35 @@ def test_aggregate_counts_all_time_not_mean_tps():
     assert result["tps"] == 4
     assert result["tps_including_learner_setup"] == 40 / 12
     assert result["updates"] == 2 and result["update_seconds"] == 3
+
+
+def test_trajectory_accumulates_in_order_with_one_learner_initialization():
+    rows = [Generation([1] * 10, 1, 4, 2, accepted=6, updates=1, update_seconds=.2).summary(),
+            Generation([1] * 30, 9, 12, 6, accepted=18, updates=2, update_seconds=.3).summary()]
+    rows[0].update(adapter_version_start=0, adapter_version=1, last_update_loss=.7)
+    rows[1].update(adapter_version_start=1, adapter_version=3, last_update_loss=.4)
+    actual = stream_trajectory(rows, setup_seconds=2, engine_setup_seconds=3)
+    assert actual[0]["cumulative"]["tps_including_learner_setup"] == 10 / 3
+    end = actual[1]["cumulative"]
+    assert end["tps"] == 4 and end["tps_including_learner_setup"] == 40 / 12
+    assert end["tps_including_all_setup"] == 40 / 15
+    assert end["tokens_per_round"] == 5 and end["requests"] == 2
+    assert end["updates"] == 3 and end["update_seconds"] == .5
+    assert [row["adapter_version"] for row in actual] == [1, 3]
+    assert actual[0]["cumulative"]["tokens"] == 10
+    assert "cumulative" not in rows[0]
+
+
+def test_trajectory_validates_each_request_and_setup():
+    good = Generation([1], 1, 1, 1).summary()
+    with pytest.raises(ValueError):
+        stream_trajectory([])
+    with pytest.raises(ValueError):
+        stream_trajectory([good], setup_seconds=-1)
+    with pytest.raises(ValueError):
+        stream_trajectory([good], engine_setup_seconds=float("nan"))
+    with pytest.raises(ValueError):
+        stream_trajectory([good, {**good, "seconds": 0}])
 
 
 def test_continuation_selection_is_explicit_and_copied():
@@ -36,9 +65,10 @@ def test_comparison_does_not_hide_length_or_token_mismatches():
     assert compare_tokens([], [])["identical"]
 
 
+@pytest.mark.parametrize("loss", ["l1", "forward_kl"])
 @pytest.mark.parametrize("sampler", ["linear", "tree"])
 @pytest.mark.parametrize("last_layers", [None, 1])
-def test_balanced_streams_restore_weights_and_keep_online_across_requests(sampler, last_layers):
+def test_balanced_streams_restore_weights_and_keep_online_across_requests(sampler, last_layers, loss):
     torch.manual_seed(17)
     model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=32,
                                 num_hidden_layers=2, adapter_rank=2)).train_adapters_only()
@@ -48,7 +78,8 @@ def test_balanced_streams_restore_weights_and_keep_online_across_requests(sample
     result = benchmark_streams(model, [torch.tensor([[0, 1]]), torch.tensor([[0, 2]])],
                                BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=4,
                                                sampler=sampler, prefix_budget=5),
-                               OnlineConfig(stride=1, replay_blocks=1, train_last_layers=last_layers),
+                               OnlineConfig(stride=1, replay_blocks=1, train_last_layers=last_layers,
+                                            loss=loss),
                                progress=progress.append)
     assert result["greedy_identical"]
     assert result["arms"]["ar"]["tokens"] == 32
@@ -63,6 +94,15 @@ def test_balanced_streams_restore_weights_and_keep_online_across_requests(sample
     assert requires_grad == [p.requires_grad for p in model.parameters()]
     count = sum(p.numel() for p in model.adapter_parameters())
     assert result["online_trainable_parameters"] == count / (2 if last_layers else 1)
+    for trace in result["trajectories"]:
+        for arm, requests in trace["arms"].items():
+            assert len(requests) == 2
+            assert requests[-1]["cumulative"] == result["repeats"][trace["repeat"]][arm]
+            assert requests[0]["adapter_version_start"] == 0
+            assert requests[1]["adapter_version_start"] == requests[0]["adapter_version"]
+            if arm == "online":
+                assert requests[1]["adapter_version"] > requests[0]["adapter_version"]
+                assert requests[1]["last_update_loss"] is not None
 
 
 def test_benchmark_restores_adapter_on_exception():
@@ -87,9 +127,10 @@ def test_invalid_benchmark_configuration(key, value):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph hardware required")
+@pytest.mark.parametrize("loss", ["l1", "forward_kl"])
 @pytest.mark.parametrize("sampler", ["linear", "tree"])
 @pytest.mark.parametrize("last_layers", [None, 1])
-def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_layers):
+def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_layers, loss):
     torch.manual_seed(28)
     model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
                                 num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
@@ -97,10 +138,17 @@ def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_lay
     result = benchmark_streams(model, [torch.tensor([[0, 1, 2]]), torch.tensor([[0, 2, 1]])],
                                BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=12,
                                                sampler=sampler, prefix_budget=5, execution="cuda_graph"),
-                               OnlineConfig(stride=1, replay_blocks=2, train_last_layers=last_layers))
+                               OnlineConfig(stride=1, replay_blocks=2, train_last_layers=last_layers,
+                                            loss=loss))
+    assert result["online_optimizer"] == "fused"
     assert result["greedy_identical"] and result["base_unchanged"] and result["adapter_restored"]
     assert all(result["online_adapter_changed_per_stream"])
     assert result["execution"]["capacity"] >= 3 + 12  # warmup may be longer than a measured request
     for arm in result["arms"].values():
         assert arm["engine_setup_seconds"] > 0
         assert arm["tps_including_all_setup"] < arm["tps_including_learner_setup"] <= arm["tps"]
+    for arm in result["arms"]:
+        assert sum(repeat[arm]["engine_setup_seconds"] for repeat in result["repeats"]) == (
+            result["arms"][arm]["engine_setup_seconds"])
+        for trace in result["trajectories"]:
+            assert trace["arms"][arm][-1]["cumulative"] == result["repeats"][trace["repeat"]][arm]

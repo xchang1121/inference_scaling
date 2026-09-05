@@ -40,6 +40,7 @@ class OnlineConfig:
     loss: str = "l1"
     clip_norm: float = 1.0
     train_last_layers: int | None = None
+    optimizer: str = "auto"
 
     def __post_init__(self):
         if self.stride < 1 or self.replay_blocks < 1:
@@ -48,16 +49,17 @@ class OnlineConfig:
             raise ValueError("finite positive optimizer scales required")
         if self.loss not in LOSS_KINDS:
             raise ValueError("unknown online loss")
+        if self.optimizer not in ("auto", "standard", "fused"):
+            raise ValueError("unknown optimizer execution")
         if self.train_last_layers is not None and (type(self.train_last_layers) is not int or self.train_last_layers < 1):
             raise ValueError("a positive integer suffix size or None required")
 
 
 class OnlineLearner:
-    """No hidden second teacher or per-request adapter reset.
+    """Continue the draft adapter using committed verification feedback.
 
-    Replay recomputes a differentiable noisy student forward. Verification logits
-    are detached targets, not a claim that the full-model backward is free.
-    Old prefix KV is base-only; temporary adapter-dependent noisy KV is discarded.
+    Replay recomputes a differentiable noisy student forward with base-only prefix
+    KV and detached teacher targets. Learned weights and Adam persist across requests.
     """
 
     def __init__(self, model, config=OnlineConfig()):
@@ -75,13 +77,17 @@ class OnlineLearner:
         self._prefix_parameters = ([p for p in model.model.embed_tokens.parameters()] +
                                    list(model.model.layers[:self.capture_layer].parameters())
                                    if self.capture_layer is not None else [])
-        # In-place mutations of the frozen prefix invalidate all cached features.
-        # Replacing parameters or writing through .data is outside this learner's
-        # immutable-model contract, just as changing the target mid-request is.
+        # Cached features belong to this fixed prefix and its parameter storage.
+        # Reconstruct the learner when replacing prefix weights or parameters.
         self._prefix_versions = [p._version for p in self._prefix_parameters]
         if not self.parameters:
             raise ValueError("online continuation needs trainable adapter parameters")
-        self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate, weight_decay=0)
+        use_fused = config.optimizer == "fused" or (config.optimizer == "auto" and self.parameters[0].is_cuda)
+        if use_fused and not self.parameters[0].is_cuda:
+            raise ValueError("fused online optimizer requires CUDA")
+        self.optimizer_backend = "fused" if use_fused else "standard"
+        self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate, weight_decay=0,
+                                           fused=True if use_fused else None)
         self.replay = deque(maxlen=config.replay_blocks)
         self.rounds, self.updates, self.version = 0, 0, 0
         self.update_seconds, self.last_loss = 0.0, None
@@ -121,17 +127,18 @@ class OnlineLearner:
         self.optimizer.zero_grad(set_to_none=True)
         positions = sum(item.valid for item in self.replay)
         total = 0.0
-        # Backward one sample at a time: do not retain R full activation graphs.
+        # Accumulate gradients one replay block at a time to bound activation memory.
         with torch.enable_grad():
             for item in self.replay:
                 if self.capture_layer is None:
                     mask = torch.ones_like(item.inputs, dtype=torch.bool)
                     mask[:, 0] = False
-                    logits = self.model(item.inputs, cache=item.cache, adapter_mask=mask)
+                    logits = self.model(item.inputs, cache=item.cache, adapter_mask=mask,
+                                        logit_range=(1, 1 + item.valid))
                 else:
-                    logits = self.model.forward_suffix(item.boundary, cache=item.cache)
-                loss = divergence(logits[0, 1:1 + item.valid], item.teacher_logits,
-                                  self.config.loss).sum() / positions
+                    logits = self.model.forward_suffix(item.boundary, cache=item.cache,
+                                                       logit_range=(1, 1 + item.valid))
+                loss = divergence(logits[0], item.teacher_logits, self.config.loss).sum() / positions
                 if not torch.isfinite(loss):
                     raise FloatingPointError("nonfinite online loss")
                 loss.backward()
