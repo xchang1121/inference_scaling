@@ -81,6 +81,16 @@ def test_mask_blocks_siblings_and_descendants() -> None:
         assert visible == sorted(tree.ancestor_indices(i))
 
 
+def test_dominant_logit_stable_softmax_preserves_subprobabilities():
+    logits = torch.tensor([[1000.0, 999.0, 0.0]])
+    old = torch.exp(logits - torch.logsumexp(logits, -1, keepdim=True))
+    assert old.sum() > 1 + 1e-6  # Reproduce the cancellation hazard.
+    ids = logits.topk(2, dim=-1).indices
+    prior = logits.softmax(-1).gather(-1, ids).tolist()
+    tree = build_tree(4, ids.tolist(), prior, nodes=3)
+    assert len(tree.nodes) == 3
+
+
 def test_compaction_keeps_only_logical_noncontiguous_path() -> None:
     cache = _TreeCache()
     cache.layers[0].keys = torch.arange(9.0).reshape(1, 1, 9, 1)

@@ -1,0 +1,23 @@
+{
+    "schema_version":  1,
+    "started_at":  "2026-09-05T03:00:16.5133239Z",
+    "stage":  "system_components_installed",
+    "package_path":  "C:\\Users\\singm\\Desktop\\hw\\akg_related\\inference_scaling\\online-speculation\\cache\\installers\\wsl.2.7.13.0.x64.msi",
+    "reboot_automatically":  false,
+    "commands":  [
+                     {
+                         "exit_code":  0,
+                         "command":  "msiexec /i official_wsl /qn /norestart"
+                     }
+                 ],
+    "succeeded":  true,
+    "restart_required":  true,
+    "failure":  null,
+    "package_sha256":  "A3505A50F4CC585551D11D9DE824BA4375448D7A68F2E71D3FB315FA986FC754",
+    "signer":  "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+    "updated_at":  "2026-09-05T03:00:27.0146824Z",
+    "virtual_machine_platform":  {
+                                     "state":  "Enabled",
+                                     "restart_needed":  true
+                                 }
+}
