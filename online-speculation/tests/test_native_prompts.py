@@ -28,3 +28,17 @@ def test_malformed_prompt_suite_rejected(tmp_path, data):
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError):
         module.select_workloads(path)
+
+
+@pytest.mark.parametrize("count", [3, 4, 5])
+def test_adjacent_repetitions_counterbalance_each_method_position(count):
+    methods = list(range(count))
+    original = list(methods)
+    for prompt in range(12):
+        for rep in range(0, 6, 2):
+            first = module.paired_method_order(methods, prompt, rep)
+            second = module.paired_method_order(methods, prompt, rep + 1)
+            assert second == list(reversed(first))
+            for method in methods:
+                assert first.index(method) + second.index(method) == count - 1
+    assert methods == original

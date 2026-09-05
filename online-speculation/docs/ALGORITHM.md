@@ -172,8 +172,31 @@ native_norm 将多次逐元素运算和 reduction 融合成一个 Triton kernel�
 审计额外重放也计时；它不属于正常优化版本，比较时要注明是否启用。
 
 默认比较原生基线、融合后的静态 Uno、同样融合路径上的 online LoRA。
-fast-weights 引擎的静态 B=8 已包含零增量分支与特征缓存，另测无 fast-weights 的融合引擎
-才可评估新增分支全部成本。权重字节 hash 在计时外比较，包含 base 和 packed/unpacked Uno，排除 KV。
+在 fast-weights 引擎内，`8` 是包含零增量分支与特征缓存的控制组；`plain8` 才是
+完全不执行新分支的静态 Uno；`fast8` 是实际在线学习。三者在同一进程内交错测量。
+令 C 为无分支成本、δ 为分支成本。在理想稳定区间中，对零分支基线和真正静态基线的比值满足
+
+\[
+ R_{zero}=\frac{g_1}{g_0}\frac{C+\delta}{C+\delta+U/S},\qquad
+ R_{plain}=R_{zero}\frac{C}{C+\delta}.
+\]
+
+因此只比较 `fast8/8` 不足以证明新增分支全部回本。主要净收益比较必须是 `fast8/plain8`，
+保留 `8` 仅用于分离在线更新成本与新分支成本，不把 baseline overhead 当作算法收益。
+每个 prompt 的相邻两次 repetition 使用互为反序的完整方法列表。若有 K 个方法，
+某方法两次的位置索引之和总为 K−1，故每种方法在该配对内的平均位次均为 (K−1)/2。
+这排除固定的早/晚出场偏差，不消除任意非线性热漂移、方法间 carryover 或测量噪声；仍报告置信区间。
+审计验证实际记录的顺序确实配对；奇数 repetitions 的末次不配对，不宣称完整平衡。
+
+**无分支对照构造。** 在同一冻结模型上额外捕获一组图；捕获时 Python 路径直接跳过
+新增 matmul、addition 和特征缓存。图有独立 pool/output，模型权重、KV workspace 与原组相同。
+只有 idle 请求边界才能同时切换 graph runner 和 eager 路径开关，`finally` 必须恢复二者。
+仅把服务参数设零或改变 Python 布尔值不能删除已捕获图中的算子，所以那不构成无分支对照。
+各图串行执行，无跨 pool 的中间值依赖；每轮输入由正常 staging 写入公共 workspace。
+测试验证无分支图不读新增增量、不写特征缓存，在线图仍使用新增参数；生成测试另检查 token 一致性。
+额外对照图的捕获时间计入 initialization，不计入任何方法的稳态 TPS，生产接入默认不捕获这组图。
+
+权重字节 hash 在计时外比较，包含 base 和 packed/unpacked Uno，排除 KV。
 四个旧 prompts 只用于开发，不称为 held-out，也不从训练 loss 或单次 TPS 宣称论文级收益。
 
 ## 7. 固定形状的训练 CUDA graph

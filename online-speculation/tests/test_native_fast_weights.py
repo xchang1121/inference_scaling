@@ -103,11 +103,41 @@ def test_serving_gate_keeps_seed_and_verifier_unchanged():
         assert torch.equal(down(a * 2), reference * 2)
         assert torch.equal(s.features[:4], saved)  # verify never overwrites draft cache
         assert torch.equal(down.weight, frozen)
+        context.lora_enabled = True
+        s.enabled = False  # plain graph capture must skip all feature writes too
+        assert torch.equal(down(a * 2), reference * 2)
+        assert torch.equal(s.features[:4], saved)
+
+
+def test_plain_reference_switches_actual_graph_and_restores_after_error():
+    online_graph, plain_graph = object(), object()
+    runner = SimpleNamespace(block_graph_runner=online_graph, plain_block_graph_runner=plain_graph,
+                              fast_weights=SimpleNamespace(enabled=True))
+    engine = SimpleNamespace(model_runner=runner, scheduler=SimpleNamespace(waiting=[], running=[]))
+    with pytest.raises(ValueError, match="simulate"):
+        with module.plain_uno(engine):
+            assert runner.block_graph_runner is plain_graph
+            assert not runner.fast_weights.enabled
+            with pytest.raises(RuntimeError, match="cannot use the plain"):
+                module.generate_fast(engine, [0], SimpleNamespace(diffusion_block_size=8), 128)
+            raise ValueError("simulate failed request")
+    assert runner.block_graph_runner is online_graph and runner.fast_weights.enabled
+    engine.scheduler.running = [1]
+    with pytest.raises(RuntimeError, match="idle"):
+        with module.plain_uno(engine):
+            pytest.fail("must not switch during an active request")
+
+
+def test_plain_reference_requires_captured_graph():
+    engine = SimpleNamespace(model_runner=SimpleNamespace(fast_weights=state()))
+    with pytest.raises(RuntimeError, match="captured"):
+        with module.plain_uno(engine):
+            pytest.fail("cannot treat a Python flag as a captured-graph switch")
 
 
 def test_wrapper_publishes_only_after_commit_and_skips_final_update():
     events = []
-    fast = SimpleNamespace(stride=1, serve_right=torch.zeros(8, 2))
+    fast = SimpleNamespace(stride=1, serve_right=torch.zeros(8, 2), enabled=True)
 
     def reset():
         fast.version, fast.cycles = 0, 0
@@ -208,6 +238,45 @@ def test_masked_signal_matches_unpadded_rows():
     torch.testing.assert_close(loss, ref_loss)
     torch.testing.assert_close(gradient[valid.bool()], ref_gradient)
     assert not torch.count_nonzero(gradient[~valid.bool()])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph update")
+def test_plain_cuda_graph_skips_fast_branch_and_feature_writes():
+    s = module.FastWeights(16, 8, torch.ones(8, device="cuda"), torch.zeros(32, 8, device="cuda"),
+                           rank=2, max_block=8)
+    down = torch.nn.Linear(16, 8, bias=False, device="cuda").requires_grad_(False)
+    norm = SimpleNamespace(forward=lambda x, residual: (x + residual, residual))
+    model = SimpleNamespace(model=SimpleNamespace(
+        layers=[SimpleNamespace(mlp=SimpleNamespace(down_proj=down))], norm=norm))
+    context = SimpleNamespace(lora_enabled=True, lora_mask=torch.tensor([0.] + [1.] * 7, device="cuda"))
+    a = torch.randn(8, 16, device="cuda")
+    reference = down(a).clone()
+    s.attach(model, lambda: context)
+    captured = []
+    for enabled in (True, False):
+        s.enabled = enabled
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side), torch.no_grad():
+            down(a)
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=side), torch.no_grad():
+            output = down(a)
+        captured.append((graph, output))
+    s.enabled = True  # changing this flag cannot change captured operators
+    with torch.no_grad():
+        s.serve_right.fill_(0.25)
+        s.features.fill_(-321)
+        captured[1][0].replay()
+        torch.cuda.synchronize()
+        assert torch.equal(captured[1][1], reference)
+        assert (s.features == -321).all()
+        captured[0][0].replay()
+        torch.cuda.synchronize()
+        assert torch.equal(s.features, a)
+        assert torch.equal(captured[0][1][0], reference[0])
+        assert not torch.equal(captured[0][1][1:], reference[1:])
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph update")

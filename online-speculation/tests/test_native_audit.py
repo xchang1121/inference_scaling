@@ -84,3 +84,56 @@ def test_shadow_audit_uses_synthetic_same_width_control():
     assert result["methods"]["shadow8"]["same_width_B8_token_matches"] == 1
     data["records"][-1]["output"]["token_ids"][3] = 42
     assert summarize(data)["methods"]["shadow8"]["same_width_B8_token_matches"] == 0
+
+
+def test_plain_comparator_requires_real_graph_and_reports_scope():
+    data = fixture()
+    data["design"]["methods"][-1] = "plain8"
+    data["records"][-1]["block_size"] = "plain8"
+    data["records"][-1]["online"] = None
+    with pytest.raises(RuntimeError, match="separately captured"):
+        validate(data)
+    data["plain_control_graphs"] = 3
+    assert validate(data) == 3
+
+
+def test_real_learner_audit_distinguishes_plain_and_zero_branch_baselines():
+    from copy import deepcopy
+
+    data = fixture()
+    data["design"]["methods"] = [1, 8, "plain8", "fast8"]
+    data["plain_control_graphs"] = 3
+    data["records"][-1]["block_size"] = "plain8"
+    data["records"][-1]["online"] = None
+    online = deepcopy(data["records"][-1])
+    online["block_size"] = "fast8"
+    online["online"] = dict(algorithm="last_mlp_online_lora", teacher_weight_updates=0,
+                             offline_uno_weight_updates=0, cycles=2, optimizer_steps=0,
+                             model_weight_updates=0, events=[], update_seconds=0)
+    data["records"].append(online)
+    report = summarize(data)
+    assert report["online_all_branch_costs_controlled"]
+    assert report["methods"]["fast8"]["same_width_plain8_token_matches"] == 1
+    assert report["online_over_fixed"]["plain8"]["aggregate_tps_ratio"] == 1
+    data["records"][-2]["output"]["token_ids"][3] = 42
+    assert summarize(data)["methods"]["fast8"]["same_width_plain8_token_matches"] == 0
+
+
+def test_order_audit_rejects_an_unbalanced_pair():
+    from copy import deepcopy
+
+    data = fixture()
+    data["design"]["repetitions"] = 2
+    data["design"]["order_pairing"] = "reverse_adjacent_repetitions"
+    for row in data["records"]:
+        row["order"] = [1, 8, "online"]
+    second = deepcopy(data["records"])
+    for row in second:
+        row["seed"] += 1
+        row["order"].reverse()
+    data["records"].extend(second)
+    assert summarize(data)["order_pairing_complete"]
+    for row in data["records"][3:]:
+        row["order"].reverse()
+    with pytest.raises(RuntimeError, match="counterbalance"):
+        validate(data)

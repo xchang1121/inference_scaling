@@ -20,12 +20,27 @@ def validate(payload):
     if payload.get("frozen_weights_before") != payload.get("frozen_weights_after"):
         raise RuntimeError("frozen teacher/offline Uno hash mismatch")
     methods = {str(m) for m in design["methods"]}
+    if "plain8" in methods and payload.get("plain_control_graphs", 0) < 1:
+        raise RuntimeError("plain comparator requires separately captured no-fast graphs")
     expected = {(name, design["seed"] + p * 100 + r, m)
                 for p, (name, _) in enumerate(design["workloads"])
                 for r in range(design["repetitions"]) for m in methods}
     seen = Counter((r["workload"], r["seed"], str(r["block_size"])) for r in payload["records"])
     if set(seen) != expected or any(n != 1 for n in seen.values()):
         raise RuntimeError("incomplete, duplicated or altered study matrix")
+    if design.get("order_pairing") == "reverse_adjacent_repetitions":
+        orders = {}
+        for row in payload["records"]:
+            key = row["workload"], row["seed"]
+            order = list(map(str, row["order"]))
+            if (len(order) != len(methods) or set(order) != methods
+                    or order != orders.setdefault(key, order)):
+                raise RuntimeError("invalid or inconsistent method order")
+        for p, (name, _) in enumerate(design["workloads"]):
+            for rep in range(0, design["repetitions"] - 1, 2):
+                seed = design["seed"] + p * 100 + rep
+                if orders[(name, seed)] != list(reversed(orders[(name, seed + 1)])):
+                    raise RuntimeError("repetition pair does not counterbalance method positions")
     for row in payload["records"]:
         ids = row["output"]["token_ids"]
         seconds = row["end_to_end_seconds"]
@@ -102,6 +117,10 @@ def summarize(payload):
                 for r in selected)
             summary["optimizer_steps"] = sum(r["online"]["optimizer_steps"] for r in selected)
             summary["update_seconds"] = sum(r["online"]["update_seconds"] for r in selected)
+            if "plain8" in methods:
+                summary["same_width_plain8_token_matches"] = sum(
+                    r["output"]["token_ids"] == pairs[(r["workload"], r["seed"], "plain8")]["output"]["token_ids"]
+                    for r in selected)
         if method == "online":
             summary["cycle_width_counts"] = dict(Counter(c["width"] for r in selected for c in r["online"]["cycles"]))
             summary["cycle_reasons"] = dict(Counter(c["reason"] for r in selected for c in r["online"]["cycles"]))
@@ -136,6 +155,10 @@ def summarize(payload):
                                        "paired_fixed_time_over_online_time": paired,
                                        "paired_geomean_time_ratio": math.exp(sum(map(math.log, paired)) / len(paired))}
     return {"valid_runs": len(rows), "methods": summaries, "online_over_fixed": comparisons,
+            "method_roles": payload["design"].get("method_roles", {}),
+            "online_all_branch_costs_controlled": "plain8" in methods if adaptive == "fast8" else None,
+            "order_pairing_complete": (payload["design"].get("order_pairing") == "reverse_adjacent_repetitions"
+                                       and payload["design"]["repetitions"] % 2 == 0),
             "gpu_after_counts": dict(Counter(r["gpu_after"] for r in rows)),
             "scope": f"engineering pilot; {len(payload['design']['workloads'])} prompt clusters; not confirmatory; no retroactive equivalence margin",
             "bitwise_exactness_is_not_inferred_from_theory": True}
