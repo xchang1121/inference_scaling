@@ -5,6 +5,7 @@ import torch
 
 from blockspec.checkpoint import base_fingerprint
 from blockspec.data import load_sequences, sample_batch
+from blockspec.distillation import divergence
 from blockspec.model import Decoder, ModelConfig
 from blockspec.training import TrainingConfig, train_adapter
 
@@ -38,6 +39,20 @@ def test_curriculum_and_loss_schedule_execute_with_frozen_teacher():
                            TrainingConfig(steps=4, batch_size=1, sequence_length=6,
                                           blocks=(2, 4), warmup_steps=2), progress=events.append)
     assert [e["block"] for e in events] == [2, 2, 4, 4]
-    assert [e["loss_kind"] for e in events] == ["reverse_kl", "reverse_kl", "l1", "l1"]
+    assert [e["loss_kind"] for e in events] == ["reverse_kl_l1", "reverse_kl_l1", "l1", "l1"]
     assert base_fingerprint(model) == frozen
     assert result["training_tokens"] == 24
+
+
+def test_joint_warmup_value_and_gradient_are_reverse_kl_plus_unhalved_l1():
+    student = torch.tensor([[.4, 1.2, -.8], [-.4, .2, .9]], dtype=torch.float64, requires_grad=True)
+    teacher = torch.tensor([[.8, -.2, .3], [.6, .4, -.7]], dtype=torch.float64, requires_grad=True)
+    combined = divergence(student, teacher, "reverse_kl_l1").sum()
+    expected = (divergence(student, teacher, "reverse_kl") + divergence(student, teacher, "l1")).sum()
+    torch.testing.assert_close(combined, expected, atol=0, rtol=0)
+    g = torch.autograd.grad(combined, (student, teacher), allow_unused=True)
+    reference = torch.autograd.grad(expected, student)[0]
+    torch.testing.assert_close(g[0], reference, atol=1e-15, rtol=1e-15)
+    assert g[1] is None
+    assert not torch.isclose(combined, (divergence(student, teacher, "reverse_kl") +
+                                        divergence(student, teacher, "tv")).sum())

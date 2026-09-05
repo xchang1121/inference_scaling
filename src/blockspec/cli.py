@@ -12,7 +12,7 @@ from .checkpoint import (adapter_state, base_fingerprint, implementation_fingerp
                          load_checkpoint, load_hf_base, save_checkpoint)
 from .data import assert_split_files_disjoint, load_sequences
 from .decoding import generate_ar, generate_speculative
-from .distillation import offline_step, paired_loss
+from .distillation import LOSS_KINDS, offline_step, paired_loss
 from .model import Decoder, ModelConfig
 from .online import OnlineConfig, OnlineLearner
 from .training import TrainingConfig, train_adapter
@@ -107,7 +107,7 @@ def main():
     run.add_argument("--sampler", choices=["linear", "tree"], default="linear")
     run.add_argument("--tokens", type=int, default=128)
     run.add_argument("--update-stride", type=int, default=8)
-    run.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
+    run.add_argument("--loss", choices=LOSS_KINDS, default="l1")
     run.add_argument("--checkpoint", type=Path)
     train = sub.add_parser("train", help="independently train a fresh adapter on local JSONL sequences")
     train.add_argument("--base", type=Path, required=True)
@@ -125,8 +125,8 @@ def main():
     train.add_argument("--bos-id", type=int, default=0)
     train.add_argument("--seed", type=int, default=314159)
     train.add_argument("--text-data", action="store_true", help="use local HF tokenizer for text records")
-    train.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
-    train.add_argument("--warmup-loss", choices=["forward_kl", "reverse_kl"], default="reverse_kl")
+    train.add_argument("--loss", choices=LOSS_KINDS, default="l1")
+    train.add_argument("--warmup-loss", choices=["forward_kl", "reverse_kl", "reverse_kl_l1"], default="reverse_kl_l1")
     train.add_argument("--validation-data", type=Path)
     train.add_argument("--validation-every", type=int, default=100)
     train.add_argument("--validation-batches", type=int, default=4)
@@ -158,7 +158,7 @@ def main():
     bench.add_argument("--replay-blocks", type=int, default=1)
     bench.add_argument("--online-last-layers", type=int, help="optional exact suffix replay; omit for full-adapter updates")
     bench.add_argument("--learning-rate", type=float, default=1e-4)
-    bench.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
+    bench.add_argument("--loss", choices=LOSS_KINDS, default="l1")
     bench.add_argument("--eos-id", type=int, help="omit for a declared fixed-token-budget measurement")
     bench.add_argument("--seed", type=int, default=271828)
     bench.add_argument("--threads", type=int, default=4)

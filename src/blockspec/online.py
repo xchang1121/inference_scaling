@@ -7,7 +7,7 @@ import time
 
 import torch
 
-from .distillation import divergence
+from .distillation import LOSS_KINDS, divergence
 from .model import Cache, DraftBoundary, is_adapter
 
 
@@ -46,7 +46,7 @@ class OnlineConfig:
             raise ValueError("positive update stride and replay capacity required")
         if not all(math.isfinite(v) and v > 0 for v in (self.learning_rate, self.clip_norm)):
             raise ValueError("finite positive optimizer scales required")
-        if self.loss not in ("l1", "tv", "forward_kl", "reverse_kl"):
+        if self.loss not in LOSS_KINDS:
             raise ValueError("unknown online loss")
         if self.train_last_layers is not None and (type(self.train_last_layers) is not int or self.train_last_layers < 1):
             raise ValueError("a positive integer suffix size or None required")

@@ -7,7 +7,7 @@ import time
 import torch
 
 from .data import sample_batch
-from .distillation import offline_step
+from .distillation import LOSS_KINDS, offline_step
 from .online import synchronize
 
 
@@ -19,7 +19,7 @@ class TrainingConfig:
     blocks: tuple[int, ...] = (2, 4, 6, 8)
     learning_rate: float = 1e-4
     warmup_steps: int = 100
-    warmup_loss: str = "reverse_kl"
+    warmup_loss: str = "reverse_kl_l1"
     loss: str = "l1"
     seed: int = 314159
     validation_every: int = 100
@@ -35,7 +35,7 @@ class TrainingConfig:
             raise ValueError("warm-up must fit within total steps")
         if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
             raise ValueError("positive finite learning rate required")
-        if any(k not in ("l1", "tv", "forward_kl", "reverse_kl") for k in (self.loss, self.warmup_loss)):
+        if any(k not in LOSS_KINDS for k in (self.loss, self.warmup_loss)):
             raise ValueError("unknown training loss")
 
 

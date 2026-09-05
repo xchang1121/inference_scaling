@@ -36,6 +36,7 @@ src/blockspec/
   cli.py             数据、训练、三路评测与小模型闭环入口
 tests/               概率、梯度、缓存、端到端及外部数值参照
 scripts/check_local_model.py  本地真实权重的有限集成检查
+scripts/audit_sampler_reference.py  可选的固定公开实现 CPU 契约参照
 docs/ALGORITHM.md     唯一持续维护的算法主报告
 docs/RUNNING.md       运行与测量规范
 ```
