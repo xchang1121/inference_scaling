@@ -27,7 +27,16 @@ if [[ ! -f "${WSL_CONFIG_SOURCE}" ]]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
+# Keep the original Ubuntu source list and only upgrade its official URLs.
+# HTTP archive access timed out on this host; both HTTPS endpoints were tested.
+if [[ ! -e /etc/apt/sources.list.online-uno-original ]]; then
+  cp --preserve=mode,timestamps /etc/apt/sources.list /etc/apt/sources.list.online-uno-original
+fi
+sed -i \
+  -e 's|http://archive.ubuntu.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+  -e 's|http://security.ubuntu.com/ubuntu/|https://security.ubuntu.com/ubuntu/|g' \
+  /etc/apt/sources.list
+apt-get --error-on=any update
 apt-get install --yes --no-install-recommends \
   build-essential \
   ca-certificates \
@@ -50,4 +59,3 @@ install --directory --owner "${LINUX_USER}" --group "${LINUX_USER}" \
   "/home/${LINUX_USER}/online-speculation-work"
 
 echo "WSL system bootstrap completed for ${LINUX_USER}."
-
