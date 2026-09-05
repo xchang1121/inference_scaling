@@ -24,6 +24,7 @@ from .hf_uno import (
 from .recycling import RecyclingConfig
 from .torch_sampling import SamplingConfig
 from .tree_uno import TreeConfig
+from .windows_execution import process_power_state
 
 
 PILOT_WORKLOADS = (
@@ -96,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scope", choices=["pilot", "confirmatory"], default="pilot")
     parser.add_argument("--background-note", default="unspecified")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--windows-disable-ecoqos", action="store_true")
     return parser
 
 
@@ -140,6 +142,7 @@ def summarize(records: list[dict], *, samples: int, seed: int) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    execution_qos = process_power_state(disable_ecoqos=args.windows_disable_ecoqos)
     if args.repetitions < 1 or args.max_new_tokens < 2 or args.warmup_tokens < 2:
         raise ValueError("invalid repetition or token budget")
     methods = [_method(value) for value in args.methods.split(",")]
@@ -194,6 +197,7 @@ def main(argv: list[str] | None = None) -> None:
         "backend": "Windows HF KV-cache; not official Nano-vLLM",
         "checkpoint": {"base_revision": BASE_REVISION, "adapter_revision": ADAPTER_REVISION, "sha256": hashes},
         "host": {
+            "execution_qos": execution_qos,
             "platform": platform.platform(), "torch": torch.__version__,
             "transformers": _package_version("transformers"),
             "gpu": torch.cuda.get_device_name(0), "cuda": torch.version.cuda,
