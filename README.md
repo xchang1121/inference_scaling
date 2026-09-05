@@ -144,6 +144,8 @@ Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理�
 | --- | --- |
 | [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | 默认 Qwen MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
 | [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据配置、方法标识、训练与推理命令、统计量和输出目录 |
+| [算法设计与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 固定实验设置下的准确率、pass@k、奖励与 proposal 对照，以及结果适用范围 |
+| [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 批处理、IS/MH 复用和奖励调度的墙钟、分模型 FLOPs、建库与设计成本 |
 | [非默认方案记录](docs/methods/ALGORITHMS.md#alg-nondefault-notes) | 已筛选方案的主要成本问题与适用条件 |
 
 ## 实现范围
@@ -158,8 +160,8 @@ Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理�
 记录还必须尚未使用。候选缓存与连续批处理可复用已有请求，历史库构建成本单独统计。具体执行顺序见
 [默认 MH 与 IS](docs/methods/ALGORITHMS.md#alg-qwen-default-mh)。
 
-版本控制保留代码、配置、测试和使用文档。运行产生的原始数据、汇总、日志和清单写入 `results/`，由 Git
-统一忽略。此前的实验报告与筛选记录已移除，非默认方案的结论保留在算法文档中。
+版本控制保留代码、配置、测试、使用文档和两份精选实验报告。运行产生的原始数据、汇总、日志和清单写入
+`results/`，由 Git 统一忽略。报告分别讨论算法质量与执行成本，非默认方案的简要结论集中在算法文档中。
 
 ## 安装
 
@@ -328,7 +330,7 @@ python -m pytest
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
 | `tests/` | 分布、实现一致性和结果处理测试 |
-| `docs/` | 算法原理与实现、运行与评测说明 |
+| `docs/` | 算法原理与实现、运行说明，以及算法质量和执行成本两份报告 |
 | `results/` | 运行时生成的原始数据、汇总和清单，Git 忽略 |
 | `online-speculation/` | 独立的在线推测解码项目，使用其目录内的说明与入口 |
 

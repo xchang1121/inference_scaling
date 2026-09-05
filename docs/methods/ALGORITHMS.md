@@ -3,7 +3,9 @@
 本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节先给出当前 Qwen2.5-1.5B 默认 MH 与 IS 路径的
 完整数据流；后续各节再分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、KV 复用、
 异步奖励、vLLM 和计算量统计统一列在第 17 节。[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)
-说明统一入口和统计方式；非默认方案的筛选结论集中在[第 19 节](#alg-nondefault-notes)。
+说明统一入口和统计方式；[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
+[执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)分别汇总准确率与执行开销。
+非默认方案的筛选结论集中在[第 19 节](#alg-nondefault-notes)。
 
 ## 1. 统一记号与实现边界
 
@@ -1603,7 +1605,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x`--`0.26.x` 的 Li
 | vLLM | 使用同一模型、dtype、GPU 数与请求集合的 Transformers |
 
 成对复现命令、组件名与报告标签集中列在
-[GSM8K 统一实验设计](../experiments/GSM8K_EXPERIMENT_DESIGN.md#复现)；本节只定义机制及其公平比较基准。
+[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md#统一入口)；本节说明机制及其比较基准。
 
 <a id="alg-code-index"></a>
 ## 18. 代码与验证入口
@@ -1643,7 +1645,8 @@ logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、C
 ## 19. 非默认方案记录
 
 以下结论来自 Qwen2.5-1.5B、公开 GSM8K 与 RTX 3090 的小规模筛选，适用范围限于当时的预算和后端。
-算法实现与正确性测试保留在相应模块；旧原始数据、逐轮记录、结果图和专用筛选脚本已清理。
+算法实现与正确性测试保留在相应模块；质量对照见[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)，
+墙钟、FLOPs 及完整成本见[执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)。
 
 | 方案 | 比较对象 | 观察与采用条件 |
 | --- | --- | --- |

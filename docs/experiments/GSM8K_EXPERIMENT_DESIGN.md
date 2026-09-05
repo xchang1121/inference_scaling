@@ -2,6 +2,8 @@
 
 本页说明 AR-LLM 与 dLLM 的训练、推理和评测入口。算法目标、概率修正、奖励定义和执行实现集中在
 [算法文档](../methods/ALGORITHMS.md)；安装与解释器配置见[README](../../README.md#安装)。
+已完成的实验分别汇总在[算法设计与准确率](../reports/GSM8K_3090_ALIGNED_RESULTS.md)和
+[推理成本与执行效率](../reports/RTX3090_ROLLOUT_INFRA.md)中，各报告独立列出所用设置。
 
 ## 数据与配置
 
