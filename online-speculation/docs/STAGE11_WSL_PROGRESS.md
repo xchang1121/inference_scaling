@@ -51,3 +51,11 @@ BCD 查询成功，未发现显式 hypervisorlaunchtype 值。没有修改 BIOS 
 重启后若仍无法启动，将重新检查 hypervisor/BCD，不假定本次重启一定解决所有后续问题。
 
 官方安装依据：[Microsoft WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install)。
+
+## 重启前追加的依赖完整性检查
+
+FlashAttention wheel 地址来自锁定 Uno README 的安装步骤。2026-09-05 通过
+[该发布的 GitHub API](https://api.github.com/repos/lesj0610/flash-attention/releases/tags/v2.8.3-cu12-torch2.11)
+取得服务端资产 digest 与长度，并写入 [wheel lock](../config/flash_attn_wheel.lock.json)。
+bootstrap 现在要求 SHA-256 和 253651546-byte 长度匹配后才安装，而不是仅记录下载后的 hash。
+这锁定了已指定发布资产的一致性，不代表本机已经下载、安装或执行了该 Linux wheel。
