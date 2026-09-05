@@ -1,6 +1,7 @@
 # Recycling Uno：以端到端 TPS 为目标的在线设计与证明
 
-状态：2026-09-05，R1 设计冻结，尚无该算法真机性能结论。
+状态：2026-09-05，R1 设计冻结，R2 HF 实现与小词表证明校验完成；
+尚无该算法真机性能结论。
 
 ## 1. 问题重述
 
@@ -130,6 +131,11 @@ greedy 时将 \(p\) 解释为 argmax 处的点质量即可。
 这证明的是计算所得 target distributions 的不变性。不同 BF16 kernel shape 的 logits
 可能略有不同，因此与另一个 AR kernel 的 bitwise 输出相等是额外数值要求，
 不能由概率证明推出。真机结果要记录首个不一致位置和 backend。
+
+实现验证：三元词表、3-token 完整联合分布、依赖完整历史的 target、两种候选长度及
+off-policy tail 更新全部枚举，输出 law 与 AR 的误差门为 \(10^{-12}\)。
+真实 KV 内容依赖的 fake model 覆盖 B=2/4/8 与 always/bounded/TPS 三种 policy，
+逐 token 输出与单步 AR 相同；disabled 分支额外验证 stochastic RNG 行为与旧 Uno 一致。
 
 ## 7. 定理四：KV rollback 不变量
 

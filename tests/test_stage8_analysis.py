@@ -9,6 +9,8 @@ from online_speculation.stage8_analysis import analyze
 
 RESULT_PATH = (
     Path(__file__).resolve().parents[1]
+    / "archive"
+    / "2026-09-05-v1"
     / "results"
     / "stage8_greedy_stream_uno1b_rtx3090_hf.json"
 )

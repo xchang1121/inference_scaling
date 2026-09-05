@@ -118,6 +118,7 @@ class _CycleOutcome:
     frontier_rows: int
     speculative_tokens: int
     matched_suffix_length: int | None = None
+    target_predictions: Tensor | None = None
 
 
 class HfReplayUnoRunner:
@@ -143,6 +144,7 @@ class HfReplayUnoRunner:
         seed_token: int,
         block_size: int,
         generator: torch.Generator,
+        retain_target_predictions: bool = False,
     ) -> _CycleOutcome:
         runtime = self.runtime
         prefix_cache_length = _cache_length(cache)
@@ -208,6 +210,12 @@ class HfReplayUnoRunner:
             )
         cache = verify_output.past_key_values
         verify_logits = verify_output.logits[0]
+        # Launch the optional tail reduction before the verifier's existing
+        # host transfer so its GPU work belongs to this completed cycle.
+        target_predictions = (
+            torch.argmax(verify_logits, dim=-1)
+            if retain_target_predictions else None
+        )
         if _cache_length(cache) != prefix_cache_length + block_size + 1:
             raise RuntimeError("static verifier cache frontier is inconsistent.")
 
@@ -247,6 +255,7 @@ class HfReplayUnoRunner:
             forwards=2,
             frontier_rows=block_size + 1,
             speculative_tokens=block_size - 1,
+            target_predictions=target_predictions,
         )
 
     def _replay_cycle(
