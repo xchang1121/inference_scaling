@@ -37,16 +37,19 @@ def test_comparison_does_not_hide_length_or_token_mismatches():
 
 
 @pytest.mark.parametrize("sampler", ["linear", "tree"])
-def test_balanced_streams_restore_weights_and_keep_online_across_requests(sampler):
+@pytest.mark.parametrize("last_layers", [None, 1])
+def test_balanced_streams_restore_weights_and_keep_online_across_requests(sampler, last_layers):
     torch.manual_seed(17)
     model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=32,
-                                num_hidden_layers=1, adapter_rank=2)).train_adapters_only()
+                                num_hidden_layers=2, adapter_rank=2)).train_adapters_only()
     before, frozen = adapter_state(model), base_fingerprint(model)
+    requires_grad = [p.requires_grad for p in model.parameters()]
     progress = []
     result = benchmark_streams(model, [torch.tensor([[0, 1]]), torch.tensor([[0, 2]])],
                                BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=4,
                                                sampler=sampler, prefix_budget=5),
-                               OnlineConfig(stride=1, replay_blocks=1), progress=progress.append)
+                               OnlineConfig(stride=1, replay_blocks=1, train_last_layers=last_layers),
+                               progress=progress.append)
     assert result["greedy_identical"]
     assert result["arms"]["ar"]["tokens"] == 32
     assert result["arms"]["online"]["updates"] > 0
@@ -57,6 +60,9 @@ def test_balanced_streams_restore_weights_and_keep_online_across_requests(sample
         (0, "ar"), (0, "static"), (0, "online"), (1, "online"), (1, "static"), (1, "ar")]
     assert all(torch.equal(v, adapter_state(model)[n]) for n, v in before.items())
     assert base_fingerprint(model) == frozen
+    assert requires_grad == [p.requires_grad for p in model.parameters()]
+    count = sum(p.numel() for p in model.adapter_parameters())
+    assert result["online_trainable_parameters"] == count / (2 if last_layers else 1)
 
 
 def test_benchmark_restores_adapter_on_exception():

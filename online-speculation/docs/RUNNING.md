@@ -130,6 +130,9 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 ```
 
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
+若要限制后续训练成本，可用 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)`，
+仅续训最后 4 层中原有的适配器，并复用起草的前段特征；其余离线适配器仍参与起草但不再学习。
+不指定 `train_last_layers` 才是全适配器续训。冻结前段被修改时需丢弃 learner，不能复用旧特征；数学条件见主报告 9.3。
 重新构造 learner 新建 optimizer。磁盘当前保存权重，不恢复 Adam 动量。
 不传 learner 是静态适配器；`generate_ar` 是每 token 一次前向的非投机基线。
 树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
@@ -158,6 +161,9 @@ python -m blockspec benchmark \
 
 输出汇总 TPS、每轮输出数、更新时间、含 learner 初始化的 TPS、逐请求贪心一致性、峰值显存和输入／实现 SHA。
 输出不同会标为 `greedy_identical: false`，不会挑掉该样本再计算“等价加速”。`--progress` 可打印逐请求计数。
+加 `--online-last-layers 4` 测相同离线起点的末 4 层续训；会另外报告实际可训练参数数。
+去掉此参数便是全量续训，不能把两个实验称为同一训练目标的纯内核提速。
+重跑主报告当前表格：在上述命令增加 `--sampler tree --top-k 4 --prefix-budget 12 --online-last-layers 4`。
 实验结束恢复传入模型的适配器，不把调参过程的在线权重发布回检查点；默认只写 stdout。
 此处少量开发流用于选实现，不提供统计显著性或公开基准排名。
 
