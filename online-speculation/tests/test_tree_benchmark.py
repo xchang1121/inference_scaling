@@ -35,3 +35,13 @@ def test_static_tree_secondary_baseline_and_ar_parser():
     result = summarize(data, samples=1000, seed=1, baseline_name="tree:8:16")
     assert result["treebudget:8:16"]["ratio_of_total_e2e_seconds"] == 1.25
     assert _method("ar") == ("ar", None, 0)
+
+
+def test_feedback_candidate_is_separate_from_frozen_cost_only_method():
+    _, previous, _ = _method("treebudget:8:32")
+    _, feedback, _ = _method("treefeedback:8:32")
+    assert previous.nodes == feedback.nodes == 32
+    assert previous.node_budgets == feedback.node_budgets == (8, 16, 32)
+    assert previous.explore_each == feedback.explore_each == 2
+    assert not previous.feedback_budget
+    assert feedback.feedback_budget

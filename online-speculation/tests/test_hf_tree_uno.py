@@ -152,3 +152,26 @@ def test_adaptive_budget_preserves_ar_and_explores_only_declared_actions(online_
     assert set(result.diagnostics["tree_shapes"]) == {"8", "16", "32"}
     assert result.diagnostics["cycle_sync_for_cost"]
     assert all(n >= config.explore_each for n in result.diagnostics["budget_controller"]["counts"].values())
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 8, 41, 121])
+@pytest.mark.parametrize("stop", [False, True])
+def test_feedback_budget_matches_ar_kv_and_weight_isolation(limit, stop):
+    ids = torch.tensor([[3, 5, 7]])
+    reference = _runtime().generate_ar(ids, max_new_tokens=limit, seed=0)
+    runtime = _runtime()
+    before = runtime.model.anchor.detach().clone()
+    if stop:
+        runtime.ignore_stop = False
+        runtime.stop_token_ids = {reference.output_token_ids[min(4, limit - 1)]}
+    result = HfTreeUnoRunner(runtime).generate(
+        ids, max_new_tokens=limit, seed=719,
+        config=TreeConfig(nodes=32, node_budgets=(8, 16, 32), feedback_budget=True),
+    )
+    count = len(result.metrics.output_token_ids)
+    assert result.metrics.output_token_ids == reference.output_token_ids[:count]
+    assert runtime.model.last_cache.tokens == ids[0].tolist() + list(result.metrics.output_token_ids[:-1])
+    assert torch.equal(before, runtime.model.anchor)
+    assert result.diagnostics["model_parameters_frozen"]
+    assert result.diagnostics["budget_controller"]["separate_policy_rng"]
+    assert not result.diagnostics["budget_controller"]["pending_feedback"]

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from .feedback_budget import FeedbackBudgetController
 from .hf_uno import (
     HfUnoRuntime, RunMetrics, _cache_length, _crop_cache_by,
     _first_stop_length, _generator, _sync,
@@ -16,6 +17,7 @@ from .hf_uno import (
 from .tree_uno import (
     CandidateTree, RankCalibrator, TreeBudgetController, TreeConfig, build_tree, walk_target_draws,
 )
+from .tree_feedback import nested_lengths_from_walk
 
 
 def tree_attention_mask(tree: CandidateTree, prefix_length: int, *, device: torch.device) -> Tensor:
@@ -77,7 +79,7 @@ class HfTreeUnoRunner:
         runtime = self.runtime
         generator = _generator(runtime.device, seed)
         calibrator = RankCalibrator(config)
-        controller = TreeBudgetController(config)
+        controller = FeedbackBudgetController(config, seed=seed) if config.feedback_budget else TreeBudgetController(config)
         memory_before = torch.cuda.memory_allocated(runtime.device) if runtime.device.type == "cuda" else 0
         if runtime.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(runtime.device)
@@ -131,7 +133,10 @@ class HfTreeUnoRunner:
                     int(host[0]), candidate_ids, calibrator.weights(prior),
                     nodes=max(config.node_budgets or (config.nodes,)), include_spine=config.include_spine,
                 )
-                budget, reason = controller.choose(full_tree)
+                if isinstance(controller, FeedbackBudgetController):
+                    budget, reason = controller.choose(full_tree, remaining=max_new_tokens - len(output_tokens))
+                else:
+                    budget, reason = controller.choose(full_tree)
                 tree = CandidateTree(full_tree.nodes[:budget])
                 reasons[reason] += 1
                 count = len(tree.nodes)
@@ -152,6 +157,12 @@ class HfTreeUnoRunner:
                 if not runtime.ignore_stop:
                     committed = committed[:_first_stop_length(committed, runtime.stop_token_ids)]
                 committed = committed[:max_new_tokens - len(output_tokens)]
+                if isinstance(controller, FeedbackBudgetController):
+                    visible_rewards = nested_lengths_from_walk(
+                        walk, [n for n in config.node_budgets if n <= budget],
+                        verified_nodes=count, output_limit=len(committed),
+                    )
+                    controller.observe_rewards(budget, visible_rewards)
                 keep = walk.path_indices[:len(committed) - 1]
                 compact_start = time.perf_counter()
                 compact_tree_cache(cache, prefix_length, keep, count)
