@@ -120,6 +120,7 @@ def _new_runner(
     block_size: int,
     min_suffix_length: int,
     max_suffix_length: int,
+    match_length_bucket_width: int = 1,
 ) -> HfReplayUnoRunner:
     namespace = _namespace(sampling=sampling)
     cache = VerifierReplayCache(
@@ -142,6 +143,7 @@ def _new_runner(
             probe_interval=64,
             ema_decay=0.9,
             throughput_margin=0.02,
+            match_length_bucket_width=match_length_bucket_width,
         ),
     )
     return HfReplayUnoRunner(
@@ -401,7 +403,7 @@ def main(argv: list[str] | None = None) -> None:
 
         one_time_hybrid_seconds = (
             train_replay.metrics.end_to_end_seconds
-            + train_replay.diagnostics.cache_update_seconds
+            + train_replay.diagnostics.cache_close_seconds
         )
         one_time_static_seconds = train_static.end_to_end_seconds
         one_time_overhead = one_time_hybrid_seconds - one_time_static_seconds
@@ -430,6 +432,10 @@ def main(argv: list[str] | None = None) -> None:
                     "static_end_to_end_seconds": one_time_static_seconds,
                     "hybrid_response_seconds": train_replay.metrics.end_to_end_seconds,
                     "cache_update_seconds": train_replay.diagnostics.cache_update_seconds,
+                    "cache_update_in_decode_seconds": (
+                        train_replay.diagnostics.cache_update_in_decode_seconds
+                    ),
+                    "cache_close_seconds": train_replay.diagnostics.cache_close_seconds,
                     "hybrid_inclusive_seconds": one_time_hybrid_seconds,
                     "incremental_overhead_seconds": one_time_overhead,
                 },

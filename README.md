@@ -79,6 +79,8 @@ Python 3.10 的 Ubuntu 22.04、cu128/FA2 linear 路径，并明确禁止在 WSL 
 开放域结论。下一版 request-local causal overlay 也已实现：只有完整落入 verifier-confirmed past 的 continuation
 才对所属请求可见，请求结束才 merge 到全局；因此首个请求可复用自身重复片段而不泄露未完成请求。官方
 Nano-vLLM 分支、近重复/mixed-domain 和 CUDA-time controller 仍待后续阶段。
+[首请求工程 pilot](docs/STAGE10C_CAUSAL_REPLAY_PILOT_RESULTS.md) 中，保守 `min_suffix=16` 把自然重复的
+TPF 提高 4.75%，并令另外两类 workload 的 TPF 零损回退；但 aggregate TPS 区间跨 1，系统门未通过。
 
 ## 目录
 
@@ -130,7 +132,7 @@ online-speculation/
 | 7 | static-anchored 与 verifier-gated probability mixture | 完成；安全回退通过、stochastic 学习门失败 |
 | 8 | greedy repeated-query online residual | 完成；学习门通过、HF 系统门失败 |
 | 9 | WSL2、官方 cu128/FA2 runtime 与 Nano-vLLM Uno-1B 基线 | 进行中；协议和审计安装器已冻结 |
-| 10 | verifier replay 一遍式 fast path + static Uno fallback | HF exact-repeat pilot 显著加速；泛化/官方 runtime 进行中 |
+| 10 | verifier replay 一遍式 fast path + static Uno fallback | exact-repeat 显著；首请求仅 TPF 信号；泛化/官方 runtime 进行中 |
 
 Stage 1 的正式验证命令：
 
