@@ -14,6 +14,21 @@ PROJECTIONS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "
 Cache = tuple[tuple[Tensor, Tensor], ...]
 
 
+class PackedCache(tuple):
+    """Functional KV views backed by one [layer, 2, batch, head, time, dim] tensor.
+
+    The owner never mutates this tensor. Inference executors may COPY it into
+    private mutable workspaces, but retained online feedback remains immutable.
+    """
+
+    def __new__(cls, packed):
+        if packed.ndim != 6 or packed.shape[0] < 1 or packed.shape[1] != 2:
+            raise ValueError("packed cache needs [layers, 2, batch, heads, time, dim]")
+        result = super().__new__(cls, ((layer[0], layer[1]) for layer in packed.unbind(0)))
+        result.packed = packed
+        return result
+
+
 @dataclass(frozen=True)
 class DraftBoundary:
     """Input to a suffix of layers, captured during the ordinary draft pass."""
@@ -153,14 +168,25 @@ def rotary_frequencies(config: ModelConfig, *, device=None):
     return frequency * (1 - ramp + ramp / config.rope_factor)
 
 
-def rotate(x, positions, frequencies, attention_factor=1.0):
+def rotary_embeddings(positions, frequencies, dtype, attention_factor=1.0):
+    """The same position-only trigonometric values are shared by every layer."""
     angles = positions.float()[..., None] * frequencies
     phase = torch.cat((angles, angles), dim=-1)[:, None, :, :]
-    cosine = (phase.cos() * attention_factor).to(x.dtype)
-    sine = (phase.sin() * attention_factor).to(x.dtype)
+    return (phase.cos() * attention_factor).to(dtype), (phase.sin() * attention_factor).to(dtype)
+
+
+def apply_rotary(x, embeddings):
+    # A projection may be autocast even when the embedding/normalization was
+    # FP32. Never let a shared FP32 position table promote that projection.
+    cosine, sine = (value.to(x.dtype) for value in embeddings)
     half = x.shape[-1] // 2
     perpendicular = torch.cat((-x[..., half:], x[..., :half]), dim=-1)
     return x * cosine + perpendicular * sine
+
+
+def rotate(x, positions, frequencies, attention_factor=1.0):
+    """Standalone reference operation; full Decoder calls share embeddings."""
+    return apply_rotary(x, rotary_embeddings(positions, frequencies, x.dtype, attention_factor))
 
 
 class Attention(nn.Module):
@@ -188,7 +214,7 @@ class Attention(nn.Module):
         self.frequencies = rotary_frequencies(self.config, device=self.q_proj.weight.device)
         return self
 
-    def forward(self, x, positions, allowed, mask, past):
+    def forward(self, x, positions, allowed, mask, past, rotary=None):
         b, length, _ = x.shape
         c = self.config
         q = self.q_proj(x, mask).reshape(b, length, c.num_attention_heads, c.head_dim)
@@ -196,8 +222,11 @@ class Attention(nn.Module):
         v = self.v_proj(x, mask).reshape(b, length, c.num_key_value_heads, c.head_dim)
         if c.query_key_norm:
             q, k = self.q_norm(q), self.k_norm(k)
-        q = rotate(q.transpose(1, 2), positions, self.frequencies, c.rope_attention_factor)
-        k = rotate(k.transpose(1, 2), positions, self.frequencies, c.rope_attention_factor)
+        if rotary is None:
+            q = rotate(q.transpose(1, 2), positions, self.frequencies, c.rope_attention_factor)
+            k = rotate(k.transpose(1, 2), positions, self.frequencies, c.rope_attention_factor)
+        else:
+            q, k = apply_rotary(q.transpose(1, 2), rotary), apply_rotary(k.transpose(1, 2), rotary)
         v = v.transpose(1, 2)
         if past is not None:
             k, v = torch.cat((past[0], k), dim=2), torch.cat((past[1], v), dim=2)
@@ -237,8 +266,8 @@ class Layer(nn.Module):
         self.self_attn = Attention(config)
         self.mlp = MLP(config)
 
-    def forward(self, x, positions, allowed, mask, past):
-        attention, cache = self.self_attn(self.input_layernorm(x), positions, allowed, mask, past)
+    def forward(self, x, positions, allowed, mask, past, rotary=None):
+        attention, cache = self.self_attn(self.input_layernorm(x), positions, allowed, mask, past, rotary)
         x = x + attention
         return x + self.mlp(self.post_attention_layernorm(x), mask), cache
 
@@ -262,6 +291,12 @@ class Decoder(nn.Module):
         nn.init.normal_(self.lm_head.weight, std=0.02)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
+
+    def _rotary(self, positions, dtype):
+        # Supported architectures use one fixed RoPE scheme across ALL layers.
+        # This is a per-forward value, not a cache tied to the adapter version.
+        return rotary_embeddings(positions, self.model.layers[0].self_attn.frequencies,
+                                  dtype, self.config.rope_attention_factor)
 
     def forward(self, tokens, *, positions=None, allowed=None, adapter_mask=None,
                 cache: Cache | None = None, return_cache=False, capture_layer=None):
@@ -287,12 +322,13 @@ class Decoder(nn.Module):
         if allowed.dtype != torch.bool or allowed.shape[-2:] != (length, prefix + length):
             raise ValueError("attention mask must be boolean with query/key dimensions")
         hidden = self.model.embed_tokens(tokens)
+        rotary = self._rotary(positions, hidden.dtype)
         new_cache = []
         for i, layer in enumerate(self.model.layers):
             if i == capture_layer:
                 boundary = DraftBoundary(hidden, positions, allowed, adapter_mask, i)
             hidden, kv = layer(hidden, positions, allowed, adapter_mask,
-                               None if cache is None else cache[i])
+                               None if cache is None else cache[i], rotary)
             if return_cache:
                 new_cache.append(kv)
         logits = self.lm_head(self.model.norm(hidden))
@@ -320,9 +356,10 @@ class Decoder(nn.Module):
                 or boundary.allowed.shape[-2:] != (length, cache_length(cache) + length)
                 or (boundary.adapter_mask is not None and boundary.adapter_mask.shape != hidden.shape[:2])):
             raise ValueError("boundary layout does not match replay dimensions")
+        rotary = self._rotary(boundary.positions, hidden.dtype)
         for i in range(start, self.config.num_hidden_layers):
             hidden, _ = self.model.layers[i](hidden, boundary.positions, boundary.allowed,
-                                            boundary.adapter_mask, None if cache is None else cache[i - start])
+                                            boundary.adapter_mask, None if cache is None else cache[i - start], rotary)
         return self.lm_head(self.model.norm(hidden))
 
     def adapter_parameters(self):
@@ -358,4 +395,6 @@ def trim_cache(cache: Cache | None, length: int) -> Cache | None:
         raise ValueError("cannot extend cache by trimming")
     if cache is None or length == 0:
         return None
+    if isinstance(cache, PackedCache):
+        return PackedCache(cache.packed[..., :length, :].detach())
     return tuple((k[:, :, :length].detach(), v[:, :, :length].detach()) for k, v in cache)

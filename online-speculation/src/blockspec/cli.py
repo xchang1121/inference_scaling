@@ -163,13 +163,16 @@ def main():
     bench.add_argument("--seed", type=int, default=271828)
     bench.add_argument("--threads", type=int, default=4)
     bench.add_argument("--progress", action="store_true", help="also print per-request counters")
+    bench.add_argument("--execution", choices=["eager", "cuda_graph"], default="eager",
+                       help="same inference executor for AR/static/online; CUDA graphs currently require FP32")
     args = parser.parse_args()
     if args.command == "benchmark":
         from .benchmark import BenchmarkConfig, benchmark_streams, continuation_prompts
         implementation_sha = implementation_fingerprint()
         config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
                                  warmup_tokens=args.warmup_tokens, seed=args.seed, sampler=args.sampler,
-                                 top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id)
+                                 top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id,
+                                 execution=args.execution)
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
                                      learning_rate=args.learning_rate, loss=args.loss,
                                      train_last_layers=args.online_last_layers)

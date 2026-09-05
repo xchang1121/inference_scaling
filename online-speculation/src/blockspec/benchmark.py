@@ -29,6 +29,7 @@ class BenchmarkConfig:
     top_k: int = 4
     prefix_budget: int = 16
     eos_id: int | None = None
+    execution: str = "eager"
 
     def __post_init__(self):
         if min(self.tokens, self.warmup_tokens, self.top_k, self.prefix_budget) < 1:
@@ -37,6 +38,8 @@ class BenchmarkConfig:
             raise ValueError("block >=2 and a positive even repeat count required")
         if self.sampler not in ("linear", "tree"):
             raise ValueError("unknown sampler")
+        if self.execution not in ("eager", "cuda_graph"):
+            raise ValueError("unknown inference execution")
 
 
 def continuation_prompts(sequences, *, count, length):
@@ -63,9 +66,9 @@ def compare_tokens(reference, actual):
             "reference_tokens": len(reference), "actual_tokens": len(actual)}
 
 
-def aggregate(rows, *, setup_seconds=0.0):
+def aggregate(rows, *, setup_seconds=0.0, engine_setup_seconds=0.0):
     """Token-weighted throughput, never the arithmetic mean of request TPS."""
-    if not rows or not math.isfinite(setup_seconds) or setup_seconds < 0:
+    if not rows or any(not math.isfinite(t) or t < 0 for t in (setup_seconds, engine_setup_seconds)):
         raise ValueError("nonempty measurements and nonnegative setup time required")
     fields = ("tokens", "seconds", "decode_forwards", "rounds", "accepted", "proposed",
               "updates", "update_seconds")
@@ -73,8 +76,10 @@ def aggregate(rows, *, setup_seconds=0.0):
     if result["seconds"] <= 0 or result["tokens"] < 0:
         raise ValueError("invalid measured tokens or elapsed time")
     result.update(requests=len(rows), setup_seconds=setup_seconds,
+                  engine_setup_seconds=engine_setup_seconds,
                   tps=result["tokens"] / result["seconds"],
-                  tps_including_learner_setup=result["tokens"] / (result["seconds"] + setup_seconds))
+                  tps_including_learner_setup=result["tokens"] / (result["seconds"] + setup_seconds),
+                  tps_including_all_setup=result["tokens"] / (result["seconds"] + setup_seconds + engine_setup_seconds))
     result["tokens_per_round"] = result["tokens"] / result["rounds"] if result["rounds"] else 0.0
     return result
 
@@ -90,6 +95,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     original_dtypes = {name: p.dtype for name, p in model.named_parameters()}
     measurements, generated, setup, adapter_changes = {}, {}, {}, []
     trainable = 0
+    executor, execution_info = None, {"kind": config.execution, "setup_seconds": 0.0, "signatures": 0}
+    engine_cost = dict.fromkeys(("ar", "static", "online"), 0.0)
     spec = generate_tree if config.sampler == "tree" else generate_speculative
     options = {"block_size": config.block_size}
     if config.sampler == "tree":
@@ -103,9 +110,32 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
         return torch.Generator(device=device).manual_seed(seed)
 
     try:
+        if config.execution == "cuda_graph":
+            from .execution import FixedShapeExecutor
+            # Fixed addresses survive in-place adapter restoration and AdamW.
+            model.train_adapters_only()
+            maximum = max(config.block_size, config.prefix_budget if config.sampler == "tree" else 1)
+            executor = FixedShapeExecutor(model, capacity=max(p.shape[1] for p in prompts) +
+                                           max(config.tokens, config.warmup_tokens, 4),
+                                           max_query=maximum)
+            clean = [(i, False, None) for i in range(1, maximum + 1)]
+            static_draft = [(i, True, None) for i in range(2, config.block_size + 1)]
+            capture = (None if online_config.train_last_layers is None else
+                       model.config.num_hidden_layers - online_config.train_last_layers)
+            online_draft = [(i, True, capture) for i in range(2, config.block_size + 1)]
+            executor.prepare(clean + static_draft + online_draft)
+            ar_keys = {(1, False, None)} | {(p.shape[1] - 1, False, None) for p in prompts
+                                            if 1 <= p.shape[1] - 1 <= maximum}
+            needed = {"ar": ar_keys, "static": clean + static_draft, "online": clean + online_draft}
+            # Each arm is charged once for its needed signatures as if deployed
+            # alone. Shared capture costs are not hidden from either baseline.
+            engine_cost = {arm: sum(executor.signature_seconds[k] for k in keys) for arm, keys in needed.items()}
+            execution_info.update(setup_seconds=executor.setup_seconds, signatures=len(executor.slots),
+                                  capacity=executor.capacity, setup_seconds_by_arm=engine_cost)
+            options["executor"] = executor
         # Warm kernels, not the reported online adapter/Adam trajectory. Lazy Adam
         # allocation still occurs in each fresh measured learner's first update.
-        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id)
+        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=executor)
         spec(model, prompts[0], config.warmup_tokens, **options, eos_id=config.eos_id,
              generator=rng(config.seed))
         warm = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1,
@@ -137,7 +167,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                     generator = rng(config.seed + repeat * len(prompts) + request)
                     if arm == "ar":
                         output = generate_ar(model, prompt, config.tokens, eos_id=config.eos_id,
-                                             generator=generator)
+                                             generator=generator, executor=executor)
                     else:
                         output = spec(model, prompt, config.tokens, **options, learner=learner,
                                       eos_id=config.eos_id, generator=generator)
@@ -167,10 +197,13 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     arms, repeats, comparisons = {}, [], []
     for arm in ("ar", "static", "online"):
         arms[arm] = aggregate([row for (_, label, _), row in measurements.items() if label == arm],
-                              setup_seconds=sum(s for (_, label), s in setup.items() if label == arm))
+                              setup_seconds=sum(s for (_, label), s in setup.items() if label == arm),
+                              engine_setup_seconds=engine_cost[arm])
         arms[arm]["speedup_vs_ar"] = arms[arm]["tps"] / arms["ar"]["tps"]
         arms[arm]["speedup_vs_ar_including_setup"] = (
             arms[arm]["tps_including_learner_setup"] / arms["ar"]["tps"])
+        arms[arm]["speedup_vs_ar_including_all_setup"] = (
+            arms[arm]["tps_including_all_setup"] / arms["ar"]["tps_including_all_setup"])
     for repeat in range(config.repeats):
         repeats.append({arm: aggregate([measurements[(repeat, arm, i)] for i in range(len(prompts))],
                                         setup_seconds=setup[(repeat, arm)])
@@ -186,6 +219,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             "greedy_identical": all(c["identical"] for c in comparisons),
             "online_adapter_changed_per_stream": adapter_changes,
             "online_trainable_parameters": trainable,
+            "execution": execution_info,
             "base_unchanged": True, "adapter_restored": True, "peak_allocated_bytes": peak,
             "prompt_sha256": prompt_hashes,
             "scope": "balanced development continuation streams; no test-set or statistical-significance claim"}
