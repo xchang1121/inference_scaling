@@ -10,10 +10,10 @@
 | R3A/B | Recycling / warm-start pilot | 已结束：没有可靠净收益，负结果保留 |
 | R3C/D | Packed tree + rank/cost budget 在线消融 | 已实现；HighQoS pilot 对线性约 +18%，对固定树仅约 +1.84% |
 | R3E | 12 新 prompts × 5 repeats 独立 held-out | 360/360 完成、token 一致；在线 49.58 TPS < fixed N=32 的 50.60，且计时频率门未过，仅作描述性测量 |
-| R4 | WSL2 + cu128/FA2/Triton + pinned Nano-vLLM | 环境已完整安装；14 项 checks 含 FA2 GPU forward/backward 全通过，官方模型基线待测 |
+| R4 | WSL2 + cu128/FA2/Triton + pinned Nano-vLLM | 14 项 runtime checks 通过；32/32 官方基线，AR 184.37 / B8 225.07 TPS（128 tokens），跨 B 输出差异如实记录 |
 | R5 | FA2 树路径候选、固定 CUDA graph 形状与减少同步 | 补丁仅默认关闭、apply-check 通过；必须先跑官方未修改基线 |
 | R6A | 嵌套树 counterfactual feedback | 72/72 pilot 完成；正确性通过，46.85 TPS < fixed N=32 49.63，性能未过，不提升为默认 |
-| R7 | 原生 Uno 请求内块长学习 | 设计/证明/实现、13 项 CPU 单测已完成；GPU pilot 协议已冻结，待运行时安装结束 |
+| R7 | 原生 Uno 请求内块长学习 | 60/60 pilot 完成：211.31 vs 原 B8 208.98 TPS（256 tokens），接近但未证明稳定额外收益；8/8 同宽度 shadow 输出一致 |
 
 R2/R3 在 Windows 可用环境进行；R4 并行准备系统依赖。重启若为必要外部条件，
 记录明确状态并继续不依赖重启的算法工作。
@@ -30,3 +30,7 @@ Windows HF 当前最快的已测配置是固定 N=32 树；不能与不同 backe
 用户最新接受与原 Uno 接近的行为/吞吐，故 R7 的第一步是同 backend 的原生线性 Uno 对照，
 不强制要求打败 Windows 最强静态树。保留独立记录、更新开销和负结果，见
 [R7 协议和证明](R7_NATIVE_ONLINE_DESIGN_AND_PROOFS.md)。
+
+R7 已产生[真实结果](STAGE12_NATIVE_ONLINE_RESULTS.md)。下一步优先定位官方 BF16 跨形状分叉，
+做固定条件历史的概率/argmax 对照，再用更多独立负载评估动态块长；梯度式 LoRA 在线更新
+仍需另开有成本回本依据的候选，不把当前 policy learning 冒称为 LoRA SGD。

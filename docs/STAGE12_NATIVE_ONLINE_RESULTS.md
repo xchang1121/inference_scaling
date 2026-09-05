@@ -37,6 +37,20 @@ R7 相对 B=8 的 prompt-cluster bootstrap 95% 区间为 [0.97025, 1.07206]；
 R7 的总 E2E 时间 14.538139923 s，不能把仅约 0.1% 的 choice+observe 比例当作完整开销比例。
 没有为在线策略添加 CUDA synchronization，也没有将更新移出计时区间。
 
+所有 60 个 post-run memory clocks 为 9501 MHz；SM=1950 MHz 有 18 次，1935 MHz 有 42 次，
+温度由 54℃ 增至 64℃。这些快照不证明全程频率固定，仍保留系统噪声的限制。
+峰值 allocated GPU memory=11,373,778,944 bytes（包含预分配 KV/cache，并非模型权重大小）。
+
+| Workload | 原 B=8 TPS | R7 TPS |
+| --- | ---: | ---: |
+| English | 213.12 | 212.24 |
+| Chinese | 209.65 | 207.05 |
+| Code | 195.21 | 214.99 |
+| Math | 219.50 | 211.10 |
+
+收益并非每题都为正；聚合正差主要来自 code。不同配置生成内容存在差异，不能把这个差异
+毫无保留地归因到在线预算策略本身。后续需固定条件历史的数值诊断与更丰富任务评估。
+
 ## 输出边界
 
 本组 256-token BF16 输出里，所有 48 个 speculative runs（包括固定宽度和 R7）都与 B=1 AR
@@ -47,6 +61,9 @@ R7 对 AR 首差异为 83–148；原版 B=16 的 code 在 25 即分叉。
 数学证明提供的是：固定 B 解码正确、target 不变、轮内 proposal law 不变时，自适应 B 保持
 同一条件采样法则。它没有界定该 GPU/BF16 实现的数值 ε，也没有诊断官方跨 B 差异的根因。
 另用[固定宽度 shadow 协议](R7_SHADOW_CONTROL_PROTOCOL.md)检验 wrapper 在动作相同情况下是否改变输出。
+该[控制实验现已完成](STAGE12_SHADOW_CONTROL_RESULTS.md)：8/8 对输出及 stats 与官方 B=8 完全一致，
+shadow8 216.92 TPS vs 官方 218.60 TPS（约 -0.77%）。动态 R7 与同组 B=8 的 12 对完整输出则均有差异；
+不能把固定动作的控制通过外推为所有自适应动作都 bitwise exact。
 
 ## 可复核证据
 

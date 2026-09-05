@@ -1,0 +1,128 @@
+{
+  "valid_runs": 24,
+  "methods": {
+    "1": {
+      "runs": 8,
+      "returned_tokens": 1024,
+      "total_e2e_seconds": 5.553755330999998,
+      "aggregate_e2e_tps": 184.37974649049235,
+      "official_tpf_decode_only": 0.9921875,
+      "ar_exact_matches": 8,
+      "ar_mismatches": [],
+      "cuda_graph_hits": 1024,
+      "cuda_graph_misses": 0
+    },
+    "8": {
+      "runs": 8,
+      "returned_tokens": 1024,
+      "total_e2e_seconds": 4.684448531000005,
+      "aggregate_e2e_tps": 218.59563473128892,
+      "official_tpf_decode_only": 1.4390934844192635,
+      "ar_exact_matches": 4,
+      "ar_mismatches": [
+        {
+          "workload": "chinese",
+          "seed": 20270205,
+          "first_difference": 60,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "chinese",
+          "seed": 20270206,
+          "first_difference": 60,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "code",
+          "seed": 20270305,
+          "first_difference": 87,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "code",
+          "seed": 20270306,
+          "first_difference": 87,
+          "actual_length": 128,
+          "ar_length": 128
+        }
+      ],
+      "cuda_graph_hits": 706,
+      "cuda_graph_misses": 0
+    },
+    "shadow8": {
+      "runs": 8,
+      "returned_tokens": 1024,
+      "total_e2e_seconds": 4.720598262000003,
+      "aggregate_e2e_tps": 216.92165763035214,
+      "official_tpf_decode_only": 1.4390934844192635,
+      "ar_exact_matches": 4,
+      "ar_mismatches": [
+        {
+          "workload": "chinese",
+          "seed": 20270205,
+          "first_difference": 60,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "chinese",
+          "seed": 20270206,
+          "first_difference": 60,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "code",
+          "seed": 20270305,
+          "first_difference": 87,
+          "actual_length": 128,
+          "ar_length": 128
+        },
+        {
+          "workload": "code",
+          "seed": 20270306,
+          "first_difference": 87,
+          "actual_length": 128,
+          "ar_length": 128
+        }
+      ],
+      "cuda_graph_hits": 706,
+      "cuda_graph_misses": 0,
+      "same_width_B8_token_matches": 8
+    }
+  },
+  "online_over_fixed": {},
+  "gpu_after_counts": {
+    "53, 1950 MHz, 9501 MHz, 275.47 W, 93 %": 1,
+    "53, 1950 MHz, 9501 MHz, 273.41 W, 91 %": 1,
+    "53, 1950 MHz, 9501 MHz, 273.25 W, 91 %": 1,
+    "54, 1950 MHz, 9501 MHz, 274.99 W, 92 %": 1,
+    "54, 1950 MHz, 9501 MHz, 276.86 W, 91 %": 1,
+    "53, 1950 MHz, 9501 MHz, 274.63 W, 91 %": 1,
+    "55, 1950 MHz, 9501 MHz, 272.42 W, 92 %": 1,
+    "54, 1950 MHz, 9501 MHz, 274.46 W, 91 %": 1,
+    "55, 1950 MHz, 9501 MHz, 275.86 W, 90 %": 1,
+    "55, 1950 MHz, 9501 MHz, 275.39 W, 90 %": 1,
+    "55, 1950 MHz, 9501 MHz, 275.73 W, 92 %": 1,
+    "56, 1950 MHz, 9501 MHz, 277.51 W, 91 %": 1,
+    "55, 1950 MHz, 9501 MHz, 275.24 W, 91 %": 1,
+    "56, 1950 MHz, 9501 MHz, 276.02 W, 92 %": 1,
+    "56, 1950 MHz, 9501 MHz, 276.01 W, 91 %": 1,
+    "56, 1950 MHz, 9501 MHz, 276.38 W, 91 %": 1,
+    "57, 1950 MHz, 9501 MHz, 277.22 W, 92 %": 1,
+    "56, 1950 MHz, 9501 MHz, 277.34 W, 92 %": 1,
+    "57, 1950 MHz, 9501 MHz, 278.03 W, 91 %": 1,
+    "57, 1950 MHz, 9501 MHz, 274.76 W, 90 %": 1,
+    "57, 1950 MHz, 9501 MHz, 278.16 W, 93 %": 1,
+    "57, 1950 MHz, 9501 MHz, 278.73 W, 91 %": 1,
+    "57, 1950 MHz, 9501 MHz, 276.19 W, 91 %": 1,
+    "57, 1950 MHz, 9501 MHz, 278.20 W, 92 %": 1
+  },
+  "scope": "engineering pilot; four reused prompt clusters; not confirmatory; no retroactive equivalence margin",
+  "bitwise_exactness_is_not_inferred_from_theory": true,
+  "source_sha256": "ad7f41beb8b4155c68b640186b04bedbc169a66dc8b42ba266debf850ef3d95f",
+  "source": "online-speculation\\results\\stage12_native_shadow8.json"
+}

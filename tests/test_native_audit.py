@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import runpy
 
 import pytest
@@ -74,3 +75,25 @@ def test_nan_timing_is_rejected():
     data["records"][0]["end_to_end_seconds"] = float("nan")
     with pytest.raises(RuntimeError, match="timing"):
         validate(data)
+
+
+@pytest.mark.parametrize("filename,expected", [
+    ("stage12_official_fa2_baseline.json", 32),
+    ("stage12_native_online_r7_pilot.json", 60),
+    ("stage12_native_shadow8.json", 24),
+])
+def test_real_completed_native_studies_preserve_the_full_matrix(filename, expected):
+    path = Path(__file__).resolve().parents[1] / "results" / filename
+    assert validate(json.loads(path.read_text(encoding="utf-8"))) == expected
+
+
+def test_gpu_shadow_preserves_same_width_outputs_and_official_stats():
+    path = Path(__file__).resolve().parents[1] / "results" / "stage12_native_shadow8.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload["records"]
+    fixed = {(r["workload"], r["seed"]): r for r in rows if r["block_size"] == 8}
+    for row in rows:
+        if row["block_size"] == "shadow8":
+            reference = fixed[(row["workload"], row["seed"])]
+            assert row["output"] == reference["output"]
+            assert {c["width"] for c in row["online"]["cycles"]} == {8}
