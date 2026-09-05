@@ -29,4 +29,5 @@ shadow8/原版 TPS=0.99234，本组约 -0.77%；包含在线更新和整个 wrap
 - [完整审计](../results/stage12_native_shadow8_audit.json)
 - 原始 SHA-256：`ad7f41beb8b4155c68b640186b04bedbc169a66dc8b42ba266debf850ef3d95f`。
 - 真实 32/60/24-run 矩阵及 shadow 完整输出一致性已加入 CPU 回归测试。
-- 清除一次性下载器测试之后，最终全套 **215 passed**，Ruff 全通过，Linux pip check 通过。
+- 清除一次性下载器测试并增加原始数据 SHA 回归后，最终全套 **218 passed**，Ruff 全通过，Linux pip check 通过。
+- `.gitattributes` 固定本轮原始结果为 LF，避免 Windows checkout 的 CRLF 转换破坏已记录的字节摘要。
