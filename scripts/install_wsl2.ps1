@@ -4,14 +4,14 @@ param(
     [string]$Distribution = "Ubuntu-22.04",
 
     [ValidateNotNullOrEmpty()]
-    [string]$ResultPath = (
-        Join-Path (Split-Path -Parent $PSScriptRoot) `
-            "results\stage9_wsl_install.json"
-    )
+    [string]$ResultPath
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if (-not $ResultPath) {
+    $ResultPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'results\stage9_wsl_install.json'
+}
 
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -194,4 +194,3 @@ if ($record.restart_required) {
 
 Write-Host "WSL installation completed without a detected restart requirement."
 exit 0
-

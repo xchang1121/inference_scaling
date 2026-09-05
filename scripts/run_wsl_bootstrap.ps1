@@ -47,17 +47,17 @@ $baseMount = ConvertTo-WslMountPath $BaseModel
 $adapterMount = ConvertTo-WslMountPath $Adapter
 $resultMount = "$projectMount/results/stage9_wsl_runtime.json"
 
-Invoke-WslChecked @("--set-default-version", "2")
-Invoke-WslChecked @("--set-version", $Distribution, "2")
-Invoke-WslChecked @(
+Invoke-WslChecked -Arguments @("--set-default-version", "2")
+Invoke-WslChecked -Arguments @("--set-version", $Distribution, "2")
+Invoke-WslChecked -Arguments @(
     "--distribution", $Distribution,
     "--user", "root",
     "--", "bash", $systemScript, $LinuxUser, $wslConfig
 )
 
 # Reload /etc/wsl.conf before running the unprivileged phase.
-Invoke-WslChecked @("--terminate", $Distribution)
-Invoke-WslChecked @(
+Invoke-WslChecked -Arguments @("--terminate", $Distribution)
+Invoke-WslChecked -Arguments @(
     "--distribution", $Distribution,
     "--user", $LinuxUser,
     "--", "bash", $runtimeScript,
