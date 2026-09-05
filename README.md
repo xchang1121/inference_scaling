@@ -15,8 +15,9 @@
 | --- | --- |
 | 硬件 | RTX 3090 24 GB，i7-12700K，32 GB RAM |
 | 静态基线 | Uno 0.9B，Windows HF KV-cache；早期静态复现与本轮完整生成计时分别保留 |
-| WSL | Microsoft 签名/hash 验证通过，WSL 2.7.13.0 与虚拟机平台已安装；**等待 Windows 重启** |
-| 官方 Linux runtime | Ubuntu/CUDA/PyTorch/Triton/FA2 和未修改官方 Nano-vLLM 基线仍待重启后验证 |
+| WSL | Windows 已重启；WSL2 + Ubuntu 22.04.5 正常运行，Linux nvidia-smi 已识别 RTX 3090 |
+| 官方 Linux runtime | Python 3.10/系统编译依赖、ext4 源码/模型已就绪；cu128/FA2 安装与 kernel smoke 进行中 |
+| R7 原生在线候选 | 不改官方模型/decoder，只在线学习块长；13 项 CPU 单测通过，已冻结 GPU pilot 协议，尚待实测 |
 | 在线预算树 pilot | FP32：48.74 TPS vs linear B=8 的 41.27 TPS（+18.09%）；vs fixed tree 47.86 TPS 仅 +1.84% |
 | 独立评估 | 360/360 完成；300 个 speculative 输出全部逐 token 等于 AR；频率门未通过，整组仅作描述性工程测量 |
 | held-out TPS | linear B=8：42.41；fixed tree N=16：48.35；fixed tree N=32：50.60；online budget：49.58 |
@@ -27,6 +28,10 @@
 
 ## 当前文档
 
+- [用户更新后的验收口径](docs/CURRENT_ACCEPTANCE_CRITERIA.md)
+- [已重启后的 WSL/Ubuntu/CUDA 进度](docs/STAGE12_LINUX_RUNTIME_PROGRESS.md)
+- [未修改官方 FA2 基线协议](docs/STAGE12_OFFICIAL_BASELINE_PROTOCOL.md)
+- [R7 原生在线块长：设计、分布保持与成本证明](docs/R7_NATIVE_ONLINE_DESIGN_AND_PROOFS.md)
 - [当前树算法与数学证明](docs/BUDGETED_TREE_UNO_DESIGN_AND_PROOFS.md)
 - [完整 held-out 结果、审计与收益边界](docs/STAGE11_TREE_HELDOUT_RESULTS.md)
 - [稳定 QoS pilot 与在线收益边界](docs/STAGE11_HIGHQOS_TREE_PILOT_RESULTS.md)
@@ -63,11 +68,13 @@
 模型和安装包保存在被忽略的目录；版本锁、摘要结果和证明进入 Git。
 
 当前观察到的最快配置是 `tree:8:32`，不是在线 controller；该选择不构成全局最大 TPS 保证。
-WSL 支持栈的下一步需要用户保存工作并重启 Windows，再运行
-`scripts/resume_wsl_after_reboot.ps1`。Ubuntu 与 Linux GPU kernels 尚未在本机验证。
+Windows 重启和 Ubuntu 安装已经完成，无需沿用旧重启请求。Linux GPU kernels 与官方完整基线
+以 Stage 12 的实际记录为准；在 kernel smoke 成功前不把运行时标记完成。
 
 ## 核心实现
 
+- `scripts/native_online_policy.py`：R7 原生官方引擎外围的请求内 EMA 块长学习，无在线 LoRA SGD。
+- `scripts/wsl_official_baseline.py`：官方原版基线，以及 `--online` 启用的同运行时 R7 配对实验。
 - `src/online_speculation/tree_uno.py`：嵌套树、target-draw 遍历、rank 校准、在线成本预算。
 - `src/online_speculation/hf_tree_uno.py`：真实模型 ancestor mask、position、KV 路径整理。
 - `src/online_speculation/feedback_budget.py`：独立启用的 R6A propensity-corrected 残差控制器；旧 R3E 配置不变。

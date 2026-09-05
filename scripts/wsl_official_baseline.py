@@ -54,19 +54,23 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--warmup-tokens", type=int, default=128)
     parser.add_argument("--seed", type=int, default=20270005)
+    parser.add_argument("--online", action="store_true", help="include frozen R7 request-local width policy")
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite a previous baseline record")
     blocks = [int(n) for n in args.blocks.split(",")]
+    methods = blocks + (["online"] if args.online else [])
     if len(set(blocks)) != len(blocks) or 1 not in blocks or min(blocks) < 1 or max(blocks) > 16:
         raise ValueError("distinct widths within 1..16 including AR width 1 required")
     if args.repetitions < 1 or min(args.max_new_tokens, args.warmup_tokens) < 2:
         raise ValueError("positive repetitions and at least two output tokens required")
+    if args.online and not {4, 8, 16} <= set(blocks):
+        raise ValueError("R7 requires captured and measured static widths 4,8,16")
     payload = {
         "schema_version": 1, "scope": "official-runtime engineering baseline; not confirmatory",
         "backend": "unmodified pinned Nano-vLLM Uno / WSL2 / FA2 / CUDA graphs",
         "design": {**{k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
-                   "workloads": WORKLOADS, "blocks": blocks, "temperature": 0.0, "batch_size": 1,
+                   "workloads": WORKLOADS, "blocks": blocks, "methods": methods, "temperature": 0.0, "batch_size": 1,
                    "noise_mode": "random_uniform", "ignore_eos": True,
                    "e2e_scope": "full official generate call including prefill and detokenization; excludes model initialization, shared prompt encoding, GPU snapshots and JSON I/O",
                    "order": "rotated and alternately reversed within prompt/repetition"},
@@ -92,6 +96,7 @@ def main():
         import torch
         from generation import format_chat_prompt
         from nano_vllm_uno import LLM, SamplingParams
+        from native_online_policy import NativeWidthPolicy, generate_online
 
         payload["environment"] = {
             "platform": platform.platform(), "python": sys.version,
@@ -129,36 +134,43 @@ def main():
             params = SamplingParams(
                 temperature=0.0, top_k=32, top_p=0.95, max_tokens=budget,
                 ignore_eos=True, stop_token_ids=[64019, 1], mask_token_id=64256,
-                noise_mode="random_uniform", diffusion_block_size=width,
+                noise_mode="random_uniform", diffusion_block_size=8 if width == "online" else width,
             )
             torch.cuda.synchronize()
             started = time.perf_counter()
-            outputs = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])
+            diagnostics = None
+            if width == "online":
+                output, diagnostics = generate_online(engine, ids, params, budget, NativeWidthPolicy())
+            else:
+                output = engine.generate([ids], params, use_tqdm=False, request_max_tokens=[budget])[0]
             torch.cuda.synchronize()
             elapsed = time.perf_counter() - started
-            return outputs[0], elapsed
+            return output, elapsed, diagnostics
 
         payload["stage"] = "warmup"
         save()
-        for width in blocks:
+        for width in methods:
             generate(encoded[0][1], width, args.warmup_tokens, args.seed - 1)
         payload["stage"] = "measuring"
         save()
         for prompt_index, (name, ids) in enumerate(encoded):
             for rep in range(args.repetitions):
                 seed = args.seed + prompt_index * 100 + rep
-                offset = (prompt_index + rep) % len(blocks)
-                order = blocks[offset:] + blocks[:offset]
+                offset = (prompt_index + rep) % len(methods)
+                order = methods[offset:] + methods[:offset]
                 if (prompt_index + rep) % 2:
                     order = list(reversed(order))
                 for width in order:
                     before = gpu_snapshot()
-                    output, elapsed = generate(ids, width, args.max_new_tokens, seed)
+                    graph_before = (engine.model_runner.cuda_graph_hits, engine.model_runner.cuda_graph_misses)
+                    output, elapsed, diagnostics = generate(ids, width, args.max_new_tokens, seed)
                     record = {"workload": name, "seed": seed, "block_size": width, "order": order,
                               "prompt_tokens": len(ids), "output": output, "end_to_end_seconds": elapsed,
                               "output_tokens": len(output["token_ids"]),
                               "e2e_tps": len(output["token_ids"]) / elapsed,
-                              "gpu_before": before, "gpu_after": gpu_snapshot()}
+                              "gpu_before": before, "gpu_after": gpu_snapshot(), "online": diagnostics,
+                              "cuda_graph_hits": engine.model_runner.cuda_graph_hits - graph_before[0],
+                              "cuda_graph_misses": engine.model_runner.cuda_graph_misses - graph_before[1]}
                     payload["records"].append(record)
                     save()
                     print(f"{name} seed={seed} B={width} TPS={record['e2e_tps']:.2f} stats={output['stats']}", flush=True)
