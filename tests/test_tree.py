@@ -7,7 +7,7 @@ import torch
 from blockspec.decoding import generate_ar
 from blockspec.model import Decoder, ModelConfig, cache_length
 from blockspec.online import OnlineConfig, OnlineLearner
-from blockspec.tree import build_tree, compact_tree_cache, generate_tree, traverse_target
+from blockspec.tree import build_tree, compact_tree_cache, generate_tree, traverse_greedy, traverse_target
 
 
 def tiny():
@@ -97,3 +97,11 @@ def test_tree_target_sampling_probabilities_do_not_depend_on_tree_scores(monkeyp
         result = traverse_target(tree, p, budget=2)
         law[result.tokens[1]] += p[0, token]
     torch.testing.assert_close(law, p[0], atol=0, rtol=0)
+
+
+def test_tree_greedy_specialization_equals_one_hot_traversal():
+    tree = build_tree(0, torch.tensor([[.6, .4], [.3, .7]]), top_k=2, prefix_budget=6)
+    for targets in itertools.product(range(2), repeat=len(tree.tokens)):
+        ids = torch.tensor(targets)
+        p = torch.nn.functional.one_hot(ids, 2).float()
+        assert traverse_greedy(tree, ids, budget=4) == traverse_target(tree, p, budget=4)

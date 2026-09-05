@@ -4,7 +4,8 @@ import pytest
 import torch
 
 from blockspec.diffusion import corrupt, posterior, psi_transition
-from blockspec.sampling import SamplingConfig, probabilities, residual, verify_linear
+from blockspec.sampling import (SamplingConfig, greedy_tokens, probabilities, residual,
+                               sample_logits, verify_greedy, verify_linear)
 
 
 @pytest.mark.parametrize("p,q", [
@@ -104,3 +105,25 @@ def test_corruption_endpoints():
     prior = torch.tensor([0., 1., 0.])
     assert torch.equal(corrupt(clean, prior, 1), clean)
     assert torch.equal(corrupt(clean, prior, 0), torch.ones_like(clean))
+
+
+@pytest.mark.parametrize("length", [0, 1, 2, 3])
+def test_exhaustive_greedy_specialization_equals_probability_kernel(length):
+    for candidate in itertools.product(range(2), repeat=length):
+        for target in itertools.product(range(2), repeat=length + 1):
+            proposed = torch.tensor(candidate, dtype=torch.long)
+            ids = torch.tensor(target, dtype=torch.long)
+            q = torch.nn.functional.one_hot(proposed, 2).float()
+            p = torch.nn.functional.one_hot(ids, 2).float()
+            reference = verify_linear(proposed, q, p, acceptance_uniforms=torch.zeros(length))
+            assert verify_greedy(proposed, ids) == reference
+
+
+def test_greedy_selection_is_argmax_without_probability_allocation(monkeypatch):
+    logits = torch.tensor([[.3, 1., -.5], [2., 2., 1.]])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("greedy path must not materialize a probability table")
+    monkeypatch.setattr("blockspec.sampling.probabilities", forbidden)
+    assert torch.equal(sample_logits(logits), torch.tensor([1, 0]))
+    with pytest.raises(ValueError):
+        greedy_tokens(torch.tensor([float("nan"), 0.]))

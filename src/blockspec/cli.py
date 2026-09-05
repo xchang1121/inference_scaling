@@ -138,7 +138,64 @@ def main():
     prepare.add_argument("--page-size", type=int, default=8)
     prepare.add_argument("--max-tokens", type=int, default=8192)
     prepare.add_argument("--seed", type=int, default=314159)
+    bench = sub.add_parser("benchmark", help="balanced AR/static/online continuation streams; stdout only")
+    bench.add_argument("--base", type=Path, required=True)
+    bench.add_argument("--adapter", type=Path, required=True)
+    bench.add_argument("--data", type=Path, required=True, help="tokenized development or held-out JSONL")
+    bench.add_argument("--split-role", choices=["validation", "test"], default="validation")
+    bench.add_argument("--device", default="cuda")
+    bench.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32")
+    bench.add_argument("--prompts", type=int, default=4)
+    bench.add_argument("--prompt-length", type=int, default=128)
+    bench.add_argument("--tokens", type=int, default=128)
+    bench.add_argument("--block-size", type=int, default=4)
+    bench.add_argument("--sampler", choices=["linear", "tree"], default="linear")
+    bench.add_argument("--top-k", type=int, default=4)
+    bench.add_argument("--prefix-budget", type=int, default=16)
+    bench.add_argument("--repeats", type=int, default=2)
+    bench.add_argument("--warmup-tokens", type=int, default=8)
+    bench.add_argument("--update-stride", type=int, default=32)
+    bench.add_argument("--replay-blocks", type=int, default=1)
+    bench.add_argument("--learning-rate", type=float, default=1e-4)
+    bench.add_argument("--loss", choices=["l1", "tv", "forward_kl", "reverse_kl"], default="l1")
+    bench.add_argument("--eos-id", type=int, help="omit for a declared fixed-token-budget measurement")
+    bench.add_argument("--seed", type=int, default=271828)
+    bench.add_argument("--threads", type=int, default=4)
+    bench.add_argument("--progress", action="store_true", help="also print per-request counters")
     args = parser.parse_args()
+    if args.command == "benchmark":
+        from .benchmark import BenchmarkConfig, benchmark_streams, continuation_prompts
+        config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
+                                 warmup_tokens=args.warmup_tokens, seed=args.seed, sampler=args.sampler,
+                                 top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id)
+        online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
+                                     learning_rate=args.learning_rate, loss=args.loss)
+        if args.threads < 1:
+            parser.error("positive threads required")
+        torch.set_num_threads(args.threads)
+        torch.manual_seed(args.seed)
+        payload = torch.load(args.adapter, map_location="cpu", weights_only=True)
+        if not payload.get("adapter_only"):
+            parser.error("benchmark expects an adapter-only checkpoint and its local base")
+        saved_config = ModelConfig.from_dict(payload["config"])
+        data_sha = hashlib.sha256(args.data.read_bytes()).hexdigest()
+        if data_sha == payload.get("metadata", {}).get("train_data_sha256"):
+            parser.error("benchmark data is the checkpoint's training file")
+        del payload
+        model = load_hf_base(args.base, rank=saved_config.adapter_rank, alpha=saved_config.adapter_alpha,
+                             device=args.device, dtype=getattr(torch, args.dtype))
+        model, metadata = load_checkpoint(args.adapter, model=model, device=args.device)
+        sequences = load_sequences(args.data, model.config.vocab_size)
+        prompts = continuation_prompts(sequences, count=args.prompts, length=args.prompt_length)
+        progress = (lambda row: print(json.dumps(row), flush=True)) if args.progress else None
+        result = benchmark_streams(model, prompts, config, online_config, progress=progress)
+        result.update(data_sha256=data_sha, split_role=args.split_role,
+                      adapter_sha256=hashlib.sha256(args.adapter.read_bytes()).hexdigest(),
+                      implementation_sha256=implementation_fingerprint(), dtype=args.dtype,
+                      offline_training_config=metadata.get("training_config"),
+                      device=torch.cuda.get_device_name() if str(args.device).startswith("cuda") else str(args.device))
+        print(json.dumps(result), flush=True)
+        return
     if args.command == "prepare":
         from .corpus import DEFAULT_OFFSETS, prepare_snapshot
         from .tokenizer import LocalTokenizer
