@@ -22,6 +22,20 @@ Ubuntu 首次安装后已是 WSL2。原 bootstrap 无条件执行 `--set-version
 从 HTTP 升级为 HTTPS，原配置备份为 /etc/apt/sources.list.online-uno-original；保留 APT 签名校验，
 未修改 Windows 的代理、DNS 或 VPN。增加 update --error-on=any，防止索引失败被当成成功继续。
 
+## 已完成的系统层与下载恢复
+
+随后 APT 安装成功，Python 3.10、venv、build-essential、cmake、ninja、git、rsync 等已就绪；
+非 root 用户 singm、ext4 上的固定 Uno 源码和模型副本已建立，模型 SHA-256 与 Windows 副本一致。
+
+PyTorch 官方索引默认选中的 download-r2.pytorch.org 主 wheel 多次断流；持续约 20 分钟仅取得
+约 19 MiB。核实同一官方 download.pytorch.org 端点支持精确 HTTP 206 Range，且其对象元数据
+SHA-256 与官方 wheel 索引一致后，保留 pip 临时文件的连续前缀，主动终止了经命令行核实的本任务
+pip 进程 PID 401（退出 143）。这不是安装成功，也不是因一次观测超时就重启下载。
+
+新增 Python 3.10 标准库分段续传器：最多 12 个并行 1 MiB 请求、每段最多 8 次重试、校验
+Content-Range 与长度，最后以锁文件中的完整 SHA-256 验证；已有 NVIDIA 依赖缓存不删除。
+未关闭 TLS 或更换到非官方 PyTorch 镜像。仅完整文件校验成功后才允许 pip 安装。
+
 ## 后续检查点
 
 系统 apt 包 -> 非 root 用户/隔离 Python 3.10 venv -> cu128 PyTorch/FA2/Triton ->
