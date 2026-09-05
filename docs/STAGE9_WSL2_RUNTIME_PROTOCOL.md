@@ -59,6 +59,18 @@ CUDA 或 GPU driver。执行前后 feature state、命令参数、退出码、�
 5. 导入已下载 Uno-1B base/adapter 到 Linux ext4，并重新核对 checkpoint hash；
 6. 先跑 import/kernel smoke，再跑固定短 prompt 的 AR 与 linear Uno smoke。
 
+重启后从父仓库运行以下可重入的 orchestrator；它以 WSL root 只安装 apt 系统包，再以新建的非 root
+`singm` 用户建立 venv、复制模型并运行 smoke：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  .\online-speculation\scripts\run_wsl_bootstrap.ps1
+```
+
+bootstrap 不给 Linux 用户设置口令或 passwordless sudo；后续系统包操作仍需由 Windows 侧显式指定
+`wsl --user root`。源代码、venv 和模型的运行副本位于 WSL ext4 的
+`/home/singm/online-speculation-work`，Windows 路径只作为可校验的导入源和结果落点。
+
 除非预编译 FA2 或 Triton 明确报告缺少 CUDA compiler，否则不安装完整 CUDA toolkit。若确实需要，
 只能安装 `cuda-toolkit-12-8`；禁止 NVIDIA 文档警告会尝试覆盖 WSL driver 的 `cuda`、`cuda-12-x`
 或 `cuda-drivers` 元包。
@@ -92,4 +104,3 @@ draft/verify stream 的空隙摊销。
 - [NVIDIA CUDA on WSL User Guide](https://docs.nvidia.com/cuda/cuda-on-wsl-user-guide/index.html)
 - [FlashAttention 官方安装与 GPU 支持](https://github.com/Dao-AILab/flash-attention#installation-and-features)
 - [Uno 锁定上游安装说明](https://github.com/ifm-ai/uno/tree/ed2ee36bb7a3aea8732ebc635b3f09490a032ea3)
-
