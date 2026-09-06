@@ -16,7 +16,11 @@ class ProposalSampler:
             return self.executor.sample_ar(logits, generator)
         return int(sample_logits(logits, self.config, generator))
 
-    def propose(self, logits, generator):
+    def propose(self, logits, generator, *, protected_rows=1):
+        if self.calibrator is not None and getattr(self.calibrator, "protected_rows", 1) != protected_rows:
+            raise ValueError("proposal calibration must match the branch's protected-row layout")
+        if self.executor is not None and self.calibrator is not None and self.executor.protected_rows != protected_rows:
+            raise ValueError("prepared calibration must match the branch's protected-row layout")
         if self.executor is not None:
             return self.executor.draft(logits, generator, self.calibrator)
         if self.config.temperature == 0:

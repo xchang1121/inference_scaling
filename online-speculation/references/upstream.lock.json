@@ -1,5 +1,15 @@
 {
   "captured_date": "2026-09-06",
+  "evaluation_data": {
+    "gsm8k": {
+      "repository": "https://github.com/openai/grade-school-math",
+      "commit": "3101c7d5072418e28b9008a6636bde82a006892c",
+      "directory": "grade_school_math/data",
+      "train_sha256": "17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465",
+      "test_sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14",
+      "usage": "question-only prompts, disjoint learning/evaluation splits; explicit request counts, thinking and output budgets per run"
+    }
+  },
   "related_papers": [
     {
       "arxiv": "2607.05147v1",

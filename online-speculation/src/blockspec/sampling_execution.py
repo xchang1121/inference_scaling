@@ -68,11 +68,12 @@ class _Slot:
 
 class _DraftSlot(_Slot):
     @torch.no_grad()
-    def __init__(self, length, vocabulary, sampling, device, dtype, temperatures, use_cuda_graph):
+    def __init__(self, length, vocabulary, sampling, device, dtype, temperatures, use_cuda_graph, protected_rows=1):
         self.sampling, self.temperatures = sampling, temperatures
+        self.protected_rows = protected_rows
         self.logits = torch.zeros(length, vocabulary, device=device, dtype=dtype)
         self.exponential = torch.ones_like(self.logits)
-        self.weights = self.logits.new_zeros(length - 1, len(temperatures))
+        self.weights = self.logits.new_zeros(length - protected_rows, len(temperatures))
         if temperatures:
             self.identity = temperatures.index(1.)
             self.weights[:, self.identity] = 1
@@ -83,7 +84,8 @@ class _DraftSlot(_Slot):
         self.q = _probabilities_unchecked(self.logits, self.sampling)
         self.feedback = None
         if self.temperatures:
-            self.q, self.feedback = mix_rows(self.q, self.weights, self.powers, self.identity, self.sampling.top_k)
+            self.q, self.feedback = mix_rows(self.q, self.weights, self.powers, self.identity,
+                                            self.sampling.top_k, self.protected_rows)
         self.tokens = exponential_choice(self.q, self.exponential)
         self.valid = (torch.isfinite(self.logits).all() & torch.isfinite(self.q).all() & (self.q >= 0).all()
                       & torch.isclose(self.q.sum(-1), torch.ones_like(self.q[:, 0]), atol=1e-6, rtol=1e-6).all())
@@ -131,10 +133,12 @@ class SamplingExecutor:
     @torch.no_grad()
     def __init__(self, vocabulary, block_size, sampling=SamplingConfig(), *, device="cuda",
                  dtype=torch.float32, temperatures=(.5, .75, 1., 1.25, 1.5), use_cuda_graph=True,
-                 continuation=False):
+                 continuation=False, protected_rows=1):
         if (type(vocabulary) is not int or vocabulary < 1 or type(block_size) is not int or block_size < 2
                 or sampling.temperature <= 0 or dtype not in (torch.float32, torch.float64)
-                or (temperatures and (sampling.top_k < 1 or 1. not in temperatures))):
+                or (temperatures and (sampling.top_k < 1 or 1. not in temperatures))
+                or type(protected_rows) is not int or protected_rows not in (0, 1)
+                or (continuation and protected_rows != 1)):
             raise ValueError("positive-temperature floating probabilities and a compatible mixing support required")
         self.vocabulary, self.block_size, self.sampling = vocabulary, block_size, sampling
         self.device, self.dtype = torch.device(device), dtype
@@ -143,13 +147,14 @@ class SamplingExecutor:
         if use_cuda_graph and self.device.type != "cuda":
             raise ValueError("CUDA device required for graph capture")
         self.temperatures = tuple(temperatures)
+        self.protected_rows = protected_rows
         self.continuation = continuation
         self.drafts, self.verifiers, self.signature_seconds = {}, {}, {}
         for n in range(1, block_size + 1):
-            for mixed in ([False, True] if n > 1 and temperatures else [False]):
+            for mixed in ([False, True] if n > protected_rows and temperatures else [False]):
                 start = time.perf_counter()
                 self.drafts[n, mixed] = _DraftSlot(n, vocabulary, sampling, self.device, dtype,
-                                                 self.temperatures if mixed else (), use_cuda_graph)
+                                                 self.temperatures if mixed else (), use_cuda_graph, protected_rows)
                 if self.device.type == "cuda":
                     torch.cuda.synchronize(self.device)
                 self.signature_seconds[n, "mixed" if mixed else "plain"] = time.perf_counter() - start
@@ -176,7 +181,8 @@ class SamplingExecutor:
                                        or (getattr(calibrator, "kind", None) != "continuation"
                                            and calibrator.temperatures != self.temperatures))
                                       or calibrator.weights.device != self.device
-                                      or calibrator.weights.dtype != self.dtype):
+                                      or calibrator.weights.dtype != self.dtype
+                                      or getattr(calibrator, "protected_rows", 1) != self.protected_rows):
             raise ValueError("calibrator temperatures, device and dtype must match prepared maps")
 
     def _shape(self, logits):
