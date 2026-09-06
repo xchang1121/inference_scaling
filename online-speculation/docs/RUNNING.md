@@ -458,3 +458,47 @@ python scripts/audit_pipeline.py \
 
 对应原理见 [共同接口](ALGORITHM.md#44-共同接口与位置差异) 与 [代码组织](ALGORITHM.md#9-代码组织)，
 有效结果集中记录于 [RESULTS.md](RESULTS.md)。
+
+## 11. 双向起草训练与恢复
+
+训练入口为 `scripts/train_dual_view.py`。基座参数使用 FP32 存储，
+`--precision bf16 --device cuda` 在前向和反向计算中使用 BF16 自动混合精度。
+优化对象为起草注意力的 Q/K/V/O 和 Q/K 归一化，AR 分支与共享参数冻结。
+
+数据采用每行一个 `input_ids` 数组的 JSONL。索引保存记录偏移量，批次读取独立记录并抽取连续窗口。
+长度达到 `--sequence-length` 的记录参与训练，其余计入短记录统计。
+真实文本可沿用本项目的数据准备入口转换为 token 序列。
+
+```bash
+python scripts/train_dual_view.py train \
+  --base /path/to/plain-qwen3 --mask-token-id 151669 --block-size 32 \
+  --data /path/to/training.jsonl --validation /path/to/validation.jsonl \
+  --device cuda --precision bf16 --sequence-length 256 \
+  --batch-size 1 --anchors-per-sequence 4 --accumulate 4 \
+  --steps 1000 --warmup-steps 50 --learning-rate 0.0001 \
+  --stop-after 500 --output /path/to/checkpoint-500.pt
+
+python scripts/train_dual_view.py resume \
+  --checkpoint /path/to/checkpoint-500.pt --data /path/to/training.jsonl \
+  --validation /path/to/validation.jsonl --device cuda \
+  --output /path/to/checkpoint-1000.pt
+```
+
+基座入口读取普通 Qwen3 的单文件或分片 safetensors，并逐项检查映射、形状和分片索引。
+`--mask-token-id` 由所用 tokenizer 确定，示例采用当前 Qwen3 复现约定。
+学习率按总更新次数计算预热和余弦衰减；`--stop-after` 设置本次运行的中断边界。
+恢复沿用保存的模型、优化器、数据排列与游标、随机状态和完整调度，检查训练数据摘要与运行环境。
+验证使用独立随机流，训练／验证数据按问题标识和完整记录检查互斥。
+检查点路径使用新文件名，`--summary` 可将本次摘要写入仓库外的新 JSON 文件。
+
+小型合成闭环使用相同的基座加载、数据入口、优化器和恢复流程：
+
+```bash
+python scripts/train_dual_view.py demo --device cpu \
+  --output /home/singm/online-speculation-work/models/dual-fit-synthetic-new.pt \
+  --summary /home/singm/online-speculation-work/results/dual-fit-synthetic-new.json
+```
+
+该入口在小型周期序列上训练 AR 教师，冻结共享参数后蒸馏双向分支，
+比较连续训练和中断恢复的每步损失、梯度范数、学习率及最终参数，并检查贪心生成和 AR 的一致性。
+临时基座导出和合成数据在运行结束时清理，显式指定的最终检查点与摘要保留。
