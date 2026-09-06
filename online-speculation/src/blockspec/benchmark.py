@@ -33,6 +33,7 @@ class BenchmarkConfig:
     prefix_budget: int = 16
     eos_id: int | None = None
     execution: str = "eager"
+    online_execution: str = "eager"
 
     def __post_init__(self):
         if min(self.tokens, self.warmup_tokens, self.top_k, self.prefix_budget) < 1:
@@ -43,6 +44,8 @@ class BenchmarkConfig:
             raise ValueError("unknown sampler")
         if self.execution not in ("eager", "cuda_graph"):
             raise ValueError("unknown inference execution")
+        if self.online_execution not in ("eager", "cuda_graph"):
+            raise ValueError("unknown online execution")
 
 
 def continuation_prompts(sequences, *, count, length):
@@ -100,6 +103,8 @@ def stream_trajectory(rows, *, setup_seconds=0.0, engine_setup_seconds=0.0):
 def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=OnlineConfig(), *, progress=None):
     if not prompts or any(p.ndim != 2 or p.shape[0] != 1 or p.shape[1] < 1 for p in prompts):
         raise ValueError("nonempty batch-one prompts required")
+    if config.online_execution == "cuda_graph" and online_config.train_last_layers is None:
+        raise ValueError("online graph execution requires an explicit trainable suffix")
     device = next(model.parameters()).device
     prompts = [p.to(device) for p in prompts]
     initial = adapter_state(model)
@@ -109,6 +114,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     measurements, generated, setup, adapter_changes = {}, {}, {}, []
     trainable, optimizer_backend = 0, None
     executor, execution_info = None, {"kind": config.execution, "setup_seconds": 0.0, "signatures": 0}
+    replay_executor = None
+    replay_info = {"kind": config.online_execution, "setup_seconds": 0.0, "signatures": 0}
     engine_cost = dict.fromkeys(("ar", "static", "online"), 0.0)
     spec = generate_tree if config.sampler == "tree" else generate_speculative
     options = {"block_size": config.block_size}
@@ -147,7 +154,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             # Charge each arm for the signatures required by its standalone deployment.
             engine_cost = {arm: sum(executor.signature_seconds[k] for k in set(keys)) for arm, keys in needed.items()}
             execution_info.update(setup_seconds=executor.setup_seconds, signatures=len(executor.slots),
-                                  capacity=executor.capacity, setup_seconds_by_arm=engine_cost)
+                                  capacity=executor.capacity, setup_seconds_by_arm=engine_cost.copy())
             options["executor"] = executor
         # Restore the offline weights after kernel warmup. Each measured learner
         # initializes Adam states during its first timed update.
@@ -164,6 +171,21 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                                                  feedback_execution=online_config.feedback_execution))
         spec(model, prompts[0], max(4, config.warmup_tokens), **options, learner=warm,
              eos_id=config.eos_id, generator=rng(config.seed))
+        if config.online_execution == "cuda_graph":
+            from .replay_execution import SuffixReplayExecutor
+            synchronize(model)
+            replay_start = time.perf_counter()
+            replay_executor = SuffixReplayExecutor(model, start_layer=warm.capture_layer,
+                                                    loss=online_config.loss,
+                                                    capacity=max(p.shape[1] for p in prompts) +
+                                                    max(config.tokens, config.warmup_tokens, 4),
+                                                    max_query=config.block_size)
+            replay_executor.prepare([(length, valid) for length in range(2, config.block_size + 1)
+                                      for valid in range(1, length)])
+            synchronize(model)
+            replay_info.update(setup_seconds=time.perf_counter() - replay_start,
+                               signatures=len(replay_executor.slots), capacity=replay_executor.capacity)
+            engine_cost["online"] += replay_info["setup_seconds"]
         del warm
         restore()
         synchronize(model)
@@ -178,7 +200,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                 if arm == "online":
                     synchronize(model)
                     start = time.perf_counter()
-                    learner = OnlineLearner(model, online_config)
+                    learner = OnlineLearner(model, online_config, replay_executor=replay_executor)
                     trainable = sum(p.numel() for p in learner.parameters)
                     optimizer_backend = learner.optimizer_backend
                     synchronize(model)
@@ -249,6 +271,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             "online_adapter_changed_per_stream": adapter_changes,
             "online_trainable_parameters": trainable,
             "online_optimizer": optimizer_backend,
+            "online_execution": replay_info,
             "execution": execution_info,
             "base_unchanged": True, "adapter_restored": True, "peak_allocated_bytes": peak,
             "prompt_sha256": prompt_hashes,

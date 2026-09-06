@@ -172,6 +172,24 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 默认贪心；随机采样传 `SamplingConfig(temperature=1, top_k=50, top_p=0.95)`。
 `eos_id=None` 按固定预算生成；设置本模型的 `eos_id` 可在结束标记处停止。
 
+末层训练图可在进入请求流前显式准备：
+
+```python
+from blockspec.replay_execution import SuffixReplayExecutor
+
+learner = OnlineLearner(model, OnlineConfig(train_last_layers=4, stride=8, replay_blocks=1,
+                                          loss="forward_kl", learning_rate=0.0003,
+                                          update_policy="coverage"))
+replay = SuffixReplayExecutor(model, start_layer=learner.capture_layer, loss=learner.config.loss,
+                              capacity=768, max_query=4)
+replay.prepare([(b, m) for b in range(2, 5) for m in range(1, b)])
+learner.replay_executor = replay
+```
+
+输入使用 FP32 CUDA、batch=1，历史长度在容量范围内；块长和有效监督行数通过 `prepare()` 显式准备。
+准备好的 `replay` 可传给同一模型的新 `OnlineLearner(model, config, replay_executor=replay)`，
+新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。数学推导见主报告 9.8。
+
 ## 6. 同条件三路评测
 
 当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载，训练配置为 1,200 步的 2→4→6→8 课程。
@@ -187,7 +205,7 @@ python -m blockspec benchmark \
   --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
   --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
   --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed \
-  --update-policy coverage
+  --update-policy coverage --online-execution cuda_graph
 ```
 
 按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
@@ -204,12 +222,14 @@ python -m blockspec benchmark \
 `--update-policy periodic` 提供周期更新对照；`coverage_skips` 统计完整覆盖窗口保留状态的检查次数，
 `fully_covered_rounds` 统计实际完整覆盖的验证轮次，`updates` 统计真正执行的训练次数。
 `--online-last-layers 4` 选择末 4 层续训，输出报告实际可训练参数数。
-删除命令中的 `--online-last-layers 4` 参数即可测全适配器续训。
+`--online-execution cuda_graph` 准备末层前向／损失／梯度图，`eager` 使用普通重放路径。
+全适配器续训使用默认层范围和 `--online-execution eager`。
 
 加 `--execution cuda_graph` 启用同一个独立固定形状执行器，AR、静态和在线都使用它。
 本机当前表格使用此开关；默认 `eager` 使用普通执行路径。
-图在预热和请求计时前准备，输出 `execution.setup_seconds_by_arm` 和 `tps_including_all_setup`，
-分别报告每个方法单独部署所需的图准备时间，以及包含图准备和 learner 初始化的流级 TPS。
+推理图在预热和请求计时前准备，`execution.setup_seconds_by_arm` 报告各方法的推理图准备成本。
+末层梯度图在正式请求流前准备，`online_execution.setup_seconds` 报告这部分准备耗时，
+其成本归入在线方法；`tps_including_all_setup` 包含推理图、训练图和 learner 初始化。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
 末层窗口化采集使用带分界特征和普通起草两组图；自建执行器时在 `prepare()` 中准备这两组查询形状。
 图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存等价性和张量规模见主报告 8.2。
