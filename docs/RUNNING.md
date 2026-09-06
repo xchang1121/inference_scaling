@@ -398,4 +398,10 @@ python scripts/overlap_mix.py benchmark \
 `--audit-online` 同时记录在线更新前的 TV；审计运行单列，吞吐测量使用关闭观测统计的入口。
 输出包括权重指纹、配置、数据与实现 SHA、各路 TPS、每轮输出、更新时间和配对问题簇 bootstrap 区间。
 `identity` 经过相同概率处理但保持原表，用于测量新增处理开销；`online` 包含系数更新。
+加入 `--learn-requests 64 --learn-tokens 128 --audit-learned`，在独立训练请求上学习系数，
+随后增加 `learned`（学习后冻结）与 `continued`（同一起点持续更新）两路验证。
+`learning` 单列预学习的生成量、完整耗时与系数更新计时；验证 TPS 使用验证请求自身的耗时。
+两路从同一份参数、累计梯度和更新步数恢复，`vs_learned` 报告继续学习相对冻结推理的净吞吐比。
+`learned_audit` 在相同候选前缀上比较学习表与原表的 TV，审计运行独立于吞吐计时。
+默认四路中的 `online` 仍从初始系数开始，`retention_pass` 对应这一冷启动对照。
 文件保存在现有源码目录，实验结果写入 stdout。

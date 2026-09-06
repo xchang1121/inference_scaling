@@ -129,6 +129,44 @@ class OverlapMix:
             torch.cuda.synchronize(self.weights.device)
         self.update_seconds += time.perf_counter() - start
 
+    def _state_config(self):
+        return {"block_size": self.block_size, "top_k": self.top_k,
+                "temperatures": self.temperatures, "learning_rate": self.learning_rate,
+                "interval": self.interval, "dtype": str(self.weights.dtype)}
+
+    def state_dict(self):
+        """Owned portable state; restoring keeps the destination tensor storage."""
+        return {"config": self._state_config(),
+                "tensors": {name: getattr(self, name).detach().cpu().clone()
+                            for name in ("weights", "gradient", "counts", "steps")},
+                "updates": self.updates, "feedback_blocks": self.feedback_blocks,
+                "update_seconds": self.update_seconds}
+
+    @torch.no_grad()
+    def load_state_dict(self, state):
+        """Restore learned parameters and cadence for frozen or live comparisons."""
+        if state.get("config") != self._state_config():
+            raise ValueError("calibration state must match shape, temperatures, precision and update policy")
+        tensors = state.get("tensors", {})
+        if set(tensors) != {"weights", "gradient", "counts", "steps"}:
+            raise ValueError("exact calibration tensor keys required")
+        for name in ("weights", "gradient", "counts", "steps"):
+            value, destination = tensors.get(name), getattr(self, name)
+            if (not isinstance(value, torch.Tensor) or value.shape != destination.shape
+                    or value.dtype != destination.dtype or not torch.isfinite(value).all()):
+                raise ValueError("finite matching calibration state tensors required")
+        w = tensors["weights"]
+        if ((w < 0).any() or not torch.allclose(w.sum(-1), torch.ones_like(w[:, 0]), atol=1e-6, rtol=1e-6)
+                or any((tensors[name] < 0).any() for name in ("counts", "steps"))
+                or any(type(state.get(name)) is not int or state[name] < 0 for name in ("updates", "feedback_blocks"))
+                or not math.isfinite(state.get("update_seconds", float("nan"))) or state["update_seconds"] < 0):
+            raise ValueError("normalized mixture and nonnegative calibration counters required")
+        for name, value in tensors.items():
+            getattr(self, name).copy_(value)
+        self.updates, self.feedback_blocks = state["updates"], state["feedback_blocks"]
+        self.update_seconds = state["update_seconds"]
+        self.totals.zero_()
+
     def metrics(self):
         values = self.totals.detach().cpu()
         count = values[:, :1].clamp_min(1)
