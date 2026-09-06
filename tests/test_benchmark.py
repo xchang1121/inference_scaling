@@ -1,14 +1,15 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 import torch
 
-from blockspec.benchmark import (BenchmarkConfig, aggregate, benchmark_streams,
-                                compare_tokens, continuation_prompts, stream_trajectory)
+from blockspec.benchmark import (BenchmarkConfig, aggregate, benchmark_offline, benchmark_streams,
+                                compare_tokens, comparison_summary, continuation_prompts, stream_trajectory)
 from blockspec.checkpoint import adapter_state, base_fingerprint
 from blockspec.decoding import Generation
 from blockspec.model import Decoder, ModelConfig
 from blockspec.online import OnlineConfig
+from blockspec.sampling import SamplingConfig
 
 
 def test_aggregate_counts_all_time_not_mean_tps():
@@ -18,6 +19,7 @@ def test_aggregate_counts_all_time_not_mean_tps():
     assert result["tps"] == 4
     assert result["tps_including_learner_setup"] == 40 / 12
     assert result["updates"] == 2 and result["update_seconds"] == 3
+    assert result["tokens_per_decode_forward"] == 1
 
 
 def test_trajectory_accumulates_in_order_with_one_learner_initialization():
@@ -33,6 +35,7 @@ def test_trajectory_accumulates_in_order_with_one_learner_initialization():
     assert end["tps"] == 4 and end["tps_including_learner_setup"] == 40 / 12
     assert end["tps_including_all_setup"] == 40 / 15
     assert end["tokens_per_round"] == 5 and end["requests"] == 2
+    assert end["tokens_per_decode_forward"] == 2.5
     assert end["updates"] == 3 and end["update_seconds"] == .5
     assert end["feedback_blocks"] == 3
     assert end["fully_covered_rounds"] == 5 and end["coverage_skips"] == 2
@@ -67,6 +70,75 @@ def test_comparison_does_not_hide_length_or_token_mismatches():
     assert compare_tokens([1, 2, 3], [1, 4, 3])["common_prefix"] == 1
     assert not compare_tokens([1, 2], [1, 2, 3])["identical"]
     assert compare_tokens([], [])["identical"]
+
+
+@pytest.mark.parametrize("identical", [False, True])
+def test_sampled_token_equality_is_reported_as_a_diagnostic(identical):
+    rows = [{"identical": identical}]
+    assert comparison_summary(rows, SamplingConfig()) == {
+        "comparison_mode": "greedy_exact", "greedy_identical": identical}
+    assert comparison_summary(rows, SamplingConfig(temperature=1)) == {
+        "comparison_mode": "stochastic_diagnostic", "greedy_identical": None}
+
+
+@pytest.mark.parametrize("sampler", ["linear", "tree"])
+@pytest.mark.parametrize("online", [False, True])
+@pytest.mark.parametrize("sampling", [SamplingConfig(temperature=1), SamplingConfig(.7, 3, .8)])
+def test_sampling_settings_reach_every_warmup_and_measured_arm(monkeypatch, sampler, online, sampling):
+    import blockspec.benchmark as module
+
+    torch.manual_seed(517)
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, adapter_rank=2)).train_adapters_only()
+    observed = []
+
+    def record(original, name):
+        def generate(*args, **kwargs):
+            assert kwargs["sampling"] == sampling
+            seed = kwargs["generator"].initial_seed()
+            output = original(*args, **kwargs)
+            observed.append((name, seed, tuple(output.tokens), kwargs.get("learner") is not None))
+            return output
+        return generate
+
+    for name in ("generate_ar", "generate_speculative", "generate_tree"):
+        monkeypatch.setattr(module, name, record(getattr(module, name), name))
+    config = BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=4, sampler=sampler,
+                             top_k=2, prefix_budget=5, sampling=sampling)
+    prompts = [torch.tensor([[0, 1]]), torch.tensor([[0, 2]])]
+
+    def run():
+        if online:
+            return benchmark_streams(model, prompts, config, OnlineConfig(stride=1, replay_blocks=1,
+                                                                          train_last_layers=1))
+        return benchmark_offline(model, prompts, config)
+
+    result = run()
+    first = observed.copy()
+    observed.clear()
+    repeated = run()
+    assert observed == first  # Local generators include warmup; adapters are restored between runs.
+    assert result["config"]["sampling"] == asdict(sampling)
+    assert result["config"]["top_k"] == 2  # Tree width is separate from the target filter.
+    assert result["comparison_mode"] == "stochastic_diagnostic"
+    assert result["greedy_identical"] is None
+    assert result["comparisons"] == repeated["comparisons"]
+    assert {row[0] for row in observed} == {"generate_ar", "generate_tree" if sampler == "tree"
+                                                                     else "generate_speculative"}
+    assert all(arm["tokens"] == 32 for arm in result["arms"].values())
+    if online:
+        assert result["arms"]["online"]["updates"] > 0
+        assert all(result["online_adapter_changed_per_stream"])
+        for trace in result["trajectories"]:
+            first, second = trace["arms"]["online"]
+            assert second["adapter_version_start"] == first["adapter_version"] > 0
+            assert second["adapter_version"] > first["adapter_version"]
+
+
+@pytest.mark.parametrize("sampling", [None, {"temperature": 1}, 1])
+def test_benchmark_requires_a_validated_sampling_configuration(sampling):
+    with pytest.raises(ValueError, match="SamplingConfig"):
+        BenchmarkConfig(sampling=sampling)
 
 
 @pytest.mark.parametrize("loss", ["l1", "forward_kl"])
@@ -131,21 +203,24 @@ def test_invalid_benchmark_configuration(key, value):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph hardware required")
+@pytest.mark.parametrize("temperature", [0, 1])
 @pytest.mark.parametrize("loss", ["l1", "forward_kl"])
 @pytest.mark.parametrize("sampler", ["linear", "tree"])
 @pytest.mark.parametrize("last_layers", [None, 1])
-def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_layers, loss):
+def test_cuda_graph_three_arm_stream_with_live_adapter_updates(sampler, last_layers, loss, temperature):
     torch.manual_seed(28)
     model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
                                 num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
                                 head_dim=8, adapter_rank=2)).cuda().train_adapters_only()
     result = benchmark_streams(model, [torch.tensor([[0, 1, 2]]), torch.tensor([[0, 2, 1]])],
                                BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=12,
-                                               sampler=sampler, prefix_budget=5, execution="cuda_graph"),
+                                               sampler=sampler, prefix_budget=5, execution="cuda_graph",
+                                               sampling=SamplingConfig(temperature=temperature)),
                                OnlineConfig(stride=1, replay_blocks=2, train_last_layers=last_layers,
                                             loss=loss))
     assert result["online_optimizer"] == "fused"
-    assert result["greedy_identical"] and result["base_unchanged"] and result["adapter_restored"]
+    assert result["greedy_identical"] is (True if temperature == 0 else None)
+    assert result["base_unchanged"] and result["adapter_restored"]
     assert all(result["online_adapter_changed_per_stream"])
     assert result["execution"]["capacity"] >= 3 + 12  # warmup may be longer than a measured request
     for arm in result["arms"].values():

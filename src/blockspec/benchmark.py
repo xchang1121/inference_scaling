@@ -15,6 +15,7 @@ from .checkpoint import adapter_state, base_fingerprint
 from .attention import ATTENTION_BACKENDS
 from .decoding import generate_ar, generate_speculative
 from .online import OnlineConfig, OnlineLearner, synchronize
+from .sampling import SamplingConfig
 from .tree import generate_tree
 
 
@@ -36,6 +37,7 @@ class BenchmarkConfig:
     execution: str = "eager"
     online_execution: str = "eager"
     attention_backend: str = "sdpa"
+    sampling: SamplingConfig = SamplingConfig()
 
     def __post_init__(self):
         if min(self.tokens, self.warmup_tokens, self.top_k, self.prefix_budget) < 1:
@@ -50,6 +52,8 @@ class BenchmarkConfig:
             raise ValueError("unknown online execution")
         if self.attention_backend not in ATTENTION_BACKENDS:
             raise ValueError("unknown attention backend")
+        if not isinstance(self.sampling, SamplingConfig):
+            raise ValueError("sampling must be a SamplingConfig")
 
 
 def continuation_prompts(sequences, *, count, length):
@@ -72,6 +76,18 @@ def compare_tokens(reference, actual):
             "reference_tokens": len(reference), "actual_tokens": len(actual)}
 
 
+def comparison_summary(comparisons, sampling):
+    """Exact greedy check; sampled token matches are descriptive diagnostics.
+
+    AR, draft, and verification consume different numbers of random draws.
+    Equal RNG seeds therefore specify reproducible runs, not a token coupling.
+    Distribution correctness is tested separately with enumerated output laws.
+    """
+    greedy = sampling.temperature == 0
+    return {"comparison_mode": "greedy_exact" if greedy else "stochastic_diagnostic",
+            "greedy_identical": all(c["identical"] for c in comparisons) if greedy else None}
+
+
 def aggregate(rows, *, setup_seconds=0.0, engine_setup_seconds=0.0):
     """Total output tokens divided by total measured time and specified setup."""
     if not rows or any(not math.isfinite(t) or t < 0 for t in (setup_seconds, engine_setup_seconds)):
@@ -85,6 +101,8 @@ def aggregate(rows, *, setup_seconds=0.0, engine_setup_seconds=0.0):
                   tps_including_learner_setup=result["tokens"] / (result["seconds"] + setup_seconds),
                   tps_including_all_setup=result["tokens"] / (result["seconds"] + setup_seconds + engine_setup_seconds))
     result["tokens_per_round"] = result["tokens"] / result["rounds"] if result["rounds"] else 0.0
+    result["tokens_per_decode_forward"] = (result["tokens"] / result["decode_forwards"]
+                                           if result["decode_forwards"] else 0.0)
     return result
 
 
@@ -118,7 +136,7 @@ def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None
     initial, frozen = adapter_state(model), base_fingerprint(model)
     engine, setup = None, {"ar": 0.0, "static": 0.0}
     generate = generate_tree if config.sampler == "tree" else generate_speculative
-    options = {"block_size": config.block_size}
+    options = {"block_size": config.block_size, "sampling": config.sampling}
     if config.sampler == "tree":
         options.update(top_k=config.top_k, prefix_budget=config.prefix_budget)
     rows, comparisons, repetitions = {"ar": [], "static": []}, [], []
@@ -137,7 +155,8 @@ def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None
             setup["ar"] = sum(engine.signature_seconds[key] for key in ar_keys)
             setup["static"] = engine.setup_seconds
         options["executor"] = engine
-        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=engine)
+        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=engine,
+                    sampling=config.sampling, generator=torch.Generator(device=device).manual_seed(config.seed))
         generate(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, **options,
                  generator=torch.Generator(device=device).manual_seed(config.seed))
         if device.type == "cuda":
@@ -150,7 +169,7 @@ def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None
                 for arm in order:
                     rng = torch.Generator(device=device).manual_seed(config.seed + repeat * len(prompts) + request)
                     output = (generate_ar(model, prompt, config.tokens, eos_id=config.eos_id,
-                                          executor=engine, generator=rng) if arm == "ar" else
+                                          executor=engine, generator=rng, sampling=config.sampling) if arm == "ar" else
                               generate(model, prompt, config.tokens, eos_id=config.eos_id,
                                        generator=rng, **options))
                     row = output.summary()
@@ -177,7 +196,7 @@ def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None
             "speedup": arms["static"]["tps"] / arms["ar"]["tps"],
             "speedup_including_setup": arms["static"]["tps_including_all_setup"] /
                                        arms["ar"]["tps_including_all_setup"],
-            "greedy_identical": all(item["identical"] for item in comparisons),
+            **comparison_summary(comparisons, config.sampling),
             "base_unchanged": True, "adapter_unchanged": True, "peak_allocated_bytes": peak,
             "prompt_sha256": [hashlib.sha256(p.cpu().numpy().tobytes()).hexdigest() for p in prompts]}
 
@@ -201,7 +220,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     replay_info = {"kind": config.online_execution, "setup_seconds": 0.0, "signatures": 0}
     engine_cost = dict.fromkeys(("ar", "static", "online"), 0.0)
     spec = generate_tree if config.sampler == "tree" else generate_speculative
-    options = {"block_size": config.block_size}
+    options = {"block_size": config.block_size, "sampling": config.sampling}
     if config.sampler == "tree":
         options.update(top_k=config.top_k, prefix_budget=config.prefix_budget)
 
@@ -242,7 +261,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
             options["executor"] = executor
         # Restore the offline weights after kernel warmup. Each measured learner
         # initializes Adam states during its first timed update.
-        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=executor)
+        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=executor,
+                    sampling=config.sampling, generator=rng(config.seed))
         spec(model, prompts[0], config.warmup_tokens, **options, eos_id=config.eos_id,
              generator=rng(config.seed))
         # Periodic warmup exercises training kernels even for fully covered drafts.
@@ -294,7 +314,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
                     version_start = learner.version if learner is not None else 0
                     if arm == "ar":
                         output = generate_ar(model, prompt, config.tokens, eos_id=config.eos_id,
-                                             generator=generator, executor=executor)
+                                             generator=generator, executor=executor, sampling=config.sampling)
                     else:
                         output = spec(model, prompt, config.tokens, **options, learner=learner,
                                       eos_id=config.eos_id, generator=generator)
@@ -353,7 +373,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     prompt_hashes = [hashlib.sha256(p.cpu().numpy().tobytes()).hexdigest() for p in prompts]
     return {"config": asdict(config), "online_config": asdict(online_config), "arms": arms,
             "repeats": repeats, "comparisons": comparisons, "trajectories": trajectories,
-            "greedy_identical": all(c["identical"] for c in comparisons),
+            **comparison_summary(comparisons, config.sampling),
             "online_adapter_changed_per_stream": adapter_changes,
             "online_trainable_parameters": trainable,
             "online_optimizer": optimizer_backend,
