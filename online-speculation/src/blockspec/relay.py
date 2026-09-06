@@ -6,6 +6,7 @@ transformed conditional proposal rows. See ALGORITHM.md, section 15.
 """
 
 from dataclasses import asdict, dataclass, field
+import json
 import math
 from pathlib import Path
 import time
@@ -270,13 +271,16 @@ def save_relay(path, head, *, binding, metadata=None):
         raise ValueError("SHA256 bindings for base and adapter required")
     payload = {"format": "prefixrelay-v1", "config": asdict(head.config), "binding": binding,
                "state": {k: v.detach().cpu().clone() for k, v in head.state_dict().items()},
-               "metadata": metadata or {}}
+               "metadata": json.loads(json.dumps(metadata or {}, allow_nan=False))}
     with Path(path).open("xb") as handle:
         torch.save(payload, handle)
 
 
 def load_relay(path, *, binding, device="cpu"):
-    payload = torch.load(path, map_location="cpu", weights_only=True)
+    # Early local metadata stored torch.__version__ as this string subclass.
+    # Keep the weights-only loader and narrowly permit that legacy value type.
+    with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
+        payload = torch.load(path, map_location="cpu", weights_only=True)
     if payload.get("format") != "prefixrelay-v1" or payload.get("binding") != binding:
         raise ValueError("head checkpoint binding differs from the frozen backbone")
     head = RelayHead(RelayConfig(**payload["config"]))

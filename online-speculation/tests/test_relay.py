@@ -174,9 +174,10 @@ def test_head_checkpoint_binding_and_exclusive_write(tmp_path):
     _, head = tiny()
     binding = {"base": "a" * 64, "adapter": "b" * 64}
     path = tmp_path / "relay.pt"
-    save_relay(path, head, binding=binding, metadata={"test": True})
+    save_relay(path, head, binding=binding, metadata={"test": True, "torch": torch.__version__})
     restored, metadata = load_relay(path, binding=binding)
-    assert metadata == {"test": True}
+    assert metadata == {"test": True, "torch": str(torch.__version__)}
+    assert type(torch.load(path, weights_only=True)["metadata"]["torch"]) is str
     for a, b in zip(head.parameters(), restored.parameters()):
         torch.testing.assert_close(a, b, atol=0, rtol=0)
     with pytest.raises(FileExistsError):
