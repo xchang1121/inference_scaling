@@ -177,7 +177,7 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 ```python
 from blockspec.replay_execution import SuffixReplayExecutor
 
-learner = OnlineLearner(model, OnlineConfig(train_last_layers=4, stride=8, replay_blocks=1,
+learner = OnlineLearner(model, OnlineConfig(train_last_layers=4, stride=16, replay_blocks=1,
                                           loss="forward_kl", learning_rate=0.0003,
                                           update_policy="coverage"))
 replay = SuffixReplayExecutor(model, start_layer=learner.capture_layer, loss=learner.config.loss,
@@ -189,6 +189,8 @@ learner.replay_executor = replay
 输入使用 FP32 CUDA、batch=1，历史长度在容量范围内；块长和有效监督行数通过 `prepare()` 显式准备。
 准备好的 `replay` 可传给同一模型的新 `OnlineLearner(model, config, replay_executor=replay)`，
 新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。数学推导见主报告 9.8。
+结束执行器的使用时，先清理反馈、解除各 learner 的 `replay_executor` 引用，再释放调用方持有的执行器。
+图槽与工作区随最后一个执行器引用释放；基座和仍在使用的 Adam 状态保持各自的生命周期。
 
 ## 6. 同条件三路评测
 
@@ -200,15 +202,15 @@ python -m blockspec benchmark \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --split-role validation --dtype float32 --prompts 8 --prompt-length 256 \
+  --split-role validation --dtype float32 --prompts 17 --prompt-length 256 \
   --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
   --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
-  --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
+  --online-last-layers 4 --update-stride 16 --replay-blocks 1 \
   --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed \
   --update-policy coverage --online-execution cuda_graph
 ```
 
-按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
+按文件顺序取全部 17 个验证记录的前 256 项作为输入，包含 4 个代码请求和 13 个数学请求。默认贪心、固定输出预算、`eos_id=None`；
 `--eos-id 1` 启用结束标记。上面命令对应主报告当前表格；`--sampler linear` 切换线性路径。
 重复次数取正偶数，每对按 AR／静态／在线、在线／静态／AR 的顺序运行。每个在线请求流从同一离线起点开始，
 在线流内保留学习后的权重与 Adam 状态，静态流保持离线权重。预热结束恢复正式起点，第一次 Adam 状态分配计入更新时间。

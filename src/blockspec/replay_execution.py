@@ -15,8 +15,11 @@ from .model import DraftBoundary, PackedCache, cache_length, is_adapter
 
 class _GradientSlot:
     def __init__(self, owner, length, valid):
-        self.owner, self.valid = owner, valid
         model, capacity = owner.model, owner.capacity
+        # Slots retain their compute inputs, while ownership flows executor ->
+        # slots only. Dropping the executor immediately releases graph storage.
+        self.model, self.capacity, self.valid = model, capacity, valid
+        self.loss_kind, self.parameters = owner.loss, owner.parameters
         c = model.config
         device, dtype = next(model.parameters()).device, next(model.parameters()).dtype
         self.hidden = torch.zeros(1, length, c.hidden_size, device=device, dtype=dtype)
@@ -46,10 +49,10 @@ class _GradientSlot:
 
     @torch.enable_grad()
     def run(self):
-        logits = self.owner.model.forward_suffix(self.boundary, cache=self.cache,
-                                                 logit_range=(1, 1 + self.valid))
-        loss = divergence(logits[0], self.teacher, self.owner.loss).sum() / self.denominator
-        self.gradients = torch.autograd.grad(loss, self.owner.parameters)
+        logits = self.model.forward_suffix(self.boundary, cache=self.cache,
+                                            logit_range=(1, 1 + self.valid))
+        loss = divergence(logits[0], self.teacher, self.loss_kind).sum() / self.denominator
+        self.gradients = torch.autograd.grad(loss, self.parameters)
         # Graph replay owns tensor storage; release Python autograd nodes so
         # later captures create their leaf nodes on their own capture stream.
         self.logits, self.loss = logits.detach(), loss.detach()
@@ -63,7 +66,7 @@ class _GradientSlot:
         self.mask.copy_(boundary.adapter_mask)
         self.allowed.zero_()
         self.allowed[..., :prefix].copy_(boundary.allowed[..., :prefix])
-        self.allowed[..., self.owner.capacity:].copy_(boundary.allowed[..., prefix:])
+        self.allowed[..., self.capacity:].copy_(boundary.allowed[..., prefix:])
         if item.cache is not None:
             for dst, (k, v) in zip(self.past, item.cache):
                 dst[0, :, :, :prefix].copy_(k)

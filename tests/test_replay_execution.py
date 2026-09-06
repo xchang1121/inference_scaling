@@ -1,5 +1,7 @@
 import copy
 from dataclasses import replace
+import gc
+import weakref
 
 import pytest
 import torch
@@ -148,6 +150,36 @@ def test_preparing_additional_shapes_preserves_existing_gradients_and_optimizer(
     torch.testing.assert_close(adapter_state(model), initial, atol=0, rtol=0)
     torch.testing.assert_close([p.grad for p in learner.parameters], gradients, atol=0, rtol=0)
     torch.testing.assert_close(learner.optimizer.state_dict(), state, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA replay hardware required"))])
+def test_replay_owner_and_workspaces_release_when_last_owner_is_dropped(device):
+    model = example(device)
+    learner = OnlineLearner(model, OnlineConfig(train_last_layers=1))
+    collection_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        engine = SuffixReplayExecutor(model, start_layer=2, loss="l1", capacity=8, max_query=4,
+                                      use_cuda_graph=device == "cuda")
+        engine.prepare([(2, 1), (4, 3)])
+        owner_ref = weakref.ref(engine)
+        slot_refs = [weakref.ref(slot) for slot in engine.slots.values()]
+        buffer_refs = [weakref.ref(slot.hidden) for slot in engine.slots.values()]
+        if device == "cuda":
+            torch.cuda.synchronize()
+            allocated = torch.cuda.memory_allocated()
+        del engine
+        assert owner_ref() is None
+        assert all(ref() is None for ref in slot_refs + buffer_refs)
+        if device == "cuda":
+            torch.cuda.synchronize()
+            assert torch.cuda.memory_allocated() < allocated
+        assert learner.model is model and learner.optimizer.state_dict()["state"] == {}
+    finally:
+        if collection_was_enabled:
+            gc.enable()
+        gc.collect()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA replay hardware required")
