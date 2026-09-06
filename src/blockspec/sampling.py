@@ -23,6 +23,11 @@ class SamplingConfig:
 def probabilities(logits: Tensor, config: SamplingConfig) -> Tensor:
     if not torch.isfinite(logits).all():
         raise ValueError("logits must be finite")
+    return _probabilities_unchecked(logits, config)
+
+
+def _probabilities_unchecked(logits: Tensor, config: SamplingConfig) -> Tensor:
+    """Pure tensor transform; graph callers check finiteness at the boundary."""
     work = logits if logits.dtype == torch.float64 else logits.float()
     if config.temperature == 0:
         return torch.zeros_like(work).scatter_(-1, work.argmax(-1, keepdim=True), 1)

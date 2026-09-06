@@ -1,0 +1,140 @@
+"""Frozen-weight audits and paired benchmarks for cheap online proposal mixing."""
+
+import argparse
+from dataclasses import asdict
+import json
+from pathlib import Path
+import time
+
+import torch
+
+from blockspec.adapter_io import load_peft_adapter, peft_config
+from blockspec.benchmark import aggregate, continuation_prompts
+from blockspec.calibration import OverlapMix
+from blockspec.checkpoint import adapter_fingerprint, base_fingerprint, implementation_fingerprint, load_hf_base
+from blockspec.data import assert_split_files_disjoint, load_sequences
+from blockspec.decoding import generate_ar, generate_speculative
+from blockspec.diffusion import UniformNoise
+from blockspec.execution import FixedShapeExecutor
+from blockspec.sampling import SamplingConfig
+from prefix_relay import assert_frozen, paired_bootstrap, sha
+
+
+def emit(value):
+    print(json.dumps(value, allow_nan=False), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=["audit", "benchmark"])
+    parser.add_argument("--base", type=Path, required=True)
+    parser.add_argument("--adapter", type=Path, required=True)
+    parser.add_argument("--reference-sha256", required=True)
+    parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--train-data", type=Path, required=True)
+    parser.add_argument("--split-role", choices=["validation", "test"], default="validation")
+    parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
+    parser.add_argument("--prompt-length", type=int, default=256)
+    parser.add_argument("--tokens", type=int, default=256)
+    parser.add_argument("--prompts", type=int, default=17)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--block-size", type=int, default=8)
+    parser.add_argument("--temperature", type=float, default=1.)
+    parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--top-p", type=float, default=.95)
+    parser.add_argument("--temperatures", type=float, nargs="+", default=[.5, .75, 1., 1.25, 1.5])
+    parser.add_argument("--learning-rate", type=float, default=.5)
+    parser.add_argument("--interval", type=int, default=8)
+    parser.add_argument("--fixed", type=float, nargs="*", default=[])
+    parser.add_argument("--audit-online", action="store_true")
+    parser.add_argument("--seed", type=int, default=271828)
+    args = parser.parse_args()
+    if args.repeats < 2 or args.repeats % 2 or args.top_k < 1 or args.temperature <= 0:
+        parser.error("positive temperature/top-k and a positive even repeat count required")
+    assert_split_files_disjoint(args.train_data, args.data)
+    torch.set_num_threads(4)
+    torch.manual_seed(args.seed)
+    config = peft_config(args.adapter)
+    model = load_hf_base(args.base, rank=config["r"], alpha=config["lora_alpha"], device="cuda",
+                        dtype=getattr(torch, args.dtype))
+    source = load_peft_adapter(args.adapter, model, expected_sha256=args.reference_sha256)
+    model.eval().requires_grad_(False).set_attention_backend("grouped")
+    frozen = {"base": base_fingerprint(model), "adapter": adapter_fingerprint(model)}
+    prompts = [p.cuda() for p in continuation_prompts(load_sequences(args.data, model.config.vocab_size),
+                                                    count=args.prompts, length=args.prompt_length)]
+    sampling, noise = SamplingConfig(args.temperature, args.top_k, args.top_p), UniformNoise(1, model.config.vocab_size)
+    engine = FixedShapeExecutor(model, capacity=args.prompt_length + max(args.tokens, 32), max_query=args.block_size)
+    clean = [(n, False, None) for n in range(1, args.block_size + 1)]
+    draft = [(n, True, None) for n in range(2, args.block_size + 1)]
+    engine.prepare(clean + draft)
+    setups = {"ar": engine.signature_seconds[(1, False, None)], "base": engine.setup_seconds}
+    options = dict(block_size=args.block_size, sampling=sampling, noise=noise, executor=engine)
+    provenance = {"config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+                  "implementation_sha256": implementation_fingerprint(), "script_sha256": sha(__file__),
+                  "data_sha256": sha(args.data), "adapter": source, "frozen_fingerprints": frozen,
+                  "sampling": asdict(sampling), "noise": asdict(noise)}
+
+    def mixer(adaptive=False, fixed=1., diagnostics=False):
+        return OverlapMix(args.block_size, args.top_k, temperatures=args.temperatures,
+                          learning_rate=args.learning_rate, interval=args.interval, adaptive=adaptive,
+                          fixed_temperature=fixed, diagnostics=diagnostics, device="cuda")
+
+    warm = load_sequences(args.train_data, model.config.vocab_size)[0][:args.prompt_length].reshape(1, -1).cuda()
+    generate_ar(model, warm, 32, sampling=sampling, executor=engine)
+    generate_speculative(model, warm, 32, **options)
+    generate_speculative(model, warm, 32, calibrator=mixer(True), **options)
+    emit({"stage": "start", **provenance, "engine_setup_seconds": setups})
+    if args.mode == "audit":
+        calibration = mixer(args.audit_online, diagnostics=True)
+        for index, prompt in enumerate(prompts):
+            result = generate_speculative(model, prompt, args.tokens, calibrator=calibration, **options,
+                                          generator=torch.Generator(device="cuda").manual_seed(args.seed + index))
+            emit({"stage": "audit_progress", "request": index, "tokens_per_round": len(result.tokens) / result.rounds})
+        emit({"stage": "audit_complete", **provenance, **calibration.metrics(), **assert_frozen(model, frozen)})
+        return
+
+    arms = ["ar", "base", "identity", "online"] + [f"fixed_{value:g}" for value in args.fixed]
+    if len(set(arms)) != len(arms):
+        parser.error("distinct fixed temperatures required")
+    rows = {arm: [] for arm in arms}
+    initialization = {arm: 0. for arm in arms}
+    repetitions, final_states = [], []
+    for repeat in range(args.repeats):
+        mixers = {}
+        for arm in arms[2:]:
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            mixers[arm] = mixer(arm == "online", float(arm[6:]) if arm.startswith("fixed_") else 1.)
+            torch.cuda.synchronize()
+            initialization[arm] += time.perf_counter() - start
+        current = {arm: [] for arm in arms}
+        for index, prompt in enumerate(prompts):
+            order = arms if (repeat + index) % 2 == 0 else arms[::-1]
+            for arm in order:
+                generator = torch.Generator(device="cuda").manual_seed(args.seed + len(prompts) * repeat + index)
+                if arm == "ar":
+                    result = generate_ar(model, prompt, args.tokens, sampling=sampling, executor=engine,
+                                         generator=generator)
+                else:
+                    result = generate_speculative(model, prompt, args.tokens, calibrator=mixers.get(arm),
+                                                  generator=generator, **options)
+                row = result.summary()
+                rows[arm].append(row)
+                current[arm].append(row)
+            emit({"stage": "progress", "repeat": repeat, "request": index,
+                  "tps": {arm: current[arm][-1]["tps"] for arm in arms}})
+        repetitions.append({arm: aggregate(current[arm]) for arm in arms})
+        final_states.append(mixers["online"].metrics())
+    summary = {arm: aggregate(rows[arm], setup_seconds=initialization[arm],
+                              engine_setup_seconds=setups.get(arm, setups["base"])) for arm in arms}
+    emit({"stage": "complete", **provenance, "summary": summary, "repetitions": repetitions,
+          "final_online_states": final_states,
+          "vs_base": {arm: {"ratio": summary[arm]["tps"] / summary["base"]["tps"],
+                           **paired_bootstrap(rows, "base", arm, len(prompts))} for arm in arms if arm != "base"},
+          "vs_ar": {arm: {"ratio": summary[arm]["tps"] / summary["ar"]["tps"],
+                         **paired_bootstrap(rows, "ar", arm, len(prompts))} for arm in arms if arm != "ar"},
+          **assert_frozen(model, frozen)})
+
+
+if __name__ == "__main__":
+    main()

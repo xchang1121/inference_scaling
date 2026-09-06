@@ -85,7 +85,7 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
 @torch.no_grad()
 def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
                          sampling=SamplingConfig(), eos_id=None, generator=None,
-                         learner=None, executor=None, noise=UniformNoise()):
+                         learner=None, executor=None, noise=UniformNoise(), calibrator=None):
     """One clean root + B-1 independent noisy proposals, then base verification.
 
     cache always describes committed history excluding its last token. A replay
@@ -98,8 +98,14 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         raise ValueError("speculative blocks require B>=2; use generate_ar for B=1")
     if learner is not None and learner.model is not model:
         raise ValueError("learner and decoder must share the same model")
+    if calibrator is not None and (learner is not None or sampling.temperature <= 0
+                                   or sampling.top_k != calibrator.top_k
+                                   or block_size != calibrator.block_size):
+        raise ValueError("calibration requires matched positive-temperature top-k sampling and a frozen adapter")
     synchronize(model)
     start = time.perf_counter()
+    calibration_initial = ((calibrator.updates, calibrator.update_seconds, calibrator.feedback_blocks)
+                           if calibrator is not None else (0, 0., 0))
     initial_updates = learner.updates if learner is not None else 0
     initial_update_seconds = learner.update_seconds if learner is not None else 0.0
     initial_feedback = learner.feedback_blocks if learner is not None else 0
@@ -135,6 +141,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
             candidates = greedy_tokens(draft[0])
         else:
             draft_distribution = probabilities(draft[0], sampling)
+            if calibrator is not None:
+                draft_distribution, calibration_feedback = calibrator.propose(draft_distribution)
             candidates = draw(draft_distribution, generator)
         root = int(candidates[0])
         if root == eos_id:
@@ -172,12 +180,19 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
                 learner.observe(feedback, may_update=not done)
             else:
                 learner._skip_decoder_feedback(used)
+        if calibrator is not None:
+            calibrator.observe(calibration_feedback, target[:used])
         if done:
             break
     if learner is not None:
         learner.clear_replay()
     synchronize(model)
     elapsed = time.perf_counter() - start
+    if calibrator is not None:
+        return Generation(output, elapsed, forwards, rounds, accepted, proposed,
+                          calibrator.updates - calibration_initial[0],
+                          calibrator.update_seconds - calibration_initial[1], accepts,
+                          calibrator.feedback_blocks - calibration_initial[2], fully_covered_rounds)
     return Generation(output, elapsed, forwards, rounds, accepted, proposed,
                       (learner.updates - initial_updates) if learner is not None else 0,
                       (learner.update_seconds - initial_update_seconds) if learner is not None else 0.0,
