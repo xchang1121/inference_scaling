@@ -348,3 +348,5 @@ python scripts/prefix_relay.py train \
 添加 `--online --interval 8 --lr .003` 可同时测量新增头的推理后续训。
 每个重复从相同检查点开始，在线头与 Adam 跨请求持续更新；其他方法每次使用固定参数。
 stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练开销和逐深度接受计数。
+加入 `--head-execution cuda_graph` 可将块内小头与采样合并为 GPU 图，准备时间计入对应方法。
+将子命令换成 `audit` 可测量相同前缀上的原始／修正 TV，并比较小头执行耗时。

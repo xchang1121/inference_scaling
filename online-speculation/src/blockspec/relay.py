@@ -180,7 +180,8 @@ class RelayGeneration(Generation):
 
 @torch.no_grad()
 def generate_relay(model, head, prompt, max_new_tokens, *, block_size=8, sampling=SamplingConfig(),
-                   threshold=0., eos_id=None, generator=None, executor=None, learner=None, noise=UniformNoise()):
+                   threshold=0., eos_id=None, generator=None, executor=None, learner=None, noise=UniformNoise(),
+                   proposal_executor=None):
     _check(model, prompt, max_new_tokens, eos_id)
     if type(block_size) is not int or block_size < 2:
         raise ValueError("block size must be an integer >=2")
@@ -190,6 +191,8 @@ def generate_relay(model, head, prompt, max_new_tokens, *, block_size=8, samplin
         raise ValueError("prefix threshold must lie in [0,1]")
     if learner is not None and learner.head is not head:
         raise ValueError("learner must update the serving head")
+    if proposal_executor is not None:
+        proposal_executor.validate(head, sampling, threshold)
     forward = _inference_forward(model, executor)
     initial = (learner.updates, learner.update_seconds, learner.feedback_blocks) if learner else (0, 0., 0)
     if learner:
@@ -217,8 +220,9 @@ def generate_relay(model, head, prompt, max_new_tokens, *, block_size=8, samplin
             logits, temporary, boundary = forward(inputs, cache=cache, adapter_mask=mask, return_cache=True,
                                                    capture_layer=model.config.num_hidden_layers)
             result.decode_forwards += 1
-            draft = relay_candidates(head, logits[0], boundary.hidden[0], sampling=sampling,
-                                     threshold=threshold, generator=generator)
+            draft = (relay_candidates(head, logits[0], boundary.hidden[0], sampling=sampling,
+                                      threshold=threshold, generator=generator)
+                     if proposal_executor is None else proposal_executor(logits[0], boundary.hidden[0], generator=generator))
             root = int(draft.tokens[0])
             if root == eos_id:
                 result.tokens.append(root)
