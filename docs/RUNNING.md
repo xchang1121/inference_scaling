@@ -537,3 +537,51 @@ TPS 包含 prefill、生成、反馈采集、更新和末尾同步；`update_sec
 反馈采集及梯度累计也计入完整 TPS。图准备和独立学习流的生成成本分别记录。
 输出保存逐请求数据、配对请求重采样区间、最终系数和所有模型参数的前后摘要。
 数值结果集中记录于 [RESULTS.md](RESULTS.md)，原始 JSON 保存在仓库外。
+
+## 13. 双向起草后段的在线续训
+
+`scripts/dual_continue.py` 从公开起草参数开始，更新所选后续层的起草 Q/K/V/O 与 Q/K 归一化。
+共享参数和 AR 注意力始终冻结。普通推理使用 BF16 执行副本，在线优化器维护 FP32 主权重。
+起草时按更新窗口保存冻结边界；验证后收集接受位置和首次拒绝位置的完整教师 logits。
+反向只重放所选后续层，输出头按有效监督行计算。
+
+```bash
+python scripts/dual_continue.py \
+  --model /home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B \
+  --prompts /home/singm/online-speculation-work/data/gsm8k-pinned/test.jsonl \
+  --learning-prompts /home/singm/online-speculation-work/data/gsm8k-pinned/train.jsonl \
+  --thinking --block-size 32 --requests 8 --tokens 256 --repeats 2 \
+  --learn-requests 16 --learn-tokens 256 --temperature 1 --top-k 20 --top-p .8 \
+  --last-layers 1 --stride 16 --replay-blocks 1 --learning-rate .00001 --loss forward_kl \
+  --output /home/singm/online-speculation-work/results/dual-suffix-new.json
+```
+
+五组分别为 AR、公开起点固定投机、公开起点在线续训、独立学习后固定推理，以及相同学习起点继续在线。
+两条在线流均跨请求保留主权重和优化器状态，每次重复恢复各自相同的初始状态。
+实验共用一份模型，交错运行时只切换所选起草参数，切换费用单列为 `comparison_state_switch_seconds`。
+这个费用用于隔离各组实验状态；每次真实在线更新中的权重发布完整计入 `update_seconds` 和 TPS。
+
+表内请求 TPS 包含 prefill、采样、验证、反馈保存、重放、反向、优化器和末尾同步。
+`learner_setup_seconds` 记录主权重建立、冻结参数摘要等初始化；独立学习流的时间和更新成本单列。
+`--temperature 0` 使用贪心验证，学习目标仍是完整 softmax 蒸馏；`--loss tv` 使用逐位置 TV。
+测试覆盖前向与梯度对齐、有限差分、固定反馈学习、实际教师行对齐和跨请求恢复。
+结束时核验 AR logits／KV、公共起点恢复、执行副本变化及冻结参数状态。
+
+接入持续请求时，同一个 learner 贯穿请求流：
+
+```python
+from blockspec.parallel import MaskedAttentionBranch, generate
+from blockspec.parallel.feedback import OnlineFeedback
+from blockspec.parallel.online import SuffixConfig, SuffixLearner
+
+learner = SuffixLearner(model, SuffixConfig(last_layers=1, stride=16))
+for prompt in requests:
+    output = generate(MaskedAttentionBranch(model), prompt, 512,
+                      block_size=32, feedback=OnlineFeedback(learner=learner))
+state = learner.state_dict()
+```
+
+`model` 为已加载的冻结双向模型，`prompt` 为同设备上的 `[1, length]` token 张量。
+请求结束后的 `state_dict()` 包含主权重、优化器和更新进度；
+新实例通过 `load_state_dict(state)` 恢复，并检查冻结参数摘要与完整配置。
+采样随机状态由调用方传入的 `generator` 管理。

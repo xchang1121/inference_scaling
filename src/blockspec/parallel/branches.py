@@ -45,10 +45,12 @@ class MaskedAttentionBranch:
         sampler = ProposalSampler(sampling) if sampler is None else sampler
         inputs = anchor.new_full((1, block_size), self.model.config.mask_token_id)
         inputs[:, :1] = anchor
-        output = self.model(inputs, view="draft", cache=cache)
+        capture = None if feedback is None else feedback.capture_layer
+        output = self.model(inputs, view="draft", cache=cache, capture_layer=capture)
         candidates, q, calibration = sampler.propose(output.logits[0, :-1], generator, protected_rows=0)
-        return DraftBatch(torch.cat((anchor, candidates[None]), 1), candidates, q, cache, [],
-                          calibration_feedback=calibration)
+        return DraftBatch(torch.cat((anchor, candidates[None]), 1), candidates, q, cache, [], inputs, cache,
+                          output.boundary, calibration, feedback is not None and feedback.learner is not None
+                          and feedback.learner.needs_decoder_feedback)
 
 
 class CausalLowRankBranch:

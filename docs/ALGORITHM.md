@@ -663,6 +663,45 @@ $$
 末层子集续训也可以在冻结层和可训练层之间保存边界表示。
 缓存同时记录参数版本、位置编号与历史，保证反馈样本的条件一致。
 
+双向分支的末层续训可以沿这一边界展开。设前 $\ell-1$ 层的参数为 $\psi$，
+后续层中可训练的起草注意力参数为 $\phi$，本轮干净历史为 $C$，掩码块为 $z$。
+起草前向保存
+
+$$
+b=F^{<\ell}_{\psi}(z,C^{<\ell}),\qquad
+q_{\phi,i}=\operatorname{softmax}\!\left(W_{\rm out}
+F^{\ge\ell}_{\phi}(b,C^{\ge\ell})_i\right).
+$$
+
+$b$ 包含整个块的中间表示，$C^{\ge\ell}$ 是后续各层读取的 AR 历史 KV。
+设本轮接受了 $A$ 个候选，共有 $m$ 个候选，监督位置为
+$I=\{1,\ldots,\min(A+1,m)\}$。首次拒绝处的教师概率同样对应已经到达的前缀。
+完整词表蒸馏损失为
+
+$$
+\mathcal L(\phi)=\frac1{|I|}\sum_{i\in I}
+D_{\rm KL}\!\left(p_{\theta,i}^{\rm raw}\,\middle\|\,q_{\phi,i}\right).
+$$
+
+这里 $p^{\rm raw}$ 表示教师原始 logits 的 softmax；生成时的温度和截断继续由采样规则处理。
+教师 logits 直接取自验证前向，重放只计算学生后续层，并只为 $I$ 中的位置投影完整词表。
+记输出表示到损失的映射为 $J$。由于前置参数 $\psi$ 保持冻结，
+$\partial b/\partial\phi=0$，链式法则给出
+
+$$
+\nabla_\phi J\bigl(F^{\ge\ell}_\phi(F^{<\ell}_\psi(z,C^{<\ell}),C^{\ge\ell})\bigr)
+=\nabla_\phi J\bigl(F^{\ge\ell}_\phi(b,C^{\ge\ell})\bigr).
+$$
+
+因此，保存边界表示和重算完整起草骨干具有相同的末层梯度。
+后续层中的共享 MLP、归一化和输出投影仍向输入传播梯度，其参数保持冻结。
+解析等式使用实数运算；实现按相同的浮点计算布局核验前向和梯度。
+
+在线状态保存 FP32 主权重与优化器累计量，推理使用转换后的执行副本。
+周期更新选择最近若干个反馈块，按有效监督行数加权，完成反向和优化器步骤后发布执行副本。
+每条请求结束释放边界、教师 logits 和重放 KV，主权重与优化器在后续请求中延续。
+检查点绑定冻结参数摘要、层范围、精度、注意力后端及更新策略。
+
 ### 7.3 概率混合与在线调度
 
 另一类低成本扩展直接学习若干概率表的混合：
@@ -838,6 +877,7 @@ TPF 与 TPS 分别反映产出和时间，二者共同解释加速来源。
 | [parallel/generation.py](../src/blockspec/parallel/generation.py) | 共同的初始化、起草、验证、提交和收尾循环 |
 | [parallel/sampling.py](../src/blockspec/parallel/sampling.py) | 概率变换、候选抽样与验证执行；复用 [sampling.py](../src/blockspec/sampling.py) 中的概率规则 |
 | [parallel/feedback.py](../src/blockspec/parallel/feedback.py) | 实际前缀反馈、更新发布与请求间学习状态 |
+| [parallel/online.py](../src/blockspec/parallel/online.py) | 双向起草后段重放、FP32 主权重、在线优化与状态恢复 |
 | [model.py](../src/blockspec/model.py)、[parallel/backbone.py](../src/blockspec/parallel/backbone.py) | 条件低秩与双视图两种参数组织 |
 
 分支返回一个完整的起草记录：待验证候选及其概率、验证输入、验证前的干净 KV，
