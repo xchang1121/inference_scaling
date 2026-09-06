@@ -75,7 +75,7 @@ PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
 `--attention-backend grouped` 在本项目模型中启用分组短查询，外部参照继续使用其原有注意力。
 `--execution eager` 使用普通执行路径。移位短窗口检查大位置编号的计算，校验输入取自开发集。
 BF16 外部审计添加 `--dtype bfloat16 --max-logit-error 0.5 --max-tv 0.02`；
-当前 1B 测量的数值与门槛比较见主报告 13.1，BF16 吞吐结果作为近似精度开发测量。
+当前 1B 测量的数值比较见[主报告的数值精度](ALGORITHM.md#82-数值精度)，BF16 吞吐结果作为近似精度开发测量。
 `--trace` 在第一条共同 prefill 上比较各层；`--bf16-full-accumulation` 让两边 GEMM 采用完整累加精度，
 结束后恢复调用方的全局设置。输出给出实际累加开关。
 
@@ -164,12 +164,12 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)` 提供末层续训配置，
 续训最后 4 层中的适配器，并复用起草的前段特征；其余适配器以固定权重参与起草。
-`train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见主报告 9.3。
-词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导见主报告 9.4。
-`optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；两者的更新核对见主报告 9.5。
-`feedback_execution="windowed"` 按更新需求安排采集窗口，`all` 使用逐轮采集。两者的更新等价性见主报告 9.6。
+`train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见[主报告附录 B](ALGORITHM.md#附录-b-冻结特征与小头计算)。
+词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导同见附录 B。
+`optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；更新核对见 [test_online_execution.py](../tests/test_online_execution.py)。
+`feedback_execution="windowed"` 按更新需求安排采集窗口，`all` 使用逐轮采集；参数更新对照见 [test_feedback_window.py](../tests/test_feedback_window.py)。
 `update_policy="coverage"` 在检查时点读取窗口的路径覆盖标记：完整覆盖时保留参数与 Adam，含覆盖缺口时用全部有效位置训练。
-`periodic` 为默认周期更新对照；门控推导和参数状态核验见主报告 9.7。
+`periodic` 为默认周期更新对照；门控及参数状态核验见 [test_update_policy.py](../tests/test_update_policy.py)。
 `observe()` 接口逐次接收显式反馈；窗口化由线性／树解码器调度，参数与 Adam 状态跨请求续用。
 显式反馈的 `fully_covered` 默认为 False；调用方设置 True 时，需要实际路径匹配全部带噪位置，并提供对应的全部老师行。
 检查点保存权重，新建 learner 时初始化 Adam 状态。
@@ -196,9 +196,9 @@ learner.replay_executor = replay
 
 输入使用 FP32 CUDA、batch=1，历史长度在容量范围内；块长和有效监督行数通过 `prepare()` 显式准备。
 准备好的 `replay` 可传给同一模型的新 `OnlineLearner(model, config, replay_executor=replay)`，
-新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。数学推导见主报告 9.8。
+新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。特征复用的数学条件见[主报告附录 B](ALGORITHM.md#附录-b-冻结特征与小头计算)。
 `model.set_attention_backend("grouped")` 在创建 learner 和推理／训练图之前调用；`sdpa` 为按头对照。
-分组路径处理至多 32 项的 FP32／FP64 查询，长 prefill 和低精度查询由 SDPA 计算，推导见主报告 8.3。
+分组路径处理至多 32 项的 FP32／FP64 查询，长 prefill 和低精度查询由 SDPA 计算，实现见 [attention.py](../src/blockspec/attention.py)。
 结束执行器的使用时，先清理反馈、解除各 learner 的 `replay_executor` 引用，再释放调用方持有的执行器。
 图槽与工作区随最后一个执行器引用释放；基座和仍在使用的 Adam 状态保持各自的生命周期。
 
@@ -223,7 +223,7 @@ python scripts/benchmark_offline.py \
 目标分布的 top-k 使用 `--sampling-top-k`，树候选宽度继续使用 `--top-k`。
 参数同时应用于 AR、静态、在线和各自预热；`config.sampling` 保存实际设置。
 温度为零时输出 `comparison_mode: greedy_exact`；正温度时为 `stochastic_diagnostic`，
-`greedy_identical: null`，逐请求的 token 比较作为观测信息。随机数和概率验收关系见主报告 12.6。
+`greedy_identical: null`，逐请求的 token 比较作为观测信息。随机数与输出分布的关系见[主报告第 3.2 节](ALGORITHM.md#32-接受拒绝与残差分布)。
 `tokens_per_decode_forward` 报告平均每次生成前向产出的 token 数，TPS 计时包含 prefill。
 两路入口默认 FP32 CUDA，`--dtype bfloat16` 切换基座执行精度；本地检查点先按 FP32 来源验证，再转换基座，保留适配器主权重。
 三路入口的 `--dtype` 指定检查点对应的基座精度，`--execution-dtype bfloat16` 在加载后执行同一转换。
@@ -244,7 +244,7 @@ python scripts/benchmark_offline.py \
 在线三路入口继续用于后续增量收益的比较：
 
 当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载；先完成 1,200 步的 2→4→6→8 课程，
-再以 B=4、2×512 窗口、L1 和学习率 $10^{-4}$ 续训 1,200 步。训练及检查点 SHA 见主报告 13.2。
+再以 B=4、2×512 窗口、L1 和学习率 $10^{-4}$ 续训 1,200 步。检查点元数据保存训练配置，评测输出记录文件 SHA。
 开发评测使用验证集中的连续前缀；test 集留给配置确定后的评测。
 
 ```bash
@@ -260,9 +260,9 @@ python -m blockspec benchmark \
   --update-policy coverage --online-execution cuda_graph --attention-backend grouped
 ```
 
-13.7 的 BF16 在线接入测量沿用上述命令，添加 `--execution-dtype bfloat16`，
+前期 BF16 适配器续训测量沿用上述命令，添加 `--execution-dtype bfloat16`，
 并将 `--online-execution cuda_graph` 改为 `--online-execution eager`。检查点来源精度继续使用 `--dtype float32`。
-该配置保留全部 FP32 适配器主权重，三路共同使用 BF16 基座；概率误差与逐项输出比较一同记录在主报告中。
+该配置保留全部 FP32 适配器主权重，三路共同使用 BF16 基座；数值误差说明见[主报告第 8.2 节](ALGORITHM.md#82-数值精度)。
 
 按文件顺序取全部 17 个验证记录的前 256 项作为输入，包含 4 个代码请求和 13 个数学请求。默认贪心、固定输出预算、`eos_id=None`；
 `--eos-id 1` 启用结束标记；`--sampler linear` 切换线性路径。
@@ -290,9 +290,9 @@ python -m blockspec benchmark \
 其成本归入在线方法；`tps_including_all_setup` 包含推理图、训练图和 learner 初始化。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
 末层窗口化采集使用带分界特征和普通起草两组图；自建执行器时在 `prepare()` 中准备这两组查询形状。
-图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存等价性和张量规模见主报告 8.2。
+图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存关系见[主报告第 5.4 节](ALGORITHM.md#54-两次前向与干净缓存)，图执行见第 8.1 节。
 推理图支持 FP32／BF16 CUDA、batch=1；末层梯度图使用 FP32，BF16 在线续训选择 `--online-execution eager`。
-FP32 的测量保持 TF32 关闭，BF16 基座对应独立的精度配置，数学与主权重说明见主报告 8.4。
+FP32 的测量保持 TF32 关闭，BF16 基座对应独立的精度配置；执行副本由 FP32 适配器主权重转换得到。
 长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。
 实验结束恢复传入模型的适配器，结果写入 stdout。
 
@@ -310,7 +310,7 @@ python scripts/benchmark_reference.py \
 
 源码 commit 和两份权重的 SHA 来自 `references/upstream.lock.json`，每个方法在新进程运行。
 该入口调用官方 BF16／FA2 引擎的 B=1 串行对照和 B=8 线性投机，精确限制各请求输出长度，
-报告 TPS、初始化、预热、接受计数、解码前向、显存和图计数。对应结果与计数口径见主报告 13.5。
+报告 TPS、初始化、预热、接受计数、解码前向、显存和图计数。对应结果见[主报告第 8.3 节](ALGORITHM.md#83-本机结果)，计时口径见第 7.2 节。
 自有实现的相近条件使用两路公开 adapter 命令，并添加
 `--dtype bfloat16 --sampler linear --block-size 8 --temperature 1 --noise-low 1`。
 
@@ -328,40 +328,44 @@ python scripts/benchmark_reference.py \
 
 ## 8. PrefixRelay 训练和配对实验
 
-当前入口使用 FP32 自有执行器和已训练的本地扩散适配器，新增头单独保存。
-训练时基座及原适配器固定，实际候选的验证反馈训练转移与置信度参数。
+当前入口使用官方扩散适配器目录，默认 BF16 自有 GPU 图骨干。
+训练对象是新增的转移与置信度小头，基座及公开适配器保持冻结。
+先运行第 6 节的官方权重两路基线，选择并锁定块长，再启动小头训练。
 
 ```bash
 python scripts/prefix_relay.py train \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-block4-context512.pt \
+  --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
+  --reference-sha256 5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e \
   --train-data /home/singm/online-speculation-work/data/blockspec_ot3_medium/train.jsonl \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --head /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt \
-  --rank 64 --block-size 4 --train-requests 64 --train-tokens 128 \
-  --interval 8 --lr .003 --temperature 1
+  --head /home/singm/online-speculation-work/models/prefixrelay-official-r64-b8.pt \
+  --backbone independent_graph --dtype bfloat16 --rank 64 --block-size 8 \
+  --temperature 1 --sampling-top-k 50 --top-p .95 --noise-low 1 --noise-high 64256 \
+  --train-requests 64 --train-tokens 128 --embedding-init base_projected \
+  --interval 8 --lr .003 --confidence-lr .0001 --head-execution cuda_graph
 ```
 
 输出路径采用独占创建；新训练使用新的检查点文件名。
 保留相同路径参数，将子命令 `train` 改为 `benchmark`，并指定
-`--prompts 17 --prompt-length 256 --tokens 256 --repeats 2 --temperature 1 --threshold .15`。
-添加 `--online --interval 8 --lr .003` 可同时测量新增头的推理后续训。
+`--prompts 17 --prompt-length 256 --tokens 256 --repeats 2`。
+添加 `--online --interval 16 --lr .0003 --confidence-lr .00001`，
+在同一进程中交错测量 AR、原并行草稿、固定小头和在线小头四路。
+添加 `--scheduled --threshold .03` 可单独加入采样前截断诊断。
 每个重复从相同检查点开始，在线头与 Adam 跨请求持续更新；其他方法每次使用固定参数。
 stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练开销和逐深度接受计数。
-加入 `--head-execution cuda_graph` 可将块内小头与采样合并为 GPU 图，准备时间计入对应方法。
+小头与采样合并为 GPU 图，准备时间计入对应方法；`--head-execution eager` 提供普通执行对照。
 将子命令换成 `audit` 可测量相同前缀上的原始／修正 TV，并比较小头执行耗时。
 
-转移学习与置信度学习可分别使用 `--lr .003 --confidence-lr .0001`。
-训练添加 `--embedding-init base_projected` 时，新增 token 转移向量使用冻结基座嵌入的归一化高斯投影，
-输出投影保持零初始化；`random` 提供相同参数量的随机初始化对照。
-审计添加 `--audit-reference /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt`，
-各候选头将在该固定起草器生成的相同前缀上比较 TV 和置信度误差。输出轨迹 SHA 用于核对输入一致性。
+`base_projected` 使用冻结基座嵌入的归一化高斯投影初始化转移向量，输出投影为零；
+`random` 提供相同参数量的随机初始化对照。
+`--audit-reference` 和 `--compare-head` 接受同一官方权重及配置下的其他小头检查点，
+分别做共同前缀审计和交错吞吐比较。加载时同时校验权重、训练划分和完整推理配置。
+训练与测量结束核验 `frozen_base_unchanged`、`frozen_adapter_unchanged`。
+报告通过 `evaluation_sha256` 和 `config.evaluation_split` 标识使用的划分。
 
-当前投影版训练使用 `--train-requests 256 --train-tokens 128 --embedding-init base_projected`
-及 `--lr .003 --confidence-lr .0001 --interval 8 --head-execution cuda_graph`，
-输出头路径为 `/home/singm/online-speculation-work/models/prefixrelay-r64-block4-splitlr-projected.pt`。
-吞吐对照添加 `--compare-head /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt`，
-可把首版头与新头放在同一组交错请求中测量，并输出配对吞吐比区间。
-投影头的在线对照使用 `--online --interval 16 --lr .0003 --confidence-lr .00001 --threshold .03`。
-独立测试将 `--data` 改为同目录的 `test.jsonl`，加 `--evaluation-split test --prompts 23`；
-其余参数保持验证阶段锁定的值。结果通过 `evaluation_sha256` 和 `config.evaluation_split` 标识数据来源。
+共享 HF SDPA 骨干对照使用 `--backbone hf_sdpa`，并在 WSL 命令前设置
+`PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515`。
+该隔离目录提供锁定的 Transformers 5.15.0，加载器核验基座 Python 源码、配置及权重 SHA。
+两路 `benchmark_offline.py --sampler linear` 与四路 `prefix_relay.py` 均支持这个后端。
+每个后端使用自己的 AR 基线，头检查点绑定训练时的后端及精度。
