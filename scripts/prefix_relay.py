@@ -31,6 +31,14 @@ def sha(path):
     return digest.hexdigest()
 
 
+def validate_head_metadata(metadata, *, train_sha256, block_size):
+    """Apply the same data and block contract to every evaluated head."""
+    if metadata.get("train_sha256") != train_sha256:
+        raise ValueError("head training-file SHA must match the checked training split")
+    if metadata.get("config", {}).get("block_size") != block_size:
+        raise ValueError("evaluation block size must match the trained head")
+
+
 def paired_bootstrap(rows, reference, method, prompts, *, seed=271828, resamples=10000):
     """Resample request clusters, retaining all repeated runs of each request."""
     a, b = rows[reference], rows[method]
@@ -111,7 +119,8 @@ def main():
     parser.add_argument("mode", choices=["train", "benchmark", "audit"])
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
-    parser.add_argument("--data", type=Path, required=True, help="validation file; always checked against training data")
+    parser.add_argument("--data", type=Path, required=True, help="evaluation file; always checked against training data")
+    parser.add_argument("--evaluation-split", choices=["validation", "test"], default="validation")
     parser.add_argument("--train-data", type=Path, required=True)
     parser.add_argument("--head", type=Path, required=True, help="exclusive train output or benchmark input")
     parser.add_argument("--rank", type=int, default=64)
@@ -127,6 +136,7 @@ def main():
     parser.add_argument("--confidence-lr", type=float, help="separate confidence rate; omission uses --lr")
     parser.add_argument("--embedding-init", choices=["random", "base_projected"], default="random")
     parser.add_argument("--audit-reference", type=Path, help="fixed serving head for common-prefix counterfactual TV")
+    parser.add_argument("--compare-head", type=Path, help="additional fixed head in the paired throughput benchmark")
     parser.add_argument("--temperature", type=float, default=1.)
     parser.add_argument("--threshold", type=float, default=.15)
     parser.add_argument("--seed", type=int, default=271828)
@@ -147,20 +157,21 @@ def main():
     model, _ = load_checkpoint(args.adapter, model=model, device="cuda")
     model.eval().requires_grad_(False).set_attention_backend("grouped")
     binding = {"base": base_fingerprint(model), "adapter": sha(args.adapter)}
+    head_training = None
     if args.mode == "train":
         head = RelayHead(RelayConfig(model.config.vocab_size, model.config.hidden_size, args.rank)).to("cuda")
         if args.embedding_init == "base_projected":
             head.initialize_from_embedding(model.model.embed_tokens.weight, seed=args.seed)
     else:
         head, metadata = load_relay(args.head, binding=binding, device="cuda")
-        if metadata.get("train_sha256") != sha(args.train_data):
-            parser.error("the head's training-file SHA must match --train-data for split validation")
-        if metadata.get("config", {}).get("block_size") != args.block_size:
-            parser.error("benchmark block size must match the trained head")
+        validate_head_metadata(metadata, train_sha256=sha(args.train_data), block_size=args.block_size)
+        head_training = {key: metadata.get(key) for key in
+                         ("config", "generated_tokens", "updates", "examples", "training_seconds")}
     source = implementation_fingerprint()
     provenance = {"implementation_sha256": source, "script_sha256": sha(__file__), "binding": binding,
-                  "validation_sha256": sha(args.data), "train_sha256": sha(args.train_data),
+                  "evaluation_sha256": sha(args.data), "train_sha256": sha(args.train_data),
                   "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+                  "head_training": head_training,
                   "head_parameters": sum(p.numel() for p in head.parameters()), "precision": "float32",
                   "device": torch.cuda.get_device_name(), "torch": str(torch.__version__)}
     engine = FixedShapeExecutor(model, capacity=args.prompt_length + max(args.tokens, args.train_tokens, 32),
@@ -195,8 +206,7 @@ def main():
         reference = head
         if args.audit_reference:
             reference, reference_metadata = load_relay(args.audit_reference, binding=binding, device="cuda")
-            if reference_metadata.get("train_sha256") != sha(args.train_data):
-                parser.error("audit reference training data must match the checked split")
+            validate_head_metadata(reference_metadata, train_sha256=sha(args.train_data), block_size=args.block_size)
         audit = HeadAudit(reference, SamplingConfig(args.temperature if args.temperature > 0 else 1.),
                           evaluated_head=head)
         reference_executor = (RelayExecutor(reference, block_size=args.block_size, sampling=options["sampling"])
@@ -242,7 +252,16 @@ def main():
         emit({"stage": "trained", "head_sha256": sha(args.head), **metadata})
         return
     initial = {k: v.detach().clone() for k, v in head.state_dict().items()}
-    arms = ["ar", "parallel", "relay", "scheduled"] + (["online"] if args.online else [])
+    reference_head = reference_proposal = None
+    if args.compare_head:
+        reference_head, reference_metadata = load_relay(args.compare_head, binding=binding, device="cuda")
+        validate_head_metadata(reference_metadata, train_sha256=sha(args.train_data), block_size=args.block_size)
+        reference_proposal = (RelayExecutor(reference_head, block_size=args.block_size, sampling=options["sampling"])
+                              if proposal else None)
+        generate_relay(model, reference_head, warm, 32, **options, generator=rng, proposal_executor=reference_proposal)
+        setups["reference"] = setups["relay"] + (reference_proposal.setup_seconds if reference_proposal else 0.)
+    arms = ["ar", "parallel"] + (["reference"] if reference_head else []) + ["relay", "scheduled"]
+    arms += ["online"] if args.online else []
     rows = {arm: [] for arm in arms}
     repeats = []
     learner_setup_seconds = 0.
@@ -270,6 +289,9 @@ def main():
                                          executor=engine, generator=generator)
                 elif arm == "parallel":
                     result = generate_speculative(model, prompt.cuda(), args.tokens, **options, generator=generator)
+                elif arm == "reference":
+                    result = generate_relay(model, reference_head, prompt.cuda(), args.tokens, **options,
+                                            generator=generator, proposal_executor=reference_proposal)
                 else:
                     result = generate_relay(model, head, prompt.cuda(), args.tokens, **options, generator=generator,
                                             threshold=args.threshold if arm == "scheduled" else 0.,
@@ -301,6 +323,9 @@ def main():
           "repetitions": repeats, "greedy_matches": greedy_matches if args.temperature == 0 else None,
           "paired_uncertainty": {arm: paired_bootstrap(rows, "parallel", arm, len(prompts))
                                  for arm in arms if arm not in ("ar", "parallel")},
+          "reference_head_sha256": sha(args.compare_head) if args.compare_head else None,
+          "relay_vs_reference": paired_bootstrap(rows, "reference", "relay", len(prompts)) if reference_head else None,
+          "online_vs_fixed": paired_bootstrap(rows, "relay", "online", len(prompts)) if args.online else None,
           "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
           "frozen_base_unchanged": base_fingerprint(model) == binding["base"]})
 
