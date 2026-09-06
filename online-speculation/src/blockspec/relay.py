@@ -54,6 +54,24 @@ class RelayHead(nn.Module):
         normalized = hidden * (hidden.square().mean(-1, keepdim=True) + 1e-6).rsqrt()
         return self.confidence(torch.cat((normalized, self.embedding(previous)), -1)).squeeze(-1)
 
+    @torch.no_grad()
+    def initialize_from_embedding(self, embedding, *, seed=271828):
+        """Gaussian projection of frozen token features; W=0 keeps initial q.
+
+        A private RNG isolates initialization from rollout randomness. Row-wise
+        normalization matches the unit expected norm of the random embedding.
+        """
+        if (embedding.ndim != 2 or embedding.shape != (self.config.vocab_size, self.config.hidden_size)
+                or not torch.isfinite(embedding).all() or self.projection.weight.count_nonzero()):
+            raise ValueError("finite matching base embeddings and zero transition projection required")
+        device = self.embedding.weight.device
+        generator = torch.Generator(device=device).manual_seed(seed)
+        projection = torch.randn(self.config.hidden_size, self.config.rank, device=device,
+                                  dtype=torch.float32, generator=generator) / math.sqrt(self.config.rank)
+        features = embedding.detach().to(device=device, dtype=torch.float32) @ projection
+        features = F.normalize(features, dim=-1)
+        self.embedding.weight.copy_(features.to(self.embedding.weight.dtype))
+
 
 @dataclass
 class RelayDraft:
@@ -116,14 +134,20 @@ class RelayLearner:
     Detached logits/features replace backbone replay. Optimizer state persists
     across requests, while pending feedback is released at each request boundary.
     """
-    def __init__(self, head, *, lr=1e-3, interval=8, sampling=SamplingConfig(1.), confidence_weight=.1):
+    def __init__(self, head, *, lr=1e-3, interval=8, sampling=SamplingConfig(1.), confidence_weight=.1,
+                 confidence_lr=None):
         if interval < 1 or type(interval) is not int or not math.isfinite(lr) or lr <= 0:
             raise ValueError("positive update interval and learning rate required")
         if sampling.temperature <= 0 or not math.isfinite(confidence_weight) or confidence_weight < 0:
             raise ValueError("positive training temperature and nonnegative confidence weight required")
+        if confidence_lr is not None and (not math.isfinite(confidence_lr) or confidence_lr <= 0):
+            raise ValueError("positive finite confidence learning rate required")
         self.head, self.interval, self.sampling = head, interval, sampling
         self.confidence_weight = confidence_weight
-        self.optimizer = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=0.,
+        parameters = (head.parameters() if confidence_lr is None else [
+            {"params": [head.embedding.weight, head.projection.weight], "lr": lr},
+            {"params": list(head.confidence.parameters()), "lr": confidence_lr}])
+        self.optimizer = torch.optim.AdamW(parameters, lr=lr, weight_decay=0.,
                                            fused=next(head.parameters()).device.type == "cuda")
         self.pending = []
         self.updates = self.feedback_blocks = self.examples = 0

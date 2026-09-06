@@ -55,11 +55,12 @@ def paired_bootstrap(rows, reference, method, prompts, *, seed=271828, resamples
 
 class HeadAudit:
     """Paired TV on the serving head's same reached prefixes, without updates."""
-    def __init__(self, head, sampling):
+    def __init__(self, head, sampling, *, evaluated_head=None):
         self.head, self.sampling = head, sampling
+        self.evaluated_head = evaluated_head or head
         self.updates = self.feedback_blocks = 0
         self.update_seconds = 0.
-        self.totals = torch.zeros(4, device=next(head.parameters()).device)
+        self.totals = torch.zeros(6, device=next(head.parameters()).device)
 
     def clear_replay(self):
         pass
@@ -71,12 +72,16 @@ class HeadAudit:
             return
         p = probabilities(feedback.teacher, self.sampling)
         original = probabilities(feedback.logits, self.sampling)
-        corrected = probabilities(self.head(feedback.logits, feedback.previous), self.sampling)
+        corrected = probabilities(self.evaluated_head(feedback.logits, feedback.previous), self.sampling)
+        reference = probabilities(self.head(feedback.logits, feedback.previous), self.sampling)
         tv0 = .5 * (p - original).abs().sum(-1)
         tv1 = .5 * (p - corrected).abs().sum(-1)
-        confidence = self.head.confidence_logits(feedback.hidden, feedback.previous).sigmoid()
+        reference_tv = .5 * (p - reference).abs().sum(-1)
+        reference_confidence = self.head.confidence_logits(feedback.hidden, feedback.previous).sigmoid()
+        confidence = self.evaluated_head.confidence_logits(feedback.hidden, feedback.previous).sigmoid()
         self.totals += torch.stack((tv0.sum(), tv1.sum(), (confidence - (1 - tv1)).square().sum(),
-                                    tv0.new_tensor(count)))
+                                    tv0.new_tensor(count), reference_tv.sum(),
+                                    (reference_confidence - (1 - reference_tv)).square().sum()))
         self.feedback_blocks += 1
 
 
@@ -119,6 +124,9 @@ def main():
     parser.add_argument("--train-tokens", type=int, default=128)
     parser.add_argument("--interval", type=int, default=8)
     parser.add_argument("--lr", type=float, default=.001)
+    parser.add_argument("--confidence-lr", type=float, help="separate confidence rate; omission uses --lr")
+    parser.add_argument("--embedding-init", choices=["random", "base_projected"], default="random")
+    parser.add_argument("--audit-reference", type=Path, help="fixed serving head for common-prefix counterfactual TV")
     parser.add_argument("--temperature", type=float, default=1.)
     parser.add_argument("--threshold", type=float, default=.15)
     parser.add_argument("--seed", type=int, default=271828)
@@ -141,6 +149,8 @@ def main():
     binding = {"base": base_fingerprint(model), "adapter": sha(args.adapter)}
     if args.mode == "train":
         head = RelayHead(RelayConfig(model.config.vocab_size, model.config.hidden_size, args.rank)).to("cuda")
+        if args.embedding_init == "base_projected":
+            head.initialize_from_embedding(model.model.embed_tokens.weight, seed=args.seed)
     else:
         head, metadata = load_relay(args.head, binding=binding, device="cuda")
         if metadata.get("train_sha256") != sha(args.train_data):
@@ -182,18 +192,33 @@ def main():
     generate_relay(model, head, warm, 32, **options, generator=rng, threshold=args.threshold,
                    proposal_executor=scheduled_proposal)
     if args.mode == "audit":
-        audit = HeadAudit(head, SamplingConfig(args.temperature if args.temperature > 0 else 1.))
+        reference = head
+        if args.audit_reference:
+            reference, reference_metadata = load_relay(args.audit_reference, binding=binding, device="cuda")
+            if reference_metadata.get("train_sha256") != sha(args.train_data):
+                parser.error("audit reference training data must match the checked split")
+        audit = HeadAudit(reference, SamplingConfig(args.temperature if args.temperature > 0 else 1.),
+                          evaluated_head=head)
+        reference_executor = (RelayExecutor(reference, block_size=args.block_size, sampling=options["sampling"])
+                              if proposal else None)
+        rng.manual_seed(args.seed)
+        trace = hashlib.sha256()
         for prompt in prompts:
-            generate_relay(model, head, prompt.cuda(), args.tokens, **options, generator=rng,
-                           proposal_executor=proposal, learner=audit)
-        original, corrected, error, count = audit.totals.tolist()
+            result = generate_relay(model, reference, prompt.cuda(), args.tokens, **options, generator=rng,
+                                    proposal_executor=reference_executor, learner=audit)
+            trace.update(torch.tensor(result.tokens, dtype=torch.int64).numpy().tobytes())
+        original, corrected, error, count, reference_tv, reference_error = audit.totals.tolist()
         emit({"stage": "audit", **provenance, "positions": count, "original_tv": original / count,
               "corrected_tv": corrected / count, "confidence_mse": error / count,
+              "reference_tv": reference_tv / count, "trace_sha256": trace.hexdigest(),
+              "reference_confidence_mse": reference_error / count,
+              "head_sha256": sha(args.head), "reference_head_sha256": sha(args.audit_reference or args.head),
               "microbenchmark": profile_head(head, args.block_size, options["sampling"], proposal)})
         return
     if args.mode == "train":
         learner = RelayLearner(head, lr=args.lr, interval=args.interval,
-                               sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.))
+                               sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.),
+                               confidence_lr=args.confidence_lr)
         crop_rng = torch.Generator().manual_seed(args.seed)
         eligible = [s for s in sequences if len(s) >= args.prompt_length]
         start = time.perf_counter()
@@ -227,7 +252,8 @@ def main():
         torch.cuda.synchronize()
         setup_start = time.perf_counter()
         learner = (RelayLearner(head, lr=args.lr, interval=args.interval,
-                                sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.))
+                                sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.),
+                                confidence_lr=args.confidence_lr)
                    if args.online else None)
         torch.cuda.synchronize()
         learner_setup_seconds += time.perf_counter() - setup_start if learner else 0.

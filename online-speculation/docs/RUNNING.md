@@ -350,3 +350,9 @@ python scripts/prefix_relay.py train \
 stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练开销和逐深度接受计数。
 加入 `--head-execution cuda_graph` 可将块内小头与采样合并为 GPU 图，准备时间计入对应方法。
 将子命令换成 `audit` 可测量相同前缀上的原始／修正 TV，并比较小头执行耗时。
+
+转移学习与置信度学习可分别使用 `--lr .003 --confidence-lr .0001`。
+训练添加 `--embedding-init base_projected` 时，新增 token 转移向量使用冻结基座嵌入的归一化高斯投影，
+输出投影保持零初始化；`random` 提供相同参数量的随机初始化对照。
+审计添加 `--audit-reference /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt`，
+各候选头将在该固定起草器生成的相同前缀上比较 TV 和置信度误差。输出轨迹 SHA 用于核对输入一致性。
