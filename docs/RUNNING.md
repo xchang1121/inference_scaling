@@ -407,4 +407,54 @@ python scripts/overlap_mix.py benchmark \
 `--method continuation` 选择历史续句的条件混合：每个请求重建提示／输出后缀索引，
 系数按匹配长度和深度分组，初值为零。此选项沿用同一套六路评测、状态恢复与完整计时。
 GPU 图以并行前缀扫描实现条件分支，历史匹配为空的轮次直接使用原草稿概率处理入口。
-文件保存在现有源码目录，实验结果写入 stdout。
+
+## 10. 双向分支与共同管线
+
+双视图权重位于 `/home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B`。
+独立骨干直接读取 safetensors；外部对照在隔离的 Transformers 5.15.0 环境中加载固定源码。
+版本与文件摘要见 `references/upstream.lock.json`。
+
+```bash
+source /home/singm/.venvs/uno-cu128/bin/activate
+export PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515
+
+python scripts/dual_view.py audit \
+  --model /home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B \
+  --dtype bfloat16 --backend sdpa --blocks 4 32 --tokens 32
+
+python scripts/dual_view.py benchmark \
+  --model /home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B \
+  --dtype bfloat16 --backend sdpa --implementation both \
+  --blocks 8 32 --requests 8 --repeats 2 --tokens 128
+```
+
+随机采样添加 `--temperature 1`。`--implementation own` 与 `reference` 分别运行单个实现，
+`both` 同时驻留两份权重并交错运行。输出记录每条请求、吞吐、配对区间、计数和进程峰值显存。
+`--output` 指向仓库外的新 JSON 文件；相同路径重复使用时会提示选择新文件。
+数值审计的 `--dtype float32` 使用 FP32 参数和计算，保留同一组 logits 与逐层 KV 判据。
+
+单个贪心决策的诊断入口为：
+
+```bash
+python scripts/dual_view.py trace \
+  --model /home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B \
+  --dtype bfloat16 --backend sdpa --blocks 32 --tokens 128 \
+  --request-index 6 --token-index 20
+```
+
+两个索引均从零开始。诊断比较实际 AR 与块验证的概率，
+另在同一份 AR KV 上重放单行和整块前向，分开检查历史与当前查询形状的影响。
+
+既有低秩入口的迁移对照读取指定 Git 提交中的生成函数，复用当前冻结权重和相同执行器：
+
+```bash
+python scripts/audit_pipeline.py \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --reference-commit 7eb6a79 --requests 4 --tokens 128 --repeats 2 \
+  --output /home/singm/online-speculation-work/results/pipeline-migration-new.json
+```
+
+对应原理见 [共同接口](ALGORITHM.md#44-共同接口与位置差异) 与 [代码组织](ALGORITHM.md#9-代码组织)，
+有效结果集中记录于 [RESULTS.md](RESULTS.md)。

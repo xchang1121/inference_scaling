@@ -805,10 +805,33 @@ TPF 与 TPS 分别反映产出和时间，二者共同解释加速来源。
 骨干维护共享参数；分支规定占位符、投影、掩码与位置；
 校正器处理候选和目标概率；执行层管理工作区，测量层统计完整成本。
 
-条件低秩分支的已有实现为 [model.py](../src/blockspec/model.py)、
-[distillation.py](../src/blockspec/distillation.py)。
-两条分支的共同概率规则见 [sampling.py](../src/blockspec/sampling.py)。
-条件低秩分支的代码与权重版本由 [upstream.lock.json](../references/upstream.lock.json) 固定。
+| 模块 | 职责 |
+|---|---|
+| [state.py](../src/blockspec/state.py) | 两条分支的持久 KV、前缀裁剪和打包缓存 |
+| [parallel/branches.py](../src/blockspec/parallel/branches.py) | 起草输入、真实候选概率、验证输入及干净缓存边界 |
+| [parallel/generation.py](../src/blockspec/parallel/generation.py) | 共同的初始化、起草、验证、提交和收尾循环 |
+| [parallel/sampling.py](../src/blockspec/parallel/sampling.py) | 概率变换、候选抽样与验证执行；复用 [sampling.py](../src/blockspec/sampling.py) 中的概率规则 |
+| [parallel/feedback.py](../src/blockspec/parallel/feedback.py) | 实际前缀反馈、更新发布与请求间学习状态 |
+| [model.py](../src/blockspec/model.py)、[parallel/backbone.py](../src/blockspec/parallel/backbone.py) | 条件低秩与双视图两种参数组织 |
+
+分支返回一个完整的起草记录：待验证候选及其概率、验证输入、验证前的干净 KV，
+以及本轮已经由 AR 确定的新 token。共同循环据此执行第 5 节的校正，
+按实际提交长度裁剪 KV，并将反馈交给在线模块。
+原 [decoding.py](../src/blockspec/decoding.py) 作为既有调用的兼容入口，调用这套共同循环。
+
+标准入口在 prefill 中产生第一枚 AR token。兼容入口保留原有提示末 token 的初始化约定，
+两者分别记录 prefill 产出、起草前向、验证前向与尾部 AR 前向。
+这使初始化差异在计数中可见，块内的概率校正规则保持统一。
+
+训练布局分别位于 [distillation.py](../src/blockspec/distillation.py) 和
+[parallel/training.py](../src/blockspec/parallel/training.py)。
+条件低秩布局在一次配对计算中对齐干净行与带噪行；
+双向布局通过干净 AR 前向取得教师状态，再按随机锚点组织相互隔离的起草块。
+完整词表损失按监督行分块计算，反向阶段重算输出头中间量，控制词表概率的存储规模。
+
+代码与权重版本见 [upstream.lock.json](../references/upstream.lock.json)。
+[parallel/weights.py](../src/blockspec/parallel/weights.py) 逐项核验双视图参数的名称、形状与权重摘要，
+自有训练检查点同时保存参数、可训练范围、优化器状态和步数。
 
 双向分支的复现以发布的 Qwen3 双视图权重和完整教师分布 KL 为依据。
 参考仓库中新增的 Qwen3.5 训练入口采用 hard-label CE，

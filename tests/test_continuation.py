@@ -6,17 +6,18 @@ import torch
 from blockspec.continuation import ContinuationMix, CopyFeedback, SuffixLookup, copy_mixture, copy_tv_gradient
 
 
-def test_suffix_index_matches_exhaustive_search_after_every_commit():
+@pytest.mark.parametrize("lookahead", [2, 4])
+def test_suffix_index_matches_exhaustive_search_after_every_commit(lookahead):
     torch.manual_seed(730)
     tokens = torch.randint(0, 3, (100,)).tolist()
-    memory = SuffixLookup()
+    memory = SuffixLookup(lookahead=lookahead)
     observed = []
     for token in tokens:
         memory.extend([token])
         observed.append(token)
         expected = ([], 0)
         for n in range(min(8, len(observed)), 1, -1):
-            matches = [i for i in range(n, len(observed) - 1) if observed[i-n:i] == observed[-n:]]
+            matches = [i for i in range(n, len(observed) - lookahead + 1) if observed[i-n:i] == observed[-n:]]
             if matches:
                 expected = observed[matches[-1]:matches[-1] + 6], n
                 break
@@ -230,3 +231,50 @@ def test_conditional_copy_and_residual_output_law_by_joint_enumeration(amount):
                 actual[r, a, b] += path_mass * accept1 * accept2
                 actual[r, a] += path_mass * accept1 * (1 - accept2) * correction2
     torch.testing.assert_close(actual, expected, atol=1e-14, rtol=1e-14)
+
+
+def test_late_copy_learning_preserves_initial_proposal_positions():
+    mix = ContinuationMix(5, 3, start_depth=3, interval=1)
+    q0 = torch.tensor([[.6, .4, 0.]]).expand(4, -1)
+    p = torch.tensor([[.2, .1, .7]]).expand(4, -1)
+    for _ in range(10):
+        feedback = CopyFeedback(q0, torch.full((4,), 2), mix.weights[0].clone(), torch.ones(4, dtype=torch.bool))
+        mix.observe(feedback, p)
+    assert (mix.weights[:, :2] == 0).all()
+    assert (mix.steps[:, :2] == 0).all()
+    assert (mix.weights[0, 2:] > .5).all()
+    assert mix.metrics()["learned_coefficients"] == 6
+    mix.begin_request([1, 2, 7, 8, 1, 2])
+    assert mix.lookup(5) == [7, 8, 1, 2]
+    mix.begin_request([1, 2, 7, 1, 2])
+    assert mix.lookup(5) == []
+    bad = mix.state_dict()
+    bad["tensors"]["weights"][0, 0] = .1
+    with pytest.raises(ValueError):
+        mix.load_state_dict(bad)
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@torch.no_grad()
+def test_continuation_eos_commits_exactly_the_returned_prefix(device):
+    from blockspec.decoding import generate_speculative
+    from blockspec.model import Decoder, ModelConfig
+    from blockspec.sampling import SamplingConfig
+    from blockspec.sampling_execution import SamplingExecutor
+
+    torch.manual_seed(736)
+    model = Decoder(ModelConfig(vocab_size=7, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+                                head_dim=8, adapter_rank=2)).to(device).eval().requires_grad_(False)
+    prompt = torch.tensor([[1, 2, 3, 4, 1, 2]], device=device)
+    sampling = SamplingConfig(1., 5, .95)
+    sampler = SamplingExecutor(7, 4, sampling, device=device, temperatures=(), continuation=True,
+                               use_cuda_graph=device == "cuda")
+    options = dict(block_size=4, sampling=sampling, sampler_executor=sampler)
+    gen = lambda: torch.Generator(device=device).manual_seed(737)
+    ordinary = generate_speculative(model, prompt, 19, generator=gen(), **options)
+    for eos in set(ordinary.tokens[:4]):
+        mix = ContinuationMix(4, 5, device=device, adaptive=False, start_depth=3)
+        result = generate_speculative(model, prompt, 19, generator=gen(), eos_id=eos, calibrator=mix, **options)
+        assert result.tokens == ordinary.tokens[:ordinary.tokens.index(eos) + 1]
+        assert mix.memory.tokens == prompt[0].tolist() + result.tokens
