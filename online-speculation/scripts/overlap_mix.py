@@ -1,8 +1,9 @@
 """Frozen-weight audits and paired benchmarks for cheap online proposal mixing."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
-import json
 from pathlib import Path
 import time
 
@@ -23,7 +24,7 @@ from prefix_relay import assert_frozen, paired_bootstrap, sha
 
 
 def emit(value):
-    print(json.dumps(value, allow_nan=False), flush=True)
+    print(report.dumps(value, allow_nan=False), flush=True)
 
 
 def main():
@@ -31,7 +32,7 @@ def main():
     parser.add_argument("mode", choices=["audit", "benchmark"])
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
-    parser.add_argument("--reference-sha256", required=True)
+    parser.add_argument("--reference-sha256", help="optional local adapter integrity check")
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--train-data", type=Path, required=True)
     parser.add_argument("--split-role", choices=["validation", "test"], default="validation")

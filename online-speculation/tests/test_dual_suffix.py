@@ -179,6 +179,20 @@ def test_suffix_config_and_state_guards():
         SuffixLearner(other).load_state_dict(learner.state_dict())
 
 
+def test_online_state_resumes_across_storage_locations():
+    net = model()
+    net.source = {"weight_sha256": "test-content", "directory": "old-location"}
+    learner = SuffixLearner(net)
+    state = learner.state_dict()
+    assert "directory" not in state["source"]
+    state["source"]["directory"] = "legacy-location"
+    net.source["directory"] = "new-location"
+    learner.load_state_dict(state)
+    state["source"]["weight_sha256"] = "different-content"
+    with pytest.raises(ValueError, match="model, source"):
+        learner.load_state_dict(state)
+
+
 def test_suffix_gradient_finite_difference_and_fixed_feedback_learning():
     net = model()
     learner = SuffixLearner(net, SuffixConfig(stride=1, learning_rate=.003))

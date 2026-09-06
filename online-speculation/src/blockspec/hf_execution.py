@@ -1,4 +1,4 @@
-"""Frozen, hash-pinned HF backbone for the independently implemented samplers.
+"""Frozen, caller-selected HF backbone for the independently implemented samplers.
 
 The model author's SDPA layers provide a shared execution reference for AR,
 parallel drafting and PrefixRelay. Token routing, functional cache ownership,
@@ -18,12 +18,13 @@ from .checkpoint import config_from_hf
 from .model import DraftBoundary, GatedLinear
 
 
-LOCK = Path(__file__).resolve().parents[2] / "references" / "upstream.lock.json"
-
-
-def checked_reference(directory):
-    directory = Path(directory)
-    spec = json.loads(LOCK.read_text(encoding="utf-8"))["models"]["k2_1b_base"]
+def checked_reference(directory, manifest):
+    """Validate caller-supplied local integrity metadata before importing code."""
+    directory = Path(directory).resolve()
+    spec = json.loads(Path(manifest).read_text(encoding="utf-8"))["models"]["base"]
+    names = list(spec["reference_lf_sha256"]) + [spec["weight_filename"]]
+    if not names or any((directory / name).resolve().parent != directory for name in names):
+        raise ValueError("reference files must be direct children of the model directory")
     for name, expected in spec["reference_lf_sha256"].items():
         actual = hashlib.sha256((directory / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         if actual != expected:
@@ -34,9 +35,11 @@ def checked_reference(directory):
             digest.update(chunk)
     if digest.hexdigest() != spec["weight_sha256"]:
         raise ValueError("reference weights differ from reviewed pin")
-    index = json.loads((directory / "model.safetensors.index.json").read_text(encoding="utf-8"))
-    if set(index["weight_map"].values()) != {spec["weight_filename"]}:
-        raise ValueError("reference index points outside the checked weight shard")
+    index_path = directory / "model.safetensors.index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if set(index["weight_map"].values()) != {spec["weight_filename"]}:
+            raise ValueError("reference index points outside the checked weight shard")
     return spec
 
 
@@ -128,10 +131,10 @@ class FrozenHFDecoder(nn.Module):
         return result
 
 
-def load_frozen_hf(directory, adapter, *, expected_sha256, device="cuda", dtype=torch.bfloat16):
-    spec = checked_reference(directory)
+def load_frozen_hf(directory, adapter, *, reference_manifest, expected_sha256=None, device="cuda", dtype=torch.bfloat16):
+    spec = checked_reference(directory, reference_manifest)
     import transformers
-    if transformers.__version__ != spec["reference_transformers"]:
+    if spec.get("reference_transformers") and transformers.__version__ != spec["reference_transformers"]:
         raise RuntimeError(f"frozen HF execution requires isolated Transformers {spec['reference_transformers']}")
     peft = peft_config(adapter)
     raw = json.loads((Path(directory) / "config.json").read_text(encoding="utf-8"))

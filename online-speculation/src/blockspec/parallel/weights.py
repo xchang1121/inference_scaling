@@ -18,6 +18,13 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def source_identity(source):
+    """Checkpoint binding by content, independent of its storage location."""
+    if not isinstance(source, dict):
+        raise ValueError("checkpoint source metadata must be a mapping")
+    return {key: value for key, value in source.items() if key in ("weight_sha256", "config_sha256")}
+
+
 def public_key_map(config, *, include_draft=True):
     """Own key -> public key. Both the output projection and Q/K norms are routed."""
     mapping = {"embedding.weight": "model.embed_tokens.weight", "norm.weight": "model.norm.weight"}
@@ -102,7 +109,7 @@ def load_ar_base(path, *, block_size, mask_token_id, device="cpu"):
     model.load_state_dict(state, strict=True, assign=True)
     model.tie_weights()
     model.frequencies = model._frequencies(model.embedding.weight.device)
-    model.source = {"kind": "qwen3-ar-initialization", "directory": str(path),
+    model.source = {"kind": "ar-initialization",
                     "config_sha256": file_sha256(path / "config.json"), "weight_sha256": fingerprints}
     return model.eval().requires_grad_(False)
 
@@ -141,8 +148,7 @@ def load_public(path, *, device="cpu", dtype=torch.float32, expected_sha256=None
     model.load_state_dict(state, strict=True, assign=True)
     model.tie_weights()
     model.frequencies = model._frequencies(model.embedding.weight.device)
-    model.source = {"weight_sha256": fingerprint, "config_sha256": file_sha256(path / "config.json"),
-                    "directory": str(path)}
+    model.source = {"weight_sha256": fingerprint, "config_sha256": file_sha256(path / "config.json")}
     return model.eval().requires_grad_(False)
 
 
@@ -153,7 +159,7 @@ def save_checkpoint(path, model, *, optimizer=None, step=0, metadata=None, train
                "state": {key: value.detach().cpu() for key, value in model.state_dict().items()},
                "trainable": [key for key, value in model.named_parameters() if value.requires_grad],
                "optimizer": None if optimizer is None else optimizer.state_dict(),
-               "step": step, "metadata": metadata or {}, "source": getattr(model, "source", {}),
+               "step": step, "metadata": metadata or {}, "source": source_identity(getattr(model, "source", {})),
                "training_state": training_state}
     with path.open("xb") as handle:
         torch.save(payload, handle)
@@ -183,5 +189,5 @@ def load_checkpoint(path, *, device="cpu"):
         raise ValueError("unknown trainable checkpoint parameters")
     for name in payload["trainable"]:
         parameters[name].requires_grad_(True)
-    model.source = payload["source"]
+    model.source = source_identity(payload["source"])
     return model, {key: payload.get(key) for key in ("optimizer", "step", "metadata", "training_state")}

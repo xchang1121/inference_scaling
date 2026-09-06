@@ -6,11 +6,12 @@ and does not load the author's model, engine, package initializers or GPU kernel
 """
 
 import argparse
+
+from blockspec import reporting as report
 import ast
 from dataclasses import dataclass, field
 import hashlib
 import heapq
-import json
 import math
 from pathlib import Path
 import subprocess
@@ -22,9 +23,10 @@ from blockspec.distillation import divergence
 from blockspec.tree import build_tree, traverse_greedy
 
 
-def load_reference(checkout):
-    lock = Path(__file__).resolve().parents[1] / "references" / "upstream.lock.json"
-    commit = json.loads(lock.read_text(encoding="utf-8"))["source"]["commit"]
+def load_reference(checkout, revision):
+    commit = subprocess.run(["git", "--no-replace-objects", "-C", str(checkout),
+                             "rev-parse", "--verify", revision + "^{commit}"],
+                            check=True, capture_output=True, text=True).stdout.strip()
     source_file = "nano_vllm_uno/engine/draft_tree.py"
     source = subprocess.run(["git", "--no-replace-objects", "-C", str(checkout), "show",
                              f"{commit}:{source_file}"], check=True, capture_output=True).stdout
@@ -41,10 +43,10 @@ def load_reference(checkout):
     return namespace, {"commit": commit, "file": source_file, "source_sha256": hashlib.sha256(source).hexdigest()}
 
 
-def audit(checkout, *, trials=100):
+def audit(checkout, *, revision, trials=100):
     if trials < 1:
         raise ValueError("positive trial count required")
-    oracle, provenance = load_reference(checkout)
+    oracle, provenance = load_reference(checkout, revision)
     generator = torch.Generator().manual_seed(8721)
     built = walked = 0
     for depth in (1, 2, 3, 4):
@@ -112,7 +114,8 @@ def audit_losses(checkout, commit):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="existing read-only Git checkout; no download")
+    parser.add_argument("--reference-revision", required=True, help="caller-selected local Git ref")
     parser.add_argument("--trials", type=int, default=100)
     args = parser.parse_args()
     torch.set_num_threads(1)
-    print(json.dumps(audit(args.source, trials=args.trials)), flush=True)
+    print(report.dumps(audit(args.source, revision=args.reference_revision, trials=args.trials)), flush=True)

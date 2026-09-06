@@ -1,8 +1,9 @@
 """Train only PrefixRelay heads on a frozen, hash-checked published adapter."""
 
 import argparse
+
+from blockspec import reporting as report
 import hashlib
-import json
 from pathlib import Path
 import time
 from dataclasses import asdict
@@ -23,7 +24,7 @@ from blockspec.sampling import SamplingConfig, probabilities
 
 
 def emit(row):
-    print(json.dumps(row), flush=True)
+    print(report.dumps(row), flush=True)
 
 
 def sha(path):
@@ -131,7 +132,8 @@ def main():
     parser.add_argument("mode", choices=["train", "benchmark", "audit"])
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
-    parser.add_argument("--reference-sha256", required=True, help="published adapter safetensors SHA256")
+    parser.add_argument("--reference-sha256", help="optional local adapter integrity check")
+    parser.add_argument("--reference-manifest", type=Path, help="local validation metadata for HF execution")
     parser.add_argument("--backbone", choices=["independent_graph", "hf_sdpa"], default="independent_graph")
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--data", type=Path, required=True, help="evaluation file; always checked against training data")
@@ -173,8 +175,11 @@ def main():
     torch.set_num_threads(4)
     torch.manual_seed(args.seed)
     if args.backbone == "hf_sdpa":
+        if args.reference_manifest is None:
+            parser.error("HF execution requires --reference-manifest")
         from blockspec.hf_execution import load_frozen_hf
-        model, adapter_source = load_frozen_hf(args.base, args.adapter, expected_sha256=args.reference_sha256,
+        model, adapter_source = load_frozen_hf(args.base, args.adapter, reference_manifest=args.reference_manifest,
+                                               expected_sha256=args.reference_sha256,
                                                dtype=getattr(torch, args.dtype))
     else:
         config = peft_config(args.adapter)

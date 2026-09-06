@@ -1,9 +1,10 @@
 """Inspect target logits on the common history at a chosen generation position."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
 import hashlib
-import json
 from pathlib import Path
 
 import torch
@@ -64,7 +65,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("base", "adapter", "data"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--reference-sha256", help="required for a published PEFT directory")
+    parser.add_argument("--reference-sha256", help="optional local adapter integrity check")
     parser.add_argument("--request", type=int, required=True)
     parser.add_argument("--token-index", type=int, required=True, help="zero-based generated token index")
     parser.add_argument("--tokens", type=int, default=512)
@@ -95,8 +96,6 @@ def main():
     torch.manual_seed(args.seed)
     adapter_path = Path(args.adapter)
     if adapter_path.is_dir():
-        if not args.reference_sha256:
-            parser.error("a published adapter requires its artifact SHA256")
         config = peft_config(adapter_path)
         model = load_hf_base(args.base, rank=config["r"], alpha=config["lora_alpha"], device=args.device)
         provenance = load_peft_adapter(adapter_path, model, expected_sha256=args.reference_sha256)
@@ -149,7 +148,7 @@ def main():
             if row["path"] == history[row["prefix"]:position + 1]]
     if not rows:
         raise RuntimeError("the trace contains no matching ancestral target row")
-    print(json.dumps({"implementation_sha256": implementation_fingerprint(), "request": args.request,
+    print(report.dumps({"implementation_sha256": implementation_fingerprint(), "request": args.request,
                       "token_index": args.token_index, "comparison": comparison, "target_rows": rows,
                       "adapter": provenance, "request_seed": seed,
                       "online_config": asdict(learner.config) if learner is not None else None,

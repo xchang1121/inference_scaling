@@ -97,7 +97,7 @@ def test_error_summary_and_position_weighted_aggregation():
         audit.error_summary(zeros, torch.full_like(zeros, float("nan")))
 
 
-def test_reference_gate_rejects_modified_code_weights_and_index(tmp_path, monkeypatch):
+def test_reference_gate_rejects_modified_code_weights_and_index(tmp_path):
     audit = module()
     source = b"raise RuntimeError('NEVER IMPORT THIS TEST SOURCE')\n"
     (tmp_path / "modeling.py").write_bytes(source.replace(b"\n", b"\r\n"))
@@ -105,22 +105,20 @@ def test_reference_gate_rejects_modified_code_weights_and_index(tmp_path, monkey
     index = tmp_path / "model.safetensors.index.json"
     index.write_text(json.dumps({"weight_map": {"x": "weights.safetensors"}}))
     lock = tmp_path / "lock.json"
-    lock.write_text(json.dumps({"models": {"k2_1b_base": {
+    lock.write_text(json.dumps({"models": {"base": {
         "reference_lf_sha256": {"modeling.py": hashlib.sha256(source).hexdigest()},
         "weight_filename": "weights.safetensors", "weight_sha256": hashlib.sha256(b"placeholder").hexdigest(),
     }}}))
-    from blockspec import hf_execution
-    monkeypatch.setattr(hf_execution, "LOCK", lock)
-    assert audit.checked_reference(tmp_path)["weight_filename"] == "weights.safetensors"
+    assert audit.checked_reference(tmp_path, lock)["weight_filename"] == "weights.safetensors"
     index.write_text(json.dumps({"weight_map": {"x": "unchecked.safetensors"}}))
     with pytest.raises(ValueError, match="index"):
-        audit.checked_reference(tmp_path)
+        audit.checked_reference(tmp_path, lock)
     (tmp_path / "weights.safetensors").write_bytes(b"changed")
     with pytest.raises(ValueError, match="weights differ"):
-        audit.checked_reference(tmp_path)
+        audit.checked_reference(tmp_path, lock)
     (tmp_path / "modeling.py").write_bytes(b"changed")
     with pytest.raises(ValueError, match="source/config differs"):
-        audit.checked_reference(tmp_path)
+        audit.checked_reference(tmp_path, lock)
 
 
 @pytest.mark.parametrize("change", ["crlf", "source", "extra", "commit"])
@@ -156,7 +154,7 @@ def test_external_engine_weights_and_token_weighted_summary(tmp_path):
     base.mkdir()
     adapter.mkdir()
     lock = {"models": {}}
-    for key, path in (("k2_1b_base", base), ("k2_1b_adapter", adapter)):
+    for key, path in (("base", base), ("adapter", adapter)):
         payload = key.encode()
         (path / "weights").write_bytes(payload)
         lock["models"][key] = {"weight_filename": "weights", "weight_sha256": hashlib.sha256(payload).hexdigest()}
@@ -197,7 +195,7 @@ def test_reference_restores_accumulation_policy(monkeypatch, fails):
         return "complete"
 
     monkeypatch.setattr(audit, "run", run)
-    monkeypatch.setattr(sys, "argv", ["audit", "--base", ".", "--bf16-full-accumulation"])
+    monkeypatch.setattr(sys, "argv", ["audit", "--base", ".", "--reference-manifest", "local/reference.local.json", "--bf16-full-accumulation"])
     if fails:
         with pytest.raises(RuntimeError, match="test audit failure"):
             audit.main()

@@ -1,8 +1,9 @@
 """Small-model offline reproduction: own decoder with trained or reference weights."""
 
 import argparse
+
+from blockspec import reporting as report
 import hashlib
-import json
 from pathlib import Path
 
 import torch
@@ -19,7 +20,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
-    parser.add_argument("--reference-sha256", help="required for a published PEFT directory")
+    parser.add_argument("--reference-sha256", help="optional local adapter integrity check")
+    parser.add_argument("--reference-manifest", type=Path, help="local validation metadata for HF execution")
     parser.add_argument("--backbone", choices=["independent_graph", "hf_sdpa"], default="independent_graph")
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--split-role", choices=["validation", "test"], default="validation")
@@ -46,14 +48,13 @@ def main():
     source_sha = implementation_fingerprint()
     data_sha = hashlib.sha256(args.data.read_bytes()).hexdigest()
     if args.backbone == "hf_sdpa":
-        if not args.adapter.is_dir() or not args.reference_sha256 or args.sampler != "linear":
-            parser.error("HF reference requires a hashed published adapter and linear sampling")
+        if not args.adapter.is_dir() or args.reference_manifest is None or args.sampler != "linear":
+            parser.error("HF execution requires a local reference manifest, PEFT directory and linear sampling")
         from blockspec.hf_execution import load_frozen_hf
-        model, provenance = load_frozen_hf(args.base, args.adapter, expected_sha256=args.reference_sha256,
+        model, provenance = load_frozen_hf(args.base, args.adapter, reference_manifest=args.reference_manifest,
+                                               expected_sha256=args.reference_sha256,
                                            dtype=getattr(torch, args.dtype))
     elif args.adapter.is_dir():
-        if not args.reference_sha256:
-            parser.error("a PEFT reference requires its published artifact SHA256")
         config = peft_config(args.adapter)
         model = load_hf_base(args.base, rank=config["r"], alpha=config["lora_alpha"], device="cuda",
                              dtype=getattr(torch, args.dtype))
@@ -82,13 +83,13 @@ def main():
                              noise=UniformNoise(args.noise_low, args.noise_high))
     prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
                                    count=args.prompts, length=args.prompt_length)
-    print(json.dumps({"stage": "start", "implementation_sha256": source_sha,
+    print(report.dumps({"stage": "start", "implementation_sha256": source_sha,
                       "data_sha256": data_sha, "split_role": args.split_role,
                       "adapter": provenance, "backbone": args.backbone,
                       "dtype": args.dtype, "device": torch.cuda.get_device_name()}), flush=True)
     result = benchmark_offline(model, prompts, config,
-                               progress=(lambda row: print(json.dumps(row), flush=True)) if args.progress else None)
-    print(json.dumps({"stage": "complete", "implementation_sha256": source_sha,
+                               progress=(lambda row: print(report.dumps(row), flush=True)) if args.progress else None)
+    print(report.dumps({"stage": "complete", "implementation_sha256": source_sha,
                       "data_sha256": data_sha, "adapter_sha256": provenance["sha256"],
                       "backbone": args.backbone, "dtype": args.dtype, **result}), flush=True)
 

@@ -5,7 +5,8 @@ and trained here, without loading a published draft adapter. Emits stdout only.
 """
 
 import argparse
-import json
+
+from blockspec import reporting as report
 
 import torch
 
@@ -49,7 +50,7 @@ def main():
                               adapter_mask=paired.adapter_mask)[:, :clean.shape[1]]
         teacher_max_error = float((clean_logits.float() - packed_logits.float()).abs().max())
         teacher_argmax_agreement = float((clean_logits.argmax(-1) == packed_logits.argmax(-1)).float().mean())
-    print(json.dumps({"stage": "loaded", "base_parameters": sum(p.numel() for n, p in model.named_parameters()
+    print(report.dumps({"stage": "loaded", "base_parameters": sum(p.numel() for n, p in model.named_parameters()
                                                                    if not n.endswith((".lora_A", ".lora_B"))),
                       "adapter_parameters": sum(p.numel() for p in model.adapter_parameters()),
                       "paired_teacher_max_abs_error": teacher_max_error,
@@ -70,7 +71,7 @@ def main():
                                   generator=torch.Generator(device=args.device).manual_seed(43))
     assert base_fingerprint(model) == frozen
     changed = any(not torch.equal(value, adapter_state(model)[key]) for key, value in initial.items())
-    print(json.dumps({"stage": "integration", "sampler": args.sampler, "training": training, "ar": ar.summary(),
+    print(report.dumps({"stage": "integration", "sampler": args.sampler, "training": training, "ar": ar.summary(),
                       "static": static.summary(), "online": online.summary(),
                       "greedy_identical": ar.tokens == static.tokens == online.tokens,
                       "base_unchanged": True, "online_adapter_changed": changed,

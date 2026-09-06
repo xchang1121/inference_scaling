@@ -951,15 +951,13 @@ $p_\theta(v\mid\tau(s),h)$。system 消息和 thinking 标记都属于这个前�
 在梯度累积完成后执行一次优化器更新。数据排列、窗口抽样、锚点抽样和学习率进度共同构成训练状态，
 检查点保存在完整更新的边界；恢复时沿用相同的总步数与调度。
 
-代码与权重版本见 [upstream.lock.json](../references/upstream.lock.json)。
-[parallel/weights.py](../src/blockspec/parallel/weights.py) 逐项核验双视图参数的名称、形状与权重摘要，
+[parallel/weights.py](../src/blockspec/parallel/weights.py) 逐项核验双视图参数的名称、形状与存储布局，
 自有训练检查点同时保存参数、可训练范围、优化器状态和步数。
-普通 Qwen3 基座通过严格张量映射加载，起草注意力从对应的 AR 参数复制并分配独立存储。
+普通自回归基座通过受支持的张量映射加载，起草注意力从对应的 AR 参数复制并分配独立存储。
 
-双向分支的复现以发布的 Qwen3 双视图权重和完整教师分布 KL 为依据。
-参考仓库中新增的 Qwen3.5 训练入口采用 hard-label CE，
-相关模型、监督范围和损失方向在配置中分别标识。
-训练验证采用小型模型，性能测量采用固定的公开参数。
+双向分支采用完整教师分布 KL。硬标签交叉熵对应单一观测词元的监督，
+完整分布 KL 则比较教师与起草器在整个词表上的概率；两者的监督信息和梯度随之不同。
+训练验证采用小型模型，性能测量采用调用者提供的固定参数。
 
 ## 附录 A. 离散逆向转移
 
@@ -1056,7 +1054,7 @@ $$
 3. [EAGLE-3](https://arxiv.org/abs/2503.01840)：目标特征辅助起草。
 4. [DFlash](https://arxiv.org/abs/2602.06036)：轻量扩散网络与目标特征 KV 注入。
 5. [Unlocking Lossless Speedups in LLMs via Discrete Diffusion](https://arxiv.org/abs/2609.04010)、[源码](https://github.com/ifm-ai/uno)：条件低秩、因果噪声与配对蒸馏。
-6. [Orthrus: Memory-Efficient Parallel Token Generation via Dual-View Diffusion](https://arxiv.org/abs/2605.12825)、[固定源码](https://github.com/chiennv2000/orthrus/tree/4dceab65156b3dfb5dadbb11181a0e65d0ad314d)、[公开权重](https://huggingface.co/chiennv/Orthrus-Qwen3-1.7B)：双向起草、独立注意力与共享历史。
+6. [Orthrus: Memory-Efficient Parallel Token Generation via Dual-View Diffusion](https://arxiv.org/abs/2605.12825)、[源码](https://github.com/chiennv2000/orthrus)：双向起草、独立注意力与共享历史。
 7. [DSpark](https://arxiv.org/abs/2607.05147)：半自回归修正与硬件感知调度。
 8. [Online Speculative Decoding](https://arxiv.org/abs/2310.07177)、[OnlineSPEC](https://arxiv.org/abs/2603.12617)、[Test-Time Speculation](https://arxiv.org/abs/2605.09329)：验证反馈与在线学习。
 9. [LoRA](https://arxiv.org/abs/2106.09685)：低秩增量参数化。
