@@ -224,6 +224,11 @@ python scripts/benchmark_offline.py \
 数学与数值审计入口 `scripts/audit_decode_path.py` 接收相同的 `--base`、公开 `--adapter`、
 `--reference-sha256` 和 `--data`，另用 `--request 16 --token-index 125 --seed 271844` 定位第 17 条提示的第 126 个输出。
 它在共同历史上对齐树的祖先路径与 AR，输出目标 logits、前两项间隔和 TV；带观测的运行用于数值分析。
+同一审计入口接受本地自训检查点。添加 `--online-stream --stream-prompts 17 --repeat-index 1 --stream-seed 271828`
+时，先从离线起点重放前面的请求，再观测指定请求；默认在线配置与下面的三路命令一致。
+本次在线路径观测使用当前自训 adapter、`--request 16 --token-index 125`，输出跨请求更新版本和实际请求种子。
+单请求静态审计使用 `--seed`；在线流使用 `--stream-seed + repeat-index × stream-prompts + request`。
+`--device cpu --execution eager --online-execution eager` 提供小模型的 CPU 审计测试。
 离线续训在第 4 节训练命令中增加 `--initial-adapter /path/to/starting-adapter.pt`，同时传入该起点对应的 rank 与 alpha。
 新检查点记录起点 SHA，Adam 重新初始化。验证文件用于选择配置，保留测试用于确定配置后的验收。
 
