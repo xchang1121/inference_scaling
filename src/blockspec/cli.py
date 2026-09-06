@@ -12,6 +12,7 @@ from .checkpoint import (adapter_state, base_fingerprint, implementation_fingerp
                          load_checkpoint, load_hf_base, save_checkpoint)
 from .data import assert_split_files_disjoint, load_sequences
 from .decoding import generate_ar, generate_speculative
+from .diffusion import UniformNoise
 from .distillation import LOSS_KINDS, offline_step, paired_loss
 from .model import Decoder, ModelConfig
 from .online import OnlineConfig, OnlineLearner
@@ -149,7 +150,10 @@ def main():
     bench.add_argument("--data", type=Path, required=True, help="tokenized development or held-out JSONL")
     bench.add_argument("--split-role", choices=["validation", "test"], default="validation")
     bench.add_argument("--device", default="cuda")
-    bench.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32")
+    bench.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32",
+                       help="source base precision for checkpoint fingerprint validation")
+    bench.add_argument("--execution-dtype", choices=["float32", "bfloat16"],
+                       help="explicit base precision after loading; preserves adapter master values")
     bench.add_argument("--prompts", type=int, default=4)
     bench.add_argument("--prompt-length", type=int, default=128)
     bench.add_argument("--tokens", type=int, default=128)
@@ -159,6 +163,8 @@ def main():
     bench.add_argument("--temperature", type=float, default=0.0, help="0: greedy; positive: target sampling temperature")
     bench.add_argument("--sampling-top-k", type=int, default=0, help="target probability filter; 0 keeps the vocabulary")
     bench.add_argument("--top-p", type=float, default=1.0, help="target nucleus mass")
+    bench.add_argument("--noise-low", type=int, default=0, help="inclusive uniform draft-noise bound")
+    bench.add_argument("--noise-high", type=int, help="exclusive draft-noise bound; defaults to vocabulary size")
     bench.add_argument("--prefix-budget", type=int, default=16)
     bench.add_argument("--repeats", type=int, default=2)
     bench.add_argument("--warmup-tokens", type=int, default=8)
@@ -178,7 +184,7 @@ def main():
     bench.add_argument("--threads", type=int, default=4)
     bench.add_argument("--progress", action="store_true", help="also print per-request counters")
     bench.add_argument("--execution", choices=["eager", "cuda_graph"], default="eager",
-                       help="same inference executor for AR/static/online; CUDA graphs currently require FP32")
+                       help="shared inference executor for AR/static/online; FP32 or BF16 CUDA graphs")
     bench.add_argument("--online-execution", choices=["eager", "cuda_graph"], default="eager",
                        help="prepared FP32 suffix forward/loss/gradient graphs, or eager online training")
     bench.add_argument("--attention-backend", choices=["sdpa", "grouped"], default="sdpa",
@@ -192,7 +198,8 @@ def main():
                                  top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id,
                                  execution=args.execution, online_execution=args.online_execution,
                                  attention_backend=args.attention_backend,
-                                 sampling=SamplingConfig(args.temperature, args.sampling_top_k, args.top_p))
+                                 sampling=SamplingConfig(args.temperature, args.sampling_top_k, args.top_p),
+                                 noise=UniformNoise(args.noise_low, args.noise_high))
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
                                      learning_rate=args.learning_rate, loss=args.loss,
                                      train_last_layers=args.online_last_layers, optimizer=args.optimizer,
@@ -212,13 +219,16 @@ def main():
         model = load_hf_base(args.base, rank=saved_config.adapter_rank, alpha=saved_config.adapter_alpha,
                              device=args.device, dtype=getattr(torch, args.dtype))
         model, metadata = load_checkpoint(args.adapter, model=model, device=args.device)
+        execution_dtype = args.execution_dtype or args.dtype
+        model.set_base_dtype(getattr(torch, execution_dtype))
         sequences = load_sequences(args.data, model.config.vocab_size)
         prompts = continuation_prompts(sequences, count=args.prompts, length=args.prompt_length)
         progress = (lambda row: print(json.dumps(row), flush=True)) if args.progress else None
         result = benchmark_streams(model, prompts, config, online_config, progress=progress)
         result.update(data_sha256=data_sha, split_role=args.split_role,
                       adapter_sha256=hashlib.sha256(args.adapter.read_bytes()).hexdigest(),
-                      implementation_sha256_at_start=implementation_sha, dtype=args.dtype,
+                      implementation_sha256_at_start=implementation_sha, dtype=execution_dtype,
+                      checkpoint_base_dtype=args.dtype,
                       offline_training_config=metadata.get("training_config"),
                       device=torch.cuda.get_device_name() if str(args.device).startswith("cuda") else str(args.device))
         print(json.dumps(result), flush=True)

@@ -13,6 +13,8 @@
 验证覆盖概率推导、梯度、KV 缓存、完整基座外部数值对照，以及 RTX 3090 上的三路 TPS 评测。
 离线两路入口接入自训检查点和固定 SHA 的公开适配器，逐请求交错测量 AR 与静态起草，核算各自图准备成本。
 两路与三路评测统一接收温度和目标 top-k/top-p，分别提供贪心逐项比较与随机采样观测，报告 TPS 和每次解码前向产出。
+推理图支持 FP32／BF16，在线适配器保留 FP32 主权重；检查点验证和执行精度转换分开进行。
+固定官方引擎的可选外部参照在本机 1B／BF16／FA2、温度 1 的线性负载得到 1.145× 吞吐比，配置与口径见主报告 13.5。
 
 ## 先读哪一份
 
@@ -50,6 +52,7 @@ scripts/check_local_model.py  本地基座权重的集成检查
 scripts/audit_sampler_reference.py  可选的固定公开实现 CPU 契约参照
 scripts/audit_hf_reference.py  固定基座的完整外部数值参照
 scripts/benchmark_offline.py  自训／公开适配器与 AR 的配对吞吐对照
+scripts/benchmark_reference.py  固定官方引擎的外部性能参照
 docs/ALGORITHM.md     持续更新的算法主报告
 docs/RUNNING.md       运行与测量规范
 ```

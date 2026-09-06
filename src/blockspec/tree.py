@@ -13,6 +13,7 @@ import time
 import torch
 
 from .decoding import Generation, _check, _inference_forward, _prefill
+from .diffusion import UniformNoise
 from .model import PackedCache, cache_length, trim_cache
 from .online import Feedback, synchronize
 from .sampling import SamplingConfig, draw, greedy_tokens, probabilities, sample_logits, validate_distribution
@@ -150,7 +151,8 @@ def compact_tree_cache(cache, prefix_length, path):
 
 @torch.no_grad()
 def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefix_budget=16,
-                  sampling=SamplingConfig(), eos_id=None, generator=None, learner=None, executor=None):
+                  sampling=SamplingConfig(), eos_id=None, generator=None, learner=None, executor=None,
+                  noise=UniformNoise()):
     _check(model, prompt, max_new_tokens, eos_id)
     forward = _inference_forward(model, executor)
     if block_size < 2 or top_k < 1 or prefix_budget < 1:
@@ -178,8 +180,8 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
             forwards += 1
             break
         b = min(block_size, remaining)
-        noise = torch.randint(model.config.vocab_size, (1, b - 1), device=prompt.device, generator=generator)
-        inputs = torch.cat((seed, noise), dim=1)
+        noisy = noise.sample((1, b - 1), model.config.vocab_size, device=prompt.device, generator=generator)
+        inputs = torch.cat((seed, noisy), dim=1)
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache

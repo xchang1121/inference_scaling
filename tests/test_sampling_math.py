@@ -3,9 +3,40 @@ import itertools
 import pytest
 import torch
 
-from blockspec.diffusion import corrupt, posterior, psi_transition
+from blockspec.diffusion import UniformNoise, corrupt, posterior, psi_transition
 from blockspec.sampling import (SamplingConfig, greedy_tokens, probabilities, residual,
                                sample_logits, verify_greedy, verify_linear)
+
+
+def test_default_noise_preserves_original_generator_sequence():
+    actual_rng, expected_rng = (torch.Generator().manual_seed(818) for _ in range(2))
+    for shape in ((1, 7), (2, 0), (3, 11)):
+        actual = UniformNoise().sample(shape, 13, device="cpu", generator=actual_rng)
+        expected = torch.randint(13, shape, generator=expected_rng)
+        assert torch.equal(actual, expected)
+        assert torch.equal(actual_rng.get_state(), expected_rng.get_state())
+
+
+@pytest.mark.parametrize("noise,high", [(UniformNoise(1), 13), (UniformNoise(2, 7), 7)])
+def test_uniform_noise_uses_exact_integer_interval(noise, high):
+    actual_rng, expected_rng = (torch.Generator().manual_seed(819) for _ in range(2))
+    actual = noise.sample((3, 200), 13, device="cpu", generator=actual_rng)
+    expected = torch.randint(noise.low, high, (3, 200), generator=expected_rng)
+    assert torch.equal(actual, expected)
+    assert set(actual.flatten().tolist()) == set(range(noise.low, high))
+
+
+@pytest.mark.parametrize("low,high", [(-1, None), (True, None), (1.5, None),
+                                      (0, True), (0, 1.5), (0, 0), (3, 2)])
+def test_noise_requires_valid_integer_bounds(low, high):
+    with pytest.raises(ValueError, match="integer bounds"):
+        UniformNoise(low, high)
+
+
+@pytest.mark.parametrize("noise", [UniformNoise(13), UniformNoise(14), UniformNoise(0, 14)])
+def test_noise_bounds_are_checked_against_vocabulary(noise):
+    with pytest.raises(ValueError, match="model vocabulary"):
+        noise.sample((1, 3), 13, device="cpu")
 
 
 @pytest.mark.parametrize("p,q", [

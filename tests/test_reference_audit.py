@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 import pytest
 import torch
@@ -119,3 +120,86 @@ def test_reference_gate_rejects_modified_code_weights_and_index(tmp_path, monkey
     (tmp_path / "modeling.py").write_bytes(b"changed")
     with pytest.raises(ValueError, match="source/config differs"):
         audit.checked_reference(tmp_path)
+
+
+@pytest.mark.parametrize("change", ["crlf", "source", "extra", "commit"])
+def test_external_engine_gate_compares_canonical_git_blobs(tmp_path, change):
+    audit = module("benchmark_reference.py")
+    source = tmp_path / "engine.py"
+    original = b"VALUE = 1\n"
+    source.write_bytes(original)
+    git = ["git", "-C", str(tmp_path), "-c", "core.autocrlf=false",
+           "-c", "user.name=Reference Test", "-c", "user.email=reference-test@example.invalid"]
+    subprocess.run(git + ["init", "-q"], check=True, capture_output=True)
+    subprocess.run(git + ["add", "engine.py"], check=True, capture_output=True)
+    subprocess.run(git + ["commit", "-qm", "test source"], check=True, capture_output=True)
+    commit = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    assert audit.check_source(tmp_path, commit) == tmp_path.resolve()
+    if change == "crlf":
+        source.write_bytes(original.replace(b"\n", b"\r\n"))
+        assert audit.check_source(tmp_path, commit) == tmp_path.resolve()
+    else:
+        if change == "source":
+            source.write_bytes(b"VALUE = 2\n")
+        elif change == "extra":
+            (tmp_path / "extra.py").write_bytes(original)
+        else:
+            commit = "0" * 40
+        with pytest.raises(ValueError, match="reference"):
+            audit.check_source(tmp_path, commit)
+
+
+def test_external_engine_weights_and_token_weighted_summary(tmp_path):
+    audit = module("benchmark_reference.py")
+    base, adapter = tmp_path / "base", tmp_path / "adapter"
+    base.mkdir()
+    adapter.mkdir()
+    lock = {"models": {}}
+    for key, path in (("k2_1b_base", base), ("k2_1b_adapter", adapter)):
+        payload = key.encode()
+        (path / "weights").write_bytes(payload)
+        lock["models"][key] = {"weight_filename": "weights", "weight_sha256": hashlib.sha256(payload).hexdigest()}
+    assert set(audit.check_artifacts(base, adapter, lock)) == set(lock["models"])
+    (adapter / "weights").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="SHA mismatch"):
+        audit.check_artifacts(base, adapter, lock)
+    rows = [{"arm": arm, "tokens": tokens, "seconds": seconds, "initialization_seconds": 2,
+             "warmup_seconds": 1, "stats": {"forwards": 10, "accepts": 20}}
+            for arm, tokens, seconds in (("ar", 10, 1), ("ar", 30, 3), ("static", 10, .5), ("static", 30, 1.5))]
+    result = audit.summarize(rows)
+    assert result["arms"]["ar"]["tps"] == 10
+    assert result["arms"]["static"]["tps"] == 20 and result["speedup"] == 2
+    assert result["arms"]["static"]["tokens_per_sequence_forward"] == 2
+    assert result["arms"]["static"]["initialization_seconds"] == 4
+
+
+def test_reference_layer_trace_removes_hooks():
+    from blockspec.model import Decoder, ModelConfig
+
+    audit = module()
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, adapter_rank=2))
+    result = audit.trace_layers(model, model, torch.tensor([[0, 1, 2]]))
+    assert result and all(row["max_abs"] == row["mean_abs"] == 0 for row in result)
+    assert all(not child._forward_hooks for child in model.modules())
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_reference_restores_accumulation_policy(monkeypatch, fails):
+    audit = module()
+    previous = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+
+    def run(args):
+        assert not torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+        if fails:
+            raise RuntimeError("test audit failure")
+        return "complete"
+
+    monkeypatch.setattr(audit, "run", run)
+    monkeypatch.setattr(sys, "argv", ["audit", "--base", ".", "--bf16-full-accumulation"])
+    if fails:
+        with pytest.raises(RuntimeError, match="test audit failure"):
+            audit.main()
+    else:
+        assert audit.main() == "complete"
+    assert torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction == previous

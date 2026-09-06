@@ -57,6 +57,31 @@ def summarize(rows):
 
 
 @torch.no_grad()
+def trace_layers(ours, oracle, prompt):
+    names = ["model.layers.0.input_layernorm", "model.layers.0.self_attn.q_proj",
+             "model.layers.0.self_attn.k_proj", "model.layers.0.self_attn.v_proj",
+             "model.layers.0.self_attn.o_proj", "model.layers.0.mlp.down_proj"]
+    names += [f"model.layers.{i}" for i in range(ours.config.num_hidden_layers)]
+    names += ["model.norm", "lm_head"]
+    traces = []
+    for model in (ours, oracle):
+        values, handles = {}, []
+        try:
+            for name in names:
+                def hook(module, inputs, output, key=name, target=values):
+                    value = output[0] if isinstance(output, tuple) else output
+                    target[key] = value.detach().float().clone()
+                handles.append(model.get_submodule(name).register_forward_hook(hook))
+            model(prompt)
+            traces.append(values)
+        finally:
+            for handle in handles:
+                handle.remove()
+    return [{"name": name, "max_abs": float((traces[0][name] - traces[1][name]).abs().max()),
+             "mean_abs": float((traces[0][name] - traces[1][name]).abs().mean())} for name in names]
+
+
+@torch.no_grad()
 def audit(ours, oracle, prompts, *, tokens, executor=None):
     forward = ours if executor is None else executor
     prefill, incremental, shifted = [], [], []
@@ -99,11 +124,25 @@ def main():
     parser.add_argument("--max-logit-error", type=float, default=5e-4)
     parser.add_argument("--max-tv", type=float, default=1e-4)
     parser.add_argument("--require-same-argmax", action="store_true")
+    parser.add_argument("--bf16-full-accumulation", action="store_true",
+                        help="disable reduced-precision BF16 GEMM reductions in both models")
+    parser.add_argument("--trace", action="store_true", help="compare modules on the first common prefill")
     args = parser.parse_args()
     if min(args.prompts, args.prompt_length, args.tokens) < 1:
         parser.error("positive prompt count, prompt length and continuation length required")
     if not (0 < args.max_logit_error < float("inf") and 0 < args.max_tv <= 1):
         parser.error("finite positive logit tolerance and TV tolerance in (0,1] required")
+    previous = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+    try:
+        if args.bf16_full_accumulation:
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+        return run(args)
+    finally:
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = previous
+
+
+@torch.no_grad()
+def run(args):
     implementation_sha = implementation_fingerprint()
     spec = checked_reference(args.base)
     import transformers
@@ -135,6 +174,7 @@ def main():
                    for _ in range(args.prompts)]
         data_hash = None
     prompts = [p.to(args.device) for p in prompts]
+    trace = trace_layers(ours, oracle, prompts[0]) if args.trace else None
     executor = None
     if args.execution == "cuda_graph":
         from blockspec.execution import FixedShapeExecutor
@@ -153,6 +193,8 @@ def main():
                       "incremental_steps_per_prompt": args.tokens,
                       "implementation_sha256_at_start": implementation_sha, "errors": result,
                       "execution": args.execution, "attention_backend": args.attention_backend,
+                      "bf16_reduced_precision_reduction": torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction,
+                      "layer_trace": trace,
                       "numeric_gate_passed": passed,
                       "gate": {"max_logit_error": args.max_logit_error, "max_tv": args.max_tv,
                                "require_same_argmax": args.require_same_argmax},

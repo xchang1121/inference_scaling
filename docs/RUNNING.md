@@ -7,6 +7,7 @@
 本机 RTX 3090 24GB，WSL2 发行版名 `Ubuntu-22.04`，Linux 用户 `singm`。
 已有环境 `/home/singm/.venvs/uno-cu128`，PyTorch 2.11.0+cu128 / Python 3.10。
 注意力提供 PyTorch SDPA 与分组短查询路径。
+官方引擎参照使用已安装的 FlashAttention 2.8.3，独立实现继续使用自身的注意力入口。
 
 以下在 WSL Bash 中运行：
 
@@ -73,6 +74,10 @@ PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
 默认 logits 最大误差阈值为 0.0005、TV 为 0.0001；上述命令还要求 argmax 全部相同，超出门槛时以错误码退出。
 `--attention-backend grouped` 在本项目模型中启用分组短查询，外部参照继续使用其原有注意力。
 `--execution eager` 使用普通执行路径。移位短窗口检查大位置编号的计算，校验输入取自开发集。
+BF16 外部审计添加 `--dtype bfloat16 --max-logit-error 0.5 --max-tv 0.02`；
+当前 1B 测量的数值与门槛比较见主报告 13.1，BF16 吞吐结果作为近似精度开发测量。
+`--trace` 在第一条共同 prefill 上比较各层；`--bf16-full-accumulation` 让两边 GEMM 采用完整累加精度，
+结束后恢复调用方的全局设置。输出给出实际累加开关。
 
 ## 4. 用自己的数据训练全适配器
 
@@ -220,7 +225,11 @@ python scripts/benchmark_offline.py \
 温度为零时输出 `comparison_mode: greedy_exact`；正温度时为 `stochastic_diagnostic`，
 `greedy_identical: null`，逐请求的 token 比较作为观测信息。随机数和概率验收关系见主报告 12.6。
 `tokens_per_decode_forward` 报告平均每次生成前向产出的 token 数，TPS 计时包含 prefill。
-该入口使用 FP32 CUDA；`--sampler linear --block-size 8` 提供公开入口默认线性块形状的本机对照。
+两路入口默认 FP32 CUDA，`--dtype bfloat16` 切换基座执行精度；本地检查点先按 FP32 来源验证，再转换基座，保留适配器主权重。
+三路入口的 `--dtype` 指定检查点对应的基座精度，`--execution-dtype bfloat16` 在加载后执行同一转换。
+`--noise-low 1` 对齐公开 1B 引擎的均匀噪声范围；`--noise-high` 为右侧开区间端点，默认取词表大小。
+默认噪声为 `[0, vocab_size)`，沿用当前自训权重的约定。两路／三路的 `config.noise` 保存实际范围。
+`--sampler linear --block-size 8` 提供公开入口默认线性块形状的本机对照。
 数学与数值审计入口 `scripts/audit_decode_path.py` 接收相同的 `--base`、公开 `--adapter`、
 `--reference-sha256` 和 `--data`，另用 `--request 16 --token-index 125 --seed 271844` 定位第 17 条提示的第 126 个输出。
 它在共同历史上对齐树的祖先路径与 AR，输出目标 logits、前两项间隔和 TV；带观测的运行用于数值分析。
@@ -251,6 +260,10 @@ python -m blockspec benchmark \
   --update-policy coverage --online-execution cuda_graph --attention-backend grouped
 ```
 
+13.7 的 BF16 在线接入测量沿用上述命令，添加 `--execution-dtype bfloat16`，
+并将 `--online-execution cuda_graph` 改为 `--online-execution eager`。检查点来源精度继续使用 `--dtype float32`。
+该配置保留全部 FP32 适配器主权重，三路共同使用 BF16 基座；概率误差与逐项输出比较一同记录在主报告中。
+
 按文件顺序取全部 17 个验证记录的前 256 项作为输入，包含 4 个代码请求和 13 个数学请求。默认贪心、固定输出预算、`eos_id=None`；
 `--eos-id 1` 启用结束标记；`--sampler linear` 切换线性路径。
 重复次数取正偶数，每对按 AR／静态／在线、在线／静态／AR 的顺序运行。每个在线请求流从同一离线起点开始，
@@ -278,9 +291,28 @@ python -m blockspec benchmark \
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
 末层窗口化采集使用带分界特征和普通起草两组图；自建执行器时在 `prepare()` 中准备这两组查询形状。
 图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存等价性和张量规模见主报告 8.2。
-执行配置为 FP32 CUDA、batch=1、TF32 关闭。
+推理图支持 FP32／BF16 CUDA、batch=1；末层梯度图使用 FP32，BF16 在线续训选择 `--online-execution eager`。
+FP32 的测量保持 TF32 关闭，BF16 基座对应独立的精度配置，数学与主权重说明见主报告 8.4。
 长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。
 实验结束恢复传入模型的适配器，结果写入 stdout。
+
+固定官方引擎的外部参照使用单独入口：
+
+```bash
+python scripts/benchmark_reference.py \
+  --checkout /mnt/c/Users/singm/Desktop/hw/akg_related/.tmp_uno_upstream \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --cache /home/singm/online-speculation-work/hf_modules \
+  --prompts 17 --prompt-length 256 --tokens 512 --block-size 8 --temperature 1 --repeats 2
+```
+
+源码 commit 和两份权重的 SHA 来自 `references/upstream.lock.json`，每个方法在新进程运行。
+该入口调用官方 BF16／FA2 引擎的 B=1 串行对照和 B=8 线性投机，精确限制各请求输出长度，
+报告 TPS、初始化、预热、接受计数、解码前向、显存和图计数。对应结果与计数口径见主报告 13.5。
+自有实现的相近条件使用两路公开 adapter 命令，并添加
+`--dtype bfloat16 --sampler linear --block-size 8 --temperature 1 --noise-low 1`。
 
 ## 7. 完整计时与文件生命周期
 

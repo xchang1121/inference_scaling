@@ -2,7 +2,7 @@
 
 Private padded KV workspaces serve the attention layers. Each returned cache,
 logit tensor and draft feature owns a fresh snapshot for functional online replay.
-The executor uses batch-one, fixed-capacity FP32 CUDA graphs and eager long
+The executor uses batch-one, fixed-capacity FP32/BF16 CUDA graphs and eager long
 prefill. AR, static speculation and online continuation share this engine.
 """
 
@@ -10,7 +10,7 @@ import time
 
 import torch
 
-from .model import DraftBoundary, PackedCache, cache_length
+from .model import DraftBoundary, PackedCache, cache_length, is_adapter
 
 
 class _ForwardSlot:
@@ -96,16 +96,18 @@ class FixedShapeExecutor:
         if type(capacity) is not int or capacity < 1 or type(max_query) is not int or max_query < 1:
             raise ValueError("positive integer prefix capacity and maximum query required")
         device, dtype = next(model.parameters()).device, next(model.parameters()).dtype
-        if use_cuda_graph and (device.type != "cuda" or dtype != torch.float32):
-            raise ValueError("CUDA graph executor currently requires an FP32 CUDA model")
-        if any(p.device != device or p.dtype != dtype for p in model.parameters()):
-            raise ValueError("executor needs a single device and uniform parameter dtype")
+        if use_cuda_graph and (device.type != "cuda" or dtype not in (torch.float32, torch.bfloat16)):
+            raise ValueError("CUDA graph executor requires an FP32 or BF16 CUDA model")
+        if any(p.device != device or (p.dtype != dtype and not (
+                dtype == torch.bfloat16 and is_adapter(n) and p.dtype == torch.float32))
+               for n, p in model.named_parameters()):
+            raise ValueError("executor needs one base dtype and device; BF16 permits FP32 adapter masters")
         self.model, self.capacity, self.max_query = model, capacity, max_query
         self.use_cuda_graph = use_cuda_graph
         self.slots, self.setup_seconds = {}, 0.0
         self._past = None
         self.signature_seconds = {}
-        self._storage = [(n, id(p), p.data_ptr()) for n, p in model.named_parameters()]
+        self._storage = [(n, id(p), p.data_ptr(), p.dtype, p.device) for n, p in model.named_parameters()]
         self._buffers = [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()]
         self._attention = model.attention_signature()
 
@@ -114,7 +116,7 @@ class FixedShapeExecutor:
             raise ValueError("executor and decoder must share a model")
         if model.attention_signature() != self._attention:
             raise RuntimeError("attention execution changed; rebuild executor")
-        if [(n, id(p), p.data_ptr()) for n, p in model.named_parameters()] != self._storage:
+        if [(n, id(p), p.data_ptr(), p.dtype, p.device) for n, p in model.named_parameters()] != self._storage:
             raise RuntimeError("model storage changed; discard executor and recapture")
         if [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()] != self._buffers:
             raise RuntimeError("model buffers changed; discard executor and recapture")
@@ -192,5 +194,9 @@ class FixedShapeExecutor:
         if cache is not None and (len(cache) != c.num_hidden_layers
                                   or any(k.shape != expected or v.shape != expected for k, v in cache)):
             raise ValueError("invalid fixed-shape prefix cache")
+        parameter = next(self.model.parameters())
+        if cache is not None and any(value.dtype != parameter.dtype or value.device != parameter.device
+                                     for layer in cache for value in layer):
+            raise ValueError("prefix cache must match the execution base dtype and device")
         result = self.slots[key](tokens, positions, allowed, adapter_mask, cache)
         return result if return_cache else result[0]

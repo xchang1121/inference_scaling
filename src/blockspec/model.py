@@ -321,6 +321,18 @@ class Decoder(nn.Module):
     def attention_signature(self):
         return tuple(layer.self_attn.backend for layer in self.model.layers)
 
+    def set_base_dtype(self, dtype):
+        """Convert execution base weights after checkpoint validation, before graph/learner setup.
+
+        Adapter tensors and FP32 rotary frequencies retain their exact stored values.
+        """
+        if dtype not in (torch.float32, torch.bfloat16):
+            raise ValueError("base execution dtype must be FP32 or BF16")
+        for name, parameter in self.named_parameters():
+            if not is_adapter(name):
+                parameter.data = parameter.data.to(dtype)
+        return self
+
     def _rotary(self, positions, dtype):
         # Supported architectures use one fixed RoPE scheme across ALL layers.
         # This is a per-forward value, not a cache tied to the adapter version.
