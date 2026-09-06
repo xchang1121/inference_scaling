@@ -46,7 +46,9 @@ def load_reference(folder, dtype, backend):
                                             local_files_only=True).cuda().eval().requires_grad_(False)
 
 
-def prompt_texts(path, count):
+def prompt_texts(path, count, *, offset=0):
+    if type(offset) is not int or offset < 0 or type(count) is not int or count < 1:
+        raise ValueError("nonnegative prompt offset and positive count required")
     if path is None:
         texts = list(PROMPTS)
     else:
@@ -59,18 +61,18 @@ def prompt_texts(path, count):
                     if not isinstance(value, str) or not value.strip():
                         raise ValueError("each prompt record needs a nonempty question or prompt string")
                     texts.append(value)
-                    if len(texts) == count:
+                    if len(texts) == count + offset:
                         break
-    if not 1 <= count <= len(texts):
+    if not count + offset <= len(texts):
         raise ValueError("the requested number of prompts must fit the input data")
-    return texts[:count]
+    return texts[offset:offset + count]
 
 
-def prompt_ids(folder, count, *, path=None, thinking=False):
+def prompt_ids(folder, count, *, path=None, thinking=False, offset=0):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(folder, local_files_only=True)
     result = []
-    for text in prompt_texts(path, count):
+    for text in prompt_texts(path, count, offset=offset):
         rendered = tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize=False,
                                                   add_generation_prompt=True, enable_thinking=thinking)
         result.append(tokenizer(rendered, return_tensors="pt", add_special_tokens=False).input_ids.cuda())

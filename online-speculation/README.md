@@ -34,6 +34,7 @@
 ```text
 src/blockspec/
   state.py           共同历史 KV、打包存储与提交边界
+  feedback.py        独立于起草结构的教师反馈与冻结边界协议
   parallel/
     backbone.py      独立 Qwen3 双视图骨干
     branches.py      两类起草的输入、位置和参数路径
@@ -43,6 +44,7 @@ src/blockspec/
     training.py      随机锚点、多块掩码、完整分布 KL
     fitting.py       索引数据、梯度累积、调度与精确断点恢复
     online.py        起草注意力后段重放、在线更新与主权重恢复
+    audit.py         同前缀分布对照与按问题重采样的比较区间
     weights.py       严格公开权重映射、训练检查点
   model.py           独立因果 Transformer、条件低秩层、KV、后段特征重放
   attention.py       共享 K/V 的分组短查询、显式 mask 与 softmax

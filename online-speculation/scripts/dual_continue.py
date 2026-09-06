@@ -11,6 +11,7 @@ import torch
 
 from blockspec.checkpoint import implementation_fingerprint
 from blockspec.parallel import MaskedAttentionBranch, generate, generate_ar
+from blockspec.parallel.audit import AuditSampler, SuffixAudit, audit_summary, paired_audit_intervals
 from blockspec.parallel.feedback import OnlineFeedback
 from blockspec.parallel.online import SuffixConfig, SuffixLearner
 from blockspec.parallel.sampling import ProposalSampler
@@ -27,6 +28,7 @@ def main():
     parser.add_argument("--prompts", type=Path, required=True)
     parser.add_argument("--learning-prompts", type=Path, required=True)
     parser.add_argument("--requests", type=int, default=8)
+    parser.add_argument("--prompt-offset", type=int, default=0)
     parser.add_argument("--tokens", type=int, default=256)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--learn-requests", type=int, default=16)
@@ -41,28 +43,34 @@ def main():
     parser.add_argument("--replay-blocks", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--loss", choices=("forward_kl", "tv"), default="forward_kl")
+    parser.add_argument("--audit-requests", type=int, default=0)
+    parser.add_argument("--audit-tokens", type=int, default=128)
+    parser.add_argument("--audit-only", action="store_true")
     parser.add_argument("--seed", type=int, default=733)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if (args.output.exists() or min(args.requests, args.tokens, args.repeats, args.learn_requests,
-                                   args.learn_tokens) < 1 or args.block_size < 2):
+                                   args.learn_tokens, args.audit_tokens) < 1 or args.block_size < 2
+            or args.prompt_offset < 0 or not 0 <= args.audit_requests <= args.requests
+            or (args.audit_only and args.audit_requests == 0)):
         parser.error("new output, positive request budgets and block >= 2 required")
     config = SuffixConfig(args.last_layers, args.stride, args.replay_blocks, args.learning_rate, loss=args.loss)
     sampling = SamplingConfig(args.temperature, args.top_k, args.top_p)
-    if set(prompt_texts(args.prompts, args.requests)) & set(prompt_texts(args.learning_prompts, args.learn_requests)):
+    if set(prompt_texts(args.prompts, args.requests, offset=args.prompt_offset)) & set(
+            prompt_texts(args.learning_prompts, args.learn_requests)):
         parser.error("learning and evaluation questions overlap")
     torch.set_num_threads(1)
     model = load_public(args.model, device="cuda", dtype=torch.bfloat16, expected_sha256=WEIGHT_SHA)
     before = parameter_digest(model)
     branch = MaskedAttentionBranch(model)
-    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking)
+    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking, offset=args.prompt_offset)
     training = prompt_ids(args.model, args.learn_requests, path=args.learning_prompts, thinking=args.thinking)
     executor = (SamplingExecutor(model.config.vocab_size, args.block_size, sampling, temperatures=(),
                                  protected_rows=0, use_cuda_graph=False) if args.temperature > 0 else None)
     sampler = ProposalSampler(sampling, executor=executor)
 
-    def run(method, prompt, budget, seed, owner=None):
-        options = {"sampling": sampling, "eos_id": model.config.eos_token_id, "sampler": sampler,
+    def run(method, prompt, budget, seed, owner=None, sampler_override=None):
+        options = {"sampling": sampling, "eos_id": model.config.eos_token_id, "sampler": sampler_override or sampler,
                    "generator": torch.Generator(device="cuda").manual_seed(seed)}
         output = (generate_ar(branch, prompt, budget, **options) if method == "ar" else
                   generate(branch, prompt, budget, block_size=args.block_size,
@@ -101,7 +109,7 @@ def main():
     state_switch_seconds = 0.
     torch.cuda.reset_peak_memory_stats()
     resident = torch.cuda.memory_allocated()
-    for repeat in range(args.repeats):
+    for repeat in range(0 if args.audit_only else args.repeats):
         cold.load_state_dict(initial_state)
         continued.load_state_dict(learned_state)
         for index, prompt in enumerate(prompts):
@@ -119,13 +127,14 @@ def main():
                 torch.cuda.synchronize()
                 state_switch_seconds += time.perf_counter() - started
                 row = run(method, prompt, args.tokens, args.seed + repeat * 1000 + index, owners.get(method))
-                row.update(method=method, request=index, repeat=repeat, input_tokens=prompt.numel())
+                row.update(method=method, request=index, source_request=index + args.prompt_offset,
+                           repeat=repeat, input_tokens=prompt.numel())
                 records.append(row)
             print(json.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
         streams.append({name: {"updates": owner.updates, "last_loss": owner.last_loss,
                                "version": owner.version} for name, owner in owners.items()})
     aggregate = {}
-    for method in methods:
+    for method in methods if records else ():
         rows = [r for r in records if r["method"] == method]
         tokens, seconds = sum(r["tokens"] for r in rows), sum(r["seconds"] for r in rows)
         aggregate[method] = {"tokens": tokens, "seconds": seconds, "tps": tokens / seconds,
@@ -133,11 +142,25 @@ def main():
                              "updates": sum(r["updates"] for r in rows),
                              "update_seconds": sum(r["update_seconds"] for r in rows)}
     rng = np.random.default_rng(args.seed)
-    comparisons = {f"{a}_vs_{b}": compare(records, a, b, args.requests, rng) for a, b in (
+    comparisons = ({f"{a}_vs_{b}": compare(records, a, b, args.requests, rng) for a, b in (
         ("static", "ar"), ("cold", "static"), ("learned", "static"), ("continued", "static"), ("continued", "learned"))}
+        if records else {})
     with torch.no_grad():
         for name, value in original.items():
             continued.execution[name].copy_(value)
+    peak = torch.cuda.max_memory_allocated()
+    audit_records, combined_audit, audit_seconds = [], None, 0.
+    for index, prompt in enumerate(prompts[:args.audit_requests]):
+        audit_sampler = AuditSampler(sampling, executor=executor)
+        inspector = SuffixAudit(model, continued.capture_layer, learned_weights, args.block_size, sampling,
+                                recorded_logits=lambda owner=audit_sampler: owner.last_logits)
+        row = run("audit", prompt, args.audit_tokens, args.seed + 20000 + index, inspector, audit_sampler)
+        audit_seconds += row["seconds"]
+        values = inspector.totals.cpu()
+        combined_audit = values.clone() if combined_audit is None else combined_audit + values
+        audit_records.append({"request": index + args.prompt_offset,
+                              "max_replay_logit_error": inspector.max_replay_logit_error, **audit_summary(values)})
+        print(json.dumps({"audit_requests_complete": index + 1}), flush=True)
     restored = parameter_digest(model) == before
     frozen = all(not p.requires_grad and p.grad is None for p in model.parameters())
     result = {"model_revision": MODEL_REVISION, "weight_sha256": WEIGHT_SHA,
@@ -155,16 +178,24 @@ def main():
                            "updates": learned_state["updates"], "update_seconds": learned_state["update_seconds"],
                            "last_loss": learned_state["last_loss"]},
               "aggregate": aggregate, "comparisons": comparisons, "streams": streams,
+              "common_prefix_audit": {"seconds": audit_seconds, "records": audit_records,
+                                      "summary": None if combined_audit is None else audit_summary(combined_audit),
+                                      "learned_minus_original": (paired_audit_intervals(audit_records, seed=args.seed)
+                                                                 if any(r["positions"] for r in audit_records) else None)},
               "ar_logits_and_kv_unchanged": ar_equal, "learned_execution_weights_changed": changed,
               "original_restored": restored, "inference_parameters_frozen": frozen,
               "frozen_fingerprint": continued.frozen_fingerprint,
-              "resident_bytes": resident, "peak_allocated_bytes": torch.cuda.max_memory_allocated(),
+              "resident_bytes": resident, "peak_allocated_bytes": peak,
               "records": records, "pass": ar_equal and changed and restored and frozen}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x") as handle:
         json.dump(result, handle, indent=2)
         handle.write("\n")
-    print(json.dumps({key: value for key, value in result.items() if key != "records"}, indent=2))
+    displayed = {key: value for key, value in result.items() if key not in ("records", "common_prefix_audit")}
+    if combined_audit is not None:
+        displayed["audit_mean"] = result["common_prefix_audit"]["summary"]["mean"]
+        displayed["audit_learned_minus_original"] = result["common_prefix_audit"]["learned_minus_original"]
+    print(json.dumps(displayed, indent=2))
     if not result["pass"]:
         raise SystemExit(1)
 

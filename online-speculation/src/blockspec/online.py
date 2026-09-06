@@ -8,29 +8,14 @@ import time
 import torch
 
 from .distillation import LOSS_KINDS, divergence
-from .model import Cache, DraftBoundary, is_adapter
+from .feedback import Feedback as Feedback
+from .model import is_adapter
 
 
 def synchronize(model):
     device = next(model.parameters()).device
     if device.type == "cuda":
         torch.cuda.synchronize(device)
-
-
-@dataclass
-class Feedback:
-    inputs: torch.Tensor          # [1, seed + noise]
-    cache: Cache | None            # base-only prefix before the seed
-    teacher_logits: torch.Tensor  # [valid noise positions, vocabulary]
-    valid: int                    # accepted positions + first rejection, if any
-    boundary: DraftBoundary | None = None
-    fully_covered: bool = False   # every noisy candidate depth was matched
-
-    def detached(self, *, cache_start=0):
-        cache = None if self.cache is None else tuple((k.detach(), v.detach()) for k, v in self.cache[cache_start:])
-        return Feedback(self.inputs.detach().clone(), cache,
-                        self.teacher_logits.detach().clone(), self.valid,
-                        None if self.boundary is None else self.boundary.detached(), self.fully_covered)
 
 
 @dataclass(frozen=True)
