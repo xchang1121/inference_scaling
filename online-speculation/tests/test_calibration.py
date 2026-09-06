@@ -125,3 +125,49 @@ def test_identity_decoder_reuses_rng_and_online_keeps_model_frozen(budget):
 def test_invalid_mixer_config(kwargs):
     with pytest.raises(ValueError):
         OverlapMix(**{"block_size": 4, "top_k": 5, **kwargs})
+
+
+def test_state_restore_preserves_parameters_pending_feedback_and_cadence():
+    torch.manual_seed(397)
+    original = OverlapMix(4, 5, interval=3, dtype=torch.float64, diagnostics=True)
+    q0 = torch.randn(4, 5, dtype=torch.float64).softmax(-1)
+    p = torch.randn(3, 5, dtype=torch.float64).softmax(-1)
+    for _ in range(5):
+        _, feedback = original.propose(q0)
+        original.observe(feedback, p)
+    state = original.state_dict()
+    continued = OverlapMix(4, 5, interval=3, dtype=torch.float64)
+    storage = continued.weights.data_ptr()
+    continued.load_state_dict(state)
+    frozen = OverlapMix(4, 5, interval=3, dtype=torch.float64, adaptive=False)
+    frozen.load_state_dict(state)
+    assert continued.weights.data_ptr() == storage
+    assert continued.feedback_blocks == 5 and continued.updates == 1
+    torch.testing.assert_close(frozen.propose(q0)[0], original.propose(q0)[0], atol=0, rtol=0)
+    for mix in (original, continued):
+        _, feedback = mix.propose(q0)
+        mix.observe(feedback, p)
+    torch.testing.assert_close(original.weights, continued.weights, atol=0, rtol=0)
+    assert original.updates == continued.updates == 2
+    torch.testing.assert_close(frozen.weights, state["tensors"]["weights"], atol=0, rtol=0)
+    assert not torch.equal(original.weights, frozen.weights)
+    state["tensors"]["weights"].zero_()
+    assert frozen.weights.sum() > 0
+
+
+@pytest.mark.parametrize("corruption", ["shape", "nan", "sum", "contract"])
+def test_corrupt_state_is_rejected_before_parameter_publication(corruption):
+    mix = OverlapMix(4, 5)
+    state = mix.state_dict()
+    before = mix.weights.clone()
+    if corruption == "shape":
+        state["tensors"]["weights"] = torch.ones(2, 2)
+    elif corruption == "nan":
+        state["tensors"]["counts"][0] = float("nan")
+    elif corruption == "sum":
+        state["tensors"]["weights"] += 1
+    else:
+        state["config"]["top_k"] = 4
+    with pytest.raises(ValueError):
+        mix.load_state_dict(state)
+    torch.testing.assert_close(mix.weights, before, atol=0, rtol=0)
