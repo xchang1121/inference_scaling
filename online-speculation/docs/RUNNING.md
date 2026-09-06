@@ -69,17 +69,53 @@ python -m blockspec evaluate benchmark --model "$DUAL_MODEL_DIR" \
 ```bash
 python -m blockspec online --model "$DUAL_MODEL_DIR" \
   --prompts "$EVAL_PROMPTS" --learning-prompts "$LEARN_PROMPTS" \
-  --thinking --prompt-offset 8 --requests 16 --tokens 512 --repeats 2 \
+  --empty-system --prompt-offset 32 --requests 16 --tokens 512 \
+  --repeats 3 --shuffle-requests --seed 743 \
   --learn-requests 16 --learn-tokens 256 --last-layers 1 --stride 16 \
-  --replay-blocks 1 --learning-rate 0.00001 --loss forward_kl \
-  --temperature 1 --top-k 20 --top-p 0.8 --output "$RESULT_FILE"
+  --replay-blocks 1 --learning-rate 0.00001 --loss tv \
+  --temperature 1 --top-k 0 --top-p 1 \
+  --audit-requests 8 --audit-tokens 128 --output "$RESULT_FILE"
 ```
 
 每轮校正后保存教师反馈，在更新间隔到达时重放起草后段、反向并发布参数。
 评测组包括 AR、原始固定、原起点在线、预学习后固定及相同学习起点继续更新。
 在线 TPS 包含反馈与更新成本；独立预学习、状态初始化及执行器准备单列。
 
+此设置让训练与实际采样使用同一对完整词表分布。损失对照仅将 `--loss tv` 改为
+`--loss forward_kl`，其余参数相同。每条重复流从各自的起始状态恢复，
+`--shuffle-requests` 单独打乱顺序，报告同时给出合计及逐流吞吐比。
+在线命令默认采用 TV、温度一及完整词表；模板和问题窗口由命令参数选择。
+
 同前缀分布审计添加 `--audit-only --audit-requests 8 --audit-tokens 128`。
+
+### 连续推理接口
+
+给定已加载并冻结的双视图 `model`、同设备上的分词后 `prompt_stream` 与每请求输出预算 `output_budget`，
+实际在线推理使用同一份学习状态：
+
+```python
+from blockspec import MaskedAttentionBranch, generate
+from blockspec.parallel.feedback import OnlineFeedback
+from blockspec.parallel.online import SuffixConfig, SuffixLearner
+from blockspec.parallel.sampling import ProposalSampler
+from blockspec.sampling import SamplingConfig
+from blockspec.sampling_execution import SamplingExecutor
+
+branch = MaskedAttentionBranch(model)
+sampling = SamplingConfig(temperature=1., top_k=0, top_p=1.)
+executor = SamplingExecutor(model.config.vocab_size, model.config.block_size, sampling,
+                            device=next(model.parameters()).device)
+sampler = ProposalSampler(sampling, executor=executor)
+learner = SuffixLearner(model, SuffixConfig(last_layers=1, stride=16, loss="tv"))
+for prompt in prompt_stream:
+    result = generate(branch, prompt, output_budget, sampling=sampling, sampler=sampler,
+                      eos_id=model.config.eos_token_id, feedback=OnlineFeedback(learner=learner))
+    # result.tokens is this request's committed output.
+```
+
+每次请求结束后，`learner.state_dict()` 提供可本地保存的参数、优化器与更新计数；
+相同模型和更新配置的学习器通过 `load_state_dict()` 恢复。
+请求循环中的 TPS 已含在线成本，配对评测入口另提供固定起点等对照组。
 
 ## 5. 离线训练与恢复
 

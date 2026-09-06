@@ -22,7 +22,7 @@ from blockspec.measurement import compare, parameter_digest
 from .evaluate import prompt_ids, prompt_texts
 
 
-def main():
+def argument_parser(*, loss_choices=("tv", "forward_kl")):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--prompts", type=Path, required=True)
@@ -31,30 +31,38 @@ def main():
     parser.add_argument("--prompt-offset", type=int, default=0)
     parser.add_argument("--tokens", type=int, default=256)
     parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--shuffle-requests", action="store_true")
     parser.add_argument("--learn-requests", type=int, default=16)
     parser.add_argument("--learn-tokens", type=int, default=256)
     parser.add_argument("--block-size", type=int, default=32)
     parser.add_argument("--thinking", action="store_true")
+    parser.add_argument("--empty-system", action="store_true")
     parser.add_argument("--temperature", type=float, default=1.)
-    parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--top-p", type=float, default=.8)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--top-p", type=float, default=1.)
     parser.add_argument("--last-layers", type=int, default=1)
     parser.add_argument("--stride", type=int, default=16)
     parser.add_argument("--replay-blocks", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
-    parser.add_argument("--loss", choices=("forward_kl", "tv"), default="forward_kl")
+    parser.add_argument("--loss", choices=loss_choices, default=loss_choices[0])
     parser.add_argument("--audit-requests", type=int, default=0)
     parser.add_argument("--audit-tokens", type=int, default=128)
     parser.add_argument("--audit-only", action="store_true")
     parser.add_argument("--seed", type=int, default=733)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    return parser
+
+
+def run_experiment(args, *, config=None, learner_factory=SuffixLearner, feedback_factory=None):
+    """Paired controls sharing weights, sampling, setup and request accounting."""
+    parser = argument_parser()
     if (args.output.exists() or min(args.requests, args.tokens, args.repeats, args.learn_requests,
                                    args.learn_tokens, args.audit_tokens) < 1 or args.block_size < 2
             or args.prompt_offset < 0 or not 0 <= args.audit_requests <= args.requests
             or (args.audit_only and args.audit_requests == 0)):
         parser.error("new output, positive request budgets and block >= 2 required")
-    config = SuffixConfig(args.last_layers, args.stride, args.replay_blocks, args.learning_rate, loss=args.loss)
+    config = (SuffixConfig(args.last_layers, args.stride, args.replay_blocks, args.learning_rate, loss=args.loss)
+              if config is None else config)
     sampling = SamplingConfig(args.temperature, args.top_k, args.top_p)
     if set(prompt_texts(args.prompts, args.requests, offset=args.prompt_offset)) & set(
             prompt_texts(args.learning_prompts, args.learn_requests)):
@@ -63,23 +71,27 @@ def main():
     model = load_public(args.model, device="cuda", dtype=torch.bfloat16)
     before = parameter_digest(model)
     branch = MaskedAttentionBranch(model)
-    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking, offset=args.prompt_offset)
-    training = prompt_ids(args.model, args.learn_requests, path=args.learning_prompts, thinking=args.thinking)
+    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking,
+                         offset=args.prompt_offset, empty_system=args.empty_system)
+    training = prompt_ids(args.model, args.learn_requests, path=args.learning_prompts,
+                          thinking=args.thinking, empty_system=args.empty_system)
     executor = (SamplingExecutor(model.config.vocab_size, args.block_size, sampling, use_cuda_graph=False) if args.temperature > 0 else None)
     sampler = ProposalSampler(sampling, executor=executor)
 
     def run(method, prompt, budget, seed, owner=None, sampler_override=None):
+        feedback = (None if owner is None else OnlineFeedback(learner=owner) if feedback_factory is None
+                    else feedback_factory(learner=owner, output_budget=budget))
         options = {"sampling": sampling, "eos_id": model.config.eos_token_id, "sampler": sampler_override or sampler,
                    "generator": torch.Generator(device="cuda").manual_seed(seed)}
         output = (generate_ar(branch, prompt, budget, **options) if method == "ar" else
                   generate(branch, prompt, budget, block_size=args.block_size,
-                           feedback=None if owner is None else OnlineFeedback(learner=owner), **options))
+                           feedback=feedback, **options))
         return output.summary() | {"token_ids": output.tokens}
 
     for method in ("ar", "static"):
         run(method, training[0], 32, args.seed)
     started = time.perf_counter()
-    continued = SuffixLearner(model, config)
+    continued = learner_factory(model, config)
     initial_state = continued.state_dict()
     original = {name: p.detach().clone() for name, p in continued.execution.items()}
     learner_setup = time.perf_counter() - started
@@ -100,7 +112,7 @@ def main():
         torch.equal(a, b) for old, new in zip(ar_probe.cache, ar_after.cache) for a, b in zip(old, new))
     del ar_probe, ar_after
     started = time.perf_counter()
-    online = SuffixLearner(model, config)
+    online = learner_factory(model, config)
     learner_setup += time.perf_counter() - started
     methods = ["ar", "static", "online", "learned", "continued"]
     owners = {"online": online, "continued": continued}
@@ -111,7 +123,10 @@ def main():
     for repeat in range(0 if args.audit_only else args.repeats):
         online.load_state_dict(initial_state)
         continued.load_state_dict(learned_state)
-        for index, prompt in enumerate(prompts):
+        order = (np.random.default_rng(args.seed + repeat).permutation(len(prompts))
+                 if args.shuffle_requests else range(len(prompts)))
+        for completed, index in enumerate(order):
+            index, prompt = int(index), prompts[int(index)]
             offset = (index + repeat) % len(methods)
             for method in methods[offset:] + methods[:offset]:
                 torch.cuda.synchronize()
@@ -129,9 +144,15 @@ def main():
                 row.update(method=method, request=index, source_request=index + args.prompt_offset,
                            repeat=repeat, input_tokens=prompt.numel())
                 records.append(row)
-            print(report.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
-        streams.append({name: {"updates": owner.updates, "last_loss": owner.last_loss,
-                               "version": owner.version} for name, owner in owners.items()})
+            print(report.dumps({"repeat": repeat, "requests_complete": completed + 1}), flush=True)
+        stream_tps = {method: sum(r["tokens"] for r in records if r["repeat"] == repeat and r["method"] == method)
+                      / sum(r["seconds"] for r in records if r["repeat"] == repeat and r["method"] == method)
+                      for method in methods}
+        streams.append({"repeat": repeat, "tps": stream_tps,
+                        "online_vs_static": stream_tps["online"] / stream_tps["static"],
+                        "continued_vs_learned": stream_tps["continued"] / stream_tps["learned"],
+                        "learners": {name: {"updates": owner.updates, "last_loss": owner.last_loss,
+                                           "version": owner.version} for name, owner in owners.items()}})
     aggregate = {}
     for method in methods if records else ():
         rows = [r for r in records if r["method"] == method]
@@ -196,6 +217,12 @@ def main():
     print(report.dumps(displayed, indent=2))
     if not result["pass"]:
         raise SystemExit(1)
+
+    return result
+
+
+def main():
+    run_experiment(argument_parser().parse_args())
 
 
 if __name__ == "__main__":
