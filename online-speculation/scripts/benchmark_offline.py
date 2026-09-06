@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--reference-sha256", help="required for a published PEFT directory")
+    parser.add_argument("--backbone", choices=["independent_graph", "hf_sdpa"], default="independent_graph")
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--split-role", choices=["validation", "test"], default="validation")
     parser.add_argument("--prompts", type=int, default=17)
@@ -44,7 +45,13 @@ def main():
     torch.manual_seed(args.seed)
     source_sha = implementation_fingerprint()
     data_sha = hashlib.sha256(args.data.read_bytes()).hexdigest()
-    if args.adapter.is_dir():
+    if args.backbone == "hf_sdpa":
+        if not args.adapter.is_dir() or not args.reference_sha256 or args.sampler != "linear":
+            parser.error("HF reference requires a hashed published adapter and linear sampling")
+        from blockspec.hf_execution import load_frozen_hf
+        model, provenance = load_frozen_hf(args.base, args.adapter, expected_sha256=args.reference_sha256,
+                                           dtype=getattr(torch, args.dtype))
+    elif args.adapter.is_dir():
         if not args.reference_sha256:
             parser.error("a PEFT reference requires its published artifact SHA256")
         config = peft_config(args.adapter)
@@ -68,20 +75,22 @@ def main():
         model.set_base_dtype(getattr(torch, args.dtype))
     config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
                              warmup_tokens=32, sampler=args.sampler, top_k=args.top_k,
-                             prefix_budget=args.prefix_budget, execution="cuda_graph",
-                             attention_backend="grouped", seed=args.seed,
+                             prefix_budget=args.prefix_budget,
+                             execution="eager" if args.backbone == "hf_sdpa" else "cuda_graph",
+                             attention_backend="sdpa" if args.backbone == "hf_sdpa" else "grouped", seed=args.seed,
                              sampling=SamplingConfig(args.temperature, args.sampling_top_k, args.top_p),
                              noise=UniformNoise(args.noise_low, args.noise_high))
     prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
                                    count=args.prompts, length=args.prompt_length)
     print(json.dumps({"stage": "start", "implementation_sha256": source_sha,
                       "data_sha256": data_sha, "split_role": args.split_role,
-                      "adapter": provenance, "dtype": args.dtype, "device": torch.cuda.get_device_name()}), flush=True)
+                      "adapter": provenance, "backbone": args.backbone,
+                      "dtype": args.dtype, "device": torch.cuda.get_device_name()}), flush=True)
     result = benchmark_offline(model, prompts, config,
                                progress=(lambda row: print(json.dumps(row), flush=True)) if args.progress else None)
     print(json.dumps({"stage": "complete", "implementation_sha256": source_sha,
                       "data_sha256": data_sha, "adapter_sha256": provenance["sha256"],
-                      "dtype": args.dtype, **result}), flush=True)
+                      "backbone": args.backbone, "dtype": args.dtype, **result}), flush=True)
 
 
 if __name__ == "__main__":

@@ -21,15 +21,24 @@ def implementation_fingerprint():
     return digest.hexdigest()
 
 
-def base_fingerprint(model):
+def _weight_fingerprint(model, *, adapters):
     digest = hashlib.sha256()
     for name, value in sorted(model.state_dict().items()):
-        if is_adapter(name):
+        if is_adapter(name) != adapters:
             continue
         value = value.detach().cpu().contiguous()
         digest.update(f"{name}:{value.dtype}:{tuple(value.shape)}\n".encode())
         digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
+
+
+def base_fingerprint(model):
+    return _weight_fingerprint(model, adapters=False)
+
+
+def adapter_fingerprint(model):
+    """Fingerprint the actual execution-dtype adapter tensors, including names."""
+    return _weight_fingerprint(model, adapters=True)
 
 
 def adapter_state(model):
