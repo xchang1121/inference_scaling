@@ -36,6 +36,7 @@ src/blockspec/
   sampling.py        概率变换、候选接受与残差抽样
   decoding.py        AR 基线、线性验证解码
   calibration.py     稀疏温度表、混合概率、反馈梯度与单纯形投影
+  sampling_execution.py 概率变换、指数抽样与整块残差校正的 GPU 图
   tree.py            前缀预算树、树注意力、精确目标路径遍历
   online.py          原适配器全量／末层子集续训、反向、更新与版本
   relay.py           PrefixRelay 条件修正、采样前截断、新增头在线更新与检查点

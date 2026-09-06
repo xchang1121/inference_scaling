@@ -63,9 +63,11 @@ def _prefill(forward, prompt):
 
 @torch.no_grad()
 def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos_id=None,
-                generator=None, executor=None):
+                generator=None, executor=None, sampler_executor=None):
     _check(model, prompt, max_new_tokens, eos_id)
     forward = _inference_forward(model, executor)
+    if sampler_executor is not None:
+        sampler_executor.validate(model, sampling)
     synchronize(model)
     start = time.perf_counter()
     cache = _prefill(forward, prompt) if max_new_tokens else None
@@ -73,7 +75,8 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
     output = []
     for _ in range(max_new_tokens):
         logits, cache = forward(seed, cache=cache, return_cache=True)
-        token = int(sample_logits(logits[0, -1], sampling, generator))
+        token = (sampler_executor.sample_ar(logits[0, -1], generator) if sampler_executor is not None
+                 else int(sample_logits(logits[0, -1], sampling, generator)))
         output.append(token)
         seed = prompt.new_tensor([[token]])
         if token == eos_id:
@@ -85,15 +88,19 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
 @torch.no_grad()
 def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
                          sampling=SamplingConfig(), eos_id=None, generator=None,
-                         learner=None, executor=None, noise=UniformNoise(), calibrator=None):
+                         learner=None, executor=None, noise=UniformNoise(), calibrator=None,
+                         sampler_executor=None):
     """One clean root + B-1 independent noisy proposals, then base verification.
 
     cache always describes committed history excluding its last token. A replay
     update runs only AFTER accepting/rejecting with the saved proposal version.
-    End-of-request updates are skipped; weights/optimizer persist, replay does not.
+    Replay learners skip end-of-request updates. Sparse calibration accumulators
+    persist across requests; each update consumes the original proposal version.
     """
     _check(model, prompt, max_new_tokens, eos_id)
     forward = _inference_forward(model, executor)
+    if sampler_executor is not None:
+        sampler_executor.validate(model, sampling, block_size, calibrator)
     if block_size < 2:
         raise ValueError("speculative blocks require B>=2; use generate_ar for B=1")
     if learner is not None and learner.model is not model:
@@ -122,7 +129,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         remaining = max_new_tokens - len(output)
         if remaining == 1:
             logits, cache = forward(seed, cache=cache, return_cache=True)
-            output.append(int(sample_logits(logits[0, -1], sampling, generator)))
+            output.append(sampler_executor.sample_ar(logits[0, -1], generator) if sampler_executor is not None
+                          else int(sample_logits(logits[0, -1], sampling, generator)))
             forwards += 1
             break
         b = min(block_size, remaining)
@@ -137,7 +145,9 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         draft, temporary_cache = result[:2]
         boundary = result[2] if capture is not None else None
         forwards += 1
-        if sampling.temperature == 0:
+        if sampler_executor is not None:
+            candidates, draft_distribution, calibration_feedback = sampler_executor.draft(draft[0], generator, calibrator)
+        elif sampling.temperature == 0:
             candidates = greedy_tokens(draft[0])
         else:
             draft_distribution = probabilities(draft[0], sampling)
@@ -153,7 +163,9 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         clean_cache = trim_cache(temporary_cache, clean_length)
         teacher, verified_cache = forward(candidates[None], cache=clean_cache, return_cache=True)
         forwards += 1
-        if sampling.temperature == 0:
+        if sampler_executor is not None:
+            verified, target = sampler_executor.verify(candidates[1:], draft_distribution[1:], teacher[0], generator)
+        elif sampling.temperature == 0:
             verified = verify_greedy(candidates[1:], greedy_tokens(teacher[0]))
         else:
             target = probabilities(teacher[0], sampling)

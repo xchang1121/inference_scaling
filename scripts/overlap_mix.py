@@ -17,6 +17,7 @@ from blockspec.decoding import generate_ar, generate_speculative
 from blockspec.diffusion import UniformNoise
 from blockspec.execution import FixedShapeExecutor
 from blockspec.sampling import SamplingConfig
+from blockspec.sampling_execution import SamplingExecutor
 from prefix_relay import assert_frozen, paired_bootstrap, sha
 
 
@@ -45,6 +46,8 @@ def main():
     parser.add_argument("--temperatures", type=float, nargs="+", default=[.5, .75, 1., 1.25, 1.5])
     parser.add_argument("--learning-rate", type=float, default=.5)
     parser.add_argument("--interval", type=int, default=8)
+    parser.add_argument("--sampling-execution", choices=["eager", "cuda_graph"], default="eager")
+    parser.add_argument("--compare-eager", action="store_true")
     parser.add_argument("--fixed", type=float, nargs="*", default=[])
     parser.add_argument("--audit-online", action="store_true")
     parser.add_argument("--seed", type=int, default=271828)
@@ -68,11 +71,20 @@ def main():
     draft = [(n, True, None) for n in range(2, args.block_size + 1)]
     engine.prepare(clean + draft)
     setups = {"ar": engine.signature_seconds[(1, False, None)], "base": engine.setup_seconds}
-    options = dict(block_size=args.block_size, sampling=sampling, noise=noise, executor=engine)
+    setups["ar_eager"], setups["base_eager"] = setups["ar"], setups["base"]
+    sampler = None
+    if args.sampling_execution == "cuda_graph":
+        sampler = SamplingExecutor(model.config.vocab_size, args.block_size, sampling,
+                                   temperatures=tuple(args.temperatures), device="cuda")
+        setups["ar"] += sampler.signature_seconds[1, "plain"]
+        setups["base"] += sum(value for (_, kind), value in sampler.signature_seconds.items() if kind != "mixed")
+        setups["identity"] = setups["online"] = engine.setup_seconds + sampler.setup_seconds
+    options = dict(block_size=args.block_size, sampling=sampling, noise=noise, executor=engine, sampler_executor=sampler)
     provenance = {"config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                   "implementation_sha256": implementation_fingerprint(), "script_sha256": sha(__file__),
                   "data_sha256": sha(args.data), "adapter": source, "frozen_fingerprints": frozen,
-                  "sampling": asdict(sampling), "noise": asdict(noise)}
+                  "sampling": asdict(sampling), "noise": asdict(noise),
+                  "retention_threshold": .97}
 
     def mixer(adaptive=False, fixed=1., diagnostics=False):
         return OverlapMix(args.block_size, args.top_k, temperatures=args.temperatures,
@@ -80,9 +92,12 @@ def main():
                           fixed_temperature=fixed, diagnostics=diagnostics, device="cuda")
 
     warm = load_sequences(args.train_data, model.config.vocab_size)[0][:args.prompt_length].reshape(1, -1).cuda()
-    generate_ar(model, warm, 32, sampling=sampling, executor=engine)
+    generate_ar(model, warm, 32, sampling=sampling, executor=engine, sampler_executor=sampler)
     generate_speculative(model, warm, 32, **options)
     generate_speculative(model, warm, 32, calibrator=mixer(True), **options)
+    if args.compare_eager:
+        generate_ar(model, warm, 32, sampling=sampling, executor=engine)
+        generate_speculative(model, warm, 32, **dict(options, sampler_executor=None))
     emit({"stage": "start", **provenance, "engine_setup_seconds": setups})
     if args.mode == "audit":
         calibration = mixer(args.audit_online, diagnostics=True)
@@ -94,6 +109,8 @@ def main():
         return
 
     arms = ["ar", "base", "identity", "online"] + [f"fixed_{value:g}" for value in args.fixed]
+    if args.compare_eager:
+        arms += ["ar_eager", "base_eager"]
     if len(set(arms)) != len(arms):
         parser.error("distinct fixed temperatures required")
     rows = {arm: [] for arm in arms}
@@ -102,6 +119,8 @@ def main():
     for repeat in range(args.repeats):
         mixers = {}
         for arm in arms[2:]:
+            if arm.endswith("_eager"):
+                continue
             torch.cuda.synchronize()
             start = time.perf_counter()
             mixers[arm] = mixer(arm == "online", float(arm[6:]) if arm.startswith("fixed_") else 1.)
@@ -112,12 +131,13 @@ def main():
             order = arms if (repeat + index) % 2 == 0 else arms[::-1]
             for arm in order:
                 generator = torch.Generator(device="cuda").manual_seed(args.seed + len(prompts) * repeat + index)
-                if arm == "ar":
-                    result = generate_ar(model, prompt, args.tokens, sampling=sampling, executor=engine,
+                current_sampler = None if arm.endswith("_eager") else sampler
+                if arm in ("ar", "ar_eager"):
+                    result = generate_ar(model, prompt, args.tokens, sampling=sampling, executor=engine, sampler_executor=current_sampler,
                                          generator=generator)
                 else:
                     result = generate_speculative(model, prompt, args.tokens, calibrator=mixers.get(arm),
-                                                  generator=generator, **options)
+                                                  generator=generator, **dict(options, sampler_executor=current_sampler))
                 row = result.summary()
                 rows[arm].append(row)
                 current[arm].append(row)
@@ -126,11 +146,13 @@ def main():
         repetitions.append({arm: aggregate(current[arm]) for arm in arms})
         final_states.append(mixers["online"].metrics())
     summary = {arm: aggregate(rows[arm], setup_seconds=initialization[arm],
-                              engine_setup_seconds=setups.get(arm, setups["base"])) for arm in arms}
+                              engine_setup_seconds=setups.get(arm, setups.get("online", setups["base"]))) for arm in arms}
+    vs_base = {arm: {"ratio": summary[arm]["tps"] / summary["base"]["tps"],
+                     **paired_bootstrap(rows, "base", arm, len(prompts))} for arm in arms if arm != "base"}
     emit({"stage": "complete", **provenance, "summary": summary, "repetitions": repetitions,
           "final_online_states": final_states,
-          "vs_base": {arm: {"ratio": summary[arm]["tps"] / summary["base"]["tps"],
-                           **paired_bootstrap(rows, "base", arm, len(prompts))} for arm in arms if arm != "base"},
+          "vs_base": vs_base,
+          "retention_pass": vs_base["online"]["speed_ratio_95_interval"][0] >= .97,
           "vs_ar": {arm: {"ratio": summary[arm]["tps"] / summary["ar"]["tps"],
                          **paired_bootstrap(rows, "ar", arm, len(prompts))} for arm in arms if arm != "ar"},
           **assert_frozen(model, frozen)})
