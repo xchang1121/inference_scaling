@@ -22,3 +22,10 @@ build/
 dist/
 *.part
 *.log
+local/
+.env
+.env.*
+*.local.json
+*.local.toml
+*.local.yaml
+*.local.yml

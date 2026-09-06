@@ -11,6 +11,7 @@ import torch
 
 from ..distillation import divergence
 from .backbone import DraftBoundary
+from .weights import source_identity
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,7 @@ class SuffixLearner:
         if self.replay:
             raise ValueError("save online state at a request boundary after clearing replay")
         return {"format": "blockspec-dual-suffix-v1", "config": asdict(self.config),
-                "model_config": self.model.config.to_dict(), "source": getattr(self.model, "source", {}),
+                "model_config": self.model.config.to_dict(), "source": source_identity(getattr(self.model, "source", {})),
                 "dtype": str(next(self.model.parameters()).dtype), "backend": self._backend,
                 "frozen_fingerprint": self.frozen_fingerprint,
                 "master": portable(self.master), "optimizer": portable(self.optimizer.state_dict()),
@@ -171,7 +172,7 @@ class SuffixLearner:
         self._check()
         if (state.get("format") != "blockspec-dual-suffix-v1" or state.get("config") != asdict(self.config)
                 or state.get("model_config") != self.model.config.to_dict()
-                or state.get("source") != getattr(self.model, "source", {})
+                or source_identity(state.get("source", {})) != source_identity(getattr(self.model, "source", {}))
                 or state.get("dtype") != str(next(self.model.parameters()).dtype)
                 or state.get("frozen_fingerprint") != self.frozen_fingerprint
                 or state.get("backend") != self._backend or state.get("master", {}).keys() != self.master.keys()):

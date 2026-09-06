@@ -1,9 +1,10 @@
 """Small executable end-to-end pipeline; no imported research implementation."""
 
 import argparse
+
+from . import reporting as report
 from dataclasses import asdict
 import hashlib
-import json
 from pathlib import Path
 
 import torch
@@ -50,7 +51,7 @@ def demo(args):
         loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), batch[:, 1:].flatten())
         loss.backward()
         optimizer.step()
-    print(json.dumps({"stage": "base", "steps": args.base_steps, "loss": float(loss.detach())}), flush=True)
+    print(report.dumps({"stage": "base", "steps": args.base_steps, "loss": float(loss.detach())}), flush=True)
     model.train_adapters_only()
     frozen = base_fingerprint(model)
     optimizer = torch.optim.AdamW(model.adapter_parameters(), lr=0.003, weight_decay=0)
@@ -65,7 +66,7 @@ def demo(args):
     with torch.no_grad():
         after = float(paired_loss(model, train[:8], args.block_size, noisy=fixed_noise))
     assert base_fingerprint(model) == frozen, "offline training changed base weights"
-    print(json.dumps({"stage": "offline", "steps": args.adapter_steps,
+    print(report.dumps({"stage": "offline", "steps": args.adapter_steps,
                       "fixed_noise_l1_before": before, "fixed_noise_l1_after": after,
                       "last_train": stats}), flush=True)
     if args.checkpoint:
@@ -89,7 +90,7 @@ def demo(args):
     assert ar.tokens == static.tokens == online.tokens, "greedy outputs differ"
     assert base_fingerprint(model) == frozen, "online training changed base weights"
     changed = any(not torch.equal(v, adapter_state(model)[k]) for k, v in original_adapter.items())
-    print(json.dumps({"stage": "decode", "sampler": args.sampler, "ar": ar.summary(), "static": static.summary(),
+    print(report.dumps({"stage": "decode", "sampler": args.sampler, "ar": ar.summary(), "static": static.summary(),
                       "online": online.summary(), "greedy_identical": True,
                       "base_unchanged": True, "online_adapter_changed": changed,
                       "scope": "synthetic correctness smoke; not a speed claim"}), flush=True)
@@ -140,7 +141,10 @@ def main():
     prepare = sub.add_parser("prepare", help="fetch a bounded public dataset subset with question-group splits")
     prepare.add_argument("--base", type=Path, required=True, help="local tokenizer and chat template")
     prepare.add_argument("--output", type=Path, required=True)
-    prepare.add_argument("--offsets", help="comma-separated source row offsets; default spans the corpus")
+    prepare.add_argument("--dataset", required=True, help="caller-selected conversation dataset")
+    prepare.add_argument("--dataset-config", default="default")
+    prepare.add_argument("--source-split", default="train")
+    prepare.add_argument("--offsets", required=True, help="comma-separated source row offsets")
     prepare.add_argument("--page-size", type=int, default=8)
     prepare.add_argument("--max-tokens", type=int, default=8192)
     prepare.add_argument("--seed", type=int, default=314159)
@@ -223,7 +227,7 @@ def main():
         model.set_base_dtype(getattr(torch, execution_dtype))
         sequences = load_sequences(args.data, model.config.vocab_size)
         prompts = continuation_prompts(sequences, count=args.prompts, length=args.prompt_length)
-        progress = (lambda row: print(json.dumps(row), flush=True)) if args.progress else None
+        progress = (lambda row: print(report.dumps(row), flush=True)) if args.progress else None
         result = benchmark_streams(model, prompts, config, online_config, progress=progress)
         result.update(data_sha256=data_sha, split_role=args.split_role,
                       adapter_sha256=hashlib.sha256(args.adapter.read_bytes()).hexdigest(),
@@ -231,16 +235,17 @@ def main():
                       checkpoint_base_dtype=args.dtype,
                       offline_training_config=metadata.get("training_config"),
                       device=torch.cuda.get_device_name() if str(args.device).startswith("cuda") else str(args.device))
-        print(json.dumps(result), flush=True)
+        print(report.dumps(result), flush=True)
         return
     if args.command == "prepare":
-        from .corpus import DEFAULT_OFFSETS, prepare_snapshot
+        from .corpus import prepare_snapshot
         from .tokenizer import LocalTokenizer
         manifest = prepare_snapshot(args.output, LocalTokenizer(args.base),
-                                     offsets=tuple(map(int, args.offsets.split(","))) if args.offsets else DEFAULT_OFFSETS,
+                                     dataset=args.dataset, dataset_config=args.dataset_config, source_split=args.source_split,
+                                     offsets=tuple(map(int, args.offsets.split(","))),
                                      page_size=args.page_size, max_tokens=args.max_tokens, seed=args.seed,
-                                     progress=lambda row: print(json.dumps(row), flush=True))
-        print(json.dumps({"output": str(args.output), "splits": manifest["splits"],
+                                     progress=lambda row: print(report.dumps(row), flush=True))
+        print(report.dumps({"output": str(args.output), "splits": manifest["splits"],
                           "questions": manifest["unique_questions"], "domains": manifest["domains"]}), flush=True)
         return
     if args.command == "train":
@@ -282,7 +287,7 @@ def main():
                                            length=config.sequence_length, bos_id=args.bos_id)
         def progress(stats):
             if "validation" in stats or stats["step"] == 1 or stats["step"] % 25 == 0 or stats["step"] == args.steps:
-                print(json.dumps(stats), flush=True)
+                print(report.dumps(stats), flush=True)
         result = train_adapter(model, data, config, bos_id=args.bos_id, progress=progress, validation=validation)
         if base_fingerprint(model) != fingerprint:
             raise RuntimeError("offline training changed frozen base weights")
@@ -292,7 +297,7 @@ def main():
                                   "train_data_sha256": data_sha, "validation_data_sha256": validation_sha,
                                   "initial_adapter_sha256": initial_sha,
                                   "implementation_sha256_at_start": implementation_sha})
-        print(json.dumps({"checkpoint": str(args.output), **result}), flush=True)
+        print(report.dumps({"checkpoint": str(args.output), **result}), flush=True)
         return
     if min(args.base_steps, args.adapter_steps, args.rank, args.tokens, args.threads) < 1:
         parser.error("steps, rank, tokens and threads must be positive")

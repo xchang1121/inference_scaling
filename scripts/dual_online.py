@@ -1,9 +1,10 @@
 """Paired execution and online-calibration controls for a frozen dual-view model."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
 import hashlib
-import json
 from pathlib import Path
 import time
 
@@ -18,7 +19,7 @@ from blockspec.parallel.sampling import ProposalSampler
 from blockspec.parallel.weights import file_sha256, load_public
 from blockspec.sampling import SamplingConfig
 from blockspec.sampling_execution import SamplingExecutor
-from dual_view import MODEL_REVISION, WEIGHT_SHA, prompt_ids, prompt_texts
+from dual_view import prompt_ids, prompt_texts
 
 
 def parameter_digest(model):
@@ -74,7 +75,7 @@ def main():
     if set(evaluation_texts) & set(learning_texts):
         parser.error("learning and evaluation questions overlap")
     torch.set_num_threads(1)
-    model = load_public(args.model, device="cuda", dtype=torch.bfloat16, expected_sha256=WEIGHT_SHA)
+    model = load_public(args.model, device="cuda", dtype=torch.bfloat16)
     before = parameter_digest(model)
     branch = MaskedAttentionBranch(model)
     sampling = SamplingConfig(args.temperature, args.top_k, args.top_p)
@@ -124,7 +125,7 @@ def main():
                 row = run(method, prompt, args.tokens, args.seed + repeat * 1000 + index, mixes.get(method))
                 row.update(method=method, request=index, repeat=repeat, input_tokens=prompt.numel())
                 records.append(row)
-            print(json.dumps({"repeat": repeat, "requests_complete": index + 1,
+            print(report.dumps({"repeat": repeat, "requests_complete": index + 1,
                               "elapsed_seconds": time.perf_counter() - started}), flush=True)
         final_mixtures.append({name: mix.metrics() for name, mix in mixes.items()})
     aggregate = {}
@@ -149,7 +150,7 @@ def main():
                 identical &= all(rows[left][key] == rows[right][key]
                                  for key in ("token_ids", "accepted_per_round", "decode_forwards"))
     frozen = before == parameter_digest(model) and all(not p.requires_grad and p.grad is None for p in model.parameters())
-    result = {"model_revision": MODEL_REVISION, "weight_sha256": WEIGHT_SHA, "parameter_digest": before,
+    result = {"parameter_digest": before,
               "implementation": implementation_fingerprint(), "script_sha256": file_sha256(__file__),
               "torch": str(torch.__version__), "device": torch.cuda.get_device_name(),
               "prompt_sha256": file_sha256(args.prompts), "learning_prompt_sha256": file_sha256(args.learning_prompts),
@@ -164,9 +165,9 @@ def main():
               "records": records, "pass": identical and frozen}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x") as handle:
-        json.dump(result, handle, indent=2)
+        report.dump(result, handle, indent=2)
         handle.write("\n")
-    print(json.dumps({key: value for key, value in result.items() if key not in ("records", "final_mixtures")}, indent=2))
+    print(report.dumps({key: value for key, value in result.items() if key not in ("records", "final_mixtures")}, indent=2))
     if not result["pass"]:
         raise SystemExit(1)
 

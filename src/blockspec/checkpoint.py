@@ -111,8 +111,8 @@ def load_checkpoint(path, *, model=None, device="cpu", dtype=None):
 def config_from_hf(raw, *, rank=8, alpha=None):
     """Support explicit dense rotary/GQA families; reject unimplemented features.
 
-    This is not AutoModel, remote code execution, or an arbitrary-model adapter.
-    K2-Horizon is the local integration target; other families need oracle tests.
+    Architecture identifiers select validated tensor layouts and normalization
+    rules. Weight locations and dimensions come from the caller's checkpoint.
     """
     if raw.get("model_type") not in ("k2_horizon", "qwen3"):
         raise ValueError("unsupported architecture; implement and validate a bridge first")

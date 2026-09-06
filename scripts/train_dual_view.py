@@ -1,6 +1,8 @@
 """Local Qwen3 draft fitting, exact-boundary resume, and a synthetic pipeline check."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -158,7 +160,7 @@ def main():
 
         def progress(row):
             if row["step"] % args.log_every == 0:
-                print(json.dumps(row), flush=True)
+                print(report.dumps(row), flush=True)
 
         records = trainer.run(args.stop_after, progress)
         final = trainer.evaluate(validation) if validation is not None else None
@@ -176,9 +178,9 @@ def main():
     if args.summary is not None:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         with args.summary.open("x") as handle:
-            json.dump(result, handle, indent=2)
+            report.dump(result, handle, indent=2)
             handle.write("\n")
-    print(json.dumps(result, indent=2), flush=True)
+    print(report.dumps(result, indent=2), flush=True)
     if not result["pass"]:
         raise SystemExit(1)
 

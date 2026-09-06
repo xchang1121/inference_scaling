@@ -5,6 +5,8 @@ The workload is natural-prefix continuation on local hardware; all results go to
 """
 
 import argparse
+
+from blockspec import reporting as report
 import hashlib
 import json
 import os
@@ -13,9 +15,6 @@ import random
 import subprocess
 import sys
 import time
-
-
-LOCK = Path(__file__).resolve().parents[1] / "references" / "upstream.lock.json"
 
 
 def file_sha256(path):
@@ -59,7 +58,7 @@ def check_source(checkout, commit):
 
 def check_artifacts(base, adapter, lock):
     result = {}
-    for key, directory in (("k2_1b_base", base), ("k2_1b_adapter", adapter)):
+    for key, directory in (("base", base), ("adapter", adapter)):
         entry = lock["models"][key]
         digest = file_sha256(Path(directory) / entry["weight_filename"])
         if digest != entry["weight_sha256"]:
@@ -154,13 +153,14 @@ def run_arm(args, lock):
                "cuda_graph_misses": engine.model_runner.cuda_graph_misses}
     finally:
         engine.exit()
-    print(json.dumps(row), flush=True)
+    print(report.dumps(row), flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("checkout", "base", "adapter", "data", "cache"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--reference-manifest", type=Path, required=True, help="local source and artifact checks")
     parser.add_argument("--prompts", type=int, default=17)
     parser.add_argument("--prompt-length", type=int, default=256)
     parser.add_argument("--tokens", type=int, default=512)
@@ -178,7 +178,7 @@ def main():
     # Sixteen 256-token pages cover this single-sequence control plus scratch pages.
     if args.prompt_length + args.tokens + args.block_size > 3072:
         parser.error("this bounded reference control supports at most 3072 total positions")
-    lock = json.loads(LOCK.read_text(encoding="utf-8"))
+    lock = json.loads(args.reference_manifest.read_text(encoding="utf-8"))
     if args.arm:
         run_arm(args, lock)
         return
@@ -187,7 +187,7 @@ def main():
     rows = []
     for repeat in range(args.repeats):
         for arm in (("ar", "static") if repeat % 2 == 0 else ("static", "ar")):
-            print(json.dumps({"stage": "reference_start", "arm": arm, "repeat": repeat}), flush=True)
+            print(report.dumps({"stage": "reference_start", "arm": arm, "repeat": repeat}), flush=True)
             result = subprocess.run([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:],
                                      "--arm", arm, "--repeat-index", str(repeat)],
                                     capture_output=True, text=True)
@@ -196,8 +196,8 @@ def main():
             row = next(json.loads(line) for line in reversed(result.stdout.splitlines())
                        if line.startswith('{"stage": "reference_arm"'))
             rows.append(row)
-            print(json.dumps(row), flush=True)
-    print(json.dumps({"stage": "reference_complete", "source_commit": lock["source"]["commit"],
+            print(report.dumps(row), flush=True)
+    print(report.dumps({"stage": "reference_complete", "source_commit": lock["source"]["commit"],
                       "weights": provenance, "data_sha256": file_sha256(args.data),
                       "benchmark_sha256": file_sha256(__file__), "rows": rows,
                       "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},

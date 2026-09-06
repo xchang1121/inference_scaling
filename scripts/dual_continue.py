@@ -1,8 +1,9 @@
 """Paired public-weight suffix continuation, including online replay and backward."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
-import json
 from pathlib import Path
 import time
 
@@ -19,7 +20,7 @@ from blockspec.parallel.weights import file_sha256, load_public
 from blockspec.sampling import SamplingConfig
 from blockspec.sampling_execution import SamplingExecutor
 from dual_online import compare, parameter_digest
-from dual_view import MODEL_REVISION, WEIGHT_SHA, prompt_ids, prompt_texts
+from dual_view import prompt_ids, prompt_texts
 
 
 def main():
@@ -60,7 +61,7 @@ def main():
             prompt_texts(args.learning_prompts, args.learn_requests)):
         parser.error("learning and evaluation questions overlap")
     torch.set_num_threads(1)
-    model = load_public(args.model, device="cuda", dtype=torch.bfloat16, expected_sha256=WEIGHT_SHA)
+    model = load_public(args.model, device="cuda", dtype=torch.bfloat16)
     before = parameter_digest(model)
     branch = MaskedAttentionBranch(model)
     prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking, offset=args.prompt_offset)
@@ -90,7 +91,7 @@ def main():
     for index, prompt in enumerate(training):
         row = run("learning", prompt, args.learn_tokens, args.seed + 10000 + index, continued)
         learning_records.append(row)
-        print(json.dumps({"learning_request": index + 1, "updates": continued.updates,
+        print(report.dumps({"learning_request": index + 1, "updates": continued.updates,
                           "last_loss": continued.last_loss}), flush=True)
     learned_state = continued.state_dict()
     learned_weights = {name: p.detach().clone() for name, p in continued.execution.items()}
@@ -130,7 +131,7 @@ def main():
                 row.update(method=method, request=index, source_request=index + args.prompt_offset,
                            repeat=repeat, input_tokens=prompt.numel())
                 records.append(row)
-            print(json.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
+            print(report.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
         streams.append({name: {"updates": owner.updates, "last_loss": owner.last_loss,
                                "version": owner.version} for name, owner in owners.items()})
     aggregate = {}
@@ -160,11 +161,10 @@ def main():
         combined_audit = values.clone() if combined_audit is None else combined_audit + values
         audit_records.append({"request": index + args.prompt_offset,
                               "max_replay_logit_error": inspector.max_replay_logit_error, **audit_summary(values)})
-        print(json.dumps({"audit_requests_complete": index + 1}), flush=True)
+        print(report.dumps({"audit_requests_complete": index + 1}), flush=True)
     restored = parameter_digest(model) == before
     frozen = all(not p.requires_grad and p.grad is None for p in model.parameters())
-    result = {"model_revision": MODEL_REVISION, "weight_sha256": WEIGHT_SHA,
-              "implementation": implementation_fingerprint(), "script_sha256": file_sha256(__file__),
+    result = {"implementation": implementation_fingerprint(), "script_sha256": file_sha256(__file__),
               "torch": str(torch.__version__), "device": torch.cuda.get_device_name(),
               "sampling": asdict(sampling), "learner": asdict(config),
               "config": {key: str(v) if isinstance(v, Path) else v for key, v in vars(args).items()},
@@ -189,13 +189,13 @@ def main():
               "records": records, "pass": ar_equal and changed and restored and frozen}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x") as handle:
-        json.dump(result, handle, indent=2)
+        report.dump(result, handle, indent=2)
         handle.write("\n")
     displayed = {key: value for key, value in result.items() if key not in ("records", "common_prefix_audit")}
     if combined_audit is not None:
         displayed["audit_mean"] = result["common_prefix_audit"]["summary"]["mean"]
         displayed["audit_learned_minus_original"] = result["common_prefix_audit"]["learned_minus_original"]
-    print(json.dumps(displayed, indent=2))
+    print(report.dumps(displayed, indent=2))
     if not result["pass"]:
         raise SystemExit(1)
 

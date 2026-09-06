@@ -1,7 +1,8 @@
 """Paired public-adapter regression against a named pre-refactor Git revision."""
 
 import argparse
-import json
+
+from blockspec import reporting as report
 from pathlib import Path
 import subprocess
 import sys
@@ -39,7 +40,7 @@ def main():
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
-    parser.add_argument("--reference-commit", default="7eb6a79")
+    parser.add_argument("--reference-commit", required=True, help="caller-selected local Git ref")
     parser.add_argument("--requests", type=int, default=4)
     parser.add_argument("--prompt-length", type=int, default=256)
     parser.add_argument("--tokens", type=int, default=128)
@@ -51,14 +52,12 @@ def main():
     if args.output.exists() or min(args.requests, args.prompt_length, args.tokens, args.repeats) < 1:
         parser.error("positive budgets and a new output file required")
     root = Path(__file__).resolve().parents[2]
-    lock = json.loads((root / "online-speculation/references/upstream.lock.json").read_text())
     source, commit = reference_decoder(args.reference_commit, root)
     torch.set_num_threads(4)
     config = peft_config(args.adapter)
     model = load_hf_base(args.base, rank=config["r"], alpha=config["lora_alpha"], device="cuda",
                          dtype=torch.bfloat16).eval().requires_grad_(False)
-    load_peft_adapter(args.adapter, model,
-                      expected_sha256=lock["models"]["k2_1b_adapter"]["weight_sha256"])
+    load_peft_adapter(args.adapter, model)
     model.set_attention_backend("grouped")
     before = base_fingerprint(model), adapter_fingerprint(model)
     prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
@@ -120,9 +119,9 @@ def main():
               "aggregate": aggregate, "records": records}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x") as handle:
-        json.dump(result, handle, indent=2)
+        report.dump(result, handle, indent=2)
         handle.write("\n")
-    print(json.dumps({key: value for key, value in result.items() if key != "records"}, indent=2))
+    print(report.dumps({key: value for key, value in result.items() if key != "records"}, indent=2))
     if not identical or not unchanged:
         raise SystemExit(1)
 

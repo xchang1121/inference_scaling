@@ -8,8 +8,9 @@ environment just to import the model's newer reference implementation.
 """
 
 import argparse
+
+from blockspec import reporting as report
 import hashlib
-import json
 from pathlib import Path
 
 import torch
@@ -92,6 +93,7 @@ def audit(ours, oracle, prompts, *, tokens, executor=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", type=Path, required=True)
+    parser.add_argument("--reference-manifest", type=Path, required=True)
     parser.add_argument("--data", type=Path, help="Optional existing development token JSONL; never the sealed test set")
     parser.add_argument("--prompts", type=int, default=4)
     parser.add_argument("--prompt-length", type=int, default=128)
@@ -124,9 +126,9 @@ def main():
 @torch.no_grad()
 def run(args):
     implementation_sha = implementation_fingerprint()
-    spec = checked_reference(args.base)
+    spec = checked_reference(args.base, args.reference_manifest)
     import transformers
-    if transformers.__version__ != spec["reference_transformers"]:
+    if spec.get("reference_transformers") and transformers.__version__ != spec["reference_transformers"]:
         raise RuntimeError(f"oracle requires isolated Transformers {spec['reference_transformers']}; "
                            f"found {transformers.__version__}")
     dtype = getattr(torch, args.dtype)
@@ -165,7 +167,7 @@ def run(args):
     result = audit(ours, oracle, prompts, tokens=args.tokens, executor=executor)
     passed = all(row["max_abs"] <= args.max_logit_error and row["max_tv"] <= args.max_tv
                  and (not args.require_same_argmax or row["argmax_mismatches"] == 0) for row in result.values())
-    print(json.dumps({"reference": spec, "transformers": transformers.__version__,
+    print(report.dumps({"reference": spec, "transformers": transformers.__version__,
                       "torch": torch.__version__, "device": str(next(ours.parameters()).device),
                       "dtype": args.dtype, "reference_attention": args.attention,
                       "identical_base_tensors": True, "data_sha256": data_hash,

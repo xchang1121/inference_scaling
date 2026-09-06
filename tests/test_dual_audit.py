@@ -140,4 +140,14 @@ def test_benchmark_pairs_sampling_executors_and_their_ar_controls(monkeypatch):
     assert len(result["records"]) == 24
     assert all(row["tokens"] == 12 for row in result["records"])
     assert result["sampling_setup_seconds"]["own_scalar_k4"] == 0
+    assert len(result["execution_equivalence"]) == 4
+    for row in result["execution_equivalence"].values():
+        assert row["requests"] == 4
+        assert all(row[field + "_identical"] for field in ("token_ids", "accepted_per_round", "decode_forwards"))
     assert all(torch.equal(value, model.state_dict()[name]) for name, value in before.items())
+
+    monkeypatch.setattr(module, "reference_generate", lambda *a: {
+        "tokens": 12, "seconds": 1., "token_ids": [3] * 12,
+        "prefill_forwards": 1, "prefill_output_tokens": 1, "decode_forwards": 11})
+    external = module.benchmark(args, model, object())
+    assert external["execution_equivalence"]["reference_vs_own_scalar_k4"]["accepted_per_round_identical"] is None

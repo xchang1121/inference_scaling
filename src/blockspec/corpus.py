@@ -8,10 +8,6 @@ from pathlib import Path
 import unicodedata
 
 
-DATASET = "open-thoughts/OpenThoughts3-1.2M"
-DEFAULT_OFFSETS = tuple(range(10000, 1200000, 90000))
-
-
 def question_hash(text):
     normalized = " ".join(unicodedata.normalize("NFKC", text).split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -58,30 +54,27 @@ def assert_disjoint(records):
         owners[group] = split
 
 
-def prepare_snapshot(output, tokenizer, *, offsets=DEFAULT_OFFSETS, page_size=8,
+def prepare_snapshot(output, tokenizer, *, dataset, offsets, dataset_config="default", source_split="train", page_size=8,
                      seed=314159, max_tokens=8192, progress=None):
-    """Fetch only requested viewer pages, then store tokenized data and provenance.
-
-    The viewer is not revision-pinned: record observed repository revisions AND
-    hashes of the actual bytes/rows. Do not label these as a historical snapshot.
-    No raw downloaded pages or temporary download scripts are written to disk.
-    """
+    """Fetch caller-selected conversation rows; keep split integrity metadata locally."""
     import requests
 
+    if not isinstance(dataset, str) or not dataset.strip():
+        raise ValueError("an explicit dataset identifier is required")
     output = Path(output)
     if output.exists():
         raise FileExistsError(f"snapshot already exists: {output}")
     if not 1 <= page_size <= 100 or not offsets or any(n < 0 for n in offsets) or max_tokens < 256:
         raise ValueError("invalid bounded download configuration")
     session = requests.Session()
-    revision_url = f"https://huggingface.co/api/datasets/{DATASET}"
+    revision_url = f"https://huggingface.co/api/datasets/{dataset}"
     response = session.get(revision_url, timeout=45)
     response.raise_for_status()
     revision_before = response.json()["sha"]
     records, page_hashes, skipped, seen_rows, seen_text = [], [], Counter(), set(), set()
     for offset in offsets:
         response = session.get("https://datasets-server.huggingface.co/rows", params={
-            "dataset": DATASET, "config": "default", "split": "train", "offset": offset,
+            "dataset": dataset, "config": dataset_config, "split": source_split, "offset": offset,
             "length": page_size}, timeout=45)
         response.raise_for_status()
         payload = response.json()
@@ -111,7 +104,7 @@ def prepare_snapshot(output, tokenizer, *, offsets=DEFAULT_OFFSETS, page_size=8,
     counts = Counter(r["split"] for r in records)
     if any(counts[s] == 0 for s in ("train", "validation", "test")):
         raise ValueError("not all splits populated; choose more pages before training")
-    manifest = {"dataset": DATASET, "license": "apache-2.0", "observed_revision": revision_before,
+    manifest = {"dataset": dataset, "config": dataset_config, "source_split": source_split, "observed_revision": revision_before,
                 "viewer_revision_pinned": False, "retrieved_utc": datetime.now(timezone.utc).isoformat(),
                 "page_size": page_size, "pages": page_hashes, "seed": seed, "max_tokens": max_tokens,
                 "format": "local_chat_template", "splits": dict(counts), "skipped": dict(skipped),

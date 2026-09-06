@@ -1,6 +1,8 @@
-"""Pinned public-weight audit and paired dual-view throughput measurement."""
+"""Caller-selected weight audit and paired dual-view throughput measurement."""
 
 import argparse
+
+from blockspec import reporting as report
 from dataclasses import asdict
 import importlib.util
 import json
@@ -12,7 +14,6 @@ import time
 import numpy as np
 import torch
 
-from blockspec.checkpoint import implementation_fingerprint
 from blockspec.parallel import MaskedAttentionBranch, generate, generate_ar
 from blockspec.parallel.sampling import ProposalSampler
 from blockspec.parallel.weights import file_sha256, load_public
@@ -21,9 +22,6 @@ from blockspec.sampling_execution import SamplingExecutor
 from blockspec.state import cache_length
 
 
-MODEL_REVISION = "7dc9735acb89bb17dd2f3c5689928707c1fb0868"
-WEIGHT_SHA = "1c1e0d155c298095b9fe7b8a84a7e6340ccf31009fdae62539f213d037103e7c"
-SOURCE_SHA = "7e8f4e01c4c8c469866839976acd6fa45dec207af40d939e0a46b8918e413334"
 PROMPTS = (
     "Explain how binary search works. Give a Python implementation and discuss its time complexity.",
     "Solve step by step: A train travels 120 km at 60 km/h and then 180 km at 90 km/h. What is its average speed?",
@@ -36,16 +34,20 @@ PROMPTS = (
 )
 
 
-def load_reference(folder, dtype, backend):
-    source = folder / "modeling_orthrus.py"
-    if file_sha256(source) != SOURCE_SHA:
-        raise ValueError("reference source SHA256 mismatch")
-    spec = importlib.util.spec_from_file_location("blockspec_pinned_orthrus", source)
+def load_reference(folder, dtype, backend, manifest):
+    from blockspec.hf_execution import checked_reference
+
+    checked = checked_reference(folder, manifest)
+    entry = checked["entrypoint"]
+    source = (Path(folder) / entry["file"]).resolve()
+    if source.parent != Path(folder).resolve() or entry["file"] not in checked["reference_lf_sha256"]:
+        raise ValueError("reference entrypoint must be a checked local source file")
+    spec = importlib.util.spec_from_file_location("blockspec_local_reference", source)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module.OrthrusLM.from_pretrained(folder, dtype=dtype, attn_implementation=backend,
-                                            local_files_only=True).cuda().eval().requires_grad_(False)
+    return getattr(module, entry["class"]).from_pretrained(
+        folder, dtype=dtype, attn_implementation=backend, local_files_only=True).cuda().eval().requires_grad_(False)
 
 
 def prompt_texts(path, count, *, offset=0):
@@ -352,7 +354,7 @@ def benchmark(args, own, reference):
                 row.update(implementation=implementation, block=block, request=index, repeat=repeat,
                            input_tokens=prompt.numel())
                 records.append(row)
-            print(json.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
+            print(report.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
     aggregate = {}
     for implementation, block in methods:
         key = f"{implementation}_k{block}"
@@ -387,7 +389,24 @@ def benchmark(args, own, reference):
         ratios = (summed[:, 2] / summed[:, 3]) / (summed[:, 0] / summed[:, 1])
         aggregate[key]["paired_request_ci95"] = np.quantile(ratios, [.025, .975]).tolist()
         aggregate[key]["greedy_identical"] = identical if sampling.temperature == 0 else None
+    equivalence = {}
+    for block in [1] + args.blocks:
+        baseline = next(iter(engines), "reference")
+        base_rows = {(row["request"], row["repeat"]): row for row in records
+                     if row["implementation"] == baseline and row["block"] == block}
+        for implementation, size in methods:
+            if size != block or implementation == baseline:
+                continue
+            selected = [row for row in records if row["implementation"] == implementation and row["block"] == block]
+            key = f"{implementation}_vs_{baseline}_k{block}"
+            equivalence[key] = {"requests": len(selected), **{
+                field + "_identical": (all(row[field] == base_rows[row["request"], row["repeat"]][field]
+                                           for row in selected)
+                                       if all(field in row and field in base_rows[row["request"], row["repeat"]]
+                                              for row in selected) else None)
+                for field in ("token_ids", "accepted_per_round", "decode_forwards")}}
     return {"sampling": asdict(sampling), "sampling_execution": engines, "sampling_setup_seconds": preparation,
+            "execution_equivalence": equivalence,
             "workload": "local question JSONL" if args.prompts else "fixed smoke prompts",
             "thinking": args.thinking, "empty_system": args.empty_system,
             "prompt_file_sha256": None if args.prompts is None else file_sha256(args.prompts),
@@ -399,6 +418,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("audit", "benchmark", "trace", "profile"))
     parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--reference-manifest", type=Path, help="required when importing an external reference")
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="bfloat16")
     parser.add_argument("--backend", choices=("eager", "sdpa", "flash_attention_2"), default="sdpa")
     parser.add_argument("--implementation", choices=("own", "reference", "both"), default="own")
@@ -432,18 +452,16 @@ def main():
                                   or (args.prompts is None and args.request_index >= len(PROMPTS))
                                   or not 0 <= args.token_index < args.tokens):
         parser.error("trace requires the independent model and valid request/token indices")
+    if (args.mode == "audit" or args.implementation in ("reference", "both")) and args.reference_manifest is None:
+        parser.error("external execution requires a caller-supplied --reference-manifest")
     torch.set_num_threads(1)
     own = reference = None
     dtype = getattr(torch, args.dtype)
     if args.mode == "audit" or args.implementation in ("own", "both"):
-        own = load_public(args.model, device="cuda", dtype=dtype, expected_sha256=WEIGHT_SHA).set_backend(args.backend)
+        own = load_public(args.model, device="cuda", dtype=dtype).set_backend(args.backend)
     if args.mode == "audit" or args.implementation in ("reference", "both"):
-        if own is None and file_sha256(args.model / "model.safetensors") != WEIGHT_SHA:
-            raise ValueError("reference weight SHA256 mismatch")
-        reference = load_reference(args.model, dtype, args.backend)
-    result = {"mode": args.mode, "model_revision": MODEL_REVISION, "weight_sha256": WEIGHT_SHA,
-              "reference_source_sha256": SOURCE_SHA, "implementation": implementation_fingerprint(),
-              "script_sha256": file_sha256(__file__), "dtype": args.dtype, "backend": args.backend,
+        reference = load_reference(args.model, dtype, args.backend, args.reference_manifest)
+    result = {"mode": args.mode, "dtype": args.dtype, "backend": args.backend,
               "python": platform.python_version(), "torch": torch.__version__,
               "device": torch.cuda.get_device_name(), "seed": args.seed,
               "config": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}}
@@ -461,9 +479,9 @@ def main():
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x") as handle:
-            json.dump(result, handle, indent=2)
+            report.dump(result, handle, indent=2)
             handle.write("\n")
-    print(json.dumps(result if args.mode == "audit" else {key: value for key, value in result.items()
+    print(report.dumps(result if args.mode == "audit" else {key: value for key, value in result.items()
                                                         if key != "records"}, indent=2))
     if args.mode in ("audit", "profile") and not result["pass"]:
         raise SystemExit(1)

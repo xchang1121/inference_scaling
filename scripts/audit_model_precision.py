@@ -1,7 +1,8 @@
 """Compare precision policies on the same loaded base. No output files."""
 
 import argparse
-import json
+
+from blockspec import reporting as report
 
 import torch
 
@@ -26,7 +27,7 @@ def main():
         result = audit_paired_teacher(model, clean, attention=mode, reduced_bf16=reduced)
         if not args.trace:
             result.pop("layers")
-        print(json.dumps(result), flush=True)
+        print(report.dumps(result), flush=True)
 
 
 if __name__ == "__main__":

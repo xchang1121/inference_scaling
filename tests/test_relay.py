@@ -253,7 +253,7 @@ def test_paired_request_bootstrap_and_portable_file_sha(tmp_path):
     assert interval == module.paired_bootstrap(rows, "a", "b", 2, resamples=200)
     path = tmp_path / "empty"
     path.touch()
-    assert module.sha(path) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert module.sha(path) == __import__("hashlib").sha256(b"").hexdigest()
 
 
 def test_all_evaluated_heads_share_training_and_block_contract():

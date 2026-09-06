@@ -261,8 +261,25 @@ def test_public_import_complete_mapping_and_frozen_parameters(tmp_path):
         assert torch.equal(value, loaded.state_dict()[key]), key
     assert loaded.head.weight is loaded.embedding.weight
     assert loaded.frequencies.device.type == "cpu"
+    assert "directory" not in loaded.source
     with pytest.raises(ValueError, match="SHA256"):
         load_public(tmp_path, expected_sha256="bad")
+
+
+def test_checkpoint_drops_storage_metadata_and_preserves_content_binding(tmp_path):
+    from blockspec.parallel.weights import source_identity
+
+    model = tiny()
+    model.source = {"directory": str(tmp_path), "model_id": "local-resource", "weight_sha256": "test-content"}
+    path = tmp_path / "portable.pt"
+    save_checkpoint(path, model)
+    payload = torch.load(path, weights_only=True)
+    assert payload["source"] == {"weight_sha256": "test-content"}
+    payload["source"]["directory"] = str(tmp_path)  # Legacy checkpoints may carry a location.
+    legacy = tmp_path / "legacy.pt"
+    torch.save(payload, legacy)
+    restored, _ = load_checkpoint(legacy)
+    assert restored.source == source_identity(model.source)
 
 
 def test_public_import_rejects_unmapped_tensor(tmp_path):

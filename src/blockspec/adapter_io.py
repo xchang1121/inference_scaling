@@ -24,10 +24,10 @@ def peft_config(directory):
     return config
 
 
-def load_peft_adapter(directory, model, *, expected_sha256):
+def load_peft_adapter(directory, model, *, expected_sha256=None):
     """Check the entire artifact and key mapping before changing adapter tensors.
 
-    The caller supplies a trusted file hash and loads the matching base. Dropout
+    The caller may supply a local integrity check and loads the matching base. Dropout
     is an offline training setting; inference uses the deterministic A/B branch.
     """
     from safetensors.torch import load_file
@@ -40,7 +40,7 @@ def load_peft_adapter(directory, model, *, expected_sha256):
         raise ValueError("PEFT rank, scaling or projection targets differ from model")
     path = directory / "adapter_model.safetensors"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != expected_sha256:
+    if expected_sha256 is not None and digest != expected_sha256:
         raise ValueError("PEFT artifact SHA256 differs from the declared source")
     original = load_file(str(path))
     state = {}
@@ -57,5 +57,4 @@ def load_peft_adapter(directory, model, *, expected_sha256):
             if name in state:
                 parameter.copy_(state[name])
     return {"kind": "published_peft_reference", "sha256": digest, "tensors": len(state),
-            "rank": config["r"], "alpha": config["lora_alpha"],
-            "base_model_name_or_path": config.get("base_model_name_or_path")}
+            "rank": config["r"], "alpha": config["lora_alpha"]}
