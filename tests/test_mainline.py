@@ -99,6 +99,25 @@ def test_full_distribution_gradient_and_tv_overlap_identity():
     assert (tv.square() <= .5 * loss + 1e-14).all()
 
 
+def test_tv_logit_gradient_matches_analytic_subgradient_and_finite_difference():
+    torch.manual_seed(932)
+    logits = torch.randn(3, 5, dtype=torch.float64, requires_grad=True)
+    teacher = torch.randn_like(logits, requires_grad=True)
+    q, p = logits.softmax(-1), teacher.detach().softmax(-1)
+    direction = torch.sign(q - p)
+    expected = .5 * q * (direction - (q * direction).sum(-1, keepdim=True))
+    actual, teacher_gradient = torch.autograd.grad(divergence(logits, teacher, "tv").sum(),
+                                                 (logits, teacher), allow_unused=True)
+    torch.testing.assert_close(actual, expected, atol=1e-14, rtol=1e-12)
+    assert teacher_gradient is None
+    assert (actual[q < p] <= 0).all() and (actual[q > p] >= 0).all()
+    torch.testing.assert_close(actual.sum(-1), torch.zeros(3, dtype=torch.float64), atol=1e-14, rtol=0)
+    assert torch.autograd.gradcheck(lambda u: divergence(u, teacher, "tv"), (logits,))
+    identical = logits.detach().clone().requires_grad_()
+    zero, = torch.autograd.grad(divergence(identical, identical.detach(), "tv").sum(), identical)
+    assert torch.equal(zero, torch.zeros_like(zero))
+
+
 def test_fresh_online_state_is_continuation_of_the_loaded_draft():
     model = tiny()
     weights = {n: p.detach().clone() for n, p in model.named_parameters()}
