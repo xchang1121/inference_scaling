@@ -1,6 +1,6 @@
 """Online feedback lifecycle. Updates occur after a round's immutable proposal is checked."""
 
-from ..online import Feedback
+from ..feedback import Feedback
 
 
 class OnlineFeedback:

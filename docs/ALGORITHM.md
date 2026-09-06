@@ -848,6 +848,21 @@ $\delta>2\varepsilon$ 足以保持最大项相同。
 - 数值微分与冻结参数检查验证训练梯度。
 - 公开权重对照检查 AR 与起草两种视图，再检查贪心输出和随机采样。
 
+同前缀审计固定一组实际访问的前缀 $h_i$、对应教师概率 $p_i$ 和冻结边界表示，
+分别重放原参数与学习后参数，得到 $q_i^0,q_i^1$。
+接受率比较中的 $p_i,q_i$ 均包含实际采样使用的温度与截断变换，原始 softmax 的 KL 与 TV 另行记录。
+记两者的逐位置差为
+
+$$
+\Delta_i=D_{\rm TV}(p_i,q_i^1)-D_{\rm TV}(p_i,q_i^0).
+$$
+
+第 5 节给出的条件平均接受率为 $1-D_{\rm TV}$，因此在这组相同前缀上，
+接受率的变化恰为 $-\Delta_i$。
+审计按位置汇总，也按完整问题重采样，保留同一问题内的相关性。
+这组前缀来自固定起草轨迹；学习后起草器访问到的前缀分布及其整体产出，
+由独立运行的生成实验衡量。
+
 ### 8.4 性能测量
 
 正式测量采用总量口径：
@@ -862,6 +877,8 @@ TPF 与 TPS 分别反映产出和时间，二者共同解释加速来源。
 配对比较固定模型、精度、注意力后端、提示模板、采样规则、输出预算和停止条件。
 各方法交错执行，置信区间按请求重采样；
 预学习数据、参数选择用的验证集、最终测试集各自独立。
+在线状态沿请求流演化，重采样保留的是本次轨迹上已经测得的配对记录。
+相应区间描述该轨迹的请求间波动；跨轨迹的稳定性通过完整请求流、随机种子和请求顺序的独立重复检验。
 具体测量与版本集中记录于 [RESULTS.md](RESULTS.md)，运行命令见 [RUNNING.md](RUNNING.md)。
 
 ## 9. 代码组织
@@ -873,11 +890,13 @@ TPF 与 TPS 分别反映产出和时间，二者共同解释加速来源。
 | 模块 | 职责 |
 |---|---|
 | [state.py](../src/blockspec/state.py) | 两条分支的持久 KV、前缀裁剪和打包缓存 |
+| [feedback.py](../src/blockspec/feedback.py) | 共同的教师反馈与可分离边界协议，兼容两种起草参数组织 |
 | [parallel/branches.py](../src/blockspec/parallel/branches.py) | 起草输入、真实候选概率、验证输入及干净缓存边界 |
 | [parallel/generation.py](../src/blockspec/parallel/generation.py) | 共同的初始化、起草、验证、提交和收尾循环 |
 | [parallel/sampling.py](../src/blockspec/parallel/sampling.py) | 概率变换、候选抽样与验证执行；复用 [sampling.py](../src/blockspec/sampling.py) 中的概率规则 |
 | [parallel/feedback.py](../src/blockspec/parallel/feedback.py) | 实际前缀反馈、更新发布与请求间学习状态 |
 | [parallel/online.py](../src/blockspec/parallel/online.py) | 双向起草后段重放、FP32 主权重、在线优化与状态恢复 |
+| [parallel/audit.py](../src/blockspec/parallel/audit.py) | 固定前缀上的 KL、TV 与逐位置条件接受概率比较 |
 | [model.py](../src/blockspec/model.py)、[parallel/backbone.py](../src/blockspec/parallel/backbone.py) | 条件低秩与双视图两种参数组织 |
 
 分支返回一个完整的起草记录：待验证候选及其概率、验证输入、验证前的干净 KV，
