@@ -2,7 +2,7 @@
 
 import torch
 
-from ..distillation import divergence
+from ..losses import divergence
 from ..sampling import SamplingConfig, probabilities
 from .backbone import DraftBoundary
 from .sampling import ProposalSampler

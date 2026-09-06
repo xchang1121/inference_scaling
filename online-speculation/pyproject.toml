@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "online-speculation"
-version = "0.3.0"
-description = "Independent block diffusion distillation, verified decoding, and online continuation."
+version = "0.4.0"
+description = "Shared-backbone bidirectional drafting, exact correction, and online suffix continuation."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.5", "numpy>=1.26", "safetensors>=0.4"]

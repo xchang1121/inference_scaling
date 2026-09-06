@@ -1,11 +1,7 @@
-import importlib.util
-from pathlib import Path
 
 import pytest
 import torch
 
-from blockspec.feedback import Feedback
-from blockspec.online import Feedback as LegacyFeedback
 from blockspec.parallel import DualViewConfig, DualViewDecoder, MaskedAttentionBranch, generate
 from blockspec.parallel.audit import AuditSampler, METRICS, SuffixAudit, audit_summary, paired_audit_intervals
 from blockspec.parallel.feedback import OnlineFeedback
@@ -46,14 +42,10 @@ def test_common_prefix_audit_preserves_generation_and_equal_checkpoint(device, t
     assert 0 <= summary["mean"]["original_sampling_tv"] <= 1
     intervals = paired_audit_intervals([summary, summary], repeats=10)
     assert all(row["difference"] == 0. and row["paired_request_ci95"] == [0., 0.] for row in intervals.values())
-    assert Feedback is LegacyFeedback
 
 
 def test_prompt_windows_are_disjoint_and_bounded(tmp_path):
-    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
-    spec = importlib.util.spec_from_file_location("dual_view_prompt_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from blockspec.commands import evaluate as module
     data = tmp_path / "questions.jsonl"
     data.write_text('\n'.join('{"question": "question %d"}' % i for i in range(12)))
     assert module.prompt_texts(data, 4, offset=8) == ["question 8", "question 9", "question 10", "question 11"]
@@ -68,10 +60,7 @@ def test_prompt_windows_are_disjoint_and_bounded(tmp_path):
 
 @pytest.mark.parametrize("empty_system,thinking", [(False, False), (True, False), (True, True)])
 def test_public_prompt_template_keeps_roles_and_thinking_explicit(empty_system, thinking):
-    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
-    spec = importlib.util.spec_from_file_location("dual_view_render_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from blockspec.commands import evaluate as module
 
     class Tokenizer:
         def apply_chat_template(self, messages, **options):
@@ -98,10 +87,7 @@ def test_empty_audit_is_explicit_and_bootstrap_keeps_the_callers_random_state():
 
 @pytest.mark.parametrize("temperature", [0., 1.])
 def test_operator_profile_preserves_generation_and_removes_hooks(temperature):
-    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
-    spec = importlib.util.spec_from_file_location("dual_view_profile_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from blockspec.commands import evaluate as module
     model = DualViewDecoder(DualViewConfig(vocab_size=17, hidden_size=16, intermediate_size=24,
                                           num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
                                           head_dim=8)).eval().requires_grad_(False)
@@ -120,10 +106,7 @@ def test_operator_profile_preserves_generation_and_removes_hooks(temperature):
 def test_benchmark_pairs_sampling_executors_and_their_ar_controls(monkeypatch):
     from types import SimpleNamespace
 
-    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
-    spec = importlib.util.spec_from_file_location("dual_view_execution_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    from blockspec.commands import evaluate as module
     model = DualViewDecoder(DualViewConfig(vocab_size=17, hidden_size=16, intermediate_size=24,
                                           num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
                                           head_dim=8)).cuda().eval().requires_grad_(False)

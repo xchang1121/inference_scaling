@@ -9,7 +9,7 @@ import time
 
 import torch
 
-from ..distillation import divergence
+from ..losses import divergence
 from .backbone import DraftBoundary
 from .weights import source_identity
 

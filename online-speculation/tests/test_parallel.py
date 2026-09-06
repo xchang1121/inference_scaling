@@ -5,10 +5,8 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from blockspec.model import Decoder, ModelConfig
-from blockspec.decoding import generate_speculative as original_generate
 from blockspec.sampling import SamplingConfig
-from blockspec.parallel import (DualViewConfig, DualViewDecoder, CausalLowRankBranch,
+from blockspec.parallel import (DualViewConfig, DualViewDecoder,
                                 MaskedAttentionBranch, generate, generate_ar)
 from blockspec.state import cache_length, trim_cache as crop_cache
 from blockspec.parallel.training import (anchor_layout, distillation_loss, forward_kl,
@@ -194,20 +192,6 @@ def test_masked_greedy_generation_and_cache_contract(budget):
     assert len(speculative.tokens) == budget
 
 
-@pytest.mark.parametrize("temperature", [0.0, 1.0])
-def test_low_rank_branch_uses_existing_decoder_contract(temperature):
-    torch.manual_seed(79)
-    model = Decoder(ModelConfig()).eval()
-    prompt = torch.tensor([[3, 7, 5, 8]])
-    config = SamplingConfig(temperature=temperature)
-    shared = generate(CausalLowRankBranch(model, initial_ar_token=False), prompt, 19, block_size=4, sampling=config,
-                      generator=torch.Generator().manual_seed(14), audit_cache=True)
-    original = original_generate(model, prompt, 19, block_size=4, sampling=config,
-                                 generator=torch.Generator().manual_seed(14))
-    assert shared.tokens == original.tokens
-    assert shared.accepted_per_round == original.accepted_per_round
-
-
 def test_masked_eos_and_stochastic_output_budget():
     model = tiny()
     branch = MaskedAttentionBranch(model)
@@ -218,19 +202,6 @@ def test_masked_eos_and_stochastic_output_budget():
     output = generate(branch, prompt, 17, sampling=SamplingConfig(temperature=1),
                       generator=torch.Generator().manual_seed(341), audit_cache=True)
     assert len(output.tokens) == 17
-
-
-@pytest.mark.parametrize("initial_ar_token", [False, True])
-@pytest.mark.parametrize("budget", [1, 2, 7, 19])
-def test_causal_branch_bootstrap_conventions(initial_ar_token, budget):
-    torch.manual_seed(736)
-    model = Decoder(ModelConfig()).eval()
-    prompt = torch.tensor([[3, 5, 7]])
-    branch = CausalLowRankBranch(model, initial_ar_token=initial_ar_token)
-    expected = generate_ar(branch, prompt, budget)
-    output = generate(branch, prompt, budget, block_size=4, audit_cache=True)
-    assert output.tokens == expected.tokens
-    assert output.prefill_output_tokens == int(initial_ar_token)
 
 
 def test_anchor_sampling_bounds_and_cache_prefix_checks():
