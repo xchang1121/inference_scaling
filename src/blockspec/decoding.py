@@ -113,6 +113,9 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
     start = time.perf_counter()
     calibration_initial = ((calibrator.updates, calibrator.update_seconds, calibrator.feedback_blocks)
                            if calibrator is not None else (0, 0., 0))
+    continuation = getattr(calibrator, "kind", None) == "continuation"
+    if continuation:
+        calibrator.begin_request(prompt[0].tolist())
     initial_updates = learner.updates if learner is not None else 0
     initial_update_seconds = learner.update_seconds if learner is not None else 0.0
     initial_feedback = learner.feedback_blocks if learner is not None else 0
@@ -131,6 +134,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
             logits, cache = forward(seed, cache=cache, return_cache=True)
             output.append(sampler_executor.sample_ar(logits[0, -1], generator) if sampler_executor is not None
                           else int(sample_logits(logits[0, -1], sampling, generator)))
+            if continuation:
+                calibrator.commit(output[-1:])
             forwards += 1
             break
         b = min(block_size, remaining)
@@ -151,12 +156,18 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
             candidates = greedy_tokens(draft[0])
         else:
             draft_distribution = probabilities(draft[0], sampling)
-            if calibrator is not None:
+            if continuation:
+                candidates, draft_distribution, calibration_feedback = calibrator.draft(draft_distribution, generator)
+            elif calibrator is not None:
                 draft_distribution, calibration_feedback = calibrator.propose(draft_distribution)
-            candidates = draw(draft_distribution, generator)
+                candidates = draw(draft_distribution, generator)
+            else:
+                candidates = draw(draft_distribution, generator)
         root = int(candidates[0])
         if root == eos_id:
             output.append(root)
+            if continuation:
+                calibrator.commit([root])
             break
         # Only the seed's KV is clean. No adapted/noisy KV is ever committed.
         clean_length = prompt.shape[1] + len(output)
@@ -183,6 +194,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
         fully_covered = kept == b - 1
         fully_covered_rounds += fully_covered
         output.extend(committed)
+        if continuation:
+            calibrator.commit(committed)
         cache = trim_cache(verified_cache, prompt.shape[1] + len(output) - 1)
         seed = prompt.new_tensor([[output[-1]]])
         done = len(output) >= max_new_tokens or output[-1] == eos_id
@@ -193,7 +206,10 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
             else:
                 learner._skip_decoder_feedback(used)
         if calibrator is not None:
-            calibrator.observe(calibration_feedback, target[:used])
+            if continuation:
+                calibrator.observe(calibration_feedback, target[:used], root=root)
+            else:
+                calibrator.observe(calibration_feedback, target[:used])
         if done:
             break
     if learner is not None:

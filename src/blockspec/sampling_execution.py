@@ -5,11 +5,13 @@ Independent random variables enter from the caller's generator before replay.
 Graph outputs own their storage; updates are published between decode rounds.
 """
 
+from dataclasses import fields
 import time
 
 import torch
 
-from .calibration import CalibrationFeedback, mix_rows
+from .calibration import mix_rows
+from .continuation import CopyFeedback, copy_mixture
 from .sampling import SamplingConfig, Verification, _probabilities_unchecked
 
 
@@ -87,6 +89,23 @@ class _DraftSlot(_Slot):
                       & torch.isclose(self.q.sum(-1), torch.ones_like(self.q[:, 0]), atol=1e-6, rtol=1e-6).all())
 
 
+class _CopySlot(_Slot):
+    @torch.no_grad()
+    def __init__(self, length, vocabulary, sampling, device, dtype, use_cuda_graph):
+        self.sampling = sampling
+        self.logits = torch.zeros(length, vocabulary, device=device, dtype=dtype)
+        self.exponential = torch.ones_like(self.logits)
+        self.weights = self.logits.new_zeros(length - 1)
+        self.copied = torch.full((length,), -1, device=device, dtype=torch.long)
+        self.capture(use_cuda_graph)
+
+    def run(self):
+        baseline = _probabilities_unchecked(self.logits, self.sampling)
+        self.tokens, self.q, self.feedback = copy_mixture(baseline, self.weights, self.copied, self.exponential)
+        self.valid = (torch.isfinite(self.logits).all() & torch.isfinite(self.q).all() & (self.q >= 0).all()
+                      & torch.isclose(self.q.sum(-1), torch.ones_like(self.q[:, 0]), atol=1e-6, rtol=1e-6).all())
+
+
 class _VerifySlot(_Slot):
     @torch.no_grad()
     def __init__(self, length, vocabulary, sampling, device, dtype, use_cuda_graph):
@@ -111,7 +130,8 @@ class SamplingExecutor:
 
     @torch.no_grad()
     def __init__(self, vocabulary, block_size, sampling=SamplingConfig(), *, device="cuda",
-                 dtype=torch.float32, temperatures=(.5, .75, 1., 1.25, 1.5), use_cuda_graph=True):
+                 dtype=torch.float32, temperatures=(.5, .75, 1., 1.25, 1.5), use_cuda_graph=True,
+                 continuation=False):
         if (type(vocabulary) is not int or vocabulary < 1 or type(block_size) is not int or block_size < 2
                 or sampling.temperature <= 0 or dtype not in (torch.float32, torch.float64)
                 or (temperatures and (sampling.top_k < 1 or 1. not in temperatures))):
@@ -123,6 +143,7 @@ class SamplingExecutor:
         if use_cuda_graph and self.device.type != "cuda":
             raise ValueError("CUDA device required for graph capture")
         self.temperatures = tuple(temperatures)
+        self.continuation = continuation
         self.drafts, self.verifiers, self.signature_seconds = {}, {}, {}
         for n in range(1, block_size + 1):
             for mixed in ([False, True] if n > 1 and temperatures else [False]):
@@ -133,6 +154,12 @@ class SamplingExecutor:
                     torch.cuda.synchronize(self.device)
                 self.signature_seconds[n, "mixed" if mixed else "plain"] = time.perf_counter() - start
             if n > 1:
+                if continuation:
+                    start = time.perf_counter()
+                    self.drafts[n, "continuation"] = _CopySlot(n, vocabulary, sampling, self.device, dtype, use_cuda_graph)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize(self.device)
+                    self.signature_seconds[n, "continuation"] = time.perf_counter() - start
                 start = time.perf_counter()
                 self.verifiers[n] = _VerifySlot(n, vocabulary, sampling, self.device, dtype, use_cuda_graph)
                 if self.device.type == "cuda":
@@ -145,7 +172,9 @@ class SamplingExecutor:
             raise ValueError("sampling executor vocabulary and probability policy must match")
         if block_size is not None and block_size != self.block_size:
             raise ValueError("sampling executor block size must match")
-        if calibrator is not None and (calibrator.temperatures != self.temperatures
+        if calibrator is not None and (((getattr(calibrator, "kind", None) == "continuation" and not self.continuation)
+                                       or (getattr(calibrator, "kind", None) != "continuation"
+                                           and calibrator.temperatures != self.temperatures))
                                       or calibrator.weights.device != self.device
                                       or calibrator.weights.dtype != self.dtype):
             raise ValueError("calibrator temperatures, device and dtype must match prepared maps")
@@ -157,10 +186,17 @@ class SamplingExecutor:
 
     def _draft(self, logits, generator, calibrator):
         self._shape(logits)
-        slot = self.drafts[len(logits), calibrator is not None]
+        key = calibrator is not None
+        if getattr(calibrator, "kind", None) == "continuation":
+            copied = calibrator.lookup(len(logits))
+            key = "continuation" if copied else False
+        slot = self.drafts[len(logits), key]
         slot.logits.copy_(logits)
         slot.exponential.exponential_(generator=generator)
-        if calibrator is not None:
+        if key == "continuation":
+            slot.weights.copy_(calibrator.weights[calibrator.group, :len(logits) - 1])
+            slot.copied.copy_(torch.tensor(copied + [-1] * (len(logits) - len(copied)), device=self.device))
+        elif key:
             slot.weights.copy_(calibrator.weights[:len(slot.weights)])
         slot.replay()
         return slot
@@ -176,9 +212,12 @@ class SamplingExecutor:
         slot = self._draft(logits, generator, calibrator)
         if not slot.valid:
             raise ValueError("finite normalized proposal probabilities required")
-        feedback = (CalibrationFeedback(*(getattr(slot.feedback, name).clone()
-                                         for name in ("indices", "experts", "mixed", "baseline")))
+        feedback = (type(slot.feedback)(**{field.name: (getattr(slot.feedback, field.name).clone()
+                                                      if isinstance(getattr(slot.feedback, field.name), torch.Tensor)
+                                                      else getattr(slot.feedback, field.name)) for field in fields(slot.feedback)})
                     if slot.feedback is not None else None)
+        if isinstance(feedback, CopyFeedback):
+            feedback.group = calibrator.group
         return slot.tokens.clone(), slot.q.clone(), feedback
 
     def verify(self, tokens, q, logits, generator=None):

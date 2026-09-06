@@ -813,6 +813,78 @@ $A$ 就是首次拒绝之前的接受数。
 原概率表与混合概率表使用相同的验证计算，AR 使用同一套目标概率变换与指数抽样。
 在线系数在轮次之间写入工作区，本轮概率与反馈各自持有独立快照。
 
+### 6.7 历史续句的条件混合
+
+文本经常重复已经出现的代码、公式或短语。当前上下文以同一段 token 结尾时，
+那段文本后面曾经出现的续句便提供了一组具体候选。
+TraceMix（轨迹接续混合）将这组候选作为共享骨干草稿的补充。
+索引覆盖本次请求的提示与已输出文本，随输出逐 token 扩展；每个请求使用独立索引。
+匹配长度从 8 递减到 2，选取最长匹配的最近一次出现，并读取它后面已经观察到的 token。
+
+记读到的续句为 $(c_0,c_1,\ldots,c_m)$，其中 $c_0$ 对应干净根 token。
+骨干给出的原始草稿为 $q_i^0$，混合系数为 $\lambda_i\in[0,1]$。
+历史候选对应一个“概率全部集中在 $c_i$”的分布，混合表为
+
+```math
+d_i(v)=(1-\lambda_i)q_i^0(v)+\lambda_i\mathbf1[v=c_i].
+```
+
+例如原表为 $(0.6,0.4,0)$，历史候选为第三项，目标为 $(0.2,0.1,0.7)$。
+取 $\lambda=0.7$ 得到 $(0.18,0.12,0.70)$，TV 从 $0.7$ 减少到 $0.02$，
+平均接受概率从 $0.3$ 增至 $0.98$。历史候选由此能够补充原支撑集之外的 token。
+
+复制续句的适用性取决于前缀是否仍然一致。干净根按目标分布抽样得到 $Y_0$；
+第 $i$ 个草稿使用的条件分布为
+
+```math
+G_i=\mathbf1[Y_0=c_0]\prod_{j=1}^{i-1}\mathbf1[Y_j=c_j],
+\qquad
+q_i(v\mid Y_{<i})=G_i d_i(v)+(1-G_i)q_i^0(v).
+```
+
+历史续句结束后的 $G_i$ 取零。一个位置偏离续句后，后续位置继续采用原骨干草稿。
+这个条件依赖使块内预测能够利用已经抽出的 token。
+
+该依赖可以用一次并行扫描求值。对每个位置，使用第 6.6 节的独立指数随机数，
+同时计算原表候选 $Y_i^0$ 与混合表候选 $Y_i^+$；同一位置的两次假设抽样共用随机数。
+随后计算
+
+```math
+\widehat G_i=\mathbf1[Y_0=c_0]\prod_{j=1}^{i-1}\mathbf1[Y_j^+=c_j],
+\qquad
+Y_i=\begin{cases}Y_i^+,&\widehat G_i=1,\\Y_i^0,&\widehat G_i=0.\end{cases}
+```
+
+两种门控相等。此前混合候选全部匹配时，实际输出逐项等于混合候选；
+首次偏离位置的实际输出仍然来自混合表，此后的门控均为零。
+这给出了对位置的归纳证明。当前行的随机数与门控独立，因此它的条件分布恰为 $q_i$。
+并行计算、前缀乘积与逐行选择可以放入同一张 GPU 图。
+验证器读取实际选中分支的概率表，第 3 节的接受与残差公式逐位置保持目标分布。
+
+系数按匹配长度 2、3、至少 4 分成三组，每组按草稿深度保存一个数，块长 8 共需 21 个系数。
+初值为零，初始概率表与原骨干相同。
+在已经到达的候选前缀上，以 $\ell_i=D_{\rm TV}(p_i,q_i)$ 为损失，次梯度为
+
+```math
+g_i=G_i\left[
+\sum_v q_i^0(v)\mathbf1[q_i(v)<p_i(v)]
+-\mathbf1[q_i(c_i)<p_i(c_i)]
+\right].
+```
+
+该式由 $\ell_i=1-\sum_v\min(p_i(v),q_i(v))$ 逐项求导得到，概率相等处采用零次导数。
+每 8 个有效反馈块，将同组同深度的梯度取平均，并更新
+
+```math
+\lambda_i\leftarrow\min\{1,\max\{0,\lambda_i-\eta_i\bar g_i\}\},
+\qquad \eta_i=\frac{0.5}{\sqrt{s_i+1}}.
+```
+
+$s_i$ 是该系数已有的有效更新次数。观察到的前缀固定时，混合概率关于系数为线性，TV 为凸函数，
+且 $|g_i|\le1$；第 6.5 节的投影比较论证可相应应用于区间 $[0,1]$。
+实际吞吐由第 7 节的完整请求计时检验。每轮保留一次骨干起草、一次干净验证及原缓存规则。
+历史接续的来源见文末的检索式与后缀式投机解码资料。
+
 ## 7. 接受长度与吞吐
 
 ### 7.1 连续接受概率
@@ -950,6 +1022,7 @@ TPF 是总输出数除以解码前向次数。
 | 概率变换、线性校正与树验证 | [sampling.py](../src/blockspec/sampling.py)、[decoding.py](../src/blockspec/decoding.py)、[tree.py](../src/blockspec/tree.py) |
 | 条件修正、置信度与小头在线学习 | [relay.py](../src/blockspec/relay.py)、[relay_execution.py](../src/blockspec/relay_execution.py) |
 | 稀疏温度表、概率混合与在线投影 | [calibration.py](../src/blockspec/calibration.py) |
+| 请求内后缀索引、前缀门控与接续系数学习 | [continuation.py](../src/blockspec/continuation.py) |
 | 概率处理、指数抽样与整块校正 GPU 图 | [sampling_execution.py](../src/blockspec/sampling_execution.py) |
 | 原适配器及末层子集续训 | [online.py](../src/blockspec/online.py)、[replay_execution.py](../src/blockspec/replay_execution.py) |
 | 官方权重映射与冻结 HF 参照 | [adapter_io.py](../src/blockspec/adapter_io.py)、[hf_execution.py](../src/blockspec/hf_execution.py) |
@@ -1042,6 +1115,11 @@ TPS 的分母包含请求内的 prefill、生成、反馈、更新与末尾同�
 逐深度温度表的共同前缀审计显示，前两个草稿位置的最佳单温度相比原表，接受概率分别增加约
 0.47、0.09 个百分点。按最高概率分成四组后，进一步的观测改善为约 0.07、0.30 个百分点；
 当前保留逐深度 35 系数的表示，分组分支已回滚。审计与吞吐使用同一套公开权重和采样设置。
+
+连续接受长度的梯度实验参考了 [streak-distillation](https://arxiv.org/abs/2511.00606) 的整块目标，
+采用候选路径上的接受比乘积和稀疏位置求和。小词表穷举与数值微分通过，
+17 问题验证中冷启动／静态为 0.9711×，学习后冻结／静态为 0.9945×；
+继续学习的每轮产出增加约 0.8%，总吞吐为静态的 0.9876×。温度表的收益幅度较小，实验分支已回滚。
 
 早期全词表低秩条件头的独立测试中，固定头／原并行为 1.0157×，区间覆盖 1；
 在线头／固定头为 0.9848×。当前选用状态更小的概率混合，条件头实现与原结果可由 Git 提交
@@ -1221,3 +1299,4 @@ softmax 在每一行上归一化，得到该查询对各个键的注意力权重
 5. [Test-Time Speculation](https://arxiv.org/abs/2605.09329)：长生成中的测试时起草适配。
 6. [DSpark: Confidence-Scheduled Speculative Decoding with Semi-Autoregressive Generation](https://arxiv.org/abs/2607.05147)：轻量条件修正与采样前置信度调度。
 7. [LiLiCorr](https://research.nvidia.com/labs/nemotron/lilicorr/)：候选集合中的块内依赖修正，提供半自回归扩展的另一种参数化。
+8. [Prompt Lookup Decoding](https://github.com/apoorvumang/prompt-lookup-decoding)、[REST](https://arxiv.org/abs/2311.08252)、[SuffixDecoding](https://arxiv.org/abs/2411.04975)：通过已观察文本的匹配与接续构造投机候选。
