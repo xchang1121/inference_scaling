@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import pytest
 import torch
@@ -48,6 +49,39 @@ def test_decode_path_trace_keeps_base_rows_and_exact_tree_ancestry():
                    allowed=allowed, cache=past, return_cache=True)
     assert [row["path"] for row in trace.rows] == [[5, 7], [5, 8]]
     assert all(row["prefix"] == 5 and row["kind"] == "base" for row in trace.rows)
+
+
+def test_local_online_audit_replays_prior_requests_and_benchmark_seed(tmp_path, monkeypatch, capsys):
+    from blockspec.checkpoint import save_checkpoint
+    from blockspec.model import Decoder, ModelConfig
+
+    audit = module("audit_decode_path.py")
+    torch.manual_seed(419)
+    model = Decoder(ModelConfig(vocab_size=11, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, adapter_rank=2, adapter_alpha=2))
+    checkpoint = tmp_path / "adapter.pt"
+    save_checkpoint(checkpoint, model, adapter_only=True)
+    data = tmp_path / "validation.jsonl"
+    data.write_text('\n'.join(json.dumps({"input_ids": ids}) for ids in ([0, 1, 2, 3], [0, 2, 1, 4])))
+    monkeypatch.setattr(audit, "load_hf_base", lambda *args, **kwargs: model)
+    monkeypatch.setattr(sys, "argv", ["audit", "--base", str(tmp_path), "--adapter", str(checkpoint),
+                                     "--data", str(data), "--request", "1", "--token-index", "0",
+                                     "--tokens", "8", "--prompt-length", "3", "--block-size", "3",
+                                     "--top-k", "2", "--prefix-budget", "5", "--device", "cpu",
+                                     "--execution", "eager", "--online-stream", "--stream-prompts", "2",
+                                     "--repeat-index", "1", "--stream-seed", "71", "--online-last-layers", "1",
+                                     "--update-stride", "1", "--update-policy", "periodic", "--online-execution", "eager"])
+    threads = torch.get_num_threads()
+    try:
+        audit.main()
+    finally:
+        torch.set_num_threads(threads)
+    result = json.loads(capsys.readouterr().out)
+    assert result["request_seed"] == 74
+    assert result["adapter_version_after_request"] > result["adapter_version_before_request"] > 0
+    assert result["adapter"]["kind"] == "local_training"
+    assert result["comparison"]["identical"]
+    assert result["target_rows"] and all(row["tv"] < 1e-6 for row in result["target_rows"])
 
 
 def test_error_summary_and_position_weighted_aggregation():
