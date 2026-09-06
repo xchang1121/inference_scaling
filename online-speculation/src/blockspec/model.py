@@ -10,25 +10,10 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from .attention import ATTENTION_BACKENDS, GROUPED_QUERY_LIMIT, grouped_attention
+from .state import Cache as Cache, PackedCache as PackedCache, cache_length as cache_length, trim_cache as trim_cache
 
 
 PROJECTIONS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
-Cache = tuple[tuple[Tensor, Tensor], ...]
-
-
-class PackedCache(tuple):
-    """Functional KV views backed by one [layer, 2, batch, head, time, dim] tensor.
-
-    The owner never mutates this tensor. Inference executors may COPY it into
-    private mutable workspaces, but retained online feedback remains immutable.
-    """
-
-    def __new__(cls, packed):
-        if packed.ndim != 6 or packed.shape[0] < 1 or packed.shape[1] != 2:
-            raise ValueError("packed cache needs [layers, 2, batch, heads, time, dim]")
-        result = super().__new__(cls, ((layer[0], layer[1]) for layer in packed.unbind(0)))
-        result.packed = packed
-        return result
 
 
 @dataclass(frozen=True)
@@ -435,19 +420,3 @@ class Decoder(nn.Module):
 
 def is_adapter(name):
     return name.endswith(".lora_A") or name.endswith(".lora_B")
-
-
-def cache_length(cache: Cache | None):
-    if cache is not None and not cache:
-        raise ValueError("empty cache tuple; use None for an empty prefix")
-    return 0 if cache is None else cache[0][0].shape[2]
-
-
-def trim_cache(cache: Cache | None, length: int) -> Cache | None:
-    if length < 0 or length > cache_length(cache):
-        raise ValueError("cannot extend cache by trimming")
-    if cache is None or length == 0:
-        return None
-    if isinstance(cache, PackedCache):
-        return PackedCache(cache.packed[..., :length, :].detach())
-    return tuple((k[:, :, :length].detach(), v[:, :, :length].detach()) for k, v in cache)

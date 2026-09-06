@@ -15,8 +15,9 @@ FORMAT = "blockspec-v1"
 
 def implementation_fingerprint():
     digest = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        digest.update(path.name.encode() + b"\0")
+    root = Path(__file__).parent
+    for path in sorted(root.rglob("*.py")):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
         digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
     return digest.hexdigest()
 

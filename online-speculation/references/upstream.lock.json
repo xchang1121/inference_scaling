@@ -10,6 +10,18 @@
     }
   ],
   "models": {
+    "dual_view_qwen3_1b7": {
+      "id": "chiennv/Orthrus-Qwen3-1.7B",
+      "revision": "7dc9735acb89bb17dd2f3c5689928707c1fb0868",
+      "weight_filename": "model.safetensors",
+      "weight_sha256": "1c1e0d155c298095b9fe7b8a84a7e6340ccf31009fdae62539f213d037103e7c",
+      "reference_lf_sha256": {
+        "modeling_orthrus.py": "7e8f4e01c4c8c469866839976acd6fa45dec207af40d939e0a46b8918e413334",
+        "config.json": "5fb19179808c6098394213be0b0eb45fb8c94349c5a1e0daa39af03627cc8653"
+      },
+      "reference_transformers": "5.15.0",
+      "usage": "frozen Qwen3 dual-attention weights; all Q/K/V/O projections and Q/K norms mapped explicitly"
+    },
     "k2_1b_adapter": {
       "id": "IFM/K2-Horizon-0.9B-Uno",
       "revision": "b0d8896a301a2f4bc755538b1234a35100da50d0",
@@ -34,6 +46,14 @@
     "arxiv": "2609.04010v1",
     "published": "2026-09-03",
     "url": "https://arxiv.org/abs/2609.04010"
+  },
+  "dual_view_source": {
+    "repository": "https://github.com/chiennv2000/orthrus",
+    "commit": "4dceab65156b3dfb5dadbb11181a0e65d0ad314d",
+    "paper": "https://arxiv.org/abs/2605.12825v2",
+    "inference_reference": "src/model.py",
+    "training_recipe": "paper Qwen3 dual-pass random-anchor full-distribution forward KL",
+    "current_repository_training": "Qwen3.5 hybrid architecture with hard-label cross entropy"
   },
   "source": {
     "usage": "read-only research reference; optional benchmark_reference.py runs the pinned engine in isolated subprocesses; independent runtime is src/blockspec",

@@ -53,6 +53,7 @@ def main():
     parser.add_argument("--learn-tokens", type=int, default=128)
     parser.add_argument("--audit-learned", action="store_true")
     parser.add_argument("--method", choices=("temperatures", "continuation"), default="temperatures")
+    parser.add_argument("--copy-start-depth", type=int, default=1)
     parser.add_argument("--fixed", type=float, nargs="*", default=[])
     parser.add_argument("--audit-online", action="store_true")
     parser.add_argument("--seed", type=int, default=271828)
@@ -100,7 +101,8 @@ def main():
     def mixer(adaptive=False, fixed=1., diagnostics=False):
         if args.method == "continuation":
             return ContinuationMix(args.block_size, args.top_k, learning_rate=args.learning_rate,
-                                   interval=args.interval, adaptive=adaptive, diagnostics=diagnostics, device="cuda")
+                                   interval=args.interval, adaptive=adaptive, diagnostics=diagnostics, device="cuda",
+                                   start_depth=args.copy_start_depth)
         return OverlapMix(args.block_size, args.top_k, temperatures=args.temperatures,
                           learning_rate=args.learning_rate, interval=args.interval, adaptive=adaptive,
                           fixed_temperature=fixed, diagnostics=diagnostics, device="cuda")

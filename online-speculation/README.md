@@ -1,18 +1,14 @@
 # 分块起草、验证解码与在线续训
 
-当前扩展为 **OverlapMix（稀疏概率混合）**：在固定的分块扩散草稿上维护少量温度混合系数，
-利用实际验证分布持续调整系数。块长 8 使用 35 个系数，从原概率表精确起步。
-K2-Horizon-0.9B 基座及已发布的扩散适配器全程冻结，每轮保留干净根 token、两次骨干前向和原缓存规则。
-配对实验同时测量 AR、原并行草稿、恒等混合和在线混合，并核验两份权重的执行张量指纹。
-独立预学习对照增加“学习后冻结”和“同一起点继续学习”两路，分离草稿质量与在线计时成本。
+主线为共享 AR 骨干与历史 KV、并行扩散起草、AR 概率校正。
+两条分支采用条件低秩增量／因果噪声块，以及独立注意力投影／双向掩码块，
+共同使用初始化、候选验证、前缀提交和缓存管理。
+低秩路径采用公开 K2-Horizon 权重；双视图路径独立加载公开 Qwen3-1.7B 权重。
+来源版本、架构与权重摘要由 `references/upstream.lock.json` 固定。
 
-算法以 [原论文](https://arxiv.org/abs/2609.04010) 为起点，独立实现逐 token 低秩路由、蒸馏、
-采样、验证、KV 管理和在线反馈学习。自有 GPU 图执行器为推理优化主线；
-固定源码与权重的 HF SDPA 桥接提供共享骨干参照，两种后端各自进行同条件配对测量。
-前期适配器训练与续训模块保留为全管线复刻实现，当前实验采用公开适配器入口。
-
-在线混合以概率重叠质量为目标，直接计算小表梯度并投影到概率单纯形。
-系数及累积梯度跨请求持续保留，请求 TPS 包含候选处理、反馈和更新，准备成本另给完整摊销口径。
+条件低秩分支的在线模块复用实际验证反馈，支持适配器后段续训、轻量条件头和稀疏概率混合。
+学习状态跨请求保留，参数更新在本轮校正完成后发布。
+配对实验分别报告固定起草、学习后冻结与继续在线学习的完整成本。
 共享骨干、分支推导与概率校正见[主报告](docs/ALGORITHM.md)，实测对照见[性能记录](docs/RESULTS.md)。
 
 ## 文档
@@ -27,6 +23,15 @@ K2-Horizon-0.9B 基座及已发布的扩散适配器全程冻结，每轮保留�
 
 ```text
 src/blockspec/
+  state.py           共同历史 KV、打包存储与提交边界
+  parallel/
+    backbone.py      独立 Qwen3 双视图骨干
+    branches.py      两类起草的输入、位置和参数路径
+    generation.py    共同初始化、验证与提交循环
+    sampling.py      抽样／验证执行策略
+    feedback.py      在线反馈与更新生命周期
+    training.py      随机锚点、多块掩码、完整分布 KL
+    weights.py       严格公开权重映射、训练检查点
   model.py           独立因果 Transformer、条件低秩层、KV、后段特征重放
   attention.py       共享 K/V 的分组短查询、显式 mask 与 softmax
   execution.py       固定形状 GPU 图、函数式 KV 快照、原地参数更新
@@ -36,7 +41,7 @@ src/blockspec/
   distillation.py    干净／带噪配对布局与蒸馏损失
   training.py        离线课程与 KL 热身
   sampling.py        概率变换、候选接受与残差抽样
-  decoding.py        AR 基线、线性验证解码
+  decoding.py        既有 AR／线性解码调用的兼容入口
   calibration.py     稀疏温度表、混合概率、反馈梯度与单纯形投影
   sampling_execution.py 概率变换、指数抽样与整块残差校正的 GPU 图
   tree.py            前缀预算树、树注意力、精确目标路径遍历
@@ -60,6 +65,8 @@ scripts/benchmark_offline.py  自训／公开适配器与 AR 的配对吞吐对�
 scripts/benchmark_reference.py  固定官方引擎的外部性能参照
 scripts/prefix_relay.py  PrefixRelay 训练、配对吞吐与在线续训评测
 scripts/overlap_mix.py   冻结权重的在线混合、共同前缀审计与配对吞吐
+scripts/dual_view.py    双视图公开权重数值对齐与配对吞吐
+scripts/audit_pipeline.py  从指定 Git 版本对照重构前后的输出、计数与吞吐
 docs/ALGORITHM.md     持续更新的算法主报告
 docs/RESULTS.md       当前有效实验与复现记录
 docs/RUNNING.md       运行与测量规范
