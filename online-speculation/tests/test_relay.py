@@ -249,6 +249,21 @@ def test_paired_request_bootstrap_and_portable_file_sha(tmp_path):
     assert module.sha(path) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
+def test_all_evaluated_heads_share_training_and_block_contract():
+    spec = importlib.util.spec_from_file_location("prefix_relay", Path(__file__).resolve().parents[1]
+                                                 / "scripts" / "prefix_relay.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    metadata = {"train_sha256": "a" * 64, "config": {"block_size": 4}}
+    module.validate_head_metadata(metadata, train_sha256="a" * 64, block_size=4)
+    with pytest.raises(ValueError, match="training-file SHA"):
+        module.validate_head_metadata(metadata, train_sha256="b" * 64, block_size=4)
+    with pytest.raises(ValueError, match="block size"):
+        module.validate_head_metadata(metadata, train_sha256="a" * 64, block_size=8)
+    with pytest.raises(ValueError, match="block size"):
+        module.validate_head_metadata({"train_sha256": "a" * 64}, train_sha256="a" * 64, block_size=4)
+
+
 def test_counterfactual_audit_keeps_the_reference_stream_fixed():
     spec = importlib.util.spec_from_file_location("prefix_relay", Path(__file__).resolve().parents[1]
                                                  / "scripts" / "prefix_relay.py")

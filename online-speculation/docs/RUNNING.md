@@ -356,3 +356,12 @@ stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练�
 输出投影保持零初始化；`random` 提供相同参数量的随机初始化对照。
 审计添加 `--audit-reference /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt`，
 各候选头将在该固定起草器生成的相同前缀上比较 TV 和置信度误差。输出轨迹 SHA 用于核对输入一致性。
+
+当前投影版训练使用 `--train-requests 256 --train-tokens 128 --embedding-init base_projected`
+及 `--lr .003 --confidence-lr .0001 --interval 8 --head-execution cuda_graph`，
+输出头路径为 `/home/singm/online-speculation-work/models/prefixrelay-r64-block4-splitlr-projected.pt`。
+吞吐对照添加 `--compare-head /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt`，
+可把首版头与新头放在同一组交错请求中测量，并输出配对吞吐比区间。
+投影头的在线对照使用 `--online --interval 16 --lr .0003 --confidence-lr .00001 --threshold .03`。
+独立测试将 `--data` 改为同目录的 `test.jsonl`，加 `--evaluation-split test --prompts 23`；
+其余参数保持验证阶段锁定的值。结果通过 `evaluation_sha256` 和 `config.evaluation_split` 标识数据来源。
