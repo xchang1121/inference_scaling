@@ -113,3 +113,15 @@ def test_training_cli_preserves_adapter_scale_through_checkpoint(alpha, tmp_path
     assert loaded[-1].config.adapter_alpha == trained.config.adapter_alpha
     assert benchmark["greedy_identical"] and benchmark["base_unchanged"] and benchmark["adapter_restored"]
     assert all(benchmark["online_adapter_changed_per_stream"])
+
+    continuation = tmp_path / "continued.pt"
+    resumed_args = arguments.copy()
+    resumed_args[resumed_args.index(str(output))] = str(continuation)
+    resumed_args.extend(["--initial-adapter", str(output)])
+    monkeypatch.setattr(sys, "argv", resumed_args)
+    cli.main()
+    resumed_payload = torch.load(continuation, weights_only=True)
+    import hashlib
+    assert resumed_payload["metadata"]["initial_adapter_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert resumed_payload["base_fingerprint"] == payload["base_fingerprint"]
+    assert any(not torch.equal(value, resumed_payload["state"][name]) for name, value in payload["state"].items())

@@ -7,9 +7,11 @@
 当前管线包含线性验证、目标路径树、全适配器／末层在线续训和 GPU 图执行。
 在线重放按监督位置计算词表投影，CUDA 上使用融合参数更新；评测沿请求流跟踪接受长度、累计耗时和参数版本。
 末层训练可将前向、损失和梯度录制为 GPU 图，准备成本计入在线方法的完整吞吐。
+分组短查询注意力直接复用共享 K/V，前向与梯度的重新排布同用于 AR、起草、验证和在线训练。
 反馈按下一次更新所需的窗口采集，逐轮采集模式提供训练样本与参数更新对照。
 覆盖触发策略根据实际验证路径安排训练：完整覆盖窗口保留参数与 Adam，含覆盖缺口的窗口使用全部有效软目标更新。
 验证覆盖概率推导、梯度、KV 缓存、完整基座外部数值对照，以及 RTX 3090 上的三路 TPS 评测。
+离线两路入口接入自训检查点和固定 SHA 的公开适配器，逐请求交错测量 AR 与静态起草，核算各自图准备成本。
 
 ## 先读哪一份
 
@@ -23,6 +25,7 @@
 ```text
 src/blockspec/
   model.py           独立因果 Transformer、条件低秩层、KV、后段特征重放
+  attention.py       共享 K/V 的分组短查询、显式 mask 与 softmax
   execution.py       固定形状 GPU 图、函数式 KV 快照、原地参数更新
   replay_execution.py 末层前向／损失／梯度图、反馈梯度累积
   diffusion.py       离散噪声与预测—校正数学核
@@ -33,6 +36,7 @@ src/blockspec/
   tree.py            前缀预算树、树注意力、精确目标路径遍历
   online.py          原适配器全量／末层子集续训、反向、更新与版本
   checkpoint.py     自有格式、基座指纹、本地权重桥接
+  adapter_io.py      公开 PEFT 适配器的来源、形状、缩放与完整映射校验
   data.py            独立序列数据合同
   corpus.py          有界公开数据、问题分组划分及来源校验
   validation.py      固定窗口与噪声的独立验证
@@ -44,6 +48,7 @@ tests/               概率、梯度、缓存、端到端及外部数值参照
 scripts/check_local_model.py  本地基座权重的集成检查
 scripts/audit_sampler_reference.py  可选的固定公开实现 CPU 契约参照
 scripts/audit_hf_reference.py  固定基座的完整外部数值参照
+scripts/benchmark_offline.py  自训／公开适配器与 AR 的配对吞吐对照
 docs/ALGORITHM.md     持续更新的算法主报告
 docs/RUNNING.md       运行与测量规范
 ```

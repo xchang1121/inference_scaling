@@ -113,10 +113,13 @@ class SuffixReplayExecutor:
         self.slots, self.setup_seconds = {}, 0.0
         self._storage = [(n, id(p), p.data_ptr(), p.requires_grad) for n, p in model.named_parameters()]
         self._buffers = [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()]
+        self._attention = model.attention_signature()
 
     def validate(self, model, start_layer, loss):
         if model is not self.model or start_layer != self.start_layer or loss != self.loss:
             raise ValueError("learner and prepared replay must share model, suffix and loss")
+        if model.attention_signature() != self._attention:
+            raise RuntimeError("attention execution changed; rebuild replay graphs")
         if [(n, id(p), p.data_ptr(), p.requires_grad) for n, p in model.named_parameters()] != self._storage:
             raise RuntimeError("model storage or trainable scope changed; rebuild replay graphs")
         if [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()] != self._buffers:

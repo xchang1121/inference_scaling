@@ -18,6 +18,7 @@ from typing import Sequence
 
 import torch
 
+from blockspec.distillation import divergence
 from blockspec.tree import build_tree, traverse_greedy
 
 
@@ -69,8 +70,43 @@ def audit(checkout, *, trials=100):
                 assert result.tokens == emitted[0, :int(lengths[0])].tolist()
                 assert result.path == cached[0][cached[0] >= 0].tolist()
                 walked += 1
+    losses = audit_losses(checkout, provenance["commit"])
     return {"reference": provenance, "tree_builds_matched": built, "target_walks_matched": walked,
+            "losses": losses,
             "scope": "non-tied prefix scores and CPU pre-sampled target paths; not model/kernel/TPS equivalence"}
+
+
+def audit_losses(checkout, commit):
+    """Compare full-vocabulary L1 values and student gradients with the pinned source."""
+    source = subprocess.run(["git", "--no-replace-objects", "-C", str(checkout), "show",
+                             f"{commit}:training/losses.py"], check=True, capture_output=True).stdout
+    wanted = {"_ChunkedTotalVariation", "token_normalized_total_variation", "token_normalized_reverse_kl"}
+    definitions = [n for n in ast.parse(source).body if isinstance(n, (ast.ClassDef, ast.FunctionDef))
+                   and n.name in wanted]
+    if {n.name for n in definitions} != wanted:
+        raise ValueError("pinned source loss contract changed")
+    namespace = {"torch": torch, "F": torch.nn.functional}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), f"reference:{commit}:losses", "exec"), namespace)
+    rng = torch.Generator().manual_seed(315)
+    maximum_value = maximum_gradient = 0.0
+    cases = 0
+    for rows, vocab in ((1, 7), (5, 103), (3, 2111)):
+        student = torch.randn(rows, vocab, generator=rng, requires_grad=True)
+        teacher = torch.randn(rows, vocab, generator=rng, requires_grad=True)
+        for kind, name in (("l1", "token_normalized_total_variation"),
+                           ("reverse_kl", "token_normalized_reverse_kl")):
+            actual = divergence(student, teacher, kind).mean()
+            expected = namespace[name](student, teacher, rows)
+            ours = torch.autograd.grad(actual, (student, teacher), allow_unused=True)
+            theirs = torch.autograd.grad(expected, (student, teacher), allow_unused=True)
+            assert ours[1] is None and theirs[1] is None
+            torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
+            torch.testing.assert_close(ours[0], theirs[0], atol=2e-7, rtol=2e-5)
+            maximum_value = max(maximum_value, float((actual - expected).abs().detach()))
+            maximum_gradient = max(maximum_gradient, float((ours[0] - theirs[0]).abs().max()))
+            cases += 1
+    return {"cases": cases, "max_value_error": maximum_value, "max_gradient_error": maximum_gradient,
+            "source_sha256": hashlib.sha256(source).hexdigest()}
 
 
 if __name__ == "__main__":

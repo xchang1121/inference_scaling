@@ -87,6 +87,7 @@ class OnlineLearner:
         # Cached features belong to this fixed prefix and its parameter storage.
         # Reconstruct the learner when replacing prefix weights or parameters.
         self._prefix_versions = [p._version for p in self._prefix_parameters]
+        self._attention = model.attention_signature()
         if not self.parameters:
             raise ValueError("online continuation needs trainable adapter parameters")
         use_fused = config.optimizer == "fused" or (config.optimizer == "auto" and self.parameters[0].is_cuda)
@@ -147,6 +148,8 @@ class OnlineLearner:
         return None
 
     def _check_prefix(self):
+        if self.model.attention_signature() != self._attention:
+            raise RuntimeError("attention execution changed; rebuild learner and feedback")
         if any(p.requires_grad or p._version != v for p, v in zip(self._prefix_parameters, self._prefix_versions)):
             raise RuntimeError("frozen draft prefix changed; discard learner and cached boundaries")
 

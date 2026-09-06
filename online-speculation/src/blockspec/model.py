@@ -9,6 +9,8 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from .attention import ATTENTION_BACKENDS, GROUPED_QUERY_LIMIT, grouped_attention
+
 
 PROJECTIONS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 Cache = tuple[tuple[Tensor, Tensor], ...]
@@ -127,8 +129,20 @@ class GatedLinear(nn.Module):
         out = F.linear(x, self.weight, self.bias)
         if self.rank and mask is not None:
             low = F.linear(x, self.lora_A.to(x.dtype))
+            if not torch.is_grad_enabled() and mask.dtype == torch.bool and x.dtype in (torch.float32, torch.float64):
+                # The scalar row gate commutes with the B projection. Apply it
+                # in rank space, then fuse B, scaling and accumulation in GEMM.
+                gated = low * mask[..., None]
+                return torch.addmm(out.reshape(-1, out.shape[-1]),
+                                   gated.reshape(-1, self.rank), self.lora_B.to(x.dtype).t(),
+                                   beta=1, alpha=self.scale).reshape_as(out)
             delta = F.linear(low, self.lora_B.to(x.dtype))
-            out = out + mask[..., None].to(x.dtype) * (delta * self.scale)
+            if self.scale == 1 and mask.dtype == torch.bool and x.dtype in (torch.float32, torch.float64):
+                # Binary multiplication is exact; combine gating and residual
+                # addition while loading the Boolean mask directly in the kernel.
+                out = torch.addcmul(out, mask[..., None], delta)
+            else:
+                out = out + mask[..., None].to(x.dtype) * (delta * self.scale)
         return out
 
 
@@ -193,6 +207,7 @@ class Attention(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.backend = "sdpa"
         for name, outputs in (("q_proj", config.num_attention_heads * config.head_dim),
                               ("k_proj", config.num_key_value_heads * config.head_dim),
                               ("v_proj", config.num_key_value_heads * config.head_dim)):
@@ -230,12 +245,15 @@ class Attention(nn.Module):
         v = v.transpose(1, 2)
         if past is not None:
             k, v = torch.cat((past[0], k), dim=2), torch.cat((past[1], v), dim=2)
-        # Explicit repeat is the readable reference path, not a fused paged kernel.
-        repeat = c.num_attention_heads // c.num_key_value_heads
-        attended = F.scaled_dot_product_attention(
-            q, k.repeat_interleave(repeat, dim=1), v.repeat_interleave(repeat, dim=1),
-            attn_mask=allowed, dropout_p=0.0,
-        )
+        if (self.backend == "grouped" and length <= GROUPED_QUERY_LIMIT
+                and q.dtype in (torch.float32, torch.float64)):
+            attended = grouped_attention(q, k, v, allowed)
+        else:
+            repeat = c.num_attention_heads // c.num_key_value_heads
+            attended = F.scaled_dot_product_attention(
+                q, k.repeat_interleave(repeat, dim=1), v.repeat_interleave(repeat, dim=1),
+                attn_mask=allowed, dropout_p=0.0,
+            )
         out = attended.transpose(1, 2).reshape(b, length, -1)
         return self.o_proj(out, mask), (k, v)
 
@@ -291,6 +309,17 @@ class Decoder(nn.Module):
         nn.init.normal_(self.lm_head.weight, std=0.02)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
+
+    def set_attention_backend(self, backend):
+        """Choose execution before preparing graphs or retaining online feedback."""
+        if backend not in ATTENTION_BACKENDS:
+            raise ValueError("unknown attention backend")
+        for layer in self.model.layers:
+            layer.self_attn.backend = backend
+        return self
+
+    def attention_signature(self):
+        return tuple(layer.self_attn.backend for layer in self.model.layers)
 
     def _rotary(self, positions, dtype):
         # Supported architectures use one fixed RoPE scheme across ALL layers.

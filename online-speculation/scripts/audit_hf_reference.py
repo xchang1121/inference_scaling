@@ -95,6 +95,7 @@ def main():
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
     parser.add_argument("--attention", choices=("eager", "sdpa"), default="sdpa")
     parser.add_argument("--execution", choices=("eager", "cuda_graph"), default="eager")
+    parser.add_argument("--attention-backend", choices=("sdpa", "grouped"), default="sdpa")
     parser.add_argument("--max-logit-error", type=float, default=5e-4)
     parser.add_argument("--max-tv", type=float, default=1e-4)
     parser.add_argument("--require-same-argmax", action="store_true")
@@ -113,6 +114,7 @@ def main():
     torch.set_num_threads(4)
     torch.manual_seed(271828)
     ours = load_hf_base(args.base, rank=0, device=args.device, dtype=dtype).eval()
+    ours.set_attention_backend(args.attention_backend)
     oracle = transformers.AutoModelForCausalLM.from_pretrained(
         args.base, local_files_only=True, trust_remote_code=True, dtype=dtype,
         attn_implementation=args.attention,
@@ -150,7 +152,8 @@ def main():
                       "prompt_length": args.prompt_length, "prompts": args.prompts,
                       "incremental_steps_per_prompt": args.tokens,
                       "implementation_sha256_at_start": implementation_sha, "errors": result,
-                      "execution": args.execution, "numeric_gate_passed": passed,
+                      "execution": args.execution, "attention_backend": args.attention_backend,
+                      "numeric_gate_passed": passed,
                       "gate": {"max_logit_error": args.max_logit_error, "max_tv": args.max_tv,
                                "require_same_argmax": args.require_same_argmax},
                       "scope": "full external base numerical audit; short windows at shifted positions "

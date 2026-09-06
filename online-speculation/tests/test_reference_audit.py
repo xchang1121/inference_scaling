@@ -9,12 +9,45 @@ import pytest
 import torch
 
 
-def module():
+def module(filename="audit_hf_reference.py"):
     spec = importlib.util.spec_from_file_location("base_audit", Path(__file__).resolve().parents[1] /
-                                                 "scripts" / "audit_hf_reference.py")
+                                                 "scripts" / filename)
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
+
+
+def test_decode_path_summary_exposes_a_near_tie_argmax_change():
+    audit = module("audit_decode_path.py")
+    result = audit.compare_target_rows(torch.tensor([1., 1.00001, -1.]),
+                                       torch.tensor([1.00002, 1., -1.]))
+    assert result["ar_top_ids"][0] == 1 and result["spec_top_ids"][0] == 0
+    assert result["ar_argmax"] == 1 and result["spec_argmax"] == 0
+    assert 0 < result["ar_margin"] < 2e-5 and 0 < result["tv"] < 2e-5
+
+
+@torch.no_grad()
+def test_decode_path_trace_keeps_base_rows_and_exact_tree_ancestry():
+    from blockspec.execution import FixedShapeExecutor
+    from blockspec.model import Decoder, ModelConfig
+
+    audit = module("audit_decode_path.py")
+    model = Decoder(ModelConfig(vocab_size=11, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, num_attention_heads=2,
+                                num_key_value_heads=1, head_dim=8, adapter_rank=2))
+    engine = FixedShapeExecutor(model, capacity=16, max_query=3, use_cuda_graph=False)
+    engine.prepare([(2, True, None), (3, False, None)])
+    past = model(torch.tensor([[0, 1, 2, 3, 4]]), return_cache=True)[1]
+    trace = audit.TargetTrace(engine, 6)
+    trace._forward(torch.tensor([[5, 6]]), cache=past, return_cache=True,
+                   adapter_mask=torch.tensor([[False, True]]))
+    assert trace.rows == []
+    allowed = torch.ones(1, 1, 3, 8, dtype=torch.bool)
+    allowed[..., 5:] = torch.tensor([[True, False, False], [True, True, False], [True, False, True]])
+    trace._forward(torch.tensor([[5, 7, 8]]), positions=torch.tensor([[5, 6, 6]]),
+                   allowed=allowed, cache=past, return_cache=True)
+    assert [row["path"] for row in trace.rows] == [[5, 7], [5, 8]]
+    assert all(row["prefix"] == 5 and row["kind"] == "base" for row in trace.rows)
 
 
 def test_error_summary_and_position_weighted_aggregation():
