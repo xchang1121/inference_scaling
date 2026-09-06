@@ -357,7 +357,7 @@ class Decoder(nn.Module):
         if cache is not None and len(cache) != self.config.num_hidden_layers:
             raise ValueError("cache layer count differs from model")
         if capture_layer is not None and (type(capture_layer) is not int or not return_cache
-                                           or not 0 <= capture_layer < self.config.num_hidden_layers):
+                                           or not 0 <= capture_layer <= self.config.num_hidden_layers):
             raise ValueError("boundary capture needs return_cache and a valid layer")
         if positions is None:
             positions = torch.arange(prefix, prefix + length, device=tokens.device)[None].expand(b, -1)
@@ -381,6 +381,9 @@ class Decoder(nn.Module):
                                None if cache is None else cache[i], rotary)
             if return_cache:
                 new_cache.append(kv)
+        if capture_layer == self.config.num_hidden_layers:
+            # The terminal boundary exposes final residual features for light heads.
+            boundary = DraftBoundary(hidden, positions, allowed, adapter_mask, capture_layer)
         logits = self._project(hidden, logit_range)
         if capture_layer is not None:
             return logits, tuple(new_cache), boundary

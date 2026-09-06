@@ -133,7 +133,7 @@ class FixedShapeExecutor:
             if type(length) is not int or not 1 <= length <= self.max_query or type(adapted) is not bool:
                 raise ValueError("invalid graph query signature")
             if capture_layer is not None and (type(capture_layer) is not int
-                                              or not 0 <= capture_layer < self.model.config.num_hidden_layers):
+                                              or not 0 <= capture_layer <= self.model.config.num_hidden_layers):
                 raise ValueError("invalid captured boundary layer")
             key = (length, adapted, capture_layer)
             if key not in self.slots:

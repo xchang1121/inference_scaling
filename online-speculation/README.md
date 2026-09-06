@@ -15,6 +15,9 @@
 两路与三路评测统一接收温度和目标 top-k/top-p，分别提供贪心逐项比较与随机采样观测，报告 TPS 和每次解码前向产出。
 推理图支持 FP32／BF16，在线适配器保留 FP32 主权重；检查点验证和执行精度转换分开进行。
 固定官方引擎的可选外部参照在本机 1B／BF16／FA2、温度 1 的线性负载得到 1.145× 吞吐比，配置与口径见主报告 13.5。
+新增 **PrefixRelay（前缀接力起草）**：通过上一枚实际候选的低秩转移修正并行 logits，
+以采样前置信度选择验证前缀，并利用验证反馈训练新增头。基座和离线扩散适配器保持冻结。
+条件概率推导、正确性证明和实测结果集中在主报告第 15 节。
 
 ## 先读哪一份
 
@@ -38,6 +41,7 @@ src/blockspec/
   decoding.py        AR 基线、线性验证解码
   tree.py            前缀预算树、树注意力、精确目标路径遍历
   online.py          原适配器全量／末层子集续训、反向、更新与版本
+  relay.py           PrefixRelay 条件修正、采样前截断、新增头在线更新与检查点
   checkpoint.py     自有格式、基座指纹、本地权重桥接
   adapter_io.py      公开 PEFT 适配器的来源、形状、缩放与完整映射校验
   data.py            独立序列数据合同
@@ -53,6 +57,7 @@ scripts/audit_sampler_reference.py  可选的固定公开实现 CPU 契约参照
 scripts/audit_hf_reference.py  固定基座的完整外部数值参照
 scripts/benchmark_offline.py  自训／公开适配器与 AR 的配对吞吐对照
 scripts/benchmark_reference.py  固定官方引擎的外部性能参照
+scripts/prefix_relay.py  PrefixRelay 训练、配对吞吐与在线续训评测
 docs/ALGORITHM.md     持续更新的算法主报告
 docs/RUNNING.md       运行与测量规范
 ```
