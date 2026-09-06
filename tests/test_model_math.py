@@ -7,12 +7,12 @@ from blockspec.distillation import divergence, paired_batch, paired_loss
 from blockspec.model import Decoder, GatedLinear, ModelConfig, cache_length, trim_cache
 
 
-def tiny_model():
+def tiny_model(backend="sdpa"):
     torch.manual_seed(29)
     config = ModelConfig(vocab_size=7, hidden_size=16, intermediate_size=24,
                          num_attention_heads=2, num_key_value_heads=1, head_dim=8,
                          num_hidden_layers=2, adapter_rank=2, adapter_alpha=2)
-    return Decoder(config).double()
+    return Decoder(config).double().set_attention_backend(backend)
 
 
 def randomize_adapter(model):
@@ -34,8 +34,9 @@ def test_sdpa_matches_explicit_attention_equations(monkeypatch):
 
 
 @pytest.mark.parametrize("split", [1, 2, 4])
-def test_kv_cache_matches_full_causal_forward(split):
-    model = tiny_model()
+@pytest.mark.parametrize("backend", ["sdpa", "grouped"])
+def test_kv_cache_matches_full_causal_forward(split, backend):
+    model = tiny_model(backend)
     x = torch.tensor([[0, 1, 3, 2, 4]])
     full = model(x)
     _, cache = model(x[:, :split], return_cache=True)
@@ -48,8 +49,9 @@ def test_kv_cache_matches_full_causal_forward(split):
         trim_cache(full_cache, 100)
 
 
-def test_paired_teacher_has_no_noise_or_adapter_leakage():
-    model = tiny_model()
+@pytest.mark.parametrize("backend", ["sdpa", "grouped"])
+def test_paired_teacher_has_no_noise_or_adapter_leakage(backend):
+    model = tiny_model(backend)
     randomize_adapter(model)
     clean = torch.tensor([[0, 1, 3, 2, 4, 5]])
     batch = paired_batch(clean, 3, noisy=torch.full_like(clean, 6))
@@ -72,8 +74,9 @@ def test_block_attention_exact_truth_table():
             assert bool(mask[6 + j, k]) == expected
 
 
-def test_paired_student_matches_individual_cached_blocks():
-    model = tiny_model()
+@pytest.mark.parametrize("backend", ["sdpa", "grouped"])
+def test_paired_student_matches_individual_cached_blocks(backend):
+    model = tiny_model(backend)
     randomize_adapter(model)
     clean = torch.tensor([[0, 1, 2, 3, 4, 5]])
     noise = torch.tensor([[0, 6, 5, 4, 3, 2]])
@@ -90,8 +93,9 @@ def test_paired_student_matches_individual_cached_blocks():
         torch.testing.assert_close(paired[:, 6 + start:9 + start], independent, atol=2e-15, rtol=2e-14)
 
 
-def test_clean_seed_kv_survives_arbitrary_adapter_updates():
-    model = tiny_model()
+@pytest.mark.parametrize("backend", ["sdpa", "grouped"])
+def test_clean_seed_kv_survives_arbitrary_adapter_updates(backend):
+    model = tiny_model(backend)
     prefix = torch.tensor([[0, 1, 2]])
     _, cache = model(prefix, return_cache=True)
     inputs = torch.tensor([[3, 6, 5, 4]])

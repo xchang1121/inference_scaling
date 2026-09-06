@@ -113,6 +113,8 @@ def main():
     train.add_argument("--base", type=Path, required=True)
     train.add_argument("--data", type=Path, required=True)
     train.add_argument("--output", type=Path, required=True)
+    train.add_argument("--initial-adapter", type=Path,
+                       help="continue a matching local adapter; initializes a fresh optimizer")
     train.add_argument("--device", default="cuda")
     train.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     train.add_argument("--rank", type=int, default=8)
@@ -175,6 +177,8 @@ def main():
                        help="same inference executor for AR/static/online; CUDA graphs currently require FP32")
     bench.add_argument("--online-execution", choices=["eager", "cuda_graph"], default="eager",
                        help="prepared FP32 suffix forward/loss/gradient graphs, or eager online training")
+    bench.add_argument("--attention-backend", choices=["sdpa", "grouped"], default="sdpa",
+                       help="shared AR/draft/verifier/training attention; grouped specializes short FP32/FP64 queries")
     args = parser.parse_args()
     if args.command == "benchmark":
         from .benchmark import BenchmarkConfig, benchmark_streams, continuation_prompts
@@ -182,7 +186,8 @@ def main():
         config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
                                  warmup_tokens=args.warmup_tokens, seed=args.seed, sampler=args.sampler,
                                  top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id,
-                                 execution=args.execution, online_execution=args.online_execution)
+                                 execution=args.execution, online_execution=args.online_execution,
+                                 attention_backend=args.attention_backend)
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
                                      learning_rate=args.learning_rate, loss=args.loss,
                                      train_last_layers=args.online_last_layers, optimizer=args.optimizer,
@@ -243,6 +248,10 @@ def main():
         torch.manual_seed(args.seed)
         model = load_hf_base(args.base, rank=args.rank, alpha=args.alpha,
                              device=args.device, dtype=getattr(torch, args.dtype))
+        initial_sha = None
+        if args.initial_adapter:
+            model, _ = load_checkpoint(args.initial_adapter, model=model, device=args.device)
+            initial_sha = hashlib.sha256(args.initial_adapter.read_bytes()).hexdigest()
         fingerprint = base_fingerprint(model)
         tokenizer = None
         if args.text_data:
@@ -266,6 +275,7 @@ def main():
                         metadata={"training": result, "training_config": asdict(config),
                                   "base_source": str(args.base), "seed": args.seed,
                                   "train_data_sha256": data_sha, "validation_data_sha256": validation_sha,
+                                  "initial_adapter_sha256": initial_sha,
                                   "implementation_sha256_at_start": implementation_sha})
         print(json.dumps({"checkpoint": str(args.output), **result}), flush=True)
         return

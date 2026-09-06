@@ -6,7 +6,7 @@
 
 本机 RTX 3090 24GB，WSL2 发行版名 `Ubuntu-22.04`，Linux 用户 `singm`。
 已有环境 `/home/singm/.venvs/uno-cu128`，PyTorch 2.11.0+cu128 / Python 3.10。
-注意力使用 PyTorch SDPA。
+注意力提供 PyTorch SDPA 与分组短查询路径。
 
 以下在 WSL Bash 中运行：
 
@@ -64,12 +64,14 @@ PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
   HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 python scripts/audit_hf_reference.py \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --prompts 4 --prompt-length 512 --tokens 64 --execution cuda_graph --require-same-argmax
+  --prompts 4 --prompt-length 512 --tokens 64 --execution cuda_graph \
+  --attention-backend grouped --require-same-argmax
 ```
 
 该脚本执行经过 hash 核对的本地基座作者模型，与本项目 `Decoder` 对照。
 代码和配置按 LF 换行核对，权重逐字节核对，索引指向已校验的分片。结果写入 stdout。
 默认 logits 最大误差阈值为 0.0005、TV 为 0.0001；上述命令还要求 argmax 全部相同，超出门槛时以错误码退出。
+`--attention-backend grouped` 在本项目模型中启用分组短查询，外部参照继续使用其原有注意力。
 `--execution eager` 使用普通执行路径。移位短窗口检查大位置编号的计算，校验输入取自开发集。
 
 ## 4. 用自己的数据训练全适配器
@@ -177,6 +179,7 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 ```python
 from blockspec.replay_execution import SuffixReplayExecutor
 
+model.set_attention_backend("grouped")
 learner = OnlineLearner(model, OnlineConfig(train_last_layers=4, stride=16, replay_blocks=1,
                                           loss="forward_kl", learning_rate=0.0003,
                                           update_policy="coverage"))
@@ -189,10 +192,36 @@ learner.replay_executor = replay
 输入使用 FP32 CUDA、batch=1，历史长度在容量范围内；块长和有效监督行数通过 `prepare()` 显式准备。
 准备好的 `replay` 可传给同一模型的新 `OnlineLearner(model, config, replay_executor=replay)`，
 新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。数学推导见主报告 9.8。
+`model.set_attention_backend("grouped")` 在创建 learner 和推理／训练图之前调用；`sdpa` 为按头对照。
+分组路径处理至多 32 项的 FP32／FP64 查询，长 prefill 和低精度查询由 SDPA 计算，推导见主报告 8.3。
 结束执行器的使用时，先清理反馈、解除各 learner 的 `replay_executor` 引用，再释放调用方持有的执行器。
 图槽与工作区随最后一个执行器引用释放；基座和仍在使用的 Adam 状态保持各自的生命周期。
 
-## 6. 同条件三路评测
+## 6. 离线复现与同条件三路评测
+
+当前优先使用独立两路入口。它逐请求交换先后顺序，固定 adapter，并分别核算 AR 与静态起草的图准备成本：
+
+```bash
+python scripts/benchmark_offline.py \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --prompts 17 --prompt-length 256 --tokens 512 --block-size 4 \
+  --sampler tree --top-k 8 --prefix-budget 16 --repeats 2 --progress
+```
+
+公开权重对照使用同一入口，将 adapter 改为目录
+`/home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno`，并添加
+`--reference-sha256 5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e`。
+输出标明权重来源、文件 SHA、代码指纹、逐 token 比较、分轮吞吐和显存。
+该入口使用 FP32 CUDA；`--sampler linear --block-size 8` 提供公开入口默认线性块形状的本机对照。
+数学与数值审计入口 `scripts/audit_decode_path.py` 接收相同的 `--base`、公开 `--adapter`、
+`--reference-sha256` 和 `--data`，另用 `--request 16 --token-index 125 --seed 271844` 定位第 17 条提示的第 126 个输出。
+它在共同历史上对齐树的祖先路径与 AR，输出目标 logits、前两项间隔和 TV；带观测的运行用于数值分析。
+离线续训在第 4 节训练命令中增加 `--initial-adapter /path/to/starting-adapter.pt`，同时传入该起点对应的 rank 与 alpha。
+新检查点记录起点 SHA，Adam 重新初始化。验证文件用于选择配置，保留测试用于确定配置后的验收。
+
+在线三路入口继续用于后续增量收益的比较：
 
 当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载，训练配置为 1,200 步的 2→4→6→8 课程。
 开发评测使用验证集中的连续前缀；test 集留给配置确定后的评测。
@@ -207,11 +236,11 @@ python -m blockspec benchmark \
   --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
   --online-last-layers 4 --update-stride 16 --replay-blocks 1 \
   --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed \
-  --update-policy coverage --online-execution cuda_graph
+  --update-policy coverage --online-execution cuda_graph --attention-backend grouped
 ```
 
 按文件顺序取全部 17 个验证记录的前 256 项作为输入，包含 4 个代码请求和 13 个数学请求。默认贪心、固定输出预算、`eos_id=None`；
-`--eos-id 1` 启用结束标记。上面命令对应主报告当前表格；`--sampler linear` 切换线性路径。
+`--eos-id 1` 启用结束标记；`--sampler linear` 切换线性路径。
 重复次数取正偶数，每对按 AR／静态／在线、在线／静态／AR 的顺序运行。每个在线请求流从同一离线起点开始，
 在线流内保留学习后的权重与 Adam 状态，静态流保持离线权重。预热结束恢复正式起点，第一次 Adam 状态分配计入更新时间。
 
@@ -225,6 +254,8 @@ python -m blockspec benchmark \
 `fully_covered_rounds` 统计实际完整覆盖的验证轮次，`updates` 统计真正执行的训练次数。
 `--online-last-layers 4` 选择末 4 层续训，输出报告实际可训练参数数。
 `--online-execution cuda_graph` 准备末层前向／损失／梯度图，`eager` 使用普通重放路径。
+`--attention-backend grouped` 对 AR、起草、验证和在线重放共同设置分组短查询；`sdpa` 提供按头对照。
+结果的 `config.attention_backend` 记录本次选择，评测完成恢复调用方的注意力配置。
 全适配器续训使用默认层范围和 `--online-execution eager`。
 
 加 `--execution cuda_graph` 启用同一个独立固定形状执行器，AR、静态和在线都使用它。

@@ -1,0 +1,72 @@
+"""Small-model offline reproduction: own decoder with trained or reference weights."""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import torch
+
+from blockspec.adapter_io import load_peft_adapter, peft_config
+from blockspec.benchmark import BenchmarkConfig, benchmark_offline, continuation_prompts
+from blockspec.checkpoint import implementation_fingerprint, load_checkpoint, load_hf_base
+from blockspec.data import load_sequences
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", type=Path, required=True)
+    parser.add_argument("--adapter", type=Path, required=True)
+    parser.add_argument("--reference-sha256", help="required for a published PEFT directory")
+    parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--split-role", choices=["validation", "test"], default="validation")
+    parser.add_argument("--prompts", type=int, default=17)
+    parser.add_argument("--prompt-length", type=int, default=256)
+    parser.add_argument("--tokens", type=int, default=512)
+    parser.add_argument("--block-size", type=int, default=4)
+    parser.add_argument("--sampler", choices=["linear", "tree"], default="tree")
+    parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--prefix-budget", type=int, default=16)
+    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=271828)
+    parser.add_argument("--progress", action="store_true")
+    args = parser.parse_args()
+    torch.set_num_threads(4)
+    torch.manual_seed(args.seed)
+    source_sha = implementation_fingerprint()
+    data_sha = hashlib.sha256(args.data.read_bytes()).hexdigest()
+    if args.adapter.is_dir():
+        if not args.reference_sha256:
+            parser.error("a PEFT reference requires its published artifact SHA256")
+        config = peft_config(args.adapter)
+        model = load_hf_base(args.base, rank=config["r"], alpha=config["lora_alpha"], device="cuda")
+        provenance = load_peft_adapter(args.adapter, model, expected_sha256=args.reference_sha256)
+    else:
+        payload = torch.load(args.adapter, map_location="cpu", weights_only=True)
+        if not payload.get("adapter_only"):
+            parser.error("provide an adapter-only checkpoint")
+        if data_sha == payload.get("metadata", {}).get("train_data_sha256"):
+            parser.error("select a validation or test file")
+        config = payload["config"]
+        del payload
+        model = load_hf_base(args.base, rank=config["adapter_rank"], alpha=config["adapter_alpha"], device="cuda")
+        model, metadata = load_checkpoint(args.adapter, model=model, device="cuda")
+        provenance = {"kind": "local_training", "sha256": hashlib.sha256(args.adapter.read_bytes()).hexdigest(),
+                      "training": metadata}
+    config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
+                             warmup_tokens=32, sampler=args.sampler, top_k=args.top_k,
+                             prefix_budget=args.prefix_budget, execution="cuda_graph",
+                             attention_backend="grouped", seed=args.seed)
+    prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
+                                   count=args.prompts, length=args.prompt_length)
+    print(json.dumps({"stage": "start", "implementation_sha256": source_sha,
+                      "data_sha256": data_sha, "split_role": args.split_role,
+                      "adapter": provenance, "device": torch.cuda.get_device_name()}), flush=True)
+    result = benchmark_offline(model, prompts, config,
+                               progress=(lambda row: print(json.dumps(row), flush=True)) if args.progress else None)
+    print(json.dumps({"stage": "complete", "implementation_sha256": source_sha,
+                      "data_sha256": data_sha, "adapter_sha256": provenance["sha256"], **result}), flush=True)
+
+
+if __name__ == "__main__":
+    main()

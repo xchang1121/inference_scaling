@@ -12,6 +12,7 @@ import time
 import torch
 
 from .checkpoint import adapter_state, base_fingerprint
+from .attention import ATTENTION_BACKENDS
 from .decoding import generate_ar, generate_speculative
 from .online import OnlineConfig, OnlineLearner, synchronize
 from .tree import generate_tree
@@ -34,6 +35,7 @@ class BenchmarkConfig:
     eos_id: int | None = None
     execution: str = "eager"
     online_execution: str = "eager"
+    attention_backend: str = "sdpa"
 
     def __post_init__(self):
         if min(self.tokens, self.warmup_tokens, self.top_k, self.prefix_budget) < 1:
@@ -46,6 +48,8 @@ class BenchmarkConfig:
             raise ValueError("unknown inference execution")
         if self.online_execution not in ("eager", "cuda_graph"):
             raise ValueError("unknown online execution")
+        if self.attention_backend not in ATTENTION_BACKENDS:
+            raise ValueError("unknown attention backend")
 
 
 def continuation_prompts(sequences, *, count, length):
@@ -100,6 +104,84 @@ def stream_trajectory(rows, *, setup_seconds=0.0, engine_setup_seconds=0.0):
     return trajectory
 
 
+def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None):
+    """Paired AR/static measurements, with one fixed adapter and shared kernels.
+
+    Alternate the order on each request, invert it on the next repetition, and
+    account for the graph signatures each standalone arm actually needs.
+    """
+    if not prompts or any(p.ndim != 2 or p.shape[0] != 1 or p.shape[1] < 1 for p in prompts):
+        raise ValueError("nonempty batch-one prompts required")
+    device = next(model.parameters()).device
+    prompts = [p.to(device) for p in prompts]
+    original_attention = model.attention_signature()
+    initial, frozen = adapter_state(model), base_fingerprint(model)
+    engine, setup = None, {"ar": 0.0, "static": 0.0}
+    generate = generate_tree if config.sampler == "tree" else generate_speculative
+    options = {"block_size": config.block_size}
+    if config.sampler == "tree":
+        options.update(top_k=config.top_k, prefix_budget=config.prefix_budget)
+    rows, comparisons, repetitions = {"ar": [], "static": []}, [], []
+    try:
+        model.set_attention_backend(config.attention_backend)
+        if config.execution == "cuda_graph":
+            from .execution import FixedShapeExecutor
+            maximum = max(config.block_size, config.prefix_budget if config.sampler == "tree" else 1)
+            engine = FixedShapeExecutor(model, capacity=max(p.shape[1] for p in prompts) +
+                                       max(config.tokens, config.warmup_tokens), max_query=maximum)
+            clean = [(n, False, None) for n in range(1, maximum + 1)]
+            draft = [(n, True, None) for n in range(2, config.block_size + 1)]
+            engine.prepare(clean + draft)
+            ar_keys = {(1, False, None)} | {(p.shape[1] - 1, False, None) for p in prompts
+                                           if 1 <= p.shape[1] - 1 <= maximum}
+            setup["ar"] = sum(engine.signature_seconds[key] for key in ar_keys)
+            setup["static"] = engine.setup_seconds
+        options["executor"] = engine
+        generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=engine)
+        generate(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, **options,
+                 generator=torch.Generator(device=device).manual_seed(config.seed))
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+        for repeat in range(config.repeats):
+            current = {"ar": [], "static": []}
+            for request, prompt in enumerate(prompts):
+                order = ("ar", "static") if (repeat + request) % 2 == 0 else ("static", "ar")
+                outputs = {}
+                for arm in order:
+                    rng = torch.Generator(device=device).manual_seed(config.seed + repeat * len(prompts) + request)
+                    output = (generate_ar(model, prompt, config.tokens, eos_id=config.eos_id,
+                                          executor=engine, generator=rng) if arm == "ar" else
+                              generate(model, prompt, config.tokens, eos_id=config.eos_id,
+                                       generator=rng, **options))
+                    row = output.summary()
+                    outputs[arm] = output.tokens
+                    current[arm].append(row)
+                    rows[arm].append(row)
+                    if progress:
+                        progress({"repeat": repeat, "request": request, "arm": arm, **row})
+                comparisons.append({"repeat": repeat, "request": request,
+                                    **compare_tokens(outputs["ar"], outputs["static"])})
+            repetitions.append({arm: aggregate(current[arm], engine_setup_seconds=setup[arm] if repeat == 0 else 0)
+                                for arm in rows})
+        peak = torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None
+        if frozen != base_fingerprint(model):
+            raise RuntimeError("offline benchmark changed base weights")
+        after = adapter_state(model)
+        if any(not torch.equal(value, after[name]) for name, value in initial.items()):
+            raise RuntimeError("offline benchmark changed adapter weights")
+    finally:
+        for layer, backend in zip(model.model.layers, original_attention):
+            layer.self_attn.backend = backend
+    arms = {arm: aggregate(rows[arm], engine_setup_seconds=setup[arm]) for arm in rows}
+    return {"config": asdict(config), "arms": arms, "repeats": repetitions, "comparisons": comparisons,
+            "speedup": arms["static"]["tps"] / arms["ar"]["tps"],
+            "speedup_including_setup": arms["static"]["tps_including_all_setup"] /
+                                       arms["ar"]["tps_including_all_setup"],
+            "greedy_identical": all(item["identical"] for item in comparisons),
+            "base_unchanged": True, "adapter_unchanged": True, "peak_allocated_bytes": peak,
+            "prompt_sha256": [hashlib.sha256(p.cpu().numpy().tobytes()).hexdigest() for p in prompts]}
+
+
 def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=OnlineConfig(), *, progress=None):
     if not prompts or any(p.ndim != 2 or p.shape[0] != 1 or p.shape[1] < 1 for p in prompts):
         raise ValueError("nonempty batch-one prompts required")
@@ -111,6 +193,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     frozen = base_fingerprint(model)
     original_requires_grad = {name: p.requires_grad for name, p in model.named_parameters()}
     original_dtypes = {name: p.dtype for name, p in model.named_parameters()}
+    original_attention = model.attention_signature()
     measurements, generated, setup, adapter_changes = {}, {}, {}, []
     trainable, optimizer_backend = 0, None
     executor, execution_info = None, {"kind": config.execution, "setup_seconds": 0.0, "signatures": 0}
@@ -130,6 +213,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
         return torch.Generator(device=device).manual_seed(seed)
 
     try:
+        model.set_attention_backend(config.attention_backend)
         if config.execution == "cuda_graph":
             from .execution import FixedShapeExecutor
             # Fixed addresses survive in-place adapter restoration and AdamW.
@@ -234,6 +318,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     finally:
         # Restore the caller's adapter weights, dtypes, gradients and training flags.
         model.load_state_dict(initial, strict=False)
+        for layer, backend in zip(model.model.layers, original_attention):
+            layer.self_attn.backend = backend
         for name, parameter in model.named_parameters():
             parameter.data = parameter.data.to(original_dtypes[name])
             parameter.grad = None

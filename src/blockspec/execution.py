@@ -15,10 +15,9 @@ from .model import DraftBoundary, PackedCache, cache_length
 
 class _ForwardSlot:
     @torch.no_grad()
-    def __init__(self, model, capacity, length, adapted, capture_layer, use_cuda_graph):
+    def __init__(self, model, capacity, length, adapted, capture_layer, use_cuda_graph, past):
         self.model, self.capacity = model, capacity
-        device, dtype = next(model.parameters()).device, next(model.parameters()).dtype
-        c = model.config
+        device = next(model.parameters()).device
         self.ids = torch.zeros(1, length, dtype=torch.long, device=device)
         self.positions = torch.arange(length, device=device)[None]
         self.allowed = torch.zeros(1, 1, length, capacity + length, dtype=torch.bool, device=device)
@@ -26,8 +25,7 @@ class _ForwardSlot:
         self.mask = torch.ones_like(self.ids, dtype=torch.bool) if adapted else None
         if self.mask is not None:
             self.mask[:, 0] = False
-        self.past = torch.zeros(c.num_hidden_layers, 2, 1, c.num_key_value_heads,
-                                capacity, c.head_dim, device=device, dtype=dtype)
+        self.past = past
         self.cache = PackedCache(self.past)
         self.capture_layer = capture_layer
         self.graph = None
@@ -105,13 +103,17 @@ class FixedShapeExecutor:
         self.model, self.capacity, self.max_query = model, capacity, max_query
         self.use_cuda_graph = use_cuda_graph
         self.slots, self.setup_seconds = {}, 0.0
+        self._past = None
         self.signature_seconds = {}
         self._storage = [(n, id(p), p.data_ptr()) for n, p in model.named_parameters()]
         self._buffers = [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()]
+        self._attention = model.attention_signature()
 
     def validate(self, model):
         if model is not self.model:
             raise ValueError("executor and decoder must share a model")
+        if model.attention_signature() != self._attention:
+            raise RuntimeError("attention execution changed; rebuild executor")
         if [(n, id(p), p.data_ptr()) for n, p in model.named_parameters()] != self._storage:
             raise RuntimeError("model storage changed; discard executor and recapture")
         if [(n, id(b), b.data_ptr(), b._version) for n, b in model.named_buffers()] != self._buffers:
@@ -134,8 +136,13 @@ class FixedShapeExecutor:
             key = (length, adapted, capture_layer)
             if key not in self.slots:
                 before = time.perf_counter()
+                if self._past is None:
+                    c = self.model.config
+                    self._past = torch.zeros(c.num_hidden_layers, 2, 1, c.num_key_value_heads,
+                                             self.capacity, c.head_dim, device=device,
+                                             dtype=next(self.model.parameters()).dtype)
                 self.slots[key] = _ForwardSlot(self.model, self.capacity, length, adapted,
-                                               capture_layer, self.use_cuda_graph)
+                                               capture_layer, self.use_cuda_graph, self._past)
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 self.signature_seconds[key] = time.perf_counter() - before
