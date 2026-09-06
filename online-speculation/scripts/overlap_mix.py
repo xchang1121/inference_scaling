@@ -11,6 +11,7 @@ import torch
 from blockspec.adapter_io import load_peft_adapter, peft_config
 from blockspec.benchmark import aggregate, continuation_prompts
 from blockspec.calibration import OverlapMix
+from blockspec.continuation import ContinuationMix
 from blockspec.checkpoint import adapter_fingerprint, base_fingerprint, implementation_fingerprint, load_hf_base
 from blockspec.data import assert_split_files_disjoint, load_sequences
 from blockspec.decoding import generate_ar, generate_speculative
@@ -51,10 +52,13 @@ def main():
     parser.add_argument("--learn-requests", type=int, default=0)
     parser.add_argument("--learn-tokens", type=int, default=128)
     parser.add_argument("--audit-learned", action="store_true")
+    parser.add_argument("--method", choices=("temperatures", "continuation"), default="temperatures")
     parser.add_argument("--fixed", type=float, nargs="*", default=[])
     parser.add_argument("--audit-online", action="store_true")
     parser.add_argument("--seed", type=int, default=271828)
     args = parser.parse_args()
+    if args.method == "continuation" and args.fixed:
+        parser.error("fixed temperatures apply to the temperature mixture")
     if (args.repeats < 2 or args.repeats % 2 or args.top_k < 1 or args.temperature <= 0
             or args.learn_requests < 0 or args.learn_tokens < 1):
         parser.error("positive temperature/top-k and a positive even repeat count required")
@@ -79,9 +83,11 @@ def main():
     sampler = None
     if args.sampling_execution == "cuda_graph":
         sampler = SamplingExecutor(model.config.vocab_size, args.block_size, sampling,
-                                   temperatures=tuple(args.temperatures), device="cuda")
+                                   temperatures=tuple(args.temperatures) if args.method == "temperatures" else (),
+                                   continuation=args.method == "continuation", device="cuda")
         setups["ar"] += sampler.signature_seconds[1, "plain"]
-        setups["base"] += sum(value for (_, kind), value in sampler.signature_seconds.items() if kind != "mixed")
+        setups["base"] += sum(value for (_, kind), value in sampler.signature_seconds.items()
+                              if kind not in ("mixed", "continuation"))
         setups["identity"] = setups["online"] = engine.setup_seconds + sampler.setup_seconds
     options = dict(block_size=args.block_size, sampling=sampling, noise=noise, executor=engine, sampler_executor=sampler)
     provenance = {"config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
@@ -92,6 +98,9 @@ def main():
                   "retention_threshold": .97}
 
     def mixer(adaptive=False, fixed=1., diagnostics=False):
+        if args.method == "continuation":
+            return ContinuationMix(args.block_size, args.top_k, learning_rate=args.learning_rate,
+                                   interval=args.interval, adaptive=adaptive, diagnostics=diagnostics, device="cuda")
         return OverlapMix(args.block_size, args.top_k, temperatures=args.temperatures,
                           learning_rate=args.learning_rate, interval=args.interval, adaptive=adaptive,
                           fixed_temperature=fixed, diagnostics=diagnostics, device="cuda")
