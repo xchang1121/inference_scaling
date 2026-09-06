@@ -11,6 +11,7 @@ from blockspec.adapter_io import load_peft_adapter, peft_config
 from blockspec.benchmark import BenchmarkConfig, benchmark_offline, continuation_prompts
 from blockspec.checkpoint import implementation_fingerprint, load_checkpoint, load_hf_base
 from blockspec.data import load_sequences
+from blockspec.sampling import SamplingConfig
 
 
 def main():
@@ -25,7 +26,10 @@ def main():
     parser.add_argument("--tokens", type=int, default=512)
     parser.add_argument("--block-size", type=int, default=4)
     parser.add_argument("--sampler", choices=["linear", "tree"], default="tree")
-    parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--top-k", type=int, default=8, help="candidate width for tree construction")
+    parser.add_argument("--temperature", type=float, default=0.0, help="0: greedy; positive: target sampling temperature")
+    parser.add_argument("--sampling-top-k", type=int, default=0, help="target probability filter; 0 keeps the vocabulary")
+    parser.add_argument("--top-p", type=float, default=1.0, help="target nucleus mass")
     parser.add_argument("--prefix-budget", type=int, default=16)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--seed", type=int, default=271828)
@@ -56,7 +60,8 @@ def main():
     config = BenchmarkConfig(tokens=args.tokens, block_size=args.block_size, repeats=args.repeats,
                              warmup_tokens=32, sampler=args.sampler, top_k=args.top_k,
                              prefix_budget=args.prefix_budget, execution="cuda_graph",
-                             attention_backend="grouped", seed=args.seed)
+                             attention_backend="grouped", seed=args.seed,
+                             sampling=SamplingConfig(args.temperature, args.sampling_top_k, args.top_p))
     prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
                                    count=args.prompts, length=args.prompt_length)
     print(json.dumps({"stage": "start", "implementation_sha256": source_sha,

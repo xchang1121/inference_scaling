@@ -76,6 +76,44 @@ def test_temperature_topk_topp_and_greedy():
     assert torch.equal(p > 0, torch.tensor([True, True, False, False]))
 
 
+@pytest.mark.parametrize("config", [SamplingConfig(temperature=1), SamplingConfig(temperature=.4),
+                                   SamplingConfig(temperature=2), SamplingConfig(1, 2, 1),
+                                   SamplingConfig(1, 0, .7), SamplingConfig(.7, 2, .8),
+                                   SamplingConfig(1, 1, 1)])
+def test_filtered_output_law_by_executing_every_accept_and_correction_branch(monkeypatch, config):
+    p = probabilities(torch.tensor([1.4, -.3, .5, .9], dtype=torch.float64), config)
+    q = probabilities(torch.tensor([-.8, 1.5, .4, .3], dtype=torch.float64), config)
+    correction, _ = residual(p, q)
+    target = torch.stack((p, p))
+    actual, accepted_mass = torch.zeros_like(p), p.new_zeros(())
+    for y in range(len(q)):
+        if q[y] == 0:
+            continue
+        acceptance = min(1., float(p[y] / q[y]))
+        if acceptance > 0:
+            # The extra token after acceptance leaves the first emitted token fixed.
+            monkeypatch.setattr("blockspec.sampling.draw", lambda distribution, generator: distribution.argmax())
+            result = verify_linear(torch.tensor([y]), q[None], target,
+                                   acceptance_uniforms=torch.tensor([acceptance / 2], dtype=torch.float64))
+            assert result.accepted == 1
+            actual[result.tokens[0]] += q[y] * acceptance
+            accepted_mass += q[y] * acceptance
+        if acceptance < 1:
+            for z in range(len(p)):
+                if correction[z] == 0:
+                    continue
+                def force_correction(distribution, generator, z=z):
+                    torch.testing.assert_close(distribution, correction, atol=1e-15, rtol=1e-15)
+                    return torch.tensor(z)
+                monkeypatch.setattr("blockspec.sampling.draw", force_correction)
+                result = verify_linear(torch.tensor([y]), q[None], target,
+                                       acceptance_uniforms=torch.tensor([(1 + acceptance) / 2], dtype=torch.float64))
+                assert result.rejected_at == 0
+                actual[result.tokens[0]] += q[y] * (1 - acceptance) * correction[z]
+    torch.testing.assert_close(actual, p, atol=1e-15, rtol=1e-15)
+    torch.testing.assert_close(accepted_mass, 1 - .5 * (p - q).abs().sum(), atol=1e-15, rtol=1e-15)
+
+
 @pytest.mark.parametrize("alpha_s,alpha_t", [(1., 0.), (.8, .3), (.7, 0.), (1., .7)])
 def test_reverse_posterior_against_enumerated_markov_joint(alpha_s, alpha_t):
     prior = torch.tensor([.1, .3, .6], dtype=torch.float64)

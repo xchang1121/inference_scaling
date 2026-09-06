@@ -15,6 +15,7 @@ from .decoding import generate_ar, generate_speculative
 from .distillation import LOSS_KINDS, offline_step, paired_loss
 from .model import Decoder, ModelConfig
 from .online import OnlineConfig, OnlineLearner
+from .sampling import SamplingConfig
 from .training import TrainingConfig, train_adapter
 from .tree import generate_tree
 
@@ -154,7 +155,10 @@ def main():
     bench.add_argument("--tokens", type=int, default=128)
     bench.add_argument("--block-size", type=int, default=4)
     bench.add_argument("--sampler", choices=["linear", "tree"], default="linear")
-    bench.add_argument("--top-k", type=int, default=4)
+    bench.add_argument("--top-k", type=int, default=4, help="candidate width for tree construction")
+    bench.add_argument("--temperature", type=float, default=0.0, help="0: greedy; positive: target sampling temperature")
+    bench.add_argument("--sampling-top-k", type=int, default=0, help="target probability filter; 0 keeps the vocabulary")
+    bench.add_argument("--top-p", type=float, default=1.0, help="target nucleus mass")
     bench.add_argument("--prefix-budget", type=int, default=16)
     bench.add_argument("--repeats", type=int, default=2)
     bench.add_argument("--warmup-tokens", type=int, default=8)
@@ -187,7 +191,8 @@ def main():
                                  warmup_tokens=args.warmup_tokens, seed=args.seed, sampler=args.sampler,
                                  top_k=args.top_k, prefix_budget=args.prefix_budget, eos_id=args.eos_id,
                                  execution=args.execution, online_execution=args.online_execution,
-                                 attention_backend=args.attention_backend)
+                                 attention_backend=args.attention_backend,
+                                 sampling=SamplingConfig(args.temperature, args.sampling_top_k, args.top_p))
         online_config = OnlineConfig(stride=args.update_stride, replay_blocks=args.replay_blocks,
                                      learning_rate=args.learning_rate, loss=args.loss,
                                      train_last_layers=args.online_last_layers, optimizer=args.optimizer,

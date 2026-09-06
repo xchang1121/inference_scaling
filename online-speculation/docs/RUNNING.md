@@ -204,7 +204,7 @@ learner.replay_executor = replay
 ```bash
 python scripts/benchmark_offline.py \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-block4-context512.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
   --prompts 17 --prompt-length 256 --tokens 512 --block-size 4 \
   --sampler tree --top-k 8 --prefix-budget 16 --repeats 2 --progress
@@ -214,6 +214,12 @@ python scripts/benchmark_offline.py \
 `/home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno`，并添加
 `--reference-sha256 5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e`。
 输出标明权重来源、文件 SHA、代码指纹、逐 token 比较、分轮吞吐和显存。
+两路和三路入口均可添加 `--temperature 1 --sampling-top-k 0 --top-p 1`，运行完整词表的温度 1 采样。
+目标分布的 top-k 使用 `--sampling-top-k`，树候选宽度继续使用 `--top-k`。
+参数同时应用于 AR、静态、在线和各自预热；`config.sampling` 保存实际设置。
+温度为零时输出 `comparison_mode: greedy_exact`；正温度时为 `stochastic_diagnostic`，
+`greedy_identical: null`，逐请求的 token 比较作为观测信息。随机数和概率验收关系见主报告 12.6。
+`tokens_per_decode_forward` 报告平均每次生成前向产出的 token 数，TPS 计时包含 prefill。
 该入口使用 FP32 CUDA；`--sampler linear --block-size 8` 提供公开入口默认线性块形状的本机对照。
 数学与数值审计入口 `scripts/audit_decode_path.py` 接收相同的 `--base`、公开 `--adapter`、
 `--reference-sha256` 和 `--data`，另用 `--request 16 --token-index 125 --seed 271844` 定位第 17 条提示的第 126 个输出。
@@ -223,17 +229,18 @@ python scripts/benchmark_offline.py \
 
 在线三路入口继续用于后续增量收益的比较：
 
-当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载，训练配置为 1,200 步的 2→4→6→8 课程。
+当前离线起点在仓库外，使用 r=32、$\alpha=32$ / FP32 加载；先完成 1,200 步的 2→4→6→8 课程，
+再以 B=4、2×512 窗口、L1 和学习率 $10^{-4}$ 续训 1,200 步。训练及检查点 SHA 见主报告 13.2。
 开发评测使用验证集中的连续前缀；test 集留给配置确定后的评测。
 
 ```bash
 python -m blockspec benchmark \
   --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
-  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-curriculum8.pt \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-block4-context512.pt \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
   --split-role validation --dtype float32 --prompts 17 --prompt-length 256 \
   --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
-  --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
+  --sampler tree --top-k 8 --prefix-budget 16 --execution cuda_graph \
   --online-last-layers 4 --update-stride 16 --replay-blocks 1 \
   --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed \
   --update-policy coverage --online-execution cuda_graph --attention-backend grouped
