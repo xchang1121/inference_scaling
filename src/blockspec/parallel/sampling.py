@@ -1,37 +1,25 @@
-"""Proposal transforms and verification execution, independent of backbone layout."""
+"""Candidate sampling and exact correction over the same probability policy."""
 
 from ..sampling import (SamplingConfig, draw, greedy_tokens, probabilities, sample_logits,
                         verify_greedy, verify_linear)
 
 
 class ProposalSampler:
-    def __init__(self, config=SamplingConfig(), *, executor=None, calibrator=None):
-        self.config = config
-        self.executor = executor
-        self.calibrator = calibrator
-        self.continuation = getattr(calibrator, "kind", None) == "continuation"
+    def __init__(self, config=SamplingConfig(), *, executor=None):
+        self.config, self.executor = config, executor
 
     def sample_ar(self, logits, generator):
         if self.executor is not None:
             return self.executor.sample_ar(logits, generator)
         return int(sample_logits(logits, self.config, generator))
 
-    def propose(self, logits, generator, *, protected_rows=1):
-        if self.calibrator is not None and getattr(self.calibrator, "protected_rows", 1) != protected_rows:
-            raise ValueError("proposal calibration must match the branch's protected-row layout")
-        if self.executor is not None and self.calibrator is not None and self.executor.protected_rows != protected_rows:
-            raise ValueError("prepared calibration must match the branch's protected-row layout")
+    def propose(self, logits, generator):
         if self.executor is not None:
-            return self.executor.draft(logits, generator, self.calibrator)
+            return self.executor.draft(logits, generator)
         if self.config.temperature == 0:
             return greedy_tokens(logits), None, None
         q = probabilities(logits, self.config)
-        if self.continuation:
-            return self.calibrator.draft(q, generator)
-        feedback = None
-        if self.calibrator is not None:
-            q, feedback = self.calibrator.propose(q)
-        return draw(q, generator), q, feedback
+        return draw(q, generator), q, None
 
     def verify(self, proposal, target_logits, generator):
         if self.executor is not None:

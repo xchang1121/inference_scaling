@@ -1,10 +1,6 @@
-"""Independent block drafting, exact verification, and adapter distillation.
+"""Shared-backbone bidirectional drafting, exact correction and online continuation."""
 
-The implementation uses ordinary PyTorch operators. No upstream decoding or
-training package is imported; references and derivations live in ALGORITHM.md.
-"""
-
-from .model import Decoder, ModelConfig
+from .parallel import DualViewConfig, DualViewDecoder, MaskedAttentionBranch, generate, generate_ar
 from .sampling import SamplingConfig
 
-__all__ = ["Decoder", "ModelConfig", "SamplingConfig"]
+__all__ = ["DualViewConfig", "DualViewDecoder", "MaskedAttentionBranch", "SamplingConfig", "generate", "generate_ar"]

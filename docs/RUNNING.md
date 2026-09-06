@@ -11,11 +11,10 @@ GPU 运行使用支持 CUDA 的 PyTorch；Windows 可在 WSL2 中运行。
 ```bash
 python -m pip install -e '.[dev,text,hf,data]'
 python -m pytest -q
-python -m blockspec demo --device cpu
-python scripts/train_dual_view.py demo --device cpu --output local/demo.pt
+python -m blockspec fit demo --device cpu --output local/demo.pt
 ```
 
-第一个闭环验证条件低秩蒸馏与在线更新，第二个验证双向起草训练、张量映射及精确恢复。
+合成闭环验证双向起草训练、张量映射及精确恢复。
 输出检查点使用新文件名。主运行环境采用项目依赖，外部参照可使用独立虚拟环境。
 分词器配置和外部模型源码各自需要兼容的 Transformers 版本，运行时选择对应的虚拟环境。
 
@@ -25,7 +24,6 @@ python scripts/train_dual_view.py demo --device cpu --output local/demo.pt
 |---|---|
 | `--model` | 双视图权重目录及对应 tokenizer |
 | `--base` | 自回归基座目录及配置 |
-| `--adapter` | PEFT 目录或本项目的适配器检查点 |
 | `--prompts`、`--learning-prompts` | 分离的评测、学习问题 JSONL |
 | `--data`、`--validation` | 已分词的训练、验证 JSONL |
 | `--output`、`--summary` | 调用者选定的结果或检查点位置 |
@@ -34,21 +32,13 @@ python scripts/train_dual_view.py demo --device cpu --output local/demo.pt
 模型维度、注意力头数、词表及特殊 token 从配置读取。
 权重桥接校验受支持的架构、完整张量集合和形状；新增架构通过数值对齐后接入。
 
-准备会话数据时，显式指定数据集、配置、划分和行偏移：
-
-```bash
-python -m blockspec prepare --base "$BASE_DIR" --output "$DATA_DIR" \
-  --dataset "$DATASET_ID" --dataset-config "$DATASET_CONFIG" \
-  --source-split train --offsets 0,100,200 --page-size 8
-```
-
-该入口读取含 `conversations` 的会话记录，按问题分组划分训练、验证和测试。
-同一问题的不同回答归入同一划分。训练与评测入口同时检查数据重叠。
+`corpus.py` 提供会话记录转换和按问题分组划分的工具；`parallel/fitting.py` 读取已分词序列。
+同一问题的不同回答归入同一划分，学习与评测入口同时检查数据重叠。
 
 ## 3. 固定双向起草
 
 ```bash
-python scripts/dual_view.py benchmark --model "$DUAL_MODEL_DIR" \
+python -m blockspec evaluate benchmark --model "$DUAL_MODEL_DIR" \
   --prompts "$EVAL_PROMPTS" --requests 16 --tokens 2048 --blocks 32 \
   --empty-system --dtype bfloat16 --backend sdpa --temperature 0 \
   --repeats 2 --output "$RESULT_FILE"
@@ -61,12 +51,13 @@ python scripts/dual_view.py benchmark --model "$DUAL_MODEL_DIR" \
 三种概率执行的同轨迹对照：
 
 ```bash
-python scripts/dual_view.py benchmark --model "$DUAL_MODEL_DIR" \
+python -m blockspec evaluate benchmark --model "$DUAL_MODEL_DIR" \
   --prompts "$EVAL_PROMPTS" --requests 16 --tokens 2048 --blocks 32 \
   --empty-system --temperature 1 --top-k 0 --top-p 1 \
   --sampling-executions scalar tensor graph --repeats 2 --output "$RESULT_FILE"
 ```
 
+随机采样评测默认选择 `tensor`，贪心评测使用直接最大值路径。
 `scalar` 为逐项校正，`tensor` 为整块张量校正，`graph` 将相同张量操作录入 GPU 图。
 输出给出各执行方式的 AR／投机 TPS、TPF、准备时间与配对区间。
 剖析使用同一入口的 `profile` 模式，输出预算至多 256 token。
@@ -76,7 +67,7 @@ python scripts/dual_view.py benchmark --model "$DUAL_MODEL_DIR" \
 起草注意力后段续训：
 
 ```bash
-python scripts/dual_continue.py --model "$DUAL_MODEL_DIR" \
+python -m blockspec online --model "$DUAL_MODEL_DIR" \
   --prompts "$EVAL_PROMPTS" --learning-prompts "$LEARN_PROMPTS" \
   --thinking --prompt-offset 8 --requests 16 --tokens 512 --repeats 2 \
   --learn-requests 16 --learn-tokens 256 --last-layers 1 --stride 16 \
@@ -89,18 +80,16 @@ python scripts/dual_continue.py --model "$DUAL_MODEL_DIR" \
 在线 TPS 包含反馈与更新成本；独立预学习、状态初始化及执行器准备单列。
 
 同前缀分布审计添加 `--audit-only --audit-requests 8 --audit-tokens 128`。
-稀疏温度混合使用 `scripts/dual_online.py`，资源参数与独立学习／评测划分保持相同；
-具体更新配置见各入口的 `--help`。
 
 ## 5. 离线训练与恢复
 
 ```bash
-python scripts/train_dual_view.py train --base "$BASE_DIR" \
+python -m blockspec fit train --base "$BASE_DIR" \
   --data "$TRAIN_TOKENS" --validation "$VALIDATION_TOKENS" \
   --block-size 32 --mask-token-id "$MASK_TOKEN_ID" --device cuda \
   --precision bf16 --steps 200 --stop-after 100 --output "$CHECKPOINT_FILE"
 
-python scripts/train_dual_view.py resume --checkpoint "$CHECKPOINT_FILE" \
+python -m blockspec fit resume --checkpoint "$CHECKPOINT_FILE" \
   --data "$TRAIN_TOKENS" --validation "$VALIDATION_TOKENS" \
   --device cuda --output "$NEXT_CHECKPOINT_FILE"
 ```
@@ -108,20 +97,6 @@ python scripts/train_dual_view.py resume --checkpoint "$CHECKPOINT_FILE" \
 随机锚点定义多个隔离的起草块，干净 AR 视图提供完整教师分布。
 检查点保存参数、优化器、随机数、数据顺序及学习率进度。
 恢复沿用保存的总步数和调度，`--stop-after` 表示中间停止边界。
-
-条件低秩训练使用 `python -m blockspec train --help`。
-原适配器在线续训、PrefixRelay 条件头与稀疏接续混合分别由
-`blockspec benchmark`、`scripts/prefix_relay.py` 和 `scripts/overlap_mix.py` 提供。
-
-固定低秩适配器与 AR 的对照：
-
-```bash
-python scripts/benchmark_offline.py --base "$BASE_DIR" --adapter "$ADAPTER_DIR" \
-  --data "$EVAL_TOKENS" --dtype bfloat16 --sampler linear --block-size 8 \
-  --temperature 1 --sampling-top-k 50 --top-p 0.95 --repeats 2
-```
-
-PEFT 加载始终校验张量名称、形状、秩和缩放；可选的本地完整性参数由调用者提供。
 
 ## 6. 外部参照
 
@@ -132,17 +107,12 @@ PEFT 加载始终校验张量名称、形状、秩和缩放；可选的本地完
 `reference_transformers` 可指定外部环境版本。源码文件名及模型类均由本地配置选择。
 
 ```bash
-python scripts/dual_view.py audit --model "$DUAL_MODEL_DIR" \
+python -m blockspec evaluate audit --model "$DUAL_MODEL_DIR" \
   --reference-manifest "$REFERENCE_MANIFEST" --blocks 4 32 --tokens 32
-
-python scripts/audit_hf_reference.py --base "$BASE_DIR" \
-  --reference-manifest "$REFERENCE_MANIFEST" --dtype bfloat16 --device cuda
 ```
 
-`scripts/benchmark_reference.py` 额外使用本地清单的 `source.commit` 与 `models.adapter`，
-在独立进程中运行外部引擎。CPU 数学参照入口
-`scripts/audit_sampler_reference.py` 通过 `--source` 和 `--reference-revision` 选择代码。
-共同管线迁移对照 `scripts/audit_pipeline.py` 通过 `--reference-commit` 选择本地 Git 参照。
+主线的数值参照核对 AR、起草、验证 logits 及历史 KV。
+其他引擎与分支的运行入口见 [消融说明](../ablation/README.md)。
 
 ## 7. 测量与提交
 
@@ -152,5 +122,5 @@ python scripts/audit_hf_reference.py --base "$BASE_DIR" \
 
 实验入口通过统一报告层写出方法设置、指标与校验结论。
 文件地址、资源标识、内容摘要和原始提示／生成文本留在本地输入与运行状态中。
-`ALGORITHM.md` 保存推导，`RESULTS.md` 保存有效结果；设计尝试的取舍直接简述于对应章节。
+`ALGORITHM.md` 保存推导，`RESULTS.md` 保存有效结果；其他设计的实现与取舍集中于 `ablation/README.md`。
 提交前汇报性能和测试结果，提交说明聚焦方法变化与对应测量。

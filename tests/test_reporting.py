@@ -48,13 +48,14 @@ def test_resource_values_are_filtered_even_under_generic_keys():
 
 def test_report_serialization_has_one_publication_boundary():
     root = Path(__file__).resolve().parents[1]
-    for path in list((root / "scripts").glob("*.py")) + [root / "src/blockspec/cli.py"]:
+    for path in list((root / "scripts").glob("*.py")) + [root / "src/blockspec/cli.py", *root.glob("src/blockspec/commands/*.py"),
+                                                        *root.glob("ablation/scripts/*.py")]:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "json"
                     and node.func.attr in ("dump", "dumps")):
                 # These two writes construct synthetic training fixtures, not reports.
-                assert path.name == "train_dual_view.py"
+                assert path.name == "fit.py"
                 assert isinstance(node.args[0], ast.Name) and node.args[0].id in ("public_config", "row")
 
 
@@ -74,7 +75,8 @@ def test_reference_manifest_details_stay_out_of_public_results():
 def test_versioned_sources_contain_no_literal_personal_paths_or_artifact_pins():
     root = Path(__file__).resolve().parents[1]
     files = [root / "README.md", *root.glob("docs/*.md"), *root.glob("scripts/*.py"),
-             *root.glob("src/blockspec/**/*.py"), *root.glob("config/*.json")]
+             *root.glob("src/blockspec/**/*.py"), *root.glob("config/*.json"),
+             *root.glob("ablation/**/*.py"), *root.glob("ablation/**/*.md")]
     personal_path = re.compile(r"(?:[A-Za-z]:[\\/]Users[\\/][^\s/\\]+|/(?:home|mnt/c/Users)/[^\s/]+)")
     literal_pin = re.compile(r"\b[0-9a-f]{32,64}\b", re.I)
     for path in files:

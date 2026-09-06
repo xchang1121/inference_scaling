@@ -1,4 +1,4 @@
-"""Owned verification feedback shared by both drafting parameterizations."""
+"""Owned reached-prefix feedback and frozen-boundary replay protocol."""
 
 from __future__ import annotations
 

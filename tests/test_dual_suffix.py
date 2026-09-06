@@ -3,8 +3,8 @@ import copy
 import pytest
 import torch
 
-from blockspec.distillation import divergence
-from blockspec.online import Feedback
+from blockspec.losses import divergence
+from blockspec.feedback import Feedback
 from blockspec.parallel import DualViewConfig, DualViewDecoder, MaskedAttentionBranch, generate
 from blockspec.parallel.feedback import OnlineFeedback
 from blockspec.parallel.online import SuffixConfig, SuffixLearner
