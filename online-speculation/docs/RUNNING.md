@@ -75,7 +75,7 @@ PYTHONPATH=/home/singm/online-speculation-work/oracle-transformers515 \
 `--attention-backend grouped` 在本项目模型中启用分组短查询，外部参照继续使用其原有注意力。
 `--execution eager` 使用普通执行路径。移位短窗口检查大位置编号的计算，校验输入取自开发集。
 BF16 外部审计添加 `--dtype bfloat16 --max-logit-error 0.5 --max-tv 0.02`；
-数值验证的定义见[主报告](ALGORITHM.md#72-数值与缓存验证)，BF16 吞吐同时报告概率误差与最大项一致性。
+数值验证的定义见[主报告](ALGORITHM.md#83-数值与缓存验证)，BF16 吞吐同时报告概率误差与最大项一致性。
 `--trace` 在第一条共同 prefill 上比较各层；`--bf16-full-accumulation` 让两边 GEMM 采用完整累加精度，
 结束后恢复调用方的全局设置。输出给出实际累加开关。
 
@@ -164,7 +164,7 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 同一个 learner 保留权重、optimizer 和计数；请求结束释放重放 KV 和老师 logits。
 `OnlineConfig(train_last_layers=4, stride=32, replay_blocks=1)` 提供末层续训配置，
 续训最后 4 层中的适配器，并复用起草的前段特征；其余适配器以固定权重参与起草。
-`train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见[冻结表示与条件修正](ALGORITHM.md#61-实际前缀的信息)。
+`train_last_layers=None` 对应全适配器续训。修改冻结前段后重新构造 learner；数学条件见[反馈、更新与冻结表示](ALGORITHM.md#72-反馈更新与冻结表示)。
 词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导同见附录 B。
 `optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；更新核对见 [test_online_execution.py](../tests/test_online_execution.py)。
 `feedback_execution="windowed"` 按更新需求安排采集窗口，`all` 使用逐轮采集；参数更新对照见 [test_feedback_window.py](../tests/test_feedback_window.py)。
@@ -196,7 +196,7 @@ learner.replay_executor = replay
 
 输入使用 FP32 CUDA、batch=1，历史长度在容量范围内；块长和有效监督行数通过 `prepare()` 显式准备。
 准备好的 `replay` 可传给同一模型的新 `OnlineLearner(model, config, replay_executor=replay)`，
-新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。特征复用条件见[主报告](ALGORITHM.md#61-实际前缀的信息)。
+新 learner 使用相同的末层范围和损失，初始化自己的 Adam 状态。特征复用条件见[主报告](ALGORITHM.md#72-反馈更新与冻结表示)。
 `model.set_attention_backend("grouped")` 在创建 learner 和推理／训练图之前调用；`sdpa` 为按头对照。
 分组路径处理至多 32 项的 FP32／FP64 查询，长 prefill 和低精度查询由 SDPA 计算，实现见 [attention.py](../src/blockspec/attention.py)。
 结束执行器的使用时，先清理反馈、解除各 learner 的 `replay_executor` 引用，再释放调用方持有的执行器。
@@ -223,7 +223,7 @@ python scripts/benchmark_offline.py \
 目标分布的 top-k 使用 `--sampling-top-k`，树候选宽度继续使用 `--top-k`。
 参数同时应用于 AR、静态、在线和各自预热；`config.sampling` 保存实际设置。
 温度为零时输出 `comparison_mode: greedy_exact`；正温度时为 `stochastic_diagnostic`，
-`greedy_identical: null`，逐请求的 token 比较作为观测信息。输出分布的推导见[概率校正](ALGORITHM.md#51-单位置的质量守恒)。
+`greedy_identical: null`，逐请求的 token 比较作为观测信息。输出分布的推导见[概率校正](ALGORITHM.md#52-残差分支与质量守恒)。
 `tokens_per_decode_forward` 报告平均每次生成前向产出的 token 数，TPS 计时包含 prefill。
 两路入口默认 FP32 CUDA，`--dtype bfloat16` 切换基座执行精度；本地检查点先按 FP32 来源验证，再转换基座，保留适配器主权重。
 三路入口的 `--dtype` 指定检查点对应的基座精度，`--execution-dtype bfloat16` 在加载后执行同一转换。
@@ -262,7 +262,7 @@ python -m blockspec benchmark \
 
 前期 BF16 适配器续训测量沿用上述命令，添加 `--execution-dtype bfloat16`，
 并将 `--online-execution cuda_graph` 改为 `--online-execution eager`。检查点来源精度继续使用 `--dtype float32`。
-该配置保留全部 FP32 适配器主权重，三路共同使用 BF16 基座；数值误差说明见[主报告](ALGORITHM.md#72-数值与缓存验证)。
+该配置保留全部 FP32 适配器主权重，三路共同使用 BF16 基座；数值误差说明见[主报告](ALGORITHM.md#83-数值与缓存验证)。
 
 按文件顺序取全部 17 个验证记录的前 256 项作为输入，包含 4 个代码请求和 13 个数学请求。默认贪心、固定输出预算、`eos_id=None`；
 `--eos-id 1` 启用结束标记；`--sampler linear` 切换线性路径。
@@ -290,7 +290,7 @@ python -m blockspec benchmark \
 其成本归入在线方法；`tps_including_all_setup` 包含推理图、训练图和 learner 初始化。
 请求计时包括快照复制、prefix 传输和在线更新。图跨请求保留，适配器在固定存储中原地更新。
 末层窗口化采集使用带分界特征和普通起草两组图；自建执行器时在 `prepare()` 中准备这两组查询形状。
-图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存关系见[历史缓存不变量](ALGORITHM.md#32-历史缓存不变量)。
+图内部按新增位置打包 KV，再与有效历史拼成独立快照；缓存关系见[历史缓存不变量](ALGORITHM.md#33-干净历史的不变量)。
 推理图支持 FP32／BF16 CUDA、batch=1；末层梯度图使用 FP32，BF16 在线续训选择 `--online-execution eager`。
 FP32 的测量保持 TF32 关闭，BF16 基座对应独立的精度配置；执行副本由 FP32 适配器主权重转换得到。
 长 prefill 普通执行，短查询按预先准备的形状和历史容量执行，入口校验查询尺寸。
@@ -310,7 +310,7 @@ python scripts/benchmark_reference.py \
 
 源码 commit 和两份权重的 SHA 来自 `references/upstream.lock.json`，每个方法在新进程运行。
 该入口调用官方 BF16／FA2 引擎的 B=1 串行对照和 B=8 线性投机，精确限制各请求输出长度，
-报告 TPS、初始化、预热、接受计数、解码前向、显存和图计数。结果见[当前基线](ALGORITHM.md#73-当前基线)，计时口径见第 7.1 节。
+报告 TPS、初始化、预热、接受计数、解码前向、显存和图计数。结果见[性能记录](RESULTS.md#1-重构前的条件低秩基线)，计时口径见[主报告第 8.4 节](ALGORITHM.md#84-性能测量)。
 自有实现的相近条件使用两路公开 adapter 命令，并添加
 `--dtype bfloat16 --sampler linear --block-size 8 --temperature 1 --noise-low 1`。
 
