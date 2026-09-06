@@ -109,7 +109,8 @@ def test_reference_gate_rejects_modified_code_weights_and_index(tmp_path, monkey
         "reference_lf_sha256": {"modeling.py": hashlib.sha256(source).hexdigest()},
         "weight_filename": "weights.safetensors", "weight_sha256": hashlib.sha256(b"placeholder").hexdigest(),
     }}}))
-    monkeypatch.setattr(audit, "LOCK", lock)
+    from blockspec import hf_execution
+    monkeypatch.setattr(hf_execution, "LOCK", lock)
     assert audit.checked_reference(tmp_path)["weight_filename"] == "weights.safetensors"
     index.write_text(json.dumps({"weight_map": {"x": "unchecked.safetensors"}}))
     with pytest.raises(ValueError, match="index"):

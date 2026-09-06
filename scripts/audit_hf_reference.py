@@ -15,27 +15,7 @@ from pathlib import Path
 import torch
 
 from blockspec.checkpoint import implementation_fingerprint, load_hf_base
-
-
-LOCK = Path(__file__).resolve().parents[1] / "references" / "upstream.lock.json"
-
-
-def checked_reference(directory):
-    spec = json.loads(LOCK.read_text(encoding="utf-8"))["models"]["k2_1b_base"]
-    for name, expected in spec["reference_lf_sha256"].items():
-        actual = hashlib.sha256((directory / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-        if actual != expected:
-            raise ValueError(f"reference source/config differs from reviewed pin: {name}")
-    digest = hashlib.sha256()
-    with (directory / spec["weight_filename"]).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != spec["weight_sha256"]:
-        raise ValueError("reference weights differ from reviewed pin")
-    index = json.loads((directory / "model.safetensors.index.json").read_text(encoding="utf-8"))
-    if set(index["weight_map"].values()) != {spec["weight_filename"]}:
-        raise ValueError("reference index points outside the checked weight shard")
-    return spec
+from blockspec.hf_execution import checked_reference
 
 
 def error_summary(actual, expected):

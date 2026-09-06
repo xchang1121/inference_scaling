@@ -184,6 +184,7 @@ def test_exact_two_token_joint_with_conditional_proposal_and_stopping(scheduled)
     q0 = torch.tensor([.4, .6], dtype=torch.float64)
     q1 = torch.tensor([[.85, .15], [.1, .9]], dtype=torch.float64)
     observed = torch.zeros(2, 2, dtype=torch.float64)
+    acceptance_mass = torch.zeros(3, dtype=torch.float64)
     for x in range(2):
         # Admission of position two can depend on x; position one's inclusion is fixed.
         admitted = 1 if scheduled and x == 1 else 2
@@ -211,11 +212,17 @@ def test_exact_two_token_joint_with_conditional_proposal_and_stopping(scheduled)
                     with patch("blockspec.sampling.draw", side_effect=categorical):
                         result = verify_linear(proposals, q, p, acceptance_uniforms=uniforms)
                     branch_mass = weight * drawn[0]
+                    acceptance_mass[result.accepted] += branch_mass
                     if len(result.tokens) >= 2:
                         observed[result.tokens[0], result.tokens[1]] += branch_mass
                     else:
                         observed[result.tokens[0]] += branch_mass * p1[result.tokens[0]]
     torch.testing.assert_close(observed, p0[:, None] * p1, rtol=0, atol=1e-14)
+    first = torch.minimum(p0, q0)
+    second_admitted = torch.tensor([1., 0. if scheduled else 1.], dtype=torch.float64)
+    survival = first.sum() + (first * second_admitted * torch.minimum(p1, q1).sum(-1)).sum()
+    actual_length = acceptance_mass @ torch.arange(3, dtype=torch.float64)
+    torch.testing.assert_close(actual_length, survival, rtol=0, atol=1e-14)
 
 
 def test_head_checkpoint_binding_and_exclusive_write(tmp_path):
@@ -262,6 +269,31 @@ def test_all_evaluated_heads_share_training_and_block_contract():
         module.validate_head_metadata(metadata, train_sha256="a" * 64, block_size=8)
     with pytest.raises(ValueError, match="block size"):
         module.validate_head_metadata({"train_sha256": "a" * 64}, train_sha256="a" * 64, block_size=4)
+    contract = {"backbone": "hf_sdpa", "base_dtype": "bfloat16", "sampling": {"top_k": 50},
+                "noise": {"low": 1, "high": 64256}}
+    checked = {**metadata, "serving_contract": contract}
+    module.validate_head_metadata(checked, train_sha256="a" * 64, block_size=4, serving_contract=contract)
+    for changed in ({**contract, "backbone": "independent_graph"}, {**contract, "base_dtype": "float32"},
+                    {**contract, "sampling": {"top_k": 0}}, {**contract, "noise": {"low": 0, "high": 64256}}):
+        with pytest.raises(ValueError, match="serving contract"):
+            module.validate_head_metadata(checked, train_sha256="a" * 64, block_size=4, serving_contract=changed)
+    with pytest.raises(ValueError, match="serving contract"):
+        module.validate_head_metadata(metadata, train_sha256="a" * 64, block_size=4, serving_contract=contract)
+
+
+def test_published_execution_weights_are_checked_after_head_updates():
+    spec = importlib.util.spec_from_file_location("prefix_relay", Path(__file__).resolve().parents[1]
+                                                 / "scripts" / "prefix_relay.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model, _ = tiny()
+    model.requires_grad_(False)
+    frozen = {"base": module.base_fingerprint(model), "adapter": module.adapter_fingerprint(model)}
+    assert module.assert_frozen(model, frozen) == {"frozen_base_unchanged": True, "frozen_adapter_unchanged": True}
+    with torch.no_grad():
+        next(p for name, p in model.named_parameters() if name.endswith("lora_B")).add_(1.)
+    with pytest.raises(RuntimeError, match="frozen execution tensors"):
+        module.assert_frozen(model, frozen)
 
 
 def test_counterfactual_audit_keeps_the_reference_stream_fixed():
