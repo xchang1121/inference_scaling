@@ -7,6 +7,7 @@
 来源版本、架构与权重摘要由 `references/upstream.lock.json` 固定。
 
 条件低秩分支的在线模块复用实际验证反馈，支持适配器后段续训、轻量条件头和稀疏概率混合。
+双向注意力分支已接入逐位置的稀疏概率混合与共同采样执行器，覆盖首个待验证候选。
 学习状态跨请求保留，参数更新在本轮校正完成后发布。
 配对实验分别报告固定起草、学习后冻结与继续在线学习的完整成本。
 共享骨干、分支推导与概率校正见[主报告](docs/ALGORITHM.md)，实测对照见[性能记录](docs/RESULTS.md)。
@@ -75,6 +76,7 @@ scripts/benchmark_reference.py  固定官方引擎的外部性能参照
 scripts/prefix_relay.py  PrefixRelay 训练、配对吞吐与在线续训评测
 scripts/overlap_mix.py   冻结权重的在线混合、共同前缀审计与配对吞吐
 scripts/dual_view.py    双视图公开权重数值对齐与配对吞吐
+scripts/dual_online.py  双向分支的采样执行优化、固定／预学习／持续在线对照
 scripts/train_dual_view.py 双向起草训练、恢复与小型合成闭环
 scripts/audit_pipeline.py  从指定 Git 版本对照重构前后的输出、计数与吞吐
 docs/ALGORITHM.md     持续更新的算法主报告

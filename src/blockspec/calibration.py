@@ -25,16 +25,16 @@ class CalibrationFeedback:
     baseline: torch.Tensor
 
 
-def mix_rows(baseline, weights, powers, identity_index, top_k):
+def mix_rows(baseline, weights, powers, identity_index, top_k, protected_rows=1):
     """Pure tensor proposal map, shared by eager and graph execution."""
-    compact, indices = baseline[1:].topk(min(top_k, baseline.shape[-1]), dim=-1)
+    compact, indices = baseline[protected_rows:].topk(min(top_k, baseline.shape[-1]), dim=-1)
     experts = compact[:, None, :].pow(powers)
     experts = experts / experts.sum(-1, keepdim=True).clamp_min(torch.finfo(experts.dtype).tiny)
     experts[:, identity_index] = compact
     mixed = (experts * weights[:len(compact), :, None]).sum(1)
     q = torch.zeros_like(baseline)
-    q[0] = baseline[0]
-    q[1:].scatter_(-1, indices, mixed)
+    q[:protected_rows] = baseline[:protected_rows]
+    q[protected_rows:].scatter_(-1, indices, mixed)
     return q, CalibrationFeedback(indices, experts, mixed, compact)
 
 
@@ -48,15 +48,17 @@ class OverlapMix:
 
     def __init__(self, block_size, top_k, *, temperatures=(.5, .75, 1., 1.25, 1.5),
                  learning_rate=.5, interval=8, adaptive=True, fixed_temperature=1.,
-                 diagnostics=False, device="cpu", dtype=torch.float32):
+                 diagnostics=False, device="cpu", dtype=torch.float32, protected_rows=1):
         if (type(block_size) is not int or block_size < 2 or type(top_k) is not int or top_k < 1
                 or not temperatures or len(set(temperatures)) != len(temperatures)
                 or any(not math.isfinite(t) or t <= 0 for t in temperatures)
                 or 1. not in temperatures or fixed_temperature not in temperatures
                 or not math.isfinite(learning_rate) or learning_rate <= 0
-                or type(interval) is not int or interval < 1):
+                or type(interval) is not int or interval < 1 or type(protected_rows) is not int
+                or protected_rows not in (0, 1)):
             raise ValueError("block >=2, positive bounded support, distinct positive temperatures including identity required")
         self.block_size, self.top_k = block_size, top_k
+        self.protected_rows = protected_rows
         self.temperatures = tuple(temperatures)
         self.learning_rate, self.interval, self.adaptive = learning_rate, interval, adaptive
         self.diagnostics = diagnostics
@@ -83,10 +85,10 @@ class OverlapMix:
 
     @torch.no_grad()
     def propose(self, baseline):
-        if (baseline.ndim != 2 or not 2 <= len(baseline) <= self.block_size
+        if (baseline.ndim != 2 or not self.protected_rows < len(baseline) <= self.block_size - 1 + self.protected_rows
                 or baseline.device != self.weights.device or baseline.dtype != self.weights.dtype):
-            raise ValueError("matching floating probability rows with one clean root required")
-        return mix_rows(baseline, self.weights, self.powers, self.identity_index, self.top_k)
+            raise ValueError("matching floating rows and protected-prefix layout required")
+        return mix_rows(baseline, self.weights, self.powers, self.identity_index, self.top_k, self.protected_rows)
 
     @torch.no_grad()
     def observe(self, feedback, teacher):
@@ -132,7 +134,7 @@ class OverlapMix:
     def _state_config(self):
         return {"block_size": self.block_size, "top_k": self.top_k,
                 "temperatures": self.temperatures, "learning_rate": self.learning_rate,
-                "interval": self.interval, "dtype": str(self.weights.dtype)}
+                "interval": self.interval, "dtype": str(self.weights.dtype), "protected_rows": self.protected_rows}
 
     def state_dict(self):
         """Owned portable state; restoring keeps the destination tensor storage."""
@@ -145,7 +147,9 @@ class OverlapMix:
     @torch.no_grad()
     def load_state_dict(self, state):
         """Restore learned parameters and cadence for frozen or live comparisons."""
-        if state.get("config") != self._state_config():
+        config = dict(state.get("config", {}))
+        config.setdefault("protected_rows", 1)
+        if config != self._state_config():
             raise ValueError("calibration state must match shape, temperatures, precision and update policy")
         tensors = state.get("tensors", {})
         if set(tensors) != {"weights", "gradient", "counts", "steps"}:

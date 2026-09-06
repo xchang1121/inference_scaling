@@ -46,13 +46,33 @@ def load_reference(folder, dtype, backend):
                                             local_files_only=True).cuda().eval().requires_grad_(False)
 
 
-def prompt_ids(folder, count):
+def prompt_texts(path, count):
+    if path is None:
+        texts = list(PROMPTS)
+    else:
+        texts = []
+        with Path(path).open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    row = json.loads(line)
+                    value = row.get("question", row.get("prompt"))
+                    if not isinstance(value, str) or not value.strip():
+                        raise ValueError("each prompt record needs a nonempty question or prompt string")
+                    texts.append(value)
+                    if len(texts) == count:
+                        break
+    if not 1 <= count <= len(texts):
+        raise ValueError("the requested number of prompts must fit the input data")
+    return texts[:count]
+
+
+def prompt_ids(folder, count, *, path=None, thinking=False):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(folder, local_files_only=True)
     result = []
-    for text in PROMPTS[:count]:
+    for text in prompt_texts(path, count):
         rendered = tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize=False,
-                                                  add_generation_prompt=True, enable_thinking=False)
+                                                  add_generation_prompt=True, enable_thinking=thinking)
         result.append(tokenizer(rendered, return_tensors="pt", add_special_tokens=False).input_ids.cuda())
     return result
 
@@ -168,7 +188,7 @@ def reference_generate(model, prompt, tokens, block, sampling, seed):
 @torch.inference_mode()
 def trace_decision(args, own):
     """Compare one greedy decision, including a same-cache one-row/block replay."""
-    prompt = prompt_ids(args.model, args.request_index + 1)[args.request_index]
+    prompt = prompt_ids(args.model, args.request_index + 1, path=args.prompts, thinking=args.thinking)[args.request_index]
     branch, captures, output_ids = MaskedAttentionBranch(own), {}, {}
     for mode in ("ar", "speculative"):
         selected = {}
@@ -214,7 +234,7 @@ def trace_decision(args, own):
 
 @torch.inference_mode()
 def benchmark(args, own, reference):
-    prompts = prompt_ids(args.model, args.requests)
+    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking)
     sampling = SamplingConfig(args.temperature, args.top_k, args.top_p)
     methods = [(implementation, block) for implementation, model in (("own", own), ("reference", reference))
                if model is not None for block in [1] + args.blocks]
@@ -276,8 +296,9 @@ def benchmark(args, own, reference):
         ratios = (summed[:, 2] / summed[:, 3]) / (summed[:, 0] / summed[:, 1])
         aggregate[key]["paired_request_ci95"] = np.quantile(ratios, [.025, .975]).tolist()
         aggregate[key]["greedy_identical"] = identical if sampling.temperature == 0 else None
-    return {"sampling": asdict(sampling), "workload": "eight fixed smoke prompts; chat template with thinking disabled",
-            "prompts": list(PROMPTS[:args.requests]), "records": records, "aggregate": aggregate,
+    return {"sampling": asdict(sampling), "workload": "local question JSONL" if args.prompts else "fixed smoke prompts",
+            "thinking": args.thinking, "prompt_file_sha256": None if args.prompts is None else file_sha256(args.prompts),
+            "prompts": prompt_texts(args.prompts, args.requests), "records": records, "aggregate": aggregate,
             "resident_bytes": resident, "peak_allocated_bytes": torch.cuda.max_memory_allocated()}
 
 
@@ -291,6 +312,8 @@ def main():
     parser.add_argument("--blocks", type=int, nargs="+", default=[4, 8, 16, 32])
     parser.add_argument("--tokens", type=int, default=128)
     parser.add_argument("--requests", type=int, default=8)
+    parser.add_argument("--prompts", type=Path)
+    parser.add_argument("--thinking", action="store_true")
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0)
     parser.add_argument("--top-k", type=int, default=0)
@@ -300,12 +323,13 @@ def main():
     parser.add_argument("--token-index", type=int, default=20)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if (args.tokens < 1 or not 1 <= args.requests <= len(PROMPTS) or args.repeats < 1
+    if (args.tokens < 1 or args.requests < 1 or (args.prompts is None and args.requests > len(PROMPTS)) or args.repeats < 1
             or any(block < 2 for block in args.blocks) or len(set(args.blocks)) != len(args.blocks)):
-        parser.error("positive budgets, unique blocks >= 2, and 1..8 requests required")
+        parser.error("positive budgets, unique blocks >= 2, and prompts within the input data required")
     if args.output is not None and args.output.exists():
         parser.error("choose a new output file")
-    if args.mode == "trace" and (args.implementation == "reference" or not 0 <= args.request_index < len(PROMPTS)
+    if args.mode == "trace" and (args.implementation == "reference" or args.request_index < 0
+                                  or (args.prompts is None and args.request_index >= len(PROMPTS))
                                   or not 0 <= args.token_index < args.tokens):
         parser.error("trace requires the independent model and valid request/token indices")
     torch.set_num_threads(1)

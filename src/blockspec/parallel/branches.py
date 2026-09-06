@@ -46,8 +46,9 @@ class MaskedAttentionBranch:
         inputs = anchor.new_full((1, block_size), self.model.config.mask_token_id)
         inputs[:, :1] = anchor
         output = self.model(inputs, view="draft", cache=cache)
-        candidates, q, _ = sampler.propose(output.logits[0, :-1], generator)
-        return DraftBatch(torch.cat((anchor, candidates[None]), 1), candidates, q, cache, [])
+        candidates, q, calibration = sampler.propose(output.logits[0, :-1], generator, protected_rows=0)
+        return DraftBatch(torch.cat((anchor, candidates[None]), 1), candidates, q, cache, [],
+                          calibration_feedback=calibration)
 
 
 class CausalLowRankBranch:

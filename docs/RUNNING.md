@@ -430,6 +430,9 @@ python scripts/dual_view.py benchmark \
 
 随机采样添加 `--temperature 1`。`--implementation own` 与 `reference` 分别运行单个实现，
 `both` 同时驻留两份权重并交错运行。输出记录每条请求、吞吐、配对区间、计数和进程峰值显存。
+自有提示文件通过 `--prompts /path/to/questions.jsonl` 指定，每行包含 `question` 或 `prompt` 文本。
+`--requests` 选择文件开头的请求数，`--thinking` 启用聊天模板中的 thinking。
+数据来源、文件摘要、提示文本和输出预算随测量保存；公开数据版本见 `references/upstream.lock.json`。
 `--output` 指向仓库外的新 JSON 文件；相同路径重复使用时会提示选择新文件。
 数值审计的 `--dtype float32` 使用 FP32 参数和计算，保留同一组 logits 与逐层 KV 判据。
 
@@ -502,3 +505,35 @@ python scripts/train_dual_view.py demo --device cpu \
 该入口在小型周期序列上训练 AR 教师，冻结共享参数后蒸馏双向分支，
 比较连续训练和中断恢复的每步损失、梯度范数、学习率及最终参数，并检查贪心生成和 AR 的一致性。
 临时基座导出和合成数据在运行结束时清理，显式指定的最终检查点与摘要保留。
+
+## 12. 双向分支的在线概率学习
+
+`scripts/dual_online.py` 使用同一份冻结的公开 1.7B 模型，学习每个候选位置的温度混合系数。
+块长 32 对应 31 个候选位置，每个位置保存 5 个系数；教师反馈来自本轮 AR 验证。
+初值全部分配给原分布，反馈覆盖已接受位置和首次拒绝位置，每 8 个反馈块更新一次。
+更新在候选校正之后发布，跨请求保留系数、累计梯度与更新次数。
+
+```bash
+python scripts/dual_online.py \
+  --model /home/singm/online-speculation-work/models/Orthrus-Qwen3-1.7B \
+  --prompts /home/singm/online-speculation-work/data/gsm8k-pinned/test.jsonl \
+  --learning-prompts /home/singm/online-speculation-work/data/gsm8k-pinned/train.jsonl \
+  --thinking --block-size 32 --requests 8 --tokens 256 --repeats 2 \
+  --learn-requests 16 --learn-tokens 256 \
+  --temperature 1 --top-k 20 --top-p .8 --interval 8 --learning-rate .5 \
+  --output /home/singm/online-speculation-work/results/dual-online-new.json
+```
+
+学习请求与评测请求按问题文本检查互斥，分词沿用第 10 节的环境。
+所有组共用 BF16 / SDPA 骨干和 FP32 概率规则；概率变换、指数抽样及整块校正分别使用普通张量执行或 GPU 图。
+脚本中的 `eager` 指同一套张量算法的普通执行，`graph` 指它的 GPU 图版本。
+两条执行路径及恒等混合组逐请求核验 token、接受计数和前向次数。
+
+固定组使用原始概率；恒等组执行混合计算并固定原分布；冷启动在线组从恒等系数开始学习。
+独立学习流结束后保存状态，另两组从这份相同状态开始，分别保持系数固定和继续更新。
+每次重复重建这些起点，组间顺序按请求轮换，状态在各自的请求流内持续保留。
+
+TPS 包含 prefill、生成、反馈采集、更新和末尾同步；`update_seconds` 单列系数投影更新区域，
+反馈采集及梯度累计也计入完整 TPS。图准备和独立学习流的生成成本分别记录。
+输出保存逐请求数据、配对请求重采样区间、最终系数和所有模型参数的前后摘要。
+数值结果集中记录于 [RESULTS.md](RESULTS.md)，原始 JSON 保存在仓库外。
