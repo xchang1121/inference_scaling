@@ -73,7 +73,7 @@ def main():
                   "validation_sha256": sha(args.data), "train_sha256": sha(args.train_data),
                   "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                   "head_parameters": sum(p.numel() for p in head.parameters()), "precision": "float32",
-                  "device": torch.cuda.get_device_name(), "torch": torch.__version__}
+                  "device": torch.cuda.get_device_name(), "torch": str(torch.__version__)}
     engine = FixedShapeExecutor(model, capacity=args.prompt_length + max(args.tokens, args.train_tokens, 32),
                                 max_query=args.block_size)
     clean = [(n, False, None) for n in range(1, args.block_size + 1)]
