@@ -2,7 +2,7 @@
 
 Frozen parallel features feed a trainable low-rank Markov head. The confidence
 head acts before drawing the current candidate; verification uses saved, fully
-transformed conditional proposal rows. See ALGORITHM.md, section 15.
+transformed conditional proposal rows. See ALGORITHM.md, section 6.
 """
 
 from dataclasses import asdict, dataclass, field
