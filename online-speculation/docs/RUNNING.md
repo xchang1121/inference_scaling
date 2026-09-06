@@ -382,10 +382,14 @@ python scripts/overlap_mix.py benchmark \
   --reference-sha256 5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e \
   --train-data /home/singm/online-speculation-work/data/blockspec_ot3_medium/train.jsonl \
   --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
-  --prompts 17 --prompt-length 256 --tokens 256 --repeats 4 --block-size 8
+  --prompts 17 --prompt-length 256 --tokens 256 --repeats 2 --block-size 8 \
+  --sampling-execution cuda_graph --compare-eager
 ```
 
 默认采样为温度 1、top-k=50、top-p=0.95；骨干使用 BF16 分组注意力与固定形状 GPU 图。
+`--sampling-execution cuda_graph` 让 AR、静态与在线共用概率变换和整块校正的 GPU 图入口。
+`--compare-eager` 在同一轮增加原概率处理方式的 AR／静态对照，各版本分别计入自己的图准备成本。
+`--sampling-execution eager` 使用原概率入口。`retention_pass` 按在线／静态配对区间下界是否达到 0.97 判定。
 四路共享骨干执行器和采样设置。每个重复开始时创建新的混合系数，在线状态在该重复的请求流中持续更新。
 逐请求交替执行方法顺序，每组方法使用相同请求种子；随机生成的接受与残差抽样会消耗各自的随机序列。
 预热数据来自训练划分，正式划分与其按问题分组检查互斥。
