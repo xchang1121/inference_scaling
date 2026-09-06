@@ -19,6 +19,14 @@
 
 实现变化更新算法报告和运行说明的相应章节，实验数据及结论集中更新性能记录。
 
+## 当前工作范围
+
+共同管线覆盖条件低秩与双向注意力起草，训练入口覆盖基座初始化、全分布蒸馏和断点恢复。
+后续工作包括公开权重的推理执行优化，以及双向分支的在线学习：
+以公开起草参数为起点，探索低开销概率修正与起草注意力子集续训；AR 基座始终冻结。
+配对对照包含原始固定推理、学习后冻结推理和计入更新成本的在线推理，
+评价端到端 TPS、接受长度、更新开销与目标分布校正。
+
 ## 当前结构
 
 ```text
@@ -31,6 +39,7 @@ src/blockspec/
     sampling.py      抽样／验证执行策略
     feedback.py      在线反馈与更新生命周期
     training.py      随机锚点、多块掩码、完整分布 KL
+    fitting.py       索引数据、梯度累积、调度与精确断点恢复
     weights.py       严格公开权重映射、训练检查点
   model.py           独立因果 Transformer、条件低秩层、KV、后段特征重放
   attention.py       共享 K/V 的分组短查询、显式 mask 与 softmax
@@ -66,6 +75,7 @@ scripts/benchmark_reference.py  固定官方引擎的外部性能参照
 scripts/prefix_relay.py  PrefixRelay 训练、配对吞吐与在线续训评测
 scripts/overlap_mix.py   冻结权重的在线混合、共同前缀审计与配对吞吐
 scripts/dual_view.py    双视图公开权重数值对齐与配对吞吐
+scripts/train_dual_view.py 双向起草训练、恢复与小型合成闭环
 scripts/audit_pipeline.py  从指定 Git 版本对照重构前后的输出、计数与吞吐
 docs/ALGORITHM.md     持续更新的算法主报告
 docs/RESULTS.md       当前有效实验与复现记录

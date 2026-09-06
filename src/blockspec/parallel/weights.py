@@ -18,7 +18,7 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
-def public_key_map(config):
+def public_key_map(config, *, include_draft=True):
     """Own key -> public key. Both the output projection and Q/K norms are routed."""
     mapping = {"embedding.weight": "model.embed_tokens.weight", "norm.weight": "model.norm.weight"}
     if not config.tie_word_embeddings:
@@ -30,7 +30,8 @@ def public_key_map(config):
             mapping[own + name + ".weight"] = source + original + ".weight"
         for name in ("gate", "up", "down"):
             mapping[own + name + ".weight"] = source + "mlp." + name + "_proj.weight"
-        for view, suffix in (("ar", ""), ("draft", "_diff")):
+        views = (("ar", ""), ("draft", "_diff")) if include_draft else (("ar", ""),)
+        for view, suffix in views:
             for name in ("q", "k", "v", "o"):
                 for kind in (("weight", "bias") if config.attention_bias else ("weight",)):
                     mapping[own + f"attention.{view}.{name}.{kind}"] = (
@@ -39,6 +40,71 @@ def public_key_map(config):
                 mapping[own + f"attention.{view}.{name}.weight"] = (
                     source + f"self_attn.{name}{suffix}.weight")
     return mapping
+
+
+def load_ar_base(path, *, block_size, mask_token_id, device="cpu"):
+    """Initialize FP32 draft projections from an ordinary local Qwen3 checkpoint.
+
+    Single-file and indexed safetensors share the same strict name/shape bridge.
+    Each draft tensor owns separate storage; the shared/AR tensors remain frozen.
+    """
+    path = Path(path).resolve()
+    data = json.loads((path / "config.json").read_text())
+    if data.get("model_type") != "qwen3":
+        raise ValueError("a plain Qwen3 AR checkpoint is required")
+    config = DualViewConfig.from_public(data | {"block_size": block_size, "mask_token_id": mask_token_id})
+    mapping = public_key_map(config, include_draft=False)
+    index_path = path / "model.safetensors.index.json"
+    index = None
+    if index_path.exists():
+        index = json.loads(index_path.read_text()).get("weight_map")
+        if not isinstance(index, dict) or not index or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in index.items()):
+            raise ValueError("nonempty safetensors weight_map required")
+        filenames = sorted(set(index.values()))
+    else:
+        filenames = ["model.safetensors"]
+    with torch.device("meta"):
+        model = DualViewDecoder(config)
+    shapes = model.state_dict()
+    reverse = {source: own for own, source in mapping.items()}
+    state, seen, fingerprints = {}, {}, {}
+    extra_head = None
+    for filename in filenames:
+        file = (path / filename).resolve()
+        if file.parent != path or file.suffix != ".safetensors":
+            raise ValueError("checkpoint shards must be local safetensors files")
+        fingerprints[filename] = file_sha256(file)
+        with safe_open(file, framework="pt", device="cpu") as handle:
+            for source in handle.keys():
+                if source in seen or (index is not None and index.get(source) != filename):
+                    raise ValueError("duplicate tensor or inconsistent shard index")
+                seen[source] = filename
+                tensor = handle.get_tensor(source)
+                if config.tie_word_embeddings and source == "lm_head.weight":
+                    extra_head = tensor.clone()
+                    continue
+                if source not in reverse:
+                    raise ValueError(f"unexpected AR tensor: {source}")
+                own = reverse[source]
+                if tensor.shape != shapes[own].shape or not tensor.is_floating_point() or not torch.isfinite(tensor).all():
+                    raise ValueError(f"invalid AR tensor: {source}")
+                state[own] = tensor.to(device=device, dtype=torch.float32)
+    if (set(state) != set(mapping) or (index is not None and set(index) != set(seen))):
+        raise ValueError("missing AR tensors or inconsistent shard index")
+    if extra_head is not None and not torch.equal(extra_head.float().to(device), state["embedding.weight"]):
+        raise ValueError("tied AR output head differs from embeddings")
+    for own in public_key_map(config):
+        if ".attention.draft." in own:
+            state[own] = state[own.replace(".attention.draft.", ".attention.ar.")].clone()
+    if config.tie_word_embeddings:
+        state["head.weight"] = state["embedding.weight"]
+    model.load_state_dict(state, strict=True, assign=True)
+    model.tie_weights()
+    model.frequencies = model._frequencies(model.embedding.weight.device)
+    model.source = {"kind": "qwen3-ar-initialization", "directory": str(path),
+                    "config_sha256": file_sha256(path / "config.json"), "weight_sha256": fingerprints}
+    return model.eval().requires_grad_(False)
 
 
 def load_public(path, *, device="cpu", dtype=torch.float32, expected_sha256=None):
@@ -80,14 +146,15 @@ def load_public(path, *, device="cpu", dtype=torch.float32, expected_sha256=None
     return model.eval().requires_grad_(False)
 
 
-def save_checkpoint(path, model, *, optimizer=None, step=0, metadata=None):
+def save_checkpoint(path, model, *, optimizer=None, step=0, metadata=None, training_state=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"format": "blockspec-dual-view-v1", "config": model.config.to_dict(),
                "state": {key: value.detach().cpu() for key, value in model.state_dict().items()},
                "trainable": [key for key, value in model.named_parameters() if value.requires_grad],
                "optimizer": None if optimizer is None else optimizer.state_dict(),
-               "step": step, "metadata": metadata or {}, "source": getattr(model, "source", {})}
+               "step": step, "metadata": metadata or {}, "source": getattr(model, "source", {}),
+               "training_state": training_state}
     with path.open("xb") as handle:
         torch.save(payload, handle)
 
@@ -117,4 +184,4 @@ def load_checkpoint(path, *, device="cpu"):
     for name in payload["trainable"]:
         parameters[name].requires_grad_(True)
     model.source = payload["source"]
-    return model, {key: payload[key] for key in ("optimizer", "step", "metadata")}
+    return model, {key: payload.get(key) for key in ("optimizer", "step", "metadata", "training_state")}
