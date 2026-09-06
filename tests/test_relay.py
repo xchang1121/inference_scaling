@@ -129,6 +129,52 @@ def test_head_loss_numerical_gradient():
     assert abs(expected - (plus - minus) / (2 * epsilon)) < 1e-8
 
 
+def test_base_projection_preserves_initial_law_rng_and_similar_tokens():
+    model, head = tiny()
+    original = model.model.embed_tokens.weight.detach().clone()
+    source = original.clone()
+    source[1] = source[0]
+    rng_state = torch.get_rng_state().clone()
+    head.initialize_from_embedding(source, seed=51)
+    torch.testing.assert_close(torch.get_rng_state(), rng_state)
+    torch.testing.assert_close(model.model.embed_tokens.weight, original, atol=0, rtol=0)
+    torch.testing.assert_close(head.embedding.weight[0], head.embedding.weight[1], atol=0, rtol=0)
+    torch.testing.assert_close(head.embedding.weight.norm(dim=-1), torch.ones(7))
+    logits = torch.randn(3, 7)
+    torch.testing.assert_close(head(logits, torch.tensor([1, 2, 4])), logits, atol=0, rtol=0)
+    saved = head.embedding.weight.clone()
+    head.initialize_from_embedding(source, seed=51)
+    torch.testing.assert_close(head.embedding.weight, saved, atol=0, rtol=0)
+    with torch.no_grad():
+        head.projection.weight.fill_(1)
+    with pytest.raises(ValueError, match="zero transition"):
+        head.initialize_from_embedding(source)
+
+
+def test_separate_confidence_rate_controls_high_dimensional_adam_step():
+    # A zero-initialized dense head on 1536 RMS-normalized features can move
+    # by roughly lr * 1536 on its first Adam step. Check the two rates directly.
+    heads = [RelayHead(RelayConfig(2, 1536, 4)) for _ in range(2)]
+    heads[1].load_state_dict(heads[0].state_dict())
+    feedback = RelayFeedback(torch.zeros(1, 2), torch.ones(1, 1536), torch.tensor([0]),
+                             torch.tensor([[.7, .3]]).log())
+    losses = []
+    for head, rate in zip(heads, [None, .0001]):
+        head.embedding.requires_grad_(False)
+        head.projection.requires_grad_(False)
+        learner = RelayLearner(head, lr=.003, interval=1, confidence_lr=rate)
+        before = float(relay_loss(head, feedback)[2])
+        learner.observe(feedback)
+        losses.append((before, float(relay_loss(head, feedback)[2])))
+        if rate:
+            assert [group["lr"] for group in learner.optimizer.param_groups] == [.003, .0001]
+    assert losses[0][1] > losses[0][0]
+    assert losses[1][1] < losses[1][0]
+    for rate in [0, -1, float("nan")]:
+        with pytest.raises(ValueError, match="confidence learning rate"):
+            RelayLearner(heads[0], confidence_lr=rate)
+
+
 @pytest.mark.parametrize("scheduled", [False, True])
 def test_exact_two_token_joint_with_conditional_proposal_and_stopping(scheduled):
     # Enumerate candidate draws, accept/reject branches, and correction draws.
@@ -201,6 +247,27 @@ def test_paired_request_bootstrap_and_portable_file_sha(tmp_path):
     path = tmp_path / "empty"
     path.touch()
     assert module.sha(path) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_counterfactual_audit_keeps_the_reference_stream_fixed():
+    spec = importlib.util.spec_from_file_location("prefix_relay", Path(__file__).resolve().parents[1]
+                                                 / "scripts" / "prefix_relay.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model, reference = tiny()
+    evaluated = RelayHead(reference.config)
+    with torch.no_grad():
+        evaluated.projection.weight.normal_(0, .5)
+    audit = module.HeadAudit(reference, SamplingConfig(1.), evaluated_head=evaluated)
+    prompt = torch.tensor([[1, 2, 3]])
+    actual = generate_relay(model, reference, prompt, 21, block_size=4, sampling=SamplingConfig(1.), learner=audit,
+                             generator=torch.Generator().manual_seed(43))
+    expected = generate_relay(model, reference, prompt, 21, block_size=4, sampling=SamplingConfig(1.),
+                               generator=torch.Generator().manual_seed(43))
+    assert actual.tokens == expected.tokens
+    assert audit.totals.shape == (6,) and audit.totals[3] > 0
+    torch.testing.assert_close(audit.totals[0], audit.totals[4], atol=0, rtol=0)
+    assert audit.totals[1] != audit.totals[4]
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph integration")
