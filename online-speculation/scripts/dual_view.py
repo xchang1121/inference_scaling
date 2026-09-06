@@ -14,8 +14,10 @@ import torch
 
 from blockspec.checkpoint import implementation_fingerprint
 from blockspec.parallel import MaskedAttentionBranch, generate, generate_ar
+from blockspec.parallel.sampling import ProposalSampler
 from blockspec.parallel.weights import file_sha256, load_public
 from blockspec.sampling import SamplingConfig
+from blockspec.sampling_execution import SamplingExecutor
 from blockspec.state import cache_length
 
 
@@ -68,13 +70,19 @@ def prompt_texts(path, count, *, offset=0):
     return texts[offset:offset + count]
 
 
-def prompt_ids(folder, count, *, path=None, thinking=False, offset=0):
+def render_prompt(tokenizer, text, *, thinking=False, empty_system=False):
+    messages = ([{"role": "system", "content": ""}] if empty_system else [])
+    messages.append({"role": "user", "content": text})
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
+                                         enable_thinking=thinking)
+
+
+def prompt_ids(folder, count, *, path=None, thinking=False, offset=0, empty_system=False):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(folder, local_files_only=True)
     result = []
     for text in prompt_texts(path, count, offset=offset):
-        rendered = tokenizer.apply_chat_template([{"role": "user", "content": text}], tokenize=False,
-                                                  add_generation_prompt=True, enable_thinking=thinking)
+        rendered = render_prompt(tokenizer, text, thinking=thinking, empty_system=empty_system)
         result.append(tokenizer(rendered, return_tensors="pt", add_special_tokens=False).input_ids.cuda())
     return result
 
@@ -140,7 +148,7 @@ def audit(args, own, reference):
     tv_limit = 0.0001 if args.dtype == "float32" else 0.02
     numerical_pass = all(row["max_logit_error"] <= limit and row["max_tv"] <= tv_limit
                          and row.get("max_kv_tolerance_ratio", 0) <= 1 for row in records)
-    prompt = prompt_ids(args.model, 1)[0]
+    prompt = prompt_ids(args.model, 1, path=args.prompts, thinking=args.thinking, empty_system=args.empty_system)[0]
     own_ids = generate(MaskedAttentionBranch(own), prompt, args.tokens, block_size=args.blocks[-1],
                        eos_id=own.config.eos_token_id).tokens
     reference.config.block_size = args.blocks[-1]
@@ -187,10 +195,78 @@ def reference_generate(model, prompt, tokens, block, sampling, seed):
             "decode_forwards": counts["ar"] + counts["draft"], "token_ids": token_ids}
 
 
+class ProfileSampler(ProposalSampler):
+    def sample_ar(self, logits, generator):
+        with torch.profiler.record_function("blockspec.sample_ar"):
+            return super().sample_ar(logits, generator)
+
+    def propose(self, logits, generator, **kwargs):
+        with torch.profiler.record_function("blockspec.propose"):
+            return super().propose(logits, generator, **kwargs)
+
+    def verify(self, proposal, target_logits, generator):
+        with torch.profiler.record_function("blockspec.correct"):
+            return super().verify(proposal, target_logits, generator)
+
+
+@torch.inference_mode()
+def profile_generation(model, prompt, *, tokens, block_size, sampling, seed):
+    """Separate operator attribution from uninstrumented throughput measurements."""
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    if prompt.is_cuda:
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    versions = {name: value._version for name, value in model.named_parameters()}
+    branch, records = MaskedAttentionBranch(model), []
+
+    def run(method, sampler):
+        options = {"sampler": sampler, "sampling": sampling, "eos_id": model.config.eos_token_id,
+                   "generator": torch.Generator(device=prompt.device).manual_seed(seed)}
+        return (generate_ar(branch, prompt, tokens, **options) if method == "ar" else
+                generate(branch, prompt, tokens, block_size=block_size, **options))
+
+    for method in ("ar", "speculative"):
+        expected = run(method, ProposalSampler(sampling))
+        scopes = []
+
+        def before(module, inputs, kwargs, active=scopes):
+            stage = ("draft" if kwargs.get("view") == "draft" else
+                     "prefill" if kwargs.get("cache") is None else "ar_forward")
+            scope = torch.profiler.record_function(f"blockspec.{stage}")
+            scope.__enter__()
+            active.append(scope)
+
+        def after(module, inputs, output, active=scopes):
+            active.pop().__exit__(None, None, None)
+
+        pre = model.register_forward_pre_hook(before, with_kwargs=True)
+        post = model.register_forward_hook(after, always_call=True)
+        try:
+            with torch.profiler.profile(activities=activities, acc_events=True) as profiler:
+                actual = run(method, ProfileSampler(sampling))
+        finally:
+            pre.remove()
+            post.remove()
+        events = [{"name": event.key, "count": event.count,
+                   "self_cpu_us": event.self_cpu_time_total, "self_device_us": event.self_device_time_total,
+                   "inclusive_device_us": event.device_time_total} for event in profiler.key_averages()
+                  if event.device_type == torch.autograd.DeviceType.CPU]
+        records.append({"method": method, "tokens": len(actual.tokens), "decode_forwards": actual.decode_forwards,
+                        "tokens_unchanged": actual.tokens == expected.tokens,
+                        "counters_unchanged": actual.accepted_per_round == expected.accepted_per_round
+                        and actual.decode_forwards == expected.decode_forwards,
+                        "regions": [event for event in events if event["name"].startswith("blockspec.")],
+                        "operators": sorted((event for event in events if not event["name"].startswith("blockspec.")),
+                                            key=lambda event: event["self_device_us"], reverse=True)[:20]})
+    unchanged = versions == {name: value._version for name, value in model.named_parameters()}
+    return {"profiles": records, "parameters_unchanged": unchanged,
+            "pass": unchanged and all(row["tokens_unchanged"] and row["counters_unchanged"] for row in records)}
+
+
 @torch.inference_mode()
 def trace_decision(args, own):
     """Compare one greedy decision, including a same-cache one-row/block replay."""
-    prompt = prompt_ids(args.model, args.request_index + 1, path=args.prompts, thinking=args.thinking)[args.request_index]
+    prompt = prompt_ids(args.model, args.request_index + 1, path=args.prompts, thinking=args.thinking,
+                        empty_system=args.empty_system)[args.request_index]
     branch, captures, output_ids = MaskedAttentionBranch(own), {}, {}
     for mode in ("ar", "speculative"):
         selected = {}
@@ -236,16 +312,28 @@ def trace_decision(args, own):
 
 @torch.inference_mode()
 def benchmark(args, own, reference):
-    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking)
+    prompts = prompt_ids(args.model, args.requests, path=args.prompts, thinking=args.thinking,
+                         empty_system=args.empty_system)
     sampling = SamplingConfig(args.temperature, args.top_k, args.top_p)
-    methods = [(implementation, block) for implementation, model in (("own", own), ("reference", reference))
-               if model is not None for block in [1] + args.blocks]
+    engines = ({("own" if len(args.sampling_executions) == 1 else f"own_{mode}"): mode
+                for mode in args.sampling_executions} if own is not None else {})
+    samplers, preparation = {}, {}
+    for implementation, mode in engines.items():
+        for block in args.blocks:
+            executor = (None if mode == "scalar" else SamplingExecutor(
+                own.config.vocab_size, block, sampling, temperatures=(), protected_rows=0, use_cuda_graph=mode == "graph"))
+            samplers[implementation, block] = ProposalSampler(sampling, executor=executor)
+            preparation[f"{implementation}_k{block}"] = 0. if executor is None else executor.setup_seconds
+        samplers[implementation, 1] = samplers[implementation, args.blocks[0]]
+    methods = [(implementation, block) for implementation in list(engines) + (["reference"] if reference is not None else [])
+               for block in [1] + args.blocks]
     branch = None if own is None else MaskedAttentionBranch(own)
 
     def run(implementation, block, prompt, count, seed):
         if implementation == "reference":
             return reference_generate(reference, prompt, count, block, sampling, seed)
         options = {"sampling": sampling, "eos_id": own.config.eos_token_id,
+                   "sampler": samplers[implementation, block],
                    "generator": torch.Generator(device="cuda").manual_seed(seed)}
         result = (generate_ar(branch, prompt, count, **options) if block == 1 else
                   generate(branch, prompt, count, block_size=block, **options))
@@ -264,6 +352,7 @@ def benchmark(args, own, reference):
                 row.update(implementation=implementation, block=block, request=index, repeat=repeat,
                            input_tokens=prompt.numel())
                 records.append(row)
+            print(json.dumps({"repeat": repeat, "requests_complete": index + 1}), flush=True)
     aggregate = {}
     for implementation, block in methods:
         key = f"{implementation}_k{block}"
@@ -298,15 +387,17 @@ def benchmark(args, own, reference):
         ratios = (summed[:, 2] / summed[:, 3]) / (summed[:, 0] / summed[:, 1])
         aggregate[key]["paired_request_ci95"] = np.quantile(ratios, [.025, .975]).tolist()
         aggregate[key]["greedy_identical"] = identical if sampling.temperature == 0 else None
-    return {"sampling": asdict(sampling), "workload": "local question JSONL" if args.prompts else "fixed smoke prompts",
-            "thinking": args.thinking, "prompt_file_sha256": None if args.prompts is None else file_sha256(args.prompts),
+    return {"sampling": asdict(sampling), "sampling_execution": engines, "sampling_setup_seconds": preparation,
+            "workload": "local question JSONL" if args.prompts else "fixed smoke prompts",
+            "thinking": args.thinking, "empty_system": args.empty_system,
+            "prompt_file_sha256": None if args.prompts is None else file_sha256(args.prompts),
             "prompts": prompt_texts(args.prompts, args.requests), "records": records, "aggregate": aggregate,
             "resident_bytes": resident, "peak_allocated_bytes": torch.cuda.max_memory_allocated()}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("audit", "benchmark", "trace"))
+    parser.add_argument("mode", choices=("audit", "benchmark", "trace", "profile"))
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="bfloat16")
     parser.add_argument("--backend", choices=("eager", "sdpa", "flash_attention_2"), default="sdpa")
@@ -316,10 +407,12 @@ def main():
     parser.add_argument("--requests", type=int, default=8)
     parser.add_argument("--prompts", type=Path)
     parser.add_argument("--thinking", action="store_true")
+    parser.add_argument("--empty-system", action="store_true", help="include the public quickstart's empty system message")
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0)
     parser.add_argument("--top-k", type=int, default=0)
     parser.add_argument("--top-p", type=float, default=1)
+    parser.add_argument("--sampling-executions", nargs="+", choices=("scalar", "tensor", "graph"), default=["scalar"])
     parser.add_argument("--seed", type=int, default=731)
     parser.add_argument("--request-index", type=int, default=6)
     parser.add_argument("--token-index", type=int, default=20)
@@ -330,6 +423,11 @@ def main():
         parser.error("positive budgets, unique blocks >= 2, and prompts within the input data required")
     if args.output is not None and args.output.exists():
         parser.error("choose a new output file")
+    if len(set(args.sampling_executions)) != len(args.sampling_executions) or (args.sampling_executions != ["scalar"] and (
+            args.mode != "benchmark" or args.implementation == "reference" or args.temperature <= 0)):
+        parser.error("distinct prepared sampling modes require an own/both positive-temperature benchmark")
+    if args.mode == "profile" and (args.implementation != "own" or args.tokens > 256):
+        parser.error("profile uses the independent implementation and at most 256 tokens")
     if args.mode == "trace" and (args.implementation == "reference" or args.request_index < 0
                                   or (args.prompts is None and args.request_index >= len(PROMPTS))
                                   or not 0 <= args.token_index < args.tokens):
@@ -347,11 +445,17 @@ def main():
               "reference_source_sha256": SOURCE_SHA, "implementation": implementation_fingerprint(),
               "script_sha256": file_sha256(__file__), "dtype": args.dtype, "backend": args.backend,
               "python": platform.python_version(), "torch": torch.__version__,
-              "device": torch.cuda.get_device_name(), "seed": args.seed}
+              "device": torch.cuda.get_device_name(), "seed": args.seed,
+              "config": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}}
     if args.mode == "audit":
         result.update(audit(args, own, reference))
     elif args.mode == "trace":
         result.update(trace_decision(args, own))
+    elif args.mode == "profile":
+        prompt = prompt_ids(args.model, 1, path=args.prompts, thinking=args.thinking,
+                            empty_system=args.empty_system)[0]
+        result.update(profile_generation(own, prompt, tokens=args.tokens, block_size=args.blocks[-1],
+                                         sampling=SamplingConfig(args.temperature, args.top_k, args.top_p), seed=args.seed))
     else:
         result.update(benchmark(args, own, reference))
     if args.output is not None:
@@ -361,7 +465,7 @@ def main():
             handle.write("\n")
     print(json.dumps(result if args.mode == "audit" else {key: value for key, value in result.items()
                                                         if key != "records"}, indent=2))
-    if args.mode == "audit" and not result["pass"]:
+    if args.mode in ("audit", "profile") and not result["pass"]:
         raise SystemExit(1)
 
 

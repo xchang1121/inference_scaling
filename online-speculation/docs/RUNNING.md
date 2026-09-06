@@ -432,9 +432,26 @@ python scripts/dual_view.py benchmark \
 `both` 同时驻留两份权重并交错运行。输出记录每条请求、吞吐、配对区间、计数和进程峰值显存。
 自有提示文件通过 `--prompts /path/to/questions.jsonl` 指定，每行包含 `question` 或 `prompt` 文本。
 `--requests` 选择文件开头的请求数，`--thinking` 启用聊天模板中的 thinking。
+`--empty-system` 在用户消息之前加入内容为空的 system 消息。
+公开快速示例对应 `--empty-system --backend flash_attention_2 --tokens 2048`，thinking 保持默认关闭。
+GSM8K 配对测量再指定 `--prompts /home/singm/online-speculation-work/data/gsm8k-pinned/test.jsonl`
+和 `--blocks 32 --requests 16 --repeats 1 --implementation both`；
+将后端切换为 `sdpa` 可在相同模板与输出预算下比较执行路径。
 数据来源、文件摘要、提示文本和输出预算随测量保存；公开数据版本见 `references/upstream.lock.json`。
 `--output` 指向仓库外的新 JSON 文件；相同路径重复使用时会提示选择新文件。
 数值审计的 `--dtype float32` 使用 FP32 参数和计算，保留同一组 logits 与逐层 KV 判据。
+
+`profile` 模式在第一条问题上分别记录 AR 与投机的算子归因，预算上限为 256 token：
+使用同一入口，将 `benchmark` 换为 `profile`，设置 `--implementation own --tokens 32`。
+`regions` 汇总 prefill、起草、AR 前向和概率处理；`operators` 按算子自身关联的 GPU 内核时间排序。
+记录筛选 CPU 侧算子事件，GPU 内核通过关联关系计入各算子，避免重复相加。
+剖析前后的 token、接受计数与参数版本同时核验，吞吐使用独立的 `benchmark` 轮次测量。
+
+随机采样的执行比较添加 `--temperature 1 --sampling-executions scalar tensor graph`。
+`scalar` 使用逐项校正，`tensor` 使用整块张量校正，`graph` 捕获相同张量操作；三者共享概率变换。
+每种执行方式分别交错测量 AR 与投机，准备时间写入 `sampling_setup_seconds`，请求吞吐从 prefill 开始计时。
+各方式的随机数组织由相应采样器决定，输出与接受计数保存在逐请求记录中。
+本机随机采样可选 `--sampling-executions tensor`；`scalar tensor graph` 保留完整执行对照。
 
 单个贪心决策的诊断入口为：
 

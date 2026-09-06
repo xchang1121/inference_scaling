@@ -66,6 +66,23 @@ def test_prompt_windows_are_disjoint_and_bounded(tmp_path):
         module.prompt_texts(data, 0)
 
 
+@pytest.mark.parametrize("empty_system,thinking", [(False, False), (True, False), (True, True)])
+def test_public_prompt_template_keeps_roles_and_thinking_explicit(empty_system, thinking):
+    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
+    spec = importlib.util.spec_from_file_location("dual_view_render_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **options):
+            expected = ([{"role": "system", "content": ""}] if empty_system else [])
+            assert messages == expected + [{"role": "user", "content": "question"}]
+            assert options == {"tokenize": False, "add_generation_prompt": True, "enable_thinking": thinking}
+            return "rendered"
+
+    assert module.render_prompt(Tokenizer(), "question", empty_system=empty_system, thinking=thinking) == "rendered"
+
+
 def test_empty_audit_is_explicit_and_bootstrap_keeps_the_callers_random_state():
     empty = audit_summary(torch.zeros(3, len(METRICS) + 1))
     assert empty["positions"] == 0 and all(value is None for value in empty["mean"].values())
@@ -77,3 +94,50 @@ def test_empty_audit_is_explicit_and_bootstrap_keeps_the_callers_random_state():
     state = torch.get_rng_state()
     paired_audit_intervals([record], repeats=10)
     assert torch.equal(state, torch.get_rng_state())
+
+
+@pytest.mark.parametrize("temperature", [0., 1.])
+def test_operator_profile_preserves_generation_and_removes_hooks(temperature):
+    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
+    spec = importlib.util.spec_from_file_location("dual_view_profile_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model = DualViewDecoder(DualViewConfig(vocab_size=17, hidden_size=16, intermediate_size=24,
+                                          num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+                                          head_dim=8)).eval().requires_grad_(False)
+    result = module.profile_generation(model, torch.tensor([[3, 4, 5]]), tokens=8, block_size=4,
+                                       sampling=SamplingConfig(temperature, 5, .8), seed=92)
+    assert result["pass"] and len(result["profiles"]) == 2
+    assert all(row["tokens"] == 8 for row in result["profiles"])
+    assert any(event["name"] == "blockspec.draft" for event in result["profiles"][1]["regions"])
+    for row in result["profiles"]:
+        assert len(row["regions"]) == len({event["name"] for event in row["regions"]})
+        assert all(not event["name"].startswith("blockspec.") for event in row["operators"])
+    assert not model._forward_pre_hooks and not model._forward_hooks
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="paired CUDA sampling execution")
+def test_benchmark_pairs_sampling_executors_and_their_ar_controls(monkeypatch):
+    from types import SimpleNamespace
+
+    path = Path(__file__).parents[1] / "scripts" / "dual_view.py"
+    spec = importlib.util.spec_from_file_location("dual_view_execution_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model = DualViewDecoder(DualViewConfig(vocab_size=17, hidden_size=16, intermediate_size=24,
+                                          num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+                                          head_dim=8)).cuda().eval().requires_grad_(False)
+    before = {name: value.clone() for name, value in model.state_dict().items()}
+    prompts = [torch.tensor([[3, 4, 5]], device="cuda"), torch.tensor([[6, 7]], device="cuda")]
+    monkeypatch.setattr(module, "prompt_ids", lambda *a, **kw: prompts)
+    monkeypatch.setattr(module, "prompt_texts", lambda *a, **kw: ["first", "second"])
+    args = SimpleNamespace(model=None, requests=2, prompts=None, thinking=False, empty_system=True,
+                           temperature=1., top_k=5, top_p=.8, blocks=[4], repeats=2, tokens=12, seed=73,
+                           sampling_executions=["scalar", "tensor", "graph"])
+    result = module.benchmark(args, model, None)
+    assert result["sampling_execution"] == {f"own_{mode}": mode for mode in args.sampling_executions}
+    assert set(result["aggregate"]) == {f"own_{mode}_k{block}" for mode in args.sampling_executions for block in (1, 4)}
+    assert len(result["records"]) == 24
+    assert all(row["tokens"] == 12 for row in result["records"])
+    assert result["sampling_setup_seconds"]["own_scalar_k4"] == 0
+    assert all(torch.equal(value, model.state_dict()[name]) for name, value in before.items())
