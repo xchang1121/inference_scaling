@@ -6,10 +6,12 @@ import torch
 from blockspec.benchmark import (BenchmarkConfig, aggregate, benchmark_offline, benchmark_streams,
                                 compare_tokens, comparison_summary, continuation_prompts, stream_trajectory)
 from blockspec.checkpoint import adapter_state, base_fingerprint
-from blockspec.decoding import Generation
+from blockspec.decoding import Generation, generate_ar, generate_speculative
+from blockspec.diffusion import UniformNoise
 from blockspec.model import Decoder, ModelConfig
-from blockspec.online import OnlineConfig
+from blockspec.online import OnlineConfig, OnlineLearner
 from blockspec.sampling import SamplingConfig
+from blockspec.tree import generate_tree
 
 
 def test_aggregate_counts_all_time_not_mean_tps():
@@ -91,10 +93,13 @@ def test_sampling_settings_reach_every_warmup_and_measured_arm(monkeypatch, samp
     model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
                                 num_hidden_layers=2, adapter_rank=2)).train_adapters_only()
     observed = []
+    noise = UniformNoise(1, 6)
 
     def record(original, name):
         def generate(*args, **kwargs):
             assert kwargs["sampling"] == sampling
+            if name != "generate_ar":
+                assert kwargs["noise"] == noise
             seed = kwargs["generator"].initial_seed()
             output = original(*args, **kwargs)
             observed.append((name, seed, tuple(output.tokens), kwargs.get("learner") is not None))
@@ -104,7 +109,7 @@ def test_sampling_settings_reach_every_warmup_and_measured_arm(monkeypatch, samp
     for name in ("generate_ar", "generate_speculative", "generate_tree"):
         monkeypatch.setattr(module, name, record(getattr(module, name), name))
     config = BenchmarkConfig(tokens=8, block_size=3, warmup_tokens=4, sampler=sampler,
-                             top_k=2, prefix_budget=5, sampling=sampling)
+                             top_k=2, prefix_budget=5, sampling=sampling, noise=noise)
     prompts = [torch.tensor([[0, 1]]), torch.tensor([[0, 2]])]
 
     def run():
@@ -119,6 +124,7 @@ def test_sampling_settings_reach_every_warmup_and_measured_arm(monkeypatch, samp
     repeated = run()
     assert observed == first  # Local generators include warmup; adapters are restored between runs.
     assert result["config"]["sampling"] == asdict(sampling)
+    assert result["config"]["noise"] == asdict(noise)
     assert result["config"]["top_k"] == 2  # Tree width is separate from the target filter.
     assert result["comparison_mode"] == "stochastic_diagnostic"
     assert result["greedy_identical"] is None
@@ -139,6 +145,76 @@ def test_sampling_settings_reach_every_warmup_and_measured_arm(monkeypatch, samp
 def test_benchmark_requires_a_validated_sampling_configuration(sampling):
     with pytest.raises(ValueError, match="SamplingConfig"):
         BenchmarkConfig(sampling=sampling)
+
+
+@pytest.mark.parametrize("noise", [None, {"low": 1}, 1])
+def test_benchmark_requires_a_validated_noise_configuration(noise):
+    with pytest.raises(ValueError, match="UniformNoise"):
+        BenchmarkConfig(noise=noise)
+
+
+@pytest.mark.parametrize("generate", [generate_speculative, generate_tree])
+def test_online_feedback_preserves_actual_noise_and_greedy_target(monkeypatch, generate):
+    torch.manual_seed(820)
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=2, adapter_rank=2)).double()
+    learner = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1, train_last_layers=1))
+    noise = UniformNoise(3, 4)
+    observed = []
+    original = learner.observe
+
+    def observe(feedback, **kwargs):
+        observed.append(feedback.inputs.clone())
+        return original(feedback, **kwargs)
+
+    monkeypatch.setattr(learner, "observe", observe)
+    prompt = torch.tensor([[0, 1]])
+    expected = generate_ar(model, prompt, 18)
+    result = generate(model, prompt, 18, block_size=3, learner=learner, noise=noise,
+                      generator=torch.Generator().manual_seed(821))
+    assert result.tokens == expected.tokens
+    assert observed and learner.updates > 0
+    assert all(torch.all(inputs[:, 1:] == 3) for inputs in observed)
+
+
+def test_cli_checks_source_checkpoint_before_execution_cast(tmp_path, monkeypatch, capsys):
+    import copy
+    import json
+    import sys
+
+    from blockspec import cli
+    from blockspec.checkpoint import save_checkpoint
+
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=1, adapter_rank=2)).train_adapters_only()
+    checkpoint, data = tmp_path / "adapter.pt", tmp_path / "validation.jsonl"
+    save_checkpoint(checkpoint, model, adapter_only=True)
+    data.write_text(json.dumps({"input_ids": [0, 1, 2]}) + "\n")
+
+    def load_base(*args, **kwargs):
+        assert kwargs["dtype"] == torch.float32
+        return copy.deepcopy(model)
+
+    def run(converted, prompts, config, online_config, **kwargs):
+        assert next(converted.parameters()).dtype == torch.bfloat16
+        assert all(p.dtype == torch.float32 for p in converted.adapter_parameters())
+        assert config.noise == UniformNoise(1)
+        return {"checked": True}
+
+    monkeypatch.setattr(cli, "load_hf_base", load_base)
+    monkeypatch.setattr("blockspec.benchmark.benchmark_streams", run)
+    monkeypatch.setattr(sys, "argv", ["blockspec", "benchmark", "--base", str(tmp_path),
+                                     "--adapter", str(checkpoint), "--data", str(data), "--device", "cpu",
+                                     "--prompts", "1", "--prompt-length", "2", "--dtype", "float32",
+                                     "--execution-dtype", "bfloat16", "--noise-low", "1"])
+    threads = torch.get_num_threads()
+    try:
+        cli.main()
+    finally:
+        torch.set_num_threads(threads)
+    output = json.loads(capsys.readouterr().out)
+    assert output["checked"] and output["dtype"] == "bfloat16"
+    assert output["checkpoint_base_dtype"] == "float32"
 
 
 @pytest.mark.parametrize("loss", ["l1", "forward_kl"])

@@ -6,6 +6,7 @@ import time
 import torch
 
 from .model import trim_cache
+from .diffusion import UniformNoise
 from .online import Feedback, synchronize
 from .sampling import (SamplingConfig, draw, greedy_tokens, probabilities,
                        sample_logits, verify_greedy, verify_linear)
@@ -84,7 +85,7 @@ def generate_ar(model, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos
 @torch.no_grad()
 def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
                          sampling=SamplingConfig(), eos_id=None, generator=None,
-                         learner=None, executor=None):
+                         learner=None, executor=None, noise=UniformNoise()):
     """One clean root + B-1 independent noisy proposals, then base verification.
 
     cache always describes committed history excluding its last token. A replay
@@ -119,9 +120,8 @@ def generate_speculative(model, prompt, max_new_tokens, *, block_size=8,
             forwards += 1
             break
         b = min(block_size, remaining)
-        noise = torch.randint(model.config.vocab_size, (1, b - 1), device=prompt.device,
-                              generator=generator)
-        inputs = torch.cat((seed, noise), dim=1)
+        noisy = noise.sample((1, b - 1), model.config.vocab_size, device=prompt.device, generator=generator)
+        inputs = torch.cat((seed, noisy), dim=1)
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, 0] = False
         old_cache = cache

@@ -156,7 +156,7 @@ def test_executor_contracts_and_storage_invalidation():
         engine(ids.float())
     with pytest.raises(ValueError, match="share a model"):
         engine.validate(copy.deepcopy(model))
-    with pytest.raises(ValueError, match="FP32 CUDA"):
+    with pytest.raises(ValueError, match="CUDA model"):
         FixedShapeExecutor(model, capacity=4, max_query=2)
     p = model.adapter_parameters()[0]
     p.data = p.data.clone()
@@ -179,3 +179,120 @@ def test_all_setup_cost_is_not_hidden_in_warm_throughput():
     result = aggregate([row], setup_seconds=.5, engine_setup_seconds=1.5)
     assert result["tps"] == 15 and result["tps_including_learner_setup"] == 12
     assert result["tps_including_all_setup"] == 7.5
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="BF16 CUDA graphs required"))])
+@pytest.mark.parametrize("master_weights", [False, True])
+@torch.no_grad()
+def test_bf16_graphs_preserve_cache_snapshots_and_observe_adapter_updates(device, master_weights):
+    torch.manual_seed(627)
+    model = Decoder(ModelConfig(vocab_size=17, hidden_size=32, intermediate_size=64,
+                                num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+                                head_dim=8, adapter_rank=4)).to(device=device, dtype=torch.bfloat16)
+    if master_weights:
+        model.train_adapters_only()
+    for parameter in model.adapter_parameters():
+        parameter.normal_(std=.06)
+    assert all(p.dtype == (torch.float32 if master_weights else torch.bfloat16) for p in model.adapter_parameters())
+    engine = FixedShapeExecutor(model, capacity=32, max_query=5, use_cuda_graph=device == "cuda")
+    engine.prepare([(n, False, None) for n in range(1, 6)] + [(4, True, None), (4, True, 1)])
+    ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6]], device=device)
+    past = model(ids, return_cache=True)[1]
+    inputs = ids[:, :4]
+    mask = torch.tensor([[False, True, True, True]], device=device)
+
+    def check(result, expected):
+        torch.testing.assert_close(result[0], expected[0], rtol=.03, atol=.004)
+        tv = (result[0].float().softmax(-1) - expected[0].float().softmax(-1)).abs().sum(-1) / 2
+        assert float(tv.max()) < .003
+        torch.testing.assert_close(tuple(result[1]), tuple(expected[1]), rtol=.03, atol=.004)
+
+    for prefix in (past, trim_cache(past, 2), None):
+        options = dict(cache=prefix, adapter_mask=mask, return_cache=True, capture_layer=1)
+        result = engine(inputs, **options)
+        check(result, model(inputs, **options))
+        assert result[1].packed.dtype == torch.bfloat16
+        snapshot = (result[0].clone(), result[1].packed.clone(), result[2].hidden.clone())
+        for parameter in model.adapter_parameters():
+            parameter.add_(.01)
+        updated = engine(inputs, **options)
+        check(updated, model(inputs, **options))
+        assert torch.any(updated[0] != result[0])
+        torch.testing.assert_close((result[0], result[1].packed, result[2].hidden), snapshot, atol=0, rtol=0)
+    tree = CandidateTree([3, 4, 7, 8, 9], [-1, 0, 0, 1, 2], [0, 1, 1, 2, 2],
+                         [0.] * 5, [{4: 1, 7: 2}, {8: 3}, {9: 4}, {}, {}])
+    tokens, positions, allowed = tree.layout(7, device=device)
+    result = engine(tokens, positions=positions, allowed=allowed, cache=past, return_cache=True)
+    expected = model(tokens, positions=positions, allowed=allowed, cache=past, return_cache=True)
+    check(result, expected)
+    torch.testing.assert_close(tuple(compact_tree_cache(result[1], 7, [0, 2, 4])),
+                               tuple(compact_tree_cache(expected[1], 7, [0, 2, 4])), rtol=.03, atol=.004)
+
+
+def test_bf16_executor_rejects_mixed_base_and_foreign_cache_precision():
+    model = Decoder(ModelConfig(vocab_size=8, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=1, adapter_rank=2)).to(torch.bfloat16).train_adapters_only()
+    engine = FixedShapeExecutor(model, capacity=16, max_query=3, use_cuda_graph=False)
+    engine.prepare([(1, False, None)])
+    ids = torch.tensor([[0, 1]])
+    with torch.no_grad():
+        past = model(ids, return_cache=True)[1]
+        converted = tuple((k.float(), v.float()) for k, v in past)
+        with pytest.raises(ValueError, match="prefix cache"):
+            engine(ids[:, :1], cache=converted)
+    model.model.norm.weight.data = model.model.norm.weight.data.float()
+    with pytest.raises(ValueError, match="base dtype"):
+        FixedShapeExecutor(model, capacity=16, max_query=3, use_cuda_graph=False)
+
+
+def test_explicit_base_cast_preserves_adapter_masters_rotary_and_checkpoint_guard(tmp_path):
+    from blockspec.checkpoint import adapter_state, base_fingerprint, load_checkpoint, save_checkpoint
+    from blockspec.model import is_adapter
+
+    torch.manual_seed(822)
+    model = Decoder(ModelConfig(vocab_size=11, hidden_size=16, intermediate_size=24,
+                                num_hidden_layers=1, adapter_rank=2)).train_adapters_only()
+    checkpoint = tmp_path / "adapter.pt"
+    save_checkpoint(checkpoint, model, adapter_only=True)
+    initial, source = adapter_state(model), base_fingerprint(model)
+    buffers = {n: p.clone() for n, p in model.named_buffers()}
+    model, _ = load_checkpoint(checkpoint, model=model)
+    assert model.set_base_dtype(torch.bfloat16) is model
+    assert base_fingerprint(model) != source
+    for name, parameter in model.named_parameters():
+        assert parameter.dtype == (torch.float32 if is_adapter(name) else torch.bfloat16)
+    assert all(torch.equal(value, adapter_state(model)[name]) for name, value in initial.items())
+    assert all(torch.equal(value, buffers[name]) for name, value in model.named_buffers())
+    with pytest.raises(ValueError, match="different base"):
+        load_checkpoint(checkpoint, model=model)
+    with pytest.raises(ValueError, match="execution dtype"):
+        model.set_base_dtype(torch.int8)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="BF16 CUDA graphs required")
+@pytest.mark.parametrize("generate", [generate_speculative, generate_tree])
+def test_bf16_inference_graph_with_fp32_online_masters(generate):
+    from blockspec.checkpoint import adapter_state, base_fingerprint
+    from blockspec.sampling import SamplingConfig
+
+    torch.manual_seed(28)
+    model = Decoder(ModelConfig(vocab_size=11, hidden_size=32, intermediate_size=64,
+                                num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+                                head_dim=8, adapter_rank=4)).cuda().to(torch.bfloat16).train_adapters_only()
+    initial, frozen = adapter_state(model), base_fingerprint(model)
+    engine = FixedShapeExecutor(model, capacity=32, max_query=5)
+    engine.prepare([(n, False, None) for n in range(1, 6)] + [(n, True, 1) for n in (2, 3)])
+    learner = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1, train_last_layers=1))
+    options = {"block_size": 3, "sampling": SamplingConfig(temperature=1), "executor": engine, "learner": learner}
+    if generate is generate_tree:
+        options.update(top_k=2, prefix_budget=5)
+    for prompt in ([[0, 1]], [[0, 2]]):
+        output = generate(model, torch.tensor(prompt, device="cuda"), 12,
+                          generator=torch.Generator(device="cuda").manual_seed(71), **options)
+        assert output.updates > 0
+        assert len(output.tokens) == 12
+    after = adapter_state(model)
+    assert base_fingerprint(model) == frozen
+    assert all(p.dtype == torch.float32 for p in model.adapter_parameters())
+    assert any(not torch.equal(value, after[name]) for name, value in initial.items())

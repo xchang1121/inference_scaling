@@ -27,7 +27,7 @@
     "url": "https://arxiv.org/abs/2609.04010"
   },
   "source": {
-    "usage": "read-only research reference; not imported by this implementation",
+    "usage": "read-only research reference; optional benchmark_reference.py runs the pinned engine in isolated subprocesses; independent runtime is src/blockspec",
     "commit": "ed2ee36bb7a3aea8732ebc635b3f09490a032ea3",
     "repository": "https://github.com/ifm-ai/uno"
   }

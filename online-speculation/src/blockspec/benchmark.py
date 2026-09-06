@@ -14,6 +14,7 @@ import torch
 from .checkpoint import adapter_state, base_fingerprint
 from .attention import ATTENTION_BACKENDS
 from .decoding import generate_ar, generate_speculative
+from .diffusion import UniformNoise
 from .online import OnlineConfig, OnlineLearner, synchronize
 from .sampling import SamplingConfig
 from .tree import generate_tree
@@ -38,6 +39,7 @@ class BenchmarkConfig:
     online_execution: str = "eager"
     attention_backend: str = "sdpa"
     sampling: SamplingConfig = SamplingConfig()
+    noise: UniformNoise = UniformNoise()
 
     def __post_init__(self):
         if min(self.tokens, self.warmup_tokens, self.top_k, self.prefix_budget) < 1:
@@ -54,6 +56,8 @@ class BenchmarkConfig:
             raise ValueError("unknown attention backend")
         if not isinstance(self.sampling, SamplingConfig):
             raise ValueError("sampling must be a SamplingConfig")
+        if not isinstance(self.noise, UniformNoise):
+            raise ValueError("noise must be a UniformNoise")
 
 
 def continuation_prompts(sequences, *, count, length):
@@ -136,7 +140,7 @@ def benchmark_offline(model, prompts, config=BenchmarkConfig(), *, progress=None
     initial, frozen = adapter_state(model), base_fingerprint(model)
     engine, setup = None, {"ar": 0.0, "static": 0.0}
     generate = generate_tree if config.sampler == "tree" else generate_speculative
-    options = {"block_size": config.block_size, "sampling": config.sampling}
+    options = {"block_size": config.block_size, "sampling": config.sampling, "noise": config.noise}
     if config.sampler == "tree":
         options.update(top_k=config.top_k, prefix_budget=config.prefix_budget)
     rows, comparisons, repetitions = {"ar": [], "static": []}, [], []
@@ -220,7 +224,7 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
     replay_info = {"kind": config.online_execution, "setup_seconds": 0.0, "signatures": 0}
     engine_cost = dict.fromkeys(("ar", "static", "online"), 0.0)
     spec = generate_tree if config.sampler == "tree" else generate_speculative
-    options = {"block_size": config.block_size, "sampling": config.sampling}
+    options = {"block_size": config.block_size, "sampling": config.sampling, "noise": config.noise}
     if config.sampler == "tree":
         options.update(top_k=config.top_k, prefix_budget=config.prefix_budget)
 

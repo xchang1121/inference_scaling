@@ -1,8 +1,29 @@
 """Discrete corruption and predictor/corrector kernels derived with Bayes' rule."""
 
+from dataclasses import dataclass
+
 import torch
 
 from .sampling import validate_distribution
+
+
+@dataclass(frozen=True)
+class UniformNoise:
+    """Uniform integer proposal noise on [low, high); None resolves to vocabulary size."""
+
+    low: int = 0
+    high: int | None = None
+
+    def __post_init__(self):
+        if type(self.low) is not int or self.low < 0 or (self.high is not None and (
+                type(self.high) is not int or self.high <= self.low)):
+            raise ValueError("noise requires integer bounds 0 <= low < high")
+
+    def sample(self, shape, vocab_size, *, device, generator=None):
+        high = vocab_size if self.high is None else self.high
+        if not self.low < high <= vocab_size:
+            raise ValueError("noise bounds must fit the model vocabulary")
+        return torch.randint(self.low, high, shape, device=device, generator=generator)
 
 
 def corrupt(clean, prior, alpha, *, generator=None):
