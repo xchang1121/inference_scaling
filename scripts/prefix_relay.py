@@ -14,7 +14,9 @@ from blockspec.data import assert_split_files_disjoint, load_sequences
 from blockspec.decoding import generate_ar, generate_speculative
 from blockspec.execution import FixedShapeExecutor
 from blockspec.relay import (RelayConfig, RelayHead, RelayLearner, generate_relay, load_relay, save_relay)
-from blockspec.sampling import SamplingConfig
+from blockspec.relay import relay_candidates
+from blockspec.relay_execution import RelayExecutor
+from blockspec.sampling import SamplingConfig, probabilities
 
 
 def emit(row):
@@ -29,9 +31,79 @@ def sha(path):
     return digest.hexdigest()
 
 
+def paired_bootstrap(rows, reference, method, prompts, *, seed=271828, resamples=10000):
+    """Resample request clusters, retaining all repeated runs of each request."""
+    a, b = rows[reference], rows[method]
+    if (prompts < 1 or resamples < 200 or len(a) != len(b) or len(a) % prompts
+            or any(x["tokens"] != y["tokens"] for x, y in zip(a, b))):
+        raise ValueError("paired equal-token repetitions and >=200 bootstrap draws required")
+    groups = [(sum(a[j]["seconds"] for j in range(i, len(a), prompts)),
+               sum(b[j]["seconds"] for j in range(i, len(b), prompts))) for i in range(prompts)]
+    state, ratios = seed, []
+    for _ in range(resamples):
+        numerator = denominator = 0.
+        for _ in range(prompts):
+            state = (1664525 * state + 1013904223) & 0xffffffff
+            x, y = groups[(state * prompts) >> 32]
+            numerator += x
+            denominator += y
+        ratios.append(numerator / denominator)
+    ratios.sort()
+    return {"method": "paired_request_cluster_bootstrap", "clusters": prompts, "resamples": resamples,
+            "seed": seed, "speed_ratio_95_interval": [ratios[int(.025 * resamples)], ratios[int(.975 * resamples) - 1]]}
+
+
+class HeadAudit:
+    """Paired TV on the serving head's same reached prefixes, without updates."""
+    def __init__(self, head, sampling):
+        self.head, self.sampling = head, sampling
+        self.updates = self.feedback_blocks = 0
+        self.update_seconds = 0.
+        self.totals = torch.zeros(4, device=next(head.parameters()).device)
+
+    def clear_replay(self):
+        pass
+
+    @torch.no_grad()
+    def observe(self, feedback, *, may_update=True):
+        count = len(feedback.previous)
+        if not count:
+            return
+        p = probabilities(feedback.teacher, self.sampling)
+        original = probabilities(feedback.logits, self.sampling)
+        corrected = probabilities(self.head(feedback.logits, feedback.previous), self.sampling)
+        tv0 = .5 * (p - original).abs().sum(-1)
+        tv1 = .5 * (p - corrected).abs().sum(-1)
+        confidence = self.head.confidence_logits(feedback.hidden, feedback.previous).sigmoid()
+        self.totals += torch.stack((tv0.sum(), tv1.sum(), (confidence - (1 - tv1)).square().sum(),
+                                    tv0.new_tensor(count)))
+        self.feedback_blocks += 1
+
+
+@torch.no_grad()
+def profile_head(head, block_size, sampling, proposal):
+    logits = torch.randn(block_size, head.config.vocab_size, device="cuda")
+    hidden = torch.randn(block_size, head.config.hidden_size, device="cuda")
+    rng = torch.Generator(device="cuda").manual_seed(98472)
+    methods = {"eager": lambda: relay_candidates(head, logits, hidden, sampling=sampling, generator=rng)}
+    if proposal:
+        methods["cuda_graph"] = lambda: proposal(logits, hidden, generator=rng)
+    result = {}
+    for name, method in methods.items():
+        for _ in range(8):
+            method()
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        for _ in range(128):
+            method()
+        torch.cuda.synchronize()
+        result[name + "_ms_per_block"] = (time.perf_counter() - start) * 1000 / 128
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["train", "benchmark"])
+    parser.add_argument("mode", choices=["train", "benchmark", "audit"])
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True, help="validation file; always checked against training data")
@@ -51,6 +123,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=.15)
     parser.add_argument("--seed", type=int, default=271828)
     parser.add_argument("--online", action="store_true", help="include an additional head-continuation arm")
+    parser.add_argument("--head-execution", choices=["eager", "cuda_graph"], default="eager")
     args = parser.parse_args()
     if args.mode == "train" and args.head.exists():
         parser.error("select a new checkpoint output path")
@@ -66,8 +139,14 @@ def main():
     model, _ = load_checkpoint(args.adapter, model=model, device="cuda")
     model.eval().requires_grad_(False).set_attention_backend("grouped")
     binding = {"base": base_fingerprint(model), "adapter": sha(args.adapter)}
-    head = (RelayHead(RelayConfig(model.config.vocab_size, model.config.hidden_size, args.rank)).to("cuda")
-            if args.mode == "train" else load_relay(args.head, binding=binding, device="cuda")[0])
+    if args.mode == "train":
+        head = RelayHead(RelayConfig(model.config.vocab_size, model.config.hidden_size, args.rank)).to("cuda")
+    else:
+        head, metadata = load_relay(args.head, binding=binding, device="cuda")
+        if metadata.get("train_sha256") != sha(args.train_data):
+            parser.error("the head's training-file SHA must match --train-data for split validation")
+        if metadata.get("config", {}).get("block_size") != args.block_size:
+            parser.error("benchmark block size must match the trained head")
     source = implementation_fingerprint()
     provenance = {"implementation_sha256": source, "script_sha256": sha(__file__), "binding": binding,
                   "validation_sha256": sha(args.data), "train_sha256": sha(args.train_data),
@@ -85,6 +164,12 @@ def main():
               "relay": sum(engine.signature_seconds[k] for k in clean + relay)}
     emit({"stage": "start", **provenance, "engine_setup_seconds": setups})
     options = {"block_size": args.block_size, "sampling": SamplingConfig(args.temperature), "executor": engine}
+    proposal = (RelayExecutor(head, block_size=args.block_size, sampling=options["sampling"])
+                if args.head_execution == "cuda_graph" else None)
+    scheduled_proposal = (RelayExecutor(head, block_size=args.block_size, sampling=options["sampling"],
+                                        threshold=args.threshold) if proposal else None)
+    head_setup = proposal.setup_seconds if proposal else 0.
+    scheduled_setup = scheduled_proposal.setup_seconds if scheduled_proposal else 0.
     rng = torch.Generator(device="cuda").manual_seed(args.seed)
     prompts = continuation_prompts(load_sequences(args.data, model.config.vocab_size),
                                    count=args.prompts, length=args.prompt_length)
@@ -93,7 +178,19 @@ def main():
     warm = sequences[0][:args.prompt_length].reshape(1, -1).cuda()
     generate_ar(model, warm, 32, sampling=options["sampling"], executor=engine, generator=rng)
     generate_speculative(model, warm, 32, **options, generator=rng)
-    generate_relay(model, head, warm, 32, **options, generator=rng)
+    generate_relay(model, head, warm, 32, **options, generator=rng, proposal_executor=proposal)
+    generate_relay(model, head, warm, 32, **options, generator=rng, threshold=args.threshold,
+                   proposal_executor=scheduled_proposal)
+    if args.mode == "audit":
+        audit = HeadAudit(head, SamplingConfig(args.temperature if args.temperature > 0 else 1.))
+        for prompt in prompts:
+            generate_relay(model, head, prompt.cuda(), args.tokens, **options, generator=rng,
+                           proposal_executor=proposal, learner=audit)
+        original, corrected, error, count = audit.totals.tolist()
+        emit({"stage": "audit", **provenance, "positions": count, "original_tv": original / count,
+              "corrected_tv": corrected / count, "confidence_mse": error / count,
+              "microbenchmark": profile_head(head, args.block_size, options["sampling"], proposal)})
+        return
     if args.mode == "train":
         learner = RelayLearner(head, lr=args.lr, interval=args.interval,
                                sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.))
@@ -105,7 +202,8 @@ def main():
             sequence = eligible[int(torch.randint(len(eligible), (), generator=crop_rng))]
             offset = int(torch.randint(len(sequence) - args.prompt_length + 1, (), generator=crop_rng))
             prompt = sequence[offset:offset + args.prompt_length].reshape(1, -1).cuda()
-            result = generate_relay(model, head, prompt, args.train_tokens, **options, learner=learner, generator=rng)
+            result = generate_relay(model, head, prompt, args.train_tokens, **options, learner=learner,
+                                    generator=rng, proposal_executor=proposal)
             total += len(result.tokens)
             if request % 8 == 0 or request + 1 == args.train_requests:
                 emit({"stage": "training", "request": request + 1, "updates": learner.updates,
@@ -122,12 +220,17 @@ def main():
     arms = ["ar", "parallel", "relay", "scheduled"] + (["online"] if args.online else [])
     rows = {arm: [] for arm in arms}
     repeats = []
+    learner_setup_seconds = 0.
     greedy_matches = {arm: 0 for arm in arms if arm != "ar"}
     for repeat in range(args.repeats):
         head.load_state_dict(initial)
+        torch.cuda.synchronize()
+        setup_start = time.perf_counter()
         learner = (RelayLearner(head, lr=args.lr, interval=args.interval,
                                 sampling=SamplingConfig(args.temperature if args.temperature > 0 else 1.))
                    if args.online else None)
+        torch.cuda.synchronize()
+        learner_setup_seconds += time.perf_counter() - setup_start if learner else 0.
         online_state = {k: v.clone() for k, v in initial.items()}
         per_repeat = {arm: [] for arm in arms}
         for index, prompt in enumerate(prompts):
@@ -144,7 +247,8 @@ def main():
                 else:
                     result = generate_relay(model, head, prompt.cuda(), args.tokens, **options, generator=generator,
                                             threshold=args.threshold if arm == "scheduled" else 0.,
-                                            learner=learner if arm == "online" else None)
+                                            learner=learner if arm == "online" else None,
+                                            proposal_executor=scheduled_proposal if arm == "scheduled" else proposal)
                 if arm == "online":
                     online_state = {k: v.detach().clone() for k, v in head.state_dict().items()}
                 row = result.summary()
@@ -160,13 +264,17 @@ def main():
     summary = {}
     for arm in arms:
         setup = setups.get(arm, setups["relay"])
-        summary[arm] = aggregate(rows[arm], engine_setup_seconds=setup)
+        setup += scheduled_setup if arm == "scheduled" else head_setup if arm in ("relay", "online") else 0.
+        summary[arm] = aggregate(rows[arm], engine_setup_seconds=setup,
+                                 setup_seconds=learner_setup_seconds if arm == "online" else 0.)
         if arm not in ("ar", "parallel"):
             summary[arm]["verified_tokens"] = sum(r["verified_tokens"] for r in rows[arm])
             for key in ("depth_proposed", "depth_accepted"):
                 summary[arm][key] = [sum(r[key][i] for r in rows[arm]) for i in range(args.block_size - 1)]
     emit({"stage": "complete", **provenance, "head_sha256": sha(args.head), "summary": summary,
           "repetitions": repeats, "greedy_matches": greedy_matches if args.temperature == 0 else None,
+          "paired_uncertainty": {arm: paired_bootstrap(rows, "parallel", arm, len(prompts))
+                                 for arm in arms if arm not in ("ar", "parallel")},
           "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
           "frozen_base_unchanged": base_fingerprint(model) == binding["base"]})
 

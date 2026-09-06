@@ -1,6 +1,8 @@
 """Conditional proposals, predictable stopping, gradients, and frozen-backbone replay."""
 
 from itertools import product
+import importlib.util
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -184,6 +186,21 @@ def test_head_checkpoint_binding_and_exclusive_write(tmp_path):
         save_relay(path, head, binding=binding)
     with pytest.raises(ValueError, match="binding"):
         load_relay(path, binding={**binding, "adapter": "c" * 64})
+
+
+def test_paired_request_bootstrap_and_portable_file_sha(tmp_path):
+    spec = importlib.util.spec_from_file_location("prefix_relay", Path(__file__).resolve().parents[1]
+                                                 / "scripts" / "prefix_relay.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rows = {"a": [{"seconds": t, "tokens": 10} for t in [1., 3., 2., 4.]],
+            "b": [{"seconds": t / 2, "tokens": 10} for t in [1., 3., 2., 4.]]}
+    interval = module.paired_bootstrap(rows, "a", "b", 2, resamples=200)
+    assert interval["speed_ratio_95_interval"] == [2., 2.]
+    assert interval == module.paired_bootstrap(rows, "a", "b", 2, resamples=200)
+    path = tmp_path / "empty"
+    path.touch()
+    assert module.sha(path) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph integration")
