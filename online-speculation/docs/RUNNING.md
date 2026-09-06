@@ -369,3 +369,29 @@ stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练�
 该隔离目录提供锁定的 Transformers 5.15.0，加载器核验基座 Python 源码、配置及权重 SHA。
 两路 `benchmark_offline.py --sampler linear` 与四路 `prefix_relay.py` 均支持这个后端。
 每个后端使用自己的 AR 基线，头检查点绑定训练时的后端及精度。
+
+## 9. 稀疏概率混合
+
+当前在线入口加载固定公开基座与适配器，更新对象为每个草稿深度的 5 个系数。
+温度表为 `0.5 0.75 1 1.25 1.5`，默认每 8 个反馈块更新一次，初始份额全部分配给原表。
+
+```bash
+python scripts/overlap_mix.py benchmark \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/K2-Horizon-0.9B-Uno \
+  --reference-sha256 5a499229d19ef4a69eb0b21884819d1b67cd983ba02b7ee2031ba8567dedfe4e \
+  --train-data /home/singm/online-speculation-work/data/blockspec_ot3_medium/train.jsonl \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --prompts 17 --prompt-length 256 --tokens 256 --repeats 4 --block-size 8
+```
+
+默认采样为温度 1、top-k=50、top-p=0.95；骨干使用 BF16 分组注意力与固定形状 GPU 图。
+四路共享骨干执行器和采样设置。每个重复开始时创建新的混合系数，在线状态在该重复的请求流中持续更新。
+逐请求交替执行方法顺序，每组方法使用相同请求种子；随机生成的接受与残差抽样会消耗各自的随机序列。
+预热数据来自训练划分，正式划分与其按问题分组检查互斥。
+
+将 `benchmark` 改为 `audit` 可在相同实际前缀上比较原表、各温度表与目标的 TV。
+`--audit-online` 同时记录在线更新前的 TV；审计运行单列，吞吐测量使用关闭观测统计的入口。
+输出包括权重指纹、配置、数据与实现 SHA、各路 TPS、每轮输出、更新时间和配对问题簇 bootstrap 区间。
+`identity` 经过相同概率处理但保持原表，用于测量新增处理开销；`online` 包含系数更新。
+文件保存在现有源码目录，实验结果写入 stdout。
