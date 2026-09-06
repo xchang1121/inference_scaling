@@ -325,3 +325,26 @@ python scripts/benchmark_reference.py \
 
 仓库保存代码、测试、配置、主报告和运行说明。权重与数据存放于仓库外，结果通过 stdout 查看。
 设计取舍在主报告相关章节简述，代码历史通过 Git 追溯。
+
+## 8. PrefixRelay 训练和配对实验
+
+当前入口使用 FP32 自有执行器和已训练的本地扩散适配器，新增头单独保存。
+训练时基座及原适配器固定，实际候选的验证反馈训练转移与置信度参数。
+
+```bash
+python scripts/prefix_relay.py train \
+  --base /home/singm/online-speculation-work/models/K2-Horizon-0.9B \
+  --adapter /home/singm/online-speculation-work/models/blockspec-r32-fp32-block4-context512.pt \
+  --train-data /home/singm/online-speculation-work/data/blockspec_ot3_medium/train.jsonl \
+  --data /home/singm/online-speculation-work/data/blockspec_ot3_small/validation.jsonl \
+  --head /home/singm/online-speculation-work/models/prefixrelay-r64-block4-v1.pt \
+  --rank 64 --block-size 4 --train-requests 64 --train-tokens 128 \
+  --interval 8 --lr .003 --temperature 1
+```
+
+输出路径采用独占创建；新训练使用新的检查点文件名。
+保留相同路径参数，将子命令 `train` 改为 `benchmark`，并指定
+`--prompts 17 --prompt-length 256 --tokens 256 --repeats 2 --temperature 1 --threshold .15`。
+添加 `--online --interval 8 --lr .003` 可同时测量新增头的推理后续训。
+每个重复从相同检查点开始，在线头与 Adam 跨请求持续更新；其他方法每次使用固定参数。
+stdout 输出配置、文件 SHA、实现指纹、总 TPS、图准备、训练开销和逐深度接受计数。
