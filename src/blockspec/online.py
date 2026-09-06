@@ -69,7 +69,7 @@ class OnlineLearner:
     KV and detached teacher targets. Learned weights and Adam persist across requests.
     """
 
-    def __init__(self, model, config=OnlineConfig()):
+    def __init__(self, model, config=OnlineConfig(), *, replay_executor=None):
         self.model, self.config = model, config
         count = model.config.num_hidden_layers
         if config.train_last_layers is not None and config.train_last_layers > count:
@@ -100,6 +100,9 @@ class OnlineLearner:
         self.feedback_blocks = 0
         self.coverage_skips = 0
         self.update_seconds, self.last_loss = 0.0, None
+        self.replay_executor = replay_executor
+        if replay_executor is not None:
+            replay_executor.validate(model, self.capture_layer, config.loss)
 
     @property
     def needs_decoder_feedback(self):
@@ -160,8 +163,24 @@ class OnlineLearner:
         start = time.perf_counter()
         self.optimizer.zero_grad(set_to_none=True)
         positions = sum(item.valid for item in self.replay)
-        total = 0.0
         # Accumulate gradients one replay block at a time to bound activation memory.
+        if self.replay_executor is not None:
+            total = self.replay_executor.backward(self.replay)
+        else:
+            total = self._eager_backward(positions)
+        torch.nn.utils.clip_grad_norm_(self.parameters, self.config.clip_norm,
+                                       error_if_nonfinite=True)
+        self.optimizer.step()
+        synchronize(self.model)
+        elapsed = time.perf_counter() - start
+        self.updates += 1
+        self.version += 1
+        self.update_seconds += elapsed
+        self.last_loss = total
+        return {"loss": total, "seconds": elapsed, "positions": positions, "version": self.version}
+
+    def _eager_backward(self, positions):
+        total = 0.0
         with torch.enable_grad():
             for item in self.replay:
                 if self.capture_layer is None:
@@ -177,13 +196,4 @@ class OnlineLearner:
                     raise FloatingPointError("nonfinite online loss")
                 loss.backward()
                 total += float(loss.detach())
-        torch.nn.utils.clip_grad_norm_(self.parameters, self.config.clip_norm,
-                                       error_if_nonfinite=True)
-        self.optimizer.step()
-        synchronize(self.model)
-        elapsed = time.perf_counter() - start
-        self.updates += 1
-        self.version += 1
-        self.update_seconds += elapsed
-        self.last_loss = total
-        return {"loss": total, "seconds": elapsed, "positions": positions, "version": self.version}
+        return total
