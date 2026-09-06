@@ -24,12 +24,13 @@ class Feedback:
     teacher_logits: torch.Tensor  # [valid noise positions, vocabulary]
     valid: int                    # accepted positions + first rejection, if any
     boundary: DraftBoundary | None = None
+    fully_covered: bool = False   # every noisy candidate depth was matched
 
     def detached(self, *, cache_start=0):
         cache = None if self.cache is None else tuple((k.detach(), v.detach()) for k, v in self.cache[cache_start:])
         return Feedback(self.inputs.detach().clone(), cache,
                         self.teacher_logits.detach().clone(), self.valid,
-                        None if self.boundary is None else self.boundary.detached())
+                        None if self.boundary is None else self.boundary.detached(), self.fully_covered)
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class OnlineConfig:
     train_last_layers: int | None = None
     optimizer: str = "auto"
     feedback_execution: str = "windowed"
+    update_policy: str = "periodic"
 
     def __post_init__(self):
         if any(type(v) is not int or v < 1 for v in (self.stride, self.replay_blocks)):
@@ -54,6 +56,8 @@ class OnlineConfig:
             raise ValueError("unknown optimizer execution")
         if self.feedback_execution not in ("windowed", "all"):
             raise ValueError("unknown feedback execution")
+        if self.update_policy not in ("periodic", "coverage"):
+            raise ValueError("unknown online update policy")
         if self.train_last_layers is not None and (type(self.train_last_layers) is not int or self.train_last_layers < 1):
             raise ValueError("a positive integer suffix size or None required")
 
@@ -94,6 +98,7 @@ class OnlineLearner:
         self.replay = deque(maxlen=config.replay_blocks)
         self.rounds, self.updates, self.version = 0, 0, 0
         self.feedback_blocks = 0
+        self.coverage_skips = 0
         self.update_seconds, self.last_loss = 0.0, None
 
     @property
@@ -117,6 +122,11 @@ class OnlineLearner:
         self.replay.clear()
 
     def observe(self, feedback, *, may_update=True):
+        if type(feedback.fully_covered) is not bool:
+            raise ValueError("boolean coverage metadata required")
+        if feedback.fully_covered and (feedback.inputs.ndim != 2 or feedback.inputs.shape[1] < 2
+                                      or feedback.valid != feedback.inputs.shape[1] - 1):
+            raise ValueError("fully covered feedback requires every noisy target row")
         self.rounds += 1
         if feedback.valid:
             if feedback.inputs.shape[0] != 1 or not 0 < feedback.valid < feedback.inputs.shape[1]:
@@ -143,6 +153,9 @@ class OnlineLearner:
         if any(p.requires_grad for n, p in self.model.named_parameters() if not is_adapter(n)):
             raise RuntimeError("the target/base model must stay frozen")
         self._check_prefix()
+        if self.config.update_policy == "coverage" and all(item.fully_covered for item in self.replay):
+            self.coverage_skips += 1
+            return None
         synchronize(self.model)
         start = time.perf_counter()
         self.optimizer.zero_grad(set_to_none=True)

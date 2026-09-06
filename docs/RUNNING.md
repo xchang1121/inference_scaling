@@ -161,7 +161,10 @@ save_checkpoint("models/continued-adapter.pt", model, adapter_only=True)
 词表投影按有效监督位置计算；Transformer 继续使用完整块的注意力关系，梯度等价推导见主报告 9.4。
 `optimizer="auto"` 在 CUDA 上使用融合 AdamW，在 CPU 上使用标准版本；两者的更新核对见主报告 9.5。
 `feedback_execution="windowed"` 按更新需求安排采集窗口，`all` 使用逐轮采集。两者的更新等价性见主报告 9.6。
+`update_policy="coverage"` 在检查时点读取窗口的路径覆盖标记：完整覆盖时保留参数与 Adam，含覆盖缺口时用全部有效位置训练。
+`periodic` 为默认周期更新对照；门控推导和参数状态核验见主报告 9.7。
 `observe()` 接口逐次接收显式反馈；窗口化由线性／树解码器调度，参数与 Adam 状态跨请求续用。
+显式反馈的 `fully_covered` 默认为 False；调用方设置 True 时，需要实际路径匹配全部带噪位置，并提供对应的全部老师行。
 检查点保存权重，新建 learner 时初始化 Adam 状态。
 `learner=None` 对应静态适配器；`generate_ar` 每 token 执行一次前向。
 树入口为 `from blockspec.tree import generate_tree`，接受同一个 learner，另有
@@ -183,7 +186,8 @@ python -m blockspec benchmark \
   --tokens 512 --block-size 4 --repeats 2 --warmup-tokens 32 \
   --sampler tree --top-k 8 --prefix-budget 12 --execution cuda_graph \
   --online-last-layers 4 --update-stride 8 --replay-blocks 1 \
-  --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed
+  --loss forward_kl --learning-rate 0.0003 --optimizer auto --feedback-execution windowed \
+  --update-policy coverage
 ```
 
 按文件顺序取前 8 个足够长记录的前 256 项作为输入。默认贪心、固定输出预算、`eos_id=None`；
@@ -197,6 +201,8 @@ python -m blockspec benchmark \
 `--loss forward_kl` 使用老师到学生的 KL，`--loss l1` 使用概率差的绝对值总和。
 `--optimizer auto` 自动选择执行后端，输出 `online_optimizer` 给出实际选择；`--optimizer standard` 提供标准 AdamW 对照。
 `--feedback-execution all` 提供逐轮采集对照；`feedback_blocks` 给出实际保存的反馈块数，并计入累计轨迹。
+`--update-policy periodic` 提供周期更新对照；`coverage_skips` 统计完整覆盖窗口保留状态的检查次数，
+`fully_covered_rounds` 统计实际完整覆盖的验证轮次，`updates` 统计真正执行的训练次数。
 `--online-last-layers 4` 选择末 4 层续训，输出报告实际可训练参数数。
 删除命令中的 `--online-last-layers 4` 参数即可测全适配器续训。
 

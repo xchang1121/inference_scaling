@@ -162,11 +162,13 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
     initial_updates = learner.updates if learner is not None else 0
     initial_seconds = learner.update_seconds if learner is not None else 0.0
     initial_feedback = learner.feedback_blocks if learner is not None else 0
+    initial_skips = learner.coverage_skips if learner is not None else 0
     if learner is not None:
         learner.clear_replay()
     cache = _prefill(forward, prompt) if max_new_tokens else None
     seed, output, matches = prompt[:, -1:], [], []
     forwards = rounds = accepted = proposed = 0
+    fully_covered_rounds = 0
     while len(output) < max_new_tokens:
         rounds += 1
         remaining = max_new_tokens - len(output)
@@ -213,11 +215,14 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
         accepted += traversal.matched
         proposed += len(tree.tokens) - 1
         matches.append(traversal.matched)
+        fully_covered = traversal.matched == b - 1
+        fully_covered_rounds += fully_covered
         done = len(output) >= max_new_tokens or output[-1] == eos_id
         if learner is not None:
             teacher_nodes = traversal.teachers[:b - 1]
             if collect:
-                feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes), boundary)
+                feedback = Feedback(inputs, old_cache, teacher[0, teacher_nodes], len(teacher_nodes), boundary,
+                                    fully_covered)
                 learner.observe(feedback, may_update=not done)
             else:
                 learner._skip_decoder_feedback(len(teacher_nodes))
@@ -229,4 +234,5 @@ def generate_tree(model, prompt, max_new_tokens, *, block_size=8, top_k=4, prefi
     return Generation(output, time.perf_counter() - start, forwards, rounds, accepted, proposed,
                       learner.updates - initial_updates if learner is not None else 0,
                       learner.update_seconds - initial_seconds if learner is not None else 0.0, matches,
-                      learner.feedback_blocks - initial_feedback if learner is not None else 0)
+                      learner.feedback_blocks - initial_feedback if learner is not None else 0,
+                      fully_covered_rounds, learner.coverage_skips - initial_skips if learner is not None else 0)

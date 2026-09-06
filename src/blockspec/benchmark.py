@@ -18,7 +18,7 @@ from .tree import generate_tree
 
 
 _TOTAL_FIELDS = ("tokens", "seconds", "decode_forwards", "rounds", "accepted", "proposed",
-                 "updates", "update_seconds", "feedback_blocks")
+                 "updates", "update_seconds", "feedback_blocks", "fully_covered_rounds", "coverage_skips")
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,8 @@ def benchmark_streams(model, prompts, config=BenchmarkConfig(), online_config=On
         generate_ar(model, prompts[0], config.warmup_tokens, eos_id=config.eos_id, executor=executor)
         spec(model, prompts[0], config.warmup_tokens, **options, eos_id=config.eos_id,
              generator=rng(config.seed))
-        warm = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1,
+        # Periodic warmup exercises training kernels even for fully covered drafts.
+        warm = OnlineLearner(model, OnlineConfig(stride=1, replay_blocks=1, update_policy="periodic",
                                                  learning_rate=online_config.learning_rate,
                                                  loss=online_config.loss,
                                                  clip_norm=online_config.clip_norm,

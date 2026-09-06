@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from blockspec.checkpoint import base_fingerprint
+from blockspec.checkpoint import adapter_state, base_fingerprint
 from blockspec.decoding import generate_ar, generate_speculative
 from blockspec.execution import FixedShapeExecutor
 from blockspec.model import Decoder, ModelConfig
@@ -21,7 +21,7 @@ class RecordedLearner(OnlineLearner):
         self.history = []
 
     def update(self):
-        samples = [(f.inputs.clone(), f.teacher_logits.clone(), f.valid) for f in self.replay]
+        samples = [(f.inputs.clone(), f.teacher_logits.clone(), f.valid, f.fully_covered) for f in self.replay]
         result = super().update()
         if result is not None:
             self.history.append((self.rounds, samples, [p.grad.clone() for p in self.parameters],
@@ -46,10 +46,12 @@ def model_example(device="cpu"):
 @pytest.mark.parametrize("stride,replay", [(1, 1), (4, 1), (4, 3), (4, 4), (3, 5)])
 @pytest.mark.parametrize("last_layers", [None, 1])
 @pytest.mark.parametrize("loss", ["l1", "forward_kl"])
-def test_window_matches_every_full_collection_update_and_optimizer_state(stride, replay, last_layers, loss):
+@pytest.mark.parametrize("update_policy", ["periodic", "coverage"])
+def test_window_matches_every_full_collection_update_and_optimizer_state(stride, replay, last_layers, loss,
+                                                                         update_policy):
     model = model_example()
     config = OnlineConfig(stride=stride, replay_blocks=replay, train_last_layers=last_layers,
-                          learning_rate=.001, loss=loss)
+                          learning_rate=.001, loss=loss, update_policy=update_policy)
     learner = RecordedLearner(model, config)
     reference = RecordedLearner(copy.deepcopy(model), replace(config, feedback_execution="all"))
     frozen = base_fingerprint(model)
@@ -57,7 +59,8 @@ def test_window_matches_every_full_collection_update_and_optimizer_state(stride,
     mask = torch.tensor([[False, True, True, True]])
     collected = 0
     for t in range(1, 34):
-        valid = 1 + t % 3
+        covered = bool(t // 8 % 2)
+        valid = 3 if covered else 1 + t % 3
         teacher = torch.randn(valid, 13, dtype=torch.float64)
         terminal = t in (2, 7, 8, 13, 16, 27, 33)
         for target in (learner, reference):
@@ -68,7 +71,7 @@ def test_window_matches_every_full_collection_update_and_optimizer_state(stride,
                     output = target.model(inputs, adapter_mask=mask, return_cache=True,
                                            capture_layer=target.capture_layer)
                 boundary = output[2] if last_layers else None
-                target.observe(Feedback(inputs, None, teacher, valid, boundary), may_update=not terminal)
+                target.observe(Feedback(inputs, None, teacher, valid, boundary, covered), may_update=not terminal)
                 collected += target is learner
             else:
                 target._skip_decoder_feedback(valid)
@@ -76,11 +79,13 @@ def test_window_matches_every_full_collection_update_and_optimizer_state(stride,
                 target.clear_replay()
         assert learner.rounds == reference.rounds == t
         assert learner.version == reference.version
+        assert learner.coverage_skips == reference.coverage_skips
     torch.testing.assert_close(learner.history, reference.history, atol=1e-14, rtol=1e-14)
     assert learner.feedback_blocks == collected
     assert reference.feedback_blocks == 33
     assert learner.feedback_blocks <= reference.feedback_blocks
     assert base_fingerprint(model) == base_fingerprint(reference.model) == frozen
+    assert (learner.coverage_skips > 0) == (update_policy == "coverage")
 
 
 def prepared(model, last_layers, device):
@@ -98,10 +103,12 @@ def prepared(model, last_layers, device):
 @pytest.mark.parametrize("generate", [generate_speculative, generate_tree])
 @pytest.mark.parametrize("temperature", [0, 1])
 @pytest.mark.parametrize("last_layers", [None, 1])
-def test_decoder_window_matches_full_collection_across_requests(device, generate, temperature, last_layers):
+@pytest.mark.parametrize("update_policy", ["periodic", "coverage"])
+def test_decoder_window_matches_full_collection_across_requests(device, generate, temperature, last_layers,
+                                                               update_policy):
     model = model_example(device)
     config = OnlineConfig(stride=4, replay_blocks=2, train_last_layers=last_layers,
-                          learning_rate=.001, loss="forward_kl")
+                          learning_rate=.001, loss="forward_kl", update_policy=update_policy)
     learner = RecordedLearner(model, config)
     reference = RecordedLearner(copy.deepcopy(model), replace(config, feedback_execution="all"))
     engines = [prepared(target.model, last_layers, device) for target in (learner, reference)]
@@ -118,15 +125,21 @@ def test_decoder_window_matches_full_collection_across_requests(device, generate
         left, right = outputs
         assert left.tokens == right.tokens and left.accepted_per_round == right.accepted_per_round
         assert left.rounds == right.rounds and left.updates == right.updates
+        assert left.fully_covered_rounds == right.fully_covered_rounds
+        assert left.coverage_skips == right.coverage_skips
         for i, output in enumerate(outputs):
             feedback[i] += output.feedback_blocks
         assert learner.rounds == reference.rounds and learner.version == reference.version
         assert not learner.replay and not reference.replay
         if budget == 1:
             assert learner.rounds == learner.feedback_blocks == learner.version == 0
-    assert learner.updates > 0
+    assert learner.updates + learner.coverage_skips > 0
     tolerance = 1e-14 if device == "cpu" else 2e-6
     torch.testing.assert_close(learner.history, reference.history, atol=tolerance, rtol=tolerance)
+    torch.testing.assert_close(adapter_state(learner.model), adapter_state(reference.model),
+                               atol=tolerance, rtol=tolerance)
+    torch.testing.assert_close(learner.optimizer.state_dict(), reference.optimizer.state_dict(),
+                               atol=tolerance, rtol=tolerance)
     assert feedback == [learner.feedback_blocks, reference.feedback_blocks]
     assert feedback[0] < feedback[1]
 
