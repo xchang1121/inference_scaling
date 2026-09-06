@@ -174,7 +174,8 @@ def test_mutated_rotary_buffer_invalidates_captured_execution():
 def test_all_setup_cost_is_not_hidden_in_warm_throughput():
     from blockspec.benchmark import aggregate
     row = {"tokens": 30, "seconds": 2., "decode_forwards": 10, "rounds": 5,
-           "accepted": 10, "proposed": 12, "updates": 1, "update_seconds": .1, "feedback_blocks": 5}
+           "accepted": 10, "proposed": 12, "updates": 1, "update_seconds": .1, "feedback_blocks": 5,
+           "fully_covered_rounds": 2, "coverage_skips": 0}
     result = aggregate([row], setup_seconds=.5, engine_setup_seconds=1.5)
     assert result["tps"] == 15 and result["tps_including_learner_setup"] == 12
     assert result["tps_including_all_setup"] == 7.5

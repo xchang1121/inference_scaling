@@ -21,8 +21,10 @@ def test_aggregate_counts_all_time_not_mean_tps():
 
 
 def test_trajectory_accumulates_in_order_with_one_learner_initialization():
-    rows = [Generation([1] * 10, 1, 4, 2, accepted=6, updates=1, update_seconds=.2, feedback_blocks=1).summary(),
-            Generation([1] * 30, 9, 12, 6, accepted=18, updates=2, update_seconds=.3, feedback_blocks=2).summary()]
+    rows = [Generation([1] * 10, 1, 4, 2, accepted=6, updates=1, update_seconds=.2, feedback_blocks=1,
+                       fully_covered_rounds=1, coverage_skips=1).summary(),
+            Generation([1] * 30, 9, 12, 6, accepted=18, updates=2, update_seconds=.3, feedback_blocks=2,
+                       fully_covered_rounds=4, coverage_skips=1).summary()]
     rows[0].update(adapter_version_start=0, adapter_version=1, last_update_loss=.7)
     rows[1].update(adapter_version_start=1, adapter_version=3, last_update_loss=.4)
     actual = stream_trajectory(rows, setup_seconds=2, engine_setup_seconds=3)
@@ -33,6 +35,7 @@ def test_trajectory_accumulates_in_order_with_one_learner_initialization():
     assert end["tokens_per_round"] == 5 and end["requests"] == 2
     assert end["updates"] == 3 and end["update_seconds"] == .5
     assert end["feedback_blocks"] == 3
+    assert end["fully_covered_rounds"] == 5 and end["coverage_skips"] == 2
     assert [row["adapter_version"] for row in actual] == [1, 3]
     assert actual[0]["cumulative"]["tokens"] == 10
     assert "cumulative" not in rows[0]
