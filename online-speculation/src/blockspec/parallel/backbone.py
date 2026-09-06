@@ -166,10 +166,26 @@ class DualLayer(nn.Module):
 
 
 @dataclass
+class DraftBoundary:
+    hidden: Tensor
+    rotary: tuple[Tensor, Tensor]
+    allowed: Tensor | None
+    start_layer: int
+    history_length: int
+    backend: str
+
+    def detached(self):
+        return DraftBoundary(self.hidden.detach().clone(), tuple(x.detach().clone() for x in self.rotary),
+                             None if self.allowed is None else self.allowed.detach().clone(),
+                             self.start_layer, self.history_length, self.backend)
+
+
+@dataclass
 class BackboneOutput:
     hidden: Tensor
     cache: Cache | None
     logits: Tensor | None
+    boundary: DraftBoundary | None = None
 
 
 class DualViewDecoder(nn.Module):
@@ -225,11 +241,14 @@ class DualViewDecoder(nn.Module):
         return self
 
     def forward(self, tokens, *, view="ar", cache=None, positions=None, allowed=None,
-                logits_to_keep=0, compute_logits=True):
+                logits_to_keep=0, compute_logits=True, capture_layer=None):
         if view not in ("ar", "draft"):
             raise ValueError("view must be ar or draft")
         if tokens.ndim != 2 or tokens.shape[1] < 1:
             raise ValueError("nonempty tokens[batch,time] required")
+        if capture_layer is not None and (type(capture_layer) is not int or view != "draft"
+                                         or not 0 <= capture_layer < len(self.layers)):
+            raise ValueError("draft capture requires a valid layer boundary")
         batch, length = tokens.shape
         past = cache_length(cache)
         if cache is not None:
@@ -258,8 +277,10 @@ class DualViewDecoder(nn.Module):
         phase = positions.float()[..., None] * self.frequencies
         phase = torch.cat((phase, phase), -1)[:, None]
         rotary = phase.cos().to(hidden.dtype), phase.sin().to(hidden.dtype)
-        new_cache = []
+        new_cache, boundary = [], None
         for index, layer in enumerate(self.layers):
+            if index == capture_layer:
+                boundary = DraftBoundary(hidden, rotary, allowed, index, past, self.backend)
             hidden, kv = layer(hidden, view, None if cache is None else cache[index],
                                rotary, allowed, self.backend)
             if view == "ar":
@@ -267,4 +288,34 @@ class DualViewDecoder(nn.Module):
         hidden = self.norm(hidden)
         rows = hidden[:, -logits_to_keep:] if logits_to_keep else hidden
         logits = self.head(rows) if compute_logits else None
-        return BackboneOutput(hidden, tuple(new_cache) if view == "ar" else cache, logits)
+        return BackboneOutput(hidden, tuple(new_cache) if view == "ar" else cache, logits, boundary)
+
+    def forward_suffix(self, boundary, *, cache=None, logit_range=None, draft_weights=None):
+        """Replay a frozen-prefix boundary; optional draft weights carry master gradients."""
+        if (not isinstance(boundary, DraftBoundary) or not 0 <= boundary.start_layer < len(self.layers)
+                or boundary.backend != self.backend or cache_length(cache) != boundary.history_length):
+            raise ValueError("matching draft boundary, attention backend and historical cache required")
+        hidden = boundary.hidden
+        batch, length, width = hidden.shape
+        count = len(self.layers) - boundary.start_layer
+        expected = (batch, self.config.num_key_value_heads, boundary.history_length, self.config.head_dim)
+        if (width != self.config.hidden_size or (cache is not None and (
+                len(cache) != count or any(k.shape != expected or v.shape != expected for k, v in cache)))):
+            raise ValueError("suffix cache and boundary shapes must agree")
+        if logit_range is not None and (len(logit_range) != 2 or not 0 <= logit_range[0] < logit_range[1] <= length):
+            raise ValueError("logit range must select nonempty boundary rows")
+        overrides = {} if draft_weights is None else draft_weights
+        allowed_keys = {f"layers.{i}.attention.draft.{name}"
+                        for i in range(boundary.start_layer, len(self.layers))
+                        for name, _ in self.layers[i].attention.draft.named_parameters()}
+        if overrides.keys() - allowed_keys:
+            raise ValueError("suffix overrides are restricted to its draft attention parameters")
+        for offset, layer in enumerate(self.layers[boundary.start_layer:]):
+            prefix = f"layers.{boundary.start_layer + offset}."
+            weights = {name[len(prefix):]: value for name, value in overrides.items() if name.startswith(prefix)}
+            args = (hidden, "draft", None if cache is None else cache[offset],
+                    boundary.rotary, boundary.allowed, self.backend)
+            hidden, _ = (torch.func.functional_call(layer, weights, args) if weights else layer(*args))
+        hidden = self.norm(hidden)
+        rows = hidden if logit_range is None else hidden[:, logit_range[0]:logit_range[1]]
+        return BackboneOutput(hidden, cache, self.head(rows))
