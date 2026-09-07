@@ -17,6 +17,7 @@
 | 前缀重叠长度目标 | 同配置确认中冻结续训后有改善，持续在线的净收益较弱；保留精确估计与梯度对照 | `prefix_objective.py`、`scripts/prefix_overlap.py` |
 | 冷启动完整块在线蒸馏 | 从 AR 注意力初始化，完整序列 KL 与离线共用更新核；预算式服务与独立学习曲线验证 | `cold_start.py`、`scripts/cold_start.py` |
 | 整条回答的条件工作量评估 | 全输出穷举核对条件前向次数；实机审计批量数值误差与速度估计成本 | `virtual_work.py`、`scripts/virtual_work.py` |
+| 复用投机回答的后续发布 | 固定版本审计中，复用服务参照减少额外确认成本；可选接入完整回答两级控制器 | `full_answer_gate.py`、`cold_start.py` |
 
 本表描述相应配置下的本地实验。不同起点和提示设置的数值用于各自配对对照。
 

@@ -144,7 +144,7 @@ def frozen_fingerprint(model):
         if ".attention.draft." in name:
             continue
         digest.update((name + str(tuple(value.shape)) + str(value.dtype)).encode())
-        digest.update(value.detach().contiguous().cpu().view(torch.uint8).numpy().tobytes())
+        digest.update(memoryview(value.detach().contiguous().cpu().view(torch.uint8).numpy()))
     return digest.hexdigest()
 
 
