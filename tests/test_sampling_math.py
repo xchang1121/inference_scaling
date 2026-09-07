@@ -133,3 +133,34 @@ def test_greedy_selection_is_argmax_without_probability_allocation(monkeypatch):
     assert torch.equal(sample_logits(logits), torch.tensor([1, 0]))
     with pytest.raises(ValueError):
         greedy_tokens(torch.tensor([float("nan"), 0.]))
+
+
+@pytest.mark.parametrize("noise", [0., .25, 2., 8.])
+def test_clean_ar_kl_bounds_exact_prefix_survival(noise):
+    # Exhaustive AR histories and overlap mass implement ALGORITHM section 6.10.
+    rng = torch.Generator().manual_seed(912)
+    base = torch.randn(4, 3, generator=rng, dtype=torch.float64)
+    q = base.softmax(-1)
+    histories = {(): (1., 1.)}
+    tv_sum, pinsker_sum, exact_length, bounded_length = 0., 0., 1., 1.
+    for i in range(4):
+        next_histories, mean_tv, mean_kl = {}, 0., 0.
+        for prefix, (ar_mass, overlap_mass) in histories.items():
+            p = (base[i] + noise * torch.randn(3, generator=rng, dtype=torch.float64)).softmax(-1)
+            mean_tv += ar_mass * float(.5 * (p - q[i]).abs().sum())
+            mean_kl += ar_mass * float((p * (p.log() - q[i].log())).sum())
+            for token in range(3):
+                next_histories[prefix + (token,)] = (ar_mass * float(p[token]),
+                                                     overlap_mass * float(torch.minimum(p[token], q[i, token])))
+        survival = sum(mass[1] for mass in next_histories.values())
+        assert sum(mass[0] for mass in next_histories.values()) == pytest.approx(1.)
+        tv_sum += mean_tv
+        pinsker_sum += (max(0., mean_kl) / 2) ** .5
+        assert survival + 1e-12 >= max(0., 1 - tv_sum)
+        assert tv_sum <= pinsker_sum + 1e-12
+        exact_length += survival
+        bounded_length += max(0., 1 - pinsker_sum)
+        histories = next_histories
+    assert exact_length + 1e-12 >= bounded_length
+    if noise == 0:
+        assert bounded_length == pytest.approx(5.)

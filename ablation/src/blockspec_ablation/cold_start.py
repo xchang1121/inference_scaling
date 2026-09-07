@@ -124,7 +124,7 @@ class FullBlockLearner:
     and live learning call the same full-distribution update kernel.
     """
 
-    def __init__(self, model, config, *, deterministic=True):
+    def __init__(self, model, config, *, deterministic=False):
         if (not isinstance(config, FitConfig) or config.sequence_length < model.config.block_size
                 or config.batch_size != 1 or any(p.requires_grad for p in model.parameters())
                 or any(p.dtype not in (torch.float32, torch.bfloat16) for p in model.parameters())):
@@ -224,7 +224,7 @@ class ColdStartService:
     """
 
     def __init__(self, model, fit, config=ServiceConfig(), *, gate_prompts=(), sampling=SamplingConfig(1.),
-                 sampler=None, retain_batches=False, deterministic_updates=True):
+                 sampler=None, retain_batches=False, retain_records=False, deterministic_updates=False):
         synchronize(model)
         start = time.perf_counter()
         self.learner = FullBlockLearner(model, fit, deterministic=deterministic_updates)
@@ -239,8 +239,10 @@ class ColdStartService:
         self.next_probe = config.probe_every
         self.step_estimate = config.initial_step_estimate
         self.probe_estimate = 0.
+        self.probe_legs = 2
         self.tokens = self.requests = 0
         self.transcript = [] if retain_batches else None
+        self.completed_records = [] if retain_records else None
         self.last_probe = None
         synchronize(model)
         self.budget.charge("setup", time.perf_counter() - start)
@@ -289,6 +291,13 @@ class ColdStartService:
                 "fallback": self.speculating and total(baseline) < total(ar),
                 "passed": all(ratio >= self.config.publish_margin for ratio in ratios + versus_ar)}
 
+    def _probe_cost(self):
+        legs = 3 if self.speculating else 2
+        if self.probe_estimate:
+            return self.probe_estimate * legs / self.probe_legs
+        current_tps = self.tokens / self.budget.service_seconds
+        return 2 * legs * len(self.gate_prompts) * self.config.probe_tokens / current_tps
+
     def serve(self, prompt, max_new_tokens, *, seed):
         synchronize(self.model)
         start = time.perf_counter()
@@ -306,6 +315,8 @@ class ColdStartService:
             if result.tokens:
                 complete = torch.cat((prompt.detach().cpu(), torch.tensor([result.tokens], dtype=torch.long)), 1)
                 self.replay.append(complete)
+                if self.completed_records is not None and complete.shape[1] >= self.model.config.block_size:
+                    self.completed_records.append(complete)
 
         self._timed("collection", collect)
         probe_due = bool(self.gate_prompts) and self.learner.steps >= self.next_probe
@@ -325,10 +336,9 @@ class ColdStartService:
             self.step_estimate = max(elapsed * 1.2, self.step_estimate * .8)
             update["seconds"] = elapsed
         if self.gate_prompts and self.learner.steps >= self.next_probe:
-            current_tps = self.tokens / self.budget.service_seconds
-            estimate = max(self.probe_estimate, 5 * len(self.gate_prompts) * self.config.probe_tokens / current_tps)
-            if self.budget.admits(estimate):
+            if self.budget.admits(self._probe_cost()):
                 before = self.budget.spent
+                self.probe_legs = 3 if self.speculating else 2
                 probe = self._timed("validation", self._probe)
                 self.probe_estimate = 1.2 * (self.budget.spent - before)
                 if probe["passed"]:
@@ -359,16 +369,25 @@ class ColdStartService:
                 "master": portable(self.learner.master), "optimizer": portable(self.learner.optimizer.state_dict()),
                 "serving": portable(self.learner.execution), "step": self.learner.steps,
                 "serving_step": self.learner.serving_step, "speculating": self.speculating,
+                "gate_prompts": portable(self.gate_prompts),
                 "replay": portable(list(self.replay.records)), "replay_rng": self.replay.rng.get_state(),
                 "anchors_rng": self.replay.anchors_rng.get_state(), "stream": self.summary(),
                 "next_probe": self.next_probe, "step_estimate": self.step_estimate,
-                "probe_estimate": self.probe_estimate, "requests": self.requests}
+                "probe_estimate": self.probe_estimate, "probe_legs": self.probe_legs, "requests": self.requests}
 
     def load_state_dict(self, state):
         """Restore the learning/serving pair; newly incurred loading time is charged."""
         synchronize(self.model)
         start = time.perf_counter()
         self.learner.check()
+        if self.requests or self.learner.steps or self.replay.records:
+            raise ValueError("restore into a fresh service instance")
+        if "gate_prompts" in state and (not isinstance(state["gate_prompts"], (tuple, list))
+                or len(state["gate_prompts"]) != len(self.gate_prompts) or any(
+                    not isinstance(saved, torch.Tensor) or saved.dtype != prompt.dtype
+                    or not torch.equal(saved.cpu(), prompt.cpu())
+                    for saved, prompt in zip(state["gate_prompts"], self.gate_prompts, strict=True))):
+            raise ValueError("restore requires the same publication gate prompts")
         source = source_identity(getattr(self.model, "source", {}))
         if (state.get("format") != "cold-start-research-v1" or state.get("fit") != asdict(self.fit)
                 or state.get("controller") != asdict(self.config)
@@ -390,6 +409,8 @@ class ColdStartService:
                 or type(state.get("speculating")) is not bool
                 or (state["speculating"] and state["serving_step"] == 0)
                 or type(state.get("next_probe")) is not int or state["next_probe"] < 1
+                or state.get("probe_legs", 2) not in (2, 3)
+                or type(state.get("requests", 0)) is not int or state.get("requests", 0) < 0
                 or any(not math.isfinite(state.get(key, -1)) or state[key] < 0
                        for key in ("step_estimate", "probe_estimate")) or state["step_estimate"] == 0):
             raise ValueError("consistent learning, publication and trial counters required")
@@ -419,6 +440,7 @@ class ColdStartService:
         self.learner.steps, self.learner.serving_step = state["step"], state["serving_step"]
         self.speculating, self.next_probe = state["speculating"], state["next_probe"]
         self.step_estimate, self.probe_estimate = state["step_estimate"], state["probe_estimate"]
+        self.probe_legs = state.get("probe_legs", 2)
         self.replay.records.clear()
         self.replay.records.extend(x.detach().cpu().clone() for x in records)
         self.replay.rng, self.replay.anchors_rng = replay_rng, anchor_rng

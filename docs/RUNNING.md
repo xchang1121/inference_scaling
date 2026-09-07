@@ -138,31 +138,41 @@ python -m blockspec fit resume --checkpoint "$CHECKPOINT_FILE" \
 
 冷启动实验位于可选的消融包，模型资源参数提供 AR 与双视图配置；
 初始化时各层起草注意力均重新复制对应 AR 参数。
+普通 AR 权重可通过 `--base "$AR_MODEL_DIR" --block-size "$BLOCK_SIZE" --mask-token-id "$MASK_TOKEN_ID"`
+接入同一入口；掩码 token 从该模型的词表中显式指定。
 
 ```bash
 python -m pip install -e ./ablation
 python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
   --prompts "$TRAIN_PROMPTS" --heldout-prompts "$EVAL_PROMPTS" \
-  --fraction .01 --requests 192 --tokens 256 --steps 64 \
-  --sequence-length 256 --anchors 4 --probe-every 8 --probe-tokens 32 \
-  --gate-count 1 --heldout-count 4 --heldout-tokens 128 --offline-replay \
+  --fraction .01 --requests 384 --tokens 256 --steps 128 --warmup-steps 8 \
+  --block-size 4 --sequence-length 512 --anchors 42 --learning-rate .0001 \
+  --probe-every 32 --probe-tokens 48 --gate-count 1 --heldout-count 8 \
+  --heldout-offset 80 --heldout-tokens 128 --curve-every 16 --seed 857 --offline-control \
   --checkpoint "$COLD_STATE" --output "$RESULT_FILE"
 ```
 
 真实请求提供训练序列，报告题和发布门控题彼此分离。
-`--offline-replay` 使用相同初值和在线实际抽取的批次，检查最终参数逐元素一致。
-冷启动实验在训练更新内启用确定性算子，并在进程中配置矩阵乘工作区，固定 GPU 反向归约的执行方式。
-更新结束恢复服务端的算子设置。直接使用 Python 接口时，在进程启动前设置
-`CUBLAS_WORKSPACE_CONFIG=:4096:8`。
+`--block-size` 指定训练与推理共用的块长，`--anchors` 控制每个窗口中的随机锚点数。
+`--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
+保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
+日常服务采用常规 GPU 执行设置。
+模型导入与共同推理预热属于研究准备；在线账本从独立起草主权重的构造开始。
+`--deterministic --offline-replay` 用于单独的逐元素审计：按在线实际抽取的批次离线重放，
+检查最终参数一致。该配置固定矩阵乘工作区，并在更新内启用确定性算子。
+直接调用 Python 审计接口时，在进程启动前设置 `CUBLAS_WORKSPACE_CONFIG=:4096:8`，
+并显式传入 `deterministic_updates=True`。
 报告中的 `stream.net_tps` 包含在线初始化、采集、训练、验证和发布；
-`curve` 为单独测量的学习质量，`research_measurement_seconds` 为这部分研究测量耗时。
+`paired_run` 给出本次运行相对匹配 AR 的净吞吐。
+AR 服务阶段复用该请求的实际生成时间；发布投机版本后，独立交错测量同提示、同输出预算的 AR 对照。
+`curve` 为单独测量的学习质量，`research_measurement_seconds` 包含这部分测量和独立 AR 对照耗时。
 研究测量期间的时间与提示均保持在服务账本和训练数据之外。
 实验结束时的检查点写入耗时另列为 `shutdown_checkpoint_seconds`。
 
 连续使用由 `ColdStartService.serve(prompt, output_budget, seed=...)` 提供。
 它保留重放区、优化器、学习与服务参数版本和累计时间账本。
 `state_dict()` 与 `load_state_dict()` 在请求边界保存／恢复；恢复新增的复制与校验成本进入账本。
-命令行通过 `--resume "$COLD_STATE"` 恢复，沿用原有训练、采样和控制器配置；
+命令行通过 `--resume "$COLD_STATE"` 恢复，沿用原有训练、采样、控制器配置及相同的发布门控题；
 `--offset` 指定接续的输入请求位置。训练步数表示整条学习流的总调度长度。
 
 ## 6. 外部参照
