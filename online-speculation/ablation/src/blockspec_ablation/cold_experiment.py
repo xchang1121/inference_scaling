@@ -129,7 +129,7 @@ def run(args):
                     batch_size=args.batch_size, optimizer_impl=args.optimizer_impl)
     settings = ServiceConfig(fraction=args.fraction, replay_records=args.replay_records, probe_every=args.probe_every,
                               probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed,
-                              initial_probe_factor=args.initial_probe_factor)
+                              initial_probe_factor=args.initial_probe_factor, reuse_ar_prefix=args.reuse_ar_prefix)
     training_texts = prompt_texts(args.prompts, args.requests, offset=args.offset)
     heldout_texts = prompt_texts(args.heldout_prompts, args.heldout_count, offset=args.heldout_offset)
     gate_texts = prompt_texts(args.heldout_prompts, args.gate_count, offset=args.heldout_offset + args.heldout_count)
@@ -295,6 +295,7 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--publish-margin", type=float, default=1.10)
     parser.add_argument("--initial-probe-factor", type=float, default=2.)
+    parser.add_argument("--reuse-ar-prefix", action="store_true")
     parser.add_argument("--optimizer-impl", choices=("single", "fused"), default="single")
     parser.add_argument("--offline-replay", action="store_true")
     parser.add_argument("--offline-control", action="store_true")

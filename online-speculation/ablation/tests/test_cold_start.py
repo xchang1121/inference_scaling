@@ -420,3 +420,134 @@ def test_explicit_initial_probe_reservation_keeps_measured_cost_policy():
 def test_initial_probe_reservation_has_finite_headroom(factor):
     with pytest.raises(ValueError):
         cold.ServiceConfig(initial_probe_factor=factor)
+
+
+@pytest.mark.parametrize("gate_count", [1, 3])
+def test_live_gate_reuses_ar_before_collection_and_charges_capture_once(monkeypatch, gate_count):
+    ticks = [0.]
+    monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
+    prompt = torch.tensor([[2, 3, 5]])
+    config = cold.ServiceConfig(probe_every=1, probe_tokens=2, reuse_ar_prefix=True)
+    service = cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt] * gate_count)
+    service.learner.step([(torch.tensor([[2, 3, 4, 5, 6, 7]]), torch.tensor([[0, 2]]))])
+    service.budget.delivered(1000.)
+    service.tokens = 4000
+    service.step_estimate = 100000.
+    calls = []
+
+    def deliver(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+        calls.append((tokens, speculative, seed, prefix_tokens))
+        assert len(service.replay.records) == 0
+        if speculative:
+            assert service.learner.serving_step == 1
+            ticks[0] += 1.
+            return Generation(tokens=[4, 5], seconds=1.)
+        ticks[0] += 10.01
+        return Generation(tokens=[4, 5, 6, 7], seconds=10.01,
+                           prefix_tokens=2, prefix_seconds=5., prefix_capture_seconds=.01)
+
+    monkeypatch.setattr(service, "_generate", deliver)
+    _, row = service.serve(prompt, 4, seed=92)
+    assert calls == [(4, False, 92, 2), (2, True, 92, None)]
+    assert row["mode"] == "ar" and row["probe"]["reference_kind"] == "delivered_ar_prefix"
+    assert row["probe"]["ratio"] == pytest.approx(5.)
+    assert row["service_seconds"] == pytest.approx(10.)
+    assert service.budget.costs["validation_capture"] == pytest.approx(.01)
+    assert service.budget.costs["validation"] == pytest.approx(1.)
+    assert service.budget.spent == pytest.approx(1.01)
+    assert service.speculating and service.learner.serving_step == 1
+    assert len(service.replay.records) == 1
+    assert service._probe_cost() == pytest.approx(3.6 * gate_count)
+    restored = cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt] * gate_count)
+    restored.load_state_dict(service.state_dict())
+    assert restored.probe_legs == 1 and restored.speculating
+
+
+def test_live_gate_estimate_after_a_multi_prompt_trial():
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(reuse_ar_prefix=True),
+                                    gate_prompts=[prompt] * 3)
+    service.probe_estimate, service.probe_legs = 18., 3
+    assert service._probe_unit_cost() == pytest.approx(2.)
+    assert service._probe_cost() == pytest.approx(12.)
+    service.speculating = True
+    assert service._probe_cost() == pytest.approx(18.)
+
+
+def test_live_publication_then_learning_preserves_the_validated_version(monkeypatch):
+    ticks = [0.]
+    monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(),
+                                    cold.ServiceConfig(probe_every=1, probe_tokens=2, reuse_ar_prefix=True),
+                                    gate_prompts=[prompt])
+    service.learner.step([(torch.tensor([[2, 3, 4, 5, 6, 7]]), torch.tensor([[0, 2]]))])
+    candidate = {name: p.detach().clone() for name, p in service.learner.master.items()}
+    service.budget.delivered(1000.)
+    calls = []
+
+    def deliver(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+        calls.append(speculative)
+        assert not service.replay.records
+        ticks[0] += 1. if speculative else 10.
+        return (Generation(tokens=[4, 5], seconds=1.) if speculative else
+                Generation(tokens=[4, 5, 6, 7], seconds=10., prefix_tokens=2, prefix_seconds=5.))
+
+    monkeypatch.setattr(service, "_generate", deliver)
+    _, row = service.serve(prompt, 4, seed=93)
+    assert calls == [False, True]
+    assert row["probe"]["step"] == 1 and row["update"]["step"] == 2
+    assert service.learner.steps == service.next_probe == 2
+    assert service.learner.serving_step == 1
+    assert all(torch.equal(p, candidate[name]) for name, p in service.learner.execution.items())
+    assert any(not torch.equal(p, candidate[name]) for name, p in service.learner.master.items())
+
+
+def test_unfunded_live_gate_reserves_credit_and_uses_no_extra_ar(monkeypatch):
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(probe_tokens=2, reuse_ar_prefix=True),
+                                    gate_prompts=[prompt])
+    service.learner.steps = service.next_probe = 1
+    calls = []
+
+    def deliver(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+        calls.append(speculative)
+        return Generation(tokens=[4, 5, 6], seconds=.001, prefix_tokens=2, prefix_seconds=.1)
+
+    monkeypatch.setattr(service, "_generate", deliver)
+    _, row = service.serve(prompt, 4, seed=92)
+    assert calls == [False] and row["probe"] is None and row["update"] is None
+    assert service.learner.steps == 1 and service.learner.serving_step == 0
+
+
+def test_live_gate_failure_restores_serving_and_resumes_learning_schedule(monkeypatch):
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(probe_tokens=2, reuse_ar_prefix=True),
+                                    gate_prompts=[prompt])
+    service.learner.steps = service.next_probe = 1
+    old = {name: p.clone() for name, p in service.learner.execution.items()}
+    monkeypatch.setattr(service, "_generate", lambda *args, **kwargs: Generation(tokens=[4, 5], seconds=2.))
+    reference = Generation(tokens=[4, 5, 6], prefix_tokens=2, prefix_seconds=1.)
+    probe = service._probe_live(prompt, reference, 2, 92)
+    service._complete_probe(probe, 2., 1)
+    assert not probe["passed"] and not service.speculating
+    assert service.learner.serving_step == 0 and service.next_probe == 17
+    assert all(torch.equal(p, old[name]) for name, p in service.learner.execution.items())
+
+
+def test_live_gate_requires_a_later_reference_policy():
+    with pytest.raises(ValueError, match="post-publication"):
+        cold.ColdStartService(model(), fit(), cold.ServiceConfig(reuse_ar_prefix=True))
+    with pytest.raises(ValueError, match="policy"):
+        cold.ServiceConfig(reuse_ar_prefix=1)
+
+
+@pytest.mark.parametrize("legs", [0, True, 1.5, 4])
+def test_resume_validates_prefix_gate_path_counts(legs):
+    prompt = torch.tensor([[2, 3, 5]])
+    config = cold.ServiceConfig(reuse_ar_prefix=True)
+    service = cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt])
+    state = service.state_dict()
+    state["probe_legs"] = legs
+    with pytest.raises(ValueError, match="counters"):
+        cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt]).load_state_dict(state)

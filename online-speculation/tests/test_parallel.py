@@ -204,6 +204,45 @@ def test_masked_eos_and_stochastic_output_budget():
     assert len(output.tokens) == 17
 
 
+@pytest.mark.parametrize("prefill_output", [False, True])
+@pytest.mark.parametrize("prefix", [1, 4, 8, 12])
+@pytest.mark.parametrize("temperature", [0., 1.])
+def test_timed_ar_prefix_matches_a_standalone_capped_call(prefill_output, prefix, temperature):
+    branch = MaskedAttentionBranch(tiny())
+    prompt = torch.tensor([[3, 7, 8]])
+    options = dict(sampling=SamplingConfig(temperature), prefill_output=prefill_output)
+    timed = generate_ar(branch, prompt, 8, prefix_tokens=prefix,
+                         generator=torch.Generator().manual_seed(994), **options)
+    full = generate_ar(branch, prompt, 8, generator=torch.Generator().manual_seed(994), **options)
+    short = generate_ar(branch, prompt, min(8, prefix), generator=torch.Generator().manual_seed(994), **options)
+    assert timed.tokens == full.tokens
+    assert timed.tokens[:timed.prefix_tokens] == short.tokens
+    assert timed.prefix_tokens == min(8, prefix)
+    assert 0 < timed.prefix_seconds <= timed.seconds
+    assert 0 <= timed.prefix_capture_seconds < timed.seconds
+    assert timed.decode_forwards == full.decode_forwards
+    if prefix >= 8:
+        assert timed.prefix_seconds == timed.seconds and timed.prefix_capture_seconds == 0
+    assert full.prefix_seconds is None and full.prefix_tokens == 0
+
+
+def test_timed_ar_prefix_handles_eos_and_empty_output():
+    branch = MaskedAttentionBranch(tiny())
+    prompt = torch.tensor([[3, 7, 8]])
+    eos = int(branch.model(prompt).logits[0, -1].argmax())
+    output = generate_ar(branch, prompt, 8, prefix_tokens=4, eos_id=eos)
+    assert output.tokens == [eos] and output.prefix_tokens == 1
+    assert output.prefix_seconds == output.seconds and output.prefix_capture_seconds == 0
+    empty = generate_ar(branch, prompt, 0, prefix_tokens=4)
+    assert empty.prefix_tokens == 0 and empty.prefix_seconds is None
+
+
+@pytest.mark.parametrize("prefix", [0, -1, 1.5, True])
+def test_timed_ar_prefix_rejects_invalid_budgets(prefix):
+    with pytest.raises(ValueError, match="prefix"):
+        generate_ar(MaskedAttentionBranch(tiny()), torch.tensor([[3, 7]]), 8, prefix_tokens=prefix)
+
+
 def test_anchor_sampling_bounds_and_cache_prefix_checks():
     tokens = torch.zeros(2, 10, dtype=torch.long)
     anchors = sample_anchors(tokens, 4, 100, generator=torch.Generator().manual_seed(2))

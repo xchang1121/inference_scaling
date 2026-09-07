@@ -27,6 +27,9 @@ class Generation:
     update_seconds: float = 0.0
     feedback_blocks: int = 0
     coverage_skips: int = 0
+    prefix_tokens: int = 0
+    prefix_seconds: float | None = None
+    prefix_capture_seconds: float = 0.0
 
     @property
     def tps(self):
@@ -70,8 +73,10 @@ def _append(result, tokens, budget, eos_id):
 
 @torch.no_grad()
 def generate_ar(branch, prompt, max_new_tokens, *, sampling=SamplingConfig(), eos_id=None,
-                generator=None, sampler=None, prefill_output=True):
+                generator=None, sampler=None, prefill_output=True, prefix_tokens=None):
     _check(branch, prompt, max_new_tokens, eos_id)
+    if prefix_tokens is not None and (type(prefix_tokens) is not int or prefix_tokens < 1):
+        raise ValueError("positive integer AR prefix length required")
     result = Generation()
     if max_new_tokens == 0:
         return result
@@ -79,11 +84,21 @@ def generate_ar(branch, prompt, max_new_tokens, *, sampling=SamplingConfig(), eo
     start = time.perf_counter()
     sampler = ProposalSampler(sampling) if sampler is None else sampler
     cache, stopped, token = None, False, int(prompt[0, -1])
+
+    def capture_prefix():
+        marker = time.perf_counter()
+        _sync(prompt.device)
+        result.prefix_tokens = len(result.tokens)
+        result.prefix_seconds = time.perf_counter() - start
+        result.prefix_capture_seconds = time.perf_counter() - marker
+
     if prefill_output:
         logits, cache = branch.ar(prompt, logits_to_keep=1)
         token = sampler.sample_ar(logits[0, -1], generator)
         result.prefill_forwards = result.prefill_output_tokens = 1
         stopped = _append(result, [token], max_new_tokens, eos_id)
+        if prefix_tokens == 1 and not stopped:
+            capture_prefix()
     elif prompt.shape[1] > 1:
         _, cache = branch.ar(prompt[:, :-1], logits_to_keep=1)
         result.prefill_forwards = 1
@@ -92,8 +107,12 @@ def generate_ar(branch, prompt, max_new_tokens, *, sampling=SamplingConfig(), eo
         token = sampler.sample_ar(logits[0, -1], generator)
         result.tail_ar_forwards += 1
         stopped = _append(result, [token], max_new_tokens, eos_id)
+        if prefix_tokens is not None and len(result.tokens) == prefix_tokens and not stopped:
+            capture_prefix()
     _sync(prompt.device)
     result.seconds = time.perf_counter() - start
+    if prefix_tokens is not None and result.prefix_seconds is None:
+        result.prefix_tokens, result.prefix_seconds = len(result.tokens), result.seconds
     result.rounds = len(result.tokens)
     return result
 
