@@ -23,7 +23,7 @@ def fit_config(args, *, demo=False):
                 "sequence_length": 24 if demo else 256, "anchors_per_sequence": 2 if demo else 4,
                 "accumulate": 2 if demo else 1, "chunk_rows": 8 if demo else 32,
                 "learning_rate": .002 if demo else .0001, "warmup_steps": 4 if demo else 50,
-                "precision": "fp32", "backend": "sdpa", "seed": 731}
+                "precision": "fp32", "backend": "sdpa", "seed": 731, "optimizer_impl": "single"}
     return FitConfig(**{key: default if getattr(args, key) is None else getattr(args, key)
                         for key, default in defaults.items()})
 
@@ -123,6 +123,7 @@ def main():
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--precision", choices=("fp32", "bf16"))
     parser.add_argument("--backend", choices=("eager", "sdpa"))
+    parser.add_argument("--optimizer-impl", choices=("single", "fused"))
     args = parser.parse_args()
     if args.output.exists() or (args.summary is not None and args.summary.exists()):
         parser.error("checkpoint and summary paths must be new")
@@ -149,7 +150,7 @@ def main():
             if args.checkpoint is None or args.base is not None:
                 parser.error("resume requires a complete training checkpoint")
             schedule = ("steps", "batch_size", "sequence_length", "anchors_per_sequence", "accumulate", "chunk_rows",
-                        "learning_rate", "warmup_steps", "precision", "backend", "seed")
+                        "learning_rate", "warmup_steps", "precision", "backend", "seed", "optimizer_impl")
             if any(getattr(args, key) is not None for key in schedule):
                 parser.error("resume keeps the saved full schedule; --stop-after sets an interruption boundary")
             trainer = Trainer.resume(args.checkpoint, args.data, device=args.device)

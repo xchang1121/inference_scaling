@@ -85,10 +85,11 @@ def fit_complete_buffer(model, fit, records, steps, *, deterministic=False):
     for record in records:
         replay.append(record)
     for _ in range(steps):
-        learner.step(replay.batch(fit.accumulate, fit.anchors_per_sequence))
+        learner.step(replay.batch(fit.accumulate, fit.anchors_per_sequence, batch_size=fit.batch_size))
     synchronize(model)
     return learner, {"steps": steps, "completed_records": len(replay.records),
-                     "supervised_rows": steps * fit.accumulate * fit.anchors_per_sequence * (model.config.block_size - 1),
+                     "supervised_rows": (steps * fit.accumulate * fit.batch_size * fit.anchors_per_sequence
+                                         * (model.config.block_size - 1)),
                      "seconds": time.perf_counter() - start}
 
 
@@ -124,9 +125,11 @@ def run(args):
     torch.set_num_threads(1)
     fit = FitConfig(steps=args.steps, warmup_steps=args.warmup_steps, sequence_length=args.sequence_length,
                     anchors_per_sequence=args.anchors, accumulate=args.accumulate, learning_rate=args.learning_rate,
-                    chunk_rows=args.chunk_rows, precision="bf16", seed=args.seed)
+                    chunk_rows=args.chunk_rows, precision="bf16", seed=args.seed,
+                    batch_size=args.batch_size, optimizer_impl=args.optimizer_impl)
     settings = ServiceConfig(fraction=args.fraction, replay_records=args.replay_records, probe_every=args.probe_every,
-                              probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed)
+                              probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed,
+                              initial_probe_factor=args.initial_probe_factor)
     training_texts = prompt_texts(args.prompts, args.requests, offset=args.offset)
     heldout_texts = prompt_texts(args.heldout_prompts, args.heldout_count, offset=args.heldout_offset)
     gate_texts = prompt_texts(args.heldout_prompts, args.gate_count, offset=args.heldout_offset + args.heldout_count)
@@ -283,7 +286,7 @@ def main():
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--block-size", type=int)
     for name, default in (("requests", 128), ("offset", 0), ("tokens", 256), ("steps", 64), ("warmup-steps", 4),
-                           ("sequence-length", 256), ("anchors", 4), ("accumulate", 1), ("chunk-rows", 32),
+                           ("sequence-length", 256), ("anchors", 4), ("batch-size", 1), ("accumulate", 1), ("chunk-rows", 32),
                            ("replay-records", 128), ("probe-every", 8), ("probe-tokens", 32), ("gate-count", 2),
                            ("heldout-count", 4), ("heldout-tokens", 128), ("heldout-offset", 64),
                            ("curve-every", 4), ("log-every", 8), ("seed", 743)):
@@ -291,6 +294,8 @@ def main():
     parser.add_argument("--fraction", type=float, default=.01)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--publish-margin", type=float, default=1.10)
+    parser.add_argument("--initial-probe-factor", type=float, default=2.)
+    parser.add_argument("--optimizer-impl", choices=("single", "fused"), default="single")
     parser.add_argument("--offline-replay", action="store_true")
     parser.add_argument("--offline-control", action="store_true")
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False)

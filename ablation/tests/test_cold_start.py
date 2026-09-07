@@ -1,5 +1,6 @@
 from dataclasses import replace
 import copy
+from itertools import product
 import json
 
 import pytest
@@ -9,6 +10,7 @@ import torch
 from blockspec.parallel import DualViewConfig, DualViewDecoder
 from blockspec.parallel.fitting import FitConfig
 from blockspec.parallel.generation import Generation
+from blockspec.parallel.training import distillation_loss
 from blockspec_ablation import cold_start as cold
 
 
@@ -148,9 +150,81 @@ def test_service_gate_reserves_budget_and_keeps_cold_drafts_out_of_serving(monke
     assert not service.speculating and service.learner.serving_step == released_version
 
 
-def test_configuration_requires_batch_one():
-    with pytest.raises(ValueError, match="batch-one"):
-        cold.FullBlockLearner(model(), replace(fit(), batch_size=2))
+def test_grouped_replay_preserves_window_sampling_and_valid_anchors():
+    packed, separate = [cold.CleanReplay(8, 12, 4, 952) for _ in range(2)]
+    for replay in (packed, separate):
+        for length in (4, 7, 11, 16):
+            replay.append(torch.arange(length)[None] % 15 + 2)
+    groups = packed.batch(4, 3, batch_size=3)
+    singles = separate.batch(12, 3)
+    for index, (tokens, anchors) in enumerate(groups):
+        assert tokens.shape[0] == anchors.shape[0] == 3
+        for row in range(3):
+            expected, expected_anchors = singles[index * 3 + row]
+            length = expected.shape[1]
+            assert torch.equal(tokens[row, :length], expected[0])
+            assert (tokens[row, length:] == 0).all()
+            assert torch.equal(anchors[row], expected_anchors[0])
+            assert (anchors[row] + 4 <= length).all()
+    assert torch.equal(packed.rng.get_state(), separate.rng.get_state())
+    assert torch.equal(packed.anchors_rng.get_state(), separate.anchors_rng.get_state())
+
+
+@pytest.mark.parametrize("windows,anchors", [(1, 1), (1, 2), (2, 1), (2, 2)])
+def test_grouped_gradient_variance_identity_by_exhaustive_sampling(windows, anchors):
+    # Three windows, two possible anchors and a two-coordinate gradient.
+    gradients = torch.tensor([[[1., 2.], [3., -1.]], [[5., 0.], [9., 4.]],
+                              [[-2., 3.], [0., 1.]]], dtype=torch.float64)
+    mean = gradients.mean((0, 1))
+    window_mean = gradients.mean(1)
+    between = (window_mean - mean).square().sum(-1).mean()
+    within = (gradients - window_mean[:, None]).square().sum(-1).mean()
+    estimates = []
+    for chosen_windows in product(range(3), repeat=windows):
+        for chosen_anchors in product(range(2), repeat=windows * anchors):
+            samples = [gradients[window, chosen_anchors[i * anchors + k]]
+                       for i, window in enumerate(chosen_windows) for k in range(anchors)]
+            estimates.append(torch.stack(samples).mean(0))
+    estimates = torch.stack(estimates)
+    torch.testing.assert_close(estimates.mean(0), mean)
+    measured = (estimates - mean).square().sum(-1).mean()
+    torch.testing.assert_close(measured, between / windows + within / (windows * anchors))
+
+
+@pytest.mark.parametrize("backend", ["eager", "sdpa"])
+@pytest.mark.parametrize("pad_token", [0, 16])
+def test_right_padding_preserves_full_block_loss_and_gradients(backend, pad_token):
+    decoder = model().train_draft_only().set_backend(backend)
+    tokens = [torch.tensor([[2, 3, 4, 5, 6, 7]]), torch.tensor([[5, 4, 2, 7, 9, 6, 3, 8, 2]])]
+    anchors = [torch.tensor([[0, 2]]), torch.tensor([[1, 5]])]
+    packed = torch.nn.utils.rnn.pad_sequence([row[0] for row in tokens], batch_first=True, padding_value=pad_token)
+    loss = distillation_loss(decoder, packed, torch.cat(anchors))
+    loss.backward()
+    gradients = {name: p.grad.clone() for name, p in decoder.named_parameters() if p.requires_grad}
+    decoder.zero_grad(set_to_none=True)
+    reference = sum(distillation_loss(decoder, x, a) for x, a in zip(tokens, anchors, strict=True)) / 2
+    reference.backward()
+    torch.testing.assert_close(loss, reference, rtol=2e-5, atol=2e-7)
+    for name, parameter in decoder.named_parameters():
+        if parameter.requires_grad:
+            torch.testing.assert_close(parameter.grad, gradients[name], rtol=2e-4, atol=2e-7)
+
+
+def test_grouped_windows_train_all_layers_and_resume_with_same_configuration():
+    config = replace(fit(), batch_size=3, optimizer_impl="fused")
+    first = cold.ColdStartService(model(), config)
+    for length in (5, 8, 13):
+        first.replay.append(torch.arange(length)[None] + 2)
+    first.learner.step(first.replay.batch(1, 2, batch_size=3))
+    state = first.state_dict()
+    second = cold.ColdStartService(model(), config)
+    second.load_state_dict(state)
+    for service in (first, second):
+        service.learner.step(service.replay.batch(1, 2, batch_size=3))
+    assert all(torch.equal(p, second.learner.master[name]) for name, p in first.learner.master.items())
+    assert all(not torch.equal(p, first.learner.execution[name]) for name, p in first.learner.master.items())
+    with pytest.raises(ValueError, match="policies"):
+        cold.ColdStartService(model(), replace(config, optimizer_impl="single")).load_state_dict(state)
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -251,17 +325,20 @@ def test_restore_requires_a_fresh_service():
         service.load_state_dict(state)
 
 
-def test_same_data_offline_control_matches_full_buffer_update_sequence():
+@pytest.mark.parametrize("batch_size", [1, 3])
+@pytest.mark.parametrize("optimizer_impl", ["single", "fused"])
+def test_same_data_offline_control_matches_full_buffer_update_sequence(batch_size, optimizer_impl):
     from blockspec_ablation.cold_experiment import fit_complete_buffer
     records = [(torch.arange(14)[None] + i) % 15 + 2 for i in range(3)]
-    reference = cold.FullBlockLearner(model(), fit())
+    config = replace(fit(), batch_size=batch_size, optimizer_impl=optimizer_impl)
+    reference = cold.FullBlockLearner(model(), config)
     replay = cold.CleanReplay(3, 12, 4, fit().seed)
     for record in records:
         replay.append(record)
     for _ in range(3):
-        reference.step(replay.batch(1, 2))
-    learner, result = fit_complete_buffer(model(), fit(), records, 3)
-    assert result["completed_records"] == 3 and result["supervised_rows"] == 18
+        reference.step(replay.batch(1, 2, batch_size=batch_size))
+    learner, result = fit_complete_buffer(model(), config, records, 3)
+    assert result["completed_records"] == 3 and result["supervised_rows"] == 18 * batch_size
     assert learner.steps == reference.steps == 3
     assert all(torch.equal(p, learner.master[name]) for name, p in reference.master.items())
 
@@ -317,3 +394,29 @@ def test_resume_checks_publication_prompts():
     with pytest.raises(ValueError, match="publication gate"):
         cold.ColdStartService(model(), fit(), gate_prompts=[gate]).load_state_dict(state)
     cold.ColdStartService(model(), fit(), gate_prompts=[state["gate_prompts"][0]]).load_state_dict(state)
+
+
+def test_legacy_single_window_state_keeps_original_execution_and_reservation():
+    service = cold.ColdStartService(model(), fit())
+    state = service.state_dict()
+    state["fit"].pop("optimizer_impl")
+    state["controller"].pop("initial_probe_factor")
+    cold.ColdStartService(model(), fit()).load_state_dict(state)
+
+
+def test_explicit_initial_probe_reservation_keeps_measured_cost_policy():
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(probe_tokens=8, initial_probe_factor=1.5),
+                                    gate_prompts=[torch.tensor([[2, 3]])])
+    service.budget.delivered(10.)
+    service.tokens = 100
+    assert service._probe_cost() == pytest.approx(2.4)
+    service.probe_estimate, service.probe_legs = .7, 2
+    assert service._probe_cost() == pytest.approx(.7)
+    service.speculating = True
+    assert service._probe_cost() == pytest.approx(1.05)
+
+
+@pytest.mark.parametrize("factor", [0, .9, float("nan"), float("inf")])
+def test_initial_probe_reservation_has_finite_headroom(factor):
+    with pytest.raises(ValueError):
+        cold.ServiceConfig(initial_probe_factor=factor)
