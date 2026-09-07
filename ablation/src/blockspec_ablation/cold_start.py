@@ -212,11 +212,15 @@ class ServiceConfig:
     seed: int = 731
     initial_probe_factor: float = 2.
     reuse_ar_prefix: bool = False
+    live_probe_requests: int = 1
 
     def __post_init__(self):
         TimeBudget(self.fraction)
         if type(self.reuse_ar_prefix) is not bool:
             raise ValueError("explicit AR-prefix validation policy required")
+        if (type(self.live_probe_requests) is not int or self.live_probe_requests < 1
+                or (self.live_probe_requests > 1 and not self.reuse_ar_prefix)):
+            raise ValueError("positive live probe count requires AR-prefix validation")
         if (any(type(n) is not int or n < 1 for n in (self.replay_records, self.probe_every, self.probe_tokens))
                 or not math.isfinite(self.publish_margin) or self.publish_margin <= 1
                 or not math.isfinite(self.initial_step_estimate) or self.initial_step_estimate <= 0
@@ -254,6 +258,7 @@ class ColdStartService:
         self.transcript = [] if retain_batches else None
         self.completed_records = [] if retain_records else None
         self.last_probe = None
+        self.pending_live_probes = []
         synchronize(model)
         self.budget.charge("setup", time.perf_counter() - start)
 
@@ -289,13 +294,36 @@ class ColdStartService:
 
     def _complete_probe(self, probe, elapsed, legs):
         self.probe_legs, self.probe_estimate = legs, 1.2 * elapsed
+        self.last_probe = probe
+        if not probe.get("complete", True):
+            return
         if probe["passed"]:
             self._timed("publication", self.learner.publish)
             self.speculating = True
         elif probe.get("fallback", False):
             self.speculating = False
-        self.last_probe = probe
         self.next_probe = self.learner.steps + self.config.probe_every
+
+    def _pool_live_probe(self, probe):
+        """Fixed-count aggregate for one frozen learning version."""
+        if (probe["step"] != self.learner.steps
+                or any(row["step"] != probe["step"] for row in self.pending_live_probes)):
+            raise RuntimeError("pending prefix trials require a fixed learning version")
+        keys = ("step", "reference_tokens", "reference_seconds", "candidate_tokens", "candidate_seconds")
+        self.pending_live_probes.append({key: probe[key] for key in keys})
+        rows = self.pending_live_probes
+        totals = {key: sum(row[key] for row in rows) for key in keys[1:]}
+        ratio = ((totals["candidate_tokens"] / totals["candidate_seconds"])
+                 / (totals["reference_tokens"] / totals["reference_seconds"]))
+        ratios = [(row["candidate_tokens"] / row["candidate_seconds"])
+                  / (row["reference_tokens"] / row["reference_seconds"]) for row in rows]
+        complete = len(rows) == self.config.live_probe_requests
+        result = {**probe, **totals, "paired_ratios": ratios, "ratio": ratio, "candidate_over_ar": ratio,
+                  "probe_requests": len(rows), "complete": complete,
+                  "passed": complete and ratio >= self.config.publish_margin}
+        if complete:
+            self.pending_live_probes = []
+        return result
 
     def _probe(self):
         baseline, candidate, ar = [], [], []
@@ -337,13 +365,27 @@ class ColdStartService:
         examples = 1 if self.probe_legs == 1 else len(self.gate_prompts)
         return self.probe_estimate / (self.probe_legs * examples)
 
+    def _prefunded_live_cost(self):
+        if self.probe_estimate:
+            return self._probe_unit_cost()
+        if self.tokens:
+            return (self.config.initial_probe_factor * self.config.probe_tokens
+                    * self.budget.service_seconds / self.tokens)
+        return None
+
     def serve(self, prompt, max_new_tokens, *, seed):
         synchronize(self.model)
-        start = time.perf_counter()
+        admission_start = time.perf_counter()
         speculative = self.speculating
         live_trial = (self.config.reuse_ar_prefix and not speculative
                       and self.learner.steps >= self.next_probe)
+        prefunded = live_trial and self.config.live_probe_requests > 1
+        estimate_before = self._prefunded_live_cost() if prefunded else None
+        if prefunded:
+            live_trial = estimate_before is not None and self.budget.admits(estimate_before)
         options = {"prefix_tokens": self.config.probe_tokens} if live_trial else {}
+        self.budget.charge("scheduling", time.perf_counter() - admission_start)
+        start = time.perf_counter()
         result = self._generate(prompt, max_new_tokens, speculative=speculative, seed=seed, **options)
         synchronize(self.model)
         service_seconds = time.perf_counter() - start - result.prefix_capture_seconds
@@ -356,12 +398,12 @@ class ColdStartService:
         update, probe = None, None
 
         if live_trial and result.prefix_tokens and result.prefix_seconds:
-            estimate = (self._probe_unit_cost() if self.probe_estimate
+            estimate = (estimate_before if prefunded else self._probe_unit_cost() if self.probe_estimate
                         else self.config.initial_probe_factor * result.prefix_seconds)
-            if self.budget.admits(estimate):
+            if prefunded or self.budget.admits(estimate):
                 before = self.budget.spent
-                probe = self._timed("validation", lambda: self._probe_live(
-                    prompt, result, min(max_new_tokens, self.config.probe_tokens), seed))
+                probe = self._timed("validation", lambda: self._pool_live_probe(self._probe_live(
+                    prompt, result, min(max_new_tokens, self.config.probe_tokens), seed)))
                 self._complete_probe(probe, self.budget.spent - before, 1)
 
         def collect():
@@ -417,6 +459,7 @@ class ColdStartService:
                 "master": portable(self.learner.master), "optimizer": portable(self.learner.optimizer.state_dict()),
                 "serving": portable(self.learner.execution), "step": self.learner.steps,
                 "serving_step": self.learner.serving_step, "speculating": self.speculating,
+                "pending_live_probes": [dict(row) for row in self.pending_live_probes],
                 "gate_prompts": portable(self.gate_prompts),
                 "replay": portable(list(self.replay.records)), "replay_rng": self.replay.rng.get_state(),
                 "anchors_rng": self.replay.anchors_rng.get_state(), "stream": self.summary(),
@@ -466,6 +509,20 @@ class ColdStartService:
                 or any(not math.isfinite(state.get(key, -1)) or state[key] < 0
                        for key in ("step_estimate", "probe_estimate")) or state["step_estimate"] == 0):
             raise ValueError("consistent learning, publication and trial counters required")
+        pending = state.get("pending_live_probes", [])
+        fields = {"step", "reference_tokens", "reference_seconds", "candidate_tokens", "candidate_seconds"}
+        positive = lambda value: type(value) in (int, float) and math.isfinite(value) and value > 0
+        if (not isinstance(pending, list) or len(pending) >= self.config.live_probe_requests
+                or (pending and (state["speculating"] or state["step"] == 0 or state["next_probe"] > state["step"]
+                                 or state.get("probe_legs", 2) != 1 or state["probe_estimate"] <= 0
+                                 or len(pending) > state.get("requests", 0)))
+                or any(not isinstance(row, dict) or row.keys() != fields
+                       or type(row["step"]) is not int or row["step"] != state["step"]
+                       or any(type(row[key]) is not int or not 1 <= row[key] <= self.config.probe_tokens
+                              for key in ("reference_tokens", "candidate_tokens"))
+                       or any(not positive(row[key]) for key in ("reference_seconds", "candidate_seconds"))
+                       for row in pending)):
+            raise ValueError("bounded same-version pending prefix trials required")
         records = state.get("replay", [])
         if len(records) > self.config.replay_records or any(
                 not isinstance(x, torch.Tensor) or x.ndim != 2 or x.shape[0] != 1 or x.dtype != torch.long
@@ -493,6 +550,7 @@ class ColdStartService:
         self.speculating, self.next_probe = state["speculating"], state["next_probe"]
         self.step_estimate, self.probe_estimate = state["step_estimate"], state["probe_estimate"]
         self.probe_legs = state.get("probe_legs", 2)
+        self.pending_live_probes = [dict(row) for row in pending]
         self.replay.records.clear()
         self.replay.records.extend(x.detach().cpu().clone() for x in records)
         self.replay.rng, self.replay.anchors_rng = replay_rng, anchor_rng

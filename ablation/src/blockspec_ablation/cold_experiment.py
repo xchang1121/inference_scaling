@@ -129,7 +129,8 @@ def run(args):
                     batch_size=args.batch_size, optimizer_impl=args.optimizer_impl)
     settings = ServiceConfig(fraction=args.fraction, replay_records=args.replay_records, probe_every=args.probe_every,
                               probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed,
-                              initial_probe_factor=args.initial_probe_factor, reuse_ar_prefix=args.reuse_ar_prefix)
+                              initial_probe_factor=args.initial_probe_factor, reuse_ar_prefix=args.reuse_ar_prefix,
+                              live_probe_requests=args.live_probe_requests)
     training_texts = prompt_texts(args.prompts, args.requests, offset=args.offset)
     heldout_texts = prompt_texts(args.heldout_prompts, args.heldout_count, offset=args.heldout_offset)
     gate_texts = prompt_texts(args.heldout_prompts, args.gate_count, offset=args.heldout_offset + args.heldout_count)
@@ -288,6 +289,7 @@ def main():
     for name, default in (("requests", 128), ("offset", 0), ("tokens", 256), ("steps", 64), ("warmup-steps", 4),
                            ("sequence-length", 256), ("anchors", 4), ("batch-size", 1), ("accumulate", 1), ("chunk-rows", 32),
                            ("replay-records", 128), ("probe-every", 8), ("probe-tokens", 32), ("gate-count", 2),
+                           ("live-probe-requests", 1),
                            ("heldout-count", 4), ("heldout-tokens", 128), ("heldout-offset", 64),
                            ("curve-every", 4), ("log-every", 8), ("seed", 743)):
         parser.add_argument("--" + name, type=int, default=default)
