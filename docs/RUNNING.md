@@ -160,6 +160,12 @@ python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
 例如 `--batch-size 3 --anchors 14` 和 `--batch-size 1 --anchors 42` 使用相同数量的监督位置。
 `--optimizer-impl fused` 与离线入口共用融合更新；对照实验和恢复沿用所保存的执行选项。
 `--initial-probe-factor` 控制首次验证的耗时预留系数，默认 2；后续验证使用实测时间估计。
+`--reuse-ar-prefix` 在 AR 服务期间记录当前回答的短前缀计时，复用为发布检查的 AR 参照。
+回答交付后、进入重放区之前，只额外运行相同提示、种子和输出上限的候选分支。
+前缀计时的新增开销记入 `validation_capture`，候选检查与参数切换记入 `validation`。
+投机服务启用后，后续发布继续使用独立门控题上的 AR／服务版本／候选版本比较。
+性能记录第 9 节沿用上述命令，并设置
+`--offset 768 --heldout-offset 176 --seed 1009 --optimizer-impl fused --initial-probe-factor 1.5 --reuse-ar-prefix`。
 `--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
 保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
 日常服务采用常规 GPU 执行设置。

@@ -10,6 +10,7 @@ import torch
 
 from blockspec.parallel import DualViewConfig, DualViewDecoder
 from blockspec.parallel.fitting import BatchStream, FitConfig, TokenDataset, Trainer, frozen_fingerprint
+from blockspec.parallel.weights import load_ar_base, load_checkpoint, public_key_map
 
 
 def test_adamw_execution_choices_follow_the_same_fp32_update():
@@ -24,7 +25,6 @@ def test_adamw_execution_choices_follow_the_same_fp32_update():
         torch.testing.assert_close(reference, fused, rtol=2e-6, atol=2e-7)
     with pytest.raises(ValueError, match="AdamW"):
         FitConfig(optimizer_impl="unknown")
-from blockspec.parallel.weights import load_ar_base, load_checkpoint, public_key_map
 
 
 def model():

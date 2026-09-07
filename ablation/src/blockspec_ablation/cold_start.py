@@ -211,9 +211,12 @@ class ServiceConfig:
     initial_step_estimate: float = .5
     seed: int = 731
     initial_probe_factor: float = 2.
+    reuse_ar_prefix: bool = False
 
     def __post_init__(self):
         TimeBudget(self.fraction)
+        if type(self.reuse_ar_prefix) is not bool:
+            raise ValueError("explicit AR-prefix validation policy required")
         if (any(type(n) is not int or n < 1 for n in (self.replay_records, self.probe_every, self.probe_tokens))
                 or not math.isfinite(self.publish_margin) or self.publish_margin <= 1
                 or not math.isfinite(self.initial_step_estimate) or self.initial_step_estimate <= 0
@@ -230,6 +233,8 @@ class ColdStartService:
 
     def __init__(self, model, fit, config=ServiceConfig(), *, gate_prompts=(), sampling=SamplingConfig(1.),
                  sampler=None, retain_batches=False, retain_records=False, deterministic_updates=False):
+        if config.reuse_ar_prefix and not gate_prompts:
+            raise ValueError("reference prompts are required for post-publication trials")
         synchronize(model)
         start = time.perf_counter()
         self.learner = FullBlockLearner(model, fit, deterministic=deterministic_updates)
@@ -261,11 +266,36 @@ class ColdStartService:
             synchronize(self.model)
             self.budget.charge(kind, time.perf_counter() - start)
 
-    def _generate(self, prompt, tokens, *, speculative, seed):
+    def _generate(self, prompt, tokens, *, speculative, seed, prefix_tokens=None):
+        if speculative and prefix_tokens is not None:
+            raise ValueError("prefix timing uses the AR service path")
         generator = torch.Generator(device=prompt.device).manual_seed(seed)
         method = generate if speculative else generate_ar
+        options = {} if prefix_tokens is None else {"prefix_tokens": prefix_tokens}
         return method(self.branch, prompt, tokens, sampling=self.sampling,
-                      eos_id=self.model.config.eos_token_id, generator=generator, sampler=self.sampler)
+                      eos_id=self.model.config.eos_token_id, generator=generator, sampler=self.sampler, **options)
+
+    def _probe_live(self, prompt, reference, tokens, seed):
+        # The learner has yet to see this delivered response. Replaying the same
+        # AR seed with this output cap would produce precisely its timed prefix.
+        with self.learner.candidate():
+            candidate = self._generate(prompt, tokens, speculative=True, seed=seed)
+        ratio = candidate.tps / (reference.prefix_tokens / reference.prefix_seconds)
+        return {"step": self.learner.steps, "paired_ratios": [ratio], "ratio": ratio,
+                "candidate_over_ar": ratio, "fallback": False, "passed": ratio >= self.config.publish_margin,
+                "reference_kind": "delivered_ar_prefix", "reference_tokens": reference.prefix_tokens,
+                "reference_seconds": reference.prefix_seconds, "candidate_tokens": len(candidate.tokens),
+                "candidate_seconds": candidate.seconds}
+
+    def _complete_probe(self, probe, elapsed, legs):
+        self.probe_legs, self.probe_estimate = legs, 1.2 * elapsed
+        if probe["passed"]:
+            self._timed("publication", self.learner.publish)
+            self.speculating = True
+        elif probe.get("fallback", False):
+            self.speculating = False
+        self.last_probe = probe
+        self.next_probe = self.learner.steps + self.config.probe_every
 
     def _probe(self):
         baseline, candidate, ar = [], [], []
@@ -299,22 +329,40 @@ class ColdStartService:
     def _probe_cost(self):
         legs = 3 if self.speculating else 2
         if self.probe_estimate:
-            return self.probe_estimate * legs / self.probe_legs
+            return self._probe_unit_cost() * legs * len(self.gate_prompts)
         current_tps = self.tokens / self.budget.service_seconds
         return self.config.initial_probe_factor * legs * len(self.gate_prompts) * self.config.probe_tokens / current_tps
+
+    def _probe_unit_cost(self):
+        examples = 1 if self.probe_legs == 1 else len(self.gate_prompts)
+        return self.probe_estimate / (self.probe_legs * examples)
 
     def serve(self, prompt, max_new_tokens, *, seed):
         synchronize(self.model)
         start = time.perf_counter()
         speculative = self.speculating
-        result = self._generate(prompt, max_new_tokens, speculative=speculative, seed=seed)
+        live_trial = (self.config.reuse_ar_prefix and not speculative
+                      and self.learner.steps >= self.next_probe)
+        options = {"prefix_tokens": self.config.probe_tokens} if live_trial else {}
+        result = self._generate(prompt, max_new_tokens, speculative=speculative, seed=seed, **options)
         synchronize(self.model)
-        service_seconds = time.perf_counter() - start
+        service_seconds = time.perf_counter() - start - result.prefix_capture_seconds
         self.budget.delivered(service_seconds)
+        if result.prefix_capture_seconds:
+            self.budget.charge("validation_capture", result.prefix_capture_seconds)
         self.tokens += len(result.tokens)
         self.requests += 1
         maintenance_start, previous_spent = time.perf_counter(), self.budget.spent
         update, probe = None, None
+
+        if live_trial and result.prefix_tokens and result.prefix_seconds:
+            estimate = (self._probe_unit_cost() if self.probe_estimate
+                        else self.config.initial_probe_factor * result.prefix_seconds)
+            if self.budget.admits(estimate):
+                before = self.budget.spent
+                probe = self._timed("validation", lambda: self._probe_live(
+                    prompt, result, min(max_new_tokens, self.config.probe_tokens), seed))
+                self._complete_probe(probe, self.budget.spent - before, 1)
 
         def collect():
             if result.tokens:
@@ -341,19 +389,13 @@ class ColdStartService:
             elapsed = self.budget.spent - before
             self.step_estimate = max(elapsed * 1.2, self.step_estimate * .8)
             update["seconds"] = elapsed
-        if self.gate_prompts and self.learner.steps >= self.next_probe:
+        if (probe is None and self.gate_prompts and self.learner.steps >= self.next_probe
+                and (self.speculating or not self.config.reuse_ar_prefix)):
             if self.budget.admits(self._probe_cost()):
                 before = self.budget.spent
-                self.probe_legs = 3 if self.speculating else 2
+                legs = 3 if self.speculating else 2
                 probe = self._timed("validation", self._probe)
-                self.probe_estimate = 1.2 * (self.budget.spent - before)
-                if probe["passed"]:
-                    self._timed("publication", self.learner.publish)
-                    self.speculating = True
-                elif probe.get("fallback", False):
-                    self.speculating = False
-                self.last_probe = probe
-                self.next_probe = self.learner.steps + self.config.probe_every
+                self._complete_probe(probe, self.budget.spent - before, legs)
         residual = time.perf_counter() - maintenance_start - (self.budget.spent - previous_spent)
         self.budget.charge("scheduling", max(0., residual))
         return result, {"request": self.requests, "mode": "speculative" if speculative else "ar",
@@ -417,7 +459,9 @@ class ColdStartService:
                 or type(state.get("speculating")) is not bool
                 or (state["speculating"] and state["serving_step"] == 0)
                 or type(state.get("next_probe")) is not int or state["next_probe"] < 1
-                or state.get("probe_legs", 2) not in (2, 3)
+                or type(state.get("probe_legs", 2)) is not int
+                or state.get("probe_legs", 2) not in (1, 2, 3)
+                or (state.get("probe_legs", 2) == 1 and not self.config.reuse_ar_prefix)
                 or type(state.get("requests", 0)) is not int or state.get("requests", 0) < 0
                 or any(not math.isfinite(state.get(key, -1)) or state[key] < 0
                        for key in ("step_estimate", "probe_estimate")) or state["step_estimate"] == 0):
