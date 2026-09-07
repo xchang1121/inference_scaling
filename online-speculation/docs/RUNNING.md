@@ -193,6 +193,23 @@ AR 服务阶段复用该请求的实际生成时间；发布投机版本后，�
 命令行通过 `--resume "$COLD_STATE"` 恢复，沿用原有训练、采样、控制器配置及相同的发布门控题；
 `--offset` 指定接续的输入请求位置。训练步数表示整条学习流的总调度长度。
 
+### 完整回答的条件工作量审计
+
+```bash
+python ablation/scripts/virtual_work.py --model "$DUAL_MODEL_DIR" \
+  --checkpoint "$COLD_STATE" --prompts "$EVAL_PROMPTS" \
+  --offset 232 --count 12 --tokens 256 --block-size 4 --seed 1249 --serial-audits 2
+```
+
+入口读取冷启动检查点的学习版本，独立比较普通 AR、候选生成与完整回答上的条件前向次数。
+`--cold-copy` 替代检查点参数时，各层起草注意力从 AR 重新复制，可审计学习起点。
+`--anchors-per-pass` 控制隔离掩码中同时计算的块数，默认 128；
+`--calibration-points` 控制按访问质量选取的单轮计时点数，默认 3。
+`--serial-audits` 对指定数量的完整回答逐起点重算起草概率，报告批量计算的数值误差。
+`--prefix-compare` 交错测量同一候选的 48-token 前缀生成，与完整回答评估作额外成本对照。
+输出为逐题统计及最终汇总，包含实际 TPS、预测速度、预期前向次数、概率评估和校准耗时。
+这组测量属于独立研究评估，模型及学习状态保持原值。
+
 ## 6. 外部参照
 
 独立运行读取权重张量。执行外部模型 Python 时，显式传入 `--reference-manifest "$REFERENCE_MANIFEST"`。
