@@ -133,6 +133,7 @@ python -m blockspec fit resume --checkpoint "$CHECKPOINT_FILE" \
 随机锚点定义多个隔离的起草块，干净 AR 视图提供完整教师分布。
 检查点保存参数、优化器、随机数、数据顺序及学习率进度。
 恢复沿用保存的总步数和调度，`--stop-after` 表示中间停止边界。
+`--optimizer-impl fused` 选择融合 AdamW；默认 `single` 保留逐张量执行。
 
 ### 冷启动的预算式完整块训练
 
@@ -154,6 +155,11 @@ python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
 
 真实请求提供训练序列，报告题和发布门控题彼此分离。
 `--block-size` 指定训练与推理共用的块长，`--anchors` 控制每个窗口中的随机锚点数。
+`--batch-size` 指定每个微批抽取的回答窗口数，较短窗口在右侧补齐，锚点取自原始有效范围。
+每次更新的监督行数为 `accumulate × batch-size × anchors × (block-size - 1)`。
+例如 `--batch-size 3 --anchors 14` 和 `--batch-size 1 --anchors 42` 使用相同数量的监督位置。
+`--optimizer-impl fused` 与离线入口共用融合更新；对照实验和恢复沿用所保存的执行选项。
+`--initial-probe-factor` 控制首次验证的耗时预留系数，默认 2；后续验证使用实测时间估计。
 `--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
 保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
 日常服务采用常规 GPU 执行设置。

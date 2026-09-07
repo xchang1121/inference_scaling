@@ -10,6 +10,20 @@ import torch
 
 from blockspec.parallel import DualViewConfig, DualViewDecoder
 from blockspec.parallel.fitting import BatchStream, FitConfig, TokenDataset, Trainer, frozen_fingerprint
+
+
+def test_adamw_execution_choices_follow_the_same_fp32_update():
+    reference = torch.nn.Parameter(torch.linspace(-1, 1, 37))
+    fused = torch.nn.Parameter(reference.detach().clone())
+    optimizers = [FitConfig(optimizer_impl=mode).make_optimizer([p])
+                  for mode, p in (("single", reference), ("fused", fused))]
+    for step in range(4):
+        for parameter, optimizer in zip((reference, fused), optimizers, strict=True):
+            parameter.grad = torch.sin(torch.arange(37.) + step)
+            optimizer.step()
+        torch.testing.assert_close(reference, fused, rtol=2e-6, atol=2e-7)
+    with pytest.raises(ValueError, match="AdamW"):
+        FitConfig(optimizer_impl="unknown")
 from blockspec.parallel.weights import load_ar_base, load_checkpoint, public_key_map
 
 
@@ -95,10 +109,11 @@ CASES = [("cpu", "fp32")] + ([("cuda", "fp32"), ("cuda", "bf16")] if torch.cuda.
 
 
 @pytest.mark.parametrize("device,precision", CASES)
-def test_complete_training_resume_matches_every_update(tmp_path, device, precision):
+@pytest.mark.parametrize("optimizer_impl", ["single", "fused"])
+def test_complete_training_resume_matches_every_update(tmp_path, device, precision, optimizer_impl):
     data = dataset(tmp_path / "data.jsonl")
     config = FitConfig(steps=5, batch_size=2, sequence_length=8, anchors_per_sequence=2,
-                       accumulate=2, chunk_rows=3, warmup_steps=1, precision=precision)
+                       accumulate=2, chunk_rows=3, warmup_steps=1, precision=precision, optimizer_impl=optimizer_impl)
     original = model().to(device)
     base = frozen_fingerprint(original)
     full = Trainer(original, data, config)

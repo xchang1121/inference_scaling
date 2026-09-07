@@ -100,20 +100,24 @@ class CleanReplay:
         if tokens.shape[1] >= self.block_size:
             self.records.append(tokens.detach().cpu().clone())
 
-    def batch(self, count, anchors_per_sequence):
-        # Variable completed lengths use separate microbatches, each with an
-        # identical per-row mean objective and equal record weight.
-        if not self.records or type(count) is not int or count < 1:
-            raise ValueError("nonempty replay and positive microbatch count required")
+    def batch(self, count, anchors_per_sequence, *, batch_size=1):
+        # Sample anchors before padding: valid teacher rows are causal, and each
+        # draft block reads only clean positions preceding its own anchor.
+        if not self.records or any(type(n) is not int or n < 1 for n in (count, batch_size)):
+            raise ValueError("nonempty replay and positive microbatch/window counts required")
         batches = []
         for _ in range(count):
-            index = int(torch.randint(len(self.records), (), generator=self.rng))
-            record = self.records[index]
-            length = min(self.sequence_length, record.shape[1])
-            start = int(torch.randint(record.shape[1] - length + 1, (), generator=self.rng))
-            tokens = record[:, start:start + length].clone()
-            anchors = sample_anchors(tokens, self.block_size, anchors_per_sequence, generator=self.anchors_rng)
-            batches.append((tokens, anchors))
+            rows, anchors = [], []
+            for _ in range(batch_size):
+                index = int(torch.randint(len(self.records), (), generator=self.rng))
+                record = self.records[index]
+                length = min(self.sequence_length, record.shape[1])
+                start = int(torch.randint(record.shape[1] - length + 1, (), generator=self.rng))
+                tokens = record[:, start:start + length].clone()
+                rows.append(tokens[0])
+                anchors.append(sample_anchors(tokens, self.block_size, anchors_per_sequence, generator=self.anchors_rng))
+            tokens = torch.nn.utils.rnn.pad_sequence(rows, batch_first=True, padding_value=0)
+            batches.append((tokens, torch.cat(anchors)))
         return batches
 
 
@@ -126,9 +130,9 @@ class FullBlockLearner:
 
     def __init__(self, model, config, *, deterministic=False):
         if (not isinstance(config, FitConfig) or config.sequence_length < model.config.block_size
-                or config.batch_size != 1 or any(p.requires_grad for p in model.parameters())
+                or any(p.requires_grad for p in model.parameters())
                 or any(p.dtype not in (torch.float32, torch.bfloat16) for p in model.parameters())):
-            raise ValueError("frozen FP32/BF16 execution and batch-one full-block configuration required")
+            raise ValueError("frozen FP32/BF16 execution and a full-block configuration required")
         self.model, self.config = model, config
         self.device = model.embedding.weight.device
         if type(deterministic) is not bool:
@@ -142,8 +146,7 @@ class FullBlockLearner:
         model.set_backend(config.backend).eval()
         self.execution = {name: p for name, p in model.named_parameters() if ".attention.draft." in name}
         self.master = {name: torch.nn.Parameter(p.detach().float().clone()) for name, p in self.execution.items()}
-        self.optimizer = torch.optim.AdamW(list(self.master.values()), lr=config.learning_rate,
-                                           weight_decay=config.weight_decay, foreach=False)
+        self.optimizer = config.make_optimizer(list(self.master.values()))
         self.frozen = [(p, p._version) for name, p in model.named_parameters() if name not in self.execution]
         self.deterministic = deterministic
         self.steps = self.serving_step = 0
@@ -207,12 +210,14 @@ class ServiceConfig:
     publish_margin: float = 1.10
     initial_step_estimate: float = .5
     seed: int = 731
+    initial_probe_factor: float = 2.
 
     def __post_init__(self):
         TimeBudget(self.fraction)
         if (any(type(n) is not int or n < 1 for n in (self.replay_records, self.probe_every, self.probe_tokens))
                 or not math.isfinite(self.publish_margin) or self.publish_margin <= 1
-                or not math.isfinite(self.initial_step_estimate) or self.initial_step_estimate <= 0):
+                or not math.isfinite(self.initial_step_estimate) or self.initial_step_estimate <= 0
+                or not math.isfinite(self.initial_probe_factor) or self.initial_probe_factor < 1):
             raise ValueError("positive replay/probe sizes, cost estimate and publication margin > 1 required")
 
 
@@ -296,7 +301,7 @@ class ColdStartService:
         if self.probe_estimate:
             return self.probe_estimate * legs / self.probe_legs
         current_tps = self.tokens / self.budget.service_seconds
-        return 2 * legs * len(self.gate_prompts) * self.config.probe_tokens / current_tps
+        return self.config.initial_probe_factor * legs * len(self.gate_prompts) * self.config.probe_tokens / current_tps
 
     def serve(self, prompt, max_new_tokens, *, seed):
         synchronize(self.model)
@@ -325,7 +330,8 @@ class ColdStartService:
             before = self.budget.spent
 
             def train():
-                batches = self.replay.batch(self.fit.accumulate, self.fit.anchors_per_sequence)
+                batches = self.replay.batch(self.fit.accumulate, self.fit.anchors_per_sequence,
+                                            batch_size=self.fit.batch_size)
                 metrics = self.learner.step(batches)
                 if self.transcript is not None:
                     self.transcript.append(batches)
@@ -389,8 +395,10 @@ class ColdStartService:
                     for saved, prompt in zip(state["gate_prompts"], self.gate_prompts, strict=True))):
             raise ValueError("restore requires the same publication gate prompts")
         source = source_identity(getattr(self.model, "source", {}))
-        if (state.get("format") != "cold-start-research-v1" or state.get("fit") != asdict(self.fit)
-                or state.get("controller") != asdict(self.config)
+        saved_fit = FitConfig(**state.get("fit", {}))
+        saved_controller = ServiceConfig(**state.get("controller", {}))
+        if (state.get("format") != "cold-start-research-v1" or saved_fit != self.fit
+                or saved_controller != self.config
                 or state.get("sampling", asdict(SamplingConfig(1.))) != asdict(self.sampling)
                 or source_identity(state.get("source", {})) != source
                 or ("runtime" in state and state["runtime"] != self.learner.runtime())

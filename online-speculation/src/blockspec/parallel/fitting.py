@@ -107,6 +107,7 @@ class FitConfig:
     precision: str = "fp32"
     backend: str = "sdpa"
     seed: int = 731
+    optimizer_impl: str = "single"
 
     def __post_init__(self):
         counts = (self.steps, self.batch_size, self.sequence_length, self.anchors_per_sequence,
@@ -122,6 +123,12 @@ class FitConfig:
             raise ValueError("finite positive learning rate/clip and valid decay required")
         if self.precision not in ("fp32", "bf16") or self.backend not in ("eager", "sdpa"):
             raise ValueError("training supports FP32/BF16 and eager/SDPA masks")
+        if self.optimizer_impl not in ("single", "fused"):
+            raise ValueError("AdamW implementation must be single or fused")
+
+    def make_optimizer(self, parameters):
+        return torch.optim.AdamW(parameters, lr=self.learning_rate, weight_decay=self.weight_decay,
+                                  foreach=False, fused=self.optimizer_impl == "fused")
 
     def rate(self, step):
         if step < self.warmup_steps:
@@ -156,8 +163,7 @@ class Trainer:
         if config.precision == "bf16" and self.device.type != "cuda":
             raise ValueError("BF16 training autocast requires CUDA")
         self.parameters = [value for value in model.parameters() if value.requires_grad]
-        self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate,
-                                            weight_decay=config.weight_decay, foreach=False)
+        self.optimizer = config.make_optimizer(self.parameters)
         self.stream = BatchStream(data, config.seed)
         self.anchors_rng = torch.Generator().manual_seed(config.seed + 1)
         self.step = 0
