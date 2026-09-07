@@ -11,7 +11,7 @@ import time
 
 import torch
 
-from .training import distillation_loss, sample_anchors
+from .training import distillation_loss, distillation_update, sample_anchors
 from .weights import file_sha256, load_checkpoint, save_checkpoint
 
 
@@ -185,29 +185,19 @@ class Trainer:
                 torch.cuda.synchronize(self.device)
             start = time.perf_counter()
             rate = self.config.rate(self.step)
-            for group in self.optimizer.param_groups:
-                group["lr"] = rate
-            self.optimizer.zero_grad(set_to_none=True)
-            losses = []
+            batches = []
             for _ in range(self.config.accumulate):
                 tokens = self.stream.batch(self.config.batch_size)
                 anchors = sample_anchors(tokens, self.model.config.block_size,
                                          self.config.anchors_per_sequence, generator=self.anchors_rng)
-                with self._autocast():
-                    loss = distillation_loss(self.model, tokens.to(self.device), anchors.to(self.device),
-                                             chunk_rows=self.config.chunk_rows)
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("nonfinite distillation loss")
-                (loss / self.config.accumulate).backward()
-                losses.append(float(loss.detach()))
-            norm = torch.nn.utils.clip_grad_norm_(self.parameters, self.config.clip_grad, error_if_nonfinite=True)
-            self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none=True)
+                batches.append((tokens.to(self.device), anchors.to(self.device)))
+            metrics = distillation_update(self.model, batches, self.optimizer, learning_rate=rate,
+                                          clip_grad=self.config.clip_grad, chunk_rows=self.config.chunk_rows,
+                                          autocast=self._autocast)
             self.step += 1
             if self.device.type == "cuda":
                 torch.cuda.synchronize(self.device)
-            record = {"step": self.step, "loss": sum(losses) / len(losses), "learning_rate": rate,
-                      "gradient_norm": float(norm), "seconds": time.perf_counter() - start}
+            record = {"step": self.step, **metrics, "seconds": time.perf_counter() - start}
             records.append(record)
             if progress is not None:
                 progress(record)

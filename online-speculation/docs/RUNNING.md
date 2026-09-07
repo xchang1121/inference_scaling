@@ -134,6 +134,37 @@ python -m blockspec fit resume --checkpoint "$CHECKPOINT_FILE" \
 检查点保存参数、优化器、随机数、数据顺序及学习率进度。
 恢复沿用保存的总步数和调度，`--stop-after` 表示中间停止边界。
 
+### 冷启动的预算式完整块训练
+
+冷启动实验位于可选的消融包，模型资源参数提供 AR 与双视图配置；
+初始化时各层起草注意力均重新复制对应 AR 参数。
+
+```bash
+python -m pip install -e ./ablation
+python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
+  --prompts "$TRAIN_PROMPTS" --heldout-prompts "$EVAL_PROMPTS" \
+  --fraction .01 --requests 192 --tokens 256 --steps 64 \
+  --sequence-length 256 --anchors 4 --probe-every 8 --probe-tokens 32 \
+  --gate-count 1 --heldout-count 4 --heldout-tokens 128 --offline-replay \
+  --checkpoint "$COLD_STATE" --output "$RESULT_FILE"
+```
+
+真实请求提供训练序列，报告题和发布门控题彼此分离。
+`--offline-replay` 使用相同初值和在线实际抽取的批次，检查最终参数逐元素一致。
+冷启动实验在训练更新内启用确定性算子，并在进程中配置矩阵乘工作区，固定 GPU 反向归约的执行方式。
+更新结束恢复服务端的算子设置。直接使用 Python 接口时，在进程启动前设置
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`。
+报告中的 `stream.net_tps` 包含在线初始化、采集、训练、验证和发布；
+`curve` 为单独测量的学习质量，`research_measurement_seconds` 为这部分研究测量耗时。
+研究测量期间的时间与提示均保持在服务账本和训练数据之外。
+实验结束时的检查点写入耗时另列为 `shutdown_checkpoint_seconds`。
+
+连续使用由 `ColdStartService.serve(prompt, output_budget, seed=...)` 提供。
+它保留重放区、优化器、学习与服务参数版本和累计时间账本。
+`state_dict()` 与 `load_state_dict()` 在请求边界保存／恢复；恢复新增的复制与校验成本进入账本。
+命令行通过 `--resume "$COLD_STATE"` 恢复，沿用原有训练、采样和控制器配置；
+`--offset` 指定接续的输入请求位置。训练步数表示整条学习流的总调度长度。
+
 ## 6. 外部参照
 
 独立运行读取权重张量。执行外部模型 Python 时，显式传入 `--reference-manifest "$REFERENCE_MANIFEST"`。
