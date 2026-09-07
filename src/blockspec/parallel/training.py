@@ -1,6 +1,8 @@
 """Random-anchor block distillation from complete, frozen AR distributions."""
 
 from dataclasses import dataclass
+from contextlib import nullcontext
+import math
 
 import torch
 from torch import Tensor
@@ -54,7 +56,7 @@ def forward_kl(student_logits, teacher_logits):
     return (teacher_log.exp() * (teacher_log - student_log)).sum(-1).mean()
 
 
-def distillation_loss(model, tokens, anchors, *, block_size=None, chunk_rows=32):
+def distillation_loss(model, tokens, anchors, *, block_size=None, chunk_rows=32, draft_weights=None):
     """All K-1 used draft rows, with row-chunked full-vocabulary soft targets.
 
     Checkpointed output-head chunks retain hidden vectors for backward, keeping
@@ -71,8 +73,15 @@ def distillation_loss(model, tokens, anchors, *, block_size=None, chunk_rows=32)
         teacher = model(tokens, compute_logits=False)
         index = layout.teacher_rows[..., None].expand(-1, -1, model.config.hidden_size)
         teacher_hidden = teacher.hidden.gather(1, index).reshape(-1, model.config.hidden_size)
-    student = model(layout.tokens, view="draft", cache=teacher.cache,
-                    positions=layout.positions, allowed=layout.allowed, compute_logits=False)
+    options = dict(view="draft", cache=teacher.cache, positions=layout.positions,
+                   allowed=layout.allowed, compute_logits=False)
+    if draft_weights is None:
+        student = model(layout.tokens, **options)
+    else:
+        expected = {name for name, _ in model.named_parameters() if ".attention.draft." in name}
+        if draft_weights.keys() != expected:
+            raise ValueError("full-block overrides must contain every draft attention parameter")
+        student = torch.func.functional_call(model, draft_weights, (layout.tokens,), options)
     student_hidden = student.hidden[:, layout.student_rows].reshape(-1, model.config.hidden_size)
     count = student_hidden.shape[0]
 
@@ -88,3 +97,41 @@ def distillation_loss(model, tokens, anchors, *, block_size=None, chunk_rows=32)
                           use_reentrant=False)
         terms.append(term * ((stop - start) / count))
     return torch.stack(terms).sum()
+
+
+def distillation_update(model, batches, optimizer, *, learning_rate, clip_grad=1., chunk_rows=32,
+                        autocast=nullcontext, master=None):
+    """One full-block AdamW update, shared by file-backed and streaming trainers.
+
+    `batches` contains fixed (clean tokens, anchors) pairs. Separate FP32 masters
+    leave serving tensors unchanged; publication is a caller-controlled boundary.
+    """
+    if (not batches or any(not math.isfinite(v) or v <= 0 for v in (learning_rate, clip_grad))):
+        raise ValueError("nonempty microbatches and finite positive optimizer scales required")
+    resident = dict(model.named_parameters())
+    parameters = [p for group in optimizer.param_groups for p in group["params"]]
+    expected = {name: p for name, p in resident.items() if ".attention.draft." in name}
+    selected = expected if master is None else master
+    if (selected.keys() != expected.keys() or {id(p) for p in parameters} != {id(p) for p in selected.values()}
+            or any(p.dtype != torch.float32 or not p.requires_grad for p in selected.values())):
+        raise ValueError("optimizer must own exactly the full FP32 draft parameter set")
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+    optimizer.zero_grad(set_to_none=True)
+    losses = []
+    try:
+        with torch.enable_grad():
+            for tokens, anchors in batches:
+                weights = (None if master is None else
+                           {name: p.to(resident[name].dtype) for name, p in master.items()})
+                with autocast():
+                    loss = distillation_loss(model, tokens, anchors, chunk_rows=chunk_rows, draft_weights=weights)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("nonfinite distillation loss")
+                (loss / len(batches)).backward()
+                losses.append(float(loss.detach()))
+        norm = torch.nn.utils.clip_grad_norm_(parameters, clip_grad, error_if_nonfinite=True)
+        optimizer.step()
+    finally:
+        optimizer.zero_grad(set_to_none=True)
+    return {"loss": sum(losses) / len(losses), "learning_rate": learning_rate, "gradient_norm": float(norm)}
