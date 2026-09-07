@@ -1,7 +1,9 @@
 from dataclasses import replace
 import copy
+import json
 
 import pytest
+from safetensors.torch import save_file
 import torch
 
 from blockspec.parallel import DualViewConfig, DualViewDecoder
@@ -217,3 +219,101 @@ def test_publication_trials_compare_with_ar_after_speculation_is_enabled(monkeyp
     result = service._probe()
     assert result["ratio"] > 1.1 and result["candidate_over_ar"] < 1.
     assert result["fallback"] and not result["passed"]
+
+
+def test_measured_probe_cost_replaces_startup_estimate_and_scales_with_methods():
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(probe_tokens=8),
+                                    gate_prompts=[torch.tensor([[2, 3]])])
+    service.budget.delivered(10.)
+    service.tokens = 100
+    assert service._probe_cost() == pytest.approx(3.2)
+    service.probe_estimate, service.probe_legs = .6, 2
+    assert service._probe_cost() == pytest.approx(.6)
+    service.speculating = True
+    assert service._probe_cost() == pytest.approx(.9)
+
+
+def test_optional_completed_archive_contains_only_delivered_records(monkeypatch):
+    service = cold.ColdStartService(model(), fit(), cold.ServiceConfig(replay_records=1), retain_records=True)
+    monkeypatch.setattr(service, "_generate", lambda *args, **kwargs: Generation(tokens=[4, 5, 6], seconds=.001))
+    for i in range(3):
+        service.serve(torch.tensor([[2, i + 3]]), 3, seed=i)
+    assert len(service.replay.records) == 1 and len(service.completed_records) == 3
+    assert [x.tolist() for x in service.completed_records] == [[[2, i + 3, 4, 5, 6]] for i in range(3)]
+    assert service.learner.steps == 0
+
+
+def test_restore_requires_a_fresh_service():
+    service = cold.ColdStartService(model(), fit())
+    state = service.state_dict()
+    service.replay.append(torch.tensor([[2, 3, 4, 5]]))
+    with pytest.raises(ValueError, match="fresh service"):
+        service.load_state_dict(state)
+
+
+def test_same_data_offline_control_matches_full_buffer_update_sequence():
+    from blockspec_ablation.cold_experiment import fit_complete_buffer
+    records = [(torch.arange(14)[None] + i) % 15 + 2 for i in range(3)]
+    reference = cold.FullBlockLearner(model(), fit())
+    replay = cold.CleanReplay(3, 12, 4, fit().seed)
+    for record in records:
+        replay.append(record)
+    for _ in range(3):
+        reference.step(replay.batch(1, 2))
+    learner, result = fit_complete_buffer(model(), fit(), records, 3)
+    assert result["completed_records"] == 3 and result["supervised_rows"] == 18
+    assert learner.steps == reference.steps == 3
+    assert all(torch.equal(p, learner.master[name]) for name, p in reference.master.items())
+
+
+def test_paired_stream_counts_restoration_and_maintenance_after_mode_switch():
+    from blockspec_ablation.cold_experiment import paired_stream
+    summary = {"delivered_tokens": 160, "budget": {"service_seconds": 3., "extra_seconds": .05}}
+    rows = [{"tokens": 20, "seconds": 1.}, {"tokens": 40, "seconds": 2.}]
+    result = paired_stream(summary, rows, prior_tokens=100, prior_generation=1., prior_extra=.02)
+    assert result["ar_tps"] == 20.
+    assert result["net_tps"] == pytest.approx(60 / 2.03)
+    assert result["net_over_ar"] == pytest.approx(3 / 2.03)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_cold_entry_accepts_plain_ar_weights_with_precise_rotary_frequencies(tmp_path, dtype):
+    from blockspec.parallel.weights import public_key_map
+    from blockspec_ablation.cold_experiment import load_cold_model
+    original = model()
+    config = original.config.to_dict() | {"model_type": "qwen3"}
+    for key in ("block_size", "mask_token_id"):
+        config.pop(key)
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    source = dict(original.named_parameters())
+    save_file({public: source[own].detach().clone().contiguous()
+               for own, public in public_key_map(original.config, include_draft=False).items()},
+              tmp_path / "model.safetensors")
+    loaded = load_cold_model(tmp_path, ar_base=True, block_size=4, mask_token_id=1, device="cpu", dtype=dtype)
+    assert loaded.frequencies.dtype == torch.float32
+    for name, parameter in loaded.named_parameters():
+        expected = source[name.replace(".attention.draft.", ".attention.ar.")].to(dtype)
+        assert torch.equal(parameter, expected) and not parameter.requires_grad
+    for layer in loaded.layers:
+        assert layer.attention.draft.q.weight.data_ptr() != layer.attention.ar.q.weight.data_ptr()
+
+
+def test_stream_interval_includes_incremental_maintenance_and_setup_once():
+    from blockspec_ablation.cold_experiment import stream_comparison
+    rows = [{"delivered_tokens": 100 + i * 10, "service_seconds": 1.,
+             "budget": {"extra_seconds": .5 + i * .1}, "ar_reference": {"tokens": 10, "seconds": 2.2}}
+            for i in (1, 2, 3)]
+    result = stream_comparison(rows, seed=18, prior_tokens=100, prior_extra=.5)
+    assert result["ratio"] == pytest.approx(2.)
+    assert result["paired_request_ci95"] == pytest.approx([2., 2.])
+
+
+def test_resume_checks_publication_prompts():
+    gate = torch.tensor([[2, 3, 4]])
+    service = cold.ColdStartService(model(), fit(), gate_prompts=[gate])
+    state = service.state_dict()
+    gate.fill_(9)
+    assert state["gate_prompts"][0].tolist() == [[2, 3, 4]]
+    with pytest.raises(ValueError, match="publication gate"):
+        cold.ColdStartService(model(), fit(), gate_prompts=[gate]).load_state_dict(state)
+    cold.ColdStartService(model(), fit(), gate_prompts=[state["gate_prompts"][0]]).load_state_dict(state)
