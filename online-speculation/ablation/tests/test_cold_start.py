@@ -551,3 +551,158 @@ def test_resume_validates_prefix_gate_path_counts(legs):
     state["probe_legs"] = legs
     with pytest.raises(ValueError, match="counters"):
         cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt]).load_state_dict(state)
+
+
+@pytest.mark.parametrize("count", [0, -1, True, 1.5])
+def test_live_probe_count_is_a_positive_integer(count):
+    with pytest.raises(ValueError, match="probe count"):
+        cold.ServiceConfig(reuse_ar_prefix=True, live_probe_requests=count)
+
+
+def test_multiple_live_probes_require_prefix_reuse():
+    with pytest.raises(ValueError, match="AR-prefix"):
+        cold.ServiceConfig(live_probe_requests=2)
+
+
+def test_prefix_pool_uses_total_tokens_and_time_with_a_fixed_version():
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(),
+                                    cold.ServiceConfig(reuse_ar_prefix=True, live_probe_requests=2, publish_margin=1.05),
+                                    gate_prompts=[prompt])
+    service.learner.steps = 1
+    first = dict(step=1, reference_tokens=16, reference_seconds=10., candidate_tokens=16, candidate_seconds=8.)
+    row = service._pool_live_probe(first)
+    assert row["ratio"] == pytest.approx(1.25) and not row["complete"] and not row["passed"]
+    with pytest.raises(RuntimeError, match="fixed learning version"):
+        service._pool_live_probe(first | {"step": 2})
+    row = service._pool_live_probe(dict(step=1, reference_tokens=4, reference_seconds=2.,
+                                        candidate_tokens=2, candidate_seconds=2.))
+    assert row["complete"] and row["passed"] and not service.pending_live_probes
+    assert row["ratio"] == pytest.approx(1.08)
+    assert row["paired_ratios"] == pytest.approx([1.25, .5])
+    assert row["probe_requests"] == 2 and row["reference_tokens"] == 20 and row["candidate_tokens"] == 18
+
+
+def pooled_service(monkeypatch):
+    ticks = [0.]
+    monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
+    prompt = torch.tensor([[2, 3, 5]])
+    config = cold.ServiceConfig(probe_every=1, probe_tokens=2, reuse_ar_prefix=True,
+                                live_probe_requests=3, publish_margin=1.0504)
+    service = cold.ColdStartService(model(), fit(), config, gate_prompts=[prompt])
+    service.learner.step([(torch.tensor([[2, 3, 4, 5, 6, 7]]), torch.tensor([[0, 2]]))])
+    service.budget.delivered(1000.)
+    service.tokens = 4000
+    service.step_estimate = 100000.
+
+    def connect(target):
+        calls = []
+
+        def deliver(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+            calls.append(speculative)
+            expected_records = target.requests - int(speculative)
+            assert len(target.replay.records) == expected_records
+            if speculative:
+                duration = (2.2, 1.7, 1.6)[target.requests - 1]
+                ticks[0] += duration
+                return Generation(tokens=[4, 5], seconds=duration)
+            ticks[0] += 10.
+            return Generation(tokens=[4, 5, 6, 7], seconds=10., prefix_tokens=2, prefix_seconds=2.)
+
+        monkeypatch.setattr(target, "_generate", deliver)
+        return calls
+
+    return service, prompt, connect
+
+
+def test_pooled_trials_hold_learning_until_the_fixed_count_and_resume_exactly(monkeypatch):
+    service, prompt, connect = pooled_service(monkeypatch)
+    calls = connect(service)
+    _, first = service.serve(prompt, 4, seed=92)
+    assert first["update"] is None and not first["probe"]["complete"]
+    assert service.learner.steps == service.next_probe == 1 and service.learner.serving_step == 0
+    state = service.state_dict()
+    restored = cold.ColdStartService(model(), fit(), service.config, gate_prompts=[prompt])
+    restored.load_state_dict(state)
+    restored_calls = connect(restored)
+    assert restored.pending_live_probes == service.pending_live_probes
+    state["pending_live_probes"][0]["candidate_seconds"] = 77.
+    assert restored.pending_live_probes[0]["candidate_seconds"] == pytest.approx(2.2)
+    for number in (2, 3):
+        for target in (service, restored):
+            _, row = target.serve(prompt, 4, seed=91 + number)
+            assert row["update"] is None and row["probe"]["probe_requests"] == number
+            assert row["probe"]["complete"] == (number == 3)
+            assert target.learner.steps == 1
+            assert target.speculating == (number == 3)
+    assert calls == [False, True] * 3 and restored_calls == [False, True] * 2
+    assert service.last_probe["ratio"] == pytest.approx(6 / 5.5)
+    assert service.next_probe == restored.next_probe == 2
+    assert service.learner.serving_step == restored.learner.serving_step == 1
+    assert service.pending_live_probes == restored.pending_live_probes == []
+    assert service.budget.costs["validation"] == pytest.approx(5.5)
+    assert restored.budget.costs["validation"] == pytest.approx(5.5)
+    for name, parameter in service.learner.execution.items():
+        assert torch.equal(parameter, restored.learner.execution[name])
+
+
+def test_unfunded_pending_pool_keeps_learning_and_evidence_fixed(monkeypatch):
+    service, prompt, connect = pooled_service(monkeypatch)
+    calls = connect(service)
+    service.serve(prompt, 4, seed=92)
+    evidence = copy.deepcopy(service.pending_live_probes)
+    service.budget.service_seconds = service.budget.spent / service.budget.fraction
+    _, row = service.serve(prompt, 4, seed=93)
+    assert calls == [False, True, False]
+    assert row["probe"] is None and row["update"] is None
+    assert service.pending_live_probes == evidence
+    assert service.learner.steps == service.next_probe == 1 and not service.speculating
+
+
+def test_pooled_admission_uses_only_pre_request_credit(monkeypatch):
+    ticks = [0.]
+    monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
+    prompt = torch.tensor([[2, 3, 5]])
+    service = cold.ColdStartService(model(), fit(),
+                                    cold.ServiceConfig(reuse_ar_prefix=True, live_probe_requests=3, probe_tokens=2),
+                                    gate_prompts=[prompt])
+    service.learner.steps = service.next_probe = 1
+    service.tokens = 4000
+    service.budget.service_seconds, service.budget.costs = 1000., {"setup": 10.}
+    calls = []
+
+    def deliver(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+        calls.append((speculative, prefix_tokens))
+        ticks[0] += 1. if speculative else 200.
+        return (Generation(tokens=[4, 5], seconds=1.) if speculative else
+                Generation(tokens=[4, 5, 6, 7], seconds=200., prefix_tokens=2, prefix_seconds=.2))
+
+    monkeypatch.setattr(service, "_generate", deliver)
+    _, first = service.serve(prompt, 4, seed=92)
+    assert calls == [(False, None)] and first["probe"] is None
+    assert service.budget.credit == pytest.approx(2.)
+    _, second = service.serve(prompt, 4, seed=93)
+    assert calls == [(False, None), (False, 2), (True, None)]
+    assert second["probe"]["probe_requests"] == 1 and not second["probe"]["complete"]
+
+
+@pytest.mark.parametrize("field,value", [("step", 2), ("candidate_seconds", float("nan")),
+                                        ("reference_seconds", 0), ("candidate_tokens", 1.5),
+                                        ("reference_tokens", 3), ("extra", 1)])
+def test_restore_checks_pending_prefix_evidence(monkeypatch, field, value):
+    service, prompt, connect = pooled_service(monkeypatch)
+    connect(service)
+    service.serve(prompt, 4, seed=92)
+    state = service.state_dict()
+    state["pending_live_probes"][0][field] = value
+    with pytest.raises(ValueError, match="pending prefix"):
+        cold.ColdStartService(model(), fit(), service.config, gate_prompts=[prompt]).load_state_dict(state)
+
+
+def test_legacy_state_with_an_empty_prefix_pool_restores():
+    service = cold.ColdStartService(model(), fit())
+    state = service.state_dict()
+    del state["pending_live_probes"], state["controller"]["live_probe_requests"]
+    restored = cold.ColdStartService(model(), fit())
+    restored.load_state_dict(state)
+    assert restored.pending_live_probes == []

@@ -164,8 +164,14 @@ python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
 回答交付后、进入重放区之前，只额外运行相同提示、种子和输出上限的候选分支。
 前缀计时的新增开销记入 `validation_capture`，候选检查与参数切换记入 `validation`。
 投机服务启用后，后续发布继续使用独立门控题上的 AR／服务版本／候选版本比较。
+`--live-probe-requests` 指定同一候选版本在多少个实际请求上汇总 AR 前缀检查，默认 1。
+取值大于 1 时，检查在请求开始之前根据已积累额度决定，候选参数在整组评估期间保持固定。
+全部配对完成后，按两条路径各自的总 token 数和总耗时计算发布比值，随后恢复训练。
+检查点保存尚待完成的配对统计；恢复沿用相同的评估数量与发布余量。
 性能记录第 9 节沿用上述命令，并设置
 `--offset 768 --heldout-offset 176 --seed 1009 --optimizer-impl fused --initial-probe-factor 1.5 --reuse-ar-prefix`。
+第 9.3 节的三请求对照改用 `--offset 1152 --heldout-offset 200 --seed 1061`，
+并增加 `--live-probe-requests 3 --publish-margin 1.0504`。
 `--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
 保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
 日常服务采用常规 GPU 执行设置。
