@@ -243,6 +243,42 @@ def test_timed_ar_prefix_rejects_invalid_budgets(prefix):
         generate_ar(MaskedAttentionBranch(tiny()), torch.tensor([[3, 7]]), 8, prefix_tokens=prefix)
 
 
+@pytest.mark.parametrize("temperature", [0., 1.])
+@pytest.mark.parametrize("budget", [0, 1, 9])
+def test_speculative_first_token_capture_preserves_sampling_and_forward_counts(temperature, budget):
+    branch = MaskedAttentionBranch(tiny())
+    prompt = torch.tensor([[3, 7, 8]])
+    options = dict(sampling=SamplingConfig(temperature))
+    timed = generate(branch, prompt, budget, prefix_tokens=1,
+                     generator=torch.Generator().manual_seed(811), **options)
+    ordinary = generate(branch, prompt, budget, generator=torch.Generator().manual_seed(811), **options)
+    assert timed.tokens == ordinary.tokens and timed.decode_forwards == ordinary.decode_forwards
+    assert timed.accepted_per_round == ordinary.accepted_per_round
+    assert ordinary.prefix_seconds is None and ordinary.prefix_capture_seconds == 0
+    if budget:
+        assert timed.prefix_tokens == 1 and 0 < timed.prefix_seconds <= timed.seconds
+        assert 0 <= timed.prefix_capture_seconds < timed.seconds
+        ar = generate_ar(branch, prompt, 1, generator=torch.Generator().manual_seed(811), **options)
+        assert timed.tokens[:1] == ar.tokens
+    else:
+        assert timed.prefix_tokens == 0 and timed.prefix_seconds is None
+
+
+def test_speculative_first_token_capture_handles_eos():
+    branch = MaskedAttentionBranch(tiny())
+    prompt = torch.tensor([[3, 7, 8]])
+    eos = int(branch.model(prompt).logits[0, -1].argmax())
+    result = generate(branch, prompt, 9, prefix_tokens=1, eos_id=eos)
+    assert result.tokens == [eos] and result.prefix_tokens == 1 and result.decode_forwards == 0
+    assert 0 < result.prefix_seconds <= result.seconds
+
+
+@pytest.mark.parametrize("prefix", [0, -1, 2, 1., True])
+def test_speculative_prefix_capture_requires_one_integer_token(prefix):
+    with pytest.raises(ValueError, match="prefix"):
+        generate(MaskedAttentionBranch(tiny()), torch.tensor([[3, 7]]), 8, prefix_tokens=prefix)
+
+
 def test_anchor_sampling_bounds_and_cache_prefix_checks():
     tokens = torch.zeros(2, 10, dtype=torch.long)
     anchors = sample_anchors(tokens, 4, 100, generator=torch.Generator().manual_seed(2))

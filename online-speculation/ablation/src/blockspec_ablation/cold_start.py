@@ -216,6 +216,7 @@ class ServiceConfig:
     reuse_ar_prefix: bool = False
     live_probe_requests: int = 1
     full_answer_screen: bool = False
+    reuse_speculative_answers: bool = False
     screen_requests: int = 2
     screen_margin: float = 1.02
     initial_screen_estimate: float = .4
@@ -226,6 +227,9 @@ class ServiceConfig:
             raise ValueError("explicit AR-prefix validation policy required")
         if (type(self.full_answer_screen) is not bool or (self.full_answer_screen and self.reuse_ar_prefix)):
             raise ValueError("select one explicit live validation policy")
+        if (type(self.reuse_speculative_answers) is not bool
+                or (self.reuse_speculative_answers and not self.full_answer_screen)):
+            raise ValueError("speculative answer reuse requires full-answer screening")
         FullAnswerGate(self.screen_requests, self.screen_margin, self.initial_screen_estimate)
         if (type(self.live_probe_requests) is not int or self.live_probe_requests < 1
                 or (self.live_probe_requests > 1 and not self.reuse_ar_prefix)):
@@ -268,7 +272,8 @@ class ColdStartService:
         self.completed_records = [] if retain_records else None
         self.last_probe = None
         self.pending_live_probes = []
-        self.full_gate = (FullAnswerGate(config.screen_requests, config.screen_margin, config.initial_screen_estimate)
+        self.full_gate = (FullAnswerGate(config.screen_requests, config.screen_margin, config.initial_screen_estimate,
+                                         reuse_speculative=config.reuse_speculative_answers)
                           if config.full_answer_screen else None)
         synchronize(model)
         self.budget.charge("setup", time.perf_counter() - start)
@@ -283,8 +288,6 @@ class ColdStartService:
             self.budget.charge(kind, time.perf_counter() - start)
 
     def _generate(self, prompt, tokens, *, speculative, seed, prefix_tokens=None):
-        if speculative and prefix_tokens is not None:
-            raise ValueError("prefix timing uses the AR service path")
         generator = torch.Generator(device=prompt.device).manual_seed(seed)
         method = generate if speculative else generate_ar
         options = {} if prefix_tokens is None else {"prefix_tokens": prefix_tokens}
@@ -322,7 +325,9 @@ class ColdStartService:
                 prefill_seconds=reference.prefix_seconds, sampler=self.sampler, sampling=self.sampling,
                 eos_id=self.model.config.eos_token_id,
                 generator=torch.Generator(device=prompt.device).manual_seed(seed + 300000))
-        return {"step": self.learner.steps, "stage": "screen", "reference_kind": "delivered_ar_full",
+        kind = "delivered_speculative_full" if self.speculating else "delivered_ar_full"
+        return {"step": self.learner.steps, "stage": "screen", "reference_kind": kind,
+                "reference_step": self.learner.serving_step if self.speculating else 0,
                 "reference_tokens": len(reference.tokens),
                 "reference_seconds": reference.seconds - reference.prefix_capture_seconds,
                 "predicted_seconds": measured.predicted_seconds,
@@ -331,14 +336,29 @@ class ColdStartService:
                 "calibration_seconds": measured.calibration_seconds}
 
     def _confirm_live(self, prompt, reference, tokens, seed):
-        with self.learner.candidate():
-            candidate = self._generate(prompt, tokens, speculative=True, seed=seed)
+        pair = {}
+        names = ["candidate", "ar"] if self.speculating else ["candidate"]
+        if self.requests % 2:
+            names.reverse()
+        for name in names:
+            if name == "candidate":
+                with self.learner.candidate():
+                    pair[name] = self._generate(prompt, tokens, speculative=True, seed=seed)
+            else:
+                pair[name] = self._generate(prompt, tokens, speculative=False, seed=seed)
+        candidate = pair["candidate"]
+        ar = pair.get("ar", reference)
         ratio = candidate.tps / reference.tps
-        return {"step": self.learner.steps, "stage": "confirmation", "reference_kind": "delivered_ar_full",
-                "ratio": ratio, "candidate_over_ar": ratio, "paired_ratios": [ratio], "complete": True,
-                "passed": ratio >= self.config.publish_margin, "fallback": False,
+        versus_ar = candidate.tps / ar.tps
+        kind = "delivered_speculative_full" if self.speculating else "delivered_ar_full"
+        return {"step": self.learner.steps, "stage": "confirmation", "reference_kind": kind,
+                "reference_step": self.learner.serving_step if self.speculating else 0,
+                "ratio": ratio, "candidate_over_ar": versus_ar, "paired_ratios": [ratio], "complete": True,
+                "passed": min(ratio, versus_ar) >= self.config.publish_margin,
+                "fallback": self.speculating and reference.tps < ar.tps,
                 "reference_tokens": len(reference.tokens), "reference_seconds": reference.seconds,
-                "candidate_tokens": len(candidate.tokens), "candidate_seconds": candidate.seconds}
+                "candidate_tokens": len(candidate.tokens), "candidate_seconds": candidate.seconds,
+                "ar_tokens": len(ar.tokens), "ar_seconds": ar.seconds}
 
     def _pool_live_probe(self, probe):
         """Fixed-count aggregate for one frozen learning version."""
@@ -414,7 +434,8 @@ class ColdStartService:
         admission_start = time.perf_counter()
         speculative = self.speculating
         full_action = None
-        if (self.full_gate is not None and not speculative and max_new_tokens > 1
+        use_full_gate = self.full_gate is not None and (not speculative or self.config.reuse_speculative_answers)
+        if (use_full_gate and max_new_tokens > 1
                 and self.learner.steps >= self.next_probe and self.budget.admits(self.full_gate.estimate)):
             full_action = "confirmation" if self.full_gate.ready else "screen"
         live_trial = (self.config.reuse_ar_prefix and not speculative
@@ -466,8 +487,8 @@ class ColdStartService:
                     self.next_probe = self.learner.steps + self.config.probe_every
             else:
                 probe = self._timed("validation", lambda: self._confirm_live(prompt, result, max_new_tokens, seed))
-                self.full_gate.confirmed()
-                self._complete_probe(probe, self.budget.spent - before, 1)
+                self.full_gate.confirmed(ar_tps=probe["ar_tokens"] / probe["ar_seconds"])
+                self._complete_probe(probe, self.budget.spent - before, 2 if speculative else 1)
 
         def collect():
             if result.tokens:
@@ -495,7 +516,8 @@ class ColdStartService:
             self.step_estimate = max(elapsed * 1.2, self.step_estimate * .8)
             update["seconds"] = elapsed
         if (probe is None and self.gate_prompts and self.learner.steps >= self.next_probe
-                and (self.speculating or not (self.config.reuse_ar_prefix or self.config.full_answer_screen))):
+                and ((self.speculating and not self.config.reuse_speculative_answers)
+                     or not (self.config.reuse_ar_prefix or self.config.full_answer_screen))):
             if self.budget.admits(self._probe_cost()):
                 before = self.budget.spent
                 legs = 3 if self.speculating else 2
@@ -591,10 +613,11 @@ class ColdStartService:
         full_gate = None
         if self.config.full_answer_screen:
             full_gate = FullAnswerGate(self.config.screen_requests, self.config.screen_margin,
-                                       self.config.initial_screen_estimate)
+                                       self.config.initial_screen_estimate,
+                                       reuse_speculative=self.config.reuse_speculative_answers)
             full_gate.load_state_dict(state.get("full_answer_gate"), step=state["step"],
                                        next_probe=state["next_probe"], speculating=state["speculating"],
-                                       requests=state.get("requests", 0))
+                                       requests=state.get("requests", 0), serving_step=state["serving_step"])
         elif state.get("full_answer_gate") is not None:
             raise ValueError("full-answer gate requires the matching controller policy")
         records = state.get("replay", [])

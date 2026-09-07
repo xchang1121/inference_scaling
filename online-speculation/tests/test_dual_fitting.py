@@ -1,4 +1,5 @@
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -32,6 +33,20 @@ def model():
     config = replace(DualViewConfig(), vocab_size=13, hidden_size=16, intermediate_size=32,
                      num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=1, head_dim=8)
     return DualViewDecoder(config)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_frozen_fingerprint_buffer_matches_the_serialized_byte_definition(dtype):
+    network = model().to(dtype=dtype)
+    digest = hashlib.sha256()
+    for name, value in network.named_parameters():
+        if ".attention.draft." not in name:
+            digest.update((name + str(tuple(value.shape)) + str(value.dtype)).encode())
+            digest.update(value.detach().contiguous().cpu().view(torch.uint8).numpy().tobytes())
+    assert frozen_fingerprint(network) == digest.hexdigest()
+    with torch.no_grad():
+        network.embedding.weight[0, 0].add_(1)
+    assert frozen_fingerprint(network) != digest.hexdigest()
 
 
 def ar_fixture(folder, source, *, sharded=False):

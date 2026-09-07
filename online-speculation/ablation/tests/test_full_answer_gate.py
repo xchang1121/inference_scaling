@@ -51,13 +51,13 @@ def test_invalid_gate_configuration(count, margin, cost):
         FullAnswerGate(count, margin, cost)
 
 
-def service_fixture(monkeypatch, *, screen_ratio=1.25, candidate_seconds=8., screen_count=2):
+def service_fixture(monkeypatch, *, screen_ratio=1.25, candidate_seconds=8., screen_count=2, reuse_speculative=False):
     ticks = [0.]
     monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
     prompt = torch.tensor([[2, 3, 5]])
     fit = FitConfig(steps=8, warmup_steps=0, sequence_length=12, anchors_per_sequence=2, learning_rate=.001)
     settings = cold.ServiceConfig(probe_every=1, full_answer_screen=True, screen_requests=screen_count,
-                                    publish_margin=1.05)
+                                    publish_margin=1.05, reuse_speculative_answers=reuse_speculative)
     service = cold.ColdStartService(decoder(), fit, settings, gate_prompts=[prompt])
     service.learner.steps = 1
     service.budget.delivered(1000.)
@@ -89,8 +89,9 @@ def service_fixture(monkeypatch, *, screen_ratio=1.25, candidate_seconds=8., scr
     return service, prompt, ticks, calls, connect
 
 
-def test_actual_full_confirmation_is_required_and_all_costs_are_charged(monkeypatch):
-    service, prompt, ticks, calls, connect = service_fixture(monkeypatch)
+@pytest.mark.parametrize("reuse_speculative", [False, True])
+def test_actual_full_confirmation_is_required_and_all_costs_are_charged(monkeypatch, reuse_speculative):
+    service, prompt, ticks, calls, connect = service_fixture(monkeypatch, reuse_speculative=reuse_speculative)
     original = {name: p.clone() for name, p in service.model.named_parameters()}
     for index in range(2):
         _, row = service.serve(prompt, 4, seed=10 + index)
@@ -105,6 +106,7 @@ def test_actual_full_confirmation_is_required_and_all_costs_are_charged(monkeypa
     assert service.budget.spent == pytest.approx(8.42)
     assert calls == [(False, 10, 1, 0), (False, 11, 1, 1), (False, 12, None, 2), (True, 12, None, 2)]
     assert len(service.replay.records) == 3
+    assert service.full_gate.ar_tps == pytest.approx(.4)
     assert all(torch.equal(p, original[name]) for name, p in service.model.named_parameters()
                if ".attention.draft." not in name)
 
@@ -250,3 +252,165 @@ def test_recomputed_support_failure_returns_ar_and_charges_attempt(monkeypatch):
     assert service.budget.costs["screening"] == pytest.approx(.2)
     assert all(torch.equal(p, original[name]) for name, p in service.learner.execution.items())
     assert len(service.replay.records) == 1
+
+
+def live_update_fixture(monkeypatch, *, baseline_seconds=8., candidate_seconds=6., ar_seconds=10.,
+                        predicted_seconds=6., screen_count=2):
+    ticks = [0.]
+    monkeypatch.setattr(cold.time, "perf_counter", lambda: ticks[0])
+    prompt = torch.tensor([[2, 3, 5]])
+    fit = FitConfig(steps=8, warmup_steps=0, sequence_length=12, anchors_per_sequence=2)
+    config = cold.ServiceConfig(probe_every=1, full_answer_screen=True, reuse_speculative_answers=True,
+                                screen_requests=screen_count, publish_margin=1.05)
+    service = cold.ColdStartService(decoder(), fit, config, gate_prompts=[prompt])
+    service.learner.steps = 1
+    service.learner.publish()
+    service.learner.steps, service.next_probe, service.speculating = 2, 2, True
+    with torch.no_grad():
+        for p in service.learner.master.values():
+            p.add_(.01)
+    service.full_gate.confirmed(ar_tps=4 / ar_seconds)
+    service.budget.delivered(10000.)
+    service.tokens, service.requests, service.step_estimate = 4000, 100, 1e6
+    calls = []
+
+    def connect(current):
+        def generate(prompt, tokens, *, speculative, seed, prefix_tokens=None):
+            name = ("candidate" if current.learner.serving_step == current.learner.steps else "baseline"
+                    ) if speculative else "ar"
+            calls.append((name, seed, prefix_tokens, len(current.replay.records)))
+            elapsed = {"baseline": baseline_seconds, "candidate": candidate_seconds, "ar": ar_seconds}[name]
+            capture = .01 if prefix_tokens else 0.
+            ticks[0] += elapsed + capture
+            return Generation(tokens=[4, 5, 6, 7], seconds=elapsed + capture,
+                               prefix_tokens=1 if prefix_tokens else 0,
+                               prefix_seconds=2. if prefix_tokens else None, prefix_capture_seconds=capture)
+        monkeypatch.setattr(current, "_generate", generate)
+
+    def screen(*args, **kwargs):
+        assert kwargs["prefill_seconds"] == 2. and kwargs["output_budget"] == 4
+        ticks[0] += .2
+        return SimpleNamespace(predicted_seconds=predicted_seconds, measured_seconds=.2,
+                                score_seconds=.1, calibration_seconds=.1,
+                                work=SimpleNamespace(decode_forwards=torch.tensor(2.)))
+    monkeypatch.setattr(cold, "estimate_trace", screen)
+    connect(service)
+    return service, prompt, ticks, calls, connect
+
+
+def test_post_publication_reuses_delivered_answer_and_reserves_two_extra_paths(monkeypatch):
+    service, prompt, ticks, calls, connect = live_update_fixture(monkeypatch)
+    for seed in (10, 11):
+        _, row = service.serve(prompt, 4, seed=seed)
+        assert row["mode"] == "speculative" and not row["probe"]["passed"]
+        assert row["probe"]["reference_step"] == 1 and row["probe"]["step"] == 2
+        assert row["probe"]["candidate_over_serving"] == pytest.approx(8 / 6)
+        assert "candidate_over_ar" not in row["probe"]
+    assert service.full_gate.ready and service.full_gate.estimate == pytest.approx(1.2 * (6 + 10))
+    assert service.learner.serving_step == 1 and service.learner.steps == 2
+    assert service.budget.costs["validation_capture"] == pytest.approx(.02)
+    _, row = service.serve(prompt, 4, seed=12)
+    probe = row["probe"]
+    assert probe["passed"] and probe["ratio"] == pytest.approx(8 / 6)
+    assert probe["candidate_over_ar"] == pytest.approx(10 / 6)
+    assert probe["reference_kind"] == "delivered_speculative_full" and probe["reference_step"] == 1
+    assert service.learner.serving_step == 2 and service.speculating and service.next_probe == 3
+    assert service.budget.spent == pytest.approx(16.42) and service.probe_legs == 2
+    assert calls == [("baseline", 10, 1, 0), ("baseline", 11, 1, 1),
+                     ("baseline", 12, None, 2), ("ar", 12, None, 2), ("candidate", 12, None, 2)]
+    assert len(service.replay.records) == 3
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_live_update_pending_evidence_and_serving_identity_restore(monkeypatch, count):
+    service, prompt, ticks, calls, connect = live_update_fixture(monkeypatch, screen_count=count)
+    service.serve(prompt, 4, seed=10)
+    state = service.state_dict()
+    restored = cold.ColdStartService(decoder(), service.fit, service.config, gate_prompts=[prompt])
+    restored.load_state_dict(state)
+    connect(restored)
+    assert restored.full_gate.state_dict() == service.full_gate.state_dict()
+    assert restored.learner.serving_step == 1 and restored.learner.steps == 2
+    if count == 2:
+        restored.serve(prompt, 4, seed=11)
+    _, row = restored.serve(prompt, 4, seed=12)
+    assert row["probe"]["passed"] and restored.learner.serving_step == 2
+    expected = ["candidate", "ar"] if count == 1 else ["ar", "candidate"]
+    assert [item[0] for item in calls[-2:]] == expected
+
+
+@pytest.mark.parametrize("baseline,candidate,ar,passed,fallback", [
+    (8., 8.5, 10., False, False), (11., 12., 10., False, True),
+    (10., 8., 7., False, True), (8., 6., 10., True, False),
+])
+def test_live_confirmation_checks_both_serving_and_ar(monkeypatch, baseline, candidate, ar, passed, fallback):
+    service, prompt, ticks, calls, connect = live_update_fixture(
+        monkeypatch, baseline_seconds=baseline, candidate_seconds=candidate, ar_seconds=ar, screen_count=1)
+    old = {name: p.clone() for name, p in service.learner.execution.items()}
+    service.serve(prompt, 4, seed=10)
+    _, row = service.serve(prompt, 4, seed=11)
+    assert row["probe"]["passed"] is passed and row["probe"]["fallback"] is fallback
+    assert service.speculating is (passed or not fallback) and service.next_probe == 3
+    assert service.full_gate.ar_tps == pytest.approx(4 / ar)
+    assert service.budget.costs["validation"] == pytest.approx(candidate + ar)
+    if not passed:
+        assert service.learner.serving_step == 1
+        assert all(torch.equal(p, old[name]) for name, p in service.learner.execution.items())
+
+
+def test_post_publication_unfunded_trial_holds_versions_and_does_not_run_independent_gate(monkeypatch):
+    service, prompt, ticks, calls, connect = live_update_fixture(monkeypatch, screen_count=1)
+    service.serve(prompt, 4, seed=10)
+    service.budget.charge("reservation", service.budget.credit - .01)
+    before = copy.deepcopy(service.full_gate.state_dict())
+    _, row = service.serve(prompt, 4, seed=11)
+    assert row["probe"] is None and row["update"] is None
+    assert len(calls) == 2 and calls[-1][:3] == ("baseline", 11, None)
+    assert service.full_gate.state_dict() == before
+    assert service.learner.steps == 2 and service.learner.serving_step == 1
+
+
+def test_post_publication_cost_overrun_stops_new_maintenance(monkeypatch):
+    service, prompt, ticks, calls, connect = live_update_fixture(
+        monkeypatch, screen_count=1, candidate_seconds=15.)
+    service.serve(prompt, 4, seed=10)
+    service.budget.charge("reservation", service.budget.credit - service.full_gate.estimate)
+    _, row = service.serve(prompt, 4, seed=11)
+    assert row["budget"]["debt_seconds"] > 0 and not row["probe"]["passed"]
+    assert service.speculating and service.learner.serving_step == 1
+    _, row = service.serve(prompt, 4, seed=12)
+    assert row["update"] is None and row["probe"] is None
+
+
+@pytest.mark.parametrize("mutation", ["serving_version", "reference_version", "mode", "ar_rate", "missing_rate"])
+def test_live_screen_restore_rejects_mismatched_reference(monkeypatch, mutation):
+    service, prompt, ticks, calls, connect = live_update_fixture(monkeypatch)
+    service.serve(prompt, 4, seed=10)
+    state = service.state_dict()
+    if mutation == "serving_version":
+        state["serving_step"] = 2
+    elif mutation == "reference_version":
+        state["full_answer_gate"]["pending"][0]["reference_step"] = 0
+    elif mutation == "mode":
+        state["speculating"] = False
+    elif mutation == "ar_rate":
+        state["full_answer_gate"]["ar_tps"] = 0.
+    else:
+        state["full_answer_gate"].pop("ar_tps")
+    with pytest.raises(ValueError):
+        cold.ColdStartService(decoder(), service.fit, service.config, gate_prompts=[prompt]).load_state_dict(state)
+
+
+def test_live_reuse_requires_explicit_full_answer_policy():
+    with pytest.raises(ValueError):
+        cold.ServiceConfig(reuse_speculative_answers=True)
+    with pytest.raises(ValueError):
+        cold.ServiceConfig(full_answer_screen=True, reuse_speculative_answers=1)
+
+
+def test_screen_cannot_mix_serving_versions():
+    gate = FullAnswerGate(reuse_speculative=True)
+    gate.confirmed(ar_tps=1.)
+    gate.observe({**example(step=3), "reference_step": 1}, .2)
+    with pytest.raises(ValueError):
+        gate.observe({**example(step=3), "reference_step": 2}, .2)

@@ -119,8 +119,11 @@ def generate_ar(branch, prompt, max_new_tokens, *, sampling=SamplingConfig(), eo
 
 @torch.no_grad()
 def generate(branch, prompt, max_new_tokens, *, block_size=None, sampling=SamplingConfig(),
-             eos_id=None, generator=None, audit_cache=False, sampler=None, feedback=None):
+             eos_id=None, generator=None, audit_cache=False, sampler=None, feedback=None, prefix_tokens=None):
     _check(branch, prompt, max_new_tokens, eos_id)
+    if prefix_tokens is not None and (type(prefix_tokens) is not int or prefix_tokens != 1
+                                      or not branch.initial_ar_token):
+        raise ValueError("speculative prefix timing requires the first exact AR token")
     block_size = branch.default_block_size if block_size is None else block_size
     if block_size < 2:
         raise ValueError("parallel drafting requires block_size >= 2")
@@ -143,6 +146,12 @@ def generate(branch, prompt, max_new_tokens, *, block_size=None, sampling=Sampli
         token = sampler.sample_ar(logits[0, -1], generator)
         result.prefill_forwards = result.prefill_output_tokens = 1
         stopped = _append(result, [token], max_new_tokens, eos_id)
+        if prefix_tokens is not None:
+            marker = time.perf_counter()
+            _sync(prompt.device)
+            result.prefix_tokens = 1
+            result.prefix_seconds = time.perf_counter() - start
+            result.prefix_capture_seconds = time.perf_counter() - marker
         if feedback is not None:
             feedback.commit([token])
         anchor = prompt.new_tensor([[token]])

@@ -131,6 +131,7 @@ def run(args):
                               probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed,
                               initial_probe_factor=args.initial_probe_factor, reuse_ar_prefix=args.reuse_ar_prefix,
                               live_probe_requests=args.live_probe_requests, full_answer_screen=args.full_answer_screen,
+                              reuse_speculative_answers=args.reuse_speculative_answers,
                               screen_requests=args.screen_requests, screen_margin=args.screen_margin,
                               initial_screen_estimate=args.initial_screen_estimate)
     training_texts = prompt_texts(args.prompts, args.requests, offset=args.offset)
@@ -163,7 +164,7 @@ def run(args):
     prior = dict(prior_tokens=0, prior_generation=0., prior_extra=0.)
     if args.resume is not None:
         start = time.perf_counter()
-        state = torch.load(args.resume, map_location="cpu", weights_only=True)
+        state = torch.load(args.resume, map_location="cpu", weights_only=True, mmap=True)
         read_seconds = time.perf_counter() - start
         service.load_state_dict(state)
         service.budget.charge("resume_io", read_seconds)
@@ -301,6 +302,7 @@ def main():
     parser.add_argument("--initial-probe-factor", type=float, default=2.)
     parser.add_argument("--reuse-ar-prefix", action="store_true")
     parser.add_argument("--full-answer-screen", action="store_true")
+    parser.add_argument("--reuse-speculative-answers", action="store_true")
     parser.add_argument("--screen-margin", type=float, default=1.02)
     parser.add_argument("--initial-screen-estimate", type=float, default=.4)
     parser.add_argument("--optimizer-impl", choices=("single", "fused"), default="single")
