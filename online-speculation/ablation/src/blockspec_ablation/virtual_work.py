@@ -17,6 +17,10 @@ from blockspec.sampling import SamplingConfig, probabilities
 from blockspec.state import trim_cache
 
 
+class TraceSupportError(ValueError):
+    """A delivered token has zero mass in a recomputed, truncated target law."""
+
+
 @dataclass
 class VirtualWork:
     draft_visits: Tensor
@@ -88,6 +92,8 @@ The first output comes from a common AR prefill. This recurrence is differentiab
 
 def inverse_acceptance(proposal_logp, target_logp):
     """P(accept | delivered x); delivered tokens must have positive target mass."""
+    if torch.isneginf(target_logp).any():
+        raise TraceSupportError("delivered tokens require positive recomputed target mass")
     if (proposal_logp.shape != target_logp.shape or not torch.isfinite(target_logp).all()
             or torch.isnan(proposal_logp).any() or torch.isposinf(proposal_logp).any()
             or (proposal_logp > 0).any() or (target_logp > 0).any()):

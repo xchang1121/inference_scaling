@@ -168,10 +168,21 @@ python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
 取值大于 1 时，检查在请求开始之前根据已积累额度决定，候选参数在整组评估期间保持固定。
 全部配对完成后，按两条路径各自的总 token 数和总耗时计算发布比值，随后恢复训练。
 检查点保存尚待完成的配对统计；恢复沿用相同的评估数量与发布余量。
+`--full-answer-screen` 选择完整回答的两级检查，与 `--reuse-ar-prefix` 分开使用。
+`--screen-requests` 指定固定候选版本汇总的回答数，默认 2；`--screen-margin` 为筛选门槛，默认 1.02。
+筛选通过后，后续另一条获准请求按实际输出上限完整生成候选，以 `--publish-margin` 的实测速度余量决定发布。
+`--initial-screen-estimate` 提供首次评估的秒数预留，默认 0.4；后续按实测评估耗时预留。
+筛选和确认均在请求开始前申请额度；通过筛选后的完整测速预留使用已完成评估的平均预测耗时，
+另计候选临时切换成本并保留 20% 余量。超出预留的部分进入累计欠额。
+该策略恢复时保留部分筛选统计和待确认版本；投机服务启用后的检查使用独立门控题。
 性能记录第 9 节沿用上述命令，并设置
 `--offset 768 --heldout-offset 176 --seed 1009 --optimizer-impl fused --initial-probe-factor 1.5 --reuse-ar-prefix`。
 第 9.3 节的三请求对照改用 `--offset 1152 --heldout-offset 200 --seed 1061`，
 并增加 `--live-probe-requests 3 --publish-margin 1.0504`。
+第 11 节沿用冷启动命令，设置
+`--offset 1536 --heldout-offset 256 --seed 1301 --optimizer-impl fused --initial-probe-factor 1.5`，
+并采用 `--full-answer-screen --screen-requests 2 --screen-margin 1.02 --publish-margin 1.0504 --probe-tokens 256`。
+该组使用完整回答策略，前缀复用选项保持默认值。
 `--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
 保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
 日常服务采用常规 GPU 执行设置。

@@ -130,7 +130,9 @@ def run(args):
     settings = ServiceConfig(fraction=args.fraction, replay_records=args.replay_records, probe_every=args.probe_every,
                               probe_tokens=args.probe_tokens, publish_margin=args.publish_margin, seed=args.seed,
                               initial_probe_factor=args.initial_probe_factor, reuse_ar_prefix=args.reuse_ar_prefix,
-                              live_probe_requests=args.live_probe_requests)
+                              live_probe_requests=args.live_probe_requests, full_answer_screen=args.full_answer_screen,
+                              screen_requests=args.screen_requests, screen_margin=args.screen_margin,
+                              initial_screen_estimate=args.initial_screen_estimate)
     training_texts = prompt_texts(args.prompts, args.requests, offset=args.offset)
     heldout_texts = prompt_texts(args.heldout_prompts, args.heldout_count, offset=args.heldout_offset)
     gate_texts = prompt_texts(args.heldout_prompts, args.gate_count, offset=args.heldout_offset + args.heldout_count)
@@ -289,7 +291,7 @@ def main():
     for name, default in (("requests", 128), ("offset", 0), ("tokens", 256), ("steps", 64), ("warmup-steps", 4),
                            ("sequence-length", 256), ("anchors", 4), ("batch-size", 1), ("accumulate", 1), ("chunk-rows", 32),
                            ("replay-records", 128), ("probe-every", 8), ("probe-tokens", 32), ("gate-count", 2),
-                           ("live-probe-requests", 1),
+                           ("live-probe-requests", 1), ("screen-requests", 2),
                            ("heldout-count", 4), ("heldout-tokens", 128), ("heldout-offset", 64),
                            ("curve-every", 4), ("log-every", 8), ("seed", 743)):
         parser.add_argument("--" + name, type=int, default=default)
@@ -298,6 +300,9 @@ def main():
     parser.add_argument("--publish-margin", type=float, default=1.10)
     parser.add_argument("--initial-probe-factor", type=float, default=2.)
     parser.add_argument("--reuse-ar-prefix", action="store_true")
+    parser.add_argument("--full-answer-screen", action="store_true")
+    parser.add_argument("--screen-margin", type=float, default=1.02)
+    parser.add_argument("--initial-screen-estimate", type=float, default=.4)
     parser.add_argument("--optimizer-impl", choices=("single", "fused"), default="single")
     parser.add_argument("--offline-replay", action="store_true")
     parser.add_argument("--offline-control", action="store_true")

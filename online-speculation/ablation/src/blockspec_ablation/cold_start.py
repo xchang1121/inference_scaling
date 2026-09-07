@@ -16,6 +16,8 @@ from blockspec.parallel.sampling import ProposalSampler
 from blockspec.parallel.training import distillation_update, sample_anchors
 from blockspec.parallel.weights import source_identity
 from blockspec.sampling import SamplingConfig
+from .full_answer_gate import FullAnswerGate
+from .virtual_work import TraceSupportError, estimate_trace
 
 
 def synchronize(model):
@@ -213,11 +215,18 @@ class ServiceConfig:
     initial_probe_factor: float = 2.
     reuse_ar_prefix: bool = False
     live_probe_requests: int = 1
+    full_answer_screen: bool = False
+    screen_requests: int = 2
+    screen_margin: float = 1.02
+    initial_screen_estimate: float = .4
 
     def __post_init__(self):
         TimeBudget(self.fraction)
         if type(self.reuse_ar_prefix) is not bool:
             raise ValueError("explicit AR-prefix validation policy required")
+        if (type(self.full_answer_screen) is not bool or (self.full_answer_screen and self.reuse_ar_prefix)):
+            raise ValueError("select one explicit live validation policy")
+        FullAnswerGate(self.screen_requests, self.screen_margin, self.initial_screen_estimate)
         if (type(self.live_probe_requests) is not int or self.live_probe_requests < 1
                 or (self.live_probe_requests > 1 and not self.reuse_ar_prefix)):
             raise ValueError("positive live probe count requires AR-prefix validation")
@@ -237,7 +246,7 @@ class ColdStartService:
 
     def __init__(self, model, fit, config=ServiceConfig(), *, gate_prompts=(), sampling=SamplingConfig(1.),
                  sampler=None, retain_batches=False, retain_records=False, deterministic_updates=False):
-        if config.reuse_ar_prefix and not gate_prompts:
+        if (config.reuse_ar_prefix or config.full_answer_screen) and not gate_prompts:
             raise ValueError("reference prompts are required for post-publication trials")
         synchronize(model)
         start = time.perf_counter()
@@ -259,6 +268,8 @@ class ColdStartService:
         self.completed_records = [] if retain_records else None
         self.last_probe = None
         self.pending_live_probes = []
+        self.full_gate = (FullAnswerGate(config.screen_requests, config.screen_margin, config.initial_screen_estimate)
+                          if config.full_answer_screen else None)
         synchronize(model)
         self.budget.charge("setup", time.perf_counter() - start)
 
@@ -303,6 +314,31 @@ class ColdStartService:
         elif probe.get("fallback", False):
             self.speculating = False
         self.next_probe = self.learner.steps + self.config.probe_every
+
+    def _screen_live(self, prompt, reference, tokens, seed):
+        with self.learner.candidate():
+            measured = estimate_trace(
+                self.branch, prompt, prompt.new_tensor(reference.tokens), output_budget=tokens,
+                prefill_seconds=reference.prefix_seconds, sampler=self.sampler, sampling=self.sampling,
+                eos_id=self.model.config.eos_token_id,
+                generator=torch.Generator(device=prompt.device).manual_seed(seed + 300000))
+        return {"step": self.learner.steps, "stage": "screen", "reference_kind": "delivered_ar_full",
+                "reference_tokens": len(reference.tokens),
+                "reference_seconds": reference.seconds - reference.prefix_capture_seconds,
+                "predicted_seconds": measured.predicted_seconds,
+                "virtual_forwards": float(measured.work.decode_forwards),
+                "evaluation_seconds": measured.measured_seconds, "score_seconds": measured.score_seconds,
+                "calibration_seconds": measured.calibration_seconds}
+
+    def _confirm_live(self, prompt, reference, tokens, seed):
+        with self.learner.candidate():
+            candidate = self._generate(prompt, tokens, speculative=True, seed=seed)
+        ratio = candidate.tps / reference.tps
+        return {"step": self.learner.steps, "stage": "confirmation", "reference_kind": "delivered_ar_full",
+                "ratio": ratio, "candidate_over_ar": ratio, "paired_ratios": [ratio], "complete": True,
+                "passed": ratio >= self.config.publish_margin, "fallback": False,
+                "reference_tokens": len(reference.tokens), "reference_seconds": reference.seconds,
+                "candidate_tokens": len(candidate.tokens), "candidate_seconds": candidate.seconds}
 
     def _pool_live_probe(self, probe):
         """Fixed-count aggregate for one frozen learning version."""
@@ -377,6 +413,10 @@ class ColdStartService:
         synchronize(self.model)
         admission_start = time.perf_counter()
         speculative = self.speculating
+        full_action = None
+        if (self.full_gate is not None and not speculative and max_new_tokens > 1
+                and self.learner.steps >= self.next_probe and self.budget.admits(self.full_gate.estimate)):
+            full_action = "confirmation" if self.full_gate.ready else "screen"
         live_trial = (self.config.reuse_ar_prefix and not speculative
                       and self.learner.steps >= self.next_probe)
         prefunded = live_trial and self.config.live_probe_requests > 1
@@ -384,6 +424,8 @@ class ColdStartService:
         if prefunded:
             live_trial = estimate_before is not None and self.budget.admits(estimate_before)
         options = {"prefix_tokens": self.config.probe_tokens} if live_trial else {}
+        if full_action == "screen":
+            options = {"prefix_tokens": 1}
         self.budget.charge("scheduling", time.perf_counter() - admission_start)
         start = time.perf_counter()
         result = self._generate(prompt, max_new_tokens, speculative=speculative, seed=seed, **options)
@@ -404,6 +446,27 @@ class ColdStartService:
                 before = self.budget.spent
                 probe = self._timed("validation", lambda: self._pool_live_probe(self._probe_live(
                     prompt, result, min(max_new_tokens, self.config.probe_tokens), seed)))
+                self._complete_probe(probe, self.budget.spent - before, 1)
+
+        if full_action and result.tokens:
+            before = self.budget.spent
+            if full_action == "screen":
+                try:
+                    measured = self._timed("screening", lambda: self._screen_live(prompt, result, max_new_tokens, seed))
+                except TraceSupportError:
+                    # Truncated/greedy laws can change support under batched BF16
+                    # rounding. The AR answer is complete and remains the response.
+                    self.full_gate.confirmed()
+                    probe = {"step": self.learner.steps, "stage": "screen", "passed": False,
+                             "complete": True, "failure_kind": "recomputed_target_support"}
+                else:
+                    probe = self.full_gate.observe(measured, self.budget.spent - before)
+                self.last_probe = probe
+                if probe["complete"]:
+                    self.next_probe = self.learner.steps + self.config.probe_every
+            else:
+                probe = self._timed("validation", lambda: self._confirm_live(prompt, result, max_new_tokens, seed))
+                self.full_gate.confirmed()
                 self._complete_probe(probe, self.budget.spent - before, 1)
 
         def collect():
@@ -432,7 +495,7 @@ class ColdStartService:
             self.step_estimate = max(elapsed * 1.2, self.step_estimate * .8)
             update["seconds"] = elapsed
         if (probe is None and self.gate_prompts and self.learner.steps >= self.next_probe
-                and (self.speculating or not self.config.reuse_ar_prefix)):
+                and (self.speculating or not (self.config.reuse_ar_prefix or self.config.full_answer_screen))):
             if self.budget.admits(self._probe_cost()):
                 before = self.budget.spent
                 legs = 3 if self.speculating else 2
@@ -460,6 +523,7 @@ class ColdStartService:
                 "serving": portable(self.learner.execution), "step": self.learner.steps,
                 "serving_step": self.learner.serving_step, "speculating": self.speculating,
                 "pending_live_probes": [dict(row) for row in self.pending_live_probes],
+                "full_answer_gate": None if self.full_gate is None else self.full_gate.state_dict(),
                 "gate_prompts": portable(self.gate_prompts),
                 "replay": portable(list(self.replay.records)), "replay_rng": self.replay.rng.get_state(),
                 "anchors_rng": self.replay.anchors_rng.get_state(), "stream": self.summary(),
@@ -504,7 +568,8 @@ class ColdStartService:
                 or type(state.get("next_probe")) is not int or state["next_probe"] < 1
                 or type(state.get("probe_legs", 2)) is not int
                 or state.get("probe_legs", 2) not in (1, 2, 3)
-                or (state.get("probe_legs", 2) == 1 and not self.config.reuse_ar_prefix)
+                or (state.get("probe_legs", 2) == 1
+                    and not (self.config.reuse_ar_prefix or self.config.full_answer_screen))
                 or type(state.get("requests", 0)) is not int or state.get("requests", 0) < 0
                 or any(not math.isfinite(state.get(key, -1)) or state[key] < 0
                        for key in ("step_estimate", "probe_estimate")) or state["step_estimate"] == 0):
@@ -523,6 +588,15 @@ class ColdStartService:
                        or any(not positive(row[key]) for key in ("reference_seconds", "candidate_seconds"))
                        for row in pending)):
             raise ValueError("bounded same-version pending prefix trials required")
+        full_gate = None
+        if self.config.full_answer_screen:
+            full_gate = FullAnswerGate(self.config.screen_requests, self.config.screen_margin,
+                                       self.config.initial_screen_estimate)
+            full_gate.load_state_dict(state.get("full_answer_gate"), step=state["step"],
+                                       next_probe=state["next_probe"], speculating=state["speculating"],
+                                       requests=state.get("requests", 0))
+        elif state.get("full_answer_gate") is not None:
+            raise ValueError("full-answer gate requires the matching controller policy")
         records = state.get("replay", [])
         if len(records) > self.config.replay_records or any(
                 not isinstance(x, torch.Tensor) or x.ndim != 2 or x.shape[0] != 1 or x.dtype != torch.long
@@ -551,6 +625,7 @@ class ColdStartService:
         self.step_estimate, self.probe_estimate = state["step_estimate"], state["probe_estimate"]
         self.probe_legs = state.get("probe_legs", 2)
         self.pending_live_probes = [dict(row) for row in pending]
+        self.full_gate = full_gate
         self.replay.records.clear()
         self.replay.records.extend(x.detach().cpu().clone() for x in records)
         self.replay.rng, self.replay.anchors_rng = replay_rng, anchor_rng
