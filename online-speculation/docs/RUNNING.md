@@ -188,6 +188,7 @@ python ablation/scripts/cold_start.py --model "$DUAL_MODEL_DIR" \
 `--offset 1536 --heldout-offset 256 --seed 1301 --optimizer-impl fused --initial-probe-factor 1.5`，
 并采用 `--full-answer-screen --screen-requests 2 --screen-margin 1.02 --publish-margin 1.0504 --probe-tokens 256`。
 该组使用完整回答策略，前缀复用选项保持默认值。
+第 13 节沿用第 11 节设置，将 `--requests` 改为 768，并增加 `--reuse-speculative-answers`。
 `--offline-control` 在流结束后从 AR 重新初始化，向离线训练提供全部已交付记录，
 保持优化器配置、更新次数和监督行数相同，并在同一留出集比较学习质量。对照训练单独计时。
 日常服务采用常规 GPU 执行设置。
@@ -207,6 +208,7 @@ AR 服务阶段复用该请求的实际生成时间；发布投机版本后，�
 它保留重放区、优化器、学习与服务参数版本和累计时间账本。
 `state_dict()` 与 `load_state_dict()` 在请求边界保存／恢复；恢复新增的复制与校验成本进入账本。
 恢复入口采用映射读取，随后访问权重、校验完整内容和装载优化器的时间一并计入恢复账本。
+CPU 上的 FP32、BF16 参数通过分块指数域检查识别所有无穷与非数编码；其他类型使用张量有限值检查。
 命令行通过 `--resume "$COLD_STATE"` 恢复，沿用原有训练、采样、控制器配置及相同的发布门控题；
 `--offset` 指定接续的输入请求位置。训练步数表示整条学习流的总调度长度。
 

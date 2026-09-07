@@ -16,6 +16,7 @@ from blockspec.parallel.sampling import ProposalSampler
 from blockspec.parallel.training import distillation_update, sample_anchors
 from blockspec.parallel.weights import source_identity
 from blockspec.sampling import SamplingConfig
+from .checkpoint_validation import all_finite
 from .full_answer_gate import FullAnswerGate
 from .virtual_work import TraceSupportError, estimate_trace
 
@@ -580,7 +581,7 @@ class ColdStartService:
         for key, expected in (("master", self.learner.master), ("serving", self.learner.execution)):
             saved = state.get(key, {})
             if saved.keys() != expected.keys() or any(
-                    p.shape != expected[name].shape or p.dtype != expected[name].dtype or not torch.isfinite(p).all()
+                    p.shape != expected[name].shape or p.dtype != expected[name].dtype or not all_finite(p)
                     for name, p in saved.items()):
                 raise ValueError("matching finite learning and serving tensors required")
         if (type(state.get("step")) is not int or not 0 <= state["step"] <= self.fit.steps
