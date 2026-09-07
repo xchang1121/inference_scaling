@@ -17,7 +17,7 @@ $`\theta`$ 表示模型参数，$`v`$ 表示下一枚 token 的取值。整段�
 
 ```math
 p_\theta(x_{1:T})
-=\prod_{t=1}^{T}p_\theta(x_t\mid x_{<t}).
+=\prod_{t=1}^{T}p_\theta(x_t\mid x_{\lt t}).
 ```
 
 这里把序列起始标记视为已给定的上下文。
@@ -38,7 +38,7 @@ p_\theta(x_{1:T})
 给定已提交的上下文 $`s`$，起草器提出 $`m`$ 个候选 $`y_1,\ldots,y_m`$。其分布记为
 
 ```math
-q_i(v)=q(v\mid s,y_{<i}).
+q_i(v)=q(v\mid s,y_{\lt i}).
 ```
 
 这是统一记法。独立并行起草器的 $`q_i`$ 在采样整块之前就已确定；串行起草器的 $`q_i`$ 还依赖前面实际抽出的候选。
@@ -46,7 +46,7 @@ q_i(v)=q(v\mid s,y_{<i}).
 把候选接到上下文后，自回归模型的一次因果前向可同时计算
 
 ```math
-p_i(v)=p_\theta(v\mid s,y_{<i}),\quad i=1,\ldots,m+1.
+p_i(v)=p_\theta(v\mid s,y_{\lt i}),\quad i=1,\ldots,m+1.
 ```
 
 最后一行用于整块全部通过时的额外抽样。候选使未来位置的输入暂时可用，从而把多次串行生成变成一次并行评分。概率校正沿候选顺序检查，遇到首次拒绝时生成一枚替代 token，并结束本轮。通过的连续前缀进入最终输出。
@@ -79,8 +79,8 @@ Q=HW_Q,\qquad K=HW_K,\qquad V=HW_V.
 单个注意力头的输出为
 
 ```math
-\operatorname{Attn}(Q,K,V;M)
-=\operatorname{softmax}\left(\frac{QK^\top}{\sqrt d}+M\right)V.
+\mathrm{Attn}(Q,K,V;M)
+=\mathrm{softmax}\left(\frac{QK^\top}{\sqrt d}+M\right)V.
 ```
 
 $`d`$ 是每个头的维度；掩码 $`M`$ 在可见位置取 $`0`$，屏蔽位置取 $`-\infty`$。查询与键的内积决定各位置的权重，值向量按这些权重求和。实现同时包含逐头 Q/K 归一化和旋转位置编码 RoPE。RoPE 将当前位置的 Q/K 乘以由位置确定的旋转矩阵，编码相对位置关系。
@@ -88,8 +88,8 @@ $`d`$ 是每个头的维度；掩码 $`M`$ 在可见位置取 $`0`$，屏蔽位�
 一段已提交历史的各层 $`K,V`$ 可以缓存。每次续写只计算新输入的 Q/K/V，并读取历史键值。记位置 $`a`$ 之前的真实 AR 缓存为
 
 ```math
-C_a=\{K_{<a}^{\mathrm{AR},\ell},
-      V_{<a}^{\mathrm{AR},\ell}\}_{\ell=1}^{L},
+C_a=\{K_{\lt a}^{\mathrm{AR},\ell},
+      V_{\lt a}^{\mathrm{AR},\ell}\}_{\ell=1}^{L},
 ```
 
 其中 $`L`$ 是层数。缓存中的向量由 AR 路径在真实已提交前缀上计算。
@@ -118,18 +118,18 @@ $`W_O`$ 是注意力输出投影，$`\gamma_Q,\gamma_K`$ 是逐头归一化的�
 
 ```math
 \begin{aligned}
-\widetilde H&=H+\operatorname{Attn}_{\phi}(\operatorname{RMSNorm}(H),C),\\
+\widetilde H&=H+\mathrm{Attn}_{\phi}(\mathrm{RMSNorm}(H),C),\\
 H'&=\widetilde H+
-\left[\operatorname{SiLU}(\widehat H W_g)\odot(\widehat H W_u)\right]W_d,
-\quad \widehat H=\operatorname{RMSNorm}(\widetilde H).
+\left[\mathrm{SiLU}(\widehat H W_g)\odot(\widehat H W_u)\right]W_d,
+\quad \widehat H=\mathrm{RMSNorm}(\widetilde H).
 \end{aligned}
 ```
 
-$`\odot`$ 表示逐元素乘法，$`\operatorname{SiLU}(x)=x/(1+e^{-x})`$；
+$`\odot`$ 表示逐元素乘法，$`\mathrm{SiLU}(x)=x/(1+e^{-x})`$；
 RMSNorm 用向量的均方根调整尺度，再乘可学习缩放：
 
 ```math
-\operatorname{RMSNorm}(h)
+\mathrm{RMSNorm}(h)
 =\gamma\odot\frac{h}{\sqrt{d^{-1}\sum_{j=1}^{d}h_j^2+\epsilon}}.
 ```
 
@@ -149,16 +149,16 @@ RMSNorm 用向量的均方根调整尺度，再乘可学习缩放：
 
 ```math
 z=(x_a,\underbrace{\mathtt{MASK},\ldots,\mathtt{MASK}}_{B-1}),
-\qquad \operatorname{pos}(z_j)=a+j.
+\qquad \mathrm{pos}(z_j)=a+j.
 ```
 
 在第 $`\ell`$ 层，当前块的起草查询访问
 
 ```math
 Q_D^\ell,\qquad
-K_{\mathrm{all}}^\ell=[K_{<a}^{\mathrm{AR},\ell};K_D^\ell],
+K_{\mathrm{all}}^\ell=[K_{\lt a}^{\mathrm{AR},\ell};K_D^\ell],
 \qquad
-V_{\mathrm{all}}^\ell=[V_{<a}^{\mathrm{AR},\ell};V_D^\ell].
+V_{\mathrm{all}}^\ell=[V_{\lt a}^{\mathrm{AR},\ell};V_D^\ell].
 ```
 
 历史部分全部可见，块内各位置互相可见。双向交互让各个掩码位置交换上下文信息。
@@ -187,7 +187,7 @@ q_\phi(y_{1:m}\mid x_{\le a})=\prod_{i=1}^{m}q_{\phi,i}(y_i\mid x_{\le a},z).
 
 ```math
 \text{验证输入}=(x_a,y_1,\ldots,y_m),\qquad
-p_i=p_\theta(\cdot\mid x_{\le a},y_{<i}).
+p_i=p_\theta(\cdot\mid x_{\le a},y_{\lt i}).
 ```
 
 这一结构及其参数映射依据[双视图起草论文](https://arxiv.org/abs/2605.12825)和[参考源码](https://github.com/chiennv2000/orthrus)核对，注意力、缓存、训练与解码循环由本仓独立实现。
@@ -196,14 +196,14 @@ p_i=p_\theta(\cdot\mid x_{\le a},y_{<i}).
 
 ### 3.1 单个位置的接受与替代
 
-暂时固定当前前缀，并省略位置下标。候选 $`Y\sim q`$，独立抽取 $`U\sim\operatorname{Uniform}[0,1)`$。接受条件为
+暂时固定当前前缀，并省略位置下标。候选 $`Y\sim q`$，独立抽取 $`U\sim\mathrm{Uniform}[0,1)`$。接受条件为
 
 ```math
-U<\alpha(Y),\qquad
+U\lt \alpha(Y),\qquad
 \alpha(v)=\min\left(1,\frac{p(v)}{q(v)}\right).
 ```
 
-被实际抽到的候选满足 $`q(Y)>0`$。一个取值 $`v`$ 通过接受分支进入输出的概率为
+被实际抽到的候选满足 $`q(Y)\gt 0`$。一个取值 $`v`$ 通过接受分支进入输出的概率为
 
 ```math
 q(v)\alpha(v)=\min(q(v),p(v)).
@@ -244,13 +244,13 @@ r(v)=\frac{(p(v)-q(v))_+}{Z}.
 
 ### 3.2 连续前缀与整段输出
 
-假设本轮首次拒绝发生在第 $`j`$ 个候选。前 $`j-1`$ 个候选进入输出，第 $`j`$ 个位置按 $`r_j`$ 抽样，随后结束本轮。此时已经计算的 $`p_j`$ 使用上下文 $`s,y_{<j}`$，其中所有候选都已接受，因此正好是该输出位置所需的目标分布。
+假设本轮首次拒绝发生在第 $`j`$ 个候选。前 $`j-1`$ 个候选进入输出，第 $`j`$ 个位置按 $`r_j`$ 抽样，随后结束本轮。此时已经计算的 $`p_j`$ 使用上下文 $`s,y_{\lt j}`$，其中所有候选都已接受，因此正好是该输出位置所需的目标分布。
 
 若 $`m`$ 个候选全部通过，使用最后一行 $`p_{m+1}`$ 再抽取一枚 token。把单位置的质量守恒结论依次应用于每个输出前缀，可得
 
 ```math
 \Pr(X_{1:n}=x_{1:n}\mid s)
-=\prod_{i=1}^{n}p_\theta(x_i\mid s,x_{<i}).
+=\prod_{i=1}^{n}p_\theta(x_i\mid s,x_{\lt i}).
 ```
 
 证明中的归纳条件是：在给定到达当前位置之前的信息后，当前候选按照保存的 $`q_i`$ 抽样，接受随机数与候选抽样独立，校正使用对应前缀上的 $`p_i`$。
@@ -288,10 +288,10 @@ A=\min\bigl(\{i-1:U_i\ge a_i\}\cup\{m\}\bigr).
 
 $`A`$ 是连续接受数。张量执行通过一次索引归约找到 $`A`$，选择 $`p_{A+1}`$，并在需要时减去对应 $`q_{A+1}`$。索引 $`i`$ 从一开始；代码数组从零开始。
 
-替代抽样采用指数竞争。对每个词表项独立抽取 $`E_v\sim\operatorname{Exp}(1)`$，令
+替代抽样采用指数竞争。对每个词表项独立抽取 $`E_v\sim\mathrm{Exp}(1)`$，令
 
 ```math
-X=\arg\min_{v:q(v)>0}\frac{E_v}{q(v)}
+X=\arg\min_{v:q(v)\gt 0}\frac{E_v}{q(v)}
 =\arg\max_v\frac{q(v)}{E_v}.
 ```
 
@@ -342,7 +342,7 @@ C_{\mathrm{next}}
 
 ```math
 z^{(b)}=(x_{a_b},\mathtt{MASK},\ldots,\mathtt{MASK}),
-\qquad \operatorname{pos}(z_j^{(b)})=a_b+j.
+\qquad \mathrm{pos}(z_j^{(b)})=a_b+j.
 ```
 
 干净序列先经过冻结 AR 路径，产生所有层的历史 KV 与教师表示。所有起草块拼成长度 $`KB`$ 的序列，通过显式掩码隔离信息。
@@ -350,10 +350,10 @@ z^{(b)}=(x_{a_b},\mathtt{MASK},\ldots,\mathtt{MASK}),
 设起草查询属于块 $`b`$，键来自干净序列位置 $`k`$ 或某个起草块 $`b'`$。可见条件为
 
 ```math
-\operatorname{visible}(b,k,b')
+\mathrm{visible}(b,k,b')
 =
 \begin{cases}
-k<a_b,& \text{键来自干净序列},\\
+k\lt a_b,& \text{键来自干净序列},\\
 b'=b,& \text{键来自起草序列}.
 \end{cases}
 ```
@@ -366,10 +366,10 @@ b'=b,& \text{键来自起草序列}.
 
 ```math
 \begin{aligned}
-p_{b,j}&=\operatorname{softmax}
+p_{b,j}&=\mathrm{softmax}
  \bigl(u^{\mathrm{AR}}_{a_b+j}\bigr)
  =p_\theta(\cdot\mid x_{\le a_b+j}),\\
-q_{b,j}&=\operatorname{softmax}(u^{D}_{b,j}),
+q_{b,j}&=\mathrm{softmax}(u^{D}_{b,j}),
 \qquad j=0,\ldots,B-2.
 \end{aligned}
 ```
@@ -437,7 +437,7 @@ EOS 和输出预算会进一步缩短实际到达的位置范围。每个反馈�
 
 ```math
 H_\ast=F(z,C),\qquad
-u_\phi=\operatorname{Head}(G_\phi(H_\ast,C)).
+u_\phi=\mathrm{Head}(G_\phi(H_\ast,C)).
 ```
 
 $`F`$、共享 AR 参数与缓存均固定，故 $`\partial H_\ast/\partial\phi=0`$。保存 $`H_\ast`$ 后，重放后段计算得到的梯度为
@@ -473,7 +473,7 @@ D(p_{b,i},q_{\phi,b,i})}
 训练维护 FP32 主权重 $`\phi^{32}`$，前向使用对应的执行精度：
 
 ```math
-\phi^{\mathrm{exec}}=\operatorname{cast}(\phi^{32}).
+\phi^{\mathrm{exec}}=\mathrm{cast}(\phi^{32}).
 ```
 
 反向通过转换后的主权重计算，梯度裁剪后由 AdamW 更新。更新完成后，把主权重复制到起草执行张量，供下一轮使用。AR 与共享参数始终固定。这使低精度推理中的小幅学习增量可以在 FP32 中累积。
@@ -490,7 +490,7 @@ D_{\mathrm{TV}}(p,q)=\frac12\sum_v|q(v)-p(v)|
 直接联系平均接受率。固定当前位置的历史，减小 TV 等价于提高这一位置的平均接受概率。
 这条等式对实际送入概率校正的 $`p,q`$ 成立。温度一、完整词表的设置使训练与校正使用同一对分布。
 
-TV 的梯度也可以直接写出。令 $`g(v)=\operatorname{sign}(q(v)-p(v))`$，
+TV 的梯度也可以直接写出。令 $`g(v)=\mathrm{sign}(q(v)-p(v))`$，
 相等处选取次梯度 $`g(v)=0`$。把 softmax 导数
 $`\partial q(v)/\partial u(w)=q(v)(\mathbf1[v=w]-q(w))`$ 代入，得到
 
@@ -502,8 +502,8 @@ $`\partial q(v)/\partial u(w)=q(v)(\mathbf1[v=w]-q(w))`$ 代入，得到
 \end{aligned}
 ```
 
-当 $`q(w)<p(w)`$ 时，这个导数小于或等于零，对 logits 直接做梯度下降会提高该位置的分数；
-$`q(w)>p(w)`$ 时方向相反。所有分数通过 softmax 的归一化耦合，词表总概率始终为一。
+当 $`q(w)\lt p(w)`$ 时，这个导数小于或等于零，对 logits 直接做梯度下降会提高该位置的分数；
+$`q(w)\gt p(w)`$ 时方向相反。所有分数通过 softmax 的归一化耦合，词表总概率始终为一。
 完整词表上的教师概率同时参与损失和梯度。
 
 在线窗口固定已经获得的上下文与教师分布，把这次反馈作为一次局部拟合问题。
@@ -589,7 +589,7 @@ A=\sum_{k=1}^{m}\mathbf1[A\ge k],
 S_k=
 \sum_{y_{1:k}}
 \prod_{i=1}^{k}
-\min\bigl(p_i(y_i\mid s,y_{<i}),q_i(y_i\mid s,y_{<i})\bigr).
+\min\bigl(p_i(y_i\mid s,y_{\lt i}),q_i(y_i\mid s,y_{\lt i})\bigr).
 ```
 
 基础并行起草的 $`q_i`$ 对块内已采样前缀保持固定；上式同时适用于带条件依赖的起草器。定义
@@ -626,17 +626,17 @@ C_0=C_D+C_V+C_S.
 忽略有限请求的启动和末尾效应，在稳定轮次统计下，吞吐近似为
 
 ```math
-\operatorname{TPS}_{\mathrm{spec}}
+\mathrm{TPS}_{\mathrm{spec}}
 =\frac{\mathbb E[N]}{\mathbb E[C_0]},
 \qquad
-\operatorname{Speedup}
+\mathrm{Speedup}
 =\frac{C_{\mathrm{AR}}\mathbb E[N]}{\mathbb E[C_0]}.
 ```
 
 这里使用总产出除以总时间，对应长期“每轮平均产出／每轮平均耗时”。若每 $`s`$ 轮更新一次、每次更新耗时 $`C_U`$、平均反馈开销为 $`C_F`$，则
 
 ```math
-\operatorname{TPS}_{\mathrm{online}}
+\mathrm{TPS}_{\mathrm{online}}
 \approx
 \frac{\mathbb E[N_{\mathrm{online}}]}
 {\mathbb E[C_0^{\mathrm{online}}]+C_F+C_U/s}.
@@ -646,7 +646,7 @@ C_0=C_D+C_V+C_S.
 
 ```math
 \frac{\mathbb E[N_{\mathrm{online}}]}{\mathbb E[N_{\mathrm{fixed}}]}
->
+\gt
 1+\frac{C_F+C_U/s}{\mathbb E[C_0]}.
 ```
 
