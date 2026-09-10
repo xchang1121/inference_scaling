@@ -22,6 +22,7 @@ from experiments.shared.model_cli import add_model_output_arguments, apply_model
 from experiments.shared.reasoning_results import comparison_coverage, summarize_reasoning
 from experiments.arllm.reasoning_methods import (
     REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
+    sampling_policy, reward_temperature,
 )
 from experiments.arllm.request_reuse import ColdCostRequestReplay
 from inference_scaling.arllm.backends.loader import load_backend_from_config, close_backend
@@ -71,8 +72,7 @@ def run_base(backend, judge, problem, config, seed, mode):
     current, budget = generation_config_for_prompt(current, len(prompt), [backend])
     sample, cost = measured_call(backend, lambda: backend.sample_batch([GenerationRequest(
         prefix=prompt, max_new_tokens=budget["effective_max_new_tokens"],
-        sampling=SamplingConfig(temperature=float(current["sampling"]["temperature"]),
-                                eos_token_id=backend.tokenizer.eos_token_id),
+        sampling=sampling_policy(current, eos_token_id=backend.tokenizer.eos_token_id),
         seed=seed, request_id=f"base:{problem.identifier}:{mode}:{seed}",
     )])[0])
     segments = visible_output(backend, prompt, sample.token_ids, current)
@@ -245,6 +245,10 @@ def main():
         raise ValueError("compare fixes both baseline modes; use --stage base for a single-mode baseline")
     config = tomllib.loads(args.config.read_text(encoding="utf-8"))
     apply_model_output_overrides(config, args)
+    sampling_policy(config, require_full_support=args.stage == "compare")
+    if args.stage == "compare":
+        for source in args.rewards:
+            reward_temperature(source, config)
     if args.stage == "compare" and config.get("output", {}).get("sampling_scope", "full") != "full":
         raise ValueError("this reward comparison uses full-sequence IS/MH; select --sampling-scope full")
     selection = stratified_subset(load_math500(args.data, download=bool(args.allow_download)), **{

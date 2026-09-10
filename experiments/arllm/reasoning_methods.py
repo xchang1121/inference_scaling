@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from functools import lru_cache
+from math import isfinite
 import time
 from typing import Any, Callable
 
@@ -17,6 +18,18 @@ from inference_scaling.shared.stepwise import normalize_log_weights, categorical
 from inference_scaling.shared.rng import SeedStream
 
 REWARDS = ("self_consistency", "sequence_log_probability", "consilience")
+
+
+def sampling_policy(config: dict[str, Any], *, eos_token_id: int | None = None,
+                    require_full_support: bool = False) -> SamplingConfig:
+    options = config.get("sampling", {})
+    unknown = set(options) - {"temperature", "top_p", "top_k"}
+    if unknown:
+        raise ValueError(f"unsupported comparison sampling options: {sorted(unknown)}")
+    policy = SamplingConfig(**options, eos_token_id=eos_token_id)
+    if require_full_support and (policy.top_p != 1.0 or policy.top_k is not None):
+        raise ValueError("the shared IS/MH reference policy requires top_p=1 and no top_k truncation")
+    return policy
 
 
 def budget_plan(slots: int, candidates: int, prompt_tokens: int, maximum: int) -> dict[str, int]:
@@ -91,9 +104,12 @@ class FrozenAnswerReward:
 
 def reward_temperature(source: str, config: dict[str, Any]) -> float:
     options = config.get("comparison", {})
-    return float(options.get(source + "_temperature", {
+    value = float(options.get(source + "_temperature", {
         "self_consistency": 0.25, "sequence_log_probability": 10.0, "consilience": 2.0,
     }[source]))
+    if not isfinite(value) or value <= 0:
+        raise ValueError(f"{source} reward temperature must be finite and positive")
+    return value
 
 
 def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
@@ -118,7 +134,8 @@ def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
         costs.extend(generation_cost(len(prompt), len(tokens), backend.parameter_count) for tokens in pilot_tokens)
     elif source == "sequence_log_probability":
         # Generation already returned the exact actual-policy log probabilities.
-        rewards = [sum(logs) for _, logs in tokens_and_logs]
+        reward = model_reward_from_config(backend, config, source=source)
+        rewards = [reward.scale * sum(logs) for _, logs in tokens_and_logs]
     elif source == "consilience":
         rewards = []
         reward = model_reward_from_config(backend, config, source=source)
@@ -153,7 +170,7 @@ def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
 
 def compare_mh(*, backend, judge, prompt, reference, config, plan, pilots, source, seed, render_output):
     length = plan["max_new_tokens"]
-    temperature = float(config["sampling"]["temperature"])
+    temperature = sampling_policy(config, require_full_support=True).temperature
     reference_backend = ReferencePolicyBackend(backend, temperature=temperature)
     stopped = AbsorbingEOSBackend(reference_backend, backend.tokenizer.eos_token_id, absorbing_after=len(prompt))
     pilot_cost = {}

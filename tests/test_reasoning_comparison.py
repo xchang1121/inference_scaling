@@ -3,7 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.reasoning_methods import budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS
+from experiments.arllm.reasoning_methods import (
+    budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS, sampling_policy, reward_temperature,
+)
 from experiments.arllm.request_reuse import ColdCostRequestReplay
 from experiments.arllm.reasoning_benchmark import build_parser
 from inference_scaling.arllm.types import GenerationRequest
@@ -76,6 +78,33 @@ def test_comparison_cli_keeps_generic_model_and_output_options():
                                      "--max-new-tokens", "32768", "--thinking-format", "json"])
     assert args.model == "org/model" and args.model_revision == "fixed" and args.allow_download
     assert args.max_new_tokens == 32768 and args.thinking_format == "json"
+
+
+def test_sampling_configuration_is_applied_and_mh_support_is_checked():
+    config = {"sampling": {"temperature": 0.7, "top_p": 0.9, "top_k": 20}}
+    assert sampling_policy(config, eos_token_id=2) == SamplingConfig(0.7, 0.9, 20, 2)
+    with pytest.raises(ValueError, match="reference policy"):
+        sampling_policy(config, require_full_support=True)
+    with pytest.raises(ValueError, match="unsupported"):
+        sampling_policy({"sampling": {"temprature": 0.6}})
+
+
+@pytest.mark.parametrize("temperature", [0.0, -1.0, float("inf"), float("nan")])
+def test_reward_temperature_rejects_invalid_values(temperature):
+    with pytest.raises(ValueError, match="finite and positive"):
+        reward_temperature("consilience", {"comparison": {"consilience_temperature": temperature}})
+
+
+def test_sir_log_probability_reuses_the_configured_reward_scale():
+    backend = CountedBackend()
+    samples = [{"token_ids": (0, 2), "token_logprobs": (-0.4, -1.0)},
+               {"token_ids": (1, 2), "token_logprobs": (-1.4, -1.0)}]
+    result = compare_sir(backend=backend, judge=Judge(), reference="0", prompt=(0,),
+        config={"reward": {"logprob_scale": 2.0}}, plan=budget_plan(128, 2, 1, 16),
+        samples=samples, pilots=[], source="sequence_log_probability", seed=8,
+        render_output=output, score_cache={})
+    assert result["rewards"] == [-2.8, -4.8]
+    assert backend.snapshot().score_forward_token_slots == 0
 
 
 def output(backend, prompt, tokens, config):
