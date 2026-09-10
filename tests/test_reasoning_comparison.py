@@ -15,6 +15,11 @@ from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBacken
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackendSnapshot
 
 
+def test_cache_growth_is_an_explicit_execution_option():
+    assert build_parser().parse_args([]).cache_growth_tokens == 0
+    assert build_parser().parse_args(["--cache-growth-tokens", "512"]).cache_growth_tokens == 512
+
+
 class CountedBackend(TabularAutoregressiveBackend):
     parameter_count = 7
     tokenizer = SimpleNamespace(eos_token_id=2, get_vocab=lambda: {"a": 0, "b": 1, "eos": 2})

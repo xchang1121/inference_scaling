@@ -126,6 +126,7 @@ class TransformersBackend:
         forward_parameters = inspect.signature(inspected_model.forward).parameters
         self._supports_logits_to_keep = "logits_to_keep" in forward_parameters
         self._model_lock = threading.RLock()
+        self.cache_growth_tokens = 0
         self._statistics_lock = threading.Lock()
         self._sample_calls = 0
         self._score_calls = 0
@@ -1250,13 +1251,27 @@ class TransformersBackend:
     def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
         return None if self._draft_tree is None else self._draft_tree.snapshot()
 
+    def configure_cache_growth(self, block_tokens: int = 0) -> None:
+        """Select lossless, bounded-slack KV storage for subsequent decoding calls."""
+        if not isinstance(block_tokens, int) or block_tokens < 0:
+            raise ValueError("cache growth block must be a non-negative integer")
+        if block_tokens:
+            from inference_scaling.arllm.backends.growing_cache import validate_cache_growth_support
+            validate_cache_growth_support()
+        with self._model_lock:
+            self.cache_growth_tokens = block_tokens
+
     def _prefill_model(self, *, input_ids, attention_mask, position_ids, use_cache=True,
                        return_dict=True, logits_to_keep=1):
-        return prefill_causal_model(
+        output = prefill_causal_model(
             self.model, input_ids, attention_mask, position_ids,
             chunk_size=self.score_chunk_size, logits_to_keep=logits_to_keep,
             supports_logits_to_keep=self._supports_logits_to_keep,
         )
+        if self.cache_growth_tokens:
+            from inference_scaling.arllm.backends.growing_cache import block_allocated_cache
+            output.past_key_values = block_allocated_cache(output.past_key_values, self.cache_growth_tokens)
+        return output
 
     def _stream_score(
         self, request: ScoreRequest, continuation: TokenSequence, *,

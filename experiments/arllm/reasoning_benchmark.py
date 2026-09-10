@@ -82,6 +82,7 @@ def run_base(backend, judge, problem, config, seed, mode):
             "thinking_tokens": len(segments["thinking_token_ids"]),
             "thinking_status": segments["thinking_status"], "content": segments["content_text"],
             "thinking": segments["thinking_text"], "cost": cost, "generation_budget": budget,
+            "execution_cache_growth_tokens": getattr(backend, "cache_growth_tokens", 0),
             "ended_by_eos": segments["ended_by_eos"], **grade}
 
 
@@ -235,6 +236,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-complete", action="store_true", help="reject summaries with missing problem/method/budget records")
     parser.add_argument("--reuse-identical-requests", action=argparse.BooleanOptionalAction, default=True,
                         help="reuse identical MH requests across comparisons while retaining their cold-run token/FLOP charge")
+    parser.add_argument("--cache-growth-tokens", type=int, default=0,
+                        help="optional legacy Transformers KV allocation block; zero uses standard storage")
     parser.add_argument("--draws", type=_positive_integer, default=1)
     parser.add_argument("--seed", type=int, default=20260911)
     parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"],
@@ -262,6 +265,13 @@ def main():
         raise ValueError("compare fixes both baseline modes; use --stage base for a single-mode baseline")
     config = tomllib.loads(args.config.read_text(encoding="utf-8"))
     apply_model_output_overrides(config, args)
+    if args.cache_growth_tokens < 0:
+        raise ValueError("cache growth block must be non-negative")
+    if args.cache_growth_tokens and config.get("runtime", {}).get("backend", "transformers") != "transformers":
+        raise ValueError("cache growth is a Transformers-only execution option")
+    if args.cache_growth_tokens:
+        from inference_scaling.arllm.backends.growing_cache import validate_cache_growth_support
+        validate_cache_growth_support()
     sampling_policy(config, require_full_support=args.stage == "compare")
     if args.stage == "compare":
         for source in args.rewards:
@@ -304,6 +314,9 @@ def main():
             print(f"validated {len(problems)} {args.split} problems; model weights were not loaded", flush=True)
             return
         backend = load_backend_from_config(config["models"]["base"], config, role="base")
+        if args.cache_growth_tokens:
+            backend.configure_cache_growth(args.cache_growth_tokens)
+            print(f"execution cache_growth_tokens={args.cache_growth_tokens}; sampling and cost accounting unchanged", flush=True)
         # Warm-up is excluded from per-problem inference cost.
         warm = model_prompt(backend, "Compute 1 + 1.", config)
         backend.sample_batch([GenerationRequest(warm, 2, SamplingConfig(), args.seed, "warmup")])
