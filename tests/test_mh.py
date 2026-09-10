@@ -25,6 +25,24 @@ def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):
     return {sequence: weight / normalizer for sequence, weight in weights.items()}
 
 
+def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
+    from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
+    backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
+    sampling = SamplingConfig(temperature=0.8)
+    explicit = MHConfig(alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3)
+    full_stage = MHConfig(alpha=2, total_length=7, block_size=7, steps_per_block=3)
+    left = run_mh_chain(backend, (), explicit, sampling, SeedStream(2))
+    right = run_mh_chain(backend, (), full_stage, sampling, SeedStream(2))
+    assert left == right
+    assert left.attempts == 3
+    assert {step.stage_length for step in left.trace} == {7}
+    reward = lambda prompt, completion: float(sum(completion))
+    left = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=2, iterations=3), sampling, reward, SeedStream(2))
+    right = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=7, steps_per_block=3), sampling, reward, SeedStream(2))
+    assert left == right
+    assert left.attempts == 3
+
+
 def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
     result = run_mh_chain(

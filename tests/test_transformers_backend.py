@@ -36,11 +36,11 @@ class ConstantLogitModel(torch.nn.Module):
     def device(self):
         return self.constant_logits.device
 
-    def forward(self, input_ids, **_kwargs):
+    def forward(self, input_ids, logits_to_keep=0, **_kwargs):
         self.forward_calls += 1
         batch, length = input_ids.shape
         logits = self.constant_logits.expand(batch, length, -1).clone()
-        logits_to_keep = int(_kwargs.get("logits_to_keep", 0))
+        logits_to_keep = int(logits_to_keep)
         self.logits_to_keep_calls.append(logits_to_keep)
         if logits_to_keep:
             logits = logits[:, -logits_to_keep:, :]

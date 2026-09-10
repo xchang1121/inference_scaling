@@ -22,6 +22,8 @@ from inference_scaling.arllm.acceleration import (
 )
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.compute import dense_forward_flops
+from inference_scaling.shared.model_loading import model_identity
+from inference_scaling.arllm.backends.causal_scoring import iter_causal_logits, prefill_causal_model
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     GenerationRequest,
@@ -87,6 +89,7 @@ class TransformersBackend:
         model_id: str | None = None,
         device: str | Any | None = None,
         max_score_batch_size: int = 8,
+        score_chunk_size: int = 256,
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> None:
@@ -113,15 +116,15 @@ class TransformersBackend:
         if max_score_batch_size <= 0:
             raise ValueError("max_score_batch_size must be positive")
         self.max_score_batch_size = int(max_score_batch_size)
+        if score_chunk_size <= 0:
+            raise ValueError("score_chunk_size must be positive")
+        self.score_chunk_size = int(score_chunk_size)
         bos_token_id = getattr(tokenizer, "bos_token_id", None)
         self.bos_token_id = None if bos_token_id is None else int(bos_token_id)
         self.model.eval()
-        forward_parameters = inspect.signature(model.forward).parameters
-        self._supports_logits_to_keep = (
-            "logits_to_keep" in forward_parameters
-            or getattr(getattr(model, "config", None), "model_type", None)
-            in {"qwen2", "qwen3"}
-        )
+        inspected_model = model.get_base_model() if callable(getattr(model, "get_base_model", None)) else model
+        forward_parameters = inspect.signature(inspected_model.forward).parameters
+        self._supports_logits_to_keep = "logits_to_keep" in forward_parameters
         self._model_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
         self._sample_calls = 0
@@ -134,8 +137,10 @@ class TransformersBackend:
         self._generation_forward_token_slots = 0
         self._score_forward_token_slots = 0
         self._estimated_dense_forward_flops = 0
-        self._parameter_count = sum(
-            parameter.numel() for parameter in model.parameters()
+        count_parameters = getattr(model, "num_parameters", None)
+        self._parameter_count = (
+            int(count_parameters()) if callable(count_parameters)
+            else sum(parameter.numel() for parameter in model.parameters())
         )
         self._speculation = speculation
         self._draft_tree = (
@@ -164,9 +169,18 @@ class TransformersBackend:
         device: str = "cuda",
         dtype: str = "float32",
         cache_dir: str | None = None,
+        revision: str | None = None,
+        tokenizer_name_or_path: str | None = None,
+        tokenizer_revision: str | None = None,
+        adapter_revision: str | None = None,
+        device_map: str | dict[str, Any] | None = None,
+        attn_implementation: str | None = None,
+        model_kwargs: Mapping[str, Any] | None = None,
+        tokenizer_kwargs: Mapping[str, Any] | None = None,
         local_files_only: bool = False,
         trust_remote_code: bool = False,
         max_score_batch_size: int = 8,
+        score_chunk_size: int = 256,
         draft_tree: RolloutTokenTree | None = None,
         speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> "TransformersBackend":
@@ -178,9 +192,11 @@ class TransformersBackend:
                 "TransformersBackend.from_pretrained requires transformers"
             ) from error
         try:
-            torch_dtype = getattr(torch_module, dtype)
+            torch_dtype = "auto" if dtype == "auto" else getattr(torch_module, dtype)
         except AttributeError as error:
             raise ValueError(f"unknown torch dtype {dtype!r}") from error
+        if dtype not in {"auto", "float32", "float16", "bfloat16", "float64"}:
+            raise ValueError(f"unsupported floating-point dtype {dtype!r}")
         if torch_dtype != torch_module.float32:
             warnings.warn(
                 "Reduced-precision logits can depend noticeably on batch shape. "
@@ -188,20 +204,29 @@ class TransformersBackend:
                 RuntimeWarning,
                 stacklevel=2,
             )
+        common = {
+            "cache_dir": cache_dir, "local_files_only": local_files_only,
+            "trust_remote_code": trust_remote_code,
+        }
+        extra_model, extra_tokenizer = dict(model_kwargs or {}), dict(tokenizer_kwargs or {})
+        reserved = {"dtype", "torch_dtype", "cache_dir", "revision", "local_files_only",
+                    "trust_remote_code", "device_map", "attn_implementation", "token"}
+        collision = reserved.intersection(extra_model.keys() | extra_tokenizer.keys())
+        if collision:
+            raise ValueError("loading kwargs duplicate explicit options or contain credentials: " + ", ".join(sorted(collision)))
         tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            trust_remote_code=trust_remote_code,
+            tokenizer_name_or_path or model_name_or_path,
+            revision=tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
+            **common, **extra_tokenizer,
         )
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
-        model_load_kwargs = {
-            "cache_dir": cache_dir,
-            "local_files_only": local_files_only,
-            "trust_remote_code": trust_remote_code,
-        }
+        model_load_kwargs = {**common, "revision": revision, **extra_model}
+        if device_map is not None:
+            model_load_kwargs["device_map"] = device_map
+        if attn_implementation is not None:
+            model_load_kwargs["attn_implementation"] = attn_implementation
         try:
             model = AutoModelForCausalLM.from_pretrained(
                 model_name_or_path,
@@ -230,18 +255,27 @@ class TransformersBackend:
                 model,
                 adapter_name_or_path,
                 local_files_only=local_files_only,
+                revision=adapter_revision,
+                cache_dir=cache_dir,
             )
-        model.to(torch_module.device(device))
+        if device_map is None and not getattr(model, "is_quantized", False):
+            model.to(torch_module.device(device))
+        input_device = device
+        if device_map is not None:
+            input_device = model.get_input_embeddings().weight.device
+            if str(input_device) == "meta":
+                raise ValueError("input embeddings require a concrete device for manual decoding")
         return cls(
             model,
             tokenizer,
-            model_id=(
-                model_name_or_path
-                if adapter_name_or_path is None
-                else f"{model_name_or_path}+adapter:{adapter_name_or_path}"
+            model_id=model_identity(
+                model_name_or_path, adapter_name_or_path, revision=revision,
+                adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
+                tokenizer_revision=tokenizer_revision,
             ),
-            device=device,
+            device=input_device,
             max_score_batch_size=max_score_batch_size,
+            score_chunk_size=score_chunk_size,
             draft_tree=draft_tree,
             speculation=speculation,
         )
@@ -249,6 +283,12 @@ class TransformersBackend:
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    def close(self) -> None:
+        """Release model and draft references after all dispatchers have stopped."""
+        with self._model_lock:
+            self.model = None
+            self._draft_tree = None
 
     @property
     def parameter_count(self) -> int:
@@ -454,17 +494,13 @@ class TransformersBackend:
         input_ids, attention_mask = self._padded_inputs([sequence])
         logits_to_keep = len(draft) + 1
         with self._model_lock, torch_module.inference_mode():
-            outputs = self.model(
+            outputs = self._prefill_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 position_ids=self._position_ids(attention_mask),
                 use_cache=True,
                 return_dict=True,
-                **(
-                    {"logits_to_keep": logits_to_keep}
-                    if self._supports_logits_to_keep
-                    else {}
-                ),
+                logits_to_keep=logits_to_keep,
             )
         first_predictor = len(prefix) - 1
         logits_start = len(sequence) - outputs.logits.shape[1]
@@ -792,7 +828,7 @@ class TransformersBackend:
                 unique_input_ids, unique_attention_mask = self._padded_inputs(
                     reusable_prefixes
                 )
-                unique_outputs = self.model(
+                unique_outputs = self._prefill_model(
                     input_ids=unique_input_ids,
                     attention_mask=unique_attention_mask,
                     position_ids=self._position_ids(unique_attention_mask),
@@ -819,7 +855,7 @@ class TransformersBackend:
                     generation_forward_token_slots = int(unique_input_ids.numel())
             if cache is None:
                 input_ids, attention_mask = self._padded_inputs(prefixes)
-                outputs = self.model(
+                outputs = self._prefill_model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=self._position_ids(attention_mask),
@@ -1214,6 +1250,68 @@ class TransformersBackend:
     def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
         return None if self._draft_tree is None else self._draft_tree.snapshot()
 
+    def _prefill_model(self, *, input_ids, attention_mask, position_ids, use_cache=True,
+                       return_dict=True, logits_to_keep=1):
+        return prefill_causal_model(
+            self.model, input_ids, attention_mask, position_ids,
+            chunk_size=self.score_chunk_size, logits_to_keep=logits_to_keep,
+            supports_logits_to_keep=self._supports_logits_to_keep,
+        )
+
+    def _stream_score(
+        self, request: ScoreRequest, continuation: TokenSequence, *,
+        statistics: bool = False, confidence_top_k: int | None = None,
+    ) -> tuple[SequenceScoreStatistics, int]:
+        torch_module = _require_torch()
+        logs: list[float] = []
+        confidence: list[float] = []
+        entropies: list[float] = []
+        certainties: list[float] = []
+        forwarded = 0
+        effective_top_k = None
+
+        def count(amount: int) -> None:
+            nonlocal forwarded
+            forwarded += amount
+
+        with self._model_lock, torch_module.inference_mode():
+            chunks = iter_causal_logits(
+                self.model, self._model_prefix(request.prefix), continuation,
+                device=self.device, chunk_size=self.score_chunk_size,
+                supports_logits_to_keep=self._supports_logits_to_keep, on_forward=count,
+            )
+            try:
+                for offset, logits in chunks:
+                    log_probs = self._policy_log_probs(logits, request.sampling)
+                    targets = torch_module.tensor(
+                        continuation[offset:offset + logits.shape[0]],
+                        dtype=torch_module.long, device=log_probs.device,
+                    )
+                    selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
+                    logs.extend(float(v) for v in selected.cpu().tolist())
+                    if statistics:
+                        entropy = torch_module.special.xlogy(log_probs.exp(), log_probs.exp()).sum(-1)
+                        certainty = -(math.log(log_probs.shape[-1]) + log_probs).mean(-1)
+                        entropies.extend(float(v) for v in entropy.cpu().tolist())
+                        certainties.extend(float(v) for v in certainty.cpu().tolist())
+                        if confidence_top_k is not None:
+                            effective_top_k = min(confidence_top_k, log_probs.shape[-1])
+                            values = -log_probs.topk(effective_top_k, dim=-1).values.mean(-1)
+                            confidence.extend(float(v) for v in values.cpu().tolist())
+                            del values
+                        del entropy, certainty
+                    del logits, log_probs, selected, targets
+            finally:
+                chunks.close()
+        if len(logs) != len(continuation):
+            raise RuntimeError("incomplete chunked sequence score")
+        return SequenceScoreStatistics(
+            token_logprobs=tuple(logs), mean_logprob=sum(logs) / len(logs),
+            mean_negative_entropy=math.fsum(entropies) / len(logs) if statistics else 0.0,
+            mean_self_certainty=math.fsum(certainties) / len(logs) if statistics else 0.0,
+            token_topk_confidences=tuple(confidence), confidence_top_k=effective_top_k,
+        ), forwarded
+
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         torch_module = _require_torch()
         flattened: list[tuple[ScoreRequest, TokenSequence]] = [
@@ -1225,7 +1323,11 @@ class TransformersBackend:
         nonempty: list[tuple[int, ScoreRequest, TokenSequence, TokenSequence]] = []
         score_forward_token_slots = 0
         for index, (request, continuation) in enumerate(flattened):
-            if continuation:
+            if continuation and len(self._model_prefix(request.prefix)) + len(continuation) > self.score_chunk_size:
+                scored, forwarded = self._stream_score(request, continuation)
+                results[index] = scored.token_logprobs
+                score_forward_token_slots += forwarded
+            elif continuation:
                 nonempty.append(
                     (index, request, continuation, self._model_prefix(request.prefix))
                 )
@@ -1263,7 +1365,7 @@ class TransformersBackend:
                         torch_module.arange(
                             padding + len(prefix) - 1,
                             padding + len(prefix) + len(continuation) - 1,
-                            device=self.device,
+                            device=outputs.logits.device,
                         )
                         - logits_start
                     )
@@ -1276,7 +1378,7 @@ class TransformersBackend:
                     )
                     log_probs = self._policy_log_probs(token_logits, request.sampling)
                     targets = torch_module.tensor(
-                        continuation, dtype=torch_module.long, device=self.device
+                        continuation, dtype=torch_module.long, device=log_probs.device
                     )
                     selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
                     results[flat_index] = tuple(
@@ -1330,6 +1432,17 @@ class TransformersBackend:
             (index, request, continuation, self._model_prefix(request.prefix))
             for index, (request, continuation) in enumerate(flattened)
         ]
+        short_indexed = []
+        for item in indexed:
+            index, request, continuation, prefix = item
+            if len(prefix) + len(continuation) > self.score_chunk_size:
+                results[index], forwarded = self._stream_score(
+                    request, continuation, statistics=True, confidence_top_k=confidence_top_k,
+                )
+                score_forward_token_slots += forwarded
+            else:
+                short_indexed.append(item)
+        indexed = short_indexed
         for start in range(0, len(indexed), self.max_score_batch_size):
             chunk = indexed[start : start + self.max_score_batch_size]
             sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
@@ -1359,7 +1472,7 @@ class TransformersBackend:
                     torch_module.arange(
                         padding + len(prefix) - 1,
                         padding + len(prefix) + len(continuation) - 1,
-                        device=self.device,
+                        device=outputs.logits.device,
                     )
                     - logits_start
                 )
@@ -1371,7 +1484,7 @@ class TransformersBackend:
                 log_probs = self._policy_log_probs(token_logits, request.sampling)
                 probabilities = log_probs.exp()
                 targets = torch_module.tensor(
-                    continuation, dtype=torch_module.long, device=self.device
+                    continuation, dtype=torch_module.long, device=log_probs.device
                 )
                 selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
                 negative_entropy = (probabilities * log_probs).sum(dim=-1)

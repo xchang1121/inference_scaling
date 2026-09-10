@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inference_scaling.shared.generation import DEFAULT_MAX_NEW_TOKENS
 
 from inference_scaling.shared.config import (
     RuntimeConfig as RuntimeConfig,
@@ -43,11 +44,12 @@ class SamplingConfig:
 @dataclass(frozen=True, slots=True)
 class MHConfig:
     alpha: float = 4.0
-    total_length: int = 192
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     block_size: int = 32
     steps_per_block: int = 10
     chains: int = 1
     suffix_schedule: str = "uniform"
+    iterations: int | None = None
 
     def __post_init__(self) -> None:
         require_finite("alpha", self.alpha)
@@ -59,17 +61,31 @@ class MHConfig:
             raise ValueError("block_size cannot exceed total_length")
         if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
             raise ValueError("unknown MH suffix_schedule")
+        if self.iterations is not None:
+            require_positive("iterations", self.iterations)
+
+    @property
+    def stages(self) -> tuple[int, ...]:
+        if self.iterations is not None:
+            return (self.total_length,)
+        lengths = tuple(range(self.block_size, self.total_length + 1, self.block_size))
+        return lengths if lengths and lengths[-1] == self.total_length else (*lengths, self.total_length)
+
+    @property
+    def stage_updates(self) -> int:
+        return self.steps_per_block if self.iterations is None else self.iterations
 
 
 @dataclass(frozen=True, slots=True)
 class RewardMHConfig:
     """Full-sequence MH budget for a base-times-exponentiated-reward target."""
 
-    total_length: int = 192
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     block_size: int = 32
     steps_per_block: int = 10
     reward_temperature: float = 0.1
     suffix_schedule: str = "uniform"
+    iterations: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("total_length", "block_size", "steps_per_block"):
@@ -79,9 +95,13 @@ class RewardMHConfig:
             raise ValueError("block_size cannot exceed total_length")
         if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
             raise ValueError("unknown MH suffix_schedule")
+        if self.iterations is not None:
+            require_positive("iterations", self.iterations)
 
     @property
     def updates(self) -> int:
+        if self.iterations is not None:
+            return self.iterations
         blocks = (self.total_length + self.block_size - 1) // self.block_size
         return blocks * self.steps_per_block
 
@@ -91,7 +111,7 @@ class ConditionalISConfig:
     candidate_count: int = 4
     rollout_count: int = 4
     block_size: int = 16
-    total_length: int = 128
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
     apply_importance_correction: bool = True
@@ -159,7 +179,7 @@ class IteratedConditionalISConfig:
     updates: int = 4
     rollout_count: int = 4
     block_size: int = 16
-    total_length: int = 128
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
     apply_importance_correction: bool = True
@@ -211,7 +231,7 @@ class ProgressiveISConfig:
     evaluation_cost_budget: float = 16.0
     minimum_evaluation_per_candidate: int = 1
     block_size: int = 16
-    total_length: int = 128
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
     importance_log_ratio_clip: float | None = None
     reward_workers: int = 4
@@ -251,7 +271,7 @@ class ProgressiveISConfig:
 class BaseReplayConfig:
     candidate_count: int = 4
     block_size: int = 16
-    total_length: int = 128
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
     max_history_per_candidate: int = 8
     fresh_rollouts: int = 2
@@ -276,7 +296,7 @@ class BaseReplayConfig:
 class DynamicISConfig:
     candidate_count: int = 4
     block_size: int = 16
-    total_length: int = 128
+    total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
     max_history_per_candidate: int = 8
     truncation: float = 8.0

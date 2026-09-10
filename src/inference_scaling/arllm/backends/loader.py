@@ -12,6 +12,9 @@ from inference_scaling.arllm.acceleration import (
 )
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.shared.model_loading import (
+    model_loading_options, model_role, resolve_checkpoint_path,
+)
 
 BACKEND_CHOICES = ("transformers", "vllm", "vllm-sync")
 
@@ -55,6 +58,8 @@ _EXPLICIT_ENGINE_SETTINGS = {
     "max_num_batched_tokens",
     "max_num_seqs",
     "model",
+    "tokenizer",
+    "tokenizer_revision",
     "quantization",
     "revision",
     "seed",
@@ -117,13 +122,7 @@ def _infer_role(
     *,
     adapter_base: str | None,
 ) -> str:
-    models = _mapping(config.get("models"), name="models")
-    resolved = Path(path).resolve()
-    for role in _MODEL_ROLES:
-        configured = models.get(role)
-        if configured is not None and Path(str(configured)).resolve() == resolved:
-            return role
-    return "rl" if adapter_base is not None else "base"
+    return model_role(path, config, adapter_base=adapter_base)
 
 
 def _vllm_settings(config: Mapping[str, Any], role: str) -> dict[str, Any]:
@@ -175,17 +174,20 @@ def _transformers_backend(
     device: str | None = None,
     dtype: str | None = None,
     speculation: ActiveBatchSpeculationConfig | None = None,
+    loading: Mapping[str, Any] | None = None,
 ) -> TransformersBackend:
     kwargs: dict[str, Any] = {}
     if speculation is not None:
         kwargs["speculation"] = speculation
+    kwargs.update(loading or {})
+    kwargs.setdefault("local_files_only", True)
+    kwargs.setdefault("trust_remote_code", bool(runtime.get("trust_remote_code", False)))
+    kwargs["score_chunk_size"] = int(runtime.get("score_chunk_size", 256))
     return TransformersBackend.from_pretrained(
         model_name_or_path,
         adapter_name_or_path=adapter_name_or_path,
         device=device or str(runtime.get("device", "cuda")),
         dtype=dtype or str(runtime.get("dtype", "float32")),
-        local_files_only=True,
-        trust_remote_code=bool(runtime.get("trust_remote_code", False)),
         max_score_batch_size=int(runtime.get("max_score_batch_size", 8)),
         **kwargs,
     )
@@ -196,6 +198,7 @@ def load_backend_from_config(
     config: Mapping[str, Any],
     *,
     adapter_base: str | None = None,
+    role: str | None = None,
 ) -> Any:
     """Load one model using the selected runtime without changing its policy.
 
@@ -210,26 +213,52 @@ def load_backend_from_config(
     backend_kind = configured_backend(config)
     model_name_or_path = adapter_base or path
     adapter_name_or_path = path if adapter_base is not None else None
+    role = role or _infer_role(path, config, adapter_base=adapter_base)
+    loading = model_loading_options(config, role)
+    resolved = config.get("_resolved_models", {}).get(role, {})
+    if resolved.get("source") == path:
+        model_name_or_path = resolved["model"]
+        adapter_name_or_path = resolved.get("adapter")
+        if "tokenizer" in resolved:
+            loading["tokenizer_name_or_path"] = resolved["tokenizer"]
     if backend_kind == "transformers":
         return _transformers_backend(
             model_name_or_path,
             adapter_name_or_path,
             runtime,
             speculation=speculation,
+            loading=loading,
         )
 
-    role = _infer_role(path, config, adapter_base=adapter_base)
     settings = _vllm_settings(config, role)
+    # Resolve once so the engine and exact scorer share the same immutable files.
+    for option, vllm_option in (("revision", "revision"), ("cache_dir", "download_dir"),
+                                ("trust_remote_code", "trust_remote_code")):
+        if vllm_option in settings:
+            if option in loading and loading[option] != settings[vllm_option] and option == "revision":
+                raise ValueError("vLLM and model_loading revision settings must agree")
+            loading[option] = settings.pop(vllm_option)
+    if "/" in model_name_or_path and not Path(model_name_or_path).is_dir():
+        model_name_or_path = str(resolve_checkpoint_path(
+            model_name_or_path, revision=loading.get("revision"),
+            cache_dir=loading.get("cache_dir"), local_files_only=loading["local_files_only"],
+        ))
+    if adapter_name_or_path is not None:
+        adapter_name_or_path = str(resolve_checkpoint_path(
+            adapter_name_or_path, revision=loading.get("adapter_revision"),
+            cache_dir=loading.get("cache_dir"), local_files_only=loading["local_files_only"],
+        ))
+    unsupported = set(loading) & {"device_map", "attn_implementation", "model_kwargs"}
+    if unsupported:
+        raise ValueError("use vllm settings for engine-specific options: " + ", ".join(sorted(unsupported)))
     exact_kind = str(settings.pop("exact_scoring_backend", "none"))
     exact_backend = None
+    exact_options: dict[str, Any] = {}
     if exact_kind == "transformers":
-        exact_backend = _transformers_backend(
-            model_name_or_path,
-            adapter_name_or_path,
-            runtime,
-            device=str(settings.pop("exact_scoring_device", runtime.get("device", "cuda"))),
-            dtype=str(settings.pop("exact_scoring_dtype", runtime.get("dtype", "float32"))),
-        )
+        exact_options = {
+            "device": str(settings.pop("exact_scoring_device", runtime.get("device", "cuda"))),
+            "dtype": str(settings.pop("exact_scoring_dtype", runtime.get("dtype", "float32"))),
+        }
     elif exact_kind != "none":
         raise ValueError("vllm.exact_scoring_backend must be 'none' or 'transformers'")
     elif "exact_scoring_device" in settings or "exact_scoring_dtype" in settings:
@@ -267,12 +296,16 @@ def load_backend_from_config(
     )
     loader = AsyncVLLMBackend if asynchronous else VLLMBackend
     acceleration_kwargs: dict[str, Any] = {}
+    if not asynchronous:
+        acceleration_kwargs["enable_mh_fused_logprobs"] = mh_fused_logprobs
     if speculation is not None:
-        acceleration_kwargs = {
+        acceleration_kwargs.update({
             "speculation": speculation,
             "dynamic_speculation": dynamic_vllm_speculation,
-        }
+        })
     try:
+        if exact_kind == "transformers":
+            exact_backend = _transformers_backend(model_name_or_path, adapter_name_or_path, runtime, loading=loading, **exact_options)
         return loader.from_pretrained(
             model_name_or_path,
             adapter_name_or_path=adapter_name_or_path,
@@ -285,17 +318,19 @@ def load_backend_from_config(
             max_num_batched_tokens=settings.pop("max_num_batched_tokens", None),
             quantization=settings.pop("quantization", None),
             enforce_eager=bool(settings.pop("enforce_eager", False)),
-            trust_remote_code=bool(
-                settings.pop("trust_remote_code", runtime.get("trust_remote_code", False))
-            ),
-            revision=settings.pop("revision", None),
-            download_dir=settings.pop("download_dir", None),
+            trust_remote_code=loading["trust_remote_code"],
+            revision=loading.get("revision"),
+            download_dir=loading.get("cache_dir"),
+            tokenizer_name_or_path=loading.get("tokenizer_name_or_path"),
+            tokenizer_revision=loading.get("tokenizer_revision"),
+            adapter_revision=loading.get("adapter_revision"),
+            tokenizer_kwargs=loading.get("tokenizer_kwargs"),
+            local_files_only=loading["local_files_only"],
             seed=int(settings.pop("seed", config.get("run", {}).get("seed", 0))),
             parameter_count=settings.pop("parameter_count", None),
             scoring_backend=exact_backend,
             enable_prefix_caching=bool(settings.pop("enable_prefix_caching", True)),
             max_lora_rank=int(settings.pop("max_lora_rank", 16)),
-            enable_mh_fused_logprobs=mh_fused_logprobs,
             engine_kwargs=engine_kwargs,
             **acceleration_kwargs,
         )
@@ -309,11 +344,11 @@ def close_backend(backend: Any | None) -> None:
 
     if backend is None:
         return
-    callback = getattr(backend, "close", None)
-    if callback is not None:
-        callback()
-    scoring_backend = getattr(backend, "scoring_backend", None)
-    if scoring_backend is not None and scoring_backend is not backend:
-        nested = getattr(scoring_backend, "close", None)
-        if nested is not None:
-            nested()
+    try:
+        callback = getattr(backend, "close", None)
+        if callback is not None:
+            callback()
+    finally:
+        scoring_backend = getattr(backend, "scoring_backend", None)
+        if scoring_backend is not None and scoring_backend is not backend:
+            close_backend(scoring_backend)

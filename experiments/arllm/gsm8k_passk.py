@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import gc
 import hashlib
@@ -61,35 +63,9 @@ PASSK_IMPLEMENTATION_FILES = (
 )
 
 
-class _MethodBackend:
-    """Expose model metadata while routing inference through the batch dispatcher."""
-
-    def __init__(self, batching: ContinuousBatchingBackend, raw_backend: Any) -> None:
-        self._batching = batching
-        self._raw_backend = raw_backend
-        self.tokenizer = raw_backend.tokenizer
-        self.parameter_count = raw_backend.parameter_count
-
-    @property
-    def model_id(self) -> str:
-        return self._batching.model_id
-
-    def sample_batch(self, requests):
-        return self._batching.sample_batch(requests)
-
-    def score_batch(self, requests):
-        return self._batching.score_batch(requests)
-
-    def decode(self, tokens, *, skip_special_tokens=True) -> str:
-        if skip_special_tokens:
-            return self._raw_backend.decode(tokens)
-        return self._raw_backend.decode(tokens, skip_special_tokens=False)
-
-    def encode(self, text, *, add_special_tokens=True):
-        return self._raw_backend.encode(text, add_special_tokens=add_special_tokens)
-
-    def score_statistics_batch(self, requests, *, confidence_top_k=None):
-        return self._raw_backend.score_statistics_batch(requests, confidence_top_k=confidence_top_k)
+from inference_scaling.arllm.backends.execution import ExecutionBackend as _MethodBackend
+from inference_scaling.arllm.scope import SamplingScope
+from inference_scaling.shared.generation import generation_config_for_prompt
 
 
 _estimated_pass_at_k = estimated_pass_at_k
@@ -187,20 +163,6 @@ def _validate_chunks(
     return completed
 
 
-def _input_weight_hashes(config: dict[str, Any], methods: Sequence[str]) -> dict[str, str]:
-    base_path = Path(str(config["models"]["base"])) / "model.safetensors"
-    base_hash = _file_sha256(base_path)
-    if base_hash != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    hashes = {"base": base_hash}
-    if "rl_sample" in methods:
-        adapter_path = (
-            Path(str(config["models"]["rl"])) / "adapter_model.safetensors"
-        )
-        hashes["rl_adapter"] = _file_sha256(adapter_path)
-    return hashes
-
-
 def _run_chunk(
     *,
     method: str,
@@ -251,7 +213,8 @@ def _run_chunk(
                 raise ValueError("a vectorized MH chunk must contain one problem")
             problem_index = next(iter(problem_indices))
             prompt = prompts_by_index[problem_index]
-            section = config["mh"]
+            bounded_config, length_budget = generation_config_for_prompt(config, len(prompt), [raw_backend])
+            section = bounded_config["mh"]
             alpha = float(section["alpha"])
             absorbing = AbsorbingEOSBackend(
                 ScoreCachingBackend(backend),
@@ -273,9 +236,10 @@ def _run_chunk(
                 prompt,
                 MHConfig(
                     alpha=alpha,
-                    total_length=int(config["generation"]["max_new_tokens"]),
+                    total_length=int(bounded_config["generation"]["max_new_tokens"]),
                     block_size=int(section["block_size"]),
                     steps_per_block=int(section["steps_per_block"]),
+                    iterations=section.get("iterations"),
                     suffix_schedule=str(section.get("suffix_schedule", "uniform")),
                 ),
                 SamplingConfig(temperature=1.0 / alpha),
@@ -295,6 +259,8 @@ def _run_chunk(
                         "accepted": result.accepted,
                         "acceptance_rate": result.acceptance_rate,
                         "execution": "lockstep_vectorized_independent_chains",
+                        "generation_budget": length_budget,
+                        "output_segments": SamplingScope.from_config(raw_backend, config, active=False).describe_output(raw_backend, prompt, _trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id)),
                     },
                 )
                 for result in results
@@ -358,7 +324,7 @@ def _run_pending_chunks(
         if model_key == "rl" and config["models"].get("rl_kind") == "peft_adapter":
             adapter_base = str(config["models"]["rl_base"])
         raw_backend = _load_backend(
-            str(config["models"][model_key]), config, adapter_base=adapter_base
+            str(config["models"][model_key]), config, adapter_base=adapter_base, role=model_key
         )
         prompts_by_index = {
             index: _prompt_tokens(raw_backend, problem, config)
@@ -567,6 +533,7 @@ def main() -> None:
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--raw-output", type=Path)
     parser.add_argument("--output", type=Path)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.draws <= 0 or args.limit <= 0 or args.workers <= 0:
         raise ValueError("draws, limit, and workers must be positive")
@@ -580,6 +547,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
     if args.mh_suffix_schedule is not None:
         config["mh"]["suffix_schedule"] = args.mh_suffix_schedule

@@ -10,6 +10,8 @@ an independent design pool before evaluation records are revealed.
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import copy
 import hashlib
@@ -22,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from experiments.arllm.scoped_execution import fixed_experiment_reward, with_output_scope
 from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
@@ -546,6 +549,7 @@ def _prepare_replay_cache(
     return samples, len(records)
 
 
+@with_output_scope
 def _run_method(
     *,
     method: str,
@@ -965,10 +969,12 @@ def main() -> None:
     parser.add_argument("--tag", default="default")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--verifier-config", type=Path)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     with args.extension_config.open("rb") as source:
@@ -1064,8 +1070,8 @@ def main() -> None:
         print(serialized)
         return
 
-    backend = _load_backend(str(config["models"]["base"]), config)
-    proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
+    backend = _load_backend(str(config["models"]["base"]), config, role="base")
+    proposal_backend = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
     if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
         raise ValueError("base and proposal tokenizers must match")
     manifest["models"] = {
@@ -1106,7 +1112,7 @@ def main() -> None:
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
             prompt = _prompt_tokens(backend, problem, config)
-            verifier_reward = _configured_verifier_reward(backend, problem, config)
+            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, _configured_verifier_reward)
             method_results: dict[str, dict[str, Any]] = {}
             for method in METHODS:
                 seed = SeedStream(
@@ -1120,12 +1126,12 @@ def main() -> None:
                     proposal_backend=proposal_backend,
                     prompt=prompt,
                     reward=verifier_reward,
-                    reward_version=verifier_reward.version,
+                    reward_version=reward_version,
                     config=config,
                     seeds=seed,
                 )
                 output = backend.decode(tokens)
-                prediction = extract_numeric_answer(output)
+                prediction = extract_numeric_answer(info["output_segments"]["content_text"])
                 method_results[method] = {
                     "prediction": _fraction_text(prediction),
                     "correct": prediction == problem.gold_answer,

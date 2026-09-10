@@ -39,6 +39,7 @@ def test_transformers_loader_preserves_existing_defaults(monkeypatch) -> None:
         "local_files_only": True,
         "trust_remote_code": False,
         "max_score_batch_size": 11,
+        "score_chunk_size": 256,
     }
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import copy
 import gc
@@ -110,27 +112,8 @@ def _method_backend(config: dict[str, Any], method: str):
             if config["models"].get("rl_kind") == "peft_adapter"
             else None
         )
-        return _load_backend(str(config["models"]["rl"]), config, adapter_base=adapter_base)
-    return _load_backend(str(config["models"]["base"]), config)
-
-
-def _input_weight_hashes(config: dict[str, Any], methods: tuple[str, ...]) -> dict[str, str]:
-    hashes = {
-        "base": _file_sha256(Path(str(config["models"]["base"])) / "model.safetensors")
-    }
-    if hashes["base"] != str(config["models"]["base_weight_sha256"]):
-        raise ValueError("base model weight hash does not match the pinned configuration")
-    if "rl_sample" in methods:
-        hashes["rl_adapter"] = _file_sha256(
-            Path(str(config["models"]["rl"])) / "adapter_model.safetensors"
-        )
-    if any(method.endswith("small_proposal") for method in methods):
-        hashes["proposal"] = _file_sha256(
-            Path(str(config["models"]["proposal"])) / "model.safetensors"
-        )
-        if hashes["proposal"] != str(config["models"]["proposal_weight_sha256"]):
-            raise ValueError("proposal model weight hash does not match the pinned configuration")
-    return hashes
+        return _load_backend(str(config["models"]["rl"]), config, adapter_base=adapter_base, role="rl")
+    return _load_backend(str(config["models"]["base"]), config, role="base")
 
 
 def _prepare_manifest(
@@ -216,7 +199,7 @@ def _run_pending_samples(
             backend = _method_backend(config, method)
             proposal_backend = None
             if method.endswith("small_proposal"):
-                proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
+                proposal_backend = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
                 if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
                     raise ValueError(
                         "base and proposal tokenizers do not have identical vocabularies"
@@ -374,12 +357,14 @@ def main() -> None:
         type=Path,
         help="append-only per-sample JSONL; defaults beside --output",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.problem_count <= 0 or args.draws <= 0:
         raise ValueError("problem-count and draws must be positive")
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     set_rl_adapter_override(config, args.rl_adapter)

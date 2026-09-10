@@ -18,6 +18,7 @@ from experiments.shared.methods import (
     DLLM_DEFAULT_METHODS,
     DLLM_METHODS,
 )
+from experiments.shared.model_cli import add_model_output_arguments, model_output_cli_arguments
 from experiments.shared.components import COMPONENTS, DLLM_COMPONENTS, FULL_COMPONENTS
 from experiments.shared.suite_runner import run_manifested_commands
 
@@ -80,6 +81,7 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             command.append("--dry-run")
         if getattr(args, "restart", False):
             command.append("--restart")
+        command[2:2] = model_output_cli_arguments(args)
         commands.append(command)
 
     if args.family in {"dllm", "both"}:
@@ -269,7 +271,10 @@ def main() -> None:
         action="store_true",
         help="replace an existing suite manifest and execute the full command plan",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
+    if args.family == "dllm" and model_output_cli_arguments(args):
+        parser.error("model/output override flags in this entry point apply to arllm; configure dllm through --dllm-config")
 
     # Keep research-only methods available through an explicit CLI selection,
     # but do not place rejected or unmatched methods in the default Qwen run.

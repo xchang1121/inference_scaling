@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from inference_scaling.shared.model_loading import checkpoint_weight_files
 import hashlib
 import json
 from pathlib import Path
@@ -165,6 +166,20 @@ def checkpoint_metadata_hashes(path: Path) -> dict[str, str]:
     return directory_hashes(path, suffixes=_CHECKPOINT_METADATA_SUFFIXES)
 
 
+def checkpoint_weight_hashes(path: Path, *, cache_directory: Path) -> dict[str, str]:
+    """Hash the weight layout selected by standard Transformers loaders."""
+    directory = path.resolve()
+    return {
+        file.relative_to(directory).as_posix(): cached_file_sha256(file, cache_directory=cache_directory)
+        for file in checkpoint_weight_files(directory)
+    }
+
+
+def weight_manifest_digest(files: Mapping[str, str]) -> str:
+    """Retain legacy single-file digests; aggregate every shard otherwise."""
+    return next(iter(files.values())) if len(files) == 1 else json_fingerprint(files)
+
+
 def adapter_hashes(path: Path) -> dict[str, str]:
     """Hash the PEFT files that determine an adapter's inference behavior."""
 
@@ -250,6 +265,8 @@ def dataclass_snapshot_delta(
 __all__ = [
     "adapter_hashes",
     "checkpoint_metadata_hashes",
+    "checkpoint_weight_hashes",
+    "weight_manifest_digest",
     "cached_file_sha256",
     "dataclass_snapshot_delta",
     "directory_hashes",

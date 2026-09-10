@@ -8,6 +8,8 @@ metric.
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides, require_full_scope
+
 import argparse
 import hashlib
 import json
@@ -751,6 +753,7 @@ def main() -> None:
     parser.add_argument("--draft-tokens", type=int, default=8)
     parser.add_argument("--verifier-delay", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=20260812)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.chunk_tokens <= 0 or args.max_new_tokens < 4 * args.chunk_tokens:
         raise ValueError("max-new-tokens must cover four positive chunks")
@@ -766,12 +769,14 @@ def main() -> None:
 
     with args.config.open("rb") as stream:
         config = tomllib.load(stream)
+    apply_model_output_overrides(config, args)
+    require_full_scope(config, "benchmark_is_mh_reuse")
     problem = select_problems(
         load_gsm8k(args.data), 1, seed=int(config["run"]["subset_seed"])
     )[0]
     factory = _BackendFactory(config, args.backend, args.dtype)
     try:
-        prompt = _prompt_tokens(factory.tokenizer, problem.question)
+        prompt = _prompt_tokens(factory.tokenizer, problem.question, config)
         report: dict[str, Any] = {
             "schema_version": 1,
             "created_at_unix": time.time(),

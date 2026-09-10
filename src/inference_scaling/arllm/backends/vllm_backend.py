@@ -15,9 +15,12 @@ using incorrect importance ratios.
 
 from __future__ import annotations
 
+from inference_scaling.shared.model_loading import model_identity, checkpoint_weight_files
+
 import asyncio
 import importlib.metadata
 import inspect
+import json
 import itertools
 import os
 import threading
@@ -48,6 +51,8 @@ from inference_scaling.arllm.types import (
 _PROTECTED_ENGINE_KWARGS = frozenset(
     {
         "model",
+        "tokenizer",
+        "tokenizer_revision",
         "dtype",
         "tensor_parallel_size",
         "data_parallel_size",
@@ -211,7 +216,15 @@ def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
         return None
     files = [root] if root.is_file() and root.suffix == ".safetensors" else []
     if root.is_dir():
-        files = sorted(root.glob("*.safetensors"))
+        config_path = root / "config.json"
+        if config_path.is_file() and json.loads(config_path.read_text(encoding="utf-8")).get("quantization_config"):
+            return None  # Packed tensor sizes are not dense parameter counts.
+        try:
+            files = list(checkpoint_weight_files(root))
+        except FileNotFoundError:
+            return None
+    if any(path.suffix != ".safetensors" for path in files):
+        return None
     if not files:
         return None
     try:
@@ -248,6 +261,21 @@ def _logprob_value(position: Any, token_id: int) -> float:
     return float(getattr(value, "logprob", value))
 
 
+def _load_tokenizer(factory, model, tokenizer, tokenizer_revision, revision, cache_dir,
+                    local_files_only, trust_remote_code, options):
+    options = dict(options or {})
+    forbidden = {"revision", "cache_dir", "local_files_only", "trust_remote_code", "token"} & options.keys()
+    if forbidden:
+        raise ValueError("tokenizer kwargs duplicate explicit options or contain credentials: " + ", ".join(sorted(forbidden)))
+    return factory.from_pretrained(
+        tokenizer or model,
+        revision=tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer is None else None),
+        cache_dir=cache_dir,
+        local_files_only=Path(tokenizer or model).exists() if local_files_only is None else local_files_only,
+        trust_remote_code=trust_remote_code, **options,
+    )
+
+
 class VLLMBackend:
     """Synchronous offline vLLM implementation of ``AutoregressiveBackend``.
 
@@ -282,7 +310,7 @@ class VLLMBackend:
         self._engine = engine
         self.tokenizer = tokenizer
         self._model_id = str(model_id)
-        self._metric_model_name = self._model_id.split("+adapter:", 1)[0]
+        self._metric_model_name = self._model_id.split("+adapter:", 1)[0].split(";", 1)[0]
         self._parameter_count = int(parameter_count)
         self._sampling_params_factory = sampling_params_factory
         self._tokens_prompt_factory = tokens_prompt_factory
@@ -352,6 +380,11 @@ class VLLMBackend:
         enforce_eager: bool = False,
         trust_remote_code: bool = False,
         revision: str | None = None,
+        tokenizer_name_or_path: str | None = None,
+        tokenizer_revision: str | None = None,
+        adapter_revision: str | None = None,
+        tokenizer_kwargs: dict[str, Any] | None = None,
+        local_files_only: bool | None = None,
         download_dir: str | None = None,
         seed: int = 0,
         parameter_count: int | None = None,
@@ -377,12 +410,9 @@ class VLLMBackend:
             ) from error
 
         base_model = model_name_or_path
-        tokenizer = AutoTokenizer.from_pretrained(
-            base_model,
-            local_files_only=Path(base_model).exists(),
-            trust_remote_code=trust_remote_code,
-            revision=revision,
-            cache_dir=download_dir,
+        tokenizer = _load_tokenizer(
+            AutoTokenizer, base_model, tokenizer_name_or_path, tokenizer_revision,
+            revision, download_dir, local_files_only, trust_remote_code, tokenizer_kwargs,
         )
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -406,6 +436,8 @@ class VLLMBackend:
             "enforce_eager": bool(enforce_eager),
             "trust_remote_code": bool(trust_remote_code),
             "revision": revision,
+            "tokenizer": tokenizer_name_or_path or model_name_or_path,
+            "tokenizer_revision": tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
             "download_dir": download_dir,
             "seed": int(seed),
             "enable_prefix_caching": bool(enable_prefix_caching),
@@ -445,6 +477,12 @@ class VLLMBackend:
                     + ", ".join(sorted(overlap))
                 )
             kwargs.update(engine_kwargs)
+        counted = parameter_count or _checkpoint_parameter_count(base_model)
+        if counted is None:
+            raise ValueError(
+                "parameter_count could not be read from a local safetensors checkpoint; "
+                "pass parameter_count explicitly"
+            )
         previous_v2_runner = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
         if enable_mh_fused_logprobs:
             if previous_v2_runner is not None and previous_v2_runner.strip().lower() in {
@@ -472,17 +510,11 @@ class VLLMBackend:
             from vllm.lora.request import LoRARequest
 
             lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
-        model_id = (
-            base_model
-            if adapter_name_or_path is None
-            else f"{base_model}+adapter:{adapter_name_or_path}"
+        model_id = model_identity(
+            base_model, adapter_name_or_path, revision=revision,
+            adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
+            tokenizer_revision=tokenizer_revision,
         )
-        counted = parameter_count or _checkpoint_parameter_count(base_model)
-        if counted is None:
-            raise ValueError(
-                "parameter_count could not be read from a local safetensors checkpoint; "
-                "pass parameter_count explicitly"
-            )
         return cls(
             engine,
             tokenizer,
@@ -1307,6 +1339,11 @@ class AsyncVLLMBackend(VLLMBackend):
         enforce_eager: bool = False,
         trust_remote_code: bool = False,
         revision: str | None = None,
+        tokenizer_name_or_path: str | None = None,
+        tokenizer_revision: str | None = None,
+        adapter_revision: str | None = None,
+        tokenizer_kwargs: dict[str, Any] | None = None,
+        local_files_only: bool | None = None,
         download_dir: str | None = None,
         seed: int = 0,
         parameter_count: int | None = None,
@@ -1331,12 +1368,9 @@ class AsyncVLLMBackend(VLLMBackend):
                 "AsyncVLLMBackend.from_pretrained requires the project's vllm extra"
             ) from error
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path,
-            local_files_only=Path(model_name_or_path).exists(),
-            trust_remote_code=trust_remote_code,
-            revision=revision,
-            cache_dir=download_dir,
+        tokenizer = _load_tokenizer(
+            AutoTokenizer, model_name_or_path, tokenizer_name_or_path, tokenizer_revision,
+            revision, download_dir, local_files_only, trust_remote_code, tokenizer_kwargs,
         )
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -1352,6 +1386,8 @@ class AsyncVLLMBackend(VLLMBackend):
             "enforce_eager": bool(enforce_eager),
             "trust_remote_code": bool(trust_remote_code),
             "revision": revision,
+            "tokenizer": tokenizer_name_or_path or model_name_or_path,
+            "tokenizer_revision": tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
             "download_dir": download_dir,
             "seed": int(seed),
             "enable_prefix_caching": bool(enable_prefix_caching),
@@ -1391,10 +1427,10 @@ class AsyncVLLMBackend(VLLMBackend):
             from vllm.lora.request import LoRARequest
 
             lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
-        model_id = (
-            model_name_or_path
-            if adapter_name_or_path is None
-            else f"{model_name_or_path}+adapter:{adapter_name_or_path}"
+        model_id = model_identity(
+            model_name_or_path, adapter_name_or_path, revision=revision,
+            adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
+            tokenizer_revision=tokenizer_revision,
         )
         counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
         if counted is None:

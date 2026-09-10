@@ -11,6 +11,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from experiments.shared.model_cli import add_model_output_arguments, model_output_cli_arguments
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
 from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
@@ -64,6 +65,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 command.extend((flag, str(value)))
         commands.append(command)
     if not include_inference:
+        for command in commands:
+            command[2:2] = model_output_cli_arguments(args)
         return commands
 
     components = set(args.components)
@@ -194,6 +197,9 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
                 args.tag,
             ]
         )
+    extra = model_output_cli_arguments(args)
+    for command in commands:
+        command[2:2] = extra
     return commands
 
 
@@ -213,7 +219,7 @@ def main() -> None:
         "--mh-suffix-schedule",
         choices=("uniform", "inverse_length", "multiscale"),
         default="multiscale",
-        help="Qwen MH suffix schedule; multiscale is the confirmed production default",
+        help="MH suffix-length proposal schedule",
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--train-limit", type=int)
@@ -242,6 +248,7 @@ def main() -> None:
         action="store_true",
         help="skip the role-specific dependency preflight",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     if args.config is None:
@@ -258,7 +265,7 @@ def main() -> None:
     if args.profile == "smoke":
         if args.training_output is None and args.stage in {"train", "all"}:
             args.training_output = Path(
-                f"models/Qwen2.5-1.5B-Instruct-GRPO-GSM8K-smoke-{args.tag}"
+                f"models/arllm-grpo-smoke-{args.tag}"
             )
         args.limit = args.limit or 1
         args.train_limit = args.train_limit or 4

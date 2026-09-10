@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import copy
 import gc
@@ -164,23 +166,6 @@ def _summarize_batching_by_model(
     }
 
 
-def _input_weight_hashes(
-    config: dict[str, Any], methods: Sequence[str]
-) -> dict[str, str]:
-    hashes: dict[str, str] = {}
-    model_keys = ["base"]
-    if any(_uses_small_proposal(method) for method in methods):
-        model_keys.append("proposal")
-    for key in model_keys:
-        path = Path(str(config["models"][key])) / "model.safetensors"
-        digest = _file_sha256(path)
-        expected = str(config["models"][f"{key}_weight_sha256"])
-        if digest != expected:
-            raise ValueError(f"{key} model weight hash does not match the pinned configuration")
-        hashes[key] = digest
-    return hashes
-
-
 def _batching_backend(stack: ExitStack, raw_backend: Any, config: dict[str, Any]):
     return stack.enter_context(
         ContinuousBatchingBackend(
@@ -327,9 +312,9 @@ def _run_pending_chunks(
         pending = [key for key in plan if key[0] == method and key not in completed]
         if not pending:
             continue
-        raw_base = _load_backend(str(config["models"]["base"]), config)
+        raw_base = _load_backend(str(config["models"]["base"]), config, role="base")
         raw_proposal = (
-            _load_backend(str(config["models"]["proposal"]), config)
+            _load_backend(str(config["models"]["proposal"]), config, role="proposal")
             if _uses_small_proposal(method)
             else None
         )
@@ -476,6 +461,7 @@ def main() -> None:
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--raw-output", type=Path)
     parser.add_argument("--output", type=Path)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.draws <= 0 or args.limit <= 0 or args.workers <= 0:
         raise ValueError("draws, limit, and workers must be positive")
@@ -489,6 +475,7 @@ def main() -> None:
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit

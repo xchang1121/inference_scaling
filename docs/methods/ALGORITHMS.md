@@ -1,6 +1,6 @@
 # 推理扩展算法：基础、原理与实现
 
-本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节先给出当前 Qwen2.5-1.5B 默认 MH 与 IS 路径的
+本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节给出 Qwen2.5-1.5B 复现配置中 MH 与 IS 路径的
 完整数据流；后续各节再分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、KV 复用、
 异步奖励、vLLM 和计算量统计统一列在第 17 节。[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)
 说明统一入口和统计方式；[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
@@ -113,9 +113,9 @@ $`\log q(y\mid y')`$。共享核计算
 默认组件由 `experiments/shared/components.py` 定义。表中位于 `experimental/` 的实现以及动态
 候选、分阶段 IS、SMC、两阶段延迟接受和草稿模型专项实验均需显式选择，不会随 `full` 自动运行。
 
-### 2.1 当前 Qwen2.5-1.5B 默认执行规则
+### 2.1 Qwen2.5-1.5B 复现配置的执行规则
 
-当前默认设置区分算法设计与执行调度。算法设计决定候选、概率、权重、接受随机数和 replay 数据；执行调度
+该复现配置区分算法设计与执行调度。算法设计决定候选、概率、权重、接受随机数和 replay 数据；执行调度
 只合并已经确定的生成与评分请求。统一入口将多尺度后缀配置 `multiscale` 传给 MH，并默认调度 `replay` 与
 `async` 组件；
 根级复现入口将这些组件作为独立任务调度；持续运行服务中的请求级自动路由尚未接入。冻结的历史记录只有在提示、模型、采样策略、
@@ -127,7 +127,7 @@ $`\log q(y\mid y')`$。共享核计算
 
 同一执行流程支持幂目标式 (2) 和奖励目标式 (1)。幂目标使用
 $`\log\widetilde\pi(y)=\alpha\log p(y\mid x)`$；奖励目标使用
-$`\log\widetilde\pi(y)=\log p(y\mid x)+r(y)/\tau`$。当前 Qwen 默认入口采用 `multiscale`
+$`\log\widetilde\pi(y)=\log p(y\mid x)+r(y)/\tau`$。Qwen 复现入口采用 `multiscale`
 后缀长度分布；存在匹配历史记录时，冻结历史 proposal 是优先降低墙钟的路径；以 FLOPs 为主要指标或没有
 匹配历史记录时使用基础模型 proposal。
 
@@ -1702,7 +1702,54 @@ python -m experiments.arllm.run_vllm_backend_benchmark \
 slots、token 一致率和数值结果一致率。vLLM `0.25.x`--`0.26.x` 的 Linux/WSL2 安装命令见仓库
 [README](../../README.md#安装)。
 
-### 17.8 公平比较与复现
+<a id="alg-model-loading"></a>
+
+### 17.8 模型加载与长序列执行
+
+`shared/model_loading.py` 负责模型角色、加载选项和版本标识；`arllm/backends/loader.py` 分别构造
+Transformers 与 vLLM 后端。实验使用同一接口加载主模型、rollout 模型和训练后的适配器。
+单文件权重、索引分片权重及适配器分别校验；Hub 路径先解析为本地快照，再交给生成与评分端。
+独立 tokenizer 的文件也参与实验配置指纹。`trust_remote_code` 默认关闭，Hub 下载默认关闭。
+
+```python
+backend = load_backend_from_config(config["models"]["base"], config)
+try:
+    samples = backend.sample_batch(requests)
+finally:
+    close_backend(backend)
+```
+
+`models.base`、`models.proposal`、`models.rl` 指定模型角色；`model_loading` 保存共同加载选项，
+同名角色子表覆盖共同值。tokenizer、模型、适配器分别设置版本。Transformers 支持设备映射、注意力实现及
+模型加载附加参数；vLLM 的显存、并行、量化选项放在 `vllm` 表中。
+模型须满足所选后端的因果生成及 KV 缓存接口。概率校正所需的 tokenizer 词表、概率支持集与采样策略检查仍然生效。
+
+通用入口的最大生成长度为 32,768 token，思考与最终内容共享该上限；EOS 可提前结束。
+`generation_config_for_prompt` 根据提示长度、两个模型的上下文限制和可选 `runtime.context_window` 计算实际预算。
+结果中的 `generation_budget` 记录请求与实际预算。短序列冒烟和历史实验配置保留显式长度。
+
+完整长度 MH 可以设置 `mh.iterations`（CLI：`--mh-iterations`）：先生成初始完整序列，再执行指定次数的后缀更新。
+每次更新沿用[MH 接受率](#alg-power-mh)，因此目标保持不变。该模式的有限步误差由固定长度链的更新次数控制。
+未设置该参数时，仍按原有 block 阶段扩展序列，每阶段执行 `steps_per_block` 次更新。
+两种初始化和预算安排在有限计算量下可产生不同结果，应分别记录；提高长度上限与增加 MH 轮次是独立的预算选择。
+
+长序列使用 `causal_scoring.py` 分块预填充与评分。设分块长度为 $`C`$，每块通过 KV 缓存读取全部先前上下文，
+只保留当前块所需的词表 logits。单条长序列的 logits 存储从 $`O(T|\mathcal V|)`$ 降至
+$`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度默认 256，可用 `--score-chunk-size` 修改。
+短序列继续采用批量评分。分块用于控制峰值内存，额外的调用开销由墙钟统计体现。
+评分 token、前缀预填充和 FLOPs 继续按实际前向计算计数。
+
+数值测试将两种微型因果模型的分块结果与整段结果对比，覆盖逐 token 对数概率、置信度统计、带填充的批量生成，
+以及独立 tokenizer 与分片权重的本地加载。浮点精度、不同后端和批形状可能造成数值偏差；这些测试验证实现的一致性，
+模型与后端组合的正式质量和吞吐结果由独立实验记录。
+
+`shared/output.py` 与 `shared/structured_output.py` 负责分段，`arllm/scope.py` 负责采样范围及最终内容生成，
+`shared/consilience.py` 计算置信度窗口分数，`arllm/reward_factory.py` 构造模型奖励。
+算法接受概率后端与奖励接口；GSM8K 提示和准确率评测保留在实验适配层。
+`ExecutionBackend` 为批处理调度器附加模型信息，质量、pass@k 与异步比较共用核心方法调度。
+replay 与动态 IS 的最终内容补生成成本计入在线推理，并单列 `final_content_*` 字段。
+
+### 17.9 公平比较与复现
 
 | 优化 | 比较基准 |
 | --- | --- |
@@ -1723,7 +1770,7 @@ slots、token 一致率和数值结果一致率。vLLM `0.25.x`--`0.26.x` 的 Li
 <a id="alg-code-index"></a>
 ## 18. 代码与验证入口
 
-下表把默认 Qwen 路径中的数学步骤直接对应到函数、配置和运行结果。研究性方法的完整文件索引列在后一张表。
+下表把 Qwen 复现路径中的数学步骤直接对应到函数、配置和运行结果。研究性方法的完整文件索引列在后一张表。
 
 | 数学或执行步骤 | 主要函数 | 关键配置 | 必须核对的诊断 |
 | --- | --- | --- | --- |

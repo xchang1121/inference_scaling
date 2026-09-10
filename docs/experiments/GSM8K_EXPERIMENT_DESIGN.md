@@ -7,6 +7,11 @@
 
 ## 数据与配置
 
+单方法通用入口默认使用 `arllm.toml`，通过 `--model` 指定因果语言模型，最大生成长度为 32,768 token。
+上下文约束、思考范围、模型版本和分块评分的配置集中在
+[README 的通用模型配置](../../README.md#通用模型与生成配置)与[实现说明](../methods/ALGORITHMS.md#alg-model-loading)。
+以下 Qwen 复现命令显式选择历史配置；新加载器及思考范围功能的验证使用 CPU 微型模型和接口测试，尚未开展正式质量或性能实验。
+
 配置位于 [`configs/`](../../configs/)。`gsm8k_quick.toml` 用于短预算检查，`gsm8k_3090_aligned.toml`
 用于 Qwen2.5-1.5B，`gsm8k_llada_moe_3090.toml` 提供 LLaDA-MoE 的模型与算法参数。GRPO 训练单独读取
 `gsm8k_grpo.toml`。模型路径、revision、数据子集、随机种子与生成长度均由配置和 CLI 参数决定。

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import importlib.metadata
 import json
@@ -26,11 +28,11 @@ from experiments.arllm.gsm8k_reproduction import (
     _file_sha256,
     _implementation_hashes,
     _load_backend,
+    _run_method,
     _prompt_tokens,
     _snapshot_delta,
     _timed,
 )
-from inference_scaling.arllm.algorithms import run_conditional_is
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,
@@ -38,15 +40,13 @@ from inference_scaling.arllm.backends import (
     close_backend,
     set_backend_override,
 )
-from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
 from inference_scaling.shared.evaluation import (
-    CumulativeConsensusReward,
-    consensus_index,
     extract_numeric_answer,
     load_gsm8k,
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 
 METHODS = AR_ASYNC_METHODS
@@ -64,11 +64,7 @@ def _package_version(name: str) -> str | None:
         return None
 
 
-def _sampling(raw_backend, config: dict[str, Any]) -> SamplingConfig:
-    return SamplingConfig(
-        temperature=float(config.get("sampling", {}).get("temperature", 1.0)),
-        eos_token_id=raw_backend.tokenizer.eos_token_id,
-    )
+from inference_scaling.arllm.backends.execution import ExecutionBackend, execution_model
 
 
 def _run_one(
@@ -81,76 +77,13 @@ def _run_one(
     config: dict[str, Any],
     root_seed: int,
 ) -> TokenSequence:
-    maximum = int(config["generation"]["max_new_tokens"])
-    sampling = _sampling(raw_backend, config)
-    seeds = SeedStream(
-        SeedStream(root_seed).derive("async-benchmark", method, problem.index)
+    wrapped = ExecutionBackend(base_backend, raw_backend)
+    proposal = None if proposal_backend is None else ExecutionBackend(proposal_backend, execution_model(proposal_backend))
+    tokens, _ = _run_method(
+        method, wrapped, problem, prompt, config,
+        SeedStream(SeedStream(root_seed).derive("async-benchmark", method, problem.index)), proposal,
     )
-    if method == "base":
-        return base_backend.sample_batch(
-            [
-                GenerationRequest(
-                    prompt,
-                    maximum,
-                    sampling,
-                    seeds.derive("sample"),
-                    f"async-base:{problem.index}",
-                )
-            ]
-        )[0].token_ids
-
-    if method == "best_of_n":
-        count = int(config["best_of_n"]["samples"])
-        samples = base_backend.sample_batch(
-            [
-                GenerationRequest(
-                    prompt,
-                    maximum,
-                    sampling,
-                    seeds.derive("candidate", candidate_index),
-                    f"async-best-of-n:{problem.index}:{candidate_index}",
-                )
-                for candidate_index in range(count)
-            ]
-        )
-        texts = [raw_backend.decode(sample.token_ids) for sample in samples]
-        selected = consensus_index(texts, [sample.logprob for sample in samples])
-        return samples[selected].token_ids
-
-    if method not in {"conditional_is", "conditional_is_small_proposal"}:
-        raise ValueError(f"unknown asynchronous benchmark method: {method}")
-    if method.endswith("small_proposal") and proposal_backend is None:
-        raise ValueError("small-proposal method requires a proposal backend")
-    section = config["conditional_is"]
-    reward = CumulativeConsensusReward(raw_backend.decode)
-    result = run_conditional_is(
-        base_backend,
-        prompt,
-        ConditionalISConfig(
-            candidate_count=int(section["candidate_count"]),
-            rollout_count=int(section["rollout_count"]),
-            block_size=int(section["block_size"]),
-            total_length=maximum,
-            reward_temperature=float(section["reward_temperature"]),
-            importance_log_ratio_clip=(
-                float(section["importance_log_ratio_clip"])
-                if method.endswith("small_proposal")
-                and section.get("importance_log_ratio_clip") is not None
-                else None
-            ),
-        ),
-        None,
-        seeds,
-        base_sampling=sampling,
-        rollout_backend=(
-            proposal_backend
-            if method.endswith("small_proposal")
-            else base_backend
-        ),
-        rollout_sampling=sampling,
-        reward_batch=reward,
-    )
-    return result.token_ids
+    return tokens
 
 
 def _accuracy(raw_backend, outputs, problems) -> float:
@@ -291,10 +224,12 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--methods", default=",".join(METHODS))
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     set_backend_override(config, args.backend)
     config["run"]["sample_count"] = args.limit
     methods = tuple(item.strip() for item in args.methods.split(",") if item.strip())
@@ -315,10 +250,10 @@ def main() -> None:
     base_weight_hash = input_artifacts["weight_sha256"]["base"]
     proposal_weight_hash = input_artifacts["weight_sha256"].get("proposal")
 
-    raw_backend = _load_backend(str(config["models"]["base"]), config)
+    raw_backend = _load_backend(str(config["models"]["base"]), config, role="base")
     try:
         raw_proposal = (
-            _load_backend(str(config["models"]["proposal"]), config)
+            _load_backend(str(config["models"]["proposal"]), config, role="proposal")
             if needs_proposal
             else None
         )
@@ -334,7 +269,7 @@ def main() -> None:
         raise ValueError("base and proposal tokenizers do not have identical vocabularies")
     prompts = [_prompt_tokens(raw_backend, problem, config) for problem in problems]
     root_seed = int(config["run"]["seed"])
-    warm_sampling = _sampling(raw_backend, config)
+    warm_sampling = SamplingConfig(temperature=float(config.get("sampling", {}).get("temperature", 1.0)), eos_token_id=raw_backend.tokenizer.eos_token_id)
     raw_backend.sample_batch(
         [GenerationRequest(prompts[0], 2, warm_sampling, root_seed, "warmup-base")]
     )

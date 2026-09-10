@@ -151,13 +151,6 @@ class RewardMHChainResult:
         )
 
 
-def _stage_lengths(total_length: int, block_size: int) -> tuple[int, ...]:
-    stages = list(range(block_size, total_length + 1, block_size))
-    if not stages or stages[-1] != total_length:
-        stages.append(total_length)
-    return tuple(stages)
-
-
 def suffix_length_probabilities(
     stage_length: int,
     schedule: str,
@@ -363,7 +356,7 @@ def run_mh_chain(
     trace: list[MHStep] = []
 
     for stage_index, stage_length in enumerate(
-        _stage_lengths(config.total_length, config.block_size)
+        config.stages
     ):
         extension_length = stage_length - len(tokens)
         if extension_length > 0:
@@ -385,7 +378,7 @@ def run_mh_chain(
             base_logs.extend(extension_p)
             proposal_logs.extend(extension_q)
 
-        for step_index in range(config.steps_per_block):
+        for step_index in range(config.stage_updates):
             cut_rng = seeds.generator("mh", chain_id, stage_index, step_index, "cut")
             cut, suffix_length, suffix_probability = _draw_suffix(
                 stage_length=stage_length,
@@ -506,7 +499,7 @@ def run_mh_chains_batched(
     traces: list[list[MHStep]] = [[] for _ in range(count)]
 
     for stage_index, stage_length in enumerate(
-        _stage_lengths(config.total_length, config.block_size)
+        config.stages
     ):
         extension_length = stage_length - len(tokens[0])
         if extension_length > 0:
@@ -530,7 +523,7 @@ def run_mh_chains_batched(
                 base_logs[chain_index].extend(extension_ps[chain_index])
                 proposal_logs[chain_index].extend(extension_qs[chain_index])
 
-        for step_index in range(config.steps_per_block):
+        for step_index in range(config.stage_updates):
             suffix_draws = tuple(
                 _draw_suffix(
                     stage_length=stage_length,

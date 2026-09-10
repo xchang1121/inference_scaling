@@ -8,6 +8,8 @@ replay implementation.
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import hashlib
 import json
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
+from experiments.arllm.scoped_execution import fixed_experiment_reward, with_output_scope
 from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
@@ -67,6 +70,7 @@ IMPLEMENTATION_FILES = (
 )
 
 
+@with_output_scope
 def _run_fresh(
     backend,
     prompt,
@@ -87,7 +91,7 @@ def _run_fresh(
         fresh_rollouts=total_rollouts,
         truncation=float(replay["truncation"]),
     )
-    sampling = SamplingConfig(eos_token_id=backend.tokenizer.eos_token_id)
+    sampling = SamplingConfig(temperature=float(config.get("sampling", {}).get("temperature", 1.0)), eos_token_id=backend.tokenizer.eos_token_id)
     registry = BehaviorRegistry()
     store = InMemoryReplayStore()
     generated: list[int] = []
@@ -125,6 +129,7 @@ def _run_fresh(
     }
 
 
+@with_output_scope
 def _run_warm(
     backend,
     proposal_backend,
@@ -145,7 +150,7 @@ def _run_warm(
         fresh_rollouts=int(replay["fresh_rollouts"]),
         truncation=float(replay["truncation"]),
     )
-    sampling = SamplingConfig(eos_token_id=backend.tokenizer.eos_token_id)
+    sampling = SamplingConfig(temperature=float(config.get("sampling", {}).get("temperature", 1.0)), eos_token_id=backend.tokenizer.eos_token_id)
     proposal_sampling = SamplingConfig(eos_token_id=proposal_backend.tokenizer.eos_token_id)
     cached_base = ScoreCachingBackend(backend)
     cached_proposal = ScoreCachingBackend(proposal_backend)
@@ -375,10 +380,12 @@ def main() -> None:
     parser.add_argument("--tag", default="default")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--verifier-config", type=Path)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
     set_backend_override(config, args.backend)
     if args.limit is not None:
@@ -435,8 +442,8 @@ def main() -> None:
     backend = None
     proposal = None
     if pending:
-        backend = _load_backend(str(config["models"]["base"]), config)
-        proposal = _load_backend(str(config["models"]["proposal"]), config)
+        backend = _load_backend(str(config["models"]["base"]), config, role="base")
+        proposal = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
         if backend.tokenizer.get_vocab() != proposal.tokenizer.get_vocab():
             raise ValueError("base and replay proposal tokenizers must match")
         manifest["models"] = {
@@ -472,7 +479,7 @@ def main() -> None:
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
             prompt = _prompt_tokens(backend, problem, config)
-            verifier_reward = _configured_verifier_reward(backend, problem, config)
+            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, _configured_verifier_reward)
             seed = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("replay", problem.index)
             )
@@ -481,7 +488,7 @@ def main() -> None:
             (fresh_tokens, fresh_info), fresh_seconds = _timed(
                 lambda prompt=prompt,
                 reward=verifier_reward,
-                reward_version=verifier_reward.version,
+                reward_version=reward_version,
                 seed=seed: _run_fresh(
                     backend, prompt, reward, reward_version, config, seed
                 )
@@ -492,7 +499,7 @@ def main() -> None:
             (warm_tokens, warm_info), warm_total_seconds = _timed(
                 lambda prompt=prompt,
                 reward=verifier_reward,
-                reward_version=verifier_reward.version,
+                reward_version=reward_version,
                 seed=seed: _run_warm(
                     backend,
                     proposal,
@@ -518,8 +525,8 @@ def main() -> None:
             )
             online_speedup = fresh_seconds / warm_info["online_seconds"]
             end_to_end_speedup = fresh_seconds / warm_total_seconds
-            fresh_text = backend.decode(fresh_tokens)
-            warm_text = backend.decode(warm_tokens)
+            fresh_text = fresh_info["output_segments"]["content_text"]
+            warm_text = warm_info["output_segments"]["content_text"]
             record = {
                 "schema_version": 4,
                 "manifest_fingerprint": fingerprint,

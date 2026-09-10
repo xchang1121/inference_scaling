@@ -8,6 +8,8 @@ offline cost cannot disappear from the reported speedup.
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides, require_full_scope
+
 import argparse
 import copy
 import gc
@@ -183,11 +185,12 @@ def _draft_snapshot(backend: Any) -> Any:
     return callback() if callable(callback) else None
 
 
-def _prompt_tokens(tokenizer: Any, question: str) -> TokenSequence:
-    rendered = tokenizer.apply_chat_template(
+def _prompt_tokens(tokenizer: Any, question: str, config: dict[str, Any] | None = None) -> TokenSequence:
+    from inference_scaling.shared.prompting import render_prompt
+    rendered = render_prompt(
+        tokenizer,
         [{"role": "user", "content": gsm8k_prompt(question)}],
-        tokenize=False,
-        add_generation_prompt=True,
+        config or {},
     )
     return tuple(
         int(token)
@@ -249,7 +252,14 @@ class _BackendFactory:
             from transformers import AutoTokenizer
 
             path = str(self.config["models"]["base"])
-            self.tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
+            from inference_scaling.shared.model_loading import model_loading_options
+            options = model_loading_options(self.config, "base")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                options.get("tokenizer_name_or_path", path),
+                revision=options.get("tokenizer_revision", options.get("revision") if "tokenizer_name_or_path" not in options else None),
+                cache_dir=options.get("cache_dir"), local_files_only=options["local_files_only"],
+                trust_remote_code=options["trust_remote_code"], **options.get("tokenizer_kwargs", {}),
+            )
             if self.tokenizer.pad_token_id is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.padding_side = "left"
@@ -268,6 +278,7 @@ class _BackendFactory:
                 model_id=self._shared.model_id,
                 device=self._shared.device,
                 max_score_batch_size=self._shared.max_score_batch_size,
+                score_chunk_size=self._shared.score_chunk_size,
                 draft_tree=tree,
                 speculation=speculation,
             )
@@ -729,6 +740,7 @@ def main() -> None:
     parser.add_argument("--branch-factor", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--verifier-config", type=Path)
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.rollout_count < 2:
         raise ValueError("rollout-count must be at least two for a cost-matched pilot split")
@@ -740,6 +752,8 @@ def main() -> None:
 
     with args.config.open("rb") as stream:
         config = tomllib.load(stream)
+    apply_model_output_overrides(config, args)
+    require_full_scope(config, "benchmark_rollout_infra")
     replace_verifier_from_file(config, args.verifier_config)
     problems = select_problems(
         load_gsm8k(args.data), args.limit, seed=int(config["run"]["subset_seed"])
@@ -747,7 +761,7 @@ def main() -> None:
     factory = _BackendFactory(config, args.backend, args.dtype)
     try:
         prompts = tuple(
-            _prompt_tokens(factory.tokenizer, problem.question) for problem in problems
+            _prompt_tokens(factory.tokenizer, problem.question, config) for problem in problems
         )
         gold_by_prompt = {
             prompt: problem.gold_answer

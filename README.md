@@ -1,7 +1,7 @@
 # inference_scaling
 
 本仓库同时实现自回归语言模型（AR-LLM）和掩码扩散语言模型（dLLM）的训练与推理扩展。AR-LLM
-使用 Qwen2.5 与组相对策略优化（Group Relative Policy Optimization，GRPO）；dLLM 使用 LLaDA-MoE 与
+提供通用因果语言模型加载接口及组相对策略优化（Group Relative Policy Optimization，GRPO）；已保存的 AR 实验使用 Qwen2.5。dLLM 使用 LLaDA-MoE 与
 方差缩减偏好优化（Variance-Reduced Preference Optimization，VRPO）。两侧共享 GSM8K 数据、奖励、统计量、计算量记录和
 可续跑调度，并分别实现 Metropolis--Hastings（MH）、重要性采样（IS）与 rollout replay。
 
@@ -55,7 +55,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 代替序列对数似然：每个偏好对采样 8 个独立掩码比例，每个比例采样 1 个掩码，并让当前策略与冻结的参考模型
 使用相同掩码。LoRA 适配器与关闭适配器后得到的参考模型共同使用同一份已加载基础模型。
 
-当前 Qwen 默认 MH/IS 的完整步骤、模型职责和参数表，以及初始估计与最终估计分离的 IS、流式奖励、SMC
+Qwen 复现配置中 MH/IS 的完整步骤、模型职责和参数表，以及初始估计与最终估计分离的 IS、流式奖励、SMC
 多树搜索、两阶段延迟接受 MH、历史后缀 proposal、批处理、KV 复用和 vLLM 后端，均集中在同一份
 [算法基础、原理与实现文档](docs/methods/ALGORITHMS.md)中按“目标—算法—实现—误差与成本”组织。
 
@@ -88,6 +88,7 @@ unparseable_reward = 0.0
 
 ```powershell
 python -m experiments.arllm.gsm8k_reproduction `
+  --config configs/gsm8k_3090_aligned.toml `
   --method verifier_conditional_is `
   --verifier-config configs\verifiers\gsm8k_numeric_reference.toml `
   --limit 1 --tag verifier-check
@@ -116,6 +117,7 @@ MH 对同一目标直接使用 `mh --mh-alpha <alpha>`，无需把 logprob 再�
 
 ```powershell
 python -m experiments.arllm.gsm8k_reproduction `
+  --config configs/gsm8k_3090_aligned.toml `
   --method conditional_is --conditional-reward sequence_log_probability `
   --reward-temperature 0.5 --logprob-reward-scale 0.5 `
   --limit 1 --tag power-two-is
@@ -150,7 +152,7 @@ chat template 或显式配置。关闭思考、缺少完整思考段、结构解
 Consilience，并记录回退原因。`reward.consilience.scope = "full"` 可直接选择全序列评分。
 vLLM 路径需要配置 Transformers 精确评分后端。
 
-单方法入口 `experiments.arllm.gsm8k_reproduction` 的 `--sampling-scope full|thinking` 独立控制 IS/MH
+AR 统一入口及单方法入口的 `--sampling-scope full|thinking` 独立控制 IS/MH
 的采样范围：`full` 操作完整生成，`thinking` 在可靠的结束标记处选择思考段，再由基模型生成最终内容。
 XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍可仅评价思考字段。输出记录区分请求范围、
 实际范围、思考文本、最终内容和回退原因。字段配置与示例见[输出格式与模式识别](docs/methods/ALGORITHMS.md#alg-output-formats)。
@@ -158,11 +160,54 @@ XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍
 公式、实现边界与成本见[奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)，评测设置见
 [Consilience 评测设置](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
 
+## 通用模型与生成配置
+
+单方法入口默认读取 [`configs/arllm.toml`](configs/arllm.toml)，使用 `--model` 指定权重。
+默认生成上限为 **32,768 token**，包括思考和最终内容；EOS 可提前结束生成。
+每个提示的实际预算取配置上限与主模型、proposal 模型剩余上下文长度的较小值。更长输出可通过
+`--max-new-tokens` 设置；结果记录请求上限、实际上限及上下文截断标记。
+`gsm8k_quick.toml` 保留短序列冒烟设置，历史实验配置保留原有预算。
+
+```powershell
+python -m experiments.arllm.gsm8k_reproduction `
+  --model "D:\models\my-causal-lm" `
+  --method conditional_is --reward consilience `
+  --sampling-scope thinking --max-new-tokens 32768 `
+  --limit 1 --tag thinking-is
+```
+
+`--model` 也接受 Hub 模型 ID；默认读取本地目录或已缓存文件，`--allow-download` 开启下载。
+模型选项按 `[model_loading]` 与 `[model_loading.base|proposal|rl]` 合并：
+
+| 配置或参数 | 用途 |
+| --- | --- |
+| `--model`、`--proposal-model` | 主模型与 rollout 模型的目录或 Hub ID |
+| `--model-revision` | 主模型版本；建议使用固定提交 ID |
+| `--tokenizer`、`--tokenizer-revision` | 独立 tokenizer 及其版本 |
+| `model_loading.adapter_revision` | 适配器版本，与基础模型版本分开 |
+| `model_loading.device_map` | Transformers 的设备放置策略，如 `"auto"` |
+| `model_loading.attn_implementation` | Transformers 注意力实现，如 `"sdpa"` |
+| `model_loading.model_kwargs`、`tokenizer_kwargs` | 对应加载接口的附加配置 |
+| `--score-chunk-size` | 长序列评分与前缀预填充的分块长度，默认 256 |
+| `--mh-iterations` | 固定完整长度目标上的 MH 更新次数，与生成上限独立 |
+| `--thinking-mode auto|enabled|disabled` | 思考模式声明及支持该开关的 chat template 设置 |
+| `--thinking-format auto|tags|xml|json` | 思考与最终内容的解析格式 |
+
+权重校验支持单文件、索引分片和 PEFT 适配器；所有实际使用的分片参与校验。
+vLLM 与精确评分后端使用相同的已解析权重和 tokenizer。Consilience 的 vLLM 路径需要
+`vllm.exact_scoring_backend = "transformers"`；设备、显存比例及量化选项仍由 `[vllm]` 设置。
+详细接口、数值检查和模块分工见[模型加载与长序列执行](docs/methods/ALGORITHMS.md#alg-model-loading)。
+
+范围控制已接入基础 IS、迭代 IS、replay、动态候选 IS、MH、pass@k 和异步比较。
+依赖最终内容的奖励会显式采用全序列采样。两个固定任务的 infra 微基准使用 `full`，并在加载模型前检查范围。
+通用 AR 加载器面向支持因果 logits、tokenizer 和 KV 缓存的模型；具体架构由所选 Transformers 或 vLLM 版本支持。
+dLLM 继续使用独立的扩散后端接口。
+
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | 默认 Qwen MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
+| [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
 | [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据配置、方法标识、训练与推理命令、统计量和输出目录 |
 | [算法设计与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 固定实验设置下的准确率、pass@k、奖励与 proposal 对照，以及结果适用范围 |
 | [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 批处理、IS/MH 复用和奖励调度的墙钟、分模型 FLOPs、建库与设计成本 |
@@ -172,13 +217,13 @@ XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍
 
 | 模型族 | 模型与训练对照 | 推理组件 | 执行接口 |
 | --- | --- | --- | --- |
-| AR-LLM | Qwen2.5-1.5B 主模型与 GRPO；0.5B 可作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；两种模型的计算量分别记录 |
+| AR-LLM | 通用因果模型与 GRPO；现有报告使用 Qwen2.5-1.5B，0.5B 作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；两种模型的计算量分别记录 |
 | dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 分块生成、轨迹 MH、条件 IS 与 replay | 批量 Transformers；提供轻量测试和大显存机器入口 |
 | 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算量记录 | AR/dLLM 共用同一实现 |
 
 统一入口默认使用 `multiscale` 后缀 MH。replay 要求历史记录与当前提示、模型和采样策略匹配；IS 的最终估计
 记录还必须尚未使用。候选缓存与连续批处理可复用已有请求，历史库构建成本单独统计。具体执行顺序见
-[默认 MH 与 IS](docs/methods/ALGORITHMS.md#alg-qwen-default-mh)。
+[Qwen 复现流程](docs/methods/ALGORITHMS.md#alg-qwen-default-mh)。
 
 版本控制保留代码、配置、测试、使用文档和两份精选实验报告。运行产生的原始数据、汇总、日志和清单写入
 `results/`，由 Git 统一忽略。报告分别讨论算法质量与执行成本，非默认方案的简要结论集中在算法文档中。

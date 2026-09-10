@@ -8,6 +8,8 @@ per-query cost of MH and conditional importance sampling.
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
 import json
 import os
@@ -26,6 +28,7 @@ import transformers
 from datasets import Dataset
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer
+from inference_scaling.shared.model_loading import model_loading_options, resolve_checkpoint_path
 from trl import GRPOConfig, GRPOTrainer
 
 from inference_scaling.shared.compute import (
@@ -47,7 +50,8 @@ from inference_scaling.shared.verifier import (
 
 from experiments.shared.artifacts import (
     checkpoint_metadata_hashes,
-    cached_file_sha256,
+    checkpoint_weight_hashes,
+    weight_manifest_digest,
     implementation_hashes,
     json_fingerprint,
 )
@@ -231,24 +235,29 @@ def main() -> None:
         default="auto",
         help="'auto', 'none', or an explicit checkpoint directory",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
         config = tomllib.load(source)
+    apply_model_output_overrides(config, args)
     _apply_overrides(config, args)
     if not torch.cuda.is_available():
         raise RuntimeError("GRPO training requires CUDA in this reproduction")
 
-    base_path = Path(config["model"]["base"])
-    weight_path = base_path / "model.safetensors"
-    expected_weight_hash = str(config["model"]["weight_sha256"])
-    actual_weight_hash = cached_file_sha256(
-        weight_path,
-        cache_directory=Path(__file__).resolve().parents[2]
-        / ".cache"
-        / "artifact_hashes",
-        expected=expected_weight_hash,
+    loading = model_loading_options(config, "base")
+    loading.setdefault("revision", config["model"].get("revision"))
+    base_path = resolve_checkpoint_path(
+        str(config["model"]["base"]), revision=loading.get("revision"),
+        cache_dir=loading.get("cache_dir"), local_files_only=loading["local_files_only"],
     )
+    weight_files = checkpoint_weight_hashes(
+        base_path, cache_directory=Path(__file__).resolve().parents[2] / ".cache" / "artifact_hashes",
+    )
+    actual_weight_hash = weight_manifest_digest(weight_files)
+    expected_weight_hash = config["model"].get("weight_sha256")
+    if expected_weight_hash is not None and expected_weight_hash != actual_weight_hash:
+        raise ValueError("training checkpoint weight hash mismatch")
 
     train_path = Path(config["data"]["train"])
     test_path = Path(config["data"]["test"])
@@ -283,6 +292,8 @@ def main() -> None:
         "run": config["run"],
         "data": {**config["data"], "selected_indices": [problem.index for problem in selected]},
         "model": config["model"],
+        "model_loading": loading,
+        "input_shard_sha256": weight_files,
         "training": training,
         "lora": config["lora"],
         "verifier": verifier_spec_from_config(config).as_dict(),
@@ -322,8 +333,8 @@ def main() -> None:
             "test_sha256": GSM8K_TEST_SHA256,
         },
         "base_model": {
-            "source": config["model"]["source"],
-            "revision": config["model"]["revision"],
+            "source": config["model"].get("source", config["model"]["base"]),
+            "revision": loading.get("revision"),
             "weight_sha256": actual_weight_hash,
         },
         "environment": {
@@ -341,7 +352,12 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(base_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        loading.get("tokenizer_name_or_path", base_path),
+        revision=loading.get("tokenizer_revision"), cache_dir=loading.get("cache_dir"),
+        local_files_only=loading["local_files_only"], trust_remote_code=loading["trust_remote_code"],
+        **loading.get("tokenizer_kwargs", {}),
+    )
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
@@ -351,7 +367,7 @@ def main() -> None:
         r=int(lora["r"]),
         lora_alpha=int(lora["alpha"]),
         lora_dropout=float(lora["dropout"]),
-        target_modules=list(lora["target_modules"]),
+        target_modules=lora["target_modules"] if isinstance(lora["target_modules"], str) else list(lora["target_modules"]),
         bias="none",
         task_type=TaskType.CAUSAL_LM,
     )
@@ -389,9 +405,11 @@ def main() -> None:
         optim="adamw_torch_fused",
         dataloader_num_workers=0,
         model_init_kwargs={
-            "dtype": str(config["model"]["dtype"]),
-            "attn_implementation": str(config["model"]["attn_implementation"]),
+            **loading.get("model_kwargs", {}),
+            "dtype": str(config["model"].get("dtype", "bfloat16")),
+            "attn_implementation": loading.get("attn_implementation", config["model"].get("attn_implementation", "sdpa")),
             "local_files_only": True,
+            "trust_remote_code": loading["trust_remote_code"],
         },
     )
     reward = ConfiguredTrainingVerifierReward(

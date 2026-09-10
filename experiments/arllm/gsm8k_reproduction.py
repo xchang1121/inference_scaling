@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
+
 import argparse
-from copy import deepcopy
 import gc
 import hashlib
 import importlib.metadata
@@ -86,7 +87,9 @@ from experiments.shared.statistics import wilson_interval
 
 _file_sha256 = file_sha256
 
-from experiments.arllm.runtime import set_rl_adapter_override, validate_model_artifacts
+from experiments.arllm.runtime import model_metadata, set_rl_adapter_override, validate_model_artifacts
+from inference_scaling.shared.generation import generation_config_for_prompt
+from inference_scaling.shared.prompting import render_prompt
 from experiments.shared.methods import AR_METHODS
 
 METHODS = AR_METHODS
@@ -164,21 +167,8 @@ def _timed(call: Callable[[], Any]) -> tuple[Any, float]:
 
 
 def _prompt_tokens(backend: Any, problem: GSM8KProblem, config: dict[str, Any] | None = None) -> TokenSequence:
-    config = config or {}
-    kwargs = dict(config.get("prompt", {}).get("chat_template_kwargs", {}))
-    mode = config.get("output", {}).get("thinking_mode", "auto")
-    if mode != "auto" and "enable_thinking" in str(getattr(backend.tokenizer, "chat_template", "")):
-        expected = mode == "enabled"
-        if "enable_thinking" in kwargs and kwargs["enable_thinking"] != expected:
-            raise ValueError("thinking_mode conflicts with chat_template_kwargs.enable_thinking")
-        kwargs["enable_thinking"] = expected
     messages = [{"role": "user", "content": gsm8k_prompt(problem.question)}]
-    rendered = backend.tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        **kwargs,
-    )
+    rendered = render_prompt(backend.tokenizer, messages, config or {})
     return backend.encode(str(rendered), add_special_tokens=False)
 
 
@@ -205,8 +195,9 @@ def _load_backend(
     config: dict[str, Any],
     *,
     adapter_base: str | None = None,
+    role: str | None = None,
 ) -> Any:
-    return load_backend_from_config(path, config, adapter_base=adapter_base)
+    return load_backend_from_config(path, config, adapter_base=adapter_base, role=role)
 
 
 def _trim_eos(tokens: TokenSequence, eos_token_id: int | None) -> TokenSequence:
@@ -604,7 +595,7 @@ def _run_method(
     seeds: SeedStream,
     proposal_backend: Any | None,
 ) -> tuple[TokenSequence, dict[str, Any]]:
-    config = deepcopy(config)
+    config, length_budget = generation_config_for_prompt(config, len(prompt), [backend, proposal_backend])
     source = config.get("reward", {}).get("source")
     if source is not None:
         config.setdefault("conditional_is", {})["reward"] = source
@@ -634,6 +625,7 @@ def _run_method(
         sampling=SamplingConfig(temperature=temperature, eos_token_id=backend.tokenizer.eos_token_id),
         seed=seeds.derive(method, problem.index, "final-content"),
     )
+    diagnostics["generation_budget"] = length_budget
     diagnostics["output_segments"] = output
     if diagnostics.get("reward_source") == "consilience" or (
         source == "consilience" and method not in {"mh", "base", "rl_sample", "beam", "rl_greedy"}
@@ -715,6 +707,7 @@ def _run_method_impl(
                 total_length=maximum,
                 block_size=int(mh["block_size"]),
                 steps_per_block=int(mh["steps_per_block"]),
+                iterations=mh.get("iterations"),
                 suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
             SamplingConfig(temperature=1.0 / float(mh["alpha"])),
@@ -725,6 +718,7 @@ def _run_method_impl(
             "target_sampling_temperature": sampling_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
+            "iterations": mh.get("iterations"),
             "suffix_schedule": str(mh.get("suffix_schedule", "uniform")),
             "attempts": result.attempts,
             "accepted": result.accepted,
@@ -763,6 +757,7 @@ def _run_method_impl(
                 total_length=maximum,
                 block_size=int(mh["block_size"]),
                 steps_per_block=int(mh["steps_per_block"]),
+                iterations=mh.get("iterations"),
                 reward_temperature=reward_temperature,
                 suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
@@ -780,6 +775,7 @@ def _run_method_impl(
             "reward_temperature": reward_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
+            "iterations": mh.get("iterations"),
             "suffix_schedule": str(mh.get("suffix_schedule", "uniform")),
             "updates": result.attempts,
             "accepted": result.accepted,
@@ -1209,6 +1205,7 @@ def _summary(
 
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+    apply_model_output_overrides(config, args)
     set_backend_override(config, args.backend)
     if getattr(args, "vllm_mh_fused_logprobs", False):
         if args.method != "mh":
@@ -1218,17 +1215,8 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         ] = True
     set_rl_adapter_override(config, getattr(args, "rl_adapter", None))
     replace_verifier_from_file(config, getattr(args, "verifier_config", None))
-    for name in (
-        "sampling_scope", "thinking_mode", "thinking_format", "thinking_path", "content_path",
-        "thinking_start_text", "thinking_end_text", "starts_in_thinking",
-    ):
-        value = getattr(args, name, None)
-        if value is not None:
-            config.setdefault("output", {})[name] = value
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
-    if args.max_new_tokens is not None:
-        config["generation"]["max_new_tokens"] = args.max_new_tokens
     if args.sampling_temperature is not None:
         config.setdefault("sampling", {})["temperature"] = args.sampling_temperature
     if args.num_beams is not None:
@@ -1334,26 +1322,14 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
             config["conditional_is"]["block_size"] = args.block_size
 
 
-def _model_metadata(config: dict[str, Any], method: str) -> dict[str, str]:
-    key = "rl" if method.startswith("rl_") else "base"
-    metadata = {
-        "role": key,
-        "local_path": str(config["models"][key]),
-        "source": str(config["models"][f"{key}_source"]),
-        "revision": str(config["models"][f"{key}_revision"]),
-    }
-    if key == "base":
-        metadata["weight_sha256"] = str(config["models"]["base_weight_sha256"])
-    if key == "rl":
-        metadata["kind"] = str(config["models"].get("rl_kind", "full_model"))
-        if "rl_base" in config["models"]:
-            metadata["base_path"] = str(config["models"]["rl_base"])
-    return metadata
+def _model_metadata(config: dict[str, Any], method: str) -> dict[str, Any]:
+    return model_metadata(config, "rl" if method.startswith("rl_") else "base")
+
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=Path, default=Path("configs/gsm8k_quick.toml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/arllm.toml"))
     parser.add_argument(
         "--backend",
         choices=BACKEND_CHOICES,
@@ -1458,6 +1434,7 @@ def main() -> None:
         default=0,
         help="independent sampling replicate included in the request-level seed",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
 
     with args.config.open("rb") as source:
@@ -1525,12 +1502,7 @@ def main() -> None:
             else None
         ),
         "proposal_model": (
-            {
-                "local_path": str(config["models"]["proposal"]),
-                "source": str(config["models"]["proposal_source"]),
-                "revision": str(config["models"]["proposal_revision"]),
-                "weight_sha256": str(config["models"]["proposal_weight_sha256"]),
-            }
+            model_metadata(config, "proposal")
             if args.method.endswith("small_proposal")
             else None
         ),
@@ -1586,134 +1558,141 @@ def main() -> None:
     adapter_base = None
     if model_key == "rl" and config["models"].get("rl_kind") == "peft_adapter":
         adapter_base = str(config["models"]["rl_base"])
-    backend = _load_backend(
-        str(config["models"][model_key]),
-        config,
-        adapter_base=adapter_base,
-    )
+    backend = None
     proposal_backend = None
-    if args.method.endswith("small_proposal"):
-        proposal_backend = _load_backend(str(config["models"]["proposal"]), config)
-        if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
-            raise ValueError(
-                "base and proposal tokenizers do not have identical vocabularies"
-            )
-
-    manifest["model"]["parameter_count"] = backend.parameter_count
-    manifest["model"]["verified_base_weight_sha256"] = actual_base_hash
-    if model_key == "rl":
-        assert actual_adapter_hash is not None
-        manifest["model"]["adapter_weight_sha256"] = actual_adapter_hash
-        manifest["model"]["base_weight_sha256"] = str(
-            config["models"]["base_weight_sha256"]
+    try:
+        backend = _load_backend(
+            str(config["models"][model_key]),
+            config,
+            adapter_base=adapter_base, role=model_key,
         )
-    if proposal_backend is not None and manifest["proposal_model"] is not None:
-        assert actual_proposal_hash is not None
-        manifest["proposal_model"]["parameter_count"] = proposal_backend.parameter_count
-        manifest["proposal_model"]["verified_weight_sha256"] = actual_proposal_hash
-    manifest["compute_accounting"] = {
-        "primary_units": ["forward_token_slots", "estimated_dense_forward_flops"],
-        "flop_formula": "2 * model_parameter_count * forward_token_slots",
-        "wall_time_role": "hardware-dependent supplemental measurement",
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+        proposal_backend = None
+        if args.method.endswith("small_proposal"):
+            proposal_backend = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+            if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
+                raise ValueError(
+                    "base and proposal tokenizers do not have identical vocabularies"
+                )
 
-    warm_prompt = _prompt_tokens(backend, pending[0], config)
-    _sample_one(
-        backend,
-        warm_prompt,
-        max_new_tokens=2,
-        temperature=1.0,
-        seed=int(config["run"]["seed"]),
-        request_id="warmup",
-    )
-    seeds = SeedStream(
-        SeedStream(int(config["run"]["seed"])).derive("draw", args.draw_index)
-    )
-    with records_path.open("a", encoding="utf-8", buffering=1) as sink:
-        for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem, config)
-            before = backend.snapshot()
-            proposal_before = proposal_backend.snapshot() if proposal_backend else None
-            (tokens, diagnostics), elapsed = _timed(
-                lambda backend=backend, problem=problem, prompt=prompt, proposal_backend=proposal_backend: (
-                    _run_method(
-                        args.method,
-                        backend,
-                        problem,
-                        prompt,
-                        config,
-                        seeds,
-                        proposal_backend,
+        manifest["model"]["parameter_count"] = backend.parameter_count
+        manifest["model"]["verified_base_weight_sha256"] = actual_base_hash
+        if model_key == "rl" and config["models"].get("rl_kind") == "peft_adapter":
+            assert actual_adapter_hash is not None
+            manifest["model"]["adapter_weight_sha256"] = actual_adapter_hash
+            manifest["model"]["base_weight_sha256"] = str(
+                input_weight_hashes.get("rl_base", actual_base_hash)
+            )
+        if proposal_backend is not None and manifest["proposal_model"] is not None:
+            assert actual_proposal_hash is not None
+            manifest["proposal_model"]["parameter_count"] = proposal_backend.parameter_count
+            manifest["proposal_model"]["verified_weight_sha256"] = actual_proposal_hash
+        manifest["compute_accounting"] = {
+            "primary_units": ["forward_token_slots", "estimated_dense_forward_flops"],
+            "flop_formula": "2 * model_parameter_count * forward_token_slots",
+            "wall_time_role": "hardware-dependent supplemental measurement",
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        warm_prompt = _prompt_tokens(backend, pending[0], config)
+        _sample_one(
+            backend,
+            warm_prompt,
+            max_new_tokens=2,
+            temperature=1.0,
+            seed=int(config["run"]["seed"]),
+            request_id="warmup",
+        )
+        seeds = SeedStream(
+            SeedStream(int(config["run"]["seed"])).derive("draw", args.draw_index)
+        )
+        with records_path.open("a", encoding="utf-8", buffering=1) as sink:
+            for ordinal, problem in enumerate(pending, 1):
+                prompt = _prompt_tokens(backend, problem, config)
+                before = backend.snapshot()
+                proposal_before = proposal_backend.snapshot() if proposal_backend else None
+                (tokens, diagnostics), elapsed = _timed(
+                    lambda backend=backend, problem=problem, prompt=prompt, proposal_backend=proposal_backend: (
+                        _run_method(
+                            args.method,
+                            backend,
+                            problem,
+                            prompt,
+                            config,
+                            seeds,
+                            proposal_backend,
+                        )
                     )
                 )
-            )
-            after = backend.snapshot()
-            proposal_after = proposal_backend.snapshot() if proposal_backend else None
-            text = backend.decode(tokens)
-            segments = diagnostics["output_segments"]
-            prediction = extract_numeric_answer(segments["content_text"])
-            record = {
-                "schema_version": 2,
-                "method": args.method,
-                "tag": args.tag,
-                "draw_index": args.draw_index,
-                "problem_index": problem.index,
-                "question_sha256": hashlib.sha256(
-                    problem.question.encode()
-                ).hexdigest(),
-                "gold_answer": _fraction_text(problem.gold_answer),
-                "prediction": _fraction_text(prediction),
-                "correct": prediction == problem.gold_answer,
-                "output": text,
-                "thinking": segments["thinking_text"],
-                "content": segments["content_text"],
-                "output_tokens": len(tokens),
-                "prompt_tokens": len(prompt),
-                "elapsed_seconds": elapsed,
-                "backend_delta": _snapshot_delta(before, after),
-                "diagnostics": diagnostics,
-            }
-            if proposal_before is not None and proposal_after is not None:
-                record["proposal_backend_delta"] = _snapshot_delta(
-                    proposal_before, proposal_after
-                )
-            sink.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-            fallback = segments.get("sampling_fallback_reason") or segments.get("reward_fallback_reason")
-            if fallback is not None:
+                after = backend.snapshot()
+                proposal_after = proposal_backend.snapshot() if proposal_backend else None
+                text = backend.decode(tokens)
+                segments = diagnostics["output_segments"]
+                prediction = extract_numeric_answer(segments["content_text"])
+                record = {
+                    "schema_version": 2,
+                    "method": args.method,
+                    "tag": args.tag,
+                    "draw_index": args.draw_index,
+                    "problem_index": problem.index,
+                    "question_sha256": hashlib.sha256(
+                        problem.question.encode()
+                    ).hexdigest(),
+                    "gold_answer": _fraction_text(problem.gold_answer),
+                    "prediction": _fraction_text(prediction),
+                    "correct": prediction == problem.gold_answer,
+                    "output": text,
+                    "thinking": segments["thinking_text"],
+                    "content": segments["content_text"],
+                    "output_tokens": len(tokens),
+                    "prompt_tokens": len(prompt),
+                    "elapsed_seconds": elapsed,
+                    "backend_delta": _snapshot_delta(before, after),
+                    "diagnostics": diagnostics,
+                }
+                if proposal_before is not None and proposal_after is not None:
+                    record["proposal_backend_delta"] = _snapshot_delta(
+                        proposal_before, proposal_after
+                    )
+                sink.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                fallback = segments.get("sampling_fallback_reason") or segments.get("reward_fallback_reason")
+                if fallback is not None:
+                    print(
+                        f"gsm8k_index={problem.index} sampling_scope={segments['sampling_scope']} "
+                        f"reward_scope={segments.get('reward_scope', 'unchanged')} full_fallback={fallback}",
+                        flush=True,
+                    )
                 print(
-                    f"gsm8k_index={problem.index} sampling_scope={segments['sampling_scope']} "
-                    f"reward_scope={segments.get('reward_scope', 'unchanged')} full_fallback={fallback}",
+                    f"[{ordinal}/{len(pending)}] method={args.method} "
+                    f"gsm8k_index={problem.index} correct={record['correct']} "
+                    f"seconds={elapsed:.3f}",
                     flush=True,
                 )
-            print(
-                f"[{ordinal}/{len(pending)}] method={args.method} "
-                f"gsm8k_index={problem.index} correct={record['correct']} "
-                f"seconds={elapsed:.3f}",
-                flush=True,
-            )
 
-    records = _load_records(records_path)
-    selected = [
-        record
-        for record in records
-        if int(record["problem_index"]) in {p.index for p in problems}
-    ]
-    summary = _summary(selected, manifest)
-    summary_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        records = _load_records(records_path)
+        selected = [
+            record
+            for record in records
+            if int(record["problem_index"]) in {p.index for p in problems}
+        ]
+        summary = _summary(selected, manifest)
+        summary_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    finally:
+        try:
+            close_backend(proposal_backend)
+        finally:
+            close_backend(backend)
+            backend = proposal_backend = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-    close_backend(proposal_backend)
-    close_backend(backend)
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

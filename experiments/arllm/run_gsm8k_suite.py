@@ -9,15 +9,20 @@ import sys
 import tomllib
 from pathlib import Path
 
+from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides, model_output_cli_arguments
 from inference_scaling.arllm.backends import BACKEND_CHOICES
 from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHODS = AR_DEFAULT_METHODS
 SUPPORTED_METHODS = AR_METHODS
+_CLI_OVERRIDES: list[str] = []
 
 
 def _run(command: list[str], environment: dict[str, str]) -> None:
+    script = Path(command[1]).name
+    if not script.startswith(("summarize_", "plot_", "render_")):
+        command[2:2] = _CLI_OVERRIDES
     print("RUN", subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, check=True, env=environment)
 
@@ -53,10 +58,14 @@ def main() -> None:
         default=Path("results"),
         help="directory for aggregate reports",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
+    global _CLI_OVERRIDES
+    _CLI_OVERRIDES = model_output_cli_arguments(args)
 
     with args.config.open("rb") as source:
         loaded_config = tomllib.load(source)
+    apply_model_output_overrides(loaded_config, args)
     configured_length = int(loaded_config["generation"]["max_new_tokens"])
     configured_beams = int(loaded_config["beam"]["num_beams"])
     configured_best_of_n = int(loaded_config["best_of_n"]["samples"])

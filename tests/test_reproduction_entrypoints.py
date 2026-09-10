@@ -96,6 +96,29 @@ def test_ar_full_entry_preserves_training_and_every_suite_family(tmp_path):
     assert suite[suite.index("--mh-suffix-schedule") + 1] == "multiscale"
 
 
+def test_shared_model_and_scope_flags_reach_every_ar_command(tmp_path):
+    args = _ar_args(summary_root=tmp_path, model="org/model", model_revision="fixed",
+                    tokenizer="org/tokenizer", sampling_scope="thinking", max_new_tokens=32768,
+                    mh_iterations=5, allow_download=False, thinking_mode="enabled")
+    for command in build_ar_commands(args, Path.cwd()):
+        for flag, value in (("--model", "org/model"), ("--model-revision", "fixed"),
+                            ("--tokenizer", "org/tokenizer"), ("--sampling-scope", "thinking"),
+                            ("--max-new-tokens", "32768"), ("--mh-iterations", "5")):
+            assert command[command.index(flag) + 1] == value
+        assert "--no-allow-download" in command
+
+
+def test_model_override_removes_stale_identity_and_honors_offline_override():
+    from experiments.shared.model_cli import apply_model_output_overrides
+    config = {"models": {"base": "old", "base_weight_sha256": "old-hash", "base_revision": "old-ref", "rl_base": "old"},
+              "model_loading": {"base": {"local_files_only": True}}}
+    apply_model_output_overrides(config, argparse.Namespace(model="org/new", model_revision="commit", allow_download=True))
+    assert config["models"]["base"] == config["models"]["rl_base"] == "org/new"
+    assert "base_weight_sha256" not in config["models"]
+    assert config["model_loading"]["base"]["revision"] == "commit"
+    assert config["model_loading"]["base"]["local_files_only"] is False
+
+
 def test_ar_component_without_quality_does_not_run_main_methods(tmp_path):
     commands = build_ar_commands(
         _ar_args(

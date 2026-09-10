@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from experiments.shared.model_cli import add_model_output_arguments, model_output_cli_arguments
+
 import argparse
 import json
 import os
@@ -67,6 +69,7 @@ def main() -> None:
         action="store_true",
         help="skip either backend run when its report already exists",
     )
+    add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.limit <= 0 or args.workers <= 0:
         raise ValueError("--limit and --workers must be positive")
@@ -87,7 +90,7 @@ def main() -> None:
         (str(REPOSITORY_ROOT / "src"), str(REPOSITORY_ROOT), existing or "")
     ).rstrip(os.pathsep)
 
-    common = [
+    common = [*model_output_cli_arguments(args),
         "--config",
         str(args.config),
         "--data",
