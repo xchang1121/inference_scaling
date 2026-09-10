@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from functools import lru_cache
 import time
+from typing import Any, Callable
 
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
@@ -43,19 +44,19 @@ def generation_cost(prompt_tokens: int, generated_tokens: int, parameter_count: 
             "estimated_dense_forward_flops": dense_forward_flops(parameter_count, slots)}
 
 
-def add_costs(*costs) -> dict:
+def add_costs(*costs: dict[str, Any]) -> dict[str, Any]:
     keys = {key for cost in costs for key in cost}
     return {key: sum(cost.get(key, 0) for cost in costs) for key in keys}
 
 
-def check_budget(cost: dict, limit: int) -> int:
+def check_budget(cost: dict[str, Any], limit: int) -> int:
     used = int(cost.get("generation_forward_token_slots", 0) + cost.get("score_forward_token_slots", 0))
     if used > limit:
         raise RuntimeError(f"inference cost {used} exceeds the declared budget {limit}")
     return used
 
 
-def crop_sample(sample: dict, length: int) -> tuple[tuple[int, ...], tuple[float, ...]]:
+def crop_sample(sample: dict[str, Any], length: int) -> tuple[tuple[int, ...], tuple[float, ...]]:
     return tuple(sample["token_ids"][:length]), tuple(sample["token_logprobs"][:length])
 
 
@@ -88,7 +89,7 @@ class FrozenAnswerReward:
         return sum(self.judge.equivalent(content, pilot) for pilot in self.contents) / len(self.contents)
 
 
-def reward_temperature(source: str, config: dict) -> float:
+def reward_temperature(source: str, config: dict[str, Any]) -> float:
     options = config.get("comparison", {})
     return float(options.get(source + "_temperature", {
         "self_consistency": 0.25, "sequence_log_probability": 10.0, "consilience": 2.0,
@@ -156,6 +157,7 @@ def compare_mh(*, backend, judge, prompt, reference, config, plan, pilots, sourc
     reference_backend = ReferencePolicyBackend(backend, temperature=temperature)
     stopped = AbsorbingEOSBackend(reference_backend, backend.tokenizer.eos_token_id, absorbing_after=len(prompt))
     pilot_cost = {}
+    reward: Callable[[tuple[int, ...], tuple[int, ...]], float]
     if source == "self_consistency":
         pilot_tokens = [crop_sample(sample, length)[0] for sample in pilots]
         pilot_contents = [render_output(backend, prompt, tokens, config)["content_text"] for tokens in pilot_tokens]

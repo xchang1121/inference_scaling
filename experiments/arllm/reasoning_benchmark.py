@@ -24,6 +24,7 @@ from experiments.shared.statistics import wilson_interval
 from experiments.arllm.reasoning_methods import (
     REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
 )
+from experiments.arllm.request_reuse import ColdCostRequestReplay
 from inference_scaling.arllm.backends.loader import load_backend_from_config, close_backend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
@@ -129,6 +130,7 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
     with path.open("a", encoding="utf-8", buffering=1) as sink:
         for problem in problems:
             for draw in range(args.draws):
+                mh_backend = ColdCostRequestReplay(backend) if args.reuse_identical_requests else backend
                 prompt = model_prompt(backend, problem.question, current)
                 bounded, generation = generation_config_for_prompt(current, len(prompt), [backend])
                 pool_config = deepcopy(bounded)
@@ -199,7 +201,10 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                                         result = compare_sir(**common, samples=[sample("candidate", i) for i in range(candidates)],
                                                              score_cache=score_cache)
                                     else:
+                                        common["backend"] = mh_backend
+                                        hits_before = getattr(mh_backend, "cache_hits", 0)
                                         result = compare_mh(**common)
+                                        result["experiment_request_reuses"] = getattr(mh_backend, "cache_hits", 0) - hits_before
                                 result.update(problem_id=problem.identifier, subject=problem.subject, level=problem.level,
                                               draw=draw, parameter_count=backend.parameter_count, manifest_fingerprint=fingerprint)
                                 sink.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -218,6 +223,8 @@ def main():
     parser.add_argument("--stage", choices=("base", "compare", "summarize"), default="base")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--validate-only", action="store_true", help="validate data, references and manifest without loading model weights")
+    parser.add_argument("--reuse-identical-requests", action=argparse.BooleanOptionalAction, default=True,
+                        help="reuse identical MH requests across comparisons while retaining their cold-run token/FLOP charge")
     parser.add_argument("--draws", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260911)
     parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"])

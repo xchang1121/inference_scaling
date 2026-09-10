@@ -4,6 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from experiments.arllm.reasoning_methods import budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS
+from experiments.arllm.request_reuse import ColdCostRequestReplay
+from inference_scaling.arllm.types import GenerationRequest
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackendSnapshot
 
@@ -72,6 +75,48 @@ def test_majority_ignores_missing_answers_and_uses_stable_ties():
     assert majority_index(["1", "2", "2"], Judge()) == 1
     assert majority_index(["1", "2"], Judge()) == 0
     assert majority_index(["", "", "2"], Judge()) == 2
+
+
+def test_identical_request_reuse_preserves_samples_and_cold_cost():
+    raw, independent = CountedBackend(), CountedBackend()
+    replay = ColdCostRequestReplay(raw)
+    request = GenerationRequest((0,), 32, SamplingConfig(eos_token_id=2), 81, "first")
+    first = replay.sample_batch([request])[0]
+    expected_first = independent.sample_batch([request])[0]
+    assert first == expected_first
+    same = replace(request, request_id="second")
+    assert replay.sample_batch([same])[0] == independent.sample_batch([same])[0]
+    assert replay.snapshot() == independent.snapshot()
+    assert raw.snapshot().generation_forward_token_slots * 2 == replay.snapshot().generation_forward_token_slots
+    assert replay.cache_hits == 1
+
+
+def test_completed_eos_request_can_be_reused_at_a_longer_limit():
+    raw, independent = CountedBackend(), CountedBackend()
+    replay = ColdCostRequestReplay(raw)
+    request = GenerationRequest((0,), 32, SamplingConfig(eos_token_id=2), 81, "first")
+    sample = replay.sample_batch([request])[0]
+    independent.sample_batch([request])
+    assert sample.finish_reason == "eos"
+    longer = replace(request, max_new_tokens=64)
+    assert replay.sample_batch([longer])[0] == independent.sample_batch([longer])[0]
+    assert replay.snapshot() == independent.snapshot()
+    assert replay.cache_hits == 1
+
+
+@pytest.mark.parametrize("source", REWARDS)
+def test_mh_request_reuse_preserves_whole_chain_and_accounting(source):
+    backend = CountedBackend()
+    replay = ColdCostRequestReplay(backend)
+    sample = {"token_ids": (0, 2), "token_logprobs": (-0.4, -1.0)}
+    options = dict(judge=Judge(), prompt=(0,), reference="0", config={"sampling": {"temperature": 0.6}},
+                   plan=budget_plan(128, 2, 1, 16), pilots=[sample, sample], source=source, seed=17, render_output=output)
+    first = compare_mh(backend=replay, **options)
+    second = compare_mh(backend=replay, **options)
+    assert first["trace"] == second["trace"]
+    assert first["content"] == second["content"]
+    assert first["cost"] == second["cost"]
+    assert replay.cache_hits >= 1
 
 
 @pytest.mark.parametrize("source", REWARDS)
