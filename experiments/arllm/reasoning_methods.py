@@ -59,6 +59,21 @@ def crop_sample(sample: dict, length: int) -> tuple[tuple[int, ...], tuple[float
     return tuple(sample["token_ids"][:length]), tuple(sample["token_logprobs"][:length])
 
 
+def majority_index(contents: list[str], judge) -> int:
+    """Group mathematically equivalent final answers; first draw breaks ties."""
+    groups: list[list[int]] = []
+    for index, content in enumerate(contents):
+        if not content or judge.answer_key(content) is None:
+            continue
+        for group in groups:
+            if judge.equivalent(content, contents[group[0]]):
+                group.append(index)
+                break
+        else:
+            groups.append([index])
+    return max(groups, key=len)[0] if groups else 0
+
+
 class FrozenAnswerReward:
     """Agreement with independent, frozen model outputs, without gold answers."""
 

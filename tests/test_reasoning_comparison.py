@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.reasoning_methods import budget_plan, check_budget, compare_sir, compare_mh, REWARDS
+from experiments.arllm.reasoning_methods import budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackendSnapshot
 
@@ -50,6 +50,9 @@ class Judge:
     def equivalent(self, left, right):
         return bool(left and left == right)
 
+    def answer_key(self, text):
+        return text or None
+
 
 def output(backend, prompt, tokens, config):
     return {"content_text": str(tokens[0]), "thinking_status": "complete"}
@@ -63,6 +66,12 @@ def test_budget_reserves_all_generation_scoring_and_pilot_tokens():
         budget_plan(4, 2, 100, 1)
     with pytest.raises(RuntimeError, match="exceeds"):
         check_budget({"generation_forward_token_slots": 10, "score_forward_token_slots": 2}, 11)
+
+
+def test_majority_ignores_missing_answers_and_uses_stable_ties():
+    assert majority_index(["1", "2", "2"], Judge()) == 1
+    assert majority_index(["1", "2"], Judge()) == 0
+    assert majority_index(["", "", "2"], Judge()) == 2
 
 
 @pytest.mark.parametrize("source", REWARDS)

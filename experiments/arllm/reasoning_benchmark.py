@@ -22,7 +22,7 @@ from experiments.shared.math_benchmark import load_math500, stratified_subset, M
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.statistics import wilson_interval
 from experiments.arllm.reasoning_methods import (
-    REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh,
+    REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
 )
 from inference_scaling.arllm.backends.loader import load_backend_from_config, close_backend
 from inference_scaling.arllm.config import SamplingConfig
@@ -149,7 +149,7 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                 for budget, candidates in zip(args.budgets, args.candidate_counts, strict=True):
                     plan = budget_plan(budget, candidates, len(prompt), generation["effective_max_new_tokens"])
                     for method in args.methods:
-                        sources = ["none"] if method == "base" else args.rewards
+                        sources = ["none"] if method in {"base", "vote"} else args.rewards
                         for source in sources:
                             modes = ["disabled", "enabled"] if method == "base" else ["enabled"]
                             for mode in modes:
@@ -162,7 +162,7 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                                     mode_config = deepcopy(current)
                                     mode_config["output"]["thinking_mode"] = mode
                                     mode_prompt = model_prompt(backend, problem.question, mode_config)
-                                    maximum = min(generation["effective_max_new_tokens"], budget - len(mode_prompt))
+                                    maximum = min(plan["max_new_tokens"], budget - len(mode_prompt))
                                     tokens = tuple(item["token_ids"][:maximum])
                                     output = visible_output(backend, mode_prompt, tokens, mode_config)
                                     cost = generation_cost(len(mode_prompt), len(tokens), backend.parameter_count)
@@ -171,6 +171,16 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                                         "selected_tokens": len(tokens), "budget_forward_tokens": budget,
                                         "used_forward_tokens": check_budget(cost, budget),
                                         **judge.grade(output["content_text"], problem.answer)}
+                                elif method == "vote":
+                                    sequences = [tuple(sample("candidate", i)["token_ids"][:plan["max_new_tokens"]]) for i in range(candidates)]
+                                    outputs = [visible_output(backend, prompt, tokens, bounded) for tokens in sequences]
+                                    selected = majority_index([item["content_text"] for item in outputs], judge)
+                                    cost = add_costs(*(generation_cost(len(prompt), len(tokens), backend.parameter_count) for tokens in sequences))
+                                    result = {"method": "vote", "reward": "none", "cost": cost,
+                                        "content": outputs[selected]["content_text"], "thinking_status": outputs[selected]["thinking_status"],
+                                        "selected_tokens": len(sequences[selected]), "budget_forward_tokens": budget,
+                                        "used_forward_tokens": check_budget(cost, budget),
+                                        **judge.grade(outputs[selected]["content_text"], problem.answer)}
                                 else:
                                     pilots = [sample("pilot", i) for i in range(2)] if source == "self_consistency" else []
                                     common = dict(backend=backend, judge=judge, prompt=prompt, reference=problem.answer,
@@ -199,10 +209,11 @@ def main():
     parser.add_argument("--split", choices=("development", "test"), default="development")
     parser.add_argument("--stage", choices=("base", "compare", "summarize"), default="base")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--validate-only", action="store_true", help="validate data, references and manifest without loading model weights")
     parser.add_argument("--draws", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20260911)
     parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"])
-    parser.add_argument("--methods", nargs="+", choices=("base", "is", "mh"), default=["base", "is", "mh"])
+    parser.add_argument("--methods", nargs="+", choices=("base", "vote", "is", "mh"), default=["base", "vote", "is", "mh"])
     parser.add_argument("--rewards", nargs="+", choices=REWARDS, default=list(REWARDS))
     parser.add_argument("--budgets", nargs="+", type=int, default=[32768, 131072])
     parser.add_argument("--candidate-counts", nargs="+", type=int, default=[2, 4])
@@ -227,7 +238,7 @@ def main():
     if args.stage == "compare":
         from experiments.arllm.runtime import validate_model_artifacts
         artifacts = validate_model_artifacts(config, ["base"])
-        manifest.update(protocol="reasoning-comparison-v1", weight_sha256=artifacts["weight_sha256"],
+        manifest.update(protocol="reasoning-comparison-v2", weight_sha256=artifacts["weight_sha256"],
                         metadata_sha256=artifacts["metadata_sha256"],
                         budgets=args.budgets, candidate_counts=args.candidate_counts)
     fingerprint = json_fingerprint(manifest)
@@ -246,6 +257,9 @@ def main():
             validation = judge.grade("\\boxed{" + problem.answer + "}", problem.answer)
             if not validation["correct"]:
                 raise ValueError(f"benchmark reference is unsupported by the evaluator: {problem.identifier}")
+        if args.validate_only:
+            print(f"validated {len(problems)} {args.split} problems; model weights were not loaded", flush=True)
+            return
         backend = load_backend_from_config(config["models"]["base"], config, role="base")
         # Warm-up is excluded from per-problem inference cost.
         warm = model_prompt(backend, "Compute 1 + 1.", config)
