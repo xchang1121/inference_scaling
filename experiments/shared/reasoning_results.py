@@ -21,7 +21,8 @@ def comparison_coverage(records: list[dict[str, Any]], *, problem_ids: Iterable[
     problems, budgets, methods, rewards = tuple(problem_ids), tuple(budgets), tuple(methods), tuple(rewards)
     if draws <= 0 or not problems or not budgets:
         raise ValueError("comparison coverage requires problems, budgets and positive draws")
-    conditions = [("base_" + mode, "none") for mode in ("disabled", "enabled") if "base" in methods]
+    conditions = [(method + "_" + mode, "none") for method in ("base", "budget_base") if method in methods
+                  for mode in ("disabled", "enabled")]
     conditions += [("vote", "none")] if "vote" in methods else []
     conditions += [(method, reward) for method in methods if method in {"is", "mh"} for reward in rewards]
     expected = {(problem, draw, method, reward, budget) for problem in problems for draw in range(draws)
@@ -82,14 +83,16 @@ def summarize_reasoning(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if method == "is":
             item["mean_ess"] = fmean(row["ess"] for row in rows)
             item["mean_conditional_expected_correct"] = fmean(row["conditional_expected_correct"] for row in rows)
-        baseline = grouped.get(("base_enabled", "none", budget), [])
         keys = {(row["problem_id"], row["draw"]) for row in rows}
-        baseline_keys = {(row["problem_id"], row["draw"]) for row in baseline}
-        if method != "base_enabled" and keys == baseline_keys:
-            indices = {problem: index for index, problem in enumerate(sorted(by_problem))}
-            item["paired_vs_thinking_base"] = clustered_paired_binary_difference(
-                [dict(row, cluster=indices[row["problem_id"]]) for row in rows],
-                [dict(row, cluster=indices[row["problem_id"]]) for row in baseline],
-                cluster_key="cluster", outcome_key="correct", seed=20260911)
+        for baseline_method, field in (("base_enabled", "paired_vs_thinking_base"),
+                                       ("budget_base_enabled", "paired_vs_budget_thinking_base")):
+            baseline = grouped.get((baseline_method, "none", budget), [])
+            baseline_keys = {(row["problem_id"], row["draw"]) for row in baseline}
+            if method != baseline_method and keys == baseline_keys:
+                indices = {problem: index for index, problem in enumerate(sorted(by_problem))}
+                item[field] = clustered_paired_binary_difference(
+                    [dict(row, cluster=indices[row["problem_id"]]) for row in rows],
+                    [dict(row, cluster=indices[row["problem_id"]]) for row in baseline],
+                    cluster_key="cluster", outcome_key="correct", seed=20260911)
         summary.append(item)
     return summary

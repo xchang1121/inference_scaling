@@ -26,6 +26,21 @@ def test_coverage_counts_missing_conditions_and_duplicate_records():
         comparison_coverage(records + [records[0]], **options)
 
 
+def test_coverage_includes_budget_only_baselines():
+    coverage = comparison_coverage([], problem_ids=["one"], budgets=[128, 512], draws=1,
+        methods=["budget_base", "base", "vote", "is", "mh"],
+        rewards=["self_consistency", "sequence_log_probability", "consilience"])
+    assert coverage["expected_records"] == 22
+    assert not coverage["complete"]
+
+
+def test_summary_distinguishes_length_matched_and_budget_only_baselines():
+    summary = summarize_reasoning([row(correct=False), row(method="budget_base_enabled"), row(method="vote")])
+    vote = next(item for item in summary if item["method"] == "vote")
+    assert vote["paired_vs_thinking_base"]["difference"] == 1.0
+    assert vote["paired_vs_budget_thinking_base"]["difference"] == 0.0
+
+
 def test_summary_validates_cost_and_keeps_paired_problem_differences():
     records = [row(), row("two", correct=False), row(method="vote"), row("two", method="vote")]
     summary = summarize_reasoning(records)

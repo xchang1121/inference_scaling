@@ -57,6 +57,13 @@ def generation_cost(prompt_tokens: int, generated_tokens: int, parameter_count: 
             "estimated_dense_forward_flops": dense_forward_flops(parameter_count, slots)}
 
 
+def single_sample_budget_length(slots: int, prompt_tokens: int, maximum: int) -> int:
+    """Allow a single sample to use the budget without reserving other draws."""
+    if slots < prompt_tokens or prompt_tokens <= 0 or maximum <= 0:
+        raise ValueError("single-sample budget is insufficient for its prompt")
+    return min(maximum, slots - prompt_tokens + 1)
+
+
 def add_costs(*costs: dict[str, Any]) -> dict[str, Any]:
     keys = {key for cost in costs for key in cost}
     return {key: sum(cost.get(key, 0) for cost in costs) for key in keys}

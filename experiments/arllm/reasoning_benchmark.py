@@ -22,7 +22,7 @@ from experiments.shared.model_cli import add_model_output_arguments, apply_model
 from experiments.shared.reasoning_results import comparison_coverage, summarize_reasoning
 from experiments.arllm.reasoning_methods import (
     REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
-    sampling_policy, reward_temperature,
+    sampling_policy, reward_temperature, single_sample_budget_length,
 )
 from experiments.arllm.request_reuse import ColdCostRequestReplay
 from inference_scaling.arllm.backends.loader import load_backend_from_config, close_backend
@@ -130,11 +130,20 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                 if pool["fingerprint"] != fingerprint:
                     raise ValueError("candidate pool belongs to another experiment")
 
-                def sample(kind, index, mode="enabled", *, pool=pool, problem=problem, draw=draw, pool_path=pool_path, pool_config=pool_config):
+                def sample(kind, index, mode="enabled", *, maximum=None, pool=pool, problem=problem, draw=draw, pool_path=pool_path, pool_config=pool_config):
                     sample_key = f"{kind}:{index}:{mode}"
+                    cached = pool["samples"].get(sample_key)
+                    if maximum is not None and cached is not None:
+                        if cached["ended_by_eos"] or len(cached["token_ids"]) >= maximum:
+                            return cached
+                        # Keep the shorter artifact when extending a resumed pool.
+                        sample_key += f":max={maximum}"
                     if sample_key not in pool["samples"]:
                         seed = SeedStream(args.seed).derive(problem.identifier, draw, kind, index, mode)
-                        pool["samples"][sample_key] = run_base(backend, judge, problem, pool_config, seed, mode)
+                        request_config = deepcopy(pool_config)
+                        if maximum is not None:
+                            request_config["generation"]["max_new_tokens"] = maximum
+                        pool["samples"][sample_key] = run_base(backend, judge, problem, request_config, seed, mode)
                         write_json_atomic(pool_path, pool)
                         info = pool["samples"][sample_key]
                         print(f"pool {problem.identifier} draw={draw} {sample_key} tokens={len(info['token_ids'])} "
@@ -145,20 +154,27 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                 for budget, candidates in zip(args.budgets, args.candidate_counts, strict=True):
                     plan = budget_plan(budget, candidates, len(prompt), generation["effective_max_new_tokens"])
                     for method in args.methods:
-                        sources = ["none"] if method in {"base", "vote"} else args.rewards
+                        sources = ["none"] if method in {"base", "budget_base", "vote"} else args.rewards
                         for source in sources:
-                            modes = ["disabled", "enabled"] if method == "base" else ["enabled"]
+                            modes = ["disabled", "enabled"] if method in {"base", "budget_base"} else ["enabled"]
                             for mode in modes:
-                                label = "base_" + mode if method == "base" else method
+                                label = method + "_" + mode if method in {"base", "budget_base"} else method
                                 identity = (problem.identifier, draw, label, source, budget)
                                 if identity in done:
                                     continue
-                                if method == "base":
-                                    item = sample("candidate", 0, mode)
+                                if method in {"base", "budget_base"}:
                                     mode_config = deepcopy(current)
                                     mode_config["output"]["thinking_mode"] = mode
                                     mode_prompt = model_prompt(backend, problem.question, mode_config)
-                                    maximum = min(plan["max_new_tokens"], budget - len(mode_prompt))
+                                    if method == "budget_base":
+                                        _, mode_generation = generation_config_for_prompt(mode_config, len(mode_prompt), [backend])
+                                        maximum = single_sample_budget_length(budget, len(mode_prompt), mode_generation["effective_max_new_tokens"])
+                                        pool_maximum = max(single_sample_budget_length(b, len(mode_prompt), mode_generation["effective_max_new_tokens"])
+                                                           for b in args.budgets)
+                                        item = sample("candidate", 0, mode, maximum=pool_maximum)
+                                    else:
+                                        maximum = min(plan["max_new_tokens"], budget - len(mode_prompt))
+                                        item = sample("candidate", 0, mode)
                                     tokens = tuple(item["token_ids"][:maximum])
                                     output = visible_output(backend, mode_prompt, tokens, mode_config)
                                     cost = generation_cost(len(mode_prompt), len(tokens), backend.parameter_count)
@@ -223,7 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=20260911)
     parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"],
                         help="thinking modes for the standalone base stage; compare includes both baselines")
-    parser.add_argument("--methods", nargs="+", choices=("base", "vote", "is", "mh"), default=["base", "vote", "is", "mh"])
+    parser.add_argument("--methods", nargs="+", choices=("budget_base", "base", "vote", "is", "mh"),
+                        default=["budget_base", "base", "vote", "is", "mh"])
     parser.add_argument("--rewards", nargs="+", choices=REWARDS, default=list(REWARDS))
     parser.add_argument("--budgets", nargs="+", type=_positive_integer, default=[32768, 131072])
     parser.add_argument("--candidate-counts", nargs="+", type=_positive_integer, default=[2, 4],

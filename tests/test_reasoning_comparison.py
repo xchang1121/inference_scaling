@@ -5,6 +5,7 @@ import pytest
 
 from experiments.arllm.reasoning_methods import (
     budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS, sampling_policy, reward_temperature,
+    single_sample_budget_length, generation_cost,
 )
 from experiments.arllm.request_reuse import ColdCostRequestReplay
 from experiments.arllm.reasoning_benchmark import build_parser
@@ -119,6 +120,72 @@ def test_budget_reserves_all_generation_scoring_and_pilot_tokens():
         budget_plan(4, 2, 100, 1)
     with pytest.raises(RuntimeError, match="exceeds"):
         check_budget({"generation_forward_token_slots": 10, "score_forward_token_slots": 2}, 11)
+
+
+def test_single_sample_can_spend_its_budget_without_candidate_reserves():
+    length = single_sample_budget_length(32768, 120, 32768)
+    assert length == 32649
+    assert check_budget(generation_cost(120, length, 7), 32768) == 32768
+    assert length > budget_plan(32768, 2, 120, 32768)["max_new_tokens"]
+    assert single_sample_budget_length(131072, 120, 32768) == 32768
+    with pytest.raises(ValueError, match="insufficient"):
+        single_sample_budget_length(10, 11, 32768)
+
+
+@pytest.mark.parametrize("existing", ["empty", "complete", "partial"])
+def test_budget_base_reuses_eos_pools_and_preserves_shorter_resume_artifacts(tmp_path, monkeypatch, existing):
+    from copy import deepcopy
+    import experiments.arllm.reasoning_benchmark as benchmark
+    from experiments.shared.artifacts import json_fingerprint, load_jsonl, write_json_atomic
+    from experiments.shared.math_benchmark import MathProblem
+
+    backend, calls = CountedBackend(), []
+    config = {"sampling": {"temperature": 0.6}, "generation": {"max_new_tokens": 16}}
+    args = SimpleNamespace(output=tmp_path, draws=1, seed=17, reuse_identical_requests=False,
+                           budgets=[12, 32], candidate_counts=[2, 4], methods=["budget_base", "base"], rewards=[])
+    problem = MathProblem("one", "question", "0", "algebra", 5)
+    full_tokens = (0, 0, 0, 0, 2)
+
+    def item(tokens):
+        return {"token_ids": tokens, "token_logprobs": [-0.5] * len(tokens), "ended_by_eos": tokens[-1] == 2,
+                "correct": tokens[-1] == 2, "cost": {"seconds": 0.0}}
+
+    def generate(backend, judge, problem, config, seed, mode):
+        assert config["generation"]["max_new_tokens"] == 16
+        calls.append((mode, seed))
+        return item(full_tokens)
+
+    def render(backend, prompt, tokens, config):
+        disabled = config["output"]["thinking_mode"] == "disabled"
+        complete = bool(tokens and tokens[-1] == 2)
+        return {"content_text": "0" if disabled or complete else "",
+                "thinking_status": "disabled" if disabled else "complete" if complete else "incomplete"}
+
+    monkeypatch.setattr(benchmark, "model_prompt", lambda *args: (0,))
+    monkeypatch.setattr(benchmark, "generation_config_for_prompt", lambda config, *args: (deepcopy(config), {"effective_max_new_tokens": 16}))
+    monkeypatch.setattr(benchmark, "run_base", generate)
+    monkeypatch.setattr(benchmark, "visible_output", render)
+    monkeypatch.setattr(benchmark, "summarize", lambda *args: None)
+    pool_path = tmp_path / "pools" / (json_fingerprint(["one", 0])[:20] + ".json")
+    if existing != "empty":
+        tokens = full_tokens if existing == "complete" else full_tokens[:3]
+        write_json_atomic(pool_path, {"fingerprint": "same", "samples": {
+            f"candidate:0:{mode}": item(tokens) for mode in ("disabled", "enabled")}})
+    benchmark.run_comparisons(backend, Judge(), [problem], config, args, "same")
+    assert len(calls) == (0 if existing == "complete" else 2)
+    records = load_jsonl(tmp_path / "comparisons.jsonl")
+    assert len(records) == 8
+    assert all(row["correct"] for row in records if row["method"] == "budget_base_enabled")
+    assert not any(row["correct"] for row in records if row["method"] == "base_enabled")
+    assert all(row["used_forward_tokens"] <= row["budget_forward_tokens"] for row in records)
+    if existing == "partial":
+        import json
+        saved = json.loads(pool_path.read_text(encoding="utf-8"))["samples"]
+        assert len(saved["candidate:0:enabled"]["token_ids"]) == 3
+        assert saved["candidate:0:enabled:max=16"]["ended_by_eos"]
+    benchmark.run_comparisons(backend, Judge(), [problem], config, args, "same")
+    assert load_jsonl(tmp_path / "comparisons.jsonl") == records
+    assert len(calls) == (0 if existing == "complete" else 2)
 
 
 def test_majority_ignores_missing_answers_and_uses_stable_ties():
