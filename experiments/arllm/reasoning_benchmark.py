@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from collections import defaultdict
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -20,7 +19,7 @@ for _path in (ROOT, ROOT / "src"):
 from experiments.shared.artifacts import file_sha256, json_fingerprint, load_jsonl, write_json_atomic
 from experiments.shared.math_benchmark import load_math500, stratified_subset, MathJudge
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
-from experiments.shared.statistics import wilson_interval
+from experiments.shared.reasoning_results import comparison_coverage, summarize_reasoning
 from experiments.arllm.reasoning_methods import (
     REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
 )
@@ -86,30 +85,17 @@ def run_base(backend, judge, problem, config, seed, mode):
             "ended_by_eos": segments["ended_by_eos"], **grade}
 
 
-def summarize(output: Path) -> dict:
+def summarize(output: Path, args=None) -> dict:
     records = load_jsonl(output / "comparisons.jsonl")
-    if not records:
-        raise ValueError("no comparison records are available")
-    grouped = defaultdict(list)
-    for row in records:
-        grouped[(row["method"], row["reward"], row["budget_forward_tokens"])].append(row)
-    summary = []
-    for (method, reward, budget), rows in sorted(grouped.items()):
-        trials, correct = len(rows), sum(row["correct"] for row in rows)
-        summary.append({"method": method, "reward": reward, "budget_forward_tokens": budget,
-            "trials": trials, "correct": correct, "accuracy": correct / trials,
-            "wilson_95": wilson_interval(correct, trials),
-            "mean_used_forward_tokens": sum(row["used_forward_tokens"] for row in rows) / trials,
-            "mean_budget_utilization": sum(row["used_forward_tokens"] for row in rows) / trials / budget,
-            "mean_generated_tokens": sum(row["cost"].get("generated_tokens", 0) for row in rows) / trials,
-            "mean_pfLOPs": sum(row["cost"]["estimated_dense_forward_flops"] for row in rows) / trials / 1e15,
-            "mean_selected_tokens": sum(row["selected_tokens"] for row in rows) / trials,
-            "unparseable": sum(not row["parseable"] for row in rows),
-            "incomplete_thinking": sum(row["thinking_status"] not in {"complete", "disabled"} for row in rows),
-            "changed_mh_updates": sum(row.get("changed_updates", 0) for row in rows),
-            "accepted_changed_mh_updates": sum(row.get("accepted_changed_updates", 0) for row in rows),
-        })
+    summary = summarize_reasoning(records)
     value = {"rows": summary, "records": len(records)}
+    if args is not None:
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        value["coverage"] = comparison_coverage(records, problem_ids=manifest["subset"][manifest["split"]],
+            budgets=manifest["budgets"], draws=args.draws, methods=args.methods, rewards=args.rewards)
+        if args.require_complete and not value["coverage"]["complete"]:
+            raise ValueError(f"incomplete comparison grid: {value['coverage']}")
+        print(f"coverage {value['coverage']}", flush=True)
     write_json_atomic(output / "summary.json", value, indent=2)
     for row in summary:
         print(f"{row['budget_forward_tokens']:>7} {row['method']:>14} {row['reward']:>24} "
@@ -211,7 +197,7 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                                 done.add(identity)
                                 print(f"result {problem.identifier} draw={draw} {label}/{source} B={budget} "
                                       f"correct={result['correct']} used={result['used_forward_tokens']}", flush=True)
-    summarize(args.output)
+    summarize(args.output, args)
 
 
 def main():
@@ -223,6 +209,7 @@ def main():
     parser.add_argument("--stage", choices=("base", "compare", "summarize"), default="base")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--validate-only", action="store_true", help="validate data, references and manifest without loading model weights")
+    parser.add_argument("--require-complete", action="store_true", help="reject summaries with missing problem/method/budget records")
     parser.add_argument("--reuse-identical-requests", action=argparse.BooleanOptionalAction, default=True,
                         help="reuse identical MH requests across comparisons while retaining their cold-run token/FLOP charge")
     parser.add_argument("--draws", type=int, default=1)
@@ -235,7 +222,7 @@ def main():
     add_model_output_arguments(parser)
     args = parser.parse_args()
     if args.stage == "summarize":
-        summarize(args.output)
+        summarize(args.output, args)
         return
     if len(args.budgets) != len(args.candidate_counts) or len(set(args.budgets)) != len(args.budgets):
         raise ValueError("each distinct budget requires exactly one candidate count")
