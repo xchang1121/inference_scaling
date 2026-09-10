@@ -6,7 +6,9 @@ from dataclasses import asdict
 from inference_scaling.shared.model_loading import checkpoint_weight_files
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Collection, Iterable, Mapping
 
 
@@ -81,6 +83,24 @@ def json_fingerprint(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def write_json_atomic(path: Path, value: Any, *, indent: int | None = None) -> None:
+    """Publish a complete JSON artifact; retain the old file on failed writes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as sink:
+            temporary = Path(sink.name)
+            json.dump(value, sink, ensure_ascii=False, indent=indent)
+            sink.write("\n")
+            sink.flush()
+            os.fsync(sink.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _relative_file(root: Path, path: str | Path) -> tuple[str, Path]:
@@ -275,4 +295,5 @@ __all__ = [
     "indexed_records",
     "json_fingerprint",
     "load_jsonl",
+    "write_json_atomic",
 ]

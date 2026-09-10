@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from experiments.shared.math_benchmark import MathJudge, MathProblem, load_math500, stratified_subset
+from experiments.shared.artifacts import write_json_atomic
 
 
 def test_subset_is_disjoint_reproducible_and_answer_independent():
@@ -25,6 +26,16 @@ def test_loader_rejects_duplicate_ids(tmp_path: Path):
     path.write_text(row + row)
     with pytest.raises(ValueError, match="duplicate"):
         load_math500(path)
+
+
+def test_atomic_json_retains_previous_artifact_after_serialization_failure(tmp_path):
+    path = tmp_path / "pool.json"
+    write_json_atomic(path, {"completed": 2})
+    previous = path.read_bytes()
+    with pytest.raises(TypeError):
+        write_json_atomic(path, {"bad": object()})
+    assert path.read_bytes() == previous
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_math_judge_handles_equivalence_missing_answers_and_cleanup():

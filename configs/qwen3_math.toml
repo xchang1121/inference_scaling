@@ -38,6 +38,11 @@ skip_fraction = 0.05
 initial_penalty = 3.0
 score_temperature = 1.0
 
+[comparison]
+self_consistency_temperature = 0.25
+sequence_log_probability_temperature = 10.0
+consilience_temperature = 2.0
+
 [benchmark]
 subset_seed = 20260911
 minimum_level = 5

@@ -17,7 +17,7 @@ for _path in (ROOT, ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.shared.artifacts import file_sha256, json_fingerprint
+from experiments.shared.artifacts import file_sha256, json_fingerprint, load_jsonl, write_json_atomic
 from experiments.shared.math_benchmark import load_math500, stratified_subset, MathJudge
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.statistics import wilson_interval
@@ -86,7 +86,9 @@ def run_base(backend, judge, problem, config, seed, mode):
 
 
 def summarize(output: Path) -> dict:
-    records = [json.loads(line) for line in (output / "comparisons.jsonl").read_text(encoding="utf-8").splitlines()]
+    records = load_jsonl(output / "comparisons.jsonl")
+    if not records:
+        raise ValueError("no comparison records are available")
     grouped = defaultdict(list)
     for row in records:
         grouped[(row["method"], row["reward"], row["budget_forward_tokens"])].append(row)
@@ -97,6 +99,7 @@ def summarize(output: Path) -> dict:
             "trials": trials, "correct": correct, "accuracy": correct / trials,
             "wilson_95": wilson_interval(correct, trials),
             "mean_used_forward_tokens": sum(row["used_forward_tokens"] for row in rows) / trials,
+            "mean_budget_utilization": sum(row["used_forward_tokens"] for row in rows) / trials / budget,
             "mean_generated_tokens": sum(row["cost"].get("generated_tokens", 0) for row in rows) / trials,
             "mean_pfLOPs": sum(row["cost"]["estimated_dense_forward_flops"] for row in rows) / trials / 1e15,
             "mean_selected_tokens": sum(row["selected_tokens"] for row in rows) / trials,
@@ -106,7 +109,7 @@ def summarize(output: Path) -> dict:
             "accepted_changed_mh_updates": sum(row.get("accepted_changed_updates", 0) for row in rows),
         })
     value = {"rows": summary, "records": len(records)}
-    (output / "summary.json").write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(output / "summary.json", value, indent=2)
     for row in summary:
         print(f"{row['budget_forward_tokens']:>7} {row['method']:>14} {row['reward']:>24} "
               f"{row['correct']}/{row['trials']} ({row['accuracy']:.1%}) "
@@ -116,7 +119,7 @@ def summarize(output: Path) -> dict:
 
 def run_comparisons(backend, judge, problems, config, args, fingerprint):
     path = args.output / "comparisons.jsonl"
-    previous = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+    previous = load_jsonl(path)
     done = {(row["problem_id"], row["draw"], row["method"], row["reward"], row["budget_forward_tokens"]) for row in previous}
     pool_directory = args.output / "pools"
     pool_directory.mkdir(exist_ok=True)
@@ -126,25 +129,30 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
     with path.open("a", encoding="utf-8", buffering=1) as sink:
         for problem in problems:
             for draw in range(args.draws):
+                prompt = model_prompt(backend, problem.question, current)
+                bounded, generation = generation_config_for_prompt(current, len(prompt), [backend])
+                pool_config = deepcopy(bounded)
+                pool_config["generation"]["max_new_tokens"] = max(
+                    budget_plan(b, n, len(prompt), generation["effective_max_new_tokens"])["max_new_tokens"]
+                    for b, n in zip(args.budgets, args.candidate_counts, strict=True)
+                )
                 key = json_fingerprint([problem.identifier, draw])[:20]
                 pool_path = pool_directory / (key + ".json")
                 pool = json.loads(pool_path.read_text(encoding="utf-8")) if pool_path.exists() else {"fingerprint": fingerprint, "samples": {}}
                 if pool["fingerprint"] != fingerprint:
                     raise ValueError("candidate pool belongs to another experiment")
 
-                def sample(kind, index, mode="enabled", *, pool=pool, problem=problem, draw=draw, pool_path=pool_path):
+                def sample(kind, index, mode="enabled", *, pool=pool, problem=problem, draw=draw, pool_path=pool_path, pool_config=pool_config):
                     sample_key = f"{kind}:{index}:{mode}"
                     if sample_key not in pool["samples"]:
                         seed = SeedStream(args.seed).derive(problem.identifier, draw, kind, index, mode)
-                        pool["samples"][sample_key] = run_base(backend, judge, problem, current, seed, mode)
-                        pool_path.write_text(json.dumps(pool, ensure_ascii=False) + "\n", encoding="utf-8")
+                        pool["samples"][sample_key] = run_base(backend, judge, problem, pool_config, seed, mode)
+                        write_json_atomic(pool_path, pool)
                         info = pool["samples"][sample_key]
                         print(f"pool {problem.identifier} draw={draw} {sample_key} tokens={len(info['token_ids'])} "
                               f"correct={info['correct']} seconds={info['cost']['seconds']:.1f}", flush=True)
                     return pool["samples"][sample_key]
 
-                prompt = model_prompt(backend, problem.question, current)
-                bounded, generation = generation_config_for_prompt(current, len(prompt), [backend])
                 score_cache = {}
                 for budget, candidates in zip(args.budgets, args.candidate_counts, strict=True):
                     plan = budget_plan(budget, candidates, len(prompt), generation["effective_max_new_tokens"])
@@ -245,10 +253,13 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output / "manifest.json"
     if manifest_path.exists() and json_fingerprint(json.loads(manifest_path.read_text(encoding="utf-8"))) != fingerprint:
-        raise ValueError("existing experiment uses a different configuration; select a new output directory")
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        has_records = any((args.output / name).is_file() and (args.output / name).stat().st_size
+                          for name in ("base.jsonl", "comparisons.jsonl"))
+        if has_records or any((args.output / "pools").glob("*.json")):
+            raise ValueError("existing experiment uses a different configuration; select a new output directory")
+    write_json_atomic(manifest_path, manifest, indent=2)
     records_path = args.output / "base.jsonl"
-    previous = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()] if records_path.exists() else []
+    previous = load_jsonl(records_path)
     done = {(row["problem_id"], row["thinking_mode"], row["draw"]) for row in previous}
     backend = judge = None
     try:
