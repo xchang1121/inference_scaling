@@ -43,6 +43,19 @@ def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
     assert left.attempts == 3
 
 
+def test_reward_mh_observer_preserves_rng_and_reports_every_complete_state():
+    from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
+    backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
+    config = RewardMHConfig(total_length=4, block_size=4, iterations=3)
+    reward = lambda prompt, completion: float(sum(completion))
+    states = []
+    plain = run_reward_mh_chain(backend, (), config, SamplingConfig(), reward, SeedStream(12))
+    observed = run_reward_mh_chain(backend, (), config, SamplingConfig(), reward, SeedStream(12), on_state=states.append)
+    assert observed == plain
+    assert [state.attempts for state in states] == [0, 1, 2, 3]
+    assert states[-1] == observed
+
+
 def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
     result = run_mh_chain(

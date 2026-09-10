@@ -11,7 +11,7 @@ algorithmic reproduction, not the later paged-KV runtime optimization.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from math import isfinite
 
@@ -628,6 +628,7 @@ def run_reward_mh_chain(
     seeds: SeedStream,
     *,
     chain_id: int = 0,
+    on_state: Callable[[RewardMHChainResult], None] | None = None,
 ) -> RewardMHChainResult:
     """Sample ``p_base(x) exp(reward(x) / temperature)`` with suffix MH.
 
@@ -660,6 +661,13 @@ def run_reward_mh_chain(
     mutable_base_logs = list(base_logs)
     mutable_proposal_logs = list(proposal_logs)
     trace: list[RewardMHStep] = []
+
+    def state() -> RewardMHChainResult:
+        return RewardMHChainResult(prompt, tuple(mutable_tokens), current_reward,
+                                   tuple(mutable_base_logs), tuple(mutable_proposal_logs), tuple(trace), chain_id)
+
+    if on_state is not None:
+        on_state(state())
 
     for step_index in range(config.updates):
         cut, suffix_length, suffix_probability = _draw_suffix(
@@ -733,16 +741,10 @@ def run_reward_mh_chain(
                 accepted_token_changes=(proposed_token_changes if accepted else 0),
             )
         )
+        if on_state is not None:
+            on_state(state())
 
-    return RewardMHChainResult(
-        prompt=prompt,
-        token_ids=tuple(mutable_tokens),
-        reward=current_reward,
-        base_token_logprobs=tuple(mutable_base_logs),
-        proposal_token_logprobs=tuple(mutable_proposal_logs),
-        trace=tuple(trace),
-        chain_id=chain_id,
-    )
+    return state()
 
 
 def run_reward_mh_chains(

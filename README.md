@@ -375,6 +375,28 @@ AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。repla
 实验目录只保留成对调度入口。完整统计定义见
 [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
 
+### 思考模式与模型内在奖励比较
+
+[`reasoning_benchmark`](experiments/arllm/reasoning_benchmark.py) 使用公开 MATH-500 的固定分层子集，比较
+非思考/思考采样、完整序列候选 IS 和后缀 MH。标准答案仅交给最终评测；自一致性奖励使用两个独立生成后固定的
+输出，log-probability 使用实际采样策略的序列概率，Consilience 默认只评价思考段。
+数学等价性由 [Math-Verify](https://github.com/huggingface/Math-Verify) 检查。
+
+```powershell
+python -m pip install -e ".[evaluation]"
+python -m experiments.arllm.reasoning_benchmark `
+  --stage compare --split test --config configs/qwen3_math.toml `
+  --budgets 32768 131072 --candidate-counts 2 4 `
+  --output results/qwen3_math
+python -m experiments.arllm.reasoning_benchmark --stage summarize --output results/qwen3_math
+```
+
+`--model`、`--model-revision` 和 `--allow-download` 控制通用模型加载；缺少数据时，`--allow-download` 同时下载
+固定版本的 MATH-500。`--limit`、`--draws`、`--methods`、`--rewards` 分别控制题数、随机重复和比较范围。
+预算单位为模型前向 token 位置数，包括重复提示、候选、独立自一致性样本和奖励评分；FLOPs 沿用 `2 × 参数量 × 前向 token 位置数`。
+每组预算预留完整生成与评分成本，再确定长度上限。EOS 产生的剩余预算与实际消耗分开记录。
+不同 IS 奖励共享同一候选池作成对比较，但分别计入各自使用的生成与评分成本。候选池和中间结果存放在被 Git 忽略的输出目录中。
+
 ## 测试与目录
 
 ```powershell
