@@ -275,7 +275,7 @@ def _run_chunk(
     ):
         problem = problems_by_index[problem_index]
         text = raw_base.decode(tokens)
-        prediction = extract_numeric_answer(text)
+        prediction = extract_numeric_answer(diagnostics["output_segments"]["content_text"])
         records.append(
             {
                 "draw_index": draw,
@@ -339,12 +339,12 @@ def _run_pending_chunks(
         ):
             raise ValueError("base and proposal tokenizers do not have identical vocabularies")
         prompts_by_index = {
-            index: _prompt_tokens(raw_base, problem)
+            index: _prompt_tokens(raw_base, problem, config)
             for index, problem in problems_by_index.items()
         }
         if raw_proposal is not None:
             proposal_prompts = {
-                index: _prompt_tokens(raw_proposal, problem)
+                index: _prompt_tokens(raw_proposal, problem, config)
                 for index, problem in problems_by_index.items()
             }
             if proposal_prompts != prompts_by_index:

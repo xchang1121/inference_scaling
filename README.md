@@ -122,25 +122,41 @@ python -m experiments.arllm.gsm8k_reproduction `
 ```
 
 AR-LLM 还支持 [Consilience](https://arxiv.org/abs/2608.09898) 的置信度轨迹奖励。它只读取同一模型逐 token
-的 top-$`K`$ 对数概率，不读取参考答案或外部 verifier。默认设置跳过序列开头 5%，分别取随后 20% 与末尾
+的 top-$`K`$ 对数概率，不读取参考答案或外部 verifier。默认优先对思考段评分，跳过开头 5%，分别取随后 20% 与末尾
 20% 的置信度均值，并计算“末段均值减去 3 倍首段均值”。该原始分数不做候选组内归一化，因此是固定的
-逐序列奖励，可直接进入条件 IS、迭代 IS 和 rollout replay：
+逐序列奖励，可用于条件 IS、迭代 IS 和奖励 MH。思考模型配置中可加入：
 
-```powershell
-python -m experiments.arllm.gsm8k_reproduction `
-  --method conditional_is --conditional-reward consilience `
-  --consilience-top-k 5 --consilience-window-fraction 0.2 `
-  --consilience-skip-fraction 0.05 --consilience-initial-penalty 3 `
-  --reward-temperature 2 --consilience-reward-scale 1 `
-  --limit 1 --tag consilience-is
+```toml
+[reward]
+source = "consilience"
+temperature = 2.0
+
+[reward.consilience]
+scope = "thinking"
+top_k = 5
+window_fraction = 0.2
+skip_fraction = 0.05
+initial_penalty = 3.0
+scale = 1.0
+
+[output]
+sampling_scope = "thinking"
+thinking_mode = "auto"
+thinking_format = "auto"
 ```
 
-Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理结束标记的模型可用
-`--consilience-reasoning-end-text` 排除标记及其后的最终结论；vLLM 路径需要配置 Transformers 精确评分后端。
-完整公式、实现边界与成本见[已实现的奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)。
-该命令展示评分接口。思考模型的评测设置见[Consilience 评测设置](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)，
-包括思考边界、长生成预算、概率策略及与原论文的区别。示例奖励温度 2 是待验证起点；原论文验证的是 Top-1
-选择，IS/MH 的奖励强度需要单独检查。
+分段支持 `<think>`、`[THINK]` 等成对标记，以及 XML 元素、JSON 字段和嵌套路径。标记可来自 tokenizer、
+chat template 或显式配置。关闭思考、缺少完整思考段、结构解析失败或 token 边界无法对齐时，使用全序列
+Consilience，并记录回退原因。`reward.consilience.scope = "full"` 可直接选择全序列评分。
+vLLM 路径需要配置 Transformers 精确评分后端。
+
+单方法入口 `experiments.arllm.gsm8k_reproduction` 的 `--sampling-scope full|thinking` 独立控制 IS/MH
+的采样范围：`full` 操作完整生成，`thinking` 在可靠的结束标记处选择思考段，再由基模型生成最终内容。
+XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍可仅评价思考字段。输出记录区分请求范围、
+实际范围、思考文本、最终内容和回退原因。字段配置与示例见[输出格式与模式识别](docs/methods/ALGORITHMS.md#alg-output-formats)。
+奖励 MH 使用 `--method reward_mh --reward consilience`。依赖最终内容的 verifier 与自一致性配置使用 `full`。
+公式、实现边界与成本见[奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)，评测设置见
+[Consilience 评测设置](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
 
 ## 文档
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import gc
 import hashlib
 import importlib.metadata
@@ -47,8 +48,12 @@ from inference_scaling.arllm.config import (
 )
 from inference_scaling.arllm.rewards import (
     ConsilienceReward,
-    SequenceLogProbabilityReward,
 )
+from inference_scaling.arllm.reward_factory import (
+    MODEL_REWARD_SOURCES, model_reward_from_config, reward_temperature_from_config,
+)
+from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
+from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     GSM8KProblem,
@@ -158,12 +163,21 @@ def _timed(call: Callable[[], Any]) -> tuple[Any, float]:
     return result, time.perf_counter() - started
 
 
-def _prompt_tokens(backend: Any, problem: GSM8KProblem) -> TokenSequence:
+def _prompt_tokens(backend: Any, problem: GSM8KProblem, config: dict[str, Any] | None = None) -> TokenSequence:
+    config = config or {}
+    kwargs = dict(config.get("prompt", {}).get("chat_template_kwargs", {}))
+    mode = config.get("output", {}).get("thinking_mode", "auto")
+    if mode != "auto" and "enable_thinking" in str(getattr(backend.tokenizer, "chat_template", "")):
+        expected = mode == "enabled"
+        if "enable_thinking" in kwargs and kwargs["enable_thinking"] != expected:
+            raise ValueError("thinking_mode conflicts with chat_template_kwargs.enable_thinking")
+        kwargs["enable_thinking"] = expected
     messages = [{"role": "user", "content": gsm8k_prompt(problem.question)}]
     rendered = backend.tokenizer.apply_chat_template(
         messages,
         tokenize=False,
         add_generation_prompt=True,
+        **kwargs,
     )
     return backend.encode(str(rendered), add_special_tokens=False)
 
@@ -282,35 +296,11 @@ def _consilience_reward(
     sampling: SamplingConfig,
     config: dict[str, Any],
 ) -> ConsilienceReward:
-    options = config["conditional_is"]
-    marker_text = options.get("consilience_reasoning_end_text")
-    marker: TokenSequence | None = None
-    if marker_text:
-        encode = getattr(backend.tokenizer, "encode", None)
-        if encode is None:
-            raise ValueError(
-                "Consilience reasoning isolation requires tokenizer.encode"
-            )
-        marker = tuple(int(token_id) for token_id in encode(
-            str(marker_text),
-            add_special_tokens=False,
-        ))
-        if not marker:
-            raise ValueError("Consilience reasoning delimiter encoded to no tokens")
-    window_tokens = options.get("consilience_window_tokens")
-    return ConsilienceReward(
-        backend,
-        sampling,
-        top_k=int(options.get("consilience_top_k", 5)),
-        window_fraction=float(options.get("consilience_window_fraction", 0.2)),
-        window_tokens=int(window_tokens) if window_tokens is not None else None,
-        skip_fraction=float(options.get("consilience_skip_fraction", 0.05)),
-        initial_penalty=float(
-            options.get("consilience_initial_penalty", 3.0)
-        ),
-        scale=float(options.get("consilience_reward_scale", 1.0)),
-        reasoning_end_token_ids=marker,
-    )
+    from inference_scaling.arllm.reward_factory import model_reward_from_config
+
+    reward = model_reward_from_config(backend, config, source="consilience", sampling=sampling)
+    assert isinstance(reward, ConsilienceReward)
+    return reward
 
 
 def _frozen_consensus_reward(
@@ -408,12 +398,8 @@ def _run_best_of_n(
             ),
         )
     elif reward_source == "sequence_log_probability":
-        model_reward = SequenceLogProbabilityReward(
-            backend,
-            sampling,
-            scale=float(
-                config["conditional_is"].get("logprob_reward_scale", 1.0)
-            ),
+        model_reward = model_reward_from_config(
+            backend, config, source="sequence_log_probability", sampling=sampling,
         )
         # Generation already returns exact log-probabilities under ``sampling``;
         # reusing them avoids a second full-sequence model forward pass.
@@ -618,6 +604,57 @@ def _run_method(
     seeds: SeedStream,
     proposal_backend: Any | None,
 ) -> tuple[TokenSequence, dict[str, Any]]:
+    config = deepcopy(config)
+    source = config.get("reward", {}).get("source")
+    if source is not None:
+        config.setdefault("conditional_is", {})["reward"] = source
+        config.setdefault("iterated_is", {})["reward"] = source
+    scoped_algorithm = method in {"mh", "reward_mh", "verifier_mh"} or "conditional_is" in method
+    scope = SamplingScope.from_config(backend, config, active=scoped_algorithm).for_prompt(prompt)
+    if scope.scope == "thinking" and method != "mh":
+        source = (
+            "verifier" if method.startswith("verifier_") else
+            config.get("iterated_is", {}).get("reward", "frozen_consensus")
+            if method == "iterated_conditional_is" else
+            config.get("conditional_is", {}).get("reward", "self_consistency")
+        )
+        if source not in MODEL_REWARD_SOURCES and config.get("reward", {}).get("input_scope") != "thinking":
+            scope = scope.full_fallback("reward_uses_full_sequence")
+        elif source == "consilience" and config.get("reward", {}).get("consilience", {}).get("scope") == "full":
+            scope = scope.full_fallback("reward_uses_full_sequence")
+    algorithm_backend = scope.wrap(backend, prompt)
+    rollout_backend = None if proposal_backend is None else scope.wrap(proposal_backend, prompt)
+    tokens, diagnostics = _run_method_impl(
+        method, algorithm_backend, problem, prompt, config, seeds, rollout_backend
+    )
+    maximum = int(config["generation"]["max_new_tokens"])
+    temperature = 1.0 if method.startswith("verifier_") else float(config.get("sampling", {}).get("temperature", 1.0))
+    tokens, output = scope.finish(
+        backend, prompt, tokens, max_new_tokens=maximum,
+        sampling=SamplingConfig(temperature=temperature, eos_token_id=backend.tokenizer.eos_token_id),
+        seed=seeds.derive(method, problem.index, "final-content"),
+    )
+    diagnostics["output_segments"] = output
+    if diagnostics.get("reward_source") == "consilience" or (
+        source == "consilience" and method not in {"mh", "base", "rl_sample", "beam", "rl_greedy"}
+    ):
+        selected_reward = model_reward_from_config(backend, config, source="consilience")
+        assert isinstance(selected_reward, ConsilienceReward)
+        output.update(selected_reward.describe_completion(prompt, tokens))
+    return tokens, diagnostics
+
+
+def _reference_mh_backend(backend: Any, prompt: TokenSequence, temperature: float):
+    reference: Any = ScoreCachingBackend(backend)
+    if temperature != 1.0:
+        reference = ReferencePolicyBackend(reference, temperature=temperature)
+    return AbsorbingEOSBackend(reference, backend.tokenizer.eos_token_id, absorbing_after=len(prompt))
+
+
+def _run_method_impl(
+    method: str, backend: Any, problem: GSM8KProblem, prompt: TokenSequence,
+    config: dict[str, Any], seeds: SeedStream, proposal_backend: Any | None,
+) -> tuple[TokenSequence, dict[str, Any]]:
     maximum = int(config["generation"]["max_new_tokens"])
     sampling_temperature = float(config.get("sampling", {}).get("temperature", 1.0))
     seed = seeds.derive(method, problem.index)
@@ -669,11 +706,7 @@ def _run_method(
         )
     if method == "mh":
         mh = config["mh"]
-        absorbing = AbsorbingEOSBackend(
-            ScoreCachingBackend(backend),
-            backend.tokenizer.eos_token_id,
-            absorbing_after=len(prompt),
-        )
+        absorbing = _reference_mh_backend(backend, prompt, sampling_temperature)
         result = run_mh_chain(
             absorbing,
             prompt,
@@ -689,6 +722,7 @@ def _run_method(
         )
         return _trim_eos(result.token_ids, backend.tokenizer.eos_token_id), {
             "alpha": float(mh["alpha"]),
+            "target_sampling_temperature": sampling_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
             "suffix_schedule": str(mh.get("suffix_schedule", "uniform")),
@@ -699,16 +733,28 @@ def _run_method(
             "mean_proposed_token_changes": result.mean_proposed_token_changes,
             "mean_accepted_token_changes": result.mean_accepted_token_changes,
         }
-    if method == "verifier_mh":
+    if method in {"verifier_mh", "reward_mh"}:
         mh = config["mh"]
-        reward_temperature = float(config["matched_target"]["reward_temperature"])
-        absorbing = AbsorbingEOSBackend(
-            ScoreCachingBackend(backend),
-            backend.tokenizer.eos_token_id,
-            absorbing_after=len(prompt),
+        is_verifier = method == "verifier_mh"
+        source = "verifier" if is_verifier else str(config["conditional_is"]["reward"])
+        target_temperature = 1.0 if is_verifier else sampling_temperature
+        absorbing = _reference_mh_backend(backend, prompt, target_temperature)
+        reward_temperature = (
+            float(config["matched_target"]["reward_temperature"])
+            if is_verifier else reward_temperature_from_config(config, source=source)
         )
-
-        verifier_reward = _configured_verifier_reward(backend, problem, config)
+        if is_verifier:
+            selected_reward = _configured_verifier_reward(backend, problem, config)
+            reward_info = {
+                "verifier": selected_reward.describe(),
+                "uses_test_gold_oracle": selected_reward.verifier.spec.requires_reference,
+            }
+        else:
+            selected_reward = model_reward_from_config(
+                absorbing if source == "sequence_log_probability" else backend,
+                config, source=source,
+            )
+            reward_info = {"model_reward": selected_reward.describe(), "uses_test_gold_oracle": False}
 
         result = run_reward_mh_chain(
             absorbing,
@@ -721,14 +767,16 @@ def _run_method(
                 suffix_schedule=str(mh.get("suffix_schedule", "uniform")),
             ),
             SamplingConfig(),
-            verifier_reward,
+            selected_reward,
             SeedStream(seed),
         )
+        if isinstance(selected_reward, ConsilienceReward):
+            reward_info["reward_scope_counts"] = selected_reward.scope_statistics()
         return _trim_eos(result.token_ids, backend.tokenizer.eos_token_id), {
-            "target": "base_probability_times_exp_configured_verifier_over_temperature",
-            "reward_source": "verifier",
-            "verifier": verifier_reward.describe(),
-            "uses_test_gold_oracle": verifier_reward.verifier.spec.requires_reference,
+            "target": "base_probability_times_exp_reward_over_temperature",
+            "reward_source": source,
+            "target_sampling_temperature": target_temperature,
+            **reward_info,
             "reward_temperature": reward_temperature,
             "block_size": int(mh["block_size"]),
             "steps_per_block": int(mh["steps_per_block"]),
@@ -775,7 +823,7 @@ def _run_method(
         reward_temperature = (
             float(config["matched_target"]["reward_temperature"])
             if use_matched_target
-            else float(conditional["reward_temperature"])
+            else reward_temperature_from_config(config, source=reward_source)
         )
         reward_batch = None
         pointwise_reward: Callable[[TokenSequence, TokenSequence], float] | None = None
@@ -802,13 +850,12 @@ def _run_method(
                 problem_index=problem.index,
             )
         elif reward_source == "sequence_log_probability":
-            model_reward = SequenceLogProbabilityReward(
-                backend,
-                SamplingConfig(
+            model_reward = model_reward_from_config(
+                backend, config, source="sequence_log_probability",
+                sampling=SamplingConfig(
                     temperature=target_sampling_temperature,
                     eos_token_id=backend.tokenizer.eos_token_id,
                 ),
-                scale=float(conditional.get("logprob_reward_scale", 1.0)),
             )
             if method == "iterated_conditional_is":
                 pointwise_reward = model_reward
@@ -936,6 +983,8 @@ def _run_method(
                 reward_batch=reward_batch,
             )
         diagnostics = _conditional_diagnostics(result)
+        if reward_source == "consilience":
+            reward_diagnostics["reward_scope_counts"] = model_reward.scope_statistics()
         diagnostics.update(reward_diagnostics)
         diagnostics["rollout_design"] = (
             "iid"
@@ -1169,6 +1218,13 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         ] = True
     set_rl_adapter_override(config, getattr(args, "rl_adapter", None))
     replace_verifier_from_file(config, getattr(args, "verifier_config", None))
+    for name in (
+        "sampling_scope", "thinking_mode", "thinking_format", "thinking_path", "content_path",
+        "thinking_start_text", "thinking_end_text", "starts_in_thinking",
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            config.setdefault("output", {})[name] = value
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
     if args.max_new_tokens is not None:
@@ -1182,10 +1238,13 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
     if args.conditional_reward is not None:
         config["conditional_is"]["reward"] = args.conditional_reward
         config.setdefault("iterated_is", {})["reward"] = args.conditional_reward
+        config.setdefault("reward", {})["source"] = args.conditional_reward
     if args.reward_temperature is not None:
         config["conditional_is"]["reward_temperature"] = args.reward_temperature
+        config.setdefault("reward", {})["temperature"] = args.reward_temperature
     if getattr(args, "logprob_reward_scale", None) is not None:
         config["conditional_is"]["logprob_reward_scale"] = args.logprob_reward_scale
+        config.setdefault("reward", {})["logprob_scale"] = args.logprob_reward_scale
     for argument, setting in (
         ("consilience_top_k", "consilience_top_k"),
         ("consilience_window_fraction", "consilience_window_fraction"),
@@ -1198,6 +1257,11 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         value = getattr(args, argument, None)
         if value is not None:
             config["conditional_is"][setting] = value
+            if setting == "consilience_reasoning_end_text":
+                config.setdefault("output", {})["thinking_end_text"] = value
+            else:
+                name = "scale" if setting == "consilience_reward_scale" else setting.removeprefix("consilience_")
+                config.setdefault("reward", {}).setdefault("consilience", {})[name] = value
     if args.importance_log_ratio_clip is not None:
         value = args.importance_log_ratio_clip.strip().lower()
         parsed_clip = None if value == "none" else float(value)
@@ -1264,7 +1328,7 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
             args.consensus_pilot_samples
         )
     if args.block_size is not None:
-        if args.method in {"mh", "verifier_mh"}:
+        if args.method in {"mh", "verifier_mh", "reward_mh"}:
             config["mh"]["block_size"] = args.block_size
         else:
             config["conditional_is"]["block_size"] = args.block_size
@@ -1304,6 +1368,14 @@ def main() -> None:
         ),
     )
     parser.add_argument("--method", choices=METHODS, required=True)
+    parser.add_argument("--sampling-scope", choices=("full", "thinking"))
+    parser.add_argument("--thinking-mode", choices=("auto", "enabled", "disabled"))
+    parser.add_argument("--thinking-format", choices=("auto", "tags", "json", "xml"))
+    parser.add_argument("--thinking-path", help="structured thinking field, e.g. response.reasoning")
+    parser.add_argument("--content-path", help="structured final-content field, e.g. response.answer")
+    parser.add_argument("--thinking-start-text")
+    parser.add_argument("--thinking-end-text")
+    parser.add_argument("--starts-in-thinking", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--tag", default="default")
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--output-root", type=Path, default=Path("results/gsm8k"))
@@ -1319,7 +1391,7 @@ def main() -> None:
     parser.add_argument("--num-beams", type=int)
     parser.add_argument("--best-of-n-samples", type=int)
     parser.add_argument(
-        "--conditional-reward",
+        "--conditional-reward", "--reward",
         choices=REWARD_SOURCES,
         help=(
             "reward used by Best-of-N and conditional methods; verifier uses "
@@ -1549,7 +1621,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    warm_prompt = _prompt_tokens(backend, pending[0])
+    warm_prompt = _prompt_tokens(backend, pending[0], config)
     _sample_one(
         backend,
         warm_prompt,
@@ -1563,7 +1635,7 @@ def main() -> None:
     )
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem)
+            prompt = _prompt_tokens(backend, problem, config)
             before = backend.snapshot()
             proposal_before = proposal_backend.snapshot() if proposal_backend else None
             (tokens, diagnostics), elapsed = _timed(
@@ -1582,7 +1654,8 @@ def main() -> None:
             after = backend.snapshot()
             proposal_after = proposal_backend.snapshot() if proposal_backend else None
             text = backend.decode(tokens)
-            prediction = extract_numeric_answer(text)
+            segments = diagnostics["output_segments"]
+            prediction = extract_numeric_answer(segments["content_text"])
             record = {
                 "schema_version": 2,
                 "method": args.method,
@@ -1596,6 +1669,8 @@ def main() -> None:
                 "prediction": _fraction_text(prediction),
                 "correct": prediction == problem.gold_answer,
                 "output": text,
+                "thinking": segments["thinking_text"],
+                "content": segments["content_text"],
                 "output_tokens": len(tokens),
                 "prompt_tokens": len(prompt),
                 "elapsed_seconds": elapsed,
@@ -1607,6 +1682,13 @@ def main() -> None:
                     proposal_before, proposal_after
                 )
             sink.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            fallback = segments.get("sampling_fallback_reason") or segments.get("reward_fallback_reason")
+            if fallback is not None:
+                print(
+                    f"gsm8k_index={problem.index} sampling_scope={segments['sampling_scope']} "
+                    f"reward_scope={segments.get('reward_scope', 'unchanged')} full_fallback={fallback}",
+                    flush=True,
+                )
             print(
                 f"[{ordinal}/{len(pending)}] method={args.method} "
                 f"gsm8k_index={problem.index} correct={record['correct']} "

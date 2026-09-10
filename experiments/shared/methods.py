@@ -38,6 +38,7 @@ METHOD_SPECS = (
     _spec("arllm", "beam", "quality", "default_quality"),
     _spec("arllm", "best_of_n", "quality", "default_quality", "async"),
     _spec("arllm", "mh", "quality", "default_quality", "passk"),
+    _spec("arllm", "reward_mh", "quality", paired=False),
     _spec("arllm", "conditional_is", "quality", "default_quality", "is_passk", "async"),
     _spec("arllm", "iterated_conditional_is", "quality", paired=False),
     _spec(

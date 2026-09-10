@@ -94,6 +94,7 @@ def test_consilience_reward_uses_initial_and_final_confidence_windows() -> None:
         skip_fraction=0.2,
         initial_penalty=1.0,
         scale=2.0,
+        scope="full",
     )
 
     # Skip the first token, average (8, 4), and compare with final (2, 1).
@@ -116,6 +117,7 @@ def test_consilience_reward_is_batch_order_invariant_and_pointwise() -> None:
         window_fraction=0.5,
         skip_fraction=0.0,
         initial_penalty=1.0,
+        scope="full",
     )
 
     forward = reward.batch((), (first, second))
@@ -160,3 +162,61 @@ def test_consilience_reward_validates_parameters(kwargs, message) -> None:
 
     with pytest.raises(ValueError, match=message):
         ConsilienceReward(backend, **kwargs)
+
+
+def test_consilience_defaults_to_thinking_and_reports_full_fallback_without_format() -> None:
+    reward = ConsilienceReward(_ConsilienceBackend({(1, 2): (1.0, 3.0)}))
+    assert reward((), (1, 2)) == 0.0
+    assert reward.describe_completion((), (1, 2)) == {
+        "requested_reward_scope": "thinking", "reward_scope": "full",
+        "reward_mode": "consilience_full",
+        "reward_fallback_reason": "unrecognized_format",
+    }
+
+
+def test_consilience_missing_empty_and_truncated_thinking_use_pointwise_full_scores() -> None:
+    from inference_scaling.shared.output import ThinkingFormat
+
+    backend = _ConsilienceBackend({
+        (1, 2): (1.0, 3.0), (5, 6): (2.0, 5.0),
+        (90, 91, 9): (1.0, 2.0, 5.0), (90, 1, 2): (2.0, 3.0, 7.0),
+    })
+    reward = ConsilienceReward(
+        backend, thinking_format=ThinkingFormat((91,), (90,)),
+        window_tokens=1, skip_fraction=0, initial_penalty=1,
+    )
+    sequences = ((5, 6), (90, 91, 9), (90, 1, 2), (90, 1, 2, 91, 9))
+    assert reward.batch((), sequences) == pytest.approx((3, 4, 5, 2))
+    assert len(backend.requests) == 2
+    assert backend.requests[0].prefix == ()
+    assert backend.requests[0].continuations == sequences[:3]
+    assert backend.requests[1].prefix == (90,)
+    assert backend.requests[1].continuations == ((1, 2),)
+    assert [reward.describe_completion((), tokens)["reward_fallback_reason"] for tokens in sequences] == [
+        "absent", "empty", "incomplete", None,
+    ]
+    assert reward.scope_statistics() == {
+        "evaluated_sequences": 4, "thinking_sequences": 1, "full_sequences": 3,
+        "fallback_reasons": {"absent": 1, "empty": 1, "incomplete": 1},
+    }
+
+
+def test_consilience_ignores_content_but_preserves_opening_token_context() -> None:
+    from inference_scaling.shared.output import ThinkingFormat
+
+    backend = _ConsilienceBackend({(1, 2): (1.0, 3.0)})
+    reward = ConsilienceReward(
+        backend, thinking_format=ThinkingFormat((91, 92), (90,)),
+        window_tokens=1, skip_fraction=0, initial_penalty=1,
+    )
+    assert reward((8,), (90, 1, 2, 91, 92, 5)) == 2.0
+    assert reward((8,), (90, 1, 2, 91, 92, 6, 7, 8)) == 2.0
+    assert reward((8, 90), (1, 2, 91, 92, 6)) == 2.0
+    assert all(request.prefix == (8, 90) for request in backend.requests)
+
+
+def test_consilience_rejects_nonfinite_backend_statistics() -> None:
+    backend = _ConsilienceBackend({(1,): (float("nan"),)})
+    reward = ConsilienceReward(backend, reasoning_end_token_ids=(91,))
+    with pytest.raises(ValueError, match="finite confidence"):
+        reward((), (1, 91))

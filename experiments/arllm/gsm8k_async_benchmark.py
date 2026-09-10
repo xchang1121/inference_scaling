@@ -332,7 +332,7 @@ def main() -> None:
         close_backend(raw_proposal)
         close_backend(raw_backend)
         raise ValueError("base and proposal tokenizers do not have identical vocabularies")
-    prompts = [_prompt_tokens(raw_backend, problem) for problem in problems]
+    prompts = [_prompt_tokens(raw_backend, problem, config) for problem in problems]
     root_seed = int(config["run"]["seed"])
     warm_sampling = _sampling(raw_backend, config)
     raw_backend.sample_batch(

@@ -1094,7 +1094,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    warm_prompt = _prompt_tokens(backend, pending[0])
+    warm_prompt = _prompt_tokens(backend, pending[0], config)
     warm_sampling = SamplingConfig(eos_token_id=backend.tokenizer.eos_token_id)
     backend.sample_batch(
         [GenerationRequest(warm_prompt, 2, warm_sampling, 1, "base-warmup")]
@@ -1105,7 +1105,7 @@ def main() -> None:
 
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem)
+            prompt = _prompt_tokens(backend, problem, config)
             verifier_reward = _configured_verifier_reward(backend, problem, config)
             method_results: dict[str, dict[str, Any]] = {}
             for method in METHODS:

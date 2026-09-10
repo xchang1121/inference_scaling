@@ -55,6 +55,14 @@ class IteratedConditionalISStep:
         return self.transitions[-1].selected.value
 
     @property
+    def selected_index(self) -> int:
+        """Index in the evaluated states, including equal-valued distinct draws."""
+        return next(
+            index for index, candidate in enumerate(self.evaluated_candidates)
+            if candidate is self.selected
+        )
+
+    @property
     def retained_previous_updates(self) -> int:
         return sum(transition.retained_previous for transition in self.transitions)
 

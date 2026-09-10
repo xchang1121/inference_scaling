@@ -221,7 +221,7 @@ def _run_pending_samples(
                     raise ValueError(
                         "base and proposal tokenizers do not have identical vocabularies"
                     )
-            warm_prompt = _prompt_tokens(backend, problems[0])
+            warm_prompt = _prompt_tokens(backend, problems[0], config)
             _sample_one(
                 backend,
                 warm_prompt,
@@ -244,13 +244,13 @@ def _run_pending_samples(
                 draw_config = copy.deepcopy(config)
                 draw_config["run"]["seed"] = int(config["run"]["seed"]) + 1_000_003 * draw
                 seeds = SeedStream(int(draw_config["run"]["seed"]))
-                prompt = _prompt_tokens(backend, problem)
+                prompt = _prompt_tokens(backend, problem, config)
                 backend_before = backend.snapshot()
                 proposal_before = proposal_backend.snapshot() if proposal_backend else None
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 started = time.perf_counter()
-                tokens, _ = _run_method(
+                tokens, diagnostics = _run_method(
                     method,
                     backend,
                     problem,
@@ -264,7 +264,7 @@ def _run_pending_samples(
                 elapsed = time.perf_counter() - started
                 backend_after = backend.snapshot()
                 proposal_after = proposal_backend.snapshot() if proposal_backend else None
-                answer = extract_numeric_answer(backend.decode(tokens))
+                answer = extract_numeric_answer(diagnostics["output_segments"]["content_text"])
                 record = {
                     "schema_version": 1,
                     "manifest_fingerprint": fingerprint,

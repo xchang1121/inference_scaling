@@ -209,7 +209,7 @@ def test_is_passk_chunk_accounts_both_models_and_keeps_draws_independent(
         backend.sample_batch([request])
         assert proposal_backend is not None
         proposal_backend.sample_batch([request])
-        return (1,), {"fake": True}
+        return (1,), {"fake": True, "output_segments": {"content_text": "1"}}
 
     monkeypatch.setattr(is_passk, "_run_method", fake_run_method)
     monkeypatch.setattr(is_passk, "_timed", lambda call: (call(), 0.25))

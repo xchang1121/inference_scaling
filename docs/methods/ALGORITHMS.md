@@ -1253,7 +1253,7 @@ $`\log p`$，但目标指数是 $`1+1/\tau`$；它只在 $`\tau=1`$ 时等于 $`
 <a id="alg-consilience"></a>
 ### Consilience
 
-[原论文第 3 节](https://arxiv.org/html/2608.09898v1#S3) 对第 $`t`$ 个生成位置取得概率最高的
+对第 $`t`$ 个生成位置取得概率最高的
 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，定义
 
 ```math
@@ -1273,24 +1273,19 @@ r_{\mathrm{Cns}}(x,y)=
 -3\frac{1}{W}\sum_{t=P+1}^{P+W}c_t(x,y).
 ```
 
-短序列中，代码把 $`W`$ 限制为不超过 $`L-P`$；`consilience_window_tokens` 可把比例窗口替换为固定
-token 数。`consilience_top_k`、`consilience_window_fraction`、`consilience_skip_fraction`、
-`consilience_initial_penalty` 和 `consilience_reward_scale` 分别控制 $`K`$、窗口比例、跳过比例、首段系数和
-总尺度。比例窗口以思考 token 数为分母。模型生成的边界标记属于生成概率的一部分，但不参与置信度均值。
-短序列的取整、窗口限制和空序列处理属于实现约定，原论文未完整规定这些边界情况。
+默认 $`K=5`$。短序列的窗口长度限制为不超过 $`L-P`$。配置 `[reward.consilience]` 中的
+`top_k`、`window_fraction`、`skip_fraction`、`initial_penalty` 和 `scale` 分别控制 $`K`$、窗口比例、
+跳过比例、首段系数和总尺度；`window_tokens` 可将比例窗口替换为固定 token 数。
+比例窗口以思考 token 数为分母。边界标记计入生成概率，评分时排除标记及其后的最终内容。
 
-原论文使用 $`K=5`$，比较 20% 比例窗口与 2048-token 固定窗口，并在一个开发设置上确定首段系数 3 后
-跨任务使用。原始实验从共同候选池中选择分数最大的生成；IS 的指数权重和 MH 的接受过程属于本库对该信号的
-扩展。原论文的思考段评分与完整生成评分是两个独立变体，表 2 中的结果也随模型和任务变化。
-本文的 thinking 实验采用思考段评分；具体评测方案见[Consilience 评测设置](../experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
+[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards.py) 默认优先对完整、非空的思考段评分。
+关闭思考、缺少边界、思考未结束、思考段为空或结构解析失败时，同一统计公式应用于全序列。
+零 token 的空序列取分数 0；真实 EOS 保留一次，之后的确定性填充不参与评分。`scope = "full"` 可直接选择
+全序列模式。该回退规则在 rollout 评分时确定，作为逐序列奖励定义的一部分；回退次数和原因单独记录。
 
-现有 `consilience_reasoning_end_text` 参数用于排除结束标记及其后的内容；省略该参数对应完整生成评分。
-Qwen2.5-1.5B-Instruct 的短生成配置可用于接口检查，思考段实验需要采用具有明确思考边界的模型与输出格式。
-
-[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards.py) 将一个批次的所有序列合并为一次
-`score_statistics_batch` 调用。Transformers 后端从同一组 logits 同时取得选中 token 概率、熵统计和
-top-$`K`$ 轨迹；vLLM 后端把该项交给配置的精确 Transformers 评分后端，并将评分 token 与 FLOPs 计入
-运行统计。该路径包含额外评分前向；原论文中复用生成时 top-logprob 的低开销结论不直接适用于这个执行路径。
+评分请求按相同的因果前缀分组后批量提交。Transformers 后端从 logits 取得选中 token 概率、熵统计和
+top-$`K`$ 轨迹；vLLM 后端使用配置的精确 Transformers 评分后端。额外评分前向产生的 token 数与 FLOPs
+计入运行统计。评测配置见[Consilience 评测设置](../experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
 Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
 
 ```math
@@ -1299,15 +1294,15 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 ```
 
 其中 $`r_{\mathrm{Cns}}`$ 表示总尺度为 1 的原始分数。只有比值 $`\beta`$ 控制指数加权强度；
-原论文的首段系数 3 与该强度分别控制不同部分。沿用二值奖励的 $`\tau=0.1`$、总尺度 1 时，原始分数差 1
-对应约 22026 倍权重差。该设置的效果需要单独验证。奖励保留逐序列定义，模型、概率策略、分段规则和奖励参数
+首段系数 3 控制首尾窗口的相对贡献。默认总尺度为 1、$`\tau=2`$，对应 $`\beta=0.5`$；
+原始分数差 1 对应约 1.65 倍权重差。奖励保留逐序列定义，模型、概率策略、分段规则和奖励参数
 固定后，历史 rollout 才能按相同目标复用。条件 IS 应对累计思考前缀、候选和补全构成的整段思考计分，
 各生成块单独计分后相加会得到不同奖励。
 
 ### 思考段奖励与生成范围
 
-把一次完整生成写为思考段 $`h`$ 和最终内容 $`a`$，边界的生成概率包含在 $`p(h\mid x)`$ 中。
-固定分段规则、停止规则和长度预算，若奖励只依赖 $`h`$，则
+对于成功分段的生成，记思考段为 $`h`$、最终内容为 $`a`$，边界的生成概率包含在 $`p(h\mid x)`$ 中。
+固定分段规则、停止规则和长度预算，若该分支的奖励只依赖 $`h`$，则
 
 ```math
 \pi_\beta(h,a\mid x)
@@ -1331,6 +1326,56 @@ $`\mathbb E_q[W\mid h]=p(h\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,h)\}/q(h\mid x)`
 即可保持权重期望；二阶矩有限时，条件方差分解还给出
 $`\mathrm{Var}_q(\mathbb E_q[W\mid h])\leq\mathrm{Var}_q(W)`$。
 这减少最终内容的生成和重评分，并减少由该段概率比引入的方差；有限预算下的准确率收益仍由实验判断。
+
+回退分支使用实际生成的全序列和相应奖励。停止规则选取第一个完整、非空的思考块，之后的标记归入最终内容，
+使后续生成保持已有分段决定。若直到 EOS 或长度上限仍未找到该边界，采样与评分保留全序列。
+[`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 在停止后使用概率为 1 的 EOS
+填充，统一 IS、replay 与固定长度 MH 的生成和评分。成功分段分支可对最终内容的概率求和；回退分支按完整
+序列计算。因此，固定的分段与回退规则共同定义目标，选择完成后保持原奖励和概率不变。
+
+<a id="alg-output-formats"></a>
+### 输出格式与模式识别
+
+输出解析与奖励计算分别位于 [`shared/output.py`](../../src/inference_scaling/shared/output.py)、
+[`shared/structured_output.py`](../../src/inference_scaling/shared/structured_output.py) 和
+[`arllm/rewards.py`](../../src/inference_scaling/arllm/rewards.py)。采样范围与评分范围独立设置。
+
+| 格式 | 识别与切分 | `thinking` 采样范围 |
+| --- | --- | --- |
+| `<think>…</think>`、`<thinking>…</thinking>`、`[THINK]…[/THINK]`、`<reasoning>…</reasoning>` | 结合 tokenizer、chat template 与生成 token；支持提示中预填起始标记 | 在完整非空思考块结束处停止，再生成最终内容 |
+| 自定义标记 | `thinking_start_text` / `thinking_end_text`；多种标记用 `thinking_formats` 数组 | 使用相同停止与概率规则 |
+| XML | 解析元素路径、嵌套结构、同级片段及实体转义；禁用 DTD 和外部实体 | 显式使用 `full`，奖励可只取思考元素 |
+| JSON | 解析字符串字段、嵌套路径及转义；支持 JSON 代码块包装 | 显式使用 `full`，奖励可只取思考字段 |
+| 非思考模式或解析失败 | 保留完整输出；Consilience 使用全序列统计 | 显式使用 `full` 并记录原因 |
+
+`thinking_mode` 取 `auto`、`enabled` 或 `disabled`。自动模式结合模板的 `enable_thinking` 设置、提示末尾的
+空思考块和实际输出判断；模板预填的空思考块视为关闭思考。缺少已知格式时保留“格式未识别”状态，使用
+全序列模式。模型名称不参与判断。单方法入口支持 `--thinking-mode`、`--thinking-format`、`--thinking-path`
+和 `--content-path`；`--sampling-scope full|thinking` 控制请求的采样范围。
+
+JSON 的思考字段默认匹配 `thinking`、`reasoning`、`analysis` 或 `think`，最终内容匹配 `answer`、`content`
+或 `final`。多个匹配字段使用显式路径消除歧义。XML 使用相同的元素名与路径规则。例如：
+
+```toml
+[output]
+sampling_scope = "thinking"
+thinking_mode = "auto"
+thinking_format = "json"
+thinking_path = ["response", "reasoning"]
+content_path = ["response", "answer"]
+```
+
+该配置对应 `{"response":{"reasoning":"…","answer":"…"}}`。将格式改为 `xml` 后，相同路径对应
+`<response><reasoning>…</reasoning><answer>…</answer></response>`。XML/JSON 当前需要完整对象解析，实际采样
+范围为 `full`，记录原因为 `structured_format_requires_full_sequence`。
+
+结构化字段映射到原始生成 token 的区间，评分前缀保留字段前的全部原始 token。字段切点落在单个 token 内时，
+回退为全序列评分，记录 `unaligned_thinking_tokens` 或 `unaligned_content_tokens`。字段文本不重新分词。
+输出文本使用已解析的字符串，概率与置信度统计始终基于原始生成 token。
+
+记录中的 `requested_sampling_scope`、`sampling_scope`、`requested_reward_scope`、`reward_scope` 分别表示
+请求与实际范围；`sampling_fallback_reason` 和 `reward_fallback_reason` 给出回退原因。`reward_scope_counts`
+汇总 rollout 的评分范围与回退次数。最终内容单独进入任务评测，原始完整生成同时保留。
 
 ### 信号与成本诊断
 

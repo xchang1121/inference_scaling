@@ -80,8 +80,16 @@ class _MethodBackend:
     def score_batch(self, requests):
         return self._batching.score_batch(requests)
 
-    def decode(self, tokens) -> str:
-        return self._raw_backend.decode(tokens)
+    def decode(self, tokens, *, skip_special_tokens=True) -> str:
+        if skip_special_tokens:
+            return self._raw_backend.decode(tokens)
+        return self._raw_backend.decode(tokens, skip_special_tokens=False)
+
+    def encode(self, text, *, add_special_tokens=True):
+        return self._raw_backend.encode(text, add_special_tokens=add_special_tokens)
+
+    def score_statistics_batch(self, requests, *, confidence_top_k=None):
+        return self._raw_backend.score_statistics_batch(requests, confidence_top_k=confidence_top_k)
 
 
 _estimated_pass_at_k = estimated_pass_at_k
@@ -232,7 +240,7 @@ def _run_chunk(
             return tokens, diagnostics
 
         def run_parallel():
-            if method != "mh":
+            if method != "mh" or config.get("output", {}).get("sampling_scope") == "thinking" or float(config.get("sampling", {}).get("temperature", 1.0)) != 1.0:
                 with ThreadPoolExecutor(
                     max_workers=min(workers, len(task_keys))
                 ) as executor:
@@ -302,7 +310,7 @@ def _run_chunk(
     ):
         problem = problems_by_index[problem_index]
         text = raw_backend.decode(tokens)
-        prediction = extract_numeric_answer(text)
+        prediction = extract_numeric_answer(diagnostics.get("output_segments", {}).get("content_text", text))
         records.append(
             {
                 "draw_index": draw,
@@ -353,7 +361,7 @@ def _run_pending_chunks(
             str(config["models"][model_key]), config, adapter_base=adapter_base
         )
         prompts_by_index = {
-            index: _prompt_tokens(raw_backend, problem)
+            index: _prompt_tokens(raw_backend, problem, config)
             for index, problem in problems_by_index.items()
         }
         first_prompt = prompts_by_index[next(iter(problems_by_index))]

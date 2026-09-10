@@ -453,7 +453,7 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        prompt = _prompt_tokens(backend, pending[0])
+        prompt = _prompt_tokens(backend, pending[0], config)
         backend.sample_batch(
             [
                 # Warm model kernels; the request is excluded by per-method snapshots.
@@ -471,7 +471,7 @@ def main() -> None:
 
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem)
+            prompt = _prompt_tokens(backend, problem, config)
             verifier_reward = _configured_verifier_reward(backend, problem, config)
             seed = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("replay", problem.index)
