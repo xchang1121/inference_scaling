@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any
+from typing import Any, Collection
 
 _ARGUMENTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("--model", {"help": "base checkpoint directory or Hugging Face model id"}),
@@ -22,9 +22,10 @@ _ARGUMENTS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 
 
-def add_model_output_arguments(parser: argparse.ArgumentParser) -> None:
+def add_model_output_arguments(parser: argparse.ArgumentParser, *, exclude: Collection[str] = ()) -> None:
+    """Register shared options that are implemented by the calling entry point."""
     for flag, options in _ARGUMENTS:
-        if flag not in parser._option_string_actions:
+        if flag not in exclude and flag not in parser._option_string_actions:
             parser.add_argument(flag, **options)
 
 

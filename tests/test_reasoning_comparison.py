@@ -5,6 +5,7 @@ import pytest
 
 from experiments.arllm.reasoning_methods import budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS
 from experiments.arllm.request_reuse import ColdCostRequestReplay
+from experiments.arllm.reasoning_benchmark import build_parser
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
@@ -55,6 +56,26 @@ class Judge:
 
     def answer_key(self, text):
         return text or None
+
+
+@pytest.mark.parametrize("flag,value", [("--proposal-model", "org/other"), ("--mh-iterations", "1"),
+                                       ("--thinking-mode", "enabled")])
+def test_comparison_cli_rejects_unimplemented_shared_overrides(flag, value):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([flag, value])
+
+
+@pytest.mark.parametrize("flag", ["--limit", "--draws", "--budgets", "--candidate-counts"])
+def test_comparison_cli_rejects_nonpositive_work_before_model_loading(flag):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([flag, "0"])
+
+
+def test_comparison_cli_keeps_generic_model_and_output_options():
+    args = build_parser().parse_args(["--model", "org/model", "--model-revision", "fixed", "--allow-download",
+                                     "--max-new-tokens", "32768", "--thinking-format", "json"])
+    assert args.model == "org/model" and args.model_revision == "fixed" and args.allow_download
+    assert args.max_new_tokens == 32768 and args.thinking_format == "json"
 
 
 def output(backend, prompt, tokens, config):

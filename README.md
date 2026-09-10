@@ -394,6 +394,7 @@ python -m experiments.arllm.reasoning_benchmark --stage summarize --require-comp
 
 `--model`、`--model-revision` 和 `--allow-download` 控制通用模型加载；缺少数据时，`--allow-download` 同时下载
 固定版本的 MATH-500。`--limit`、`--draws`、`--methods`、`--rewards` 分别控制题数、随机重复和比较范围。
+`--candidate-counts` 同时确定 IS 候选数与 MH 状态数，MH 更新次数为状态数减一；`--modes` 用于独立的 `base` 阶段。
 汇总检查完整的题目、方法与预算组合；部分结果可省略 `--require-complete` 查看。相同题目的多次随机重复按题目统计置信区间。
 预算单位为模型前向 token 位置数，包括重复提示、候选、独立自一致性样本和奖励评分；FLOPs 沿用 `2 × 参数量 × 前向 token 位置数`。
 每组预算预留完整生成与评分成本，再确定所有方法共同的长度上限。EOS 产生的剩余预算与实际消耗分开记录。

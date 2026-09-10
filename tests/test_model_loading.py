@@ -10,6 +10,17 @@ from inference_scaling.arllm.backends import loader
 from inference_scaling.shared.model_loading import model_loading_options
 
 
+def test_shared_cli_retains_all_options_for_existing_entry_points():
+    import argparse
+    from experiments.shared.model_cli import add_model_output_arguments
+    parser = argparse.ArgumentParser()
+    add_model_output_arguments(parser)
+    args = parser.parse_args(["--proposal-model", "org/proposal", "--mh-iterations", "7",
+                              "--thinking-mode", "enabled"])
+    assert args.proposal_model == "org/proposal" and args.mh_iterations == 7
+    assert args.thinking_mode == "enabled"
+
+
 def test_role_loading_overrides_are_merged_and_validated():
     config = {"model_loading": {"revision": "main", "local_files_only": True,
                                "tokenizer_kwargs": {"use_fast": True},

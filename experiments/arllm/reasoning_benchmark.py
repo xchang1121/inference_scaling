@@ -200,32 +200,49 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
     summarize(args.output, args)
 
 
-def main():
+def _positive_integer(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("configs/qwen3_math.toml"))
     parser.add_argument("--data", type=Path, default=Path("data/math500/test.jsonl"))
     parser.add_argument("--output", type=Path, default=Path("results/qwen3_math"))
     parser.add_argument("--split", choices=("development", "test"), default="development")
     parser.add_argument("--stage", choices=("base", "compare", "summarize"), default="base")
-    parser.add_argument("--limit", type=int)
+    parser.add_argument("--limit", type=_positive_integer)
     parser.add_argument("--validate-only", action="store_true", help="validate data, references and manifest without loading model weights")
     parser.add_argument("--require-complete", action="store_true", help="reject summaries with missing problem/method/budget records")
     parser.add_argument("--reuse-identical-requests", action=argparse.BooleanOptionalAction, default=True,
                         help="reuse identical MH requests across comparisons while retaining their cold-run token/FLOP charge")
-    parser.add_argument("--draws", type=int, default=1)
+    parser.add_argument("--draws", type=_positive_integer, default=1)
     parser.add_argument("--seed", type=int, default=20260911)
-    parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"])
+    parser.add_argument("--modes", nargs="+", choices=("enabled", "disabled"), default=["disabled", "enabled"],
+                        help="thinking modes for the standalone base stage; compare includes both baselines")
     parser.add_argument("--methods", nargs="+", choices=("base", "vote", "is", "mh"), default=["base", "vote", "is", "mh"])
     parser.add_argument("--rewards", nargs="+", choices=REWARDS, default=list(REWARDS))
-    parser.add_argument("--budgets", nargs="+", type=int, default=[32768, 131072])
-    parser.add_argument("--candidate-counts", nargs="+", type=int, default=[2, 4])
-    add_model_output_arguments(parser)
-    args = parser.parse_args()
+    parser.add_argument("--budgets", nargs="+", type=_positive_integer, default=[32768, 131072])
+    parser.add_argument("--candidate-counts", nargs="+", type=_positive_integer, default=[2, 4],
+                        help="candidate/state counts; MH performs this count minus one updates")
+    add_model_output_arguments(parser, exclude={"--proposal-model", "--mh-iterations", "--thinking-mode"})
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     if args.stage == "summarize":
         summarize(args.output, args)
         return
     if len(args.budgets) != len(args.candidate_counts) or len(set(args.budgets)) != len(args.budgets):
         raise ValueError("each distinct budget requires exactly one candidate count")
+    if any(count < 2 for count in args.candidate_counts):
+        raise ValueError("candidate/state counts must be at least two")
+    if args.stage == "compare" and set(args.modes) != {"disabled", "enabled"}:
+        raise ValueError("compare fixes both baseline modes; use --stage base for a single-mode baseline")
     config = tomllib.loads(args.config.read_text(encoding="utf-8"))
     apply_model_output_overrides(config, args)
     if args.stage == "compare" and config.get("output", {}).get("sampling_scope", "full") != "full":
