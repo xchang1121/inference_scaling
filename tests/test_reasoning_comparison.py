@@ -24,8 +24,8 @@ class CountedBackend(TabularAutoregressiveBackend):
     parameter_count = 7
     tokenizer = SimpleNamespace(eos_token_id=2, get_vocab=lambda: {"a": 0, "b": 1, "eos": 2})
 
-    def __init__(self):
-        super().__init__({}, fallback=(0.6, 0.2, 0.2))
+    def __init__(self, fallback=(0.6, 0.2, 0.2)):
+        super().__init__({}, fallback=fallback)
         self.counts = TransformersBackendSnapshot(*([0] * 10))
 
     def _charge(self, key, count):
@@ -35,6 +35,10 @@ class CountedBackend(TabularAutoregressiveBackend):
     def sample_batch(self, requests):
         samples = super().sample_batch(requests)
         self._charge("generation_forward_token_slots", sum(len(r.prefix) + len(s.token_ids) - 1 for r, s in zip(requests, samples, strict=True)))
+        self.counts = replace(self.counts, sample_calls=self.counts.sample_calls + 1,
+            sampled_sequences=self.counts.sampled_sequences + len(samples),
+            generated_tokens=self.counts.generated_tokens + sum(len(sample.token_ids) for sample in samples),
+            prefill_tokens=self.counts.prefill_tokens + sum(len(request.prefix) for request in requests))
         return samples
 
     def score_batch(self, requests):
@@ -224,6 +228,90 @@ def test_completed_eos_request_can_be_reused_at_a_longer_limit():
     assert replay.sample_batch([longer])[0] == independent.sample_batch([longer])[0]
     assert replay.snapshot() == independent.snapshot()
     assert replay.cache_hits == 1
+
+
+def test_prefetched_initial_draw_preserves_each_horizon_and_independent_cost():
+    raw, independent = CountedBackend(), CountedBackend()
+    replay = ColdCostRequestReplay(raw, prefetch_limits={(0,): 32})
+    for length in (8, 32, 16, 8):
+        request = GenerationRequest((0,), length, SamplingConfig(), 81, str(length))
+        assert replay.sample_batch([request]) == independent.sample_batch([request])
+        assert replay.snapshot() == independent.snapshot()
+    assert raw.snapshot().sample_calls == 1
+    assert raw.snapshot().generated_tokens == 32
+    assert replay.cache_hits == 3
+    with pytest.raises(ValueError, match="positive integers"):
+        ColdCostRequestReplay(raw, prefetch_limits={(0,): 0})
+
+
+@pytest.mark.parametrize("cache_block", [0, 8])
+def test_qwen_prefetch_preserves_token_probabilities_and_cost(cache_block):
+    import torch
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+    from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
+
+    with torch.random.fork_rng():
+        torch.manual_seed(19)
+        model = Qwen3ForCausalLM(Qwen3Config(vocab_size=23, hidden_size=32, intermediate_size=64,
+            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1, head_dim=16))
+    tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2, bos_token_id=1)
+    raw = TransformersBackend(model, tokenizer, device="cpu", model_id="fixture", score_chunk_size=7)
+    independent = TransformersBackend(model, tokenizer, device="cpu", model_id="fixture", score_chunk_size=7)
+    if cache_block:
+        from transformers.cache_utils import DynamicCache
+        if not {"key_cache", "value_cache", "_seen_tokens"} <= vars(DynamicCache()).keys():
+            pytest.skip("optional cache growth requires the legacy storage API")
+        raw.configure_cache_growth(cache_block)
+        independent.configure_cache_growth(cache_block)
+    prefix = (1, 3, 4, 5) * 4
+    replay = ColdCostRequestReplay(raw, prefetch_limits={prefix: 33})
+    for length in (9, 33, 17, 9):
+        request = GenerationRequest(prefix, length, SamplingConfig(temperature=0.6), 81, str(length))
+        assert replay.sample_batch([request]) == independent.sample_batch([request])
+        assert replay.snapshot() == independent.snapshot()
+    assert raw.snapshot().sample_calls == 1
+    assert raw.snapshot().generated_tokens == 33
+
+
+def test_prefetch_does_not_extend_explicit_random_draws_or_other_prefixes():
+    raw, independent = CountedBackend(), CountedBackend()
+    replay = ColdCostRequestReplay(raw, prefetch_limits={(0,): 32})
+    requests = [GenerationRequest((0,), 8, SamplingConfig(), 81, "explicit", uniforms=(0.1,) * 8),
+                GenerationRequest((0, 1), 8, SamplingConfig(), 81, "different-prefix")]
+    for request in requests:
+        assert replay.sample_batch([request]) == independent.sample_batch([request])
+        assert replay.snapshot() == independent.snapshot()
+    assert raw.snapshot() == independent.snapshot()
+
+
+def test_prefetched_eos_keeps_the_stop_reason_at_the_boundary():
+    raw, independent = CountedBackend(), CountedBackend()
+    replay = ColdCostRequestReplay(raw, prefetch_limits={(0,): 32})
+    full_request = GenerationRequest((0,), 32, SamplingConfig(eos_token_id=2), 81, "probe")
+    probe = CountedBackend().sample_batch([full_request])[0]
+    assert probe.finish_reason == "eos" and len(probe.token_ids) > 1
+    for length in (len(probe.token_ids) - 1, len(probe.token_ids), 64):
+        request = replace(full_request, max_new_tokens=length, request_id=str(length))
+        assert replay.sample_batch([request]) == independent.sample_batch([request])
+        assert replay.snapshot() == independent.snapshot()
+    assert raw.snapshot().sample_calls == 1
+
+
+@pytest.mark.parametrize("source", REWARDS)
+def test_prefetched_mh_initialization_preserves_both_budget_chains(source):
+    # Zero EOS mass forces both horizons to their caps, exercising the
+    # prefetched suffix rather than only the already-complete EOS case.
+    replay = ColdCostRequestReplay(CountedBackend((0.6, 0.4, 0.0)), prefetch_limits={(0,): 24})
+    independent = CountedBackend((0.6, 0.4, 0.0))
+    sample = {"token_ids": (0, 2), "token_logprobs": (-0.4, -1.0)}
+    for budget, candidates in ((64, 2), (256, 4)):
+        options = dict(judge=Judge(), prompt=(0,), reference="0", config={"sampling": {"temperature": 0.6}},
+            plan=budget_plan(budget, candidates, 1, 24), pilots=[sample, sample], source=source,
+            seed=17, render_output=output)
+        expected = compare_mh(backend=independent, **options)
+        actual = compare_mh(backend=replay, **options)
+        for key in expected.keys() - {"seconds"}:
+            assert actual[key] == expected[key], key
 
 
 @pytest.mark.parametrize("source", REWARDS)

@@ -117,7 +117,6 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
     with path.open("a", encoding="utf-8", buffering=1) as sink:
         for problem in problems:
             for draw in range(args.draws):
-                mh_backend = ColdCostRequestReplay(backend) if args.reuse_identical_requests else backend
                 prompt = model_prompt(backend, problem.question, current)
                 bounded, generation = generation_config_for_prompt(current, len(prompt), [backend])
                 pool_config = deepcopy(bounded)
@@ -125,6 +124,13 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                     budget_plan(b, n, len(prompt), generation["effective_max_new_tokens"])["max_new_tokens"]
                     for b, n in zip(args.budgets, args.candidate_counts, strict=True)
                 )
+                # The same initial MH draw is used across budgets. Generate
+                # its largest useful horizon once; each method sees and pays
+                # for only the prefix requested by its own budget.
+                prefetch = ({prompt: pool_config["generation"]["max_new_tokens"]}
+                            if config.get("runtime", {}).get("backend", "transformers") == "transformers" else {})
+                mh_backend = (ColdCostRequestReplay(backend, prefetch_limits=prefetch)
+                              if args.reuse_identical_requests else backend)
                 key = json_fingerprint([problem.identifier, draw])[:20]
                 pool_path = pool_directory / (key + ".json")
                 pool = json.loads(pool_path.read_text(encoding="utf-8")) if pool_path.exists() else {"fingerprint": fingerprint, "samples": {}}
