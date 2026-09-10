@@ -1250,14 +1250,21 @@ top-p 策略时执行；否则要求配置精确评分后端并在缺失时终�
 $`\log p`$，但目标指数是 $`1+1/\tau`$；它只在 $`\tau=1`$ 时等于 $`p^2`$。MH 已通过式 (2) 和
 `mh.alpha` 直接实现相同目标，不需要额外调用序列奖励评分。
 
-Consilience 对第 $`t`$ 个生成位置取得概率最高的 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，并定义
+<a id="alg-consilience"></a>
+### Consilience
+
+[原论文第 3 节](https://arxiv.org/html/2608.09898v1#S3) 对第 $`t`$ 个生成位置取得概率最高的
+$`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，定义
 
 ```math
 c_t(x,y)=-\frac{1}{K}\sum_{j=1}^{K}
 \log p\!\left(v_{t,j}\mid x,y_{\lt t}\right).
 ```
 
-若用于评分的序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
+这里对 top-$`K`$ 项取等权平均，保留公式中的负号；采样到的单个 token 的 logprob、负熵和全词表
+自确定度分别是其他统计量。实验应固定计算该分数的模型和概率策略，使同一条轨迹的奖励与其来源 proposal 无关。
+
+若用于评分的思考序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
 $`W=\max\{1,\lfloor 0.2L\rfloor\}`$，则默认奖励为
 
 ```math
@@ -1269,18 +1276,79 @@ r_{\mathrm{Cns}}(x,y)=
 短序列中，代码把 $`W`$ 限制为不超过 $`L-P`$；`consilience_window_tokens` 可把比例窗口替换为固定
 token 数。`consilience_top_k`、`consilience_window_fraction`、`consilience_skip_fraction`、
 `consilience_initial_penalty` 和 `consilience_reward_scale` 分别控制 $`K`$、窗口比例、跳过比例、首段系数和
-总尺度。对含有显式推理结束标记的模型，`consilience_reasoning_end_text` 使评分只覆盖标记之前的推理 token；
-Qwen2.5-1.5B-Instruct 的默认实验没有该标记，因而使用完整生成。
+总尺度。比例窗口以思考 token 数为分母。模型生成的边界标记属于生成概率的一部分，但不参与置信度均值。
+短序列的取整、窗口限制和空序列处理属于实现约定，原论文未完整规定这些边界情况。
+
+原论文使用 $`K=5`$，比较 20% 比例窗口与 2048-token 固定窗口，并在一个开发设置上确定首段系数 3 后
+跨任务使用。原始实验从共同候选池中选择分数最大的生成；IS 的指数权重和 MH 的接受过程属于本库对该信号的
+扩展。原论文的思考段评分与完整生成评分是两个独立变体，表 2 中的结果也随模型和任务变化。
+本文的 thinking 实验采用思考段评分；具体评测方案见[Consilience 评测设置](../experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
+
+现有 `consilience_reasoning_end_text` 参数用于排除结束标记及其后的内容；省略该参数对应完整生成评分。
+Qwen2.5-1.5B-Instruct 的短生成配置可用于接口检查，思考段实验需要采用具有明确思考边界的模型与输出格式。
 
 [`ConsilienceReward`](../../src/inference_scaling/arllm/rewards.py) 将一个批次的所有序列合并为一次
 `score_statistics_batch` 调用。Transformers 后端从同一组 logits 同时取得选中 token 概率、熵统计和
 top-$`K`$ 轨迹；vLLM 后端把该项交给配置的精确 Transformers 评分后端，并将评分 token 与 FLOPs 计入
-运行统计。Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列；条件 IS 使用
-$`p(y\mid x)\exp\{r_{\mathrm{Cns}}(x,y)/\tau\}`$ 作为固定目标。奖励不依赖同批的其他候选，历史 rollout
-在模型、采样策略和奖励参数版本一致时可按原有 IS/replay 公式复用。
+运行统计。该路径包含额外评分前向；原论文中复用生成时 top-logprob 的低开销结论不直接适用于这个执行路径。
+Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
+
+```math
+\pi_\beta(y\mid x)\propto p(y\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,y)\},
+\qquad \beta=\frac{\text{reward scale}}{\tau}.
+```
+
+其中 $`r_{\mathrm{Cns}}`$ 表示总尺度为 1 的原始分数。只有比值 $`\beta`$ 控制指数加权强度；
+原论文的首段系数 3 与该强度分别控制不同部分。沿用二值奖励的 $`\tau=0.1`$、总尺度 1 时，原始分数差 1
+对应约 22026 倍权重差。该设置的效果需要单独验证。奖励保留逐序列定义，模型、概率策略、分段规则和奖励参数
+固定后，历史 rollout 才能按相同目标复用。条件 IS 应对累计思考前缀、候选和补全构成的整段思考计分，
+各生成块单独计分后相加会得到不同奖励。
+
+### 思考段奖励与生成范围
+
+把一次完整生成写为思考段 $`h`$ 和最终内容 $`a`$，边界的生成概率包含在 $`p(h\mid x)`$ 中。
+固定分段规则、停止规则和长度预算，若奖励只依赖 $`h`$，则
+
+```math
+\pi_\beta(h,a\mid x)
+=\frac{p(h\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,h)\}}{Z_\beta(x)}
+ p(a\mid x,h).
+```
+
+因此，可以对思考段执行 IS/MH，再从相同基模型条件分布生成最终内容。该分解保持理想目标分布；有限候选 IS
+和有限轮次 MH 仍有各自的近似误差。最终内容使用贪心解码时，条件分布随之改变。对完整生成取 $`p^\alpha`$
+的幂目标则依赖两段，限制为思考段的幂目标是另一种分布。
+
+这也给出 off-policy rollout 的简化。若 proposal 为 $`q(h,a\mid x)`$，支持集覆盖目标，完整 rollout 权重为
+
+```math
+W(h,a)=\frac{p(h\mid x)}{q(h\mid x)}\exp\{\beta r_{\mathrm{Cns}}(x,h)\}
+       \frac{p(a\mid x,h)}{q(a\mid x,h)}.
+```
+
+给定 $`h`$，最后一个概率比在 $`q(a\mid x,h)`$ 下的平均值为 1。因此，只生成到思考结束并使用
+$`\mathbb E_q[W\mid h]=p(h\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,h)\}/q(h\mid x)`$
+即可保持权重期望；二阶矩有限时，条件方差分解还给出
+$`\mathrm{Var}_q(\mathbb E_q[W\mid h])\leq\mathrm{Var}_q(W)`$。
+这减少最终内容的生成和重评分，并减少由该段概率比引入的方差；有限预算下的准确率收益仍由实验判断。
+
+### 信号与成本诊断
 
 该分数衡量模型置信度随生成位置的变化，不构成正确性判定。增加候选数只加强对该分数的选择；任务准确率
 是否提高仍需在目标模型与任务上验证。
+
+该 top-$`K`$ 统计量同时受概率集中程度和 top-$`K`$ 总概率影响。令 $`m_t`$ 为这 $`K`$ 项的概率之和，
+$`\widetilde p_t`$ 为它们除以 $`m_t`$ 后的分布，$`U_K`$ 为 $`K`$ 项上的均匀分布，直接展开可得
+
+```math
+c_t=\log K-\log m_t+D_{\mathrm{KL}}(U_K\Vert\widetilde p_t).
+```
+
+因而 $`c_t`$ 与全词表熵之间不存在通用的单调关系。除最终正确率外，评测应记录首尾分数、思考长度、截断率、
+top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。若复用前缀统计量，应缓存逐 token 值；
+后缀重采样改变思考长度后，需要按新长度重算窗口范围和窗口均值。
+
+### 配置型 verifier
 
 配置型 verifier 由 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py) 构造。独立 TOML
 中的 `factory` 指向可信本地工厂，`requires_reference` 决定实验适配层是否提供数据集参考值；MH、IS、replay

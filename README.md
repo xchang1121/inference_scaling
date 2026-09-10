@@ -131,12 +131,16 @@ python -m experiments.arllm.gsm8k_reproduction `
   --method conditional_is --conditional-reward consilience `
   --consilience-top-k 5 --consilience-window-fraction 0.2 `
   --consilience-skip-fraction 0.05 --consilience-initial-penalty 3 `
+  --reward-temperature 2 --consilience-reward-scale 1 `
   --limit 1 --tag consilience-is
 ```
 
 Qwen2.5-1.5B-Instruct 默认对完整生成计算该分数。具有显式推理结束标记的模型可用
 `--consilience-reasoning-end-text` 排除标记及其后的最终结论；vLLM 路径需要配置 Transformers 精确评分后端。
 完整公式、实现边界与成本见[已实现的奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)。
+该命令展示评分接口。思考模型的评测设置见[Consilience 评测设置](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)，
+包括思考边界、长生成预算、概率策略及与原论文的区别。示例奖励温度 2 是待验证起点；原论文验证的是 Top-1
+选择，IS/MH 的奖励强度需要单独检查。
 
 ## 文档
 
