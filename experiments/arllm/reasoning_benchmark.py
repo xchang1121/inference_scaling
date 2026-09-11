@@ -88,11 +88,25 @@ def run_base(backend, judge, problem, config, seed, mode):
 
 def summarize(output: Path, args=None) -> dict:
     records = load_jsonl(output / "comparisons.jsonl")
+    selection = None
+    if args is not None:
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        problem_ids = manifest["subset"][manifest["split"]]
+        if {row["problem_id"] for row in records} - set(problem_ids):
+            raise ValueError("comparison records contain problems outside the manifest split")
+        # A limit selects the original ordered prefix, including unsolved
+        # problems. It never changes the experiment fingerprint or sample pool.
+        problem_ids = problem_ids[:getattr(args, "limit", None)]
+        selected = set(problem_ids)
+        source_records = len(records)
+        records = [row for row in records if row["problem_id"] in selected]
+        selection = {"problem_ids": problem_ids, "source_records": source_records,
+                     "excluded_records": source_records - len(records)}
     summary = summarize_reasoning(records)
     value = {"rows": summary, "records": len(records)}
     if args is not None:
-        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-        value["coverage"] = comparison_coverage(records, problem_ids=manifest["subset"][manifest["split"]],
+        value["selection"] = selection
+        value["coverage"] = comparison_coverage(records, problem_ids=problem_ids,
             budgets=manifest["budgets"], draws=args.draws, methods=args.methods, rewards=args.rewards)
         if args.require_complete and not value["coverage"]["complete"]:
             raise ValueError(f"incomplete comparison grid: {value['coverage']}")
@@ -237,7 +251,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=Path("results/qwen3_math"))
     parser.add_argument("--split", choices=("development", "test"), default="development")
     parser.add_argument("--stage", choices=("base", "compare", "summarize"), default="base")
-    parser.add_argument("--limit", type=_positive_integer)
+    parser.add_argument("--limit", type=_positive_integer,
+                        help="run or summarize the first N problems in the fixed split order")
     parser.add_argument("--validate-only", action="store_true", help="validate data, references and manifest without loading model weights")
     parser.add_argument("--require-complete", action="store_true", help="reject summaries with missing problem/method/budget records")
     parser.add_argument("--reuse-identical-requests", action=argparse.BooleanOptionalAction, default=True,

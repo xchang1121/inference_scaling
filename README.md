@@ -387,13 +387,14 @@ python -m pip install -e ".[evaluation]"
 python -m experiments.arllm.reasoning_benchmark `
   --stage compare --split test --config configs/qwen3_math.toml `
   --model Qwen/Qwen3-1.7B --model-revision 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e --allow-download `
-  --budgets 32768 131072 --candidate-counts 2 4 `
+  --budgets 32768 131072 --candidate-counts 2 4 --limit 30 `
   --output results/qwen3_math
-python -m experiments.arllm.reasoning_benchmark --stage summarize --require-complete --output results/qwen3_math
+python -m experiments.arllm.reasoning_benchmark --stage summarize --limit 30 --require-complete --output results/qwen3_math
 ```
 
 `--model`、`--model-revision` 和 `--allow-download` 控制通用模型加载；缺少数据时，`--allow-download` 同时下载
 固定版本的 MATH-500。`--limit`、`--draws`、`--methods`、`--rewards` 分别控制题数、随机重复和比较范围。
+运行与汇总使用相同的 `--limit`，按固定抽题顺序取前 N 题；已有结果和候选池保持不变。
 `--candidate-counts` 同时确定 IS 候选数与 MH 状态数，MH 更新次数为状态数减一；`--modes` 用于独立的 `base` 阶段。
 共同参考策略保留完整词表支持，比较阶段要求 `sampling.top_p = 1` 且不设置 `top_k`。
 汇总检查完整的题目、方法与预算组合；部分结果可省略 `--require-complete` 查看。相同题目的多次随机重复按题目统计置信区间。

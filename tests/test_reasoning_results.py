@@ -1,8 +1,11 @@
 from copy import deepcopy
+import json
+from types import SimpleNamespace
 
 import pytest
 
 from experiments.shared.reasoning_results import comparison_coverage, summarize_reasoning
+from experiments.arllm.reasoning_benchmark import summarize
 
 
 def row(problem="one", method="base_enabled", draw=0, correct=True):
@@ -70,3 +73,41 @@ def test_repeated_draws_use_problem_bootstrap_and_partial_pairs_are_omitted():
     assert base["interval_method"] == "problem_bootstrap"
     assert base["accuracy_95"] == [0.5, 0.5]
     assert "paired_vs_thinking_base" not in vote
+
+
+def test_limited_summary_uses_manifest_order_and_keeps_original_artifacts(tmp_path):
+    manifest = {"split": "test", "subset": {"test": ["two", "one", "three"]}, "budgets": [128]}
+    records = [row("one", correct=False), row("two"), row("two", method="base_disabled")]
+    manifest_path, records_path = tmp_path / "manifest.json", tmp_path / "comparisons.jsonl"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    records_path.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+    original_manifest, original_records = manifest_path.read_bytes(), records_path.read_bytes()
+    args = SimpleNamespace(limit=1, draws=1, methods=["base"], rewards=[], require_complete=True)
+
+    result = summarize(tmp_path, args)
+    assert result["coverage"]["complete"]
+    assert result["coverage"]["expected_problems"] == 1
+    assert result["records"] == 2
+    assert result["selection"] == {"problem_ids": ["two"], "source_records": 3, "excluded_records": 1}
+    assert all(item["accuracy"] == 1.0 for item in result["rows"])
+
+    args.limit = 2
+    with pytest.raises(ValueError, match="incomplete comparison grid"):
+        summarize(tmp_path, args)
+    args.limit, args.require_complete = None, False
+    result = summarize(tmp_path, args)
+    assert result["coverage"]["expected_problems"] == 3
+    assert result["coverage"]["missing_records"] == 3
+    assert result["selection"]["excluded_records"] == 0
+    assert manifest_path.read_bytes() == original_manifest
+    assert records_path.read_bytes() == original_records
+
+
+def test_limited_summary_rejects_problems_outside_manifest(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "split": "test", "subset": {"test": ["one", "two"]}, "budgets": [128],
+    }), encoding="utf-8")
+    (tmp_path / "comparisons.jsonl").write_text(json.dumps(row("unknown")) + "\n", encoding="utf-8")
+    args = SimpleNamespace(limit=1, draws=1, methods=["base"], rewards=[], require_complete=True)
+    with pytest.raises(ValueError, match="outside the manifest"):
+        summarize(tmp_path, args)
