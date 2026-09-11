@@ -210,6 +210,7 @@ dLLM 继续使用独立的扩散后端接口。
 | [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
 | [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据配置、方法标识、训练与推理命令、统计量和输出目录 |
 | [算法设计与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 固定实验设置下的准确率、pass@k、奖励与 proposal 对照，以及结果适用范围 |
+| [思考模式与模型自身奖励](docs/reports/QWEN3_MATH500_REASONING.md) | Qwen3-1.7B / MATH-500 Level 5 的 30 题结果，比较 Base、IS、MH 的准确率与实际计算量 |
 | [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 批处理、IS/MH 复用和奖励调度的墙钟、分模型 FLOPs、建库与设计成本 |
 | [非默认方案记录](docs/methods/ALGORITHMS.md#alg-nondefault-notes) | 已筛选方案的主要成本问题与适用条件 |
 
@@ -217,7 +218,7 @@ dLLM 继续使用独立的扩散后端接口。
 
 | 模型族 | 模型与训练对照 | 推理组件 | 执行接口 |
 | --- | --- | --- | --- |
-| AR-LLM | 通用因果模型与 GRPO；现有报告使用 Qwen2.5-1.5B，0.5B 作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；两种模型的计算量分别记录 |
+| AR-LLM | 通用因果模型与 GRPO；报告覆盖 Qwen2.5-1.5B 与 Qwen3-1.7B，0.5B 作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；主模型与辅助模型的计算量分别记录 |
 | dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 分块生成、轨迹 MH、条件 IS 与 replay | 批量 Transformers；提供轻量测试和大显存机器入口 |
 | 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算量记录 | AR/dLLM 共用同一实现 |
 
