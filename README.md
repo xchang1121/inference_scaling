@@ -43,6 +43,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一个生成块产生候选，用 rollout 估计条件奖励权重后重采样 | 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
 | [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
+| [联合预算 IS](docs/methods/BUDGET.md#budget-joint) | 按当前前缀与剩余预算选择候选数、补全数、块长 | 首版使用同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/experimental/arllm/joint_budget_is.py)、[CLI](experiments/arllm/joint_budget_is.py) |
 | [可枚举候选 logit adjustment](docs/methods/ALGORITHMS.md#alg-logit-adjustment) | 将估计条件权重的对数加到基础候选 logits，再在完整候选集上归一化 | 可直接使用新生成、off-policy 或 replay 条件权重 | 理论参考；当前没有 CLI、代码实现或实验结果 |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
@@ -55,9 +56,10 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 代替序列对数似然：每个偏好对采样 8 个独立掩码比例，每个比例采样 1 个掩码，并让当前策略与冻结的参考模型
 使用相同掩码。LoRA 适配器与关闭适配器后得到的参考模型共同使用同一份已加载基础模型。
 
-Qwen 复现配置中 MH/IS 的完整步骤、模型职责和参数表，以及初始估计与最终估计分离的 IS、流式奖励、SMC
-多树搜索、两阶段延迟接受 MH、历史后缀 proposal、批处理、KV 复用和 vLLM 后端，均集中在同一份
-[算法基础、原理与实现文档](docs/methods/ALGORITHMS.md)中按“目标—算法—实现—误差与成本”组织。
+MH/IS 的目标、采样步骤、模型职责及执行实现见[算法基础、原理与实现](docs/methods/ALGORITHMS.md)。
+候选数、补全数、块长的联合调度，以及历史/新样本的方差—成本分配、两阶段估计和计费定义，集中在
+[BUDGET.md](docs/methods/BUDGET.md)；该文档包含推导、调用示例与代码索引。联合调度为显式可选的研究入口，
+已有 CPU 正确性测试，尚无模型质量或速度收益结论，不会自动加入默认复现实验。
 
 ## 奖励与 verifier 配置
 

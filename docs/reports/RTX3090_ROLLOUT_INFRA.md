@@ -2,7 +2,8 @@
 
 本报告比较批处理、rollout 复用、MH proposal 和奖励调度的执行成本。
 [算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)比较对应的准确率；
-机制与实现见[算法文档](../methods/ALGORITHMS.md#alg-runtime)。
+机制与实现见[算法文档](../methods/ALGORITHMS.md#alg-runtime)，预算分配和成本口径见
+[BUDGET.md](../methods/BUDGET.md#budget-accounting)。
 
 ## 1. 测量设置
 
@@ -188,9 +189,11 @@ verifier 组在同一会话中成对运行，墙钟从 476.5 s 增至 556.2 s，
 自一致性两组运行批次不同，此处比较其 FLOPs；质量差值见[修正消融](GSM8K_3090_ALIGNED_RESULTS.md#15b-rescoring-ablation)。
 
 <a id="infra-report-dynamic"></a>
+<a id="infra-report-budget"></a>
 ### 动态候选与方差—成本分配
 
 使用质量报告第 4 节的 32 题配置。下表按“建库、独立设计样本、最终权重估计”分解 FLOPs，完整成本包含三项。
+分配规则见[固定候选预算](../methods/BUDGET.md#budget-allocation)；这些历史结果未测试新加入的联合块长调度。
 
 | 路径 | 建库 PFLOPs | 设计 PFLOPs | 最终估计 PFLOPs | 完整 PFLOPs | 完整墙钟（s） |
 | --- | ---: | ---: | ---: | ---: | ---: |

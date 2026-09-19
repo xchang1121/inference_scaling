@@ -3,7 +3,8 @@
 本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节给出 Qwen2.5-1.5B 复现配置中 MH 与 IS 路径的
 完整数据流；后续各节再分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、KV 复用、
 异步奖励、vLLM 和计算量统计统一列在第 17 节。[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)
-说明统一入口和统计方式；[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
+说明统一入口和统计方式；[预算控制](BUDGET.md)集中说明候选数、补全数、块长及成本分配。
+[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
 [执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)分别汇总准确率与执行开销。
 非默认方案的筛选结论集中在[第 19 节](#alg-nondefault-notes)。
 
@@ -103,6 +104,7 @@ $`\log q(y\mid y')`$。共享核计算
 | 可枚举候选 logit adjustment | 式 (1) 的下一步条件分布 | 枚举候选后直接归一化；误差只来自条件权重估计 | 理论参考，当前未接入执行入口 |
 | 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 $`p/q_c`$ | `shared/budget.py` + 两侧候选适配 |
 | 分阶段 IS | 初始样本分配预算，独立样本执行最终估计 | 最终权重仅使用独立的最终估计样本 | `shared/budget.py` + 两侧 rollout 适配 |
+| 联合预算 IS | 每个前缀重新选择候选数、补全数和块长 | 独立最终采样；样本矩仅用于调度，详见 [BUDGET.md](BUDGET.md#budget-joint) | `shared/joint_budget.py` + `experimental/arllm/joint_budget_is.py` |
 | 固定样本的流式 IS | 固定设计下允许样本异步到达 | 固定样本集合上的顺序不变性 | `experimental/arllm/streaming_is.py` |
 | SMC 多树搜索 | 分块粒子近似 | 有限粒子、有限后续权重估计的 SMC 近似 | `shared/smc.py` + 两侧粒子状态 |
 | 两阶段延迟接受 MH | 式 (1) | 两阶段接受率保持目标不变 | 公共接受核 + 两侧近似/精确奖励评分 |
@@ -295,7 +297,7 @@ proposal。
 | 经验回放 | [Lin (1992)](https://doi.org/10.1007/BF00992699) | 历史补全经式 (13) 校正后进入条件奖励权重估计 |
 | 可枚举候选 logit adjustment | [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510) | 原文在有限动作集合上加入估计优势；第 6.4 节将其改写为序列奖励下的条件权重接口 |
 | GRPO | [Shao et al. (2024)](https://arxiv.org/abs/2402.03300) | 使用同一基础模型训练的参数更新基线 |
-| 最优分层分配 | [Neyman (1934)](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)、[Étoré and Jourdain (2010)](https://doi.org/10.1007/s11009-008-9108-0) | 推导式 (19) 的方差—成本预算规则 |
+| 最优分层分配 | [Neyman (1934)](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)、[Étoré and Jourdain (2010)](https://doi.org/10.1007/s11009-008-9108-0) | [方差—成本预算规则](BUDGET.md#budget-allocation) |
 | SMC | [Del Moral, Doucet, and Jasra (2006)](https://doi.org/10.1111/j.1467-9868.2006.00553.x)、[Lew et al. (2023)](https://arxiv.org/abs/2306.03081) | 用于分块粒子传播和可复用的条件后缀样本池 |
 | 两阶段延迟接受 MCMC | [Christen and Fox (2005)](https://doi.org/10.1198/106186005X76983) | 通过两阶段接受率减少精确奖励调用 |
 | 连续批处理与 KV 分块 | [Orca，Yu et al. (2022)](https://www.usenix.org/conference/osdi22/presentation/yu)、[PagedAttention，Kwon et al. (2023)](https://doi.org/10.1145/3600006.3613165) | 跨提示调度、共同前缀预填充和 vLLM APC |
@@ -1025,69 +1027,24 @@ candidate_log_weight = outer_log_ratio + replay_log_weight
 off-policy/replay 修正。
 
 <a id="alg-budget-allocation"></a>
-### 9.1 方差—成本最优预算分配
+### 9.1 方差—成本预算分配
 
-对候选 $`i`$ 和来源 $`s\in\{\text{history},\text{fresh}\}`$（分别表示历史样本与新样本），记单样本标准差为
-$`\sigma_{i,s}`$、成本为 $`c_{i,s}`$、外层比值为 $`\rho_i`$、分配数量为 $`n_{i,s}`$。忽略整数与容量约束时，
-实现近似最小化
-
-```math
-\sum_{i,s}\frac{\rho_i^2\sigma_{i,s}^2}{n_{i,s}}
-\quad\text{s.t.}\quad
-\sum_{i,s}c_{i,s}n_{i,s}\le C.
-
-```
-
-<p align="right">式 (18)</p>
-
-拉格朗日一阶条件给出
-
-```math
-n_{i,s}\propto \frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
-
-```
-
-<p align="right">式 (19)</p>
-
-代码先按式 (19) 求连续解，再施加每个候选的历史样本上限、相同 replay 匹配键的共享容量、每个非终止候选的
-最少新样本数量，最后先向下取整，再按小数余数从大到小补齐剩余配额。方差与成本只能来自设计集；
-`rollout_budget_provider` 的输入为候选、终止标记、库存数量和设计集统计量。
+固定候选的历史/新样本分配根据实际权重的方差与成本求连续解，再施加库存、共享容量、最少新样本与整数约束。
+推导、独立设计数据要求和代码索引已集中到 [BUDGET.md 第 4 节](BUDGET.md#budget-allocation)。
+联合调整候选数、补全数和块长的独立研究入口见[联合动态调度](BUDGET.md#budget-joint)。
 
 <a id="alg-progressive-is"></a>
 ## 10. 初始估计与最终估计分离的 IS
 
-当不同候选的补全长度、模型成本或权重方差差异较大时，固定 $`K`$ 可能浪费预算。分阶段版本先为每个
-候选生成少量初始估计 rollout（`pilot`），估计
-
-```math
-\widehat\sigma_i=\mathrm{Std}
-\left[\exp\{\ell_{ik}-\max_{j,k}\ell_{jk}\}\right],
-\qquad
-\ell_{ik}=r_{ik}/\tau+\log p(u_{ik})-\log q(u_{ik}),
-
-```
-
-<p align="right">式 (20)</p>
-
-并用生成 token 数乘 proposal 模型/基础模型参数量估计相对成本。随后按式 (19) 冻结最终估计样本数，再独立生成
-新的最终估计 rollout（`evaluation`）。最终条件权重只使用这些独立样本：
-
-```math
-\widehat h_i^{\mathrm{final}}
-=\frac1{K_i^{\mathrm{eval}}}
-\sum_{k=1}^{K_i^{\mathrm{eval}}}e^{\ell_{ik}^{\mathrm{eval}}}.
-
-```
-
-<p align="right">式 (21)</p>
-
-初始估计样本可作为推测解码的历史草稿；式 (21) 仅使用独立的最终估计样本。终止候选的条件权重为确定值，
-复用一次奖励计算。
+初始样本估计权重方差与成本，冻结最终样本数量，再独立生成用于条件权重的新补全。
+原分阶段算法固定候选数和块长；联合预算版本还重新选择这两个参数，并独立生成最终候选。
+估计式、无偏条件和终止候选处理见 [BUDGET.md 第 5 节](BUDGET.md#budget-pilot)，
+联合调度及调用方式见[第 3 节](BUDGET.md#budget-joint)与[第 7 节](BUDGET.md#budget-usage)。
 
 <a id="alg-streaming-is"></a>
 ## 11. 固定样本设计的流式 IS
 
-流式 IS 使用式 (10)、(14) 或 (21)，并允许已冻结的新样本按任意完成顺序到达。状态机为：
+流式 IS 使用式 (10)、(14) 或[独立最终估计](BUDGET.md#budget-pilot)，并允许已冻结的新样本按任意完成顺序到达。状态机为：
 
 1. 冻结前加入允许的历史样本项；
 2. `freeze` 一次性声明每个候选的新样本标识；
@@ -1448,14 +1405,8 @@ ScoreRequest(prefix, continuations, sampling)
 同一次模型调用所包含的请求发生变化时，每个请求仍使用相同随机阈值。CUDA 批量形状引起的 logits 数值差异通过 token 完全一致率、
 共同前缀长度和最终数值结果记录。
 
-模型 $`j`$ 基于参数量和 token 数的前向计算量估计为：
-
-```math
-\widehat F_{\mathrm{forward}}=2\sum_j N_jS_j,
-```
-
-其中 $`N_j`$ 为参数量，$`S_j`$ 为实际参与前向计算的 token 位置数。预填充、逐 token 解码、完整序列评分和目标模型草稿
-验证分别计数；墙钟、显存和吞吐单独报告。
+预填充、解码、完整序列评分和草稿验证分别计数；墙钟、显存和吞吐单独报告。
+前向 token/FLOPs 的定义、预算预留量与实际执行成本的区别，统一见 [BUDGET.md 第 6 节](BUDGET.md#budget-accounting)。
 
 <a id="infra-prefix-kv"></a>
 ### 17.2 批处理、KV 与概率评分
