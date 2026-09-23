@@ -395,7 +395,8 @@ def _run_best_of_n(
         # Generation already returns exact log-probabilities under ``sampling``;
         # reusing them avoids a second full-sequence model forward pass.
         raw_rewards = tuple(
-            model_reward.scale * candidate.logprob for candidate in candidates
+            model_reward.from_token_logprobs(prompt, candidate.token_ids, candidate.token_logprobs)
+            for candidate in candidates
         )
         model_reward_description = model_reward.describe()
         selection_rewards = raw_rewards
@@ -451,6 +452,7 @@ def _run_best_of_n(
             "per-decision min-max over candidate completions"
             if reward_source
             in {"log_probability", "negative_entropy", "self_certainty"}
+            else "mean_per_effective_token" if reward_source == "sequence_log_probability"
             else None
         ),
         "selection_rewards": list(selection_rewards),
@@ -1053,6 +1055,7 @@ def _run_method_impl(
             "per-guidance-step min-max over all candidate rollouts"
             if reward_source
             in {"log_probability", "negative_entropy", "self_certainty"}
+            else "mean_per_effective_token" if reward_source == "sequence_log_probability"
             else None
         )
         diagnostics["importance_log_ratio_clip"] = (

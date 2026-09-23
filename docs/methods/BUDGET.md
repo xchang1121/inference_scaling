@@ -285,7 +285,7 @@ python -m experiments.arllm.joint_budget_is `
 
 这是调用示例，未作为正式实验运行。`--config` 读取已有 TOML 的模型、后端、采样策略和奖励设置；
 联合预算使用本入口的显式参数。`--backend transformers|vllm|vllm-sync` 选择后端；vLLM 须具备所选奖励所需的精确评分能力。
-默认保持模型本身的上下文限制；实际有效长度和截断原因写入 JSON。`--reward sequence_log_probability` 使用序列概率奖励。
+默认保持模型本身的上下文限制；实际有效长度和截断原因写入 JSON。`--reward sequence_log_probability` 使用按有效 token 数取均值的对数概率奖励，不计停止后的 padding。
 
 | 参数 / 字段 | 含义 |
 | --- | --- |

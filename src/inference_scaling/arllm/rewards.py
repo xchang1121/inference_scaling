@@ -18,12 +18,14 @@ from inference_scaling.arllm.output import thinking_format_from_backend
 
 @dataclass(frozen=True, slots=True)
 class SequenceLogProbabilityReward:
-    """Return a scaled full-sequence ``log p(completion | prompt)``.
+    """Return scaled mean token log-probability over the effective completion.
 
     This is a model-derived reward, not an external verifier.  The backend must
     support exact scoring under ``sampling``.  With scale ``c`` and reward
     temperature ``tau``, reward reweighting targets
-    ``p(completion | prompt) ** (1 + c / tau)``.
+    ``p(completion | prompt) ** (1 + c / (tau * length))`` for nonempty
+    completions. Stop tokens count toward length, but absorbing padding does
+    not. Empty completions have neutral reward zero.
     """
 
     backend: AutoregressiveBackend
@@ -49,12 +51,37 @@ class SequenceLogProbabilityReward:
         )
         if len(scored) != len(completions):
             raise RuntimeError("backend returned an invalid log-probability score batch")
-        if any(
-            len(token_scores) != len(completion)
-            for token_scores, completion in zip(scored, completions, strict=True)
-        ):
+        return tuple(
+            self.from_token_logprobs(prompt, completion, token_scores)
+            for completion, token_scores in zip(completions, scored, strict=True)
+        )
+
+    def from_token_logprobs(
+        self,
+        prompt: TokenSequence,
+        completion: TokenSequence,
+        token_scores: Sequence[float],
+    ) -> float:
+        """Reuse exact policy scores with the same normalization as batch scoring."""
+        if len(token_scores) != len(completion):
             raise RuntimeError("backend returned an invalid token score shape")
-        return tuple(self.scale * float(sum(token_scores)) for token_scores in scored)
+        length = len(completion)
+        eos = self.sampling.eos_token_id if self.sampling is not None else None
+        backend: Any = self.backend
+        seen: set[int] = set()
+        while backend is not None and id(backend) not in seen:
+            seen.add(id(backend))
+            effective_length = getattr(backend, "effective_completion_length", None)
+            if effective_length is not None:
+                length = min(length, effective_length(prompt, completion))
+            if eos is None:
+                eos = getattr(backend, "eos_token_id", None)
+            if eos is None:
+                eos = getattr(getattr(backend, "tokenizer", None), "eos_token_id", None)
+            backend = getattr(backend, "backend", getattr(backend, "_backend", None))
+        if eos is not None and eos in completion:
+            length = min(length, completion.index(eos) + 1)
+        return self.scale * float(sum(token_scores[:length])) / length if length else 0.0
 
     def describe(self) -> dict[str, object]:
         return {
@@ -62,6 +89,7 @@ class SequenceLogProbabilityReward:
             "model_id": self.backend.model_id,
             "policy_id": self.sampling.policy_id if self.sampling is not None else None,
             "scale": self.scale,
+            "normalization": "mean_per_effective_token",
         }
 
 

@@ -142,7 +142,7 @@ def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
     elif source == "sequence_log_probability":
         # Generation already returned the exact actual-policy log probabilities.
         reward = model_reward_from_config(backend, config, source=source)
-        rewards = [reward.scale * sum(logs) for _, logs in tokens_and_logs]
+        rewards = [reward.from_token_logprobs(prompt, tokens, logs) for tokens, logs in tokens_and_logs]
     elif source == "consilience":
         rewards = []
         reward = model_reward_from_config(backend, config, source=source)

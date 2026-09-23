@@ -1177,35 +1177,38 @@ Hastings 比中抵消。历史库构建、在线生成和概率评分的成本�
 | 奖励 | 定义或实现 | 概率或执行要求 |
 | --- | --- | --- |
 | 配置型 verifier | 本地工厂或外部服务对提示与完整生成给出标量；GSM8K 默认插件解析最终数值并与参考值比较 | verifier 输出有限实数；是否接收参考值由配置显式声明 |
-| 完整序列对数概率（`sequence_log_probability`） | $`c\log p(y\mid x)`$ | AR 后端能够按实际采样策略精确评分完整序列 |
+| 长度归一化对数概率（`sequence_log_probability`） | $`cL^{-1}\log p(y\mid x)`$ | AR 后端能够按实际采样策略精确评分；$`L`$ 不计停止后的 padding |
 | Consilience（`consilience`） | top-$`K`$ token 置信度的末段均值减去加权首段均值 | 需要逐 token 的 top-$`K`$ 概率；固定逐序列分数，可用于普通或迭代条件 IS |
 | 累计自一致性（`self_consistency`） | 按本批已经评估的数值结果累计众数，匹配众数取 1 | 奖励依赖同批样本，只用于普通条件 IS 与 Best-of-$`N`$ |
 | 固定众数（`frozen_consensus`） | 用独立初始估计样本确定众数，随后固定逐序列 0/1 奖励 | 可用于需要固定逐序列奖励的迭代条件 IS |
-| token 平均对数概率（`log_probability`） | $`\lvert y\rvert^{-1}\log p(y\mid x)`$，随后做组内归一化 | 置信度消融；不等于完整序列对数概率奖励 |
+| token 平均对数概率（`log_probability`） | $`\lvert y\rvert^{-1}\log p(y\mid x)`$，随后做组内归一化 | 置信度消融；区别于不做组内归一化的逐序列奖励 |
 | 平均负熵 | $`\lvert y\rvert^{-1}\sum_t\sum_v p_t(v)\log p_t(v)`$ | 需要完整词表概率 |
 | 自确定度（`self-certainty`） | $`-\lvert y\rvert^{-1}\sum_t \lvert V\rvert^{-1}\sum_v[\log\lvert V\rvert+\log p_t(v)]`$ | 需要完整词表概率 |
 
-完整序列对数概率奖励与式 (2) 直接对应。令
+长度归一化对数概率奖励使用有效 completion 上的均值。令
 
 ```math
-r_{\log p}(x,y)=c\log p(y\mid x).
+r_{\log p}(x,y)=\frac{c}{L}\log p(y\mid x).
 ```
 
 代入式 (1) 后，未归一化目标为
 
 ```math
 p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
-=p(y\mid x)^{1+c/\tau}.
+=p(y\mid x)^{1+c/(\tau L)}.
 ```
 
-取 $`c=(\alpha-1)\tau`$ 即得到式 (2) 的 $`p^\alpha`$。Best-of-$`N`$ 已在生成时保存每个 token
-的对数概率，选择阶段直接求和，不增加模型前向计算；条件 IS 的 rollout 可能来自另一个 proposal，因此通过
+这里 $`L`$ 包含实际生成的 EOS 或完整停止标记，但不包含停止后的吸收态 padding；空 completion
+的奖励为 0。不同长度但平均 token logprob 相同的序列得到相同奖励，不做候选组内归一化。
+Best-of-$`N`$ 已在生成时保存每个 token 的对数概率，选择阶段直接取均值，不增加模型前向计算；
+条件 IS 的 rollout 可能来自另一个 proposal，因此通过
 `SequenceLogProbabilityReward.batch` 调用主模型 `score_batch`。vLLM 只在能够精确评分所选温度、top-k 与
 top-p 策略时执行；否则要求配置精确评分后端并在缺失时终止。
 
-参数 `logprob_reward_scale` 对应 $`c`$，`reward_temperature` 对应 $`\tau`$。设置 $`c=1`$ 表示奖励确实为
-$`\log p`$，但目标指数是 $`1+1/\tau`$；它只在 $`\tau=1`$ 时等于 $`p^2`$。MH 已通过式 (2) 和
-`mh.alpha` 直接实现相同目标，不需要额外调用序列奖励评分。
+参数 `logprob_reward_scale` 对应 $`c`$，`reward_temperature` 对应 $`\tau`$。该行为替代旧版的求和奖励，
+已有实验的温度需重新校准。变长序列的目标指数依赖 $`L`$，不再等价于固定 $`p^\alpha`$；需要固定
+幂次目标时仍使用式 (2) 和 `mh.alpha`。只归一化 reward，重要性采样的 $`p/q`$、MH 概率项和
+`SequenceSample.logprob` 均保留真实序列 logprob 的求和语义。
 
 <a id="alg-consilience"></a>
 ### Consilience

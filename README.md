@@ -102,27 +102,29 @@ GRPO 的批量奖励适配器也读取同一 `[verifier]` 表；`gold_answer` �
 `vrpo_training.include_reference_completion = false` 可完全排除该候选。训练与推理可使用同一
 `--verifier-config`，也可在各自配置文件中选择不同 verifier。
 
-AR-LLM 还实现与外部 verifier 分离的完整序列对数概率奖励：
+AR-LLM 还实现与外部 verifier 分离的长度归一化对数概率奖励（`sequence_log_probability`）：
 
 ```math
-r_{\log p}(x,y)=c\log p(y\mid x),
+r_{\log p}(x,y)=\frac{c}{L}\log p(y\mid x),
 \qquad
 p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
-=p(y\mid x)^{1+c/\tau}.
+=p(y\mid x)^{1+c/(\tau L)}.
 ```
 
-因此目标为 $`p^\alpha`$ 时可取 $`c=(\alpha-1)\tau`$。`Best-of-N` 直接复用生成时保存的 token
-对数概率；条件 IS 与迭代 IS 通过后端的批量序列评分计算该奖励。这里的 $`p`$ 是配置实际采用的完整支持
-采样策略。直接设置 $`c=1`$ 时指数是 $`1+1/\tau`$，并不固定为 2；例如 $`\tau=0.1`$ 时指数为 11。
-MH 对同一目标直接使用 `mh --mh-alpha <alpha>`，无需把 logprob 再作为奖励评分一次。该奖励模式要求模型后端
-返回精确 token 对数概率：
+其中 $`L`$ 是有效 completion 的 token 数，包含实际生成的 EOS 或停止标记，不包含停止后的吸收态
+padding；空 completion 的奖励为 0。`Best-of-N` 直接复用生成时保存的 token 对数概率并取均值；
+条件 IS 与迭代 IS 通过后端批量评分，使用相同的归一化。这里的 $`p`$ 是评分采用的采样策略。
+这是对旧版求和奖励的行为变更：变长序列不再对应固定指数的 $`p^\alpha`$，旧实验的 reward temperature
+需要重新校准。需要固定 $`p^\alpha`$ 目标时仍使用 `mh --mh-alpha <alpha>`。
+重要性采样的 $`p/q`$ 概率与 MH 接受率中的序列 logprob 仍保持求和，不做长度归一化。
+该奖励模式要求模型后端返回精确 token 对数概率：
 
 ```powershell
 python -m experiments.arllm.gsm8k_reproduction `
   --config configs/gsm8k_3090_aligned.toml `
   --method conditional_is --conditional-reward sequence_log_probability `
   --reward-temperature 0.5 --logprob-reward-scale 0.5 `
-  --limit 1 --tag power-two-is
+  --limit 1 --tag mean-logprob-is
 ```
 
 AR-LLM 还支持 [Consilience](https://arxiv.org/abs/2608.09898) 的置信度轨迹奖励。它只读取同一模型逐 token

@@ -105,15 +105,20 @@ def test_reward_temperature_rejects_invalid_values(temperature):
         reward_temperature("consilience", {"comparison": {"consilience_temperature": temperature}})
 
 
-def test_sir_log_probability_reuses_the_configured_reward_scale():
+@pytest.mark.parametrize("first_tokens,first_scores", [
+    ((0, 2), (-0.4, -1.0)),
+    ((0, 0, 0, 2), (-0.6, -0.6, -0.6, -1.0)),
+    ((0, 2, 2, 2), (-0.4, -1.0, 0.0, 0.0)),
+])
+def test_sir_log_probability_reuses_the_configured_reward_scale(first_tokens, first_scores):
     backend = CountedBackend()
-    samples = [{"token_ids": (0, 2), "token_logprobs": (-0.4, -1.0)},
+    samples = [{"token_ids": first_tokens, "token_logprobs": first_scores},
                {"token_ids": (1, 2), "token_logprobs": (-1.4, -1.0)}]
     result = compare_sir(backend=backend, judge=Judge(), reference="0", prompt=(0,),
         config={"reward": {"logprob_scale": 2.0}}, plan=budget_plan(128, 2, 1, 16),
         samples=samples, pilots=[], source="sequence_log_probability", seed=8,
         render_output=output, score_cache={})
-    assert result["rewards"] == [-2.8, -4.8]
+    assert result["rewards"] == pytest.approx([-1.4, -2.4])
     assert backend.snapshot().score_forward_token_slots == 0
 
 

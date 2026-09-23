@@ -91,6 +91,14 @@ class StoppedSequenceBackend:
                 ends.append(index + len(marker))
         return min(ends) if ends else None
 
+    def effective_completion_length(
+        self, prefix: TokenSequence, completion: TokenSequence
+    ) -> int:
+        """Count continuation tokens through the stop boundary, excluding padding."""
+        generated = self._generated_prefix(prefix)
+        end = self._stop_end(generated + tuple(completion))
+        return len(completion) if end is None else max(0, end - len(generated))
+
     def _generated_prefix(self, prefix: TokenSequence) -> TokenSequence:
         if len(prefix) < self.protected_prefix_length:
             raise ValueError("prefix is shorter than the protected prompt")

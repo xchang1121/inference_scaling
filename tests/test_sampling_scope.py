@@ -12,7 +12,27 @@ from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.output import ThinkingFormat
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.evaluation import GSM8KProblem
-from experiments.arllm.gsm8k_reproduction import _run_method, _apply_overrides
+from experiments.arllm.gsm8k_reproduction import _run_method, _apply_overrides, _run_best_of_n
+
+
+def test_best_of_n_log_probability_selects_mean_not_sum_without_rescoring():
+    candidates = [
+        SimpleNamespace(token_ids=(0,), token_logprobs=(-0.8,)),
+        SimpleNamespace(token_ids=(1, 1, 1), token_logprobs=(-0.4, -0.4, -0.4)),
+    ]
+    backend = SimpleNamespace(
+        model_id="recorded", tokenizer=SimpleNamespace(eos_token_id=2),
+        sample_batch=lambda requests: candidates, decode=lambda tokens: "1",
+    )
+    selected, diagnostics = _run_best_of_n(
+        backend, None, (), max_new_tokens=4, samples=2, temperature=1.0,
+        seeds=SeedStream(0), problem_index=0, reward_source="sequence_log_probability",
+        config={},
+    )
+    assert selected == (1, 1, 1)
+    assert diagnostics["raw_reward_values"] == pytest.approx([-0.8, -0.4])
+    assert diagnostics["model_reward"]["normalization"] == "mean_per_effective_token"
+    assert diagnostics["reward_normalization"] == "mean_per_effective_token"
 
 
 class _Tokenizer:
