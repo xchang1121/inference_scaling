@@ -121,13 +121,20 @@ def choose_joint_budget(
     rollout_counts: Sequence[int],
     finish_reserve: float = 0.0,
     relative_variance_floor: float = 1e-4,
+    forecast_full_horizon: bool = True,
 ) -> JointBudgetPlan | None:
     """Enumerate integer plans under forecast and next-step reservation limits.
 
     ``finish_reserve`` is the cost of completing from any subsequent prefix. It
     prevents a cheap-looking first action from consuming the completion budget.
     Terminal blocks score full candidates directly and have rollout_count == 0.
+    Disable the full-horizon forecast for next-step planning at a fixed block size.
+    The remaining length still defines the hard output boundary, not a prediction.
     """
+    if not isinstance(forecast_full_horizon, bool):
+        raise ValueError("forecast_full_horizon must be a boolean")
+    if not forecast_full_horizon and len(estimates) > 1:
+        raise ValueError("next-chunk planning requires a single block estimate")
     positive_integer("remaining_length", remaining_length)
     for name, value in (
         ("remaining_budget", remaining_budget),
@@ -154,7 +161,7 @@ def choose_joint_budget(
             raise ValueError("terminal block has no rollout variance")
         if not terminal and estimate.rollout_cost <= 0:
             raise ValueError("nonterminal block requires positive rollout cost")
-        stages = ceil(remaining_length / block)
+        stages = ceil(remaining_length / block) if forecast_full_horizon else 1
         for candidates in sorted(set(candidate_counts)):
             for rollouts in (0,) if terminal else sorted(set(rollout_counts)):
                 cost = candidates * (

@@ -290,7 +290,7 @@ python -m experiments.arllm.joint_budget_is `
 | 参数 / 字段 | 含义 |
 | --- | --- |
 | `--budget-forward-tokens` | 包含初始采样和奖励评分的总预留量 |
-| `--block-sizes` | 块长网格；运行时另加完整剩余长度 |
+| `--block-sizes` | 块长网格；仅旧 `full_horizon` 模式将完整剩余长度加入正常竞争 |
 | `--candidate-counts`、`--rollout-counts` | 整数网格，分别为 $`M\geq2`$、非终止时 $`K\geq1`$ |
 | `--pilot-candidates`、`--pilot-rollouts` | 每个被探测块长的初始样本数，均默认 2 |
 | `--pilot-fraction` | 每轮初始估计最多使用当前剩余预算的比例，默认 0.15；还受完成预留量限制 |
@@ -300,6 +300,38 @@ python -m experiments.arllm.joint_budget_is `
 | `steps[].estimates` | 每个块长的相对方差、初始候选数和成本 |
 | `reserved_forward_tokens`、`pilot_reserved_forward_tokens` | 总预留消耗及初始估计部分 |
 | `actual_backend_cost`、`inference_seconds` | 实测前向计数、估算 FLOPs 与不含模型加载的执行时间 |
+
+### 按下一块预算动态调整
+
+默认 `--planning-mode full_horizon` 保留旧行为。显式选择 `chunk_adaptive` 后，
+通过下面的参数接入通用执行入口，不依赖任何评测数据集或模型服务：
+
+```bash
+python -m experiments.arllm.joint_budget_is \
+  --model /path/to/model --prompt "Your task" \
+  --max-new-tokens 131072 --budget-forward-tokens 4000000 \
+  --planning-mode chunk_adaptive \
+  --block-sizes 50 100 200 400 --candidate-counts 2 4 8 --rollout-counts 1 2 4 \
+  --initial-block-size 100 --initial-candidate-count 4 --initial-rollout-count 2 \
+  --pilot-fraction 0.15 --adjustment-min-improvement 0.1
+```
+
+- Python 使用对应的 `JointBudgetISConfig` 字段；三个初值必须属于各自网格。
+- 每次运行从初值开始，第一块不先做 pilot；后续仅在新 pilot 有效、存在方差信号、
+  改善超过阈值且预算可负担时调整。没有证据或 pilot 预算不足则保持 B/M/K。
+- B 每次最多探测一个相邻网格值；比较 B 需要当前块与邻居的两组独立 pilot。
+  只容得下一组时，只允许调整 M/K；单元素 `--block-sizes` 固定 B。
+- 正式执行只预留下一块成本，另保护收尾预算；pilot 同时受比例上限和保护预算限制。
+  候选、rollout 和奖励评分仍按上限预留，提前结束不退款。15% 是可配置比例，不保证 pilot 能启动。
+- 仅当当前 B/M/K 已无法负担，或剩余输出额度不超过当前 B 时，进入最少候选数、K=0 的收尾。
+  完整剩余长度不参与正常块长竞争；输出上限仍约束生成，未被 chunk 大小替代。
+- 跨块长使用 `H = max(本次有效 pilot 的 B)`、`ceil(H/B) * local_error` 比较，
+  不用最大输出上限预测整个 thinking。这是小样本启发式指标，不是正确率或显著性保证。
+- `steps[].adjustment` 记录初值、保持/调整/收尾原因及比较分数；pilot 不进入正式候选池。
+
+底层 `choose_joint_budget(..., forecast_full_horizon=False)` 只接受一个块长估计，
+避免直接比较不同覆盖长度；运行层负责相邻块比较和独立收尾。
+上述命令是配置示例，不代表已经运行真实模型或验证解题准确率。
 
 ### Python 接口
 

@@ -27,6 +27,7 @@ from inference_scaling.shared.joint_budget import (
     positive_integer,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.experimental.arllm.adaptive_budget import AdaptiveBudgetController
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +43,15 @@ class JointBudgetISConfig:
     reward_temperature: float = 1.0
     reward_forward_passes: int = 1
     relative_variance_floor: float = 1e-4
+    planning_mode: str = "full_horizon"
+    initial_block_size: int | None = None
+    initial_candidate_count: int | None = None
+    initial_rollout_count: int | None = None
+    adjustment_min_improvement: float = 0.1
 
     def __post_init__(self) -> None:
+        if self.planning_mode not in {"full_horizon", "chunk_adaptive"}:
+            raise ValueError("planning_mode must be full_horizon or chunk_adaptive")
         for name in ("forward_token_budget", "total_length"):
             positive_integer(name, getattr(self, name))
         for name in ("block_sizes", "candidate_counts", "rollout_counts"):
@@ -66,6 +74,22 @@ class JointBudgetISConfig:
             or self.relative_variance_floor <= 0
         ):
             raise ValueError("relative_variance_floor must be finite and positive")
+        for name, grid, minimum in (
+            ("initial_block_size", self.block_sizes, 1),
+            ("initial_candidate_count", self.candidate_counts, 2),
+            ("initial_rollout_count", self.rollout_counts, 1),
+        ):
+            value = getattr(self, name)
+            if self.planning_mode == "chunk_adaptive":
+                positive_integer(name, value, minimum=minimum)
+                if value not in grid:
+                    raise ValueError(f"{name} must belong to its configured grid")
+            elif value is not None:
+                raise ValueError(f"{name} requires chunk_adaptive")
+        if not isfinite(self.adjustment_min_improvement) or not 0 < self.adjustment_min_improvement < 1:
+            raise ValueError("adjustment_min_improvement must be in (0, 1)")
+        if self.planning_mode != "chunk_adaptive" and self.adjustment_min_improvement != 0.1:
+            raise ValueError("adjustment_min_improvement requires chunk_adaptive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +99,7 @@ class JointBudgetStep:
     pilot_reserved_cost: int
     evaluation: ConditionalISStep
     remaining_budget: int
+    adjustment: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +145,10 @@ def run_joint_budget_is(
 ) -> JointBudgetISResult:
     """Replan at each prefix; pilots never supply production candidates/weights.
 
-    A full-remaining-length option is always included as a finite-SIR completion
-    fallback. Insufficient initial budget raises before any backend/reward call.
+    Full-horizon planning includes a full-remaining-length completion option.
+    Adaptive chunks use completion only at the output boundary or when the
+    incumbent chunk plus completion reserve no longer fits the budget.
+    Insufficient initial budget raises before any backend/reward call.
     Only fixed pointwise rewards and full-support on-policy sampling are supported.
     """
     sampling = sampling or SamplingConfig()
@@ -139,6 +166,10 @@ def run_joint_budget_is(
     steps: list[JointBudgetStep] = []
     remaining_budget = config.forward_token_budget
     pilot_spent = 0
+    controller = (
+        AdaptiveBudgetController(config, finish_cost)
+        if config.planning_mode == "chunk_adaptive" else None
+    )
 
     def evaluate(
         block: int, candidates: int, rollouts: int, phase: str
@@ -162,8 +193,29 @@ def run_joint_budget_is(
             step_index=len(steps),
         )
 
-    while len(generated) < config.total_length:
-        remaining = config.total_length - len(generated)
+    def estimate_block(block: int) -> BlockBudgetEstimate:
+        candidate_cost, rollout_cost = block_costs(
+            prompt_length=len(prompt), generated_length=len(generated),
+            total_length=config.total_length, block_size=block,
+            reward_forward_passes=config.reward_forward_passes,
+        )
+        return BlockBudgetEstimate(
+            block, WeightMoments(1.0, 0.0 if rollout_cost == 0 else 1.0),
+            candidate_cost, rollout_cost,
+        )
+
+    def measure(estimate: BlockBudgetEstimate) -> WeightMoments | None:
+        pilot = evaluate(estimate.block_size, config.pilot_candidates, config.pilot_rollouts, "pilot")
+        weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot.candidates]
+        if any(not isfinite(value) for group in weights for value in group):
+            return None
+        return estimate_weight_moments(weights, deterministic=[
+            estimate.rollout_cost == 0 or (
+                sampling.eos_token_id is not None and candidate.token_ids[-1] == sampling.eos_token_id
+            ) for candidate in pilot.candidates
+        ])
+
+    def full_horizon_plan(remaining: int):
         blocks = sorted(
             {min(value, remaining) for value in config.block_sizes} | {remaining}
         )
@@ -209,17 +261,29 @@ def run_joint_budget_is(
             estimates.append(
                 BlockBudgetEstimate(block, moments, candidate_cost, rollout_cost)
             )
-        remaining_budget -= step_pilot
-        pilot_spent += step_pilot
         plan = choose_joint_budget(
             estimates,
             remaining_length=remaining,
-            remaining_budget=remaining_budget,
+            remaining_budget=remaining_budget - step_pilot,
             candidate_counts=config.candidate_counts,
             rollout_counts=config.rollout_counts,
             finish_reserve=finish_cost,
             relative_variance_floor=config.relative_variance_floor,
         )
+        return plan, estimates, step_pilot
+
+    while len(generated) < config.total_length:
+        remaining = config.total_length - len(generated)
+        adjustment = None
+        if controller is not None:
+            selection = controller.select(remaining, remaining_budget, estimate_block, measure)
+            plan, estimates = selection.plan, selection.estimates
+            step_pilot = selection.pilot_reserved_cost
+            adjustment = selection.adjustment
+        else:
+            plan, estimates, step_pilot = full_horizon_plan(remaining)
+        remaining_budget -= step_pilot
+        pilot_spent += step_pilot
         if plan is None:
             raise RuntimeError("completion reservation invariant violated")
         evaluation = evaluate(
@@ -229,7 +293,7 @@ def run_joint_budget_is(
         generated += evaluation.selected.token_ids
         steps.append(
             JointBudgetStep(
-                plan, tuple(estimates), step_pilot, evaluation, remaining_budget
+                plan, tuple(estimates), step_pilot, evaluation, remaining_budget, adjustment
             )
         )
         if sampling.eos_token_id is not None and sampling.eos_token_id in generated:
