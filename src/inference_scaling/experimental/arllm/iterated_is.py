@@ -62,10 +62,6 @@ class IteratedConditionalISStep:
             if candidate is self.selected
         )
 
-    @property
-    def retained_previous_updates(self) -> int:
-        return sum(transition.retained_previous for transition in self.transitions)
-
 
 @dataclass(frozen=True, slots=True)
 class IteratedConditionalISResult:

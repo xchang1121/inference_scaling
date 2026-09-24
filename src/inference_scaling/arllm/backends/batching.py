@@ -41,14 +41,6 @@ class BatchingSnapshot:
     maximum_sample_batch: int
     maximum_score_batch: int
 
-    @property
-    def average_sample_batch(self) -> float:
-        return self.sample_requests / self.sample_batches if self.sample_batches else 0.0
-
-    @property
-    def average_score_batch(self) -> float:
-        return self.score_sequences / self.score_batches if self.score_batches else 0.0
-
 
 class ContinuousBatchingBackend:
     """Merge requests from concurrent prompts without changing their random streams.

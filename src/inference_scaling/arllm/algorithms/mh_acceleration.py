@@ -82,11 +82,6 @@ class DelayedRewardMHResult:
     def acceptance_rate(self) -> float:
         return self.accepted / self.attempts if self.attempts else 0.0
 
-    @property
-    def exact_reward_fraction(self) -> float:
-        denominator = 1 + self.attempts
-        return self.exact_reward_evaluations / denominator if denominator else 0.0
-
 
 @dataclass(frozen=True, slots=True)
 class PrefetchSnapshot:

@@ -327,22 +327,6 @@ def validate_record_probabilities(
                 )
 
 
-def sample_replay_record(
-    policy: BehaviorPolicy,
-    key: ReplayKey,
-    max_new_tokens: int,
-    reward: TokenReward,
-    *,
-    seed: int,
-    record_id: str,
-) -> ReplayRecord:
-    return sample_replay_records(
-        policy,
-        [ReplaySampleRequest(key, max_new_tokens, seed, record_id)],
-        reward,
-    )[0]
-
-
 def sample_replay_records(
     policy: BehaviorPolicy,
     requests: Sequence[ReplaySampleRequest],

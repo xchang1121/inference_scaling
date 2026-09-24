@@ -18,7 +18,6 @@ from inference_scaling.arllm.algorithms.base_replay import (
     ReplayWeightEstimate,
     build_fresh_replay_requests,
     estimate_replay_weight,
-    write_reserve_records,
 )
 from inference_scaling.arllm.algorithms.conditional_is import RewardFunction
 from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
@@ -249,14 +248,6 @@ class DynamicISStep:
     @property
     def selected(self) -> DynamicCandidate:
         return self.candidates[self.selected_index]
-
-
-@dataclass(frozen=True, slots=True)
-class DynamicISResult:
-    prompt: TokenSequence
-    token_ids: TokenSequence
-    steps: tuple[DynamicISStep, ...]
-    reserve_records_written: int
 
 
 def _score_candidate(
@@ -712,77 +703,4 @@ def dynamic_is_step(
         generated_length_before=len(generated_prefix),
         candidates=tuple(candidates),
         selected_index=selected_index,
-    )
-
-
-def run_dynamic_is(
-    base_backend: AutoregressiveBackend,
-    registry: BehaviorRegistry,
-    store: InMemoryReplayStore,
-    prompt: TokenSequence,
-    config: DynamicISConfig,
-    reward: RewardFunction,
-    reward_version: str,
-    seeds: SeedStream,
-    *,
-    base_sampling: SamplingConfig | None = None,
-    auxiliary_proposal: CandidateProposalSource = None,
-    statistics_provider: DesignStatisticsProvider = constant_design_statistics,
-    design_prepare: DesignPreparation | None = None,
-    rollout_budget_provider: RolloutBudgetProvider | None = None,
-    reserve_policy: BehaviorPolicy | None = None,
-) -> DynamicISResult:
-    base_sampling = base_sampling or SamplingConfig()
-    validate_base_sampling(base_sampling)
-    base_policy = BehaviorPolicy.for_backend(base_backend, base_sampling, label="base")
-    registry.register(base_policy)
-    reserve_policy = reserve_policy or base_policy
-    registry.register(reserve_policy)
-    generated: list[int] = []
-    steps: list[DynamicISStep] = []
-    reserve_written = 0
-    step_index = 0
-    while len(generated) < config.total_length:
-        step = dynamic_is_step(
-            base_backend=base_backend,
-            registry=registry,
-            store=store,
-            prompt=prompt,
-            generated_prefix=tuple(generated),
-            config=config,
-            base_sampling=base_sampling,
-            reward=reward,
-            reward_version=reward_version,
-            seeds=seeds,
-            step_index=step_index,
-            auxiliary_proposal=auxiliary_proposal,
-            statistics_provider=statistics_provider,
-            design_prepare=design_prepare,
-            rollout_budget_provider=rollout_budget_provider,
-        )
-        generated.extend(step.selected.token_ids)
-        steps.append(step)
-        eos = base_sampling.eos_token_id
-        if eos is not None and eos in step.selected.token_ids:
-            generated = generated[: generated.index(eos) + 1]
-            break
-        reserve_written += write_reserve_records(
-            base_backend=base_backend,
-            base_sampling=base_sampling,
-            reserve_policy=reserve_policy,
-            store=store,
-            prompt=prompt,
-            generated_prefix=tuple(generated),
-            config=config,
-            reward=reward,
-            reward_version=reward_version,
-            seeds=seeds,
-            step_index=step_index,
-        )
-        step_index += 1
-    return DynamicISResult(
-        prompt=prompt,
-        token_ids=tuple(generated),
-        steps=tuple(steps),
-        reserve_records_written=reserve_written,
     )

@@ -3,10 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from experiments.shared.components import (
-    FULL_COMPONENTS,
-    RESEARCH_COMPONENTS,
-)
+from experiments.shared.components import FULL_COMPONENTS
 
 
 REMOVED_COMPATIBILITY_MODULES = (
@@ -128,7 +125,6 @@ def test_production_defaults_exclude_research_components():
         "passk",
         "distribution",
     )
-    assert set(FULL_COMPONENTS).isdisjoint(RESEARCH_COMPONENTS)
 
 
 def test_production_algorithm_import_does_not_load_experimental_modules():

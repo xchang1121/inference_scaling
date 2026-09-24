@@ -150,10 +150,6 @@ class IteratedConditionalISConfig:
 
         return 1 + self.updates * (self.pool_size - 1)
 
-    @property
-    def pool_candidate_uses(self) -> int:
-        return self.updates * self.pool_size
-
 
 @dataclass(frozen=True, slots=True)
 class ProgressiveISConfig:

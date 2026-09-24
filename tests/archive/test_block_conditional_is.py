@@ -7,7 +7,6 @@ import pytest
 
 from inference_scaling.archive.arllm.block_conditional_is import (
     BlockConditionalISConfig,
-    block_conditional_is_step,
     run_block_conditional_is,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
@@ -28,17 +27,10 @@ def _reward(_prompt, generated) -> float:
 
 
 def _step(config, seed, *, base=None, rollout_sampling=SamplingConfig(), **kwargs):
-    return block_conditional_is_step(
-        base_backend=base or _backend(),
-        prompt=(),
-        generated_prefix=(),
-        config=config,
-        reward=_reward,
-        seeds=SeedStream(seed),
-        step_index=0,
-        rollout_sampling=rollout_sampling,
-        **kwargs,
-    )
+    """The first block decision of an archived run."""
+    return run_block_conditional_is(
+        base or _backend(), (), config, _reward, SeedStream(seed), rollout_sampling=rollout_sampling, **kwargs,
+    ).steps[0]
 
 
 def _rollouts(step):
@@ -97,16 +89,13 @@ def test_uncorrected_proposal_rollouts_skip_base_rescoring() -> None:
         def score_batch(self, requests):
             raise AssertionError("uncorrected proposal rollouts must not be rescored")
 
-    step = block_conditional_is_step(
-        base_backend=NoScoreBackend({}, fallback=[0.6, 0.4], model_id="base"),
-        prompt=(),
-        generated_prefix=(),
-        config=BlockConditionalISConfig(
+    step = _step(
+        BlockConditionalISConfig(
             candidate_count=3, rollout_count=2, block_size=1, total_length=2, apply_importance_correction=False,
         ),
-        reward=_reward,
-        seeds=SeedStream(394),
-        step_index=0,
+        394,
+        base=NoScoreBackend({}, fallback=[0.6, 0.4], model_id="base"),
+        rollout_sampling=None,
         rollout_backend=TabularAutoregressiveBackend({}, fallback=[0.2, 0.8], model_id="proposal"),
     )
     rollouts = _rollouts(step)

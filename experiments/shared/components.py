@@ -29,9 +29,6 @@ COMPONENT_SPECS = (
 
 COMPONENT_REGISTRY = {spec.name: spec for spec in COMPONENT_SPECS}
 COMPONENTS = tuple(COMPONENT_REGISTRY)
-AR_COMPONENTS = tuple(
-    spec.name for spec in COMPONENT_SPECS if "arllm" in spec.families
-)
 DLLM_COMPONENTS = tuple(
     spec.name for spec in COMPONENT_SPECS if "dllm" in spec.families
 )
@@ -39,7 +36,7 @@ DLLM_COMPONENTS = tuple(
 # ``full`` is the production reproduction route.  Research screens and
 # ablations remain available through an explicit ``--components`` selection,
 # but are not scheduled implicitly.
-PRODUCTION_COMPONENTS = (
+FULL_COMPONENTS = (
     "quality",
     "matched_target",
     "replay",
@@ -47,39 +44,13 @@ PRODUCTION_COMPONENTS = (
     "passk",
     "distribution",
 )
-RESEARCH_COMPONENTS = tuple(
-    name for name in COMPONENTS if name not in PRODUCTION_COMPONENTS
-)
-FULL_COMPONENTS = PRODUCTION_COMPONENTS
-
-
-def components_for(family: str) -> tuple[str, ...]:
-    if family == "arllm":
-        return AR_COMPONENTS
-    if family == "dllm":
-        return DLLM_COMPONENTS
-    raise ValueError(f"unknown model family {family!r}")
-
-
-def validate_components(family: str, components: tuple[str, ...]) -> None:
-    supported = set(components_for(family))
-    unsupported = sorted(set(components) - supported)
-    if unsupported:
-        raise ValueError(
-            f"components unsupported by {family}: {', '.join(unsupported)}"
-        )
 
 
 __all__ = [
-    "AR_COMPONENTS",
     "COMPONENTS",
     "COMPONENT_REGISTRY",
     "COMPONENT_SPECS",
     "DLLM_COMPONENTS",
     "FULL_COMPONENTS",
-    "PRODUCTION_COMPONENTS",
-    "RESEARCH_COMPONENTS",
     "ComponentSpec",
-    "components_for",
-    "validate_components",
 ]

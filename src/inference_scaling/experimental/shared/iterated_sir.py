@@ -38,10 +38,6 @@ class IteratedSIRTransition(Generic[StateT]):
     def selected(self) -> StepwiseCandidate[StateT]:
         return self.pool[self.selected_index]
 
-    @property
-    def retained_previous(self) -> bool:
-        return self.selected_index == 0
-
 
 def iterated_sir_transition(
     current: StepwiseCandidate[StateT],

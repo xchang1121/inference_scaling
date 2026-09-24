@@ -21,7 +21,7 @@ from inference_scaling.arllm.algorithms.replay_store import (
     ReplayKey,
     ReplayRecord,
     ReplaySampleRequest,
-    sample_replay_record,
+    sample_replay_records,
     sample_replay_records_brokered,
     validate_record_probabilities,
 )
@@ -86,14 +86,10 @@ def test_evaluation_claims_are_metadata_only_disjoint_and_single_use() -> None:
     store = InMemoryReplayStore()
     for index in range(3):
         store.add_evaluation(
-            sample_replay_record(
-                behavior,
-                key,
-                1,
+            sample_replay_records(
+                behavior, [ReplaySampleRequest(key, 1, index, f"record-{index}")],
                 lambda _prompt, generated: float(sum(generated)),
-                seed=index,
-                record_id=f"record-{index}",
-            )
+            )[0]
         )
 
     first, second = store.freeze_claims([key, key], 2)
@@ -151,14 +147,10 @@ def test_base_replay_uses_matching_history_and_moves_all_used_data_to_design() -
     key = ReplayKey((), (), (0,), "reward-v1")
     for index in range(2):
         store.add_evaluation(
-            sample_replay_record(
-                behavior,
-                key,
-                1,
+            sample_replay_records(
+                behavior, [ReplaySampleRequest(key, 1, 100 + index, f"history-{index}")],
                 lambda _prompt, generated: float(generated[-1]),
-                seed=100 + index,
-                record_id=f"history-{index}",
-            )
+            )[0]
         )
 
     step = base_replay_step(
@@ -371,14 +363,10 @@ def test_history_is_scored_under_the_configured_base_temperature() -> None:
     store = InMemoryReplayStore()
     key = ReplayKey((), (), (0,), "reward-v1")
     store.add_evaluation(
-        sample_replay_record(
-            behavior,
-            key,
-            1,
+        sample_replay_records(
+            behavior, [ReplaySampleRequest(key, 1, 5, "history")],
             lambda _prompt, generated: float(generated[-1]),
-            seed=5,
-            record_id="history",
-        )
+        )[0]
     )
     base_sampling = SamplingConfig(temperature=0.7)
 

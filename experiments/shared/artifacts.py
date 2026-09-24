@@ -242,26 +242,6 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def indexed_records(
-    records: Iterable[Mapping[str, Any]],
-    *,
-    key: str = "problem_index",
-) -> dict[int, Mapping[str, Any]]:
-    """Index resumable records and reject duplicate or invalid identifiers."""
-
-    indexed: dict[int, Mapping[str, Any]] = {}
-    for record in records:
-        if key not in record:
-            raise ValueError(f"record is missing {key!r}")
-        identifier = record[key]
-        if isinstance(identifier, bool) or not isinstance(identifier, int) or identifier < 0:
-            raise ValueError(f"{key} must be a non-negative integer")
-        if identifier in indexed:
-            raise ValueError(f"duplicate {key} {identifier}")
-        indexed[identifier] = record
-    return indexed
-
-
 def dataclass_snapshot_delta(
     before: Any,
     after: Any,
@@ -292,7 +272,6 @@ __all__ = [
     "directory_hashes",
     "file_sha256",
     "implementation_hashes",
-    "indexed_records",
     "json_fingerprint",
     "load_jsonl",
     "write_json_atomic",

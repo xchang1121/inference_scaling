@@ -144,14 +144,6 @@ class DraftModelSpeculationSnapshot:
     verification_rounds: int
     ordinary_batched_requests: int
 
-    @property
-    def draft_acceptance_rate(self) -> float:
-        return (
-            self.draft_tokens_accepted / self.draft_tokens_proposed
-            if self.draft_tokens_proposed
-            else 0.0
-        )
-
 
 @dataclass(slots=True)
 class _ForwardCounter:
@@ -252,16 +244,8 @@ class DraftModelSpeculativeBackend:
         return self.target.model_id
 
     @property
-    def draft_model_id(self) -> str:
-        return self.draft.model_id
-
-    @property
     def parameter_count(self) -> int:
         return self.target.parameter_count
-
-    @property
-    def draft_parameter_count(self) -> int:
-        return self.draft.parameter_count
 
     @staticmethod
     def _cuda_rng_devices(*devices: Any) -> list[int]:

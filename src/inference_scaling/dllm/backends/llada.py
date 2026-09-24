@@ -46,10 +46,6 @@ class LLaDABackendSnapshot:
     def estimated_active_flops(self) -> float:
         return 2.0 * self.active_parameters * self.model_token_slots
 
-    @property
-    def estimated_total_parameter_flops(self) -> float:
-        return 2.0 * self.total_parameters * self.model_token_slots
-
 
 class LLaDATransformersBackend:
     """Execute blockwise masked diffusion and record committed trajectories.

@@ -186,13 +186,6 @@ def methods_for(family: str, component: str) -> tuple[str, ...]:
     )
 
 
-def method_spec(family: str, name: str) -> MethodSpec:
-    try:
-        return METHOD_REGISTRY[(family, name)]
-    except KeyError as error:
-        raise ValueError(f"unknown {family} method {name!r}") from error
-
-
 AR_METHODS = methods_for("arllm", "quality")
 AR_DEFAULT_METHODS = methods_for("arllm", "default_quality")
 AR_PASSK_METHODS = methods_for("arllm", "passk")
@@ -232,6 +225,5 @@ __all__ = [
     "METHOD_REGISTRY",
     "METHOD_SPECS",
     "MethodSpec",
-    "method_spec",
     "methods_for",
 ]

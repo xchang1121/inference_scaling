@@ -9,7 +9,6 @@ from typing import Generic, Literal, TypeVar
 
 import numpy as np
 
-from inference_scaling.shared.metrics import importance_effective_sample_size
 
 PayloadT = TypeVar("PayloadT")
 
@@ -194,15 +193,6 @@ class ReplayWeightEstimate:
     @property
     def fresh_count(self) -> int:
         return len(self.fresh_log_terms)
-
-    @property
-    def history_ess(self) -> float:
-        return importance_effective_sample_size(self.history_log_terms)
-
-    @property
-    def fresh_ess(self) -> float:
-        finite = tuple(value for value in self.fresh_log_terms if isfinite(value))
-        return importance_effective_sample_size(finite)
 
 
 class TruncatedReplayRolloutWeightProvider:

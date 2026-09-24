@@ -32,15 +32,6 @@ class MetropolisHastingsProposal(Generic[StateT]):
     forward_proposal_log_probability: float = 0.0
     reverse_proposal_log_probability: float = 0.0
 
-    @property
-    def log_hastings_ratio(self) -> float:
-        return (
-            self.proposed_target_log_density
-            - self.current_target_log_density
-            + self.reverse_proposal_log_probability
-            - self.forward_proposal_log_probability
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class MetropolisHastingsDecision:

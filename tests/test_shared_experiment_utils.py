@@ -14,7 +14,6 @@ from experiments.shared.artifacts import (
     directory_hashes,
     file_sha256,
     implementation_hashes,
-    indexed_records,
     json_fingerprint,
     load_jsonl,
 )
@@ -134,9 +133,7 @@ def test_jsonl_helpers_validate_rows_and_identifiers(tmp_path) -> None:
     path = tmp_path / "records.jsonl"
     path.write_text('{"problem_index": 2}\n\n', encoding="utf-8")
     records = load_jsonl(path)
-    assert indexed_records(records) == {2: {"problem_index": 2}}
-    with pytest.raises(ValueError, match="duplicate"):
-        indexed_records(records + records)
+    assert records == [{"problem_index": 2}]
 
 
 def test_suite_runner_resumes_only_pending_commands(monkeypatch, tmp_path) -> None:

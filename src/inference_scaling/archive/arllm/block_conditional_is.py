@@ -33,7 +33,6 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
     run_stepwise_generation,
-    stepwise_generation_step,
 )
 
 
@@ -190,33 +189,6 @@ def _adapter(
         rollout_sampling=rollout_sampling,
         reward=reward,
         reward_batch=reward_batch,
-    )
-
-
-def block_conditional_is_step(
-    *,
-    base_backend: AutoregressiveBackend,
-    prompt: TokenSequence,
-    generated_prefix: TokenSequence,
-    config: BlockConditionalISConfig,
-    reward: RewardFunction | None,
-    seeds: SeedStream,
-    step_index: int,
-    base_sampling: SamplingConfig | None = None,
-    rollout_backend: AutoregressiveBackend | None = None,
-    rollout_sampling: SamplingConfig | None = None,
-    reward_batch: RewardBatchFunction | None = None,
-) -> BlockConditionalISStep:
-    adapter = _adapter(
-        base_backend, prompt, config, reward, base_sampling, rollout_backend, rollout_sampling, reward_batch,
-    )
-    selection = stepwise_generation_step(
-        adapter, generated_prefix, step_index, seeds, selection_namespace=("conditional_is",)
-    )
-    return BlockConditionalISStep(
-        len(generated_prefix),
-        tuple(candidate.value for candidate in selection.candidates),
-        selection.selected_index,
     )
 
 

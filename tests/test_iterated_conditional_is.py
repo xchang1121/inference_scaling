@@ -120,7 +120,6 @@ def test_iterated_is_evaluates_only_distinct_fresh_states_and_reuses_current() -
     )
 
     assert config.fresh_candidate_evaluations == 9
-    assert config.pool_candidate_uses == 12
     assert len(step.evaluated_candidates) == 9
     assert len(step.transitions) == 4
     assert len(backend.request_batches) == 2
