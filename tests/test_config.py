@@ -48,6 +48,14 @@ def test_policy_id_preserves_distinct_float_values() -> None:
             exact_rollout_early_stop=True,
             rollout_log_weight_bounds=(0.0, 1.0),
         ),
+        lambda: ConditionalISConfig(sweeps=0),
+        lambda: ConditionalISConfig(sweeps=2),
+        lambda: ConditionalISConfig(retain_sequence=True, rollout_design="scrambled_sobol"),
+        lambda: ConditionalISConfig(
+            retain_sequence=True,
+            exact_rollout_early_stop=True,
+            rollout_log_weight_bounds=(0.0, 1.0),
+        ),
         lambda: DynamicISConfig(auxiliary_mixture=float("nan")),
     ],
 )

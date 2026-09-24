@@ -397,6 +397,8 @@ def conditional_is_config(
         exact_rollout_early_stop=bool(table.get("exact_rollout_early_stop", False)),
         rollout_log_weight_bounds=rollout_log_weight_bounds(table),
         rollout_evaluation_batch_size=int(table.get("rollout_evaluation_batch_size", 1)),
+        retain_sequence=bool(table.get("retain_sequence", False)),
+        sweeps=int(table.get("sweeps", 1)),
     )
 
 
@@ -628,6 +630,13 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
     diagnostics["configured_candidate_count"] = int(conditional["candidate_count"])
     diagnostics["configured_rollout_count"] = int(conditional["rollout_count"])
     diagnostics["configured_block_size"] = int(conditional["block_size"])
+    if bool(conditional.get("retain_sequence", False)):
+        diagnostics["configured_retain_sequence"] = True
+        diagnostics["configured_sweeps"] = int(conditional.get("sweeps", 1))
+        diagnostics["retained_block_kept_steps"] = sum(
+            getattr(step, "retained_candidate", False) and step.selected_index == 0
+            for step in result.steps
+        )
     diagnostics["exact_rollout_early_stop_enabled"] = bool(
         conditional.get("exact_rollout_early_stop", False)
     )

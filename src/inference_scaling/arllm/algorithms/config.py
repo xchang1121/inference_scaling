@@ -95,10 +95,22 @@ class ConditionalISConfig:
     exact_rollout_early_stop: bool = False
     rollout_log_weight_bounds: tuple[float, float] | None = None
     rollout_evaluation_batch_size: int = 1
+    # Keep a complete sequence between steps (see conditional_is); sweeps
+    # restart the block cuts from the prompt with that sequence kept.
+    retain_sequence: bool = False
+    sweeps: int = 1
 
     def __post_init__(self) -> None:
-        for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
+        for name in ("candidate_count", "rollout_count", "block_size", "total_length", "sweeps"):
             require_positive(name, getattr(self, name))
+        if self.sweeps > 1 and not self.retain_sequence:
+            raise ValueError("sweeps > 1 requires retain_sequence=True")
+        if self.retain_sequence and (
+            self.rollout_design != "iid" or self.exact_rollout_early_stop
+        ):
+            raise ValueError(
+                "retain_sequence requires iid rollouts without exact early stopping"
+            )
         require_positive("reward_temperature", self.reward_temperature)
         if self.importance_log_ratio_clip is not None:
             require_positive(

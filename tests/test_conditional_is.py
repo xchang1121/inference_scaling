@@ -1,9 +1,12 @@
 from collections import Counter
 from math import exp
 
+import numpy as np
 import pytest
 
 from inference_scaling.arllm.algorithms.conditional_is import (
+    RetainedSequence,
+    RetainedSequenceAdapter,
     conditional_is_step,
     run_conditional_is,
 )
@@ -12,6 +15,7 @@ from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.sampling.stepwise import stepwise_generation_step
 from inference_scaling.experimental.shared.rqmc import (
     randomized_lattice_uniforms,
     scrambled_sobol_uniforms,
@@ -644,3 +648,116 @@ def test_bounded_staged_off_policy_weights_match_complete_evaluation() -> None:
         assert [step.selected_index for step in staged.steps] == [
             step.selected_index for step in full.steps
         ]
+
+
+def test_retained_sequence_reuses_its_kept_completion() -> None:
+    scored: list[tuple[int, ...]] = []
+
+    def reward(_prompt, generated) -> float:
+        scored.append(tuple(generated))
+        return float(sum(generated))
+
+    config = ConditionalISConfig(
+        candidate_count=3, rollout_count=2, block_size=1, total_length=3, retain_sequence=True
+    )
+    result = run_conditional_is(_backend(), (), config, reward, SeedStream(7))
+    sequence: tuple[int, ...] | None = None
+    kept_reward = 0.0
+    for step in result.steps:
+        fixed = step.generated_length_before
+        assert step.retained_candidate == (sequence is not None)
+        if sequence is not None:
+            carried = step.candidates[0]
+            assert carried.token_ids == sequence[fixed : fixed + 1]
+            assert carried.rollouts[0].token_ids == sequence[fixed + 1 :]
+            assert carried.rollouts[0].reward == kept_reward
+        assert step.completion_index is not None
+        completion = step.selected.rollouts[step.completion_index]
+        sequence = (sequence or ())[:fixed] + step.selected.token_ids + completion.token_ids
+        kept_reward = completion.reward
+    assert result.token_ids == sequence and len(sequence) == 3
+    # Only fresh sequences are scored; the kept completion is never scored again.
+    assert len(scored) == sum(step.rollout_evaluations_performed for step in result.steps) == 13
+
+
+def test_retained_sweeps_restart_the_cuts_from_the_prompt() -> None:
+    config = ConditionalISConfig(
+        candidate_count=2, rollout_count=1, block_size=2, total_length=5,
+        retain_sequence=True, sweeps=2,
+    )
+    result = run_conditional_is(
+        TabularAutoregressiveBackend({}, fallback=[0.5, 0.5]),
+        (),
+        config,
+        lambda _prompt, generated: float(sum(generated)),
+        SeedStream(3),
+    )
+    assert [(step.sweep, step.generated_length_before) for step in result.steps] == [
+        (0, 0), (0, 2), (0, 4), (1, 0), (1, 2), (1, 4)
+    ]
+    assert len(result.token_ids) == 5
+
+
+def test_retained_sequence_requires_on_policy_completions() -> None:
+    config = ConditionalISConfig(
+        candidate_count=2, rollout_count=2, block_size=1, total_length=2, retain_sequence=True
+    )
+    with pytest.raises(ValueError, match="on-policy"):
+        run_conditional_is(
+            _backend(), (), config, _reward, SeedStream(1),
+            rollout_sampling=SamplingConfig(temperature=0.5),
+        )
+
+
+def test_retained_sweep_started_at_the_target_stays_at_the_target() -> None:
+    # Each retained step is a conditional SIR move, so a sweep started from
+    # exact target samples must return exact target samples; the same sweep
+    # started from nothing is only an approximation.
+    backend = TabularAutoregressiveBackend(
+        {(): [0.6, 0.4], (0,): [0.8, 0.2], (1,): [0.3, 0.7]}, fallback=[0.5, 0.5]
+    )
+    sampling = SamplingConfig()
+
+    def reward(_prompt, generated) -> float:
+        return 2.0 * sum(generated)
+
+    sequences = [tuple(int(bit) for bit in f"{code:03b}") for code in range(8)]
+    logprobs = {
+        sequence: backend.score_batch([ScoreRequest((), (sequence,), sampling)])[0]
+        for sequence in sequences
+    }
+    weights = [exp(sum(logprobs[sequence]) + reward((), sequence)) for sequence in sequences]
+    target = {sequence: weight / sum(weights) for sequence, weight in zip(sequences, weights)}
+    adapter = RetainedSequenceAdapter(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        config=ConditionalISConfig(
+            candidate_count=2, rollout_count=2, block_size=1, total_length=3, retain_sequence=True
+        ),
+        sampling=sampling,
+        reward=reward,
+    )
+    starts = np.random.default_rng(0).choice(8, size=3000, p=list(target.values()))
+    counts: dict[str, Counter[tuple[int, ...]]] = {"target": Counter(), "empty": Counter()}
+    for trial, index in enumerate(starts):
+        start = sequences[index]
+        for label, state in (
+            ("target", RetainedSequence(start, logprobs[start], reward((), start))),
+            ("empty", adapter.initial_state),
+        ):
+            seeds = SeedStream(trial)
+            step_index = 0
+            while not adapter.is_terminal(state):
+                selection = stepwise_generation_step(
+                    adapter, state, step_index, seeds, selection_namespace=("conditional_is",)
+                )
+                state = adapter.advance(state, selection.selected.value, step_index)
+                step_index += 1
+            counts[label][state.token_ids] += 1
+    empirical = {
+        label: {sequence: counts[label][sequence] / len(starts) for sequence in sequences}
+        for label in counts
+    }
+    assert total_variation(empirical["target"], target) < 0.03
+    assert total_variation(empirical["empty"], target) > 0.2

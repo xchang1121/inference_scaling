@@ -98,6 +98,7 @@ $`\log q(y\mid y')`$。共享核计算
 | 奖励目标 MH | 式 (1) | 目标分布保持不变；每次 proposal 通常需完整奖励 | `shared/sampling/mh.py` + 两侧目标评分 |
 | 条件 IS | 式 (1) 的逐块 SIR | $`K,M\to\infty`$ 时趋近目标 | `shared/sampling/stepwise.py` + 两侧生成适配 |
 | 迭代条件 IS | 式 (1) 的逐块 i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `experimental/shared/iterated_sir.py` + AR 补全适配 |
+| 保留完整序列的条件 IS | 式 (1)：在当前完整序列的块边界上做条件 SIR | 首步是整序列 SIR；此后每步保持目标不变 | `arllm/algorithms/conditional_is.py`（`retain_sequence`） |
 | off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对条件奖励权重无偏 | `shared/sampling/importance.py` + 两侧轨迹评分 |
 | 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | 基础模型候选的 rollout replay | 式 (1) 的逐块 SIR | 历史样本与独立新样本组成的条件权重估计无偏 | `shared/sampling/importance.py` + 两侧 replay 存储 |
@@ -814,6 +815,33 @@ $`|\mathcal Z|`$ 很大时，rollout 数约为 $`|\mathcal Z|K`$，可能远高�
 参考：方法注册表、CLI、Qwen 实现和实验结果均未包含这一项。本节只说明它与现有条件权重、off-policy 和
 replay 公式的关系。原始有限动作 logit 更新见
 [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510)。
+
+<a id="alg-retained-is"></a>
+### 6.5 保留完整序列的条件 IS
+
+标准条件 IS 每步只提交选中的生成块。式 (8) 用到的补全 $`u_{mk}`$ 都是完整序列，却在选择后丢弃，下一步再为
+新候选重新生成。配置 `retain_sequence = true` 后，每一步结束时保留一条完整序列：
+
+1. 与标准步骤相同，按 $`\widehat h_m`$ 选择候选 $`z_m`$；
+2. 在 $`z_m`$ 的补全中按 $`e^{r(g,z_m,u_{mk})/\tau}`$ 选择一条，保留完整序列 $`y=(g,z_m,u_{mk})`$；
+3. 下一步在 $`y`$ 的下一个块边界处切开。0 号候选是 $`y`$ 的下一块，它在 $`y`$ 中的剩余部分算作该候选的
+   一条补全，只需再生成 $`K-1`$ 条；其余 $`M-1`$ 个候选及其补全照常生成。保留补全的奖励直接复用，不再评分。
+
+第 1、2 步合起来，就是在全部 $`MK`$ 条完整后缀中按 $`e^{r/\tau}`$ 选一条，所以第一步是 $`MK`$ 条共享首块的
+完整序列上的整序列 SIR。之后每一步把当前后缀放在候选树的固定位置，其余节点按提议分布重新生成，再按权重选择
+叶子。这是 conditional SMC 的单步转移，论证与第 6.3 节的 i-SIR 相同，只是池中的状态换成整条后缀；给定切点
+之前的前缀，它保持式 (1) 不变。由此：
+
+- 从目标分布出发，一轮扫描后仍是目标分布；`test_conditional_is.py` 在可枚举模型上核对这一点；
+- 第一步之后，每一步都不增大输出分布到目标的 KL 散度，且每一步结束时都有一条可直接输出的完整序列。
+
+`sweeps` 大于 1 时，一轮扫描结束后从提示处重新切分，使前面的块也能被替换。当前实现要求补全与候选来自同一
+模型和采样策略（on-policy）、rollout 独立同分布、奖励为逐序列固定值，并与 QMC rollout、精确提前停止互斥。
+
+在相同的 $`M,K,B`$ 下，该模式不再丢弃已生成并评分的完整补全。$`K`$ 也不再用于估计块的价值，只是增加同一
+块下的完整后缀，因此宜取 1 或 2，把预算用在 $`M`$ 上。它相对整序列 SIR 是否更省，取决于前缀计算是否复用：
+后续步骤的新后缀共享已固定的前缀，复用前缀 KV 时每条新后缀只需生成切点之后的 token；每个请求都重新计算整个
+前缀时，一条新后缀的前向成本与一条新的完整序列相同。
 
 <a id="alg-offpolicy-is"></a>
 ## 7. off-policy 补全与主模型重评分

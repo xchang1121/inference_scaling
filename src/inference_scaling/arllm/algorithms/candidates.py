@@ -71,6 +71,7 @@ def sample_candidates(
     sampling: SamplingConfig,
     seeds: SeedStream,
     step_index: int,
+    first_index: int = 0,
 ) -> list[SequenceSample]:
     requests = [
         GenerationRequest(
@@ -82,7 +83,7 @@ def sample_candidates(
             ),
             request_id=f"conditional-is:step:{step_index}:candidate:{candidate_index}",
         )
-        for candidate_index in range(count)
+        for candidate_index in range(first_index, first_index + count)
     ]
     candidates = base_backend.sample_batch(requests)
     if len(candidates) != count:

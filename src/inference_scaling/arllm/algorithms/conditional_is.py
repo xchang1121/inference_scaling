@@ -9,6 +9,13 @@ sequence log-ratio is recorded explicitly; it is a biased variance-control
 setting, while the default ``None`` retains the exact importance ratio.  An
 explicit uncorrected ablation skips target-model rescoring and instead estimates
 each candidate's future reward weighting under the rollout proposal itself.
+
+With ``retain_sequence`` a step keeps a complete sequence rather than only the
+selected block: one completion of the selected candidate is kept with
+probability proportional to its weight.  The next step's candidate 0 is that
+sequence's next block, and its remaining completion counts as one of the
+candidate's rollouts.  Each step is then a conditional SIR move that leaves the
+target invariant, and every step ends with a complete sequence.
 """
 
 from __future__ import annotations
@@ -61,6 +68,8 @@ class RolloutEvaluation:
     log_weight: float
     proposal_model_id: str
     proposal_policy_id: str
+    # Actual rollout-policy log-probabilities of token_ids.
+    token_logprobs: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +94,11 @@ class ConditionalISStep:
     rollout_evaluation_batches: int = 0
     exact_early_stop: bool = False
     selection_invariant_verified: bool = False
+    # Retained-sequence mode: whether candidate 0 continues the kept sequence,
+    # which completion of the selected candidate is kept, and the sweep.
+    retained_candidate: bool = False
+    completion_index: int | None = None
+    sweep: int = 0
 
     @property
     def selected(self) -> ConditionalCandidate:
@@ -118,8 +132,14 @@ def estimate_conditional_weights(
     reward_batch: RewardBatchFunction | None = None,
     rollout_design: str = "iid",
     rollout_index_offset: int = 0,
+    retained: RolloutEvaluation | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
-    """Estimate each candidate's conditional weight with on/off-policy rollouts."""
+    """Estimate each candidate's conditional weight with on/off-policy rollouts.
+
+    ``retained`` is an already evaluated completion of candidate 0.  It counts
+    as one of that candidate's ``rollout_count`` rollouts and is neither
+    regenerated nor re-scored.
+    """
 
     validate_rollout_sampling(rollout_sampling)
     if rollout_count <= 0:
@@ -136,8 +156,8 @@ def estimate_conditional_weights(
         raise ValueError("unknown rollout_design")
     if rollout_index_offset < 0:
         raise ValueError("rollout_index_offset must be non-negative")
-    if rollout_index_offset and rollout_design != "iid":
-        raise ValueError("staged rollout offsets currently require iid rollouts")
+    if (rollout_index_offset or retained is not None) and rollout_design != "iid":
+        raise ValueError("staged or retained rollouts currently require iid rollouts")
     if rollout_design != "iid" and reward_batch is not None:
         raise ValueError(
             "randomized QMC rollouts require a fixed pointwise reward; "
@@ -149,14 +169,19 @@ def estimate_conditional_weights(
     rollout_prefixes: list[TokenSequence] = []
     terminal_candidates: set[int] = set()
     eos = rollout_sampling.eos_token_id
+    retained_tokens = None if retained is None else retained.token_ids
 
     for candidate_index, candidate in enumerate(candidates):
         full_generated_candidate = generated_prefix + candidate.token_ids
         terminal = rollout_length == 0 or (
             eos is not None and candidate.token_ids[-1] == eos
         )
+        kept = retained_tokens is not None and candidate_index == 0
+        if kept and terminal == bool(retained_tokens):
+            raise ValueError("a retained completion must be empty exactly after a terminal block")
         if terminal:
-            terminal_candidates.add(candidate_index)
+            if not kept:
+                terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + full_generated_candidate
         if rollout_design == "scrambled_sobol":
@@ -194,7 +219,7 @@ def estimate_conditional_weights(
             )
         else:
             arithmetic_uniforms = (None,) * rollout_count
-        for rollout_index in range(rollout_count):
+        for rollout_index in range(int(kept), rollout_count):
             global_rollout_index = rollout_index_offset + rollout_index
             requests.append(
                 GenerationRequest(
@@ -252,7 +277,7 @@ def estimate_conditional_weights(
         base_totals = [None for _ in samples]
 
     pending_by_candidate: list[
-        list[tuple[TokenSequence, float, float, str, str, TokenSequence]]
+        list[tuple[TokenSequence, float, float, str, str, tuple[float, ...], TokenSequence]]
     ] = [[] for _ in candidates]
     for candidate_index in terminal_candidates:
         generated = generated_prefix + candidates[candidate_index].token_ids
@@ -263,6 +288,7 @@ def estimate_conditional_weights(
                 0.0,
                 rollout_backend.model_id,
                 rollout_sampling.policy_id,
+                (),
                 generated,
             )
         )
@@ -280,13 +306,16 @@ def estimate_conditional_weights(
                 proposal_logprob,
                 sample.model_id,
                 sample.policy_id,
+                sample.token_logprobs,
                 generated,
             )
         )
 
     pending = [item for group in pending_by_candidate for item in group]
     generated_sequences = [item[-1] for item in pending]
-    if reward_batch is not None:
+    if not pending:
+        rewards: tuple[float, ...] = ()
+    elif reward_batch is not None:
         rewards = tuple(
             float(value) for value in reward_batch(prompt, generated_sequences)
         )
@@ -314,9 +343,11 @@ def estimate_conditional_weights(
         correction="none",
     )
     by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
+    if retained is not None:
+        by_candidate[0].append(retained)
     reward_index = 0
     for candidate_index, group in enumerate(pending_by_candidate):
-        for token_ids, base_logprob, proposal_logprob, model_id, policy_id, _ in group:
+        for token_ids, base_logprob, proposal_logprob, model_id, policy_id, token_logprobs, _ in group:
             reward_value = rewards[reward_index]
             reward_index += 1
             observation = RolloutObservation(
@@ -341,6 +372,7 @@ def estimate_conditional_weights(
                     log_weight=weighted.log_weight,
                     proposal_model_id=model_id,
                     proposal_policy_id=policy_id,
+                    token_logprobs=token_logprobs,
                 )
             )
 
@@ -466,6 +498,199 @@ class AutoregressiveStepwiseAdapter:
         if eos is not None and eos in generated:
             generated = generated[: generated.index(eos) + 1]
         return generated
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedSequence:
+    """Complete sequence kept between retained-sequence steps.
+
+    Every candidate of the next step shares the first ``fixed`` tokens.  An
+    empty sequence means that no step has run yet.
+    """
+
+    token_ids: TokenSequence = ()
+    token_logprobs: tuple[float, ...] = ()
+    reward: float = 0.0
+    fixed: int = 0
+    sweep: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedCandidate:
+    """An evaluated candidate and the completion kept if it is selected."""
+
+    candidate: ConditionalCandidate
+    completion_index: int
+
+
+class RetainedSequenceAdapter:
+    """Conditional SIR moves on a complete sequence, cut at successive block boundaries.
+
+    Candidate 0 is the kept sequence's next block and its remaining completion
+    is one of that candidate's rollouts.  Other candidates and rollouts are
+    fresh base-policy samples.  Selecting a candidate by its mean weight and
+    then one of its completions by weight selects a whole suffix in proportion
+    to its reward weight.  A sweep ends when the kept sequence is fixed up to
+    its end.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_backend: AutoregressiveBackend,
+        rollout_backend: AutoregressiveBackend,
+        prompt: TokenSequence,
+        config: ConditionalISConfig,
+        sampling: SamplingConfig,
+        reward: RewardFunction | None,
+        reward_batch: RewardBatchFunction | None = None,
+    ) -> None:
+        self.base_backend = base_backend
+        self.rollout_backend = rollout_backend
+        self.prompt = prompt
+        self.config = config
+        self.sampling = sampling
+        self.reward = reward
+        self.reward_batch = reward_batch
+
+    @property
+    def initial_state(self) -> RetainedSequence:
+        return RetainedSequence()
+
+    def is_terminal(self, state: RetainedSequence) -> bool:
+        return bool(state.token_ids) and state.fixed >= len(state.token_ids)
+
+    def _block_length(self, state: RetainedSequence) -> int:
+        return min(self.config.block_size, self.config.total_length - state.fixed)
+
+    def propose(
+        self,
+        state: RetainedSequence,
+        step_index: int,
+        seeds: SeedStream,
+    ) -> Sequence[SequenceSample]:
+        validate_base_sampling(self.sampling)
+        prefix = self.prompt + state.token_ids[: state.fixed]
+        length = self._block_length(state)
+        proposals: list[SequenceSample] = []
+        if state.token_ids:
+            end = state.fixed + length
+            block = state.token_ids[state.fixed : end]
+            eos = self.sampling.eos_token_id
+            proposals.append(
+                SequenceSample(
+                    prefix=prefix,
+                    token_ids=block,
+                    token_logprobs=state.token_logprobs[state.fixed : end],
+                    policy_id=self.sampling.policy_id,
+                    model_id=self.base_backend.model_id,
+                    request_id=f"conditional-is:step:{step_index}:retained",
+                    finish_reason="eos" if eos is not None and block[-1] == eos else "length",
+                )
+            )
+        fresh = self.config.candidate_count - len(proposals)
+        if fresh:
+            proposals.extend(
+                sample_candidates(
+                    self.base_backend,
+                    prefix,
+                    fresh,
+                    length,
+                    self.sampling,
+                    seeds,
+                    step_index,
+                    first_index=len(proposals),
+                )
+            )
+        return proposals
+
+    def evaluate(
+        self,
+        state: RetainedSequence,
+        proposals: Sequence[SequenceSample],
+        step_index: int,
+        seeds: SeedStream,
+    ) -> Sequence[StepwiseCandidate[RetainedCandidate]]:
+        length = self._block_length(state)
+        retained = None
+        if state.token_ids:
+            start = state.fixed + len(proposals[0].token_ids)
+            completion_logprobs = state.token_logprobs[start:]
+            logprob = float(sum(completion_logprobs))
+            retained = RolloutEvaluation(
+                token_ids=state.token_ids[start:],
+                reward=state.reward,
+                base_logprob=logprob,
+                proposal_logprob=logprob,
+                raw_log_importance_ratio=0.0,
+                applied_log_importance_ratio=0.0,
+                log_weight=state.reward / self.config.reward_temperature,
+                proposal_model_id=self.rollout_backend.model_id,
+                proposal_policy_id=self.sampling.policy_id,
+                token_logprobs=completion_logprobs,
+            )
+        evaluated = estimate_conditional_weights(
+            base_backend=self.base_backend,
+            rollout_backend=self.rollout_backend,
+            prompt=self.prompt,
+            generated_prefix=state.token_ids[: state.fixed],
+            candidates=proposals,
+            rollout_length=self.config.total_length - state.fixed - length,
+            rollout_count=self.config.rollout_count,
+            base_sampling=self.sampling,
+            rollout_sampling=self.sampling,
+            reward_temperature=self.config.reward_temperature,
+            importance_log_ratio_clip=self.config.importance_log_ratio_clip,
+            apply_importance_correction=self.config.apply_importance_correction,
+            reward=self.reward,
+            seeds=seeds,
+            step_index=step_index,
+            reward_batch=self.reward_batch,
+            retained=retained,
+        )
+        kept: list[StepwiseCandidate[RetainedCandidate]] = []
+        for index, candidate in enumerate(evaluated):
+            # Drawn for every candidate so the kept completion is independent
+            # of which candidate the step selects.
+            probabilities = normalize_log_weights(
+                [rollout.log_weight for rollout in candidate.rollouts]
+            )
+            uniform = float(
+                seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()
+            )
+            kept.append(
+                StepwiseCandidate(
+                    RetainedCandidate(
+                        candidate, categorical_index_from_uniform(probabilities, uniform)
+                    ),
+                    candidate.log_weight,
+                )
+            )
+        return tuple(kept)
+
+    def advance(
+        self,
+        state: RetainedSequence,
+        selected: RetainedCandidate,
+        step_index: int,
+    ) -> RetainedSequence:
+        del step_index
+        candidate = selected.candidate
+        completion = candidate.rollouts[selected.completion_index]
+        prefix = state.token_ids[: state.fixed]
+        token_ids = prefix + candidate.token_ids + completion.token_ids
+        token_logprobs = (
+            state.token_logprobs[: state.fixed]
+            + candidate.base_token_logprobs
+            + completion.token_logprobs
+        )
+        if len(token_logprobs) != len(token_ids):
+            raise RuntimeError("retained sequence lost token log-probabilities")
+        fixed = state.fixed + len(candidate.token_ids)
+        sweep = state.sweep
+        if fixed >= len(token_ids) and sweep + 1 < self.config.sweeps:
+            fixed, sweep = 0, sweep + 1
+        return RetainedSequence(token_ids, token_logprobs, completion.reward, fixed, sweep)
 
 
 def _bounded_conditional_is_step(
@@ -722,7 +947,11 @@ def run_conditional_is(
     rollout_sampling: SamplingConfig | None = None,
     reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISResult:
-    """Generate a sequence by repeatedly applying finite conditional-IS steps."""
+    """Generate a sequence by repeatedly applying finite conditional-IS steps.
+
+    With ``config.retain_sequence`` the steps are conditional SIR moves on a
+    kept complete sequence; completions must then come from the base policy.
+    """
 
     base_sampling = base_sampling or SamplingConfig()
     rollout_backend = rollout_backend or base_backend
@@ -731,6 +960,50 @@ def run_conditional_is(
     validate_rollout_sampling(rollout_sampling)
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
+
+    if config.retain_sequence:
+        if (
+            rollout_backend.model_id != base_backend.model_id
+            or rollout_sampling != base_sampling
+        ):
+            raise ValueError("retained sequences require on-policy base-model completions")
+        kept = run_stepwise_generation(
+            RetainedSequenceAdapter(
+                base_backend=base_backend,
+                rollout_backend=rollout_backend,
+                prompt=prompt,
+                config=config,
+                sampling=base_sampling,
+                reward=reward,
+                reward_batch=reward_batch,
+            ),
+            seeds,
+            selection_namespace=("conditional_is",),
+        )
+        retained_steps: list[ConditionalISStep] = []
+        for selection in kept.steps:
+            evaluated = tuple(item.value.candidate for item in selection.candidates)
+            carried = bool(selection.state_before.token_ids)
+            # The kept completion is reused, not evaluated again.
+            fresh = sum(len(candidate.rollouts) for candidate in evaluated) - int(carried)
+            retained_steps.append(
+                ConditionalISStep(
+                    generated_length_before=selection.state_before.fixed,
+                    candidates=evaluated,
+                    selected_index=selection.selected_index,
+                    rollout_evaluations_planned=fresh,
+                    rollout_evaluations_performed=fresh,
+                    rollout_evaluation_batches=1,
+                    retained_candidate=carried,
+                    completion_index=selection.selected.value.completion_index,
+                    sweep=selection.state_before.sweep,
+                )
+            )
+        return ConditionalISResult(
+            prompt=prompt,
+            token_ids=kept.final_state.token_ids,
+            steps=tuple(retained_steps),
+        )
 
     if config.exact_rollout_early_stop:
         generated: TokenSequence = ()
