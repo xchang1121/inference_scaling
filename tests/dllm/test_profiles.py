@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from experiments.dllm.profiles import apply_execution_profile
+from experiments.dllm.assembly.profiles import apply_execution_profile
 
 
 def _config():

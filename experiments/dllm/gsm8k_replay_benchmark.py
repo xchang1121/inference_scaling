@@ -22,8 +22,8 @@ from experiments.dllm.gsm8k_reproduction import (
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
 from experiments.shared.statistics import wilson_interval
-from experiments.dllm.profiles import apply_execution_profile
-from experiments.dllm.runtime import (
+from experiments.dllm.assembly.profiles import apply_execution_profile
+from experiments.dllm.assembly.runtime import (
     capped_generation_length,
     checkpoint_metadata_hashes,
     implementation_hashes,
@@ -34,7 +34,7 @@ from experiments.dllm.runtime import (
 )
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.config import diffusion_decision_stage_lengths
-from inference_scaling.dllm.replay import (
+from inference_scaling.dllm.algorithms.replay import (
     build_diffusion_replay_history,
     select_diffusion_candidates_with_replay,
 )
@@ -47,7 +47,7 @@ from inference_scaling.shared.evaluation import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     TokenBatchReward,
     replace_verifier_from_file,
 )
@@ -55,7 +55,7 @@ from inference_scaling.shared.verifier import (
 IMPLEMENTATION_FILES = (
     *QUALITY_IMPLEMENTATION_FILES,
     "experiments/dllm/gsm8k_replay_benchmark.py",
-    "src/inference_scaling/dllm/replay.py",
+    "src/inference_scaling/dllm/algorithms/replay.py",
     "src/inference_scaling/shared/sampling/importance.py",
 )
 

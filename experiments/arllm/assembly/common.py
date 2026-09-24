@@ -20,7 +20,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 from inference_scaling.shared.evaluation import GSM8KProblem, gsm8k_prompt
 from inference_scaling.shared.model.prompting import render_prompt
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     TokenVerifierReward,
     VerifierContext,
     build_token_verifier_reward,

@@ -32,7 +32,7 @@ from typing import Any
 
 from packaging.version import Version
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     RolloutTokenTree,
     RolloutTokenTreeSnapshot,

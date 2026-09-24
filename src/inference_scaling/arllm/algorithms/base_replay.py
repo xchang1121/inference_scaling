@@ -17,7 +17,7 @@ from inference_scaling.shared.sampling.importance import (
     corrected_replay_log_weight as corrected_replay_log_weight,
     logmeanexp,
 )
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     FrozenReplayClaim,

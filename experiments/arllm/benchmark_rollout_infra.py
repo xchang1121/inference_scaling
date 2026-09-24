@@ -25,7 +25,7 @@ from typing import Any, Callable, Sequence
 
 import torch
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     LowPriorityRunAheadBackend,
     RolloutTokenTree,
@@ -51,8 +51,8 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file
-from experiments.arllm.common import configured_verifier_reward
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
+from experiments.arllm.assembly.common import configured_verifier_reward
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
 
 

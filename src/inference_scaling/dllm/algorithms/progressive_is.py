@@ -10,7 +10,7 @@ import numpy as np
 
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
-from inference_scaling.dllm.replay import (
+from inference_scaling.dllm.algorithms.replay import (
     DiffusionReplayRewardBatch,
     DiffusionReplaySelection,
     select_diffusion_candidates_with_replay,

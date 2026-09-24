@@ -17,7 +17,7 @@ from inference_scaling.arllm.algorithms.config import DynamicISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.budget import allocate_fresh_rollout_budget
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,

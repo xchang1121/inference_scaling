@@ -7,7 +7,7 @@ from typing import Any
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import thinking_format_from_backend, output_settings_from_config
-from inference_scaling.arllm.rewards import ConsilienceReward, SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SequenceLogProbabilityReward
 
 
 MODEL_REWARD_SOURCES = ("consilience", "sequence_log_probability")

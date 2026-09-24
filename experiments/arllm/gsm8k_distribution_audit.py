@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 import torch
 
-from experiments.arllm.runtime import set_rl_adapter_override, validate_model_artifacts
+from experiments.arllm.assembly.runtime import set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.methods import AR_DISTRIBUTION_METHODS
 
 from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
@@ -28,8 +28,8 @@ from experiments.shared.artifacts import (
     implementation_hashes as _implementation_hashes,
     dataclass_snapshot_delta,
 )
-from experiments.arllm.common import load_backend, prompt_tokens, sample_one
-from experiments.arllm.method_runners import run_method
+from experiments.arllm.assembly.common import load_backend, prompt_tokens, sample_one
+from experiments.arllm.assembly.method_runners import run_method
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
@@ -37,7 +37,7 @@ from inference_scaling.arllm.backends import (
     set_backend_override,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
 from experiments.shared.statistics import (
     bootstrap_answer_distance,
     jensen_shannon_bits,

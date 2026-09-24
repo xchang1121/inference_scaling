@@ -12,7 +12,7 @@ from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.model.output import ThinkingFormat
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.evaluation import GSM8KProblem
-from experiments.arllm.method_runners import run_method, run_best_of_n_selection
+from experiments.arllm.assembly.method_runners import run_method, run_best_of_n_selection
 from experiments.arllm.gsm8k_reproduction import _apply_overrides
 
 
@@ -146,7 +146,7 @@ def test_cli_overrides_common_and_legacy_reward_settings_consistently():
 
 def test_passk_adapter_preserves_token_format_and_confidence_scoring():
     from inference_scaling.arllm.backends.execution import ExecutionBackend
-    from inference_scaling.arllm.reward_factory import model_reward_from_config
+    from inference_scaling.arllm.rewards.factory import model_reward_from_config
 
     raw = _Backend()
     adapter = ExecutionBackend(raw, raw)

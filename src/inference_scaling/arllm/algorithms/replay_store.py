@@ -10,7 +10,7 @@ from math import isclose, isfinite, log
 import numpy as np
 
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.rollout_broker import (
+from inference_scaling.arllm.acceleration.rollout_broker import (
     AsyncRolloutBroker,
     PartialRollout,
     RolloutBrokerSnapshot,
@@ -21,7 +21,7 @@ from inference_scaling.arllm.types import (
     ScoreRequest,
     TokenSequence,
 )
-from inference_scaling.shared.verifier import TokenReward
+from inference_scaling.shared.rewards.verifier import TokenReward
 
 
 @dataclass(frozen=True, slots=True)

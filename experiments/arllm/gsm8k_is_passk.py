@@ -21,7 +21,7 @@ from typing import Any
 
 import torch
 
-from experiments.arllm.runtime import validate_model_artifacts
+from experiments.arllm.assembly.runtime import validate_model_artifacts
 from experiments.shared.methods import AR_IS_PASSK_METHODS
 
 from experiments.arllm.gsm8k_passk import (
@@ -39,8 +39,8 @@ from experiments.shared.artifacts import (
     implementation_hashes,
     dataclass_snapshot_delta,
 )
-from experiments.arllm.common import load_backend, prompt_tokens, sample_one, timed
-from experiments.arllm.method_runners import run_method
+from experiments.arllm.assembly.common import load_backend, prompt_tokens, sample_one, timed
+from experiments.arllm.assembly.method_runners import run_method
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,
@@ -53,7 +53,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
 
 
 IS_PASSK_METHODS = AR_IS_PASSK_METHODS

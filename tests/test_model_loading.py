@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.runtime import model_metadata, validate_model_artifacts
+from experiments.arllm.assembly.runtime import model_metadata, validate_model_artifacts
 from experiments.shared.artifacts import checkpoint_weight_hashes
 from inference_scaling.arllm.backends import loader
 from inference_scaling.shared.model.loading import model_loading_options
@@ -101,7 +101,7 @@ def test_sharded_checkpoint_manifest_and_pinned_load(tmp_path, monkeypatch):
         "a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}))
     for number in (1, 2):
         (model / f"model-{number:05d}-of-00002.safetensors").write_bytes(bytes([number]))
-    import experiments.arllm.runtime as runtime
+    import experiments.arllm.assembly.runtime as runtime
     monkeypatch.setattr(runtime, "HASH_CACHE", tmp_path / "hashes")
     config = {"models": {"base": str(model)}}
     artifacts = validate_model_artifacts(config, ["base"])
@@ -124,7 +124,7 @@ def test_checkpoint_shards_require_safe_existing_names(tmp_path):
 
 
 def test_binary_adapter_and_full_rl_checkpoints(tmp_path, monkeypatch):
-    import experiments.arllm.runtime as runtime
+    import experiments.arllm.assembly.runtime as runtime
     monkeypatch.setattr(runtime, "HASH_CACHE", tmp_path / "hashes")
     base, adapter = tmp_path / "base", tmp_path / "adapter"
     base.mkdir()

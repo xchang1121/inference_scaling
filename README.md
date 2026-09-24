@@ -41,7 +41,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | --- | --- | --- | --- |
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散块，再按 Hastings 比接受或拒绝 | 提议分布（proposal）的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/sampling/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
 | [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一个生成块产生候选，用 rollout 估计条件奖励权重后重采样 | 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
-| [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/replay.py) |
+| [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/algorithms/replay.py) |
 | [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
 | [联合预算 IS](docs/methods/BUDGET.md#budget-joint) | 按当前前缀与剩余预算选择候选数、补全数、块长 | 首版使用同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/experimental/arllm/joint_budget_is.py)、[CLI](experiments/arllm/joint_budget_is.py) |
 | [可枚举候选 logit adjustment](docs/methods/ALGORITHMS.md#alg-logit-adjustment) | 将估计条件权重的对数加到基础候选 logits，再在完整候选集上归一化 | 可直接使用新生成、off-policy 或 replay 条件权重 | 理论参考；当前没有 CLI、代码实现或实验结果 |
@@ -85,7 +85,7 @@ unparseable_reward = 0.0
 `score(prompt, completion)` 对象或等价可调用对象；可选的 `score_batch(inputs)` 用于批量服务。
 `requires_reference = false` 时，实验入口不会把数据集参考值传给 verifier。配置、工厂路径和参数共同生成稳定
 版本号，replay 只复用版本一致的奖励记录。核心接口位于
-[`shared/verifier.py`](src/inference_scaling/shared/verifier.py)，独立配置示例位于
+[`shared/rewards/verifier.py`](src/inference_scaling/shared/rewards/verifier.py)，独立配置示例位于
 [`configs/verifiers/`](configs/verifiers/)；所有统一入口都接受 `--verifier-config`：
 
 ```powershell
@@ -430,16 +430,18 @@ python -m pytest
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/inference_scaling/arllm/` | AR-LLM 的 MH、IS、replay、Transformers 与 vLLM 后端；`config.py` 为采样策略，`algorithms/config.py` 为算法配置 |
-| `src/inference_scaling/dllm/` | LLaDA-MoE 的分块生成、MH、IS、replay 与 VRPO；配置按同样方式区分采样策略与算法 |
+| `src/inference_scaling/arllm/` | AR-LLM。根目录为采样策略（`config.py`）、请求与后端契约（`types.py`）、思考段格式与采样范围（`output.py`、`scope.py`）；子包为 `algorithms/`（MH、IS、replay 及其数据池，`algorithms/config.py` 为算法配置）、`backends/`（Transformers 与 vLLM 执行）、`acceleration/`（推测解码、rollout 调度等执行加速）、`rewards/`（模型自身奖励及其配置工厂） |
+| `src/inference_scaling/dllm/` | LLaDA-MoE。根目录为采样策略与契约；子包为 `algorithms/`（分块生成、MH、IS、replay、动态候选）、`backends/`、`training/`（VRPO） |
 | `src/inference_scaling/shared/sampling/` | 两侧共用的采样算法核：逐步 SIR、IS/replay 权重、MH 接受核、SMC 重采样 |
 | `src/inference_scaling/shared/budget/` | 预算分配：方差—成本分配、候选数/补全数/块长联合选择、逐块规划器与预留成本模型 |
 | `src/inference_scaling/shared/model/` | 模型配置：加载、提示模板、生成长度上限与思考段/正文分段 |
-| `src/inference_scaling/shared/` | 以上子包及数据评测、verifier、随机数和计算量记录 |
+| `src/inference_scaling/shared/rewards/` | 奖励：外部 verifier 接口与 Consilience 置信度窗口算术 |
+| `src/inference_scaling/shared/` | 以上子包及数据评测（`evaluation/`）、配置校验、随机数和计算量记录 |
 | `src/inference_scaling/experimental/` | 保留但不由默认入口导入或调度的研究实现 |
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/shared/` | 两侧共用的组件清单、统计量、配置标识、可续跑调度和结果文件管理 |
-| `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本；AR 方法组装位于 `method_runners.py`（方法 → 算法调用）、`reward_sources.py`（奖励来源 → 奖励）与 `common.py`（入口共用工具） |
+| `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本，目录内只放命令行入口 |
+| `experiments/arllm/assembly/`、`experiments/dllm/assembly/` | 各入口共用的组装代码：AR 的 `method_runners.py`（方法 → 算法调用）、`reward_sources.py`（奖励来源 → 奖励）、`common.py`（提示、后端加载与 verifier 绑定）、`runtime.py`（权重校验）等 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
 | `tests/` | 分布、实现一致性和结果处理测试 |
 | `docs/` | 算法原理与实现、运行说明，以及算法质量和执行成本两份报告 |

@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     DraftProposal,
     RolloutTokenTree,

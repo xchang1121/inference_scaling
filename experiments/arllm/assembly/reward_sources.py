@@ -11,10 +11,10 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
-from experiments.arllm.common import answer_counts, configured_verifier_reward, fraction_text
+from experiments.arllm.assembly.common import answer_counts, configured_verifier_reward, fraction_text
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.reward_factory import model_reward_from_config
-from inference_scaling.arllm.rewards import ConsilienceReward, SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards.factory import model_reward_from_config
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SequenceLogProbabilityReward
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenSequence
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
@@ -23,7 +23,7 @@ from inference_scaling.shared.evaluation import (
     modal_answer,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import TokenVerifierReward
+from inference_scaling.shared.rewards.verifier import TokenVerifierReward
 
 REWARD_SOURCES = (
     "self_consistency",

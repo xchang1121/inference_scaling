@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.common import answer_counts
+from experiments.arllm.assembly.common import answer_counts
 from experiments.arllm.gsm8k_reproduction import _apply_overrides
-from experiments.arllm.reward_sources import minmax_rewards
+from experiments.arllm.assembly.reward_sources import minmax_rewards
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     GSM8KProblem,

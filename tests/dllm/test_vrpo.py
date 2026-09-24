@@ -9,7 +9,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from inference_scaling.dllm.config import VRPOSamplingConfig
-from inference_scaling.dllm.vrpo import (
+from inference_scaling.dllm.training.vrpo import (
     AdapterDisabledReference,
     estimate_masked_elbo,
     estimate_vrpo_preference_loss,

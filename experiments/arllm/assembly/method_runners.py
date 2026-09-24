@@ -3,7 +3,7 @@
 ``run_method`` is the single entry used by every AR GSM8K experiment. It applies
 the sampling scope (full output or thinking segment) around a runner from
 ``RUNNERS``; each runner turns its TOML tables into an algorithm config, builds
-the reward through :mod:`experiments.arllm.reward_sources`, calls the algorithm
+the reward through :mod:`experiments.arllm.assembly.reward_sources`, calls the algorithm
 and reports ``(tokens, diagnostics)``.
 """
 
@@ -13,14 +13,14 @@ import statistics
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from experiments.arllm.common import (
+from experiments.arllm.assembly.common import (
     answer_counts,
     configured_verifier_reward,
     direct_generate,
     sample_one,
     trim_eos,
 )
-from experiments.arllm.reward_sources import (
+from experiments.arllm.assembly.reward_sources import (
     NORMALIZED_CONFIDENCE_SOURCES,
     REWARD_SOURCES,
     REWARD_TARGET_NAMES,
@@ -38,12 +38,12 @@ from inference_scaling.arllm.algorithms.config import (
 from inference_scaling.arllm.backends import AbsorbingEOSBackend, ScoreCachingBackend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.reward_factory import (
+from inference_scaling.arllm.rewards.factory import (
     MODEL_REWARD_SOURCES,
     model_reward_from_config,
     reward_temperature_from_config,
 )
-from inference_scaling.arllm.rewards import ConsilienceReward
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 from inference_scaling.experimental.arllm.iterated_is import run_iterated_conditional_is
@@ -56,7 +56,7 @@ from inference_scaling.shared.evaluation import (
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.model.generation import generation_config_for_prompt
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import TokenVerifierReward
+from inference_scaling.shared.rewards.verifier import TokenVerifierReward
 
 Diagnostics = dict[str, Any]
 SCOPED_METHODS = frozenset({"mh", "reward_mh", "verifier_mh"})

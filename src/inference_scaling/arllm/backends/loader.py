@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     SpeculationTier,
 )

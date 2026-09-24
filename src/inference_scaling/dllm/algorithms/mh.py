@@ -12,7 +12,7 @@ from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRe
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
+from inference_scaling.shared.rewards.verifier import TokenBatchReward, TokenReward
 
 DiffusionRewardFunction = TokenReward
 DiffusionRewardBatchFunction = TokenBatchReward

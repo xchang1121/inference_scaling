@@ -5,7 +5,7 @@ from math import log
 import numpy as np
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
-from inference_scaling.dllm.replay import (
+from inference_scaling.dllm.algorithms.replay import (
     build_diffusion_replay_history,
     select_diffusion_candidates_with_replay,
 )

@@ -13,7 +13,7 @@ from inference_scaling.arllm.algorithms.candidates import sample_candidates
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.algorithms.config import BaseReplayConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     BrokeredReplayState,
@@ -25,7 +25,7 @@ from inference_scaling.arllm.replay import (
     sample_replay_records_brokered,
     validate_record_probabilities,
 )
-from inference_scaling.arllm.rollout_broker import AsyncRolloutBroker
+from inference_scaling.arllm.acceleration.rollout_broker import AsyncRolloutBroker
 from inference_scaling.shared.rng import SeedStream
 
 

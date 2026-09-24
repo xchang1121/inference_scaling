@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.reasoning_methods import (
+from experiments.arllm.assembly.reasoning_methods import (
     budget_plan, check_budget, compare_sir, compare_mh, majority_index, REWARDS, sampling_policy, reward_temperature,
     single_sample_budget_length, generation_cost,
 )
-from experiments.arllm.request_reuse import ColdCostRequestReplay
+from experiments.arllm.assembly.request_reuse import ColdCostRequestReplay
 from experiments.arllm.reasoning_benchmark import build_parser
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.arllm.config import SamplingConfig

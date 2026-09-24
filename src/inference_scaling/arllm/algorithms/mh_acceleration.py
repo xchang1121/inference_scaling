@@ -31,7 +31,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
-from inference_scaling.shared.verifier import TokenReward
+from inference_scaling.shared.rewards.verifier import TokenReward
 
 
 RewardFunction = TokenReward

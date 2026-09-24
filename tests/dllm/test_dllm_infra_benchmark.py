@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 from experiments.dllm.benchmark_infra import _aggregate
-from experiments.dllm.runtime import validate_llada_weights
+from experiments.dllm.assembly.runtime import validate_llada_weights
 
 
 def _compute(*, seconds: float, flops: int, calls: int) -> dict[str, float | int]:

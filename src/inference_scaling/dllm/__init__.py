@@ -18,7 +18,7 @@ from inference_scaling.dllm.types import (
     DiffusionTraceStep,
     DiffusionTrajectoryScoreRequest,
 )
-from inference_scaling.dllm.replay import (
+from inference_scaling.dllm.algorithms.replay import (
     DiffusionReplayCandidate,
     DiffusionReplayHistory,
     DiffusionReplayRecord,
@@ -26,7 +26,7 @@ from inference_scaling.dllm.replay import (
     build_diffusion_replay_history,
     select_diffusion_candidates_with_replay,
 )
-from inference_scaling.dllm.vrpo import (
+from inference_scaling.dllm.training.vrpo import (
     VRPOMaskPlan,
     VRPOMaskSample,
     VRPOPreferenceEstimate,
@@ -34,7 +34,7 @@ from inference_scaling.dllm.vrpo import (
     estimate_vrpo_preference_loss,
     sample_vrpo_mask_plan,
 )
-from inference_scaling.dllm.dynamic_is import (
+from inference_scaling.dllm.algorithms.dynamic_is import (
     DynamicDiffusionDraw,
     DynamicDiffusionResult,
     DynamicDiffusionStep,

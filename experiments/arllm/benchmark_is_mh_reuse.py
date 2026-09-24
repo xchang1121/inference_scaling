@@ -34,7 +34,7 @@ from experiments.arllm.benchmark_rollout_infra import (
     speculation_config,
     warm_up,
 )
-from inference_scaling.arllm.acceleration import sample_batch_with_callback
+from inference_scaling.arllm.acceleration.primitives import sample_batch_with_callback
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
 from inference_scaling.arllm.algorithms.mh_acceleration import (
     FrozenReplaySuffixProposal,
@@ -49,7 +49,7 @@ from inference_scaling.experimental.arllm.streaming_is import (
 from inference_scaling.arllm.algorithms.config import RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import load_gsm8k, select_problems
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     ReplayKey,
     ReplayRecord,
@@ -58,7 +58,7 @@ from inference_scaling.arllm.replay import (
     sample_replay_records_brokered,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.arllm.rollout_broker import AsyncRolloutBroker
+from inference_scaling.arllm.acceleration.rollout_broker import AsyncRolloutBroker
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
 
 

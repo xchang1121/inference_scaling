@@ -19,7 +19,7 @@ from typing import Any
 
 import torch
 
-from experiments.arllm.runtime import set_rl_adapter_override, validate_model_artifacts
+from experiments.arllm.assembly.runtime import set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.methods import AR_PASSK_METHODS
 
 from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
@@ -29,8 +29,8 @@ from experiments.shared.artifacts import (
     implementation_hashes,
     dataclass_snapshot_delta,
 )
-from experiments.arllm.common import load_backend, prompt_tokens, sample_one, timed, trim_eos
-from experiments.arllm.method_runners import run_method
+from experiments.arllm.assembly.common import load_backend, prompt_tokens, sample_one, timed, trim_eos
+from experiments.arllm.assembly.method_runners import run_method
 from inference_scaling.arllm.algorithms import run_mh_chains_batched
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
@@ -48,7 +48,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
 from experiments.shared.statistics import estimated_pass_at_k
 from experiments.shared.artifacts import load_jsonl
 

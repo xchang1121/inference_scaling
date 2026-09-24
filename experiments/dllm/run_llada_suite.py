@@ -12,7 +12,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.profiles import apply_execution_profile
+from experiments.dllm.assembly.profiles import apply_execution_profile
 from experiments.shared.components import DLLM_COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
 from experiments.shared.methods import (

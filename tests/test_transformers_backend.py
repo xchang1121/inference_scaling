@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     RolloutTokenTree,
     SpeculationTier,

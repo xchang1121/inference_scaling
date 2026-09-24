@@ -42,7 +42,7 @@ from inference_scaling.shared.evaluation import (
     load_gsm8k,
     select_problems,
 )
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     ConfiguredTrainingVerifierReward,
     replace_verifier_from_file,
     verifier_spec_from_config,
@@ -303,7 +303,7 @@ def main() -> None:
             Path(__file__).resolve().parents[2],
             entrypoints=(
                 "experiments/arllm/train_gsm8k_grpo.py",
-                "src/inference_scaling/shared/verifier.py",
+                "src/inference_scaling/shared/rewards/verifier.py",
                 "src/inference_scaling/shared/evaluation/numeric.py",
             ),
         ),

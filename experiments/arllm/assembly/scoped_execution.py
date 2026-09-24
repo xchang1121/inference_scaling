@@ -7,7 +7,7 @@ import inspect
 import time
 
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.reward_factory import model_reward_from_config, reward_temperature_from_config
+from inference_scaling.arllm.rewards.factory import model_reward_from_config, reward_temperature_from_config
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.shared.model.generation import generation_config_for_prompt
 from experiments.shared.artifacts import json_fingerprint

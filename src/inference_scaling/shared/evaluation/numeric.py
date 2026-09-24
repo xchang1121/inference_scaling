@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 
-from inference_scaling.shared.verifier import VerifierContext
+from inference_scaling.shared.rewards.verifier import VerifierContext
 
 _NUMBER = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?"
 _FRACTION = rf"(?:{_NUMBER})\s*/\s*(?:{_NUMBER})"

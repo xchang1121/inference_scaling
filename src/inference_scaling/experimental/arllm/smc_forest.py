@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.acceleration import StreamingRewardEvaluator
+from inference_scaling.arllm.acceleration.primitives import StreamingRewardEvaluator
 from inference_scaling.arllm.algorithms.conditional_is import RewardBatchFunction, RewardFunction
 from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
 from inference_scaling.shared.config import SMCForestConfig

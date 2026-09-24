@@ -18,7 +18,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from inference_scaling.arllm.acceleration import sample_batch_with_callback
+from inference_scaling.arllm.acceleration.primitives import sample_batch_with_callback
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,

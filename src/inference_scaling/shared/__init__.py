@@ -2,8 +2,9 @@
 
 Subpackages separate the concerns that experiments assemble:
 ``sampling`` (algorithm kernels), ``budget`` (compute allocation),
-``model`` (loading, prompting, generation limits, output parsing) and
-``evaluation`` (benchmarks and answer checking).
+``model`` (loading, prompting, generation limits, output parsing),
+``rewards`` (verifiers and Consilience arithmetic) and ``evaluation``
+(benchmarks and answer checking).
 """
 
 from inference_scaling.shared.budget import (
@@ -44,7 +45,7 @@ from inference_scaling.shared.sampling import (
     stepwise_generation_step,
 )
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards import (
     ConfiguredTrainingVerifierReward,
     ConfiguredVerifier,
     TokenBatchReward,

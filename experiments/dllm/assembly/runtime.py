@@ -17,7 +17,7 @@ from experiments.shared.artifacts import (
 )
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 HASH_CACHE = REPOSITORY_ROOT / ".cache" / "artifact_hashes"
 
 

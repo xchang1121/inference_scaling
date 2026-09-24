@@ -22,7 +22,7 @@ from inference_scaling.arllm.backends.loader import (
     set_backend_override,
 )
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.reward_factory import (
+from inference_scaling.arllm.rewards.factory import (
     MODEL_REWARD_SOURCES,
     model_reward_from_config,
     reward_temperature_from_config,

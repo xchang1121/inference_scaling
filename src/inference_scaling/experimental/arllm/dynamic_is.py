@@ -24,7 +24,7 @@ from inference_scaling.arllm.algorithms.conditional_is import RewardFunction
 from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
 from inference_scaling.arllm.algorithms.config import DynamicISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,

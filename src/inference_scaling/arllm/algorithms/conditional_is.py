@@ -38,7 +38,7 @@ from inference_scaling.shared.sampling.stepwise import (
     run_stepwise_generation,
     stepwise_generation_step,
 )
-from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
+from inference_scaling.shared.rewards.verifier import TokenBatchReward, TokenReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,

@@ -31,7 +31,7 @@ from inference_scaling.arllm.types import (
     SequenceSample,
     TokenSequence,
 )
-from inference_scaling.shared.verifier import TokenReward
+from inference_scaling.shared.rewards.verifier import TokenReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +134,7 @@ class ActiveBatchSpeculationConfig:
         }
         if dynamic:
             result["model"] = (
-                "inference_scaling.arllm.vllm_suffix_proposer."
+                "inference_scaling.arllm.acceleration.vllm_suffix_proposer."
                 "DynamicSuffixDecodingProposer"
             )
             result["num_speculative_tokens_per_batch_size"] = self.vllm_batch_schedule()

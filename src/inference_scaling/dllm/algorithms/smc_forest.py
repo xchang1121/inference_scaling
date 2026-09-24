@@ -8,7 +8,7 @@ from math import isfinite
 from typing import Sequence
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
-from inference_scaling.dllm.replay import DiffusionReplayRewardBatch
+from inference_scaling.dllm.algorithms.replay import DiffusionReplayRewardBatch
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest
 from inference_scaling.shared.config import SMCForestConfig
 from inference_scaling.shared.sampling.importance import logmeanexp

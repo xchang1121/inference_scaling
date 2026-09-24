@@ -15,7 +15,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.runtime import (
+from experiments.dllm.assembly.runtime import (
     capped_generation_length,
     checkpoint_metadata_hashes,
     implementation_hashes,
@@ -24,11 +24,11 @@ from experiments.dllm.runtime import (
     sampling_from_section,
     validate_llada_weights,
 )
-from experiments.dllm.profiles import apply_execution_profile
+from experiments.dllm.assembly.profiles import apply_execution_profile
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
 from inference_scaling.dllm.backends import load_llada_backend
-from inference_scaling.dllm.preferences import select_scored_preference_pair
+from inference_scaling.dllm.training.preferences import select_scored_preference_pair
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
@@ -37,7 +37,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     VerifierContext,
     VerifierInput,
     build_verifier,
@@ -47,11 +47,11 @@ from inference_scaling.shared.verifier import (
 
 IMPLEMENTATION_FILES = (
     "experiments/dllm/prepare_gsm8k_vrpo.py",
-    "experiments/dllm/profiles.py",
-    "src/inference_scaling/dllm/preferences.py",
+    "experiments/dllm/assembly/profiles.py",
+    "src/inference_scaling/dllm/training/preferences.py",
     "src/inference_scaling/dllm/backends/llada.py",
     "src/inference_scaling/dllm/backends/loader.py",
-    "src/inference_scaling/shared/verifier.py",
+    "src/inference_scaling/shared/rewards/verifier.py",
     "src/inference_scaling/shared/evaluation/numeric.py",
     "src/inference_scaling/shared/evaluation/gsm8k.py",
 )

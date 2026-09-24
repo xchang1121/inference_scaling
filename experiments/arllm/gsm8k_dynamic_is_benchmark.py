@@ -24,11 +24,11 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from experiments.arllm.scoped_execution import fixed_experiment_reward, with_output_scope
-from experiments.arllm.runtime import validate_model_artifacts
+from experiments.arllm.assembly.scoped_execution import fixed_experiment_reward, with_output_scope
+from experiments.arllm.assembly.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
-from experiments.arllm.common import (
+from experiments.arllm.assembly.common import (
     configured_verifier_reward,
     fraction_text,
     load_backend,
@@ -62,7 +62,7 @@ from inference_scaling.arllm.algorithms.config import DynamicISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.shared.metrics import importance_effective_sample_size
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,
@@ -72,13 +72,13 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample
 # Files under src/inference_scaling and experiments/shared are hashed automatically.
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_dynamic_is_benchmark.py",
     "experiments/arllm/summarize_gsm8k_dynamic_is.py",
-    "experiments/arllm/common.py",
+    "experiments/arllm/assembly/common.py",
 )
 def _sum_delta(
     left: dict[str, int | float], right: dict[str, int | float]

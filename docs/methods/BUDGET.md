@@ -407,7 +407,7 @@ result = run_joint_budget_is(
 | CLI、通用加载与实际成本输出 | [`experiments/arllm/joint_budget_is.py`](../../experiments/arllm/joint_budget_is.py) |
 | 历史/新样本方差—成本分配 | [`shared/budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py)：`allocate_variance_cost_budget`、`allocate_fresh_rollout_budget` |
 | 固定候选的两阶段估计 | [`AR progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py)、[`dLLM progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) |
-| 动态候选和外层概率校正 | [`AR dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`dLLM dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py) |
+| 动态候选和外层概率校正 | [`AR dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`dLLM dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py) |
 | 前向 FLOPs 估算 | [`shared/compute.py`](../../src/inference_scaling/shared/compute.py)：`dense_forward_flops` |
 | 矩估计、联合决策、精确枚举 TV 检查 | [`test_joint_budget.py`](../../tests/test_joint_budget.py) |
 | 预算、EOS、随机数隔离与分布测试 | [`test_joint_budget_is.py`](../../tests/test_joint_budget_is.py) |

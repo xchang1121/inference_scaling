@@ -18,14 +18,14 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.runtime import (
+from experiments.dllm.assembly.runtime import (
     checkpoint_metadata_hashes,
     implementation_hashes,
     json_fingerprint,
 )
 from experiments.shared.paired_protocol import load_pairing
 from inference_scaling.dllm.config import VRPOSamplingConfig
-from inference_scaling.dllm.vrpo import (
+from inference_scaling.dllm.training.vrpo import (
     AdapterDisabledReference,
     estimate_vrpo_preference_loss,
     vrpo_forward_token_slots,
@@ -34,7 +34,7 @@ from inference_scaling.shared.rng import SeedStream
 
 IMPLEMENTATION_FILES = (
     "experiments/dllm/train_gsm8k_vrpo.py",
-    "src/inference_scaling/dllm/vrpo.py",
+    "src/inference_scaling/dllm/training/vrpo.py",
     "src/inference_scaling/dllm/config.py",
 )
 

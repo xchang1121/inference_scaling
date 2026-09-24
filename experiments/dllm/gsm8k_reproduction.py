@@ -21,8 +21,8 @@ from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
 from experiments.shared.config_overrides import apply_config_overrides
 from experiments.shared.statistics import wilson_interval
-from experiments.dllm.profiles import apply_execution_profile
-from experiments.dllm.runtime import (
+from experiments.dllm.assembly.profiles import apply_execution_profile
+from experiments.dllm.assembly.runtime import (
     adapter_hashes as _adapter_hashes,
     capped_generation_length as _capped_generation_length,
     checkpoint_metadata_hashes,
@@ -41,7 +41,7 @@ from inference_scaling.dllm.algorithms import (
     run_diffusion_trajectory_power_mh,
 )
 from inference_scaling.dllm.backends import load_llada_backend
-from inference_scaling.dllm.dynamic_is import run_dynamic_diffusion_is
+from inference_scaling.dllm.algorithms.dynamic_is import run_dynamic_diffusion_is
 from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
@@ -63,7 +63,7 @@ from inference_scaling.shared.evaluation import (
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     TokenVerifierReward,
     VerifierContext,
     build_token_verifier_reward,
@@ -76,8 +76,8 @@ METHODS = DLLM_METHODS
 DYNAMIC_METHODS = DLLM_DYNAMIC_METHODS
 IMPLEMENTATION_FILES = (
     "experiments/dllm/gsm8k_reproduction.py",
-    "experiments/dllm/profiles.py",
-    "experiments/dllm/runtime.py",
+    "experiments/dllm/assembly/profiles.py",
+    "experiments/dllm/assembly/runtime.py",
     "experiments/shared/config_overrides.py",
     "experiments/shared/statistics.py",
     "src/inference_scaling/dllm/algorithms/is_sampling.py",
@@ -86,10 +86,10 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/backends/llada.py",
     "src/inference_scaling/dllm/backends/loader.py",
     "src/inference_scaling/dllm/config.py",
-    "src/inference_scaling/dllm/dynamic_is.py",
+    "src/inference_scaling/dllm/algorithms/dynamic_is.py",
     "src/inference_scaling/shared/budget/allocation.py",
     "src/inference_scaling/shared/evaluation/numeric.py",
-    "src/inference_scaling/shared/verifier.py",
+    "src/inference_scaling/shared/rewards/verifier.py",
 )
 
 

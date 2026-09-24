@@ -1,5 +1,13 @@
 """Diffusion-language-model inference-scaling algorithms."""
 
+from inference_scaling.dllm.algorithms.dynamic_is import (
+    DynamicDiffusionArm,
+    DynamicDiffusionDraw,
+    DynamicDiffusionResult,
+    DynamicDiffusionStep,
+    draw_defensive_diffusion_candidates,
+    run_dynamic_diffusion_is,
+)
 from inference_scaling.dllm.algorithms.is_sampling import (
     DiffusionConditionalCandidate,
     DiffusionConditionalISResult,
@@ -35,6 +43,15 @@ from inference_scaling.dllm.algorithms.search import (
     run_diffusion_block_beam,
     run_diffusion_trajectory_power_mh,
 )
+from inference_scaling.dllm.algorithms.replay import (
+    DiffusionReplayCandidate,
+    DiffusionReplayHistory,
+    DiffusionReplayRecord,
+    DiffusionReplayRewardBatch,
+    DiffusionReplaySelection,
+    build_diffusion_replay_history,
+    select_diffusion_candidates_with_replay,
+)
 from inference_scaling.dllm.algorithms.progressive_is import (
     ProgressiveDiffusionISResult,
     ProgressiveDiffusionISStep,
@@ -50,6 +67,19 @@ from inference_scaling.dllm.algorithms.smc_forest import (
 )
 
 __all__ = [
+    "DiffusionReplayCandidate",
+    "DiffusionReplayHistory",
+    "DiffusionReplayRecord",
+    "DiffusionReplayRewardBatch",
+    "DiffusionReplaySelection",
+    "DynamicDiffusionArm",
+    "DynamicDiffusionDraw",
+    "DynamicDiffusionResult",
+    "DynamicDiffusionStep",
+    "build_diffusion_replay_history",
+    "draw_defensive_diffusion_candidates",
+    "run_dynamic_diffusion_is",
+    "select_diffusion_candidates_with_replay",
     "DiffusionConditionalCandidate",
     "DiffusionConditionalISResult",
     "DiffusionConditionalISStep",

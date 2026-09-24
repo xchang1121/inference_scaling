@@ -24,7 +24,7 @@ from inference_scaling.shared.sampling.importance import (
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.stepwise import normalize_log_weights
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import TokenBatchReward
+from inference_scaling.shared.rewards.verifier import TokenBatchReward
 
 DiffusionReplayRewardBatch = TokenBatchReward
 

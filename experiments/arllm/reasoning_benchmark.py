@@ -20,11 +20,11 @@ from experiments.shared.artifacts import file_sha256, json_fingerprint, load_jso
 from experiments.shared.math_benchmark import load_math500, stratified_subset, MathJudge
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.reasoning_results import comparison_coverage, summarize_reasoning
-from experiments.arllm.reasoning_methods import (
+from experiments.arllm.assembly.reasoning_methods import (
     REWARDS, budget_plan, generation_cost, check_budget, compare_sir, compare_mh, majority_index, add_costs,
     sampling_policy, reward_temperature, single_sample_budget_length,
 )
-from experiments.arllm.request_reuse import ColdCostRequestReplay
+from experiments.arllm.assembly.request_reuse import ColdCostRequestReplay
 from inference_scaling.arllm.backends.loader import load_backend_from_config, close_backend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
@@ -307,7 +307,7 @@ def main():
     manifest = {"config": config, "seed": args.seed, "data_sha256": file_sha256(args.data),
                 "split": args.split, "subset": {key: [p.identifier for p in values] for key, values in selection.items()}}
     if args.stage == "compare":
-        from experiments.arllm.runtime import validate_model_artifacts
+        from experiments.arllm.assembly.runtime import validate_model_artifacts
         artifacts = validate_model_artifacts(config, ["base"])
         manifest.update(protocol="reasoning-comparison-v2", weight_sha256=artifacts["weight_sha256"],
                         metadata_sha256=artifacts["metadata_sha256"],

@@ -13,7 +13,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.types import ScoreRequest
-from inference_scaling.arllm.rewards import (
+from inference_scaling.arllm.rewards.intrinsic import (
     ConsilienceReward,
     SequenceLogProbabilityReward,
 )

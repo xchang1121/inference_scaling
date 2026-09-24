@@ -94,7 +94,7 @@ def main() -> None:
     if args.skip_models:
         return
     if args.allow_download is False:
-        from experiments.arllm.runtime import validate_model_artifacts
+        from experiments.arllm.assembly.runtime import validate_model_artifacts
         validate_model_artifacts(config, [role for role in ("base", "proposal") if role in config["models"]])
         return
     for role in ("base", "proposal"):

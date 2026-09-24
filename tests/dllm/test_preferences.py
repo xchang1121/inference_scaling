@@ -1,4 +1,4 @@
-from inference_scaling.dllm.preferences import select_scored_preference_pair
+from inference_scaling.dllm.training.preferences import select_scored_preference_pair
 
 
 def test_highest_scored_rollout_is_preferred_when_group_has_both_outcomes():

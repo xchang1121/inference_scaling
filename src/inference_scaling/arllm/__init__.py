@@ -7,7 +7,7 @@ from inference_scaling.arllm.algorithms.config import (
     RewardMHConfig,
 )
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.rewards import (
+from inference_scaling.arllm.rewards.intrinsic import (
     ConsilienceReward,
     SequenceLogProbabilityReward,
 )

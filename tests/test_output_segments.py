@@ -4,9 +4,9 @@ import pytest
 
 from inference_scaling.shared.model.output import ThinkingFormat, find_token_sequence
 from inference_scaling.shared.model.structured_output import UnifiedOutputParser
-from inference_scaling.shared.consilience import confidence_windows
+from inference_scaling.shared.rewards.consilience import confidence_windows
 from inference_scaling.arllm.output import thinking_format_from_backend
-from inference_scaling.arllm.reward_factory import model_reward_from_config, reward_temperature_from_config
+from inference_scaling.arllm.rewards.factory import model_reward_from_config, reward_temperature_from_config
 from inference_scaling.arllm.config import SamplingConfig
 
 
@@ -239,7 +239,7 @@ def test_malformed_or_ambiguous_structured_output_falls_back_to_full(text, reaso
 
 def test_structured_reward_never_retokenizes_a_field_or_splits_a_token():
     from types import SimpleNamespace
-    from inference_scaling.arllm.rewards import ConsilienceReward
+    from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward
 
     chunks = {1: '{"thinking":"wo', 2: 'rk","answer":"7"}'}
     tokenizer = SimpleNamespace(eos_token_id=99, get_vocab=lambda: {},

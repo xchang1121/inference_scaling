@@ -12,7 +12,7 @@ from inference_scaling.experimental.arllm.dynamic_is import (
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.replay import (
+from inference_scaling.arllm.algorithms.replay_store import (
     BehaviorPolicy,
     BehaviorRegistry,
     InMemoryReplayStore,

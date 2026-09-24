@@ -337,7 +337,7 @@ GRPO 对照使用同一基础模型和默认 GSM8K 数值参考值 verifier 进�
 （argmax）解码。
 
 训练入口为 [`experiments/arllm/train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py)，TRL
-批量奖励适配器位于 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py)，默认数值参考值
+批量奖励适配器位于 [`shared/rewards/verifier.py`](../../src/inference_scaling/shared/rewards/verifier.py)，默认数值参考值
 插件位于 [`shared/evaluation/numeric.py`](../../src/inference_scaling/shared/evaluation/numeric.py)。
 
 <a id="alg-power-mh"></a>
@@ -965,7 +965,7 @@ store.add_evaluation(independent_reserve_record)
 ```
 
 这套状态管理同时用于 `base-replay` 和 `dynamic-is`。存储实现见
-[`arllm/replay.py`](../../src/inference_scaling/arllm/replay.py)。
+[`arllm/algorithms/replay_store.py`](../../src/inference_scaling/arllm/algorithms/replay_store.py)。
 
 构建某个 replay 匹配键时已经按本轮随机数序列生成了相应的基础模型候选。在线选择若再次调用同一候选生成请求，
 会重复执行一次完全相同的自回归计算。AR 实现可将构建阶段返回的 `SequenceSample` 直接传给
@@ -1238,7 +1238,7 @@ r_{\mathrm{Cns}}(x,y)=
 跳过比例、首段系数和总尺度；`window_tokens` 可将比例窗口替换为固定 token 数。
 比例窗口以思考 token 数为分母。边界标记计入生成概率，评分时排除标记及其后的最终内容。
 
-[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards.py) 默认优先对完整、非空的思考段评分。
+[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py) 默认优先对完整、非空的思考段评分。
 关闭思考、缺少边界、思考未结束、思考段为空或结构解析失败时，同一统计公式应用于全序列。
 零 token 的空序列取分数 0；真实 EOS 保留一次，之后的确定性填充不参与评分。`scope = "full"` 可直接选择
 全序列模式。该回退规则在 rollout 评分时确定，作为逐序列奖励定义的一部分；回退次数和原因单独记录。
@@ -1298,7 +1298,7 @@ $`\mathrm{Var}_q(\mathbb E_q[W\mid h])\leq\mathrm{Var}_q(W)`$。
 
 输出解析与奖励计算分别位于 [`shared/model/output.py`](../../src/inference_scaling/shared/model/output.py)、
 [`shared/model/structured_output.py`](../../src/inference_scaling/shared/model/structured_output.py) 和
-[`arllm/rewards.py`](../../src/inference_scaling/arllm/rewards.py)。采样范围与评分范围独立设置。
+[`arllm/rewards/intrinsic.py`](../../src/inference_scaling/arllm/rewards/intrinsic.py)。采样范围与评分范围独立设置。
 
 | 格式 | 识别与切分 | `thinking` 采样范围 |
 | --- | --- | --- |
@@ -1355,7 +1355,7 @@ top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。若复
 
 ### 配置型 verifier
 
-配置型 verifier 由 [`shared/verifier.py`](../../src/inference_scaling/shared/verifier.py) 构造。独立 TOML
+配置型 verifier 由 [`shared/rewards/verifier.py`](../../src/inference_scaling/shared/rewards/verifier.py) 构造。独立 TOML
 中的 `factory` 指向可信本地工厂，`requires_reference` 决定实验适配层是否提供数据集参考值；MH、IS、replay
 和 dLLM 算法均只接收构造后的统一奖励回调。verifier 的名称、工厂与参数经哈希形成 `reward_version`，历史
 记录只有在提示、生成位置、采样策略和该版本均匹配时才可复用。GSM8K 的数值解析与默认参考值 verifier 位于
@@ -1516,7 +1516,7 @@ LLaDA 批量后端位于
 [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py)，上述 IS、SMC 与 MH 适配分别位于
 [`algorithms/`](../../src/inference_scaling/dllm/algorithms/)；实验执行与统一计算量记录位于
 [`benchmark_infra.py`](../../experiments/dllm/benchmark_infra.py)和
-[`runtime.py`](../../experiments/dllm/runtime.py)。
+[`runtime.py`](../../experiments/dllm/assembly/runtime.py)。
 
 <a id="infra-vllm"></a>
 ### 17.7 AR-LLM 的 Transformers 与 vLLM
@@ -1698,8 +1698,8 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度默认
 模型与后端组合的正式质量和吞吐结果由独立实验记录。
 
 `shared/model/output.py` 与 `shared/model/structured_output.py` 负责分段，`arllm/scope.py` 负责采样范围及最终内容生成，
-`shared/consilience.py` 计算置信度窗口分数，`arllm/reward_factory.py` 构造模型奖励。
-算法接受概率后端与奖励接口；GSM8K 提示和准确率评测保留在实验适配层：`experiments/arllm/reward_sources.py`
+`shared/rewards/consilience.py` 计算置信度窗口分数，`arllm/rewards/factory.py` 构造模型奖励。
+算法接受概率后端与奖励接口；GSM8K 提示和准确率评测保留在实验适配层：`experiments/arllm/assembly/reward_sources.py`
 按奖励来源构造奖励，`method_runners.py` 把方法名映射到算法配置与调用，`common.py` 提供各入口共用的提示与后端工具。
 `ExecutionBackend` 为批处理调度器附加模型信息，质量、pass@k 与异步比较共用核心方法调度。
 replay 与动态 IS 的最终内容补生成成本计入在线推理，并单列 `final_content_*` 字段。
@@ -1745,15 +1745,16 @@ logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、C
 | --- | --- | --- | --- | --- |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py)、[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
 | 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | — | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
-| replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
-| 动态候选与预算 | [`budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
+| replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/algorithms/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
+| 动态候选与预算 | [`budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
 | 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/experimental/arllm/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
 | SMC | [`smc.py`](../../src/inference_scaling/shared/sampling/smc.py) | [`smc_forest.py`](../../src/inference_scaling/experimental/arllm/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
-| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration.py`](../../src/inference_scaling/arllm/acceleration.py) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
-| RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
+| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration/`](../../src/inference_scaling/arllm/acceleration/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
+| RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/training/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
 | 配置 | 校验工具位于 [`config.py`](../../src/inference_scaling/shared/config.py)；模型加载、提示、生成长度与输出分段位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | 采样策略 [`arllm/config.py`](../../src/inference_scaling/arllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/arllm/algorithms/config.py) | 采样策略 [`dllm/config.py`](../../src/inference_scaling/dllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/dllm/algorithms/config.py) | `test_config.py`、`dllm/test_dllm_config.py` |
-| 方法组装 | 方法登记 [`methods.py`](../../experiments/shared/methods.py) | [`method_runners.py`](../../experiments/arllm/method_runners.py)、[`reward_sources.py`](../../experiments/arllm/reward_sources.py)、[`common.py`](../../experiments/arllm/common.py) | [`gsm8k_reproduction.py`](../../experiments/dllm/gsm8k_reproduction.py) | `test_sampling_scope.py`、`test_gsm8k.py`、`dllm/test_gsm8k_runner.py` |
+| 奖励 | verifier 与 Consilience 算术位于 [`rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励与配置工厂位于 [`rewards/`](../../src/inference_scaling/arllm/rewards/) | — | `test_verifier.py`、`test_rewards.py` |
+| 方法组装 | 方法登记 [`methods.py`](../../experiments/shared/methods.py) | [`method_runners.py`](../../experiments/arllm/assembly/method_runners.py)、[`reward_sources.py`](../../experiments/arllm/assembly/reward_sources.py)、[`common.py`](../../experiments/arllm/assembly/common.py) | [`assembly/`](../../experiments/dllm/assembly/)、[`gsm8k_reproduction.py`](../../experiments/dllm/gsm8k_reproduction.py) | `test_sampling_scope.py`、`test_gsm8k.py`、`dllm/test_gsm8k_runner.py` |
 | 实验调度与结果文件 | [`experiments/shared/`](../../experiments/shared/) | [`run_arllm_suite.py`](../../experiments/arllm/run_arllm_suite.py) | [`run_llada_suite.py`](../../experiments/dllm/run_llada_suite.py) | `test_reproduction_entrypoints.py`、`dllm/test_run_llada_suite.py` |
 
 有限状态测试核对转移概率、权重恒等式、样本状态管理和批处理随机数序列；真实模型实验核对模型概率、token

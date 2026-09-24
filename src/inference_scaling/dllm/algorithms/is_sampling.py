@@ -26,7 +26,7 @@ from inference_scaling.shared.sampling.stepwise import (
     run_stepwise_generation,
 )
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
+from inference_scaling.shared.rewards.verifier import TokenBatchReward, TokenReward
 
 DiffusionRewardFunction = TokenReward
 DiffusionRewardBatchFunction = TokenBatchReward

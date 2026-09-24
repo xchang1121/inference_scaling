@@ -16,8 +16,8 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.profiles import apply_execution_profile
-from experiments.dllm.runtime import (
+from experiments.dllm.assembly.profiles import apply_execution_profile
+from experiments.dllm.assembly.runtime import (
     capped_generation_length,
     checkpoint_metadata_hashes,
     empty_llada_compute,
@@ -40,7 +40,7 @@ from inference_scaling.dllm.algorithms import (
 )
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
-from inference_scaling.dllm.dynamic_is import run_dynamic_diffusion_is
+from inference_scaling.dllm.algorithms.dynamic_is import run_dynamic_diffusion_is
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.config import SMCForestConfig
 from inference_scaling.shared.evaluation import (
@@ -50,7 +50,7 @@ from inference_scaling.shared.evaluation import (
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     VerifierContext,
     build_token_verifier_reward,
     replace_verifier_from_file,
@@ -59,13 +59,13 @@ from inference_scaling.shared.verifier import (
 
 IMPLEMENTATION_FILES = (
     "experiments/dllm/benchmark_infra.py",
-    "experiments/dllm/runtime.py",
+    "experiments/dllm/assembly/runtime.py",
     "src/inference_scaling/dllm/algorithms/mh.py",
     "src/inference_scaling/dllm/algorithms/mh_acceleration.py",
     "src/inference_scaling/dllm/algorithms/progressive_is.py",
     "src/inference_scaling/dllm/algorithms/smc_forest.py",
-    "src/inference_scaling/dllm/dynamic_is.py",
-    "src/inference_scaling/dllm/replay.py",
+    "src/inference_scaling/dllm/algorithms/dynamic_is.py",
+    "src/inference_scaling/dllm/algorithms/replay.py",
     "src/inference_scaling/shared/budget/allocation.py",
     "src/inference_scaling/shared/sampling/mh.py",
 )

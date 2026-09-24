@@ -15,7 +15,7 @@ from experiments.shared.artifacts import (
 
 from inference_scaling.shared.model.loading import model_loading_options, resolve_checkpoint_path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 HASH_CACHE = REPOSITORY_ROOT / ".cache" / "artifact_hashes"
 
 

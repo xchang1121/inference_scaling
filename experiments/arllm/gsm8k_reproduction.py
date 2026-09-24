@@ -1,6 +1,6 @@
 """Run the GSM8K comparison with resumable per-example records.
 
-Method assembly lives in :mod:`experiments.arllm.method_runners`; this entry
+Method assembly lives in :mod:`experiments.arllm.assembly.method_runners`; this entry
 point owns the command line, manifest, resumable records and summary.
 """
 
@@ -20,7 +20,7 @@ from typing import Any, Sequence
 import torch
 import transformers
 
-from experiments.arllm.common import (
+from experiments.arllm.assembly.common import (
     fraction_text,
     installed_package_version,
     load_backend,
@@ -28,9 +28,9 @@ from experiments.arllm.common import (
     sample_one,
     timed,
 )
-from experiments.arllm.method_runners import run_method
-from experiments.arllm.reward_sources import REWARD_SOURCES
-from experiments.arllm.runtime import model_metadata, set_rl_adapter_override, validate_model_artifacts
+from experiments.arllm.assembly.method_runners import run_method
+from experiments.arllm.assembly.reward_sources import REWARD_SOURCES
+from experiments.arllm.assembly.runtime import model_metadata, set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.artifacts import (
     dataclass_snapshot_delta,
     implementation_hashes,
@@ -48,16 +48,16 @@ from inference_scaling.arllm.backends import (
 )
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.verifier import replace_verifier_from_file, verifier_spec_from_config
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file, verifier_spec_from_config
 
 METHODS = AR_METHODS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 # Files under src/inference_scaling and experiments/shared are hashed automatically.
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_reproduction.py",
-    "experiments/arllm/common.py",
-    "experiments/arllm/method_runners.py",
-    "experiments/arllm/reward_sources.py",
+    "experiments/arllm/assembly/common.py",
+    "experiments/arllm/assembly/method_runners.py",
+    "experiments/arllm/assembly/reward_sources.py",
 )
 
 

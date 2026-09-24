@@ -7,7 +7,7 @@ from experiments.arllm.gsm8k_replay_benchmark import _run_fresh, _run_warm
 from experiments.arllm.gsm8k_dynamic_is_benchmark import _run_method, METHODS
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackendSnapshot
-from inference_scaling.arllm.reward_factory import model_reward_from_config
+from inference_scaling.arllm.rewards.factory import model_reward_from_config
 from inference_scaling.shared.rng import SeedStream
 
 

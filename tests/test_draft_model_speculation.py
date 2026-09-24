@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from inference_scaling.arllm.acceleration import DraftModelSpeculationConfig
+from inference_scaling.arllm.acceleration.primitives import DraftModelSpeculationConfig
 from inference_scaling.arllm.backends import TransformersBackend
 from inference_scaling.experimental.arllm.draft_model_speculation import (
     DraftModelSpeculativeBackend,

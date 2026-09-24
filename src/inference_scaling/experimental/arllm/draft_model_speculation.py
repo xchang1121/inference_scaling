@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import MethodType, TracebackType
 from typing import Any
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     DraftModelSpeculationConfig,
     SampleCompletionCallback,
 )

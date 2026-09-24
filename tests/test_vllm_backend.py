@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.arllm.acceleration import ActiveBatchSpeculationConfig
+from inference_scaling.arllm.acceleration.primitives import ActiveBatchSpeculationConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
 from inference_scaling.arllm.backends.vllm_backend import _load_vllm_sampling_api

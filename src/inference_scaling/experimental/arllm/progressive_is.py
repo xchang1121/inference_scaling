@@ -14,7 +14,7 @@ from math import exp, isfinite
 
 import numpy as np
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     StreamingRewardEvaluator,
     StreamingRewardSnapshot,
 )

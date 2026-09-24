@@ -20,7 +20,7 @@ from typing import Any
 import torch
 import transformers
 
-from experiments.arllm.runtime import validate_model_artifacts
+from experiments.arllm.assembly.runtime import validate_model_artifacts
 from experiments.shared.methods import AR_ASYNC_METHODS
 
 from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
@@ -29,8 +29,8 @@ from experiments.shared.artifacts import (
     implementation_hashes,
     dataclass_snapshot_delta,
 )
-from experiments.arllm.common import load_backend, prompt_tokens, timed
-from experiments.arllm.method_runners import run_method
+from experiments.arllm.assembly.common import load_backend, prompt_tokens, timed
+from experiments.arllm.assembly.method_runners import run_method
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,

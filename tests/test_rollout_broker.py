@@ -6,7 +6,7 @@ from itertools import product
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import total_variation
-from inference_scaling.arllm.rollout_broker import AsyncRolloutBroker
+from inference_scaling.arllm.acceleration.rollout_broker import AsyncRolloutBroker
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
 

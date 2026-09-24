@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from inference_scaling.shared.verifier import (
+from inference_scaling.shared.rewards.verifier import (
     ConfiguredTrainingVerifierReward,
     ConfiguredVerifier,
     VerifierContext,

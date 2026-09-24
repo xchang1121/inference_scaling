@@ -4,7 +4,7 @@ from collections import Counter
 
 import pytest
 
-from inference_scaling.arllm.acceleration import (
+from inference_scaling.arllm.acceleration.primitives import (
     ActiveBatchSpeculationConfig,
     LowPriorityRunAheadBackend,
     RolloutTokenTree,
