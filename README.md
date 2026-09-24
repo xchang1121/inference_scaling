@@ -419,6 +419,25 @@ Qwen3-1.7B 的 RTX 3090 检查中，8,192 token 前缀后固定生成 512 token�
 平均时间从 18.89 秒降至 17.56 秒（1.076 倍）；生成 token、逐 token 概率和模型计算量完全一致。
 此数值仅对应缓存专项检查，完整质量比较的速度收益取决于实际生成长度。
 
+### 分块条件 IS 与整序列 SIR 的比较
+
+[`retained_is_comparison`](experiments/arllm/retained_is_comparison.py) 在同一 MATH-500 子集上比较标准条件 IS、
+[保留完整序列的条件 IS](docs/methods/ALGORITHMS.md#alg-retained-is) 与整序列 SIR。三者都不设预算上限，每条记录
+保存后端的实际计数：前向 token 位置数对每个请求重复计入其完整前缀；新生成 token 数只计新 token，更接近复用前缀
+缓存的运行。不同大小的 SIR 使用同一题共享样本池的前 N 条；两种分块方法使用相同的随机种子，作成对比较。
+
+```powershell
+python -m experiments.arllm.retained_is_comparison `
+  --split test --limit 30 --config configs/qwen3_math.toml `
+  --model Qwen/Qwen3-1.7B --model-revision 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e --allow-download `
+  --max-new-tokens 16384 --candidates 4 --rollouts 1 --block-size 4096 --sweeps 1 `
+  --sir-counts 1 2 4 8 16 --output results/qwen3_retained_is
+python -m experiments.arllm.retained_is_comparison --stage summarize --output results/qwen3_retained_is
+```
+
+`--rewards` 可选 `consilience`（默认）与 `sequence_log_probability`。后者在 SIR 中直接使用采样时返回的对数概率，
+在分块方法中需要重新评分。
+
 ## 测试与目录
 
 ```powershell

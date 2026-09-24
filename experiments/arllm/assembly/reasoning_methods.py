@@ -8,10 +8,11 @@ from math import isfinite
 import time
 from typing import Any, Callable
 
+from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
-from inference_scaling.arllm.algorithms.config import RewardMHConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.rewards.factory import model_reward_from_config
 from inference_scaling.shared.compute import dense_forward_flops
@@ -223,3 +224,49 @@ def compare_mh(*, backend, judge, prompt, reference, config, plan, pilots, sourc
             "changed_updates": sum(step.proposed_token_changes > 0 for step in result.trace),
             "accepted_changed_updates": sum(step.accepted_token_changes > 0 for step in result.trace),
             "trace": [asdict(step) for step in result.trace], **plan}
+
+
+def sir_curve(*, samples, rewards, reward_costs, source, temperature, seed, counts):
+    """Whole-sequence SIR over the first N shared samples, for each N in ``counts``."""
+    rows = []
+    for count in counts:
+        pool = samples[:count]
+        probabilities = normalize_log_weights([value / temperature for value in rewards[:count]])
+        uniform = float(SeedStream(seed).generator("sir-select", source, count).random())
+        selected = pool[categorical_index_from_uniform(probabilities, uniform)]
+        rows.append({"method": "sir", "reward": source, "setting": f"N={count}",
+            "correct": selected["correct"], "parseable": selected["parseable"],
+            "expected_correct": sum(p * int(item["correct"]) for p, item in zip(probabilities, pool, strict=True)),
+            "ess": 1 / sum(p * p for p in probabilities),
+            "cost": add_costs(*(item["cost"] for item in pool), *reward_costs[:count]),
+            "selected_tokens": len(selected["token_ids"]), "thinking_status": selected["thinking_status"]})
+    return rows
+
+
+def compare_conditional(*, backend, judge, prompt, reference, config, source, temperature, seed,
+                        render_output, candidates, rollouts, block_size, total_length, sweeps=None):
+    """Blockwise conditional IS; ``sweeps`` selects the retained-sequence mode.
+
+    Nothing is capped by a budget: the backend counters record what the run
+    actually spent, with every request charged for its own prefix.
+    """
+    sampling = sampling_policy(config, eos_token_id=backend.tokenizer.eos_token_id, require_full_support=True)
+    reward = model_reward_from_config(backend, config, source=source,
+                                      sampling=sampling if source == "sequence_log_probability" else None)
+    settings = ConditionalISConfig(candidate_count=candidates, rollout_count=rollouts,
+        block_size=min(block_size, total_length), total_length=total_length, reward_temperature=temperature,
+        retain_sequence=sweeps is not None, sweeps=sweeps or 1)
+    before = asdict(backend.snapshot())
+    start = time.perf_counter()
+    result = run_conditional_is(backend, prompt, settings, None, SeedStream(seed),
+                                base_sampling=sampling, reward_batch=reward.batch)
+    seconds = time.perf_counter() - start
+    after = asdict(backend.snapshot())
+    output = render_output(backend, prompt, result.token_ids, config)
+    setting = f"M={candidates},K={rollouts},B={settings.block_size}" + (f",sweeps={sweeps}" if sweeps else "")
+    return {"method": "retained_is" if sweeps else "block_is", "reward": source, "setting": setting,
+            **judge.grade(output["content_text"], reference), "content": output["content_text"],
+            "thinking_status": output["thinking_status"], "selected_tokens": len(result.token_ids),
+            "cost": {key: after[key] - before[key] for key in before}, "seconds": seconds,
+            "steps": len(result.steps), "retained_block_kept_steps": sum(
+                step.retained_candidate and step.selected_index == 0 for step in result.steps)}

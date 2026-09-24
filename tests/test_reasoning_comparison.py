@@ -1,4 +1,5 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
+from math import exp
 from types import SimpleNamespace
 
 import pytest
@@ -360,3 +361,77 @@ def test_mh_all_model_rewards_run_with_same_token_budget(source):
     assert result["updates"] == 1
     assert result["used_forward_tokens"] <= 128
     assert result["cost"]["estimated_dense_forward_flops"] == result["used_forward_tokens"] * 14
+
+
+def test_retained_comparison_cli_validates_before_model_loading():
+    from experiments.arllm.retained_is_comparison import build_parser as retained_parser
+
+    args = retained_parser().parse_args([])
+    assert args.methods == ["sir", "block_is", "retained_is"] and args.rewards == ["consilience"]
+    for flag in ("--candidates", "--rollouts", "--block-size", "--sweeps", "--sir-counts", "--limit"):
+        with pytest.raises(SystemExit):
+            retained_parser().parse_args([flag, "0"])
+    with pytest.raises(SystemExit):
+        retained_parser().parse_args(["--proposal-model", "org/other"])
+
+
+@pytest.mark.parametrize("sweeps", [None, 2])
+def test_conditional_comparison_records_uncapped_backend_cost(sweeps):
+    from experiments.arllm.assembly.reasoning_methods import compare_conditional
+
+    backend = CountedBackend()
+    row = compare_conditional(backend=backend, judge=Judge(), prompt=(0,), reference="0",
+        config={"sampling": {"temperature": 0.6}, "reward": {"consilience": {"scope": "full"}}},
+        source="consilience", temperature=2.0, seed=5, render_output=output,
+        candidates=2, rollouts=1, block_size=4, total_length=12, sweeps=sweeps)
+    assert row["method"] == ("retained_is" if sweeps else "block_is")
+    assert row["setting"] == "M=2,K=1,B=4" + (",sweeps=2" if sweeps else "")
+    assert row["cost"] == {key: value for key, value in asdict(backend.snapshot()).items()}
+    assert row["cost"]["generated_tokens"] > 0 and row["cost"]["score_forward_token_slots"] > 0
+    assert row["retained_block_kept_steps"] <= row["steps"]
+
+
+def test_sir_curve_reuses_the_first_samples_of_one_pool():
+    from experiments.arllm.assembly.reasoning_methods import sir_curve
+
+    samples = [{"token_ids": (0, 2), "correct": index == 1, "parseable": True, "thinking_status": "complete",
+                "cost": {"generated_tokens": 2}} for index in range(3)]
+    rows = sir_curve(samples=samples, rewards=[0.0, 2.0, 0.0], reward_costs=[{"score_forward_token_slots": 1}] * 3,
+                     source="consilience", temperature=1.0, seed=3, counts=[1, 3])
+    assert [row["setting"] for row in rows] == ["N=1", "N=3"]
+    assert rows[0]["expected_correct"] == 0 and rows[0]["ess"] == 1
+    assert rows[1]["expected_correct"] == pytest.approx(exp(2) / (exp(2) + 2))
+    assert rows[1]["cost"] == {"generated_tokens": 6, "score_forward_token_slots": 3}
+
+
+def test_retained_comparison_resumes_without_new_samples(tmp_path, monkeypatch):
+    import experiments.arllm.retained_is_comparison as comparison
+    from experiments.shared.artifacts import load_jsonl
+    from experiments.shared.math_benchmark import MathProblem
+
+    calls = []
+
+    def sample(backend, judge, problem, config, seed, mode):
+        calls.append(seed)
+        return {"token_ids": (0, 2), "token_logprobs": (-0.5, -0.5), "correct": True, "parseable": True,
+                "thinking_status": "complete", "cost": {"generated_tokens": 2, "seconds": 0.0}}
+
+    monkeypatch.setattr(comparison, "model_prompt", lambda *args: (0,))
+    monkeypatch.setattr(comparison, "generation_config_for_prompt",
+                        lambda config, *args: (config, {"effective_max_new_tokens": 12}))
+    monkeypatch.setattr(comparison, "run_base", sample)
+    monkeypatch.setattr(comparison, "visible_output", output)
+    (tmp_path / "pools").mkdir()
+    args = SimpleNamespace(output=tmp_path, seed=17, rewards=["consilience"], sir_counts=[1, 2],
+                           methods=["sir", "block_is", "retained_is"], candidates=2, rollouts=1,
+                           block_size=4, sweeps=2)
+    config = {"sampling": {"temperature": 0.6}, "reward": {"consilience": {"scope": "full"}}}
+    problem = MathProblem("one", "question", "0", "algebra", 5)
+    for _ in range(2):
+        done = {comparison.record_key(row) for row in load_jsonl(tmp_path / "records.jsonl")}
+        with (tmp_path / "records.jsonl").open("a", encoding="utf-8") as sink:
+            comparison.compare_problem(CountedBackend(), Judge(), problem, config, args, "same", done, sink)
+    records = load_jsonl(tmp_path / "records.jsonl")
+    assert sorted(row["setting"] for row in records) == ["M=2,K=1,B=4", "M=2,K=1,B=4,sweeps=2", "N=1", "N=2"]
+    assert len(calls) == 2
+    assert {row["method"] for row in comparison.summarize(tmp_path)} == {"sir", "block_is", "retained_is"}
