@@ -215,7 +215,7 @@ def run_comparisons(backend, judge, problems, config, args, fingerprint):
                                         "used_forward_tokens": check_budget(cost, budget),
                                         **judge.grade(outputs[selected]["content_text"], problem.answer)}
                                 else:
-                                    pilots = [sample("pilot", i) for i in range(2)] if source == "self_consistency" else []
+                                    pilots = [sample("pilot", i) for i in range(2)] if source == "pilot_agreement" else []
                                     common = dict(backend=backend, judge=judge, prompt=prompt, reference=problem.answer,
                                         config=bounded, plan=plan, pilots=pilots, source=source,
                                         seed=SeedStream(args.seed).derive(problem.identifier, draw, method),

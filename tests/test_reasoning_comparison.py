@@ -67,6 +67,11 @@ class Judge:
     def equivalent(self, left, right):
         return bool(left and left == right)
 
+    def answer(self, text):
+        return text
+
+    same = equivalent
+
     def answer_key(self, text):
         return text or None
 

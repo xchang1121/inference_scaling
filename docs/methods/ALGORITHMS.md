@@ -1041,15 +1041,16 @@ Hastings 比中抵消。历史库构建、在线生成和概率评分的成本�
 
 条件 IS 与奖励 MH 接受任意有限的逐序列奖励。算法层的统一签名为
 `reward(prompt_tokens, completion_tokens) -> float`；批量接口必须对每个序列计算同一个函数，且按输入顺序
-返回结果。数据集、参考值、文本解析和 verifier 服务位于该接口之外。
+返回结果。全部奖励按名称由 [`arllm/rewards/factory.py`](../../src/inference_scaling/arllm/rewards/factory.py) 的 `build_reward` 构造；数据集只提供答案规则（从文本取答案、判断两个答案是否一致）、pilot 文本和 verifier 参考值，同一奖励名在各数据集上含义相同。
 
 | 奖励 | 定义或实现 | 概率或执行要求 |
 | --- | --- | --- |
 | 配置型 verifier | 本地工厂或外部服务对提示与完整生成给出标量；GSM8K 默认插件解析最终数值并与参考值比较 | verifier 输出有限实数；是否接收参考值由配置显式声明 |
 | 长度归一化对数概率（`sequence_log_probability`） | $`cL^{-1}\log p(y\mid x)`$ | AR 后端能够按实际采样策略精确评分；$`L`$ 不计停止后的 padding |
 | Consilience（`consilience`） | top-$`K`$ token 置信度的末段均值减去加权首段均值 | 需要逐 token 的 top-$`K`$ 概率；固定逐序列分数，可用于普通或迭代条件 IS |
-| 累计自一致性（`self_consistency`） | 按本批已经评估的数值结果累计众数，匹配众数取 1 | 奖励依赖同批样本，只用于普通条件 IS 与 Best-of-$`N`$ |
-| 固定众数（`frozen_consensus`） | 用独立初始估计样本确定众数，随后固定逐序列 0/1 奖励 | 可用于需要固定逐序列奖励的迭代条件 IS |
+| 累计自一致性（`self_consistency`） | 按本次运行已评估序列的答案累计众数，匹配众数取 1 | 奖励依赖同批样本，只用于 Best-of-$`N`$ 与归档的分块条件 IS |
+| 固定众数（`frozen_consensus`） | 用独立 pilot 样本确定众数答案，随后固定逐序列 0/1 奖励 | 固定逐序列奖励，可用于主线条件 IS 与 MH |
+| pilot 一致比例（`pilot_agreement`） | 与各个固定的独立 pilot 样本答案一致的比例 | 固定逐序列奖励；MATH-500 比较使用两个 pilot |
 | token 平均对数概率（`log_probability`） | $`\lvert y\rvert^{-1}\log p(y\mid x)`$，随后做组内归一化 | 置信度消融；区别于不做组内归一化的逐序列奖励 |
 | 平均负熵 | $`\lvert y\rvert^{-1}\sum_t\sum_v p_t(v)\log p_t(v)`$ | 需要完整词表概率 |
 | 自确定度（`self-certainty`） | $`-\lvert y\rvert^{-1}\sum_t \lvert V\rvert^{-1}\sum_v[\log\lvert V\rvert+\log p_t(v)]`$ | 需要完整词表概率 |
@@ -1237,8 +1238,8 @@ token 数和奖励均值。VRPO 偏好构造对每条生成调用同一 verifier
 模型生成与 verifier 分数确定。
 
 token 平均对数概率、平均负熵和自确定度在每个候选选择步骤内使用组内最小值和最大值做线性归一化；常数
-信号置零。该归一化使奖励依赖当前候选组，只作为有限候选置信度消融。自一致性实现见
-[`shared/evaluation/consensus.py`](../../src/inference_scaling/shared/evaluation/consensus.py)。
+信号置零。该归一化使奖励依赖当前候选组，只作为有限候选置信度消融。答案一致性奖励实现见
+[`shared/rewards/consensus.py`](../../src/inference_scaling/shared/rewards/consensus.py)。
 
 <a id="alg-correctness-matrix"></a>
 ## 16. 正确性与近似来源
@@ -1566,9 +1567,9 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度默认
 模型与后端组合的正式质量和吞吐结果由独立实验记录。
 
 `shared/model/output.py` 与 `shared/model/structured_output.py` 负责分段，`arllm/scope.py` 负责采样范围及最终内容生成，
-`shared/rewards/consilience.py` 计算置信度窗口分数，`arllm/rewards/factory.py` 构造模型奖励。
-算法接受概率后端与奖励接口；GSM8K 提示和准确率评测保留在实验适配层：`experiments/arllm/assembly/reward_sources.py`
-按奖励来源构造奖励，`method_runners.py` 把方法名映射到算法配置与调用，`common.py` 提供各入口共用的提示与后端工具。
+`shared/rewards/consilience.py` 计算置信度窗口分数，`arllm/rewards/factory.py` 按名称构造全部奖励。
+算法接受概率后端与奖励接口；GSM8K 提示、答案规则和准确率评测保留在实验适配层：`method_runners.py`
+把方法名映射到算法配置、奖励与调用，`common.py` 提供各入口共用的提示与后端工具。
 `ExecutionBackend` 为批处理调度器附加模型信息，质量、pass@k 与异步比较共用核心方法调度。
 replay 与动态 IS 的最终内容补生成成本计入在线推理，并单列 `final_content_*` 字段。
 
@@ -1622,8 +1623,8 @@ logit adjustment 当前只有第 6.2 节的算法定义，没有对应函数、C
 | 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration/`](../../src/inference_scaling/arllm/acceleration/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
 | RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/training/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
 | 配置 | 校验工具位于 [`config.py`](../../src/inference_scaling/shared/config.py)；模型加载、提示、生成长度与输出分段位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | 采样策略 [`arllm/config.py`](../../src/inference_scaling/arllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/arllm/algorithms/config.py) | 采样策略 [`dllm/config.py`](../../src/inference_scaling/dllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/dllm/algorithms/config.py) | `test_config.py`、`dllm/test_dllm_config.py` |
-| 奖励 | verifier 与 Consilience 算术位于 [`rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励与配置工厂位于 [`rewards/`](../../src/inference_scaling/arllm/rewards/) | — | `test_verifier.py`、`test_rewards.py` |
-| 方法组装 | 方法登记 [`methods.py`](../../experiments/shared/methods.py) | [`method_runners.py`](../../experiments/arllm/assembly/method_runners.py)、[`reward_sources.py`](../../experiments/arllm/assembly/reward_sources.py)、[`common.py`](../../experiments/arllm/assembly/common.py) | [`assembly/`](../../experiments/dllm/assembly/)、[`gsm8k_reproduction.py`](../../experiments/dllm/gsm8k_reproduction.py) | `test_sampling_scope.py`、`test_gsm8k.py`、`dllm/test_gsm8k_runner.py` |
+| 奖励 | verifier、答案一致性奖励与 Consilience 算术位于 [`rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励与按名称构造全部奖励的工厂位于 [`rewards/`](../../src/inference_scaling/arllm/rewards/) | — | `test_verifier.py`、`test_rewards.py`、`test_gsm8k.py` |
+| 方法组装 | 方法登记 [`methods.py`](../../experiments/shared/methods.py) | [`method_runners.py`](../../experiments/arllm/assembly/method_runners.py)、[`common.py`](../../experiments/arllm/assembly/common.py) | [`assembly/`](../../experiments/dllm/assembly/)、[`gsm8k_reproduction.py`](../../experiments/dllm/gsm8k_reproduction.py) | `test_sampling_scope.py`、`test_gsm8k.py`、`dllm/test_gsm8k_runner.py` |
 | 实验调度与结果文件 | [`experiments/shared/`](../../experiments/shared/) | [`run_arllm_suite.py`](../../experiments/arllm/run_arllm_suite.py) | [`run_llada_suite.py`](../../experiments/dllm/run_llada_suite.py) | `test_reproduction_entrypoints.py`、`dllm/test_run_llada_suite.py` |
 
 有限状态测试核对转移概率、权重恒等式、样本状态管理和批处理随机数序列；真实模型实验核对模型概率、token

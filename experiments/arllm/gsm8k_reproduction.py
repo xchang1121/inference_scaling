@@ -29,7 +29,6 @@ from experiments.arllm.assembly.common import (
     timed,
 )
 from experiments.arllm.assembly.method_runners import run_method
-from experiments.arllm.assembly.reward_sources import REWARD_SOURCES
 from experiments.arllm.assembly.runtime import model_metadata, set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.artifacts import (
     dataclass_snapshot_delta,
@@ -46,6 +45,7 @@ from inference_scaling.arllm.backends import (
     configured_backend,
     set_backend_override,
 )
+from inference_scaling.arllm.rewards.factory import REWARD_SOURCES
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.rewards.verifier import replace_verifier_from_file, verifier_spec_from_config
@@ -58,7 +58,9 @@ IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_reproduction.py",
     "experiments/arllm/assembly/common.py",
     "experiments/arllm/assembly/method_runners.py",
-    "experiments/arllm/assembly/reward_sources.py",
+    "src/inference_scaling/arllm/rewards/factory.py",
+    "src/inference_scaling/arllm/rewards/intrinsic.py",
+    "src/inference_scaling/shared/rewards/consensus.py",
 )
 
 

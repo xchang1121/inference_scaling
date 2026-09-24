@@ -6,15 +6,20 @@ import pytest
 
 from experiments.arllm.assembly.common import answer_counts
 from experiments.arllm.gsm8k_reproduction import _apply_overrides
-from experiments.arllm.assembly.reward_sources import minmax_rewards
+from inference_scaling.arllm.rewards.intrinsic import minmax_rewards
 from inference_scaling.shared.evaluation import (
-    CumulativeConsensusReward,
+    NUMERIC_ANSWERS,
     GSM8KProblem,
-    consensus_index,
     extract_numeric_answer,
     gsm8k_prompt,
-    modal_answer,
     select_problems,
+)
+from inference_scaling.shared.rewards import (
+    CumulativeConsensusReward,
+    consensus_index,
+    frozen_consensus_reward,
+    modal_answer,
+    pilot_agreement_reward,
 )
 
 
@@ -33,15 +38,19 @@ def test_training_and_evaluation_share_one_prompt_contract() -> None:
 
 def test_consensus_is_deterministic_and_uses_likelihood_for_representative() -> None:
     texts = ("#### 2", "#### 3", "#### 2")
-    assert modal_answer([extract_numeric_answer(text) for text in texts]) == Fraction(2)
-    assert consensus_index(texts, (-2.0, -0.1, -1.0)) == 2
+    assert modal_answer(NUMERIC_ANSWERS, [extract_numeric_answer(text) for text in texts]) == Fraction(2)
+    assert consensus_index(NUMERIC_ANSWERS, texts, (-2.0, -0.1, -1.0)) == 2
 
 
-def test_cumulative_consensus_reward_carries_counts_across_steps() -> None:
+def test_answer_agreement_rewards_differ_only_in_what_they_compare_with() -> None:
     decoded = {1: "#### 2", 2: "#### 3", 3: "#### 2"}
-    reward = CumulativeConsensusReward(lambda tokens: decoded[tokens[0]])
+    decode = lambda _prompt, tokens: decoded[tokens[0]]
+    reward = CumulativeConsensusReward(NUMERIC_ANSWERS, decode)
     assert reward((), ((1,), (2,), (3,))) == (1.0, 0.0, 1.0)
     assert reward((), ((2,),)) == (0.0,)
+    pilots = tuple(decoded.values())
+    assert frozen_consensus_reward(NUMERIC_ANSWERS, decode, pilots)((), (2,)) == 0.0
+    assert pilot_agreement_reward(NUMERIC_ANSWERS, decode, pilots)((), (2,)) == pytest.approx(1 / 3)
 
 
 def test_select_problems_is_seeded_and_retains_public_order() -> None:

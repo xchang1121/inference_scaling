@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from math import isfinite
+from math import isclose, isfinite
 from threading import Lock
 from typing import Any, Literal, Sequence
 
@@ -261,4 +261,40 @@ class ConsilienceReward:
         }
 
 
-__all__ = ["ConsilienceReward", "SequenceLogProbabilityReward"]
+_CONFIDENCE_STATISTICS = {
+    "log_probability": "mean_logprob",
+    "negative_entropy": "mean_negative_entropy",
+    "self_certainty": "mean_self_certainty",
+}
+
+
+def minmax_rewards(values: Sequence[float]) -> tuple[float, ...]:
+    """Normalize confidence rewards within one decision batch."""
+
+    if not values:
+        raise ValueError("reward normalization requires at least one value")
+    lower, upper = min(values), max(values)
+    if isclose(lower, upper, rel_tol=1e-12, abs_tol=1e-12):
+        return (0.0,) * len(values)
+    return tuple((float(value) - lower) / (upper - lower) for value in values)
+
+
+def confidence_rewards(
+    backend: Any,
+    prompt: TokenSequence,
+    sequences: Sequence[TokenSequence],
+    *,
+    sampling: SamplingConfig,
+    source: str,
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Raw mean confidence statistics and their min-max normalization within the batch."""
+
+    statistic = _CONFIDENCE_STATISTICS.get(source)
+    if statistic is None:
+        raise ValueError(f"{source!r} is not a confidence reward")
+    statistics = backend.score_statistics_batch([ScoreRequest(prompt, tuple(sequences), sampling)])
+    raw = tuple(float(getattr(item, statistic)) for item in statistics)
+    return raw, minmax_rewards(raw)
+
+
+__all__ = ["ConsilienceReward", "SequenceLogProbabilityReward", "confidence_rewards", "minmax_rewards"]

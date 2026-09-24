@@ -51,12 +51,12 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
     gsm8k_prompt,
+    gsm8k_verifier_reward,
     load_gsm8k,
     select_problems,
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
-from experiments.arllm.assembly.common import configured_verifier_reward
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
 
 
@@ -531,9 +531,7 @@ def _algorithm_arm(
         def run_all() -> list[TokenSequence]:
             outputs: list[TokenSequence] = []
             for problem, prompt in zip(problems, prompts, strict=True):
-                verifier_reward = configured_verifier_reward(
-                    raw, problem, factory.config
-                )
+                verifier_reward = gsm8k_verifier_reward(factory.config, problem, raw.decode)
 
                 problem_seed = SeedStream(seed).derive(
                     "infra", "algorithm", name, problem.index

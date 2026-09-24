@@ -15,10 +15,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from experiments.dllm.gsm8k_reproduction import (
-    IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES,
-    configured_verifier_reward,
-)
+from experiments.dllm.gsm8k_reproduction import IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
 from experiments.shared.statistics import wilson_interval
@@ -42,6 +39,7 @@ from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
     gsm8k_prompt,
+    gsm8k_verifier_reward,
     load_gsm8k,
     select_problems,
 )
@@ -436,9 +434,7 @@ def main() -> None:
                     continue
                 prompt = backend.encode_chat(gsm8k_prompt(problem.question))
                 problem_seed = seeds.derive("dllm-replay-benchmark", problem.index)
-                reward_batch = configured_verifier_reward(
-                    backend, problem, config
-                ).batch
+                reward_batch = gsm8k_verifier_reward(config, problem, backend.decode).batch
 
                 fresh_before = backend.snapshot()
                 started = time.perf_counter()

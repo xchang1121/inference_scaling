@@ -51,25 +51,19 @@ from inference_scaling.dllm.algorithms.config import (
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
-    CumulativeConsensusReward,
+    NUMERIC_ANSWERS,
     GSM8KProblem,
-    consensus_index,
     extract_numeric_answer,
     gsm8k_prompt,
+    gsm8k_verifier_reward,
     load_gsm8k,
-    modal_answer,
     select_problems,
 )
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.rewards.verifier import (
-    TokenVerifierReward,
-    VerifierContext,
-    build_token_verifier_reward,
-    replace_verifier_from_file,
-    verifier_spec_from_config,
-)
+from inference_scaling.shared.rewards.consensus import CumulativeConsensusReward, consensus_index, modal_answer
+from inference_scaling.shared.rewards.verifier import replace_verifier_from_file
 from experiments.shared.methods import DLLM_DYNAMIC_METHODS, DLLM_METHODS
 
 METHODS = DLLM_METHODS
@@ -88,26 +82,15 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/config.py",
     "src/inference_scaling/dllm/algorithms/dynamic_is.py",
     "src/inference_scaling/shared/budget/allocation.py",
+    "src/inference_scaling/shared/evaluation/gsm8k.py",
     "src/inference_scaling/shared/evaluation/numeric.py",
+    "src/inference_scaling/shared/rewards/consensus.py",
     "src/inference_scaling/shared/rewards/verifier.py",
 )
 
 
-def configured_verifier_reward(
-    backend: Any,
-    problem: GSM8KProblem,
-    config: dict[str, Any],
-) -> TokenVerifierReward:
-    spec = verifier_spec_from_config(config)
-    return build_token_verifier_reward(
-        config,
-        context=VerifierContext(
-            prompt=gsm8k_prompt(problem.question),
-            reference=(str(problem.gold_answer) if spec.requires_reference else None),
-            metadata={"benchmark": "gsm8k", "problem_index": problem.index},
-        ),
-        decoder=backend.decode,
-    )
+def consensus_reward(backend: Any) -> CumulativeConsensusReward:
+    return CumulativeConsensusReward(NUMERIC_ANSWERS, lambda _prompt, tokens: backend.decode(tokens))
 
 
 def _sample_one(
@@ -166,8 +149,8 @@ def _run_best_of_n(
         else 0.0
         for candidate in candidates
     ]
-    selected_index = consensus_index(texts, tie_break_scores)
-    mode = modal_answer(answers)
+    selected_index = consensus_index(NUMERIC_ANSWERS, texts, tie_break_scores)
+    mode = modal_answer(NUMERIC_ANSWERS, answers)
     return candidates[selected_index].token_ids, {
         "candidate_count": samples,
         "selected_index": selected_index,
@@ -318,7 +301,7 @@ def run_method(
                 ),
             ),
             sampling=exact_sampling,
-            reward_batch=CumulativeConsensusReward(backend.decode),
+            reward_batch=consensus_reward(backend),
             history_rollouts=int(replay["history_rollouts"]),
             fresh_rollouts=int(replay["fresh_rollouts"]),
             truncation=float(replay["truncation"]),
@@ -400,7 +383,7 @@ def run_method(
 
     if method == "verifier_mh":
         mh = config["mh"]
-        verifier_reward = configured_verifier_reward(backend, problem, config)
+        verifier_reward = gsm8k_verifier_reward(config, problem, backend.decode)
         result = run_diffusion_reward_mh(
             backend=backend,
             prompt=prompt,
@@ -430,7 +413,7 @@ def run_method(
         raise ValueError("reduced-layer conditional IS requires its proposal backend")
     verifier = method.startswith("verifier_")
     verifier_reward = (
-        configured_verifier_reward(backend, problem, config) if verifier else None
+        gsm8k_verifier_reward(config, problem, backend.decode) if verifier else None
     )
     uncorrected = method.endswith("_uncorrected")
     unclipped = method.endswith("_unclipped")
@@ -443,7 +426,7 @@ def run_method(
         if not apply_correction or unclipped or configured_clip is None
         else float(configured_clip)
     )
-    reward_batch = None if verifier else CumulativeConsensusReward(backend.decode)
+    reward_batch = None if verifier else consensus_reward(backend)
     result = run_conditional_diffusion_is(
         base_backend=backend,
         prompt=prompt,

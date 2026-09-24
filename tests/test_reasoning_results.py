@@ -32,7 +32,7 @@ def test_coverage_counts_missing_conditions_and_duplicate_records():
 def test_coverage_includes_budget_only_baselines():
     coverage = comparison_coverage([], problem_ids=["one"], budgets=[128, 512], draws=1,
         methods=["budget_base", "base", "vote", "is", "mh"],
-        rewards=["self_consistency", "sequence_log_probability", "consilience"])
+        rewards=["pilot_agreement", "sequence_log_probability", "consilience"])
     assert coverage["expected_records"] == 22
     assert not coverage["complete"]
 

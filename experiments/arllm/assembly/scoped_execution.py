@@ -9,14 +9,15 @@ import time
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.rewards.factory import model_reward_from_config, reward_temperature_from_config
 from inference_scaling.arllm.scope import SamplingScope
+from inference_scaling.shared.evaluation import gsm8k_verifier_reward
 from inference_scaling.shared.model.generation import generation_config_for_prompt
 from experiments.shared.artifacts import json_fingerprint
 
 
-def fixed_experiment_reward(backend, problem, config, verifier_factory):
+def fixed_experiment_reward(backend, problem, config):
     source = config.get("reward", {}).get("source", "verifier")
     if source == "verifier":
-        reward = verifier_factory(backend, problem, config)
+        reward = gsm8k_verifier_reward(config, problem, backend.decode)
         return reward, reward.version
     reward = model_reward_from_config(backend, config, source=source)
     return reward, json_fingerprint(reward.describe())

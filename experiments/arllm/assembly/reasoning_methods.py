@@ -18,12 +18,14 @@ from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.rewards.factory import model_reward_from_config
+from inference_scaling.arllm.rewards.factory import build_reward, model_reward_from_config
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.sampling.stepwise import normalize_log_weights, categorical_index_from_uniform
 from inference_scaling.shared.rng import SeedStream
 
-REWARDS = ("self_consistency", "sequence_log_probability", "consilience")
+REWARDS = ("pilot_agreement", "sequence_log_probability", "consilience")
+# Selection seeds keep the name under which the MATH-500 results were reported.
+SEED_NAMES = {"pilot_agreement": "self_consistency"}
 
 
 def sampling_policy(config: dict[str, Any], *, eos_token_id: int | None = None,
@@ -101,24 +103,22 @@ def majority_index(contents: list[str], judge) -> int:
     return max(groups, key=len)[0] if groups else 0
 
 
-class FrozenAnswerReward:
-    """Agreement with independent, frozen model outputs, without gold answers."""
+def pilot_reward(backend, judge, prompt, pilots, length, config, render_output):
+    """Agreement with independent, frozen model outputs (never gold answers) and the pilots' cost."""
+    def content(prefix, tokens):
+        return render_output(backend, prefix, tokens, config)["content_text"]
 
-    def __init__(self, contents: list[str], judge, decode_content):
-        self.contents = tuple(contents)
-        self.judge = judge
-        self.decode_content = decode_content
-
-    @lru_cache(maxsize=256)
-    def __call__(self, prompt, tokens):
-        content = self.decode_content(prompt, tokens)
-        return sum(self.judge.equivalent(content, pilot) for pilot in self.contents) / len(self.contents)
+    pilot_tokens = [crop_sample(sample, length)[0] for sample in pilots]
+    reward = build_reward("pilot_agreement", backend=backend, config=config, sampling=None, rule=judge,
+                          decode=content, pilots=[content(prompt, tokens) for tokens in pilot_tokens])
+    return reward.pointwise, [generation_cost(len(prompt), len(tokens), backend.parameter_count)
+                              for tokens in pilot_tokens]
 
 
 def reward_temperature(source: str, config: dict[str, Any]) -> float:
     options = config.get("comparison", {})
     value = float(options.get(source + "_temperature", {
-        "self_consistency": 0.25, "sequence_log_probability": 10.0, "consilience": 2.0,
+        "pilot_agreement": 0.25, "sequence_log_probability": 10.0, "consilience": 2.0,
     }[source]))
     if not isfinite(value) or value <= 0:
         raise ValueError(f"{source} reward temperature must be finite and positive")
@@ -138,13 +138,10 @@ def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
     sequences = [tokens for tokens, _ in tokens_and_logs]
     contents = [render_output(backend, prompt, tokens, config)["content_text"] for tokens in sequences]
     costs = [generation_cost(len(prompt), len(tokens), backend.parameter_count) for tokens in sequences]
-    if source == "self_consistency":
-        pilot_tokens = [crop_sample(sample, length)[0] for sample in pilots]
-        pilot_contents = [render_output(backend, prompt, tokens, config)["content_text"] for tokens in pilot_tokens]
-        frozen = FrozenAnswerReward(pilot_contents, judge,
-                    lambda prefix, tokens: render_output(backend, prefix, tokens, config)["content_text"])
+    if source == "pilot_agreement":
+        frozen, pilot_costs = pilot_reward(backend, judge, prompt, pilots, length, config, render_output)
         rewards = [frozen(prompt, tokens) for tokens in sequences]
-        costs.extend(generation_cost(len(prompt), len(tokens), backend.parameter_count) for tokens in pilot_tokens)
+        costs.extend(pilot_costs)
     elif source == "sequence_log_probability":
         # Generation already returned the exact actual-policy log probabilities.
         reward = model_reward_from_config(backend, config, source=source)
@@ -164,7 +161,8 @@ def compare_sir(*, backend, judge, reference, prompt, config, plan, samples,
     else:
         raise ValueError(f"unsupported reward: {source}")
     probabilities = normalize_log_weights([value / reward_temperature(source, config) for value in rewards])
-    selected = categorical_index_from_uniform(probabilities, float(SeedStream(seed).generator("sir-select", source).random()))
+    uniform = SeedStream(seed).generator("sir-select", SEED_NAMES.get(source, source)).random()
+    selected = categorical_index_from_uniform(probabilities, float(uniform))
     grades = [judge.grade(content, reference) for content in contents]
     cost = add_costs(*costs)
     used = check_budget(cost, plan["budget_forward_tokens"])
@@ -188,12 +186,9 @@ def compare_mh(*, backend, judge, prompt, reference, config, plan, pilots, sourc
     stopped = AbsorbingEOSBackend(reference_backend, backend.tokenizer.eos_token_id, absorbing_after=len(prompt))
     pilot_cost = {}
     reward: Callable[[tuple[int, ...], tuple[int, ...]], float]
-    if source == "self_consistency":
-        pilot_tokens = [crop_sample(sample, length)[0] for sample in pilots]
-        pilot_contents = [render_output(backend, prompt, tokens, config)["content_text"] for tokens in pilot_tokens]
-        reward = FrozenAnswerReward(pilot_contents, judge,
-                    lambda prefix, tokens: render_output(backend, prefix, tokens, config)["content_text"])
-        pilot_cost = add_costs(*(generation_cost(len(prompt), len(tokens), backend.parameter_count) for tokens in pilot_tokens))
+    if source == "pilot_agreement":
+        reward, pilot_costs = pilot_reward(backend, judge, prompt, pilots, length, config, render_output)
+        pilot_cost = add_costs(*pilot_costs)
     else:
         reward = model_reward_from_config(stopped if source == "sequence_log_probability" else backend,
                                           config, source=source)

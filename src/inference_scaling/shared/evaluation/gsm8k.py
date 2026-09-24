@@ -14,9 +14,16 @@ import urllib.request
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Iterable, Literal, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from inference_scaling.shared.evaluation.numeric import extract_numeric_answer
+from inference_scaling.shared.rewards.verifier import (
+    TokenVerifierReward,
+    VerifierContext,
+    build_token_verifier_reward,
+    verifier_spec_from_config,
+)
+from inference_scaling.shared.types import TokenSequence
 
 GSM8K_TRAIN_URL = (
     "https://raw.githubusercontent.com/openai/grade-school-math/"
@@ -116,6 +123,22 @@ def gsm8k_prompt(question: str) -> str:
     """Return the single prompt text shared by training and every baseline."""
 
     return question + GSM8K_PROMPT_SUFFIX
+
+
+def gsm8k_verifier_reward(
+    config: Mapping[str, Any],
+    problem: GSM8KProblem,
+    decoder: Callable[[TokenSequence], str],
+) -> TokenVerifierReward:
+    """Bind the configured verifier to one problem; only it sees the gold answer."""
+
+    spec = verifier_spec_from_config(config)
+    context = VerifierContext(
+        prompt=gsm8k_prompt(problem.question),
+        reference=str(problem.gold_answer) if spec.requires_reference else None,
+        metadata={"benchmark": "gsm8k", "problem_index": problem.index},
+    )
+    return build_token_verifier_reward(config, context=context, decoder=decoder)
 
 
 def select_problems(

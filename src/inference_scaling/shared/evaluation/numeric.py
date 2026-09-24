@@ -50,6 +50,19 @@ def extract_numeric_answer(text: str) -> Fraction | None:
     return _as_fraction(matches[-1]) if matches else None
 
 
+class NumericAnswers:
+    """Answer rule for numeric tasks: the final number, equal when the values are equal."""
+
+    answer = staticmethod(extract_numeric_answer)
+
+    @staticmethod
+    def same(left: Fraction, right: Fraction) -> bool:
+        return left == right
+
+
+NUMERIC_ANSWERS = NumericAnswers()
+
+
 @dataclass(frozen=True, slots=True)
 class NumericReferenceVerifier:
     """Configurable reward against one bound numeric reference value."""
@@ -89,6 +102,7 @@ def build_numeric_reference_verifier(
 
 
 __all__ = [
+    "NUMERIC_ANSWERS",
     "NumericReferenceVerifier",
     "build_numeric_reference_verifier",
     "extract_numeric_answer",

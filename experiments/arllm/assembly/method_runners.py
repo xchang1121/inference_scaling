@@ -3,7 +3,7 @@
 ``run_method`` is the single entry used by every AR GSM8K experiment. It applies
 the sampling scope (full output or thinking segment) around a runner from
 ``RUNNERS``; each runner turns its TOML tables into an algorithm config, builds
-the reward through :mod:`experiments.arllm.assembly.reward_sources`, calls the algorithm
+the reward through :func:`problem_reward`, calls the algorithm
 and reports ``(tokens, diagnostics)``.
 """
 
@@ -15,18 +15,10 @@ from typing import Any, Callable
 
 from experiments.arllm.assembly.common import (
     answer_counts,
-    configured_verifier_reward,
     direct_generate,
+    fraction_text,
     sample_one,
     trim_eos,
-)
-from experiments.arllm.assembly.reward_sources import (
-    NORMALIZED_CONFIDENCE_SOURCES,
-    REWARD_SOURCES,
-    REWARD_TARGET_NAMES,
-    conditional_search_reward,
-    confidence_rewards,
-    consilience_reward,
 )
 from inference_scaling.arllm.algorithms import run_conditional_is, run_mh_chain, run_reward_mh_chain
 from inference_scaling.arllm.algorithms.config import (
@@ -39,11 +31,18 @@ from inference_scaling.arllm.backends import AbsorbingEOSBackend, ScoreCachingBa
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.rewards.factory import (
+    BATCH_DEPENDENT_SOURCES,
     MODEL_REWARD_SOURCES,
+    NORMALIZED_CONFIDENCE_SOURCES,
+    PILOT_SOURCES,
+    REWARD_SOURCES,
+    REWARD_TARGET_NAMES,
+    SequenceReward,
+    build_reward,
     model_reward_from_config,
     reward_temperature_from_config,
 )
-from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, confidence_rewards
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 from inference_scaling.archive.arllm.block_conditional_is import (
@@ -52,15 +51,15 @@ from inference_scaling.archive.arllm.block_conditional_is import (
 )
 from inference_scaling.experimental.arllm.iterated_is import run_iterated_conditional_is
 from inference_scaling.shared.evaluation import (
+    NUMERIC_ANSWERS,
     GSM8KProblem,
-    consensus_index,
     extract_numeric_answer,
-    modal_answer,
+    gsm8k_verifier_reward,
 )
+from inference_scaling.shared.rewards.consensus import modal_answer
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.model.generation import generation_config_for_prompt
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.rewards.verifier import TokenVerifierReward
 
 Diagnostics = dict[str, Any]
 SCOPED_METHODS = frozenset({"mh", "reward_mh", "verifier_mh"})
@@ -85,10 +84,6 @@ REPORTED_NAMES = {
     "block_conditional_is": "conditional_is",
     "verifier_block_conditional_is": "verifier_conditional_is",
 }
-# Rewards that depend on the other sequences scored with them.  Mainline
-# conditional IS reuses the reward of its kept sequence, which needs a fixed
-# per-sequence reward; the archived block variant still accepts these.
-BATCH_DEPENDENT_SOURCES = frozenset({"self_consistency", *NORMALIZED_CONFIDENCE_SOURCES})
 
 
 def conditional_reward_source(config: dict[str, Any], method: str) -> str:
@@ -147,79 +142,44 @@ def run_best_of_n_selection(
         for sample_index in range(samples)
     ]
     candidates = backend.sample_batch(requests)
-    texts = [backend.decode(candidate.token_ids) for candidate in candidates]
-    parsed_answers = [extract_numeric_answer(text) for text in texts]
+    sequences = [candidate.token_ids for candidate in candidates]
+    parsed_answers = [extract_numeric_answer(backend.decode(tokens)) for tokens in sequences]
     raw_rewards: tuple[float, ...] | None = None
-    verifier_reward: TokenVerifierReward | None = None
-    model_reward_description: dict[str, object] | None = None
-    if reward_source == "self_consistency":
-        chosen = consensus_index(texts, [candidate.logprob for candidate in candidates])
-        consensus = modal_answer(parsed_answers)
-        selection_rewards = tuple(
-            1.0 if consensus is not None and answer == consensus else 0.0
-            for answer in parsed_answers
-        )
-    elif reward_source == "verifier":
-        verifier_reward = configured_verifier_reward(backend, problem, config)
-        selection_rewards = verifier_reward.batch(
-            prompt, [candidate.token_ids for candidate in candidates]
-        )
-        chosen = max(
-            range(len(candidates)),
-            key=lambda index: (
-                selection_rewards[index],
-                candidates[index].logprob,
-                -index,
-            ),
-        )
-    elif reward_source == "sequence_log_probability":
-        model_reward = model_reward_from_config(
-            backend, config, source="sequence_log_probability", sampling=sampling,
-        )
-        # Generation already returns exact log-probabilities under ``sampling``;
-        # reusing them avoids a second full-sequence model forward pass.
-        raw_rewards = tuple(
-            model_reward.from_token_logprobs(prompt, candidate.token_ids, candidate.token_logprobs)
-            for candidate in candidates
-        )
-        model_reward_description = model_reward.describe()
-        selection_rewards = raw_rewards
-        chosen = max(
-            range(len(candidates)),
-            key=lambda index: (selection_rewards[index], -index),
-        )
-    elif reward_source == "consilience":
-        consilience = consilience_reward(backend, sampling, config)
-        raw_rewards = consilience.batch(
-            prompt,
-            [candidate.token_ids for candidate in candidates],
-        )
-        model_reward_description = consilience.describe()
-        selection_rewards = raw_rewards
-        chosen = max(
-            range(len(candidates)),
-            key=lambda index: (
-                selection_rewards[index],
-                candidates[index].logprob,
-                -index,
-            ),
+    reward: SequenceReward | None = None
+    if reward_source in NORMALIZED_CONFIDENCE_SOURCES:
+        raw_rewards, selection_rewards = confidence_rewards(
+            backend, prompt, sequences, sampling=sampling, source=reward_source,
         )
     else:
-        raw_rewards, selection_rewards = confidence_rewards(
-            backend,
-            prompt,
-            [candidate.token_ids for candidate in candidates],
-            sampling=sampling,
-            source=reward_source,
+        reward = problem_reward(
+            reward_source, backend=backend, problem=problem, prompt=prompt, config=config,
+            sampling=sampling, maximum=max_new_tokens, seeds=seeds,
         )
-        chosen = max(
-            range(len(candidates)),
-            key=lambda index: (
-                selection_rewards[index],
-                candidates[index].logprob,
-                -index,
-            ),
-        )
+        score = reward.verifier.batch if reward.verifier is not None else reward.batch
+        if reward_source == "sequence_log_probability":
+            # Generation already returns exact log-probabilities under ``sampling``;
+            # reusing them avoids a second full-sequence model forward pass.
+            selection_rewards = tuple(
+                reward.model_reward.from_token_logprobs(prompt, candidate.token_ids, candidate.token_logprobs)
+                for candidate in candidates
+            )
+        elif score is not None:
+            selection_rewards = tuple(score(prompt, sequences))
+        else:
+            selection_rewards = tuple(reward.pointwise(prompt, tokens) for tokens in sequences)
+        if reward.model_reward is not None:
+            raw_rewards = selection_rewards
+    # The mean log-probability reward already ranks by likelihood.
+    chosen = max(
+        range(len(candidates)),
+        key=lambda index: (
+            (selection_rewards[index], -index)
+            if reward_source == "sequence_log_probability"
+            else (selection_rewards[index], candidates[index].logprob, -index)
+        ),
+    )
+    model_reward = reward.model_reward if reward is not None else None
+    verifier_reward = reward.verifier if reward is not None else None
     return candidates[chosen].token_ids, {
         "candidate_count": samples,
         "selected_index": chosen,
@@ -231,7 +191,7 @@ def run_best_of_n_selection(
         "verifier": (
             verifier_reward.describe() if verifier_reward is not None else None
         ),
-        "model_reward": model_reward_description,
+        "model_reward": model_reward.describe() if model_reward is not None else None,
         "reward_normalization": (
             "per-decision min-max over candidate completions"
             if reward_source in NORMALIZED_CONFIDENCE_SOURCES
@@ -248,6 +208,54 @@ def run_best_of_n_selection(
         ),
         "answer_counts": answer_counts(parsed_answers),
     }
+
+
+def consensus_pilots(
+    backend: Any, prompt: TokenSequence, *, maximum: int, sampling: SamplingConfig,
+    samples: int, seeds: SeedStream, problem_index: int,
+) -> tuple[list[str], Diagnostics]:
+    """Independent base-model texts that the frozen answer-agreement rewards compare against."""
+
+    if samples <= 0:
+        raise ValueError("frozen-consensus pilot_samples must be positive")
+    requests = [
+        GenerationRequest(
+            prompt, maximum, sampling, seeds.derive("frozen_consensus", problem_index, index),
+            f"frozen-consensus:{problem_index}:pilot:{index}",
+        )
+        for index in range(samples)
+    ]
+    texts = [backend.decode(sample.token_ids) for sample in backend.sample_batch(requests)]
+    answers = [NUMERIC_ANSWERS.answer(text) for text in texts]
+    return texts, {
+        "pilot_samples": samples,
+        "pilot_answer_counts": answer_counts(answers),
+        "frozen_consensus_answer": fraction_text(modal_answer(NUMERIC_ANSWERS, answers)),
+    }
+
+
+def problem_reward(
+    source: str, *, backend: Any, problem: GSM8KProblem, prompt: TokenSequence, config: dict[str, Any],
+    sampling: SamplingConfig | None, maximum: int, seeds: SeedStream,
+) -> SequenceReward:
+    """Bind a reward source to one GSM8K problem: numeric answers, pilots and the reference."""
+
+    pilots: list[str] = []
+    diagnostics: Diagnostics = {}
+    if source in PILOT_SOURCES:
+        assert sampling is not None
+        pilots, diagnostics = consensus_pilots(
+            backend, prompt, maximum=maximum, sampling=sampling,
+            samples=int(config.get("iterated_is", {}).get("pilot_samples", 8)),
+            seeds=seeds, problem_index=problem.index,
+        )
+    reward = build_reward(
+        source, backend=backend, config=config, sampling=sampling, rule=NUMERIC_ANSWERS,
+        decode=lambda _prompt, tokens: backend.decode(tokens), pilots=pilots,
+        verifier=gsm8k_verifier_reward(config, problem, backend.decode) if source == "verifier" else None,
+    )
+    reward.diagnostics.update(diagnostics)
+    return reward
 
 
 def conditional_diagnostics(result: Any) -> Diagnostics:
@@ -504,19 +512,21 @@ def run_reward_mh(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
         float(config["matched_target"]["reward_temperature"])
         if is_verifier else reward_temperature_from_config(config, source=source)
     )
-    selected_reward: Any
-    if is_verifier:
-        selected_reward = configured_verifier_reward(backend, run.problem, config)
-        reward_info: Diagnostics = {
-            "verifier": selected_reward.describe(),
-            "uses_test_gold_oracle": selected_reward.verifier.spec.requires_reference,
-        }
-    else:
-        selected_reward = model_reward_from_config(
-            absorbing if source == "sequence_log_probability" else backend,
-            config, source=source,
-        )
-        reward_info = {"model_reward": selected_reward.describe(), "uses_test_gold_oracle": False}
+    if source in BATCH_DEPENDENT_SOURCES:
+        raise ValueError(f"reward MH needs a fixed per-sequence reward; {source!r} depends on other sequences")
+    reward = problem_reward(
+        source, backend=absorbing if source == "sequence_log_probability" else backend,
+        problem=run.problem, prompt=run.prompt, config=config,
+        sampling=None if source in MODEL_REWARD_SOURCES else SamplingConfig(
+            temperature=target_temperature, eos_token_id=backend.tokenizer.eos_token_id,
+        ),
+        maximum=run.maximum, seeds=run.seeds,
+    )
+    reward_info: Diagnostics = {
+        **reward.diagnostics,
+        "uses_test_gold_oracle": bool(reward.verifier and reward.verifier.verifier.spec.requires_reference),
+    }
+    selected_reward = reward.pointwise
 
     result = run_reward_mh_chain(
         absorbing,
@@ -526,8 +536,8 @@ def run_reward_mh(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
         selected_reward,
         SeedStream(run.seed),
     )
-    if isinstance(selected_reward, ConsilienceReward):
-        reward_info["reward_scope_counts"] = selected_reward.scope_statistics()
+    if isinstance(reward.model_reward, ConsilienceReward):
+        reward_info["reward_scope_counts"] = reward.model_reward.scope_statistics()
     return trim_eos(result.token_ids, backend.tokenizer.eos_token_id), {
         "target": "base_probability_times_exp_reward_over_temperature",
         "reward_source": source,
@@ -563,11 +573,11 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
     if reward_source not in REWARD_SOURCES:
         raise ValueError(f"unknown reward source {reward_source!r}")
     mainline = method != "iterated_conditional_is" and method not in ARCHIVED_CONDITIONAL_METHODS
-    if mainline and reward_source in BATCH_DEPENDENT_SOURCES:
+    if method not in ARCHIVED_CONDITIONAL_METHODS and reward_source in BATCH_DEPENDENT_SOURCES:
         raise ValueError(
-            f"{method} reuses the reward of its kept sequence, so it needs a fixed per-sequence "
-            f"reward; {reward_source!r} depends on the other scored sequences. Use frozen_consensus, "
-            "verifier, consilience or sequence_log_probability; block_conditional_is keeps batch rewards."
+            f"{method} reuses rewards across steps, so it needs a fixed per-sequence reward; "
+            f"{reward_source!r} depends on the other scored sequences. Use frozen_consensus, "
+            "pilot_agreement, verifier, consilience or sequence_log_probability."
         )
     target_sampling_temperature = 1.0 if use_matched_target else run.sampling_temperature
     reward_temperature = (
@@ -579,34 +589,31 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
         temperature=target_sampling_temperature,
         eos_token_id=backend.tokenizer.eos_token_id,
     )
-    reward = conditional_search_reward(
-        method=method,
-        source=reward_source,
-        backend=backend,
-        problem=run.problem,
-        prompt=run.prompt,
-        config=config,
-        seeds=run.seeds,
-        maximum=run.maximum,
-        sampling=base_sampling,
+    reward = problem_reward(
+        reward_source, backend=backend, problem=run.problem, prompt=run.prompt, config=config,
+        sampling=base_sampling, maximum=run.maximum, seeds=run.seeds,
+    )
+    # Algorithms take one call; iterated IS compares stored values, so it keeps the pointwise one.
+    pointwise, batch = (
+        (reward.pointwise, None)
+        if method == "iterated_conditional_is" or reward.batch is None
+        else (None, reward.batch)
     )
     cached_base = ScoreCachingBackend(backend)
     cached_rollout = ScoreCachingBackend(rollout_backend)
     if method == "iterated_conditional_is":
-        if reward.pointwise is None and reward.batch is None:
-            raise RuntimeError("iterated conditional IS did not construct a reward")
         result = run_iterated_conditional_is(
             cached_base,
             run.prompt,
             iterated_is_config(
                 conditional, iterated, maximum=run.maximum, reward_temperature=reward_temperature,
             ),
-            reward.pointwise,
+            pointwise,
             SeedStream(run.seed),
             base_sampling=base_sampling,
             rollout_backend=cached_rollout,
             rollout_sampling=base_sampling,
-            reward_batch=reward.batch,
+            reward_batch=batch,
         )
     elif method in ARCHIVED_CONDITIONAL_METHODS:
         result = run_block_conditional_is(
@@ -615,22 +622,22 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
             block_conditional_is_config(
                 conditional, method=method, maximum=run.maximum, reward_temperature=reward_temperature,
             ),
-            reward.pointwise,
+            pointwise,
             SeedStream(run.seed),
             base_sampling=base_sampling,
             rollout_backend=cached_rollout,
             rollout_sampling=base_sampling,
-            reward_batch=reward.batch,
+            reward_batch=batch,
         )
     else:
         result = run_conditional_is(
             cached_base,
             run.prompt,
             conditional_is_config(conditional, maximum=run.maximum, reward_temperature=reward_temperature),
-            reward.pointwise,
+            pointwise,
             SeedStream(run.seed),
             sampling=base_sampling,
-            reward_batch=reward.batch,
+            reward_batch=batch,
         )
     diagnostics = conditional_diagnostics(result)
     if reward_source == "consilience":

@@ -2,12 +2,21 @@
 
 - ``verifier``: configurable external verifiers and their token-level reward adapters
 - ``consilience``: confidence-trajectory arithmetic of the Consilience score
+- ``consensus``: answer-agreement rewards; datasets supply only an answer rule
 
 Rewards computed from a model's own probabilities live with each model family
 (``inference_scaling.arllm.rewards``); dataset-specific verifier plugins live in
 ``inference_scaling.shared.evaluation``.
 """
 
+from inference_scaling.shared.rewards.consensus import (
+    AnswerRule,
+    CumulativeConsensusReward,
+    consensus_index,
+    frozen_consensus_reward,
+    modal_answer,
+    pilot_agreement_reward,
+)
 from inference_scaling.shared.rewards.consilience import ConfidenceWindows, confidence_windows
 from inference_scaling.shared.rewards.verifier import (
     BatchTextVerifier,
@@ -28,8 +37,10 @@ from inference_scaling.shared.rewards.verifier import (
 )
 
 __all__ = [
+    "AnswerRule",
     "BatchTextVerifier",
     "ConfidenceWindows",
+    "CumulativeConsensusReward",
     "ConfiguredTrainingVerifierReward",
     "ConfiguredVerifier",
     "TextVerifier",
@@ -42,7 +53,11 @@ __all__ = [
     "build_token_verifier_reward",
     "build_verifier",
     "confidence_windows",
+    "consensus_index",
+    "frozen_consensus_reward",
     "load_verifier_table",
+    "modal_answer",
+    "pilot_agreement_reward",
     "replace_verifier_from_file",
     "verifier_spec_from_config",
 ]

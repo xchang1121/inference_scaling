@@ -138,6 +138,12 @@ class MathJudge:
     def equivalent(self, left: str, right: str) -> bool:
         return bool(self._request("equivalent", left, right))
 
+    # Answer rule of the agreement rewards: Math-Verify parses answers inside ``equivalent``.
+    def answer(self, text: str) -> str:
+        return text
+
+    same = equivalent
+
     def answer_key(self, text: str) -> str | None:
         return self._request("parse", text)
 

@@ -29,7 +29,6 @@ from experiments.arllm.assembly.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
 from experiments.arllm.assembly.common import (
-    configured_verifier_reward,
     fraction_text,
     load_backend,
     prompt_tokens,
@@ -1107,7 +1106,7 @@ def main() -> None:
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
             prompt = prompt_tokens(backend, problem, config)
-            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, configured_verifier_reward)
+            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config)
             method_results: dict[str, dict[str, Any]] = {}
             for method in METHODS:
                 seed = SeedStream(

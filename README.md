@@ -403,7 +403,7 @@ python -m experiments.arllm.reasoning_benchmark --stage summarize --limit 30 --r
 `--candidate-counts` 同时确定 IS 候选数与 MH 状态数，MH 更新次数为状态数减一；`--modes` 用于独立的 `base` 阶段。
 共同参考策略保留完整词表支持，比较阶段要求 `sampling.top_p = 1` 且不设置 `top_k`。
 汇总检查完整的题目、方法与预算组合；部分结果可省略 `--require-complete` 查看。相同题目的多次随机重复按题目统计置信区间。
-预算单位为模型前向 token 位置数，包括重复提示、候选、独立自一致性样本和奖励评分；FLOPs 沿用 `2 × 参数量 × 前向 token 位置数`。
+预算单位为模型前向 token 位置数，包括重复提示、候选、`pilot_agreement` 的独立样本和奖励评分；FLOPs 沿用 `2 × 参数量 × 前向 token 位置数`。
 `base` 使用 IS/MH 共同的单条长度上限，比较相同生成范围下的选择效果；`budget_base` 则允许单次生成使用
 整档预算，受模型上下文和 `generation.max_new_tokens` 约束，用于比较同总预算下的质量。
 IS/MH 每组预算预留完整生成与评分成本，再确定单条长度上限。EOS 产生的剩余预算与实际消耗分开记录。
@@ -462,7 +462,7 @@ python -m pytest
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/shared/` | 两侧共用的组件清单、统计量、配置标识、可续跑调度和结果文件管理 |
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本，目录内只放命令行入口 |
-| `experiments/arllm/assembly/`、`experiments/dllm/assembly/` | 各入口共用的组装代码：AR 的 `method_runners.py`（方法 → 算法调用）、`reward_sources.py`（奖励来源 → 奖励）、`common.py`（提示、后端加载与 verifier 绑定）、`runtime.py`（权重校验）等 |
+| `experiments/arllm/assembly/`、`experiments/dllm/assembly/` | 各入口共用的组装代码：AR 的 `method_runners.py`（方法 → 算法调用与奖励）、`common.py`（提示与后端加载）、`runtime.py`（权重校验）等；奖励统一由 `arllm/rewards/factory.py` 按名称构造 |
 | `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
 | `tests/` | 分布、实现一致性和结果处理测试 |
 | `docs/` | 算法原理与实现、运行说明，以及算法质量和执行成本两份报告 |

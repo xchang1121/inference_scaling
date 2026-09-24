@@ -1,7 +1,7 @@
 """Per-problem helpers shared by the AR GSM8K experiment entry points.
 
 Entry points own data loading, manifests and records. This module renders the
-prompt, loads backends, binds the configured verifier to one problem and draws
+prompt, loads backends and draws
 plain (non-search) samples, so every entry point executes them identically.
 """
 
@@ -20,12 +20,6 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 from inference_scaling.shared.evaluation import GSM8KProblem, gsm8k_prompt
 from inference_scaling.shared.model.prompting import render_prompt
-from inference_scaling.shared.rewards.verifier import (
-    TokenVerifierReward,
-    VerifierContext,
-    build_token_verifier_reward,
-    verifier_spec_from_config,
-)
 
 
 def installed_package_version(name: str) -> str | None:
@@ -72,24 +66,6 @@ def prompt_tokens(backend: Any, problem: GSM8KProblem, config: dict[str, Any] | 
     messages = [{"role": "user", "content": gsm8k_prompt(problem.question)}]
     rendered = render_prompt(backend.tokenizer, messages, config or {})
     return backend.encode(str(rendered), add_special_tokens=False)
-
-
-def configured_verifier_reward(
-    backend: Any,
-    problem: GSM8KProblem,
-    config: dict[str, Any],
-) -> TokenVerifierReward:
-    """Bind the selected verifier to one item without exposing it to algorithms."""
-
-    spec = verifier_spec_from_config(config)
-    context = VerifierContext(
-        prompt=gsm8k_prompt(problem.question),
-        reference=(
-            fraction_text(problem.gold_answer) if spec.requires_reference else None
-        ),
-        metadata={"benchmark": "gsm8k", "problem_index": problem.index},
-    )
-    return build_token_verifier_reward(config, context=context, decoder=backend.decode)
 
 
 def load_backend(
@@ -151,7 +127,6 @@ def sample_one(
 
 __all__ = [
     "answer_counts",
-    "configured_verifier_reward",
     "cuda_sync",
     "direct_generate",
     "fraction_text",
