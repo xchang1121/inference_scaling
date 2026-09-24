@@ -236,6 +236,41 @@ def test_rollout_budget_subtracts_candidate_block() -> None:
     )
 
 
+@pytest.mark.parametrize("early_stop", [False, True])
+@pytest.mark.parametrize("total_length", [6, 3])
+def test_early_eos_first_candidate_does_not_lengthen_other_rollouts(early_stop, total_length) -> None:
+    # EOS is likely only as the first token, so candidate 0 can stop at length 1
+    # while the others fill the whole block. With total_length == block_size the
+    # block is terminal: length-capped candidates must be scored without rollouts.
+    backend = TabularAutoregressiveBackend({(): [0.25, 0.25, 0.5]}, fallback=[0.49, 0.49, 0.02])
+    config = ConditionalISConfig(
+        candidate_count=4, rollout_count=1, block_size=3, total_length=total_length,
+        exact_rollout_early_stop=early_stop,
+        rollout_log_weight_bounds=(0.0, 10.0) if early_stop else None,
+    )
+    step = conditional_is_step(
+        base_backend=backend,
+        rollout_backend=backend,
+        prompt=(),
+        generated_prefix=(),
+        config=config,
+        base_sampling=SamplingConfig(eos_token_id=2),
+        rollout_sampling=SamplingConfig(eos_token_id=2),
+        reward=lambda _prompt, generated: float(len(generated)),
+        seeds=SeedStream(1),
+        step_index=0,
+    )
+    lengths = [len(candidate.token_ids) for candidate in step.candidates]
+    assert lengths[0] == 1 and 3 in lengths
+    assert all(
+        len(candidate.token_ids) + len(rollout.token_ids) <= config.total_length
+        for candidate in step.candidates
+        for rollout in candidate.rollouts
+    )
+    if total_length == config.block_size:
+        assert all(rollout.token_ids == () for c in step.candidates for rollout in c.rollouts)
+
+
 def test_conditional_is_never_exceeds_total_length() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
     result = run_conditional_is(

@@ -428,7 +428,8 @@ class AutoregressiveStepwiseAdapter:
         seeds: SeedStream,
     ) -> Sequence[StepwiseCandidate[ConditionalCandidate]]:
         remaining = self.config.total_length - len(state)
-        candidate_length = len(proposals[0].token_ids)
+        # Non-terminal candidates all have this length; EOS-terminated ones are shorter.
+        candidate_length = min(self.config.block_size, remaining)
         evaluated = estimate_conditional_weights(
             base_backend=self.base_backend,
             rollout_backend=self.rollout_backend,
@@ -505,7 +506,7 @@ def _bounded_conditional_is_step(
         seeds,
         step_index,
     )
-    rollout_length = max(0, remaining_length - len(proposals[0].token_ids))
+    rollout_length = max(0, remaining_length - candidate_length)
     eos = rollout_sampling.eos_token_id
     terminal = tuple(
         rollout_length == 0 or (eos is not None and proposal.token_ids[-1] == eos)
