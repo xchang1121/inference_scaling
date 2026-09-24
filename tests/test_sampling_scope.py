@@ -12,7 +12,7 @@ from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.model.output import ThinkingFormat
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.evaluation import GSM8KProblem
-from experiments.arllm.assembly.method_runners import run_method, run_best_of_n_selection
+from experiments.arllm.assembly.method_runners import method_reward_source, run_method, run_best_of_n_selection
 from experiments.arllm.gsm8k_reproduction import _apply_overrides
 
 
@@ -152,6 +152,12 @@ def test_passk_adapter_preserves_token_format_and_confidence_scoring():
     adapter = ExecutionBackend(raw, raw)
     reward = model_reward_from_config(adapter, {}, source="consilience")
     assert reward((3,), (0, 1, 0, 2)) == -2.0
+
+
+def test_best_of_n_votes_unless_a_reward_source_is_chosen():
+    config = {"conditional_is": {"reward": "frozen_consensus"}}
+    assert method_reward_source(config, "best_of_n") == "self_consistency"
+    assert method_reward_source({**config, "reward": {"source": "consilience"}}, "best_of_n") == "consilience"
 
 
 @pytest.mark.parametrize(

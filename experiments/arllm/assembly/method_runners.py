@@ -86,10 +86,13 @@ REPORTED_NAMES = {
 }
 
 
-def conditional_reward_source(config: dict[str, Any], method: str) -> str:
-    """Reward of a conditional method; archived methods keep their reported default."""
+def method_reward_source(config: dict[str, Any], method: str) -> str:
+    """Reward of a method: ``[reward].source`` when set, else its reported default (Best-of-N votes)."""
     if method.startswith("verifier_"):
         return "verifier"
+    chosen = config.get("reward", {}).get("source")
+    if chosen is not None or method == "best_of_n":
+        return str(chosen or "self_consistency")
     if method == "iterated_conditional_is":
         return str(config.get("iterated_is", {}).get("reward", "frozen_consensus"))
     table = config.get("conditional_is", {})
@@ -470,7 +473,7 @@ def run_best_of_n(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
         temperature=run.sampling_temperature,
         seeds=run.seeds,
         problem_index=run.problem.index,
-        reward_source=str(run.config["conditional_is"].get("reward", "self_consistency")),
+        reward_source=method_reward_source(run.config, run.method),
         config=run.config,
     )
 
@@ -505,7 +508,7 @@ def run_reward_mh(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
     backend, config = run.backend, run.config
     mh = config["mh"]
     is_verifier = run.method == "verifier_mh"
-    source = "verifier" if is_verifier else str(config["conditional_is"]["reward"])
+    source = method_reward_source(config, run.method)
     target_temperature = 1.0 if is_verifier else run.sampling_temperature
     absorbing = reference_mh_backend(backend, run.prompt, target_temperature)
     reward_temperature = (
@@ -569,7 +572,7 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
             raise ValueError("small-proposal method requires a proposal model")
         rollout_backend = run.proposal_backend
     use_matched_target = method.startswith("verifier_")
-    reward_source = conditional_reward_source(config, method)
+    reward_source = method_reward_source(config, method)
     if reward_source not in REWARD_SOURCES:
         raise ValueError(f"unknown reward source {reward_source!r}")
     mainline = method != "iterated_conditional_is" and method not in ARCHIVED_CONDITIONAL_METHODS
@@ -736,15 +739,10 @@ def run_method(
     """Run one method inside its sampling scope and finish the final content."""
 
     config, length_budget = generation_config_for_prompt(config, len(prompt), [backend, proposal_backend])
-    source = config.get("reward", {}).get("source")
-    if source is not None:
-        config.setdefault("conditional_is", {})["reward"] = source
-        config["conditional_is"]["block_reward"] = source
-        config.setdefault("iterated_is", {})["reward"] = source
+    source = method_reward_source(config, method)
     scoped_algorithm = method in SCOPED_METHODS or "conditional_is" in method
     scope = SamplingScope.from_config(backend, config, active=scoped_algorithm).for_prompt(prompt)
     if scope.scope == "thinking" and method != "mh":
-        source = conditional_reward_source(config, method)
         if source not in MODEL_REWARD_SOURCES and config.get("reward", {}).get("input_scope") != "thinking":
             scope = scope.full_fallback("reward_uses_full_sequence")
         elif source == "consilience" and config.get("reward", {}).get("consilience", {}).get("scope") == "full":
