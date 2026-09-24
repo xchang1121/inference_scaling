@@ -31,7 +31,11 @@ from inference_scaling.arllm.acceleration.primitives import (
     RolloutTokenTree,
     SpeculationTier,
 )
-from inference_scaling.arllm.algorithms import run_conditional_is
+# The reported infrastructure measurements ran the block conditional IS.
+from inference_scaling.archive.arllm.block_conditional_is import (
+    BlockConditionalISConfig,
+    run_block_conditional_is,
+)
 from inference_scaling.experimental.arllm.progressive_is import (
     run_progressive_conditional_is,
 )
@@ -41,7 +45,7 @@ from inference_scaling.arllm.backends import (
     close_backend,
     load_backend_from_config,
 )
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, ProgressiveISConfig
+from inference_scaling.arllm.algorithms.config import ProgressiveISConfig
 from inference_scaling.shared.config import SMCForestConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import (
@@ -535,10 +539,10 @@ def _algorithm_arm(
                     "infra", "algorithm", name, problem.index
                 )
                 if name == "conditional_fixed":
-                    result = run_conditional_is(
+                    result = run_block_conditional_is(
                         backend,
                         prompt,
-                        ConditionalISConfig(
+                        BlockConditionalISConfig(
                             candidate_count=candidate_count,
                             rollout_count=rollout_count,
                             block_size=block_size,

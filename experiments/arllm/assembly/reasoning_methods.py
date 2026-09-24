@@ -8,6 +8,10 @@ from math import isfinite
 import time
 from typing import Any, Callable
 
+from inference_scaling.archive.arllm.block_conditional_is import (
+    BlockConditionalISConfig,
+    run_block_conditional_is,
+)
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
@@ -244,8 +248,8 @@ def sir_curve(*, samples, rewards, reward_costs, source, temperature, seed, coun
 
 
 def compare_conditional(*, backend, judge, prompt, reference, config, source, temperature, seed,
-                        render_output, candidates, rollouts, block_size, total_length, sweeps=None):
-    """Blockwise conditional IS; ``sweeps`` selects the retained-sequence mode.
+                        render_output, candidates, rollouts, block_size, total_length, block=False):
+    """Conditional IS, or with ``block`` the archived block variant it replaced.
 
     Nothing is capped by a budget: the backend counters record what the run
     actually spent, with every request charged for its own prefix.
@@ -253,20 +257,26 @@ def compare_conditional(*, backend, judge, prompt, reference, config, source, te
     sampling = sampling_policy(config, eos_token_id=backend.tokenizer.eos_token_id, require_full_support=True)
     reward = model_reward_from_config(backend, config, source=source,
                                       sampling=sampling if source == "sequence_log_probability" else None)
-    settings = ConditionalISConfig(candidate_count=candidates, rollout_count=rollouts,
-        block_size=min(block_size, total_length), total_length=total_length, reward_temperature=temperature,
-        retain_sequence=sweeps is not None, sweeps=sweeps or 1)
+    counts = dict(candidate_count=candidates, rollout_count=rollouts, block_size=min(block_size, total_length),
+                  total_length=total_length, reward_temperature=temperature)
     before = asdict(backend.snapshot())
     start = time.perf_counter()
-    result = run_conditional_is(backend, prompt, settings, None, SeedStream(seed),
-                                base_sampling=sampling, reward_batch=reward.batch)
+    if block:
+        result = run_block_conditional_is(backend, prompt, BlockConditionalISConfig(**counts), None,
+                                          SeedStream(seed), base_sampling=sampling, reward_batch=reward.batch)
+    else:
+        result = run_conditional_is(backend, prompt, ConditionalISConfig(**counts), None, SeedStream(seed),
+                                    sampling=sampling, reward_batch=reward.batch)
     seconds = time.perf_counter() - start
     after = asdict(backend.snapshot())
     output = render_output(backend, prompt, result.token_ids, config)
-    setting = f"M={candidates},K={rollouts},B={settings.block_size}" + (f",sweeps={sweeps}" if sweeps else "")
-    return {"method": "retained_is" if sweeps else "block_is", "reward": source, "setting": setting,
-            **judge.grade(output["content_text"], reference), "content": output["content_text"],
-            "thinking_status": output["thinking_status"], "selected_tokens": len(result.token_ids),
-            "cost": {key: after[key] - before[key] for key in before}, "seconds": seconds,
-            "steps": len(result.steps), "retained_block_kept_steps": sum(
-                step.retained_candidate and step.selected_index == 0 for step in result.steps)}
+    row = {"method": "block_conditional_is" if block else "conditional_is", "reward": source,
+           "setting": f"M={candidates},K={rollouts},B={counts['block_size']}",
+           **judge.grade(output["content_text"], reference), "content": output["content_text"],
+           "thinking_status": output["thinking_status"], "selected_tokens": len(result.token_ids),
+           "cost": {key: after[key] - before[key] for key in before}, "seconds": seconds,
+           "steps": len(result.steps)}
+    if not block:
+        row["retained_block_kept_steps"] = sum(
+            step.retained_candidate and step.selected_index == 0 for step in result.steps)
+    return row

@@ -1,28 +1,30 @@
-"""Conditional importance sampling.
+"""Conditional importance sampling on a kept complete sequence.
 
-Candidate blocks are always sampled from the base model in this module.  A
-completion may be sampled on-policy or from a full-support off-policy proposal.
-Only the completion suffix receives the ``p_base / q`` correction.  This is the
-finite-candidate, finite-rollout sampling-importance-resampling algorithm used as
-the foundation for the replay extensions.  Optional symmetric clipping of the
-sequence log-ratio is recorded explicitly; it is a biased variance-control
-setting, while the default ``None`` retains the exact importance ratio.  An
-explicit uncorrected ablation skips target-model rescoring and instead estimates
-each candidate's future reward weighting under the rollout proposal itself.
+The target is ``p(y | x) exp(r(x, y) / tau)`` for a reward ``r`` of the complete
+sequence.  Each step cuts the kept sequence at the next block boundary.
+Candidate 0 is the kept sequence's next block, and the rest of the kept
+sequence counts as one of that candidate's completions; the other candidates,
+and the other completions of candidate 0, are fresh base-policy samples.  Every
+completion runs to EOS or the length limit and is scored as a complete sequence.
+A candidate is selected with probability proportional to the mean
+``exp(r / tau)`` of its completions, and one of its completions is kept with
+probability proportional to its own weight, so a step selects a whole suffix in
+proportion to its reward weight.  This is a conditional SIR move: given the
+prefix before the cut it leaves the target invariant, and every step ends with a
+complete sequence.  The kept completion's reward is reused, so the reward must
+depend only on the sequence it scores.
 
-With ``retain_sequence`` a step keeps a complete sequence rather than only the
-selected block: one completion of the selected candidate is kept with
-probability proportional to its weight.  The next step's candidate 0 is that
-sequence's next block, and its remaining completion counts as one of the
-candidate's rollouts.  Each step is then a conditional SIR move that leaves the
-target invariant, and every step ends with a complete sequence.
+The block variant, which commits only the selected block and discards the
+completions, is archived in ``inference_scaling.archive.arllm.block_conditional_is``.
+``estimate_conditional_weights`` also serves block-level research methods and
+therefore still accepts off-policy completions.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import exp, isfinite, log
+from math import isfinite
 
 from inference_scaling.arllm.algorithms.candidates import (
     sample_candidates,
@@ -40,6 +42,7 @@ from inference_scaling.shared.sampling.importance import (
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
+    StepwiseSelection,
     categorical_index_from_uniform,
     normalize_log_weights,
     run_stepwise_generation,
@@ -78,9 +81,6 @@ class ConditionalCandidate:
     base_token_logprobs: tuple[float, ...]
     rollouts: tuple[RolloutEvaluation, ...]
     log_weight: float
-    planned_rollout_count: int = 0
-    log_weight_lower_bound: float | None = None
-    log_weight_upper_bound: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,17 +88,12 @@ class ConditionalISStep:
     generated_length_before: int
     candidates: tuple[ConditionalCandidate, ...]
     selected_index: int
-    rollout_evaluations_planned: int = 0
-    rollout_evaluations_performed: int = 0
-    rollout_evaluations_skipped: int = 0
-    rollout_evaluation_batches: int = 0
-    exact_early_stop: bool = False
-    selection_invariant_verified: bool = False
-    # Retained-sequence mode: whether candidate 0 continues the kept sequence,
-    # which completion of the selected candidate is kept, and the sweep.
-    retained_candidate: bool = False
-    completion_index: int | None = None
-    sweep: int = 0
+    # Completion of the selected candidate kept in the sequence.
+    completion_index: int
+    # Whether candidate 0 continues the kept sequence (false on the first step).
+    retained_candidate: bool
+    # Completions generated and scored in this step; a reused one is excluded.
+    rollout_evaluations_performed: int
 
     @property
     def selected(self) -> ConditionalCandidate:
@@ -130,8 +125,6 @@ def estimate_conditional_weights(
     seeds: SeedStream,
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
-    rollout_design: str = "iid",
-    rollout_index_offset: int = 0,
     retained: RolloutEvaluation | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional weight with on/off-policy rollouts.
@@ -148,21 +141,6 @@ def estimate_conditional_weights(
         raise ValueError("reward_temperature must be positive")
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
-    if rollout_design not in {
-        "iid",
-        "scrambled_sobol",
-        "arithmetic_lattice",
-    }:
-        raise ValueError("unknown rollout_design")
-    if rollout_index_offset < 0:
-        raise ValueError("rollout_index_offset must be non-negative")
-    if (rollout_index_offset or retained is not None) and rollout_design != "iid":
-        raise ValueError("staged or retained rollouts currently require iid rollouts")
-    if rollout_design != "iid" and reward_batch is not None:
-        raise ValueError(
-            "randomized QMC rollouts require a fixed pointwise reward; "
-            "batch-coupled rewards change when rollout dependence changes"
-        )
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
@@ -172,55 +150,21 @@ def estimate_conditional_weights(
     retained_tokens = None if retained is None else retained.token_ids
 
     for candidate_index, candidate in enumerate(candidates):
-        full_generated_candidate = generated_prefix + candidate.token_ids
         terminal = rollout_length == 0 or (
             eos is not None and candidate.token_ids[-1] == eos
         )
         kept = retained_tokens is not None and candidate_index == 0
-        if kept and terminal == bool(retained_tokens):
-            raise ValueError("a retained completion must be empty exactly after a terminal block")
-        if terminal:
-            if not kept:
-                terminal_candidates.add(candidate_index)
+        if kept and retained_tokens and terminal:
+            raise ValueError("a retained completion cannot follow a terminal block")
+        if kept and not retained_tokens:
+            # The kept sequence ends with this block: at EOS, the length limit
+            # or a stop sequence of a scoped backend.
             continue
-        rollout_prefix = prompt + full_generated_candidate
-        if rollout_design == "scrambled_sobol":
-            from inference_scaling.experimental.shared.rqmc import (
-                scrambled_sobol_uniforms,
-            )
-
-            token_uniforms = scrambled_sobol_uniforms(
-                rollout_count,
-                rollout_length,
-                seed=seeds.derive(
-                    "conditional_is",
-                    step_index,
-                    "candidate",
-                    candidate_index,
-                    "scrambled_sobol",
-                ),
-            )
-        else:
-            token_uniforms = (None,) * rollout_count
-        if rollout_design == "arithmetic_lattice":
-            from inference_scaling.experimental.shared.rqmc import (
-                randomized_lattice_uniforms,
-            )
-
-            arithmetic_uniforms = randomized_lattice_uniforms(
-                rollout_count,
-                seed=seeds.derive(
-                    "conditional_is",
-                    step_index,
-                    "candidate",
-                    candidate_index,
-                    "arithmetic_lattice",
-                ),
-            )
-        else:
-            arithmetic_uniforms = (None,) * rollout_count
+        if terminal:
+            terminal_candidates.add(candidate_index)
+            continue
+        rollout_prefix = prompt + generated_prefix + candidate.token_ids
         for rollout_index in range(int(kept), rollout_count):
-            global_rollout_index = rollout_index_offset + rollout_index
             requests.append(
                 GenerationRequest(
                     prefix=rollout_prefix,
@@ -232,15 +176,13 @@ def estimate_conditional_weights(
                         "candidate",
                         candidate_index,
                         "rollout",
-                        global_rollout_index,
+                        rollout_index,
                     ),
                     request_id=(
                         "conditional-is:"
                         f"step:{step_index}:candidate:{candidate_index}:"
-                        f"rollout:{global_rollout_index}"
+                        f"rollout:{rollout_index}"
                     ),
-                    uniforms=token_uniforms[rollout_index],
-                    arithmetic_uniform=arithmetic_uniforms[rollout_index],
                 )
             )
             request_candidates.append(candidate_index)
@@ -390,119 +332,14 @@ def estimate_conditional_weights(
                 base_token_logprobs=candidate.token_logprobs,
                 rollouts=tuple(evaluations),
                 log_weight=candidate_log_weight,
-                planned_rollout_count=len(evaluations),
-                log_weight_lower_bound=candidate_log_weight,
-                log_weight_upper_bound=candidate_log_weight,
             )
         )
     return tuple(evaluated)
 
 
-class AutoregressiveStepwiseAdapter:
-    """Expose conditional AR generation through the common stepwise protocol."""
-
-    def __init__(
-        self,
-        *,
-        base_backend: AutoregressiveBackend,
-        rollout_backend: AutoregressiveBackend,
-        prompt: TokenSequence,
-        config: ConditionalISConfig,
-        base_sampling: SamplingConfig,
-        rollout_sampling: SamplingConfig,
-        reward: RewardFunction | None,
-        reward_batch: RewardBatchFunction | None = None,
-    ) -> None:
-        self.base_backend = base_backend
-        self.rollout_backend = rollout_backend
-        self.prompt = prompt
-        self.config = config
-        self.base_sampling = base_sampling
-        self.rollout_sampling = rollout_sampling
-        self.reward = reward
-        self.reward_batch = reward_batch
-
-    @property
-    def initial_state(self) -> TokenSequence:
-        return ()
-
-    def is_terminal(self, state: TokenSequence) -> bool:
-        eos = self.base_sampling.eos_token_id
-        return len(state) >= self.config.total_length or (
-            eos is not None and eos in state
-        )
-
-    def propose(
-        self,
-        state: TokenSequence,
-        step_index: int,
-        seeds: SeedStream,
-    ) -> Sequence[SequenceSample]:
-        validate_base_sampling(self.base_sampling)
-        remaining = self.config.total_length - len(state)
-        if remaining <= 0:
-            raise ValueError("generated prefix has already reached total_length")
-        return sample_candidates(
-            self.base_backend,
-            self.prompt + state,
-            self.config.candidate_count,
-            min(self.config.block_size, remaining),
-            self.base_sampling,
-            seeds,
-            step_index,
-        )
-
-    def evaluate(
-        self,
-        state: TokenSequence,
-        proposals: Sequence[SequenceSample],
-        step_index: int,
-        seeds: SeedStream,
-    ) -> Sequence[StepwiseCandidate[ConditionalCandidate]]:
-        remaining = self.config.total_length - len(state)
-        # Non-terminal candidates all have this length; EOS-terminated ones are shorter.
-        candidate_length = min(self.config.block_size, remaining)
-        evaluated = estimate_conditional_weights(
-            base_backend=self.base_backend,
-            rollout_backend=self.rollout_backend,
-            prompt=self.prompt,
-            generated_prefix=state,
-            candidates=proposals,
-            rollout_length=max(0, remaining - candidate_length),
-            rollout_count=self.config.rollout_count,
-            base_sampling=self.base_sampling,
-            rollout_sampling=self.rollout_sampling,
-            reward_temperature=self.config.reward_temperature,
-            importance_log_ratio_clip=self.config.importance_log_ratio_clip,
-            apply_importance_correction=self.config.apply_importance_correction,
-            reward=self.reward,
-            seeds=seeds,
-            step_index=step_index,
-            reward_batch=self.reward_batch,
-            rollout_design=self.config.rollout_design,
-        )
-        return tuple(
-            StepwiseCandidate(candidate, candidate.log_weight)
-            for candidate in evaluated
-        )
-
-    def advance(
-        self,
-        state: TokenSequence,
-        selected: ConditionalCandidate,
-        step_index: int,
-    ) -> TokenSequence:
-        del step_index
-        generated = state + selected.token_ids
-        eos = self.base_sampling.eos_token_id
-        if eos is not None and eos in generated:
-            generated = generated[: generated.index(eos) + 1]
-        return generated
-
-
 @dataclass(frozen=True, slots=True)
 class RetainedSequence:
-    """Complete sequence kept between retained-sequence steps.
+    """Complete sequence kept between steps.
 
     Every candidate of the next step shares the first ``fixed`` tokens.  An
     empty sequence means that no step has run yet.
@@ -512,7 +349,6 @@ class RetainedSequence:
     token_logprobs: tuple[float, ...] = ()
     reward: float = 0.0
     fixed: int = 0
-    sweep: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,30 +359,20 @@ class RetainedCandidate:
     completion_index: int
 
 
-class RetainedSequenceAdapter:
-    """Conditional SIR moves on a complete sequence, cut at successive block boundaries.
-
-    Candidate 0 is the kept sequence's next block and its remaining completion
-    is one of that candidate's rollouts.  Other candidates and rollouts are
-    fresh base-policy samples.  Selecting a candidate by its mean weight and
-    then one of its completions by weight selects a whole suffix in proportion
-    to its reward weight.  A sweep ends when the kept sequence is fixed up to
-    its end.
-    """
+class ConditionalISAdapter:
+    """Expose conditional IS steps through the common stepwise protocol."""
 
     def __init__(
         self,
         *,
-        base_backend: AutoregressiveBackend,
-        rollout_backend: AutoregressiveBackend,
+        backend: AutoregressiveBackend,
         prompt: TokenSequence,
         config: ConditionalISConfig,
         sampling: SamplingConfig,
         reward: RewardFunction | None,
         reward_batch: RewardBatchFunction | None = None,
     ) -> None:
-        self.base_backend = base_backend
-        self.rollout_backend = rollout_backend
+        self.backend = backend
         self.prompt = prompt
         self.config = config
         self.sampling = sampling
@@ -583,7 +409,7 @@ class RetainedSequenceAdapter:
                     token_ids=block,
                     token_logprobs=state.token_logprobs[state.fixed : end],
                     policy_id=self.sampling.policy_id,
-                    model_id=self.base_backend.model_id,
+                    model_id=self.backend.model_id,
                     request_id=f"conditional-is:step:{step_index}:retained",
                     finish_reason="eos" if eos is not None and block[-1] == eos else "length",
                 )
@@ -592,7 +418,7 @@ class RetainedSequenceAdapter:
         if fresh:
             proposals.extend(
                 sample_candidates(
-                    self.base_backend,
+                    self.backend,
                     prefix,
                     fresh,
                     length,
@@ -625,13 +451,13 @@ class RetainedSequenceAdapter:
                 raw_log_importance_ratio=0.0,
                 applied_log_importance_ratio=0.0,
                 log_weight=state.reward / self.config.reward_temperature,
-                proposal_model_id=self.rollout_backend.model_id,
+                proposal_model_id=self.backend.model_id,
                 proposal_policy_id=self.sampling.policy_id,
                 token_logprobs=completion_logprobs,
             )
         evaluated = estimate_conditional_weights(
-            base_backend=self.base_backend,
-            rollout_backend=self.rollout_backend,
+            base_backend=self.backend,
+            rollout_backend=self.backend,
             prompt=self.prompt,
             generated_prefix=state.token_ids[: state.fixed],
             candidates=proposals,
@@ -640,8 +466,8 @@ class RetainedSequenceAdapter:
             base_sampling=self.sampling,
             rollout_sampling=self.sampling,
             reward_temperature=self.config.reward_temperature,
-            importance_log_ratio_clip=self.config.importance_log_ratio_clip,
-            apply_importance_correction=self.config.apply_importance_correction,
+            importance_log_ratio_clip=None,
+            apply_importance_correction=True,
             reward=self.reward,
             seeds=seeds,
             step_index=step_index,
@@ -677,397 +503,104 @@ class RetainedSequenceAdapter:
         del step_index
         candidate = selected.candidate
         completion = candidate.rollouts[selected.completion_index]
-        prefix = state.token_ids[: state.fixed]
-        token_ids = prefix + candidate.token_ids + completion.token_ids
+        token_ids = state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids
         token_logprobs = (
             state.token_logprobs[: state.fixed]
             + candidate.base_token_logprobs
             + completion.token_logprobs
         )
         if len(token_logprobs) != len(token_ids):
-            raise RuntimeError("retained sequence lost token log-probabilities")
-        fixed = state.fixed + len(candidate.token_ids)
-        sweep = state.sweep
-        if fixed >= len(token_ids) and sweep + 1 < self.config.sweeps:
-            fixed, sweep = 0, sweep + 1
-        return RetainedSequence(token_ids, token_logprobs, completion.reward, fixed, sweep)
+            raise RuntimeError("kept sequence lost token log-probabilities")
+        eos = self.sampling.eos_token_id
+        if eos is not None and eos in token_ids:
+            # Absorbing backends pad after EOS; the kept sequence ends at EOS.
+            end = token_ids.index(eos) + 1
+            token_ids, token_logprobs = token_ids[:end], token_logprobs[:end]
+        return RetainedSequence(
+            token_ids,
+            token_logprobs,
+            completion.reward,
+            state.fixed + len(candidate.token_ids),
+        )
 
 
-def _bounded_conditional_is_step(
-    *,
-    base_backend: AutoregressiveBackend,
-    rollout_backend: AutoregressiveBackend,
-    prompt: TokenSequence,
-    generated_prefix: TokenSequence,
-    config: ConditionalISConfig,
-    base_sampling: SamplingConfig,
-    rollout_sampling: SamplingConfig,
-    reward: RewardFunction | None,
-    seeds: SeedStream,
-    step_index: int,
-    reward_batch: RewardBatchFunction | None,
+def _step_record(
+    selection: StepwiseSelection[RetainedSequence, RetainedCandidate],
 ) -> ConditionalISStep:
-    """Evaluate rollout batches until the fixed categorical choice is known."""
-
-    if reward is None or reward_batch is not None:
-        raise ValueError(
-            "exact rollout early stopping requires a fixed pointwise reward"
-        )
-    if config.rollout_log_weight_bounds is None:
-        raise ValueError("exact rollout early stopping requires log-weight bounds")
-    if config.rollout_design != "iid":
-        raise ValueError("exact rollout early stopping currently requires iid rollouts")
-    validate_base_sampling(base_sampling)
-    remaining_length = config.total_length - len(generated_prefix)
-    if remaining_length <= 0:
-        raise ValueError("generated prefix has already reached total_length")
-    candidate_length = min(config.block_size, remaining_length)
-    proposals = sample_candidates(
-        base_backend,
-        prompt + generated_prefix,
-        config.candidate_count,
-        candidate_length,
-        base_sampling,
-        seeds,
-        step_index,
-    )
-    rollout_length = max(0, remaining_length - candidate_length)
-    eos = rollout_sampling.eos_token_id
-    terminal = tuple(
-        rollout_length == 0 or (eos is not None and proposal.token_ids[-1] == eos)
-        for proposal in proposals
-    )
-    planned = tuple(
-        1 if is_terminal else config.rollout_count for is_terminal in terminal
-    )
-    planned_total = sum(planned)
-    selection_uniform = float(
-        seeds.generator("conditional_is", step_index, "select").random()
-    )
-    lower_log_weight, upper_log_weight = config.rollout_log_weight_bounds
-    try:
-        minimum_contribution = exp(lower_log_weight)
-        maximum_contribution = exp(upper_log_weight)
-    except OverflowError as error:
-        raise ValueError("rollout log-weight bounds cannot be exponentiated") from error
-    if (
-        not isfinite(minimum_contribution)
-        or not isfinite(maximum_contribution)
-        or minimum_contribution <= 0.0
-    ):
-        raise ValueError(
-            "rollout log-weight bounds must map to finite positive weights"
-        )
-
-    collected: list[list[RolloutEvaluation]] = [[] for _ in proposals]
-    lower_candidate_weights: list[float] = []
-    upper_candidate_weights: list[float] = []
-    invariant_index: int | None = None
-    rollout_offset = 0
-    evaluation_batches = 0
-    while rollout_offset < config.rollout_count:
-        batch_size = min(
-            config.rollout_evaluation_batch_size,
-            config.rollout_count - rollout_offset,
-        )
-        batch = estimate_conditional_weights(
-            base_backend=base_backend,
-            rollout_backend=rollout_backend,
-            prompt=prompt,
-            generated_prefix=generated_prefix,
-            candidates=proposals,
-            rollout_length=rollout_length,
-            rollout_count=batch_size,
-            base_sampling=base_sampling,
-            rollout_sampling=rollout_sampling,
-            reward_temperature=config.reward_temperature,
-            importance_log_ratio_clip=config.importance_log_ratio_clip,
-            apply_importance_correction=config.apply_importance_correction,
-            reward=reward,
-            seeds=seeds,
-            step_index=step_index,
-            rollout_design="iid",
-            rollout_index_offset=rollout_offset,
-        )
-        evaluation_batches += 1
-        for candidate_index, evaluated in enumerate(batch):
-            if terminal[candidate_index]:
-                if not collected[candidate_index]:
-                    collected[candidate_index].append(evaluated.rollouts[0])
-                continue
-            for rollout in evaluated.rollouts:
-                if not lower_log_weight <= rollout.log_weight <= upper_log_weight:
-                    raise ValueError(
-                        "observed rollout log-weight lies outside the declared bounds"
-                    )
-                collected[candidate_index].append(rollout)
-        rollout_offset += batch_size
-
-        lower_candidate_weights = []
-        upper_candidate_weights = []
-        for candidate_index, evaluations in enumerate(collected):
-            contributions = [exp(item.log_weight) for item in evaluations]
-            if terminal[candidate_index]:
-                exact_weight = contributions[0]
-                lower_candidate_weights.append(exact_weight)
-                upper_candidate_weights.append(exact_weight)
-                continue
-            unseen = config.rollout_count - len(evaluations)
-            lower_candidate_weights.append(
-                (sum(contributions) + unseen * minimum_contribution)
-                / config.rollout_count
-            )
-            upper_candidate_weights.append(
-                (sum(contributions) + unseen * maximum_contribution)
-                / config.rollout_count
-            )
-        from inference_scaling.experimental.shared.bounded_selection import (
-            invariant_categorical_index,
-        )
-
-        invariant_index = invariant_categorical_index(
-            lower_candidate_weights,
-            upper_candidate_weights,
-            uniform=selection_uniform,
-        )
-        if invariant_index is not None:
-            break
-
-    evaluated_candidates: list[ConditionalCandidate] = []
-    for candidate_index, proposal in enumerate(proposals):
-        evaluations = collected[candidate_index]
-        if not evaluations:
-            raise RuntimeError("bounded evaluation omitted a candidate")
-        lower_weight = lower_candidate_weights[candidate_index]
-        upper_weight = upper_candidate_weights[candidate_index]
-        representative_weight = (lower_weight + upper_weight) / 2.0
-        evaluated_candidates.append(
-            ConditionalCandidate(
-                token_ids=proposal.token_ids,
-                base_token_logprobs=proposal.token_logprobs,
-                rollouts=tuple(evaluations),
-                log_weight=log(representative_weight),
-                planned_rollout_count=planned[candidate_index],
-                log_weight_lower_bound=log(lower_weight),
-                log_weight_upper_bound=log(upper_weight),
-            )
-        )
-    probabilities = normalize_log_weights(
-        [candidate.log_weight for candidate in evaluated_candidates]
-    )
-    selected_index = categorical_index_from_uniform(
-        probabilities,
-        selection_uniform,
-    )
-    if invariant_index is not None and selected_index != invariant_index:
-        raise RuntimeError(
-            "bounded categorical proof disagrees with representative weights"
-        )
-    performed_total = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
-    skipped_total = planned_total - performed_total
+    candidates = tuple(item.value.candidate for item in selection.candidates)
+    carried = bool(selection.state_before.token_ids)
     return ConditionalISStep(
-        generated_length_before=len(generated_prefix),
-        candidates=tuple(evaluated_candidates),
-        selected_index=selected_index,
-        rollout_evaluations_planned=planned_total,
-        rollout_evaluations_performed=performed_total,
-        rollout_evaluations_skipped=skipped_total,
-        rollout_evaluation_batches=evaluation_batches,
-        exact_early_stop=skipped_total > 0,
-        selection_invariant_verified=skipped_total > 0 and invariant_index is not None,
+        generated_length_before=selection.state_before.fixed,
+        candidates=candidates,
+        selected_index=selection.selected_index,
+        completion_index=selection.selected.value.completion_index,
+        retained_candidate=carried,
+        rollout_evaluations_performed=(
+            sum(len(candidate.rollouts) for candidate in candidates) - int(carried)
+        ),
     )
 
 
 def conditional_is_step(
     *,
-    base_backend: AutoregressiveBackend,
-    rollout_backend: AutoregressiveBackend,
+    backend: AutoregressiveBackend,
     prompt: TokenSequence,
-    generated_prefix: TokenSequence,
+    state: RetainedSequence,
     config: ConditionalISConfig,
-    base_sampling: SamplingConfig,
-    rollout_sampling: SamplingConfig,
+    sampling: SamplingConfig,
     reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
-) -> ConditionalISStep:
-    if config.exact_rollout_early_stop:
-        return _bounded_conditional_is_step(
-            base_backend=base_backend,
-            rollout_backend=rollout_backend,
-            prompt=prompt,
-            generated_prefix=generated_prefix,
-            config=config,
-            base_sampling=base_sampling,
-            rollout_sampling=rollout_sampling,
-            reward=reward,
-            seeds=seeds,
-            step_index=step_index,
-            reward_batch=reward_batch,
-        )
-    adapter = AutoregressiveStepwiseAdapter(
-        base_backend=base_backend,
-        rollout_backend=rollout_backend,
+) -> tuple[ConditionalISStep, RetainedSequence]:
+    """Run one step from ``state`` and return its record and the kept sequence."""
+
+    adapter = ConditionalISAdapter(
+        backend=backend,
         prompt=prompt,
         config=config,
-        base_sampling=base_sampling,
-        rollout_sampling=rollout_sampling,
+        sampling=sampling,
         reward=reward,
         reward_batch=reward_batch,
     )
     selection = stepwise_generation_step(
         adapter,
-        generated_prefix,
+        state,
         step_index,
         seeds,
         selection_namespace=("conditional_is",),
     )
-    evaluated_candidates = tuple(candidate.value for candidate in selection.candidates)
-    performed = sum(len(candidate.rollouts) for candidate in evaluated_candidates)
-    return ConditionalISStep(
-        generated_length_before=len(generated_prefix),
-        candidates=evaluated_candidates,
-        selected_index=selection.selected_index,
-        rollout_evaluations_planned=performed,
-        rollout_evaluations_performed=performed,
-        rollout_evaluation_batches=1,
-    )
+    return _step_record(selection), adapter.advance(state, selection.selected.value, step_index)
 
 
 def run_conditional_is(
-    base_backend: AutoregressiveBackend,
+    backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: ConditionalISConfig,
     reward: RewardFunction | None,
     seeds: SeedStream,
     *,
-    base_sampling: SamplingConfig | None = None,
-    rollout_backend: AutoregressiveBackend | None = None,
-    rollout_sampling: SamplingConfig | None = None,
+    sampling: SamplingConfig | None = None,
     reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISResult:
-    """Generate a sequence by repeatedly applying finite conditional-IS steps.
+    """Generate a complete sequence by conditional SIR moves at successive block boundaries."""
 
-    With ``config.retain_sequence`` the steps are conditional SIR moves on a
-    kept complete sequence; completions must then come from the base policy.
-    """
-
-    base_sampling = base_sampling or SamplingConfig()
-    rollout_backend = rollout_backend or base_backend
-    rollout_sampling = rollout_sampling or base_sampling
-    validate_base_sampling(base_sampling)
-    validate_rollout_sampling(rollout_sampling)
-    if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
-        raise ValueError("candidate and rollout policies must agree on eos_token_id")
-
-    if config.retain_sequence:
-        if (
-            rollout_backend.model_id != base_backend.model_id
-            or rollout_sampling != base_sampling
-        ):
-            raise ValueError("retained sequences require on-policy base-model completions")
-        kept = run_stepwise_generation(
-            RetainedSequenceAdapter(
-                base_backend=base_backend,
-                rollout_backend=rollout_backend,
-                prompt=prompt,
-                config=config,
-                sampling=base_sampling,
-                reward=reward,
-                reward_batch=reward_batch,
-            ),
-            seeds,
-            selection_namespace=("conditional_is",),
-        )
-        retained_steps: list[ConditionalISStep] = []
-        for selection in kept.steps:
-            evaluated = tuple(item.value.candidate for item in selection.candidates)
-            carried = bool(selection.state_before.token_ids)
-            # The kept completion is reused, not evaluated again.
-            fresh = sum(len(candidate.rollouts) for candidate in evaluated) - int(carried)
-            retained_steps.append(
-                ConditionalISStep(
-                    generated_length_before=selection.state_before.fixed,
-                    candidates=evaluated,
-                    selected_index=selection.selected_index,
-                    rollout_evaluations_planned=fresh,
-                    rollout_evaluations_performed=fresh,
-                    rollout_evaluation_batches=1,
-                    retained_candidate=carried,
-                    completion_index=selection.selected.value.completion_index,
-                    sweep=selection.state_before.sweep,
-                )
-            )
-        return ConditionalISResult(
-            prompt=prompt,
-            token_ids=kept.final_state.token_ids,
-            steps=tuple(retained_steps),
-        )
-
-    if config.exact_rollout_early_stop:
-        generated: TokenSequence = ()
-        steps: list[ConditionalISStep] = []
-        step_index = 0
-        eos = base_sampling.eos_token_id
-        while len(generated) < config.total_length and (
-            eos is None or eos not in generated
-        ):
-            step = conditional_is_step(
-                base_backend=base_backend,
-                rollout_backend=rollout_backend,
-                prompt=prompt,
-                generated_prefix=generated,
-                config=config,
-                base_sampling=base_sampling,
-                rollout_sampling=rollout_sampling,
-                reward=reward,
-                seeds=seeds,
-                step_index=step_index,
-                reward_batch=reward_batch,
-            )
-            generated += step.selected.token_ids
-            if eos is not None and eos in generated:
-                generated = generated[: generated.index(eos) + 1]
-            steps.append(step)
-            step_index += 1
-        return ConditionalISResult(
-            prompt=prompt,
-            token_ids=generated,
-            steps=tuple(steps),
-        )
-
-    adapter = AutoregressiveStepwiseAdapter(
-        base_backend=base_backend,
-        rollout_backend=rollout_backend,
-        prompt=prompt,
-        config=config,
-        base_sampling=base_sampling,
-        rollout_sampling=rollout_sampling,
-        reward=reward,
-        reward_batch=reward_batch,
-    )
+    sampling = sampling or SamplingConfig()
+    validate_base_sampling(sampling)
     generic = run_stepwise_generation(
-        adapter,
+        ConditionalISAdapter(
+            backend=backend,
+            prompt=prompt,
+            config=config,
+            sampling=sampling,
+            reward=reward,
+            reward_batch=reward_batch,
+        ),
         seeds,
         selection_namespace=("conditional_is",),
     )
-    steps: list[ConditionalISStep] = []
-    for step in generic.steps:
-        candidates = tuple(candidate.value for candidate in step.candidates)
-        performed = sum(len(candidate.rollouts) for candidate in candidates)
-        steps.append(
-            ConditionalISStep(
-                generated_length_before=len(step.state_before),
-                candidates=candidates,
-                selected_index=step.selected_index,
-                rollout_evaluations_planned=performed,
-                rollout_evaluations_performed=performed,
-                rollout_evaluation_batches=1,
-            )
-        )
     return ConditionalISResult(
         prompt=prompt,
-        token_ids=generic.final_state,
-        steps=tuple(steps),
+        token_ids=generic.final_state.token_ids,
+        steps=tuple(_step_record(step) for step in generic.steps),
     )

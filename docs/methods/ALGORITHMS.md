@@ -96,10 +96,9 @@ $`\log q(y\mid y')`$。共享核计算
 | Base / greedy / beam / Best-of-$`N`$ | 基础模型采样或确定性搜索 | 基线分布或奖励最大化 | `experiments/run_reproduction.py` |
 | 幂分布 MH | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | `shared/sampling/mh.py` + 两侧 proposal 适配 |
 | 奖励目标 MH | 式 (1) | 目标分布保持不变；每次 proposal 通常需完整奖励 | `shared/sampling/mh.py` + 两侧目标评分 |
-| 条件 IS | 式 (1) 的逐块 SIR | $`K,M\to\infty`$ 时趋近目标 | `shared/sampling/stepwise.py` + 两侧生成适配 |
+| 条件 IS | AR：在当前完整序列的块边界上做条件 SIR；dLLM：式 (1) 的逐块 SIR | AR 首步是整序列 SIR，此后每步保持目标不变；dLLM 在 $`K,M\to\infty`$ 时趋近目标 | `shared/sampling/stepwise.py` + 两侧生成适配 |
 | 迭代条件 IS | 式 (1) 的逐块 i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `experimental/shared/iterated_sir.py` + AR 补全适配 |
-| 保留完整序列的条件 IS | 式 (1)：在当前完整序列的块边界上做条件 SIR | 首步是整序列 SIR；此后每步保持目标不变 | `arllm/algorithms/conditional_is.py`（`retain_sequence`） |
-| off-policy 条件 IS | 同上，补全来自其他 proposal | 未截断普通 IS 对条件奖励权重无偏 | `shared/sampling/importance.py` + 两侧轨迹评分 |
+| off-policy 条件 IS | 逐块 SIR，补全来自其他 proposal；AR 版本已归档 | 未截断普通 IS 对条件奖励权重无偏 | `shared/sampling/importance.py` + 两侧轨迹评分 |
 | 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | 基础模型候选的 rollout replay | 式 (1) 的逐块 SIR | 历史样本与独立新样本组成的条件权重估计无偏 | `shared/sampling/importance.py` + 两侧 replay 存储 |
 | 可枚举候选 logit adjustment | 式 (1) 的下一步条件分布 | 枚举候选后直接归一化；误差只来自条件权重估计 | 理论参考，当前未接入执行入口 |
@@ -181,7 +180,8 @@ Hastings 比中使用完整正反概率，因此两项可以组合。直观上�
 <a id="alg-qwen-default-is"></a>
 #### 2.1.2 默认条件 IS 与已有历史 replay
 
-普通 `conditional_is` 从基础模型生成候选和新的 rollout。`replay` 组件在存在匹配且尚未使用的最终估计
+普通 `conditional_is` 从基础模型生成候选和新的 rollout，并保留一条完整序列（第 6 节）；下面的 replay 路径仍按块
+提交。`replay` 组件在存在匹配且尚未使用的最终估计
 历史记录（代码字段为 `evaluation`）时使用式 (14)，并复用建库阶段已经生成的同一组候选；连续批处理只改变
 这些请求的物理执行顺序。调用入口和 replay 记录清单明确选择新生成或历史复用路径，专用组合入口负责对
 两条路径进行成对验证。
@@ -296,7 +296,7 @@ proposal。
 | 迭代 SIR（iterated SIR） | [Samsonov et al. (2022)](https://papers.neurips.cc/paper_files/paper/2022/file/21c86d5b10cdc28664ccdadf0a29065a-Paper-Conference.pdf) | 将一次性有限 SIR 变为按迭代轮次收敛的有限池转移 |
 | off-policy 修正 | [Precup, Sutton, and Singh (2000)](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) | 用实际生成概率修正异分布 rollout |
 | 经验回放 | [Lin (1992)](https://doi.org/10.1007/BF00992699) | 历史补全经式 (13) 校正后进入条件奖励权重估计 |
-| 可枚举候选 logit adjustment | [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510) | 原文在有限动作集合上加入估计优势；第 6.4 节将其改写为序列奖励下的条件权重接口 |
+| 可枚举候选 logit adjustment | [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510) | 原文在有限动作集合上加入估计优势；第 6.2 节将其改写为序列奖励下的条件权重接口 |
 | GRPO | [Shao et al. (2024)](https://arxiv.org/abs/2402.03300) | 使用同一基础模型训练的参数更新基线 |
 | 最优分层分配 | [Neyman (1934)](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)、[Étoré and Jourdain (2010)](https://doi.org/10.1007/s11009-008-9108-0) | [方差—成本预算规则](BUDGET.md#budget-allocation) |
 | SMC | [Del Moral, Doucet, and Jasra (2006)](https://doi.org/10.1111/j.1467-9868.2006.00553.x)、[Lew et al. (2023)](https://arxiv.org/abs/2306.03081) | 用于分块粒子传播和可复用的条件后缀样本池 |
@@ -468,10 +468,12 @@ h(g,z)=\mathbb E_{u\sim p(\cdot\mid x,g,z)}
 
 <p align="right">式 (7)</p>
 
-标准条件 IS 的一次候选选择步骤为：
+AR 主线的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一个块边界处切开：
 
-1. 生成 $`M`$ 个候选 $`z_m\sim p(\cdot\mid x,g)`$；
-2. 对每个候选生成 $`K`$ 条 on-policy 补全 $`u_{mk}\sim p(\cdot\mid x,g,z_m)`$；
+1. 设切点之前的前缀为 $`g`$；第一步时 $`y`$ 与 $`g`$ 都为空。0 号候选是 $`y`$ 在 $`g`$ 之后的下一块，$`y`$ 的
+   剩余部分算作它的一条补全；
+2. 其余候选 $`z_m\sim p(\cdot\mid x,g)`$，每个候选生成 $`K`$ 条 on-policy 补全
+   $`u_{mk}\sim p(\cdot\mid x,g,z_m)`$，0 号候选只再生成 $`K-1`$ 条；所有补全都生成到 EOS 或长度上限；
 3. 计算式 (8)：
 
 ```math
@@ -481,184 +483,47 @@ h(g,z)=\mathbb E_{u\sim p(\cdot\mid x,g,z)}
 
 <p align="right">式 (8)</p>
 
-4. 以 $`\widehat h_m/\sum_j\widehat h_j`$ 的概率选择候选并追加到 $`g`$，随后进入下一个生成块。
+4. 以 $`\widehat h_m/\sum_j\widehat h_j`$ 的概率选择候选，再在它的补全中按 $`e^{r(g,z_m,u_{mk})/\tau}`$
+   选一条，保留 $`y=(g,z_m,u_{mk})`$，进入下一个块边界。保留补全的奖励直接复用，不再评分。
 
-候选来自 $`p`$，因此 SIR 直接使用条件奖励权重 $`\widehat h_m`$。当
-$`K\to\infty`$ 时式 (8) 收敛到 $`h`$；当候选数 $`M\to\infty`$ 时，SIR 输出趋近式 (7)。有限
-$`K,M`$ 以及逐块重复选择共同构成实际近似误差。
+第 3、4 步合起来，就是在全部 $`MK`$ 条完整后缀中按 $`e^{r/\tau}`$ 选一条，所以第一步是 $`MK`$ 条共享首块的
+完整序列上的整序列 SIR。之后每一步把当前后缀放在候选树的固定位置，其余节点按提议分布重新生成，再按权重
+选择叶子。这是 conditional SMC 的单步转移，论证与第 6.1 节的 i-SIR 相同，只是池中的状态换成整条后缀；
+给定切点之前的前缀，它保持式 (1) 不变。由此：
 
-直观上，$`K`$ 控制“每个候选的后续表现估计得多稳定”，$`M`$ 控制“本轮看到了多少种下一段”。在条件
-权重具有有限方差时，普通样本均值的典型波动按 $`K^{-1/2}`$ 缩小；候选抽样带来的覆盖波动通常按
-$`M^{-1/2}`$ 缩小。具体常数取决于奖励尺度、重要性概率比和候选概率，多个生成块的局部误差还会沿
-生成过程累积。因此仓库同时报告 $`M`$、$`K`$、ESS、截断次数和最终质量，而不只报告一个渐近阶。
+- 从目标分布出发，一轮扫描后仍是目标分布；`test_conditional_is.py` 在可枚举模型上核对这一点；
+- 第一步之后，每一步都不增大输出分布到目标的 KL 散度，且每一步结束时都有一条可直接输出的完整序列。
 
-关键实现直接在对数尺度下求均值并重采样：
+这要求奖励只依赖被评分的序列，因为保留补全的奖励会被后续步骤复用。依赖同批其他序列的奖励（累积
+自一致性、组内归一化的置信度）只能用于归档的分块版本。
+
+$`K`$ 在这里既估计块的价值，也提供候选答案：增大 $`K`$ 只是增加同一块下的完整后缀，因此宜取 1 或 2，
+把预算用在 $`M`$ 上。它相对整序列 SIR 是否更省，取决于前缀计算是否复用：后续步骤的新后缀共享已固定的
+前缀，复用前缀 KV 时每条新后缀只需生成切点之后的 token；每个请求都重新计算整个前缀时，一条新后缀的
+前向成本与一条新的完整序列相同。真实模型上的比较入口是
+[`conditional_is_comparison.py`](../../experiments/arllm/conditional_is_comparison.py)，它同时记录前向 token
+位置数与新生成 token 数。
+
+关键实现先按候选的平均权重选择候选，再在所选候选内按权重保留一条补全：
 
 ```python
-log_candidate_weights = [
-    logmeanexp(rollout.log_weight for rollout in evaluations)
-    for evaluations in candidate_rollouts
+candidate_log_weights = [
+    logmeanexp(rollout.log_weight for rollout in candidate.rollouts)
+    for candidate in candidates
 ]
-probabilities = softmax(log_candidate_weights)
-selected_index = rng.choice(len(candidates), p=probabilities)
+m = rng.choice(len(candidates), p=softmax(candidate_log_weights))
+rollouts = candidates[m].rollouts
+k = rng.choice(len(rollouts), p=softmax([rollout.log_weight for rollout in rollouts]))
+kept = prefix + candidates[m].token_ids + rollouts[k].token_ids
 ```
 
-AR 条件 IS 适配位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有 rollout
-都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
-
-<a id="alg-rqmc-rollouts"></a>
-### 6.1 随机化 QMC rollout
-
-普通条件 IS 为每个候选独立生成 $`K`$ 条 rollout。仓库实现两种随机化拟蒙特卡洛
-（randomized quasi-Monte Carlo，RQMC）
-设计；两者都保持每条 rollout 的 proposal 边缘分布，只改变同一候选下 $`K`$ 条 rollout 的联合分布。
-
-`scrambled_sobol` 为长度 $`L`$ 的补全生成经过随机置乱的 Sobol 点
-$`v_{m1},\ldots,v_{mK}\in[0,1)^L`$，并在每个 token 位置执行 proposal 条件分布的逆 CDF：
-
-```math
-u_{mk,t}=F^{-1}_{q,t}
-\left(v_{mk,t}\mid x,g,z_m,u_{mk,1:t-1}\right).
-```
-
-<p align="right">式 (8-R1)</p>
-
-`arithmetic_lattice` 先抽取一个共享随机平移 $`\Delta_m\sim\mathrm{Unif}[0,1)`$，再构造一维格点
-
-```math
-a_{mk,1}=\left(\Delta_m+\frac{k}{K}\right)\bmod 1,
-\qquad k=0,\ldots,K-1.
-```
-
-<p align="right">式 (8-R2)</p>
-
-在第 $`t`$ 个 token 位置，将 proposal 概率按固定规则排列。若 $`a_{mk,t}`$ 落在 token $`u_{mk,t}`$
-对应的区间 $`[\ell_{mk,t},\ell_{mk,t}+q_{mk,t})`$，则选择该 token，并把区间重新缩放到 $`[0,1)`$：
-
-```math
-a_{mk,t+1}=
-\frac{a_{mk,t}-\ell_{mk,t}}{q_{mk,t}}.
-```
-
-<p align="right">式 (8-R3)</p>
-
-随机平移使每个带编号的 $`a_{mk,1}`$ 都服从 $`\mathrm{Unif}[0,1)`$。算术采样
-（Arithmetic Sampling）的递归
-区间映射将任一序列 $`u`$ 对应到长度恰为 $`q(u\mid x,g,z_m)`$ 的区间，因此每条 $`u_{mk}`$ 的边缘分布
-严格等于 rollout proposal。格点之间的距离固定为 $`1/K`$，其覆盖约束强于逐 token Sobol 在高维空间中的
-有限点集约束。
-
-令
-
-```math
-G_m(u)=
-\exp\{r(g,z_m,u)/\tau\}
-\frac{p(u\mid x,g,z_m)}{q(u\mid x,g,z_m)}.
-```
-
-两种 RQMC 设计都满足
-
-```math
-\mathbb E\!\left[\frac1K\sum_{k=1}^K G_m(u_{mk})\right]
-=\frac1K\sum_{k=1}^K\mathbb E[G_m(u_{mk})]
-=h(g,z_m).
-```
-
-<p align="right">式 (8-R4)</p>
-
-该等式只使用期望的线性性和每条 rollout 的正确边缘分布，因此同时覆盖 on-policy 与 off-policy rollout，
-原有 $`p/q`$ 权重无需改变。有限候选 SIR 的归一化误差仍然存在。RQMC 点集内部不独立，普通独立样本 ESS
-只能描述当前权重的离散程度；估计量方差需要用多个独立随机平移或随机置乱测量，有限 $`K`$ 下也没有统一的
-方差下降保证。
-
-实现为每个候选构造独立点集。随机平移等距格点只向每条请求传递一个初始随机数，后端在生成过程中更新局部
-坐标：
-
-```python
-latents = randomized_lattice_uniforms(
-    rollout_count,
-    seed=candidate_shift_seed,
-)
-requests = [
-    GenerationRequest(..., arithmetic_uniform=latents[k])
-    for k in range(rollout_count)
-]
-```
-
-Transformers 与表格后端使用 float64 累积概率执行两种逆 CDF。RQMC 只接受逐序列固定奖励；批内自一致性
-奖励会随 rollout 的联合分布改变，入口拒绝该组合。vLLM 当前不开放请求级采样随机数注入，因此两种 RQMC
-模式均在 vLLM 后端显式报错，`iid` 路径不受影响。实现位于
-[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、
-[`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
-[`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。方法依据见
-[Arithmetic Sampling](https://proceedings.mlr.press/v202/vilnis23a.html)、
-[QuasiMoTTo](https://arxiv.org/abs/2607.01179)以及 RQMC 与重要性采样组合的
-[Buchholz and Chopin (2018)](https://proceedings.mlr.press/v80/buchholz18a/buchholz18a.pdf)。
-默认使用 `iid`；两种 RQMC 设计的筛选结论见[非默认方案记录](#alg-nondefault-notes)。
-
-<a id="alg-bounded-is"></a>
-### 6.2 有界权重下的精确提前停止
-
-当每条 rollout 的非归一化权重具有已知确定性界 $`a\leq w_{mk}\leq b`$ 时，可以分批评估 rollout，并在
-候选选择已经不可能改变时停止。该规则固定完整条件 IS 原本使用的同一个均匀数 $`\eta\in[0,1)`$，不使用
-置信区间或近似判定阈值。
-
-候选 $`m`$ 已评估 $`k_m`$ 条 rollout 后，其最终平均权重位于
-
-```math
-L_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)a}{K},
-\qquad
-U_m=\frac{\sum_{k=1}^{k_m}w_{mk}+(K-k_m)b}{K}.
-```
-
-<p align="right">式 (8-E1)</p>
-
-若完整权重为 $`H_m\in[L_m,U_m]`$，固定 $`\eta`$ 时选择候选 $`j`$ 等价于
-
-```math
-\sum_{i\lt j}H_i\leq\eta\sum_iH_i
-\lt\sum_{i\leq j}H_i.
-```
-
-<p align="right">式 (8-E2)</p>
-
-式 (8-E2) 对所有合法 $`H_i`$ 都成立，当且仅当
-
-```math
-(1-\eta)\sum_{i\lt j}U_i-\eta\sum_{i\geq j}L_i\leq0,
-\qquad
-(1-\eta)\sum_{i\leq j}L_i-\eta\sum_{i\gt j}U_i\gt0.
-```
-
-<p align="right">式 (8-E3)</p>
-
-第一项是式 (8-E2) 左侧不等式在各权重区间上的最大值，第二项是右侧严格不等式在各权重区间上的最小值；线性函数
-的极值分别在对应端点取得。因此式 (8-E3) 成立时，任何尚未生成的 rollout 都会得到同一个候选索引，
-可以直接提交候选 $`j`$。若不成立，则继续评估下一批。最迟在 $`K`$ 条 rollout 全部完成后，每个区间的
-上下界相等，算法必然终止。故提前停止路径与完整有限 $`K,M`$ 算法逐步选择相同候选，不引入新的分布误差。
-
-实现接受 rollout **对数权重**的确定性界。on-policy、二值奖励 $`r\in[0,1]`$ 时可取
-$`[0,1/\tau]`$；若 off-policy 对数概率比被算法本身截断到 $`[-c,c]`$，可取
-$`[-c,1/\tau+c]`$。该优化要求 $`p/q`$ 具有已知的有限统一上界；未截断的重要性概率比通常不满足此条件。实测权重一旦超出声明区间，
-运行立即失败。批内自一致性奖励依赖尚未完成的其他 rollout，也不满足逐条固定权重条件。
-
-```python
-decision = invariant_categorical_index(
-    lower_candidate_weights,
-    upper_candidate_weights,
-    uniform=selection_uniform,
-)
-if decision is not None:
-    break
-```
-
-公共判定位于 [`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py)，AR 分批 rollout
-位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。分批执行可能重复前缀
-预填充；因此实际收益由跳过的 rollout 比例、批次数、参与前向计算的 token 位置数、FLOPs 和墙钟共同决定。
-该功能默认关闭，筛选结论见[非默认方案记录](#alg-nondefault-notes)。
+AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有
+补全都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。每步只提交所选块、丢弃补全的
+分块版本已归档，见[归档目录](../../src/inference_scaling/archive/README.md)；只属于它的 RQMC rollout 与精确提前停止在筛选中没有收益，
+已删除，最后的实现见提交 `642f617`。dLLM 的条件 IS 仍是分块版本：选择候选后只提交该块。
 
 <a id="alg-iterated-is"></a>
-### 6.3 迭代条件 IS
+### 6.1 迭代条件 IS
 
 一次性 SIR 在有限候选数 $`M`$ 下仍有归一化重采样误差。iterated SIR（i-SIR）把一次候选定义为完整
 扩展状态
@@ -753,7 +618,7 @@ for update in range(updates):
 适配位于 [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py)。
 
 <a id="alg-logit-adjustment"></a>
-### 6.4 可枚举候选的 logit adjustment
+### 6.2 可枚举候选的 logit adjustment
 
 条件 IS 从很大的候选空间抽取 $`M`$ 个候选，再在这 $`M`$ 个候选之间重采样。若下一步所有合法且互斥的候选
 组成较小集合 $`\mathcal Z(x,g)`$，可以全部列出并直接归一化。对单 token 候选，基础模型一次前向已经给出
@@ -816,37 +681,11 @@ $`|\mathcal Z|`$ 很大时，rollout 数约为 $`|\mathcal Z|K`$，可能远高�
 replay 公式的关系。原始有限动作 logit 更新见
 [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510)。
 
-<a id="alg-retained-is"></a>
-### 6.5 保留完整序列的条件 IS
-
-标准条件 IS 每步只提交选中的生成块。式 (8) 用到的补全 $`u_{mk}`$ 都是完整序列，却在选择后丢弃，下一步再为
-新候选重新生成。配置 `retain_sequence = true` 后，每一步结束时保留一条完整序列：
-
-1. 与标准步骤相同，按 $`\widehat h_m`$ 选择候选 $`z_m`$；
-2. 在 $`z_m`$ 的补全中按 $`e^{r(g,z_m,u_{mk})/\tau}`$ 选择一条，保留完整序列 $`y=(g,z_m,u_{mk})`$；
-3. 下一步在 $`y`$ 的下一个块边界处切开。0 号候选是 $`y`$ 的下一块，它在 $`y`$ 中的剩余部分算作该候选的
-   一条补全，只需再生成 $`K-1`$ 条；其余 $`M-1`$ 个候选及其补全照常生成。保留补全的奖励直接复用，不再评分。
-
-第 1、2 步合起来，就是在全部 $`MK`$ 条完整后缀中按 $`e^{r/\tau}`$ 选一条，所以第一步是 $`MK`$ 条共享首块的
-完整序列上的整序列 SIR。之后每一步把当前后缀放在候选树的固定位置，其余节点按提议分布重新生成，再按权重选择
-叶子。这是 conditional SMC 的单步转移，论证与第 6.3 节的 i-SIR 相同，只是池中的状态换成整条后缀；给定切点
-之前的前缀，它保持式 (1) 不变。由此：
-
-- 从目标分布出发，一轮扫描后仍是目标分布；`test_conditional_is.py` 在可枚举模型上核对这一点；
-- 第一步之后，每一步都不增大输出分布到目标的 KL 散度，且每一步结束时都有一条可直接输出的完整序列。
-
-`sweeps` 大于 1 时，一轮扫描结束后从提示处重新切分，使前面的块也能被替换。当前实现要求补全与候选来自同一
-模型和采样策略（on-policy）、rollout 独立同分布、奖励为逐序列固定值，并与 QMC rollout、精确提前停止互斥。
-
-在相同的 $`M,K,B`$ 下，该模式不再丢弃已生成并评分的完整补全。$`K`$ 也不再用于估计块的价值，只是增加同一
-块下的完整后缀，因此宜取 1 或 2，把预算用在 $`M`$ 上。它相对整序列 SIR 是否更省，取决于前缀计算是否复用：
-后续步骤的新后缀共享已固定的前缀，复用前缀 KV 时每条新后缀只需生成切点之后的 token；每个请求都重新计算整个
-前缀时，一条新后缀的前向成本与一条新的完整序列相同。真实模型上的比较入口是
-[`retained_is_comparison.py`](../../experiments/arllm/retained_is_comparison.py)，它同时记录前向 token 位置数与
-新生成 token 数。
-
 <a id="alg-offpolicy-is"></a>
 ## 7. off-policy 补全与主模型重评分
+
+AR 主线条件 IS 只使用 on-policy 补全。本节的 AR 小模型补全属于已归档的分块条件 IS（见
+[归档目录](../../src/inference_scaling/archive/README.md)）；dLLM 的 reduced-layer proposal 与迭代条件 IS 仍使用这里的修正。
 
 若补全由 proposal $`q(u\mid x,g,z)`$ 生成，则式 (7) 改写为
 
@@ -1408,7 +1247,6 @@ token 平均对数概率、平均负熵和自确定度在每个候选选择步�
 | --- | --- | --- |
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、FLOPs |
-| 有界权重精确提前停止 | 与完整有限 $`M,K`$ 选择逐步一致 | 声明/实测权重界、候选索引、跳过率、FLOPs |
 | i-SIR 增加更新轮次 $`n`$ | 奖励是运行期间固定的逐序列函数时，式 (8d) 按 $`n`$ 几何下降 | 候选池大小、更新数、复用状态数、FLOPs |
 | off-policy 补全 + 未截断 $`p/q`$ | 式 (7) 的条件奖励权重无偏 | 两侧对数概率、ESS、支持集 |
 | 截断对数重要性概率比 | 有偏稳定化估计 | 原始比值、实际使用的比值、截断次数 |
@@ -1768,12 +1606,13 @@ replay 与动态 IS 的最终内容补生成成本计入在线推理，并单列
 | 连续批处理 | `ContinuousBatchingBackend` | `max_batch_size`、`max_batch_tokens`、等待窗口 | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
 | 确定性重复评分缓存 | `ScoreCachingBackend` | 缓存容量、策略/前缀/补全键 | 命中数、未命中数、因容量限制删除的条目数、省略评分的 token 位置数 |
 
-logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录
+logit adjustment 当前只有第 6.2 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录
 候选集合构造、$`|\mathcal Z|`$、每候选 rollout 数、调整前后 logits、归一化概率和总补全成本。
 
 | 层 | 公共实现 | AR-LLM 适配 | dLLM 适配 | 主要测试 |
 | --- | --- | --- | --- | --- |
-| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py)、[`rqmc.py`](../../src/inference_scaling/experimental/shared/rqmc.py)、[`bounded_selection.py`](../../src/inference_scaling/experimental/shared/bounded_selection.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_rqmc.py`、`test_bounded_selection.py`、`dllm/test_algorithms.py` |
+| 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_conditional_is.py`、`dllm/test_algorithms.py` |
+| 归档实现 | [说明](../../src/inference_scaling/archive/README.md) | [`block_conditional_is.py`](../../src/inference_scaling/archive/arllm/block_conditional_is.py) | — | `archive/test_block_conditional_is.py` |
 | 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | — | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/algorithms/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
 | 动态候选与预算 | [`budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
@@ -1800,8 +1639,8 @@ logit adjustment 当前只有第 6.4 节的算法定义，没有对应函数、C
 | 方案 | 比较对象 | 观察与采用条件 |
 | --- | --- | --- |
 | 多轮 i-SIR | 普通条件 IS、相同候选-rollout 状态预算的一次性大池 | 额外轮次的质量—成本收益不足，保持显式可选 |
-| Sobol 与算术格点 rollout | 相同候选数与 rollout 数的 IID | 部分权重离散度下降，准确率未提高，墙钟与 FLOPs 略增；默认 IID |
-| 有界精确提前停止 | 完成全部 rollout | 成对输出一致，跳过的补全未抵消额外批次与前缀预填充；默认关闭 |
+| Sobol 与算术格点 rollout | 相同候选数与 rollout 数的 IID | 部分权重离散度下降，准确率未提高，墙钟与 FLOPs 略增；已删除，最后见于提交 `642f617` |
+| 有界精确提前停止 | 完成全部 rollout | 成对输出一致，跳过的补全未抵消额外批次与前缀预填充；已删除，最后见于提交 `642f617` |
 | 0.5B 草稿模型推测解码 | 1.5B 普通生成 | 草稿接受率较高，但验证与小模型成本使墙钟和总 FLOPs 增加；默认关闭 |
 | 历史 token 树及无条件历史树 | 普通自回归 rollout | 验证成本增加，墙钟收益不稳定；按请求命中率单独评估 |
 | 初始样本后再分配 rollout | 固定 rollout 数 | 初始估计与额外调用增加墙钟和 FLOPs；保持显式可选 |

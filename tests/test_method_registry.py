@@ -32,3 +32,15 @@ def test_method_requirements_are_explicit():
         "dllm", "conditional_is_reduced_layer_proposal"
     ).requires_proposal
     assert method_spec("dllm", "vrpo_sample").requires_adapter
+
+
+def test_archived_methods_are_selected_only_by_name():
+    from experiments.arllm.gsm8k_reproduction import METHODS
+    from experiments.shared.methods import AR_ARCHIVED_METHODS
+
+    assert {"block_conditional_is", "verifier_block_conditional_is"} <= set(AR_ARCHIVED_METHODS)
+    for name in ("block_conditional_is", "verifier_block_conditional_is"):
+        assert method_spec("arllm", name).components == frozenset()
+    assert method_spec("arllm", "conditional_is_small_proposal").archived
+    assert not method_spec("arllm", "conditional_is").archived
+    assert set(AR_ARCHIVED_METHODS) <= set(METHODS)

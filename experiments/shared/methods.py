@@ -13,6 +13,9 @@ class MethodSpec:
     requires_proposal: bool = False
     requires_adapter: bool = False
     paired: bool = True
+    # Superseded implementation kept in inference_scaling.archive to reproduce
+    # reported results; it is selected only by name.
+    archived: bool = False
 
 
 def _spec(
@@ -22,6 +25,7 @@ def _spec(
     requires_proposal: bool = False,
     requires_adapter: bool = False,
     paired: bool = True,
+    archived: bool = False,
 ) -> MethodSpec:
     return MethodSpec(
         family=family,
@@ -30,6 +34,7 @@ def _spec(
         requires_proposal=requires_proposal,
         requires_adapter=requires_adapter,
         paired=paired,
+        archived=archived,
     )
 
 
@@ -49,18 +54,21 @@ METHOD_SPECS = (
         "is_passk",
         "async",
         requires_proposal=True,
+        archived=True,
     ),
     _spec(
         "arllm",
         "conditional_is_small_proposal_unclipped",
         "is_passk",
         requires_proposal=True,
+        archived=True,
     ),
     _spec(
         "arllm",
         "conditional_is_small_proposal_uncorrected",
         "is_passk",
         requires_proposal=True,
+        archived=True,
     ),
     _spec("arllm", "verifier_mh", "quality", "matched_target", "distribution"),
     _spec(
@@ -77,7 +85,10 @@ METHOD_SPECS = (
         "matched_target",
         "distribution",
         requires_proposal=True,
+        archived=True,
     ),
+    _spec("arllm", "block_conditional_is", archived=True),
+    _spec("arllm", "verifier_block_conditional_is", archived=True),
     _spec(
         "arllm",
         "rl_sample",
@@ -189,6 +200,9 @@ AR_IS_PASSK_METHODS = methods_for("arllm", "is_passk")
 AR_ASYNC_METHODS = methods_for("arllm", "async")
 AR_DISTRIBUTION_METHODS = methods_for("arllm", "distribution")
 AR_DYNAMIC_METHODS = methods_for("arllm", "dynamic_is")
+AR_ARCHIVED_METHODS = tuple(
+    spec.name for spec in METHOD_SPECS if spec.family == "arllm" and spec.archived
+)
 AR_PAIRED_METHODS = tuple(
     spec.name
     for spec in METHOD_SPECS
@@ -202,6 +216,7 @@ DLLM_DYNAMIC_METHODS = methods_for("dllm", "dynamic_is")
 
 
 __all__ = [
+    "AR_ARCHIVED_METHODS",
     "AR_ASYNC_METHODS",
     "AR_DEFAULT_METHODS",
     "AR_DISTRIBUTION_METHODS",

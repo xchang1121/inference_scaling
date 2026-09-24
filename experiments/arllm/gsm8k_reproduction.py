@@ -37,7 +37,7 @@ from experiments.shared.artifacts import (
     json_fingerprint,
     load_jsonl,
 )
-from experiments.shared.methods import AR_METHODS
+from experiments.shared.methods import AR_ARCHIVED_METHODS, AR_METHODS
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.statistics import wilson_interval
 from inference_scaling.arllm.backends import (
@@ -50,7 +50,8 @@ from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.rewards.verifier import replace_verifier_from_file, verifier_spec_from_config
 
-METHODS = AR_METHODS
+# Archived methods stay runnable by name to reproduce reported results.
+METHODS = AR_METHODS + tuple(name for name in AR_ARCHIVED_METHODS if name not in AR_METHODS)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 # Files under src/inference_scaling and experiments/shared are hashed automatically.
 IMPLEMENTATION_FILES = (
@@ -259,40 +260,6 @@ def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
         config["conditional_is"]["candidate_count"] = args.candidate_count
     if args.rollout_count is not None:
         config["conditional_is"]["rollout_count"] = args.rollout_count
-    if getattr(args, "rollout_design", None) is not None:
-        if args.method == "iterated_conditional_is":
-            raise ValueError(
-                "--rollout-design is not implemented for iterated conditional IS"
-            )
-        config["conditional_is"]["rollout_design"] = args.rollout_design
-    if getattr(args, "exact_rollout_early_stop", False):
-        if args.method == "iterated_conditional_is":
-            raise ValueError(
-                "exact rollout early stopping is not implemented for iterated conditional IS"
-            )
-        lower = getattr(args, "rollout_log_weight_lower", None)
-        upper = getattr(args, "rollout_log_weight_upper", None)
-        if lower is None or upper is None:
-            raise ValueError(
-                "exact rollout early stopping requires lower and upper log-weight bounds"
-            )
-        config["conditional_is"]["exact_rollout_early_stop"] = True
-        config["conditional_is"]["rollout_log_weight_lower_bound"] = lower
-        config["conditional_is"]["rollout_log_weight_upper_bound"] = upper
-        config["conditional_is"]["rollout_evaluation_batch_size"] = int(
-            getattr(args, "rollout_evaluation_batch_size", None) or 1
-        )
-    elif any(
-        value is not None
-        for value in (
-            getattr(args, "rollout_log_weight_lower", None),
-            getattr(args, "rollout_log_weight_upper", None),
-            getattr(args, "rollout_evaluation_batch_size", None),
-        )
-    ):
-        raise ValueError(
-            "rollout bounds and evaluation batch size require --exact-rollout-early-stop"
-        )
     if getattr(args, "iterated_pool_size", None) is not None:
         config.setdefault("iterated_is", {})["pool_size"] = args.iterated_pool_size
     if getattr(args, "iterated_updates", None) is not None:
@@ -401,14 +368,6 @@ def main() -> None:
     )
     parser.add_argument("--candidate-count", type=int)
     parser.add_argument("--rollout-count", type=int)
-    parser.add_argument(
-        "--rollout-design",
-        choices=("iid", "scrambled_sobol", "arithmetic_lattice"),
-    )
-    parser.add_argument("--exact-rollout-early-stop", action="store_true")
-    parser.add_argument("--rollout-log-weight-lower", type=float)
-    parser.add_argument("--rollout-log-weight-upper", type=float)
-    parser.add_argument("--rollout-evaluation-batch-size", type=int)
     parser.add_argument("--iterated-pool-size", type=int)
     parser.add_argument("--iterated-updates", type=int)
     parser.add_argument("--consensus-pilot-samples", type=int)

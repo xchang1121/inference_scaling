@@ -1,4 +1,4 @@
-"""Block-only vs retained-sequence conditional IS vs whole-sequence SIR on math problems.
+"""Conditional IS vs its archived block variant vs whole-sequence SIR on math problems.
 
 No method is capped by a budget. Each record keeps the backend counters of what
 it spent: forward-token slots charge every request for its whole prefix, while
@@ -32,7 +32,7 @@ from inference_scaling.arllm.rewards.factory import MODEL_REWARD_SOURCES, model_
 from inference_scaling.shared.model.generation import generation_config_for_prompt
 from inference_scaling.shared.rng import SeedStream
 
-METHODS = ("sir", "block_is", "retained_is")
+METHODS = ("sir", "conditional_is", "block_conditional_is")
 
 
 def record_key(row: dict) -> tuple[str, str, str, str]:
@@ -93,7 +93,7 @@ def run(args) -> None:
     problems = selection[args.split][:args.limit]
     from experiments.arllm.assembly.runtime import validate_model_artifacts
     artifacts = validate_model_artifacts(config, ["base"])
-    manifest = {"protocol": "retained-is-comparison-v1", "config": config, "seed": args.seed,
+    manifest = {"protocol": "conditional-is-comparison-v1", "config": config, "seed": args.seed,
                 "data_sha256": file_sha256(args.data), "split": args.split,
                 "weight_sha256": artifacts["weight_sha256"], "metadata_sha256": artifacts["metadata_sha256"]}
     fingerprint = json_fingerprint(manifest)
@@ -141,15 +141,13 @@ def compare_problem(backend, judge, problem, config, args, fingerprint, done, si
             rewards, reward_costs = pool_rewards(backend, bounded, prompt, pool, source)
             rows += sir_curve(samples=pool, rewards=rewards, reward_costs=reward_costs, source=source,
                               temperature=temperature, seed=seed, counts=args.sir_counts)
-        for method in ("block_is", "retained_is"):
-            sweeps = args.sweeps if method == "retained_is" else None
-            setting = (f"M={args.candidates},K={args.rollouts},B={min(args.block_size, total_length)}"
-                       + (f",sweeps={sweeps}" if sweeps else ""))
+        setting = f"M={args.candidates},K={args.rollouts},B={min(args.block_size, total_length)}"
+        for method in ("conditional_is", "block_conditional_is"):
             if method in args.methods and (problem.identifier, method, source, setting) not in done:
                 rows.append(compare_conditional(backend=backend, judge=judge, prompt=prompt, reference=problem.answer,
                     config=bounded, source=source, temperature=temperature, seed=seed, render_output=visible_output,
                     candidates=args.candidates, rollouts=args.rollouts, block_size=args.block_size,
-                    total_length=total_length, sweeps=sweeps))
+                    total_length=total_length, block=method == "block_conditional_is"))
         for row in rows:
             row.update(identity)
             if record_key(row) in done:
@@ -171,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("configs/qwen3_math.toml"))
     parser.add_argument("--data", type=Path, default=Path("data/math500/test.jsonl"))
-    parser.add_argument("--output", type=Path, default=Path("results/qwen3_retained_is"))
+    parser.add_argument("--output", type=Path, default=Path("results/qwen3_conditional_is"))
     parser.add_argument("--split", choices=("development", "test"), default="test")
     parser.add_argument("--stage", choices=("compare", "summarize"), default="compare")
     parser.add_argument("--limit", type=_positive_integer, help="use the first N problems in the fixed split order")
@@ -183,7 +181,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidates", type=_positive_integer, default=4, help="candidate blocks per step (M)")
     parser.add_argument("--rollouts", type=_positive_integer, default=1, help="completions per candidate (K)")
     parser.add_argument("--block-size", type=_positive_integer, default=4096, help="block length in tokens (B)")
-    parser.add_argument("--sweeps", type=_positive_integer, default=1, help="retained-sequence passes over the blocks")
     add_model_output_arguments(parser, exclude={"--proposal-model", "--mh-iterations", "--thinking-mode"})
     return parser
 

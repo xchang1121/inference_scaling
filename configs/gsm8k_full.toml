@@ -75,10 +75,12 @@ suffix_schedule = "uniform"
 [conditional_is]
 candidate_count = 15
 rollout_count = 3
-rollout_design = "iid"
 block_size = 128
 reward_temperature = 0.1
-reward = "self_consistency"
+# Conditional IS reuses the reward of its kept sequence, so it needs a fixed reward.
+reward = "frozen_consensus"
+# Reward of the archived block_* methods, as used by the reported runs.
+block_reward = "self_consistency"
 logprob_reward_scale = 1.0
 consilience_top_k = 5
 consilience_window_fraction = 0.2

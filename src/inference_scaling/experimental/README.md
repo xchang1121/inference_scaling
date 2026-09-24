@@ -7,7 +7,7 @@
 - 动态候选、逐轮 i-SIR、初始估计与最终估计分离的 IS、SMC 多树搜索和流式 IS；
 - 联合调整候选数、补全数与块长的 IS 执行器，使用独立初始样本和完成预算预留；规划器与成本模型位于
   `inference_scaling.shared.budget`；
-- 有界提前停止、随机化 QMC rollout 设计和逐轮 SIR 公共算子；
+- 逐轮 SIR 公共算子；
 - Qwen2.5-0.5B 草稿模型的精确推测解码实验实现。
 
 算法原理、使用约束和非默认方案的简要记录集中在[算法文档](../../../docs/methods/ALGORITHMS.md#alg-nondefault-notes)。

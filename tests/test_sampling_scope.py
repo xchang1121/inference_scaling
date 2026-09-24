@@ -154,13 +154,17 @@ def test_passk_adapter_preserves_token_format_and_confidence_scoring():
     assert reward((3,), (0, 1, 0, 2)) == -2.0
 
 
-def test_thinking_scope_reports_full_fallback_for_final_content_rewards():
+@pytest.mark.parametrize(
+    "method,reward",
+    [("conditional_is", "frozen_consensus"), ("block_conditional_is", "self_consistency")],
+)
+def test_thinking_scope_reports_full_fallback_for_final_content_rewards(method, reward):
     config = {
         "output": {"sampling_scope": "thinking"}, "generation": {"max_new_tokens": 6},
-        "conditional_is": {"reward": "self_consistency", "candidate_count": 2, "rollout_count": 1, "block_size": 2},
+        "conditional_is": {"reward": reward, "candidate_count": 2, "rollout_count": 1, "block_size": 2},
     }
     problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, info = run_method("conditional_is", _Backend(), problem, (3,), config, SeedStream(1), None)
+    tokens, info = run_method(method, _Backend(), problem, (3,), config, SeedStream(1), None)
     assert _Backend().decode(tokens) == "77"
     assert info["output_segments"]["sampling_scope"] == "full"
     assert info["output_segments"]["sampling_fallback_reason"] == "reward_uses_full_sequence"

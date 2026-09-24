@@ -84,79 +84,24 @@ class RewardMHConfig:
 
 @dataclass(frozen=True, slots=True)
 class ConditionalISConfig:
+    """Conditional IS on a kept complete sequence (see ``conditional_is``).
+
+    Completions are both weight estimates and candidate answers, so one or two
+    per candidate usually suffice; the budget is better spent on candidates.
+    """
+
     candidate_count: int = 4
     rollout_count: int = 4
     block_size: int = 16
     total_length: int = DEFAULT_MAX_NEW_TOKENS
     reward_temperature: float = 1.0
-    importance_log_ratio_clip: float | None = None
-    apply_importance_correction: bool = True
-    rollout_design: str = "iid"
-    exact_rollout_early_stop: bool = False
-    rollout_log_weight_bounds: tuple[float, float] | None = None
-    rollout_evaluation_batch_size: int = 1
-    # Keep a complete sequence between steps (see conditional_is); sweeps
-    # restart the block cuts from the prompt with that sequence kept.
-    retain_sequence: bool = False
-    sweeps: int = 1
 
     def __post_init__(self) -> None:
-        for name in ("candidate_count", "rollout_count", "block_size", "total_length", "sweeps"):
+        for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             require_positive(name, getattr(self, name))
-        if self.sweeps > 1 and not self.retain_sequence:
-            raise ValueError("sweeps > 1 requires retain_sequence=True")
-        if self.retain_sequence and (
-            self.rollout_design != "iid" or self.exact_rollout_early_stop
-        ):
-            raise ValueError(
-                "retain_sequence requires iid rollouts without exact early stopping"
-            )
         require_positive("reward_temperature", self.reward_temperature)
-        if self.importance_log_ratio_clip is not None:
-            require_positive(
-                "importance_log_ratio_clip",
-                self.importance_log_ratio_clip,
-            )
-        if (
-            not self.apply_importance_correction
-            and self.importance_log_ratio_clip is not None
-        ):
-            raise ValueError(
-                "importance_log_ratio_clip requires apply_importance_correction=True"
-            )
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
-        if self.rollout_design not in {
-            "iid",
-            "scrambled_sobol",
-            "arithmetic_lattice",
-        }:
-            raise ValueError("unknown rollout_design")
-        require_positive(
-            "rollout_evaluation_batch_size",
-            self.rollout_evaluation_batch_size,
-        )
-        if self.rollout_log_weight_bounds is not None:
-            if len(self.rollout_log_weight_bounds) != 2:
-                raise ValueError("rollout_log_weight_bounds requires two values")
-            lower, upper = self.rollout_log_weight_bounds
-            require_finite("rollout_log_weight_lower_bound", lower)
-            require_finite("rollout_log_weight_upper_bound", upper)
-            if lower > upper:
-                raise ValueError("rollout log-weight bounds must be ordered")
-        if self.exact_rollout_early_stop:
-            if self.rollout_log_weight_bounds is None:
-                raise ValueError(
-                    "exact rollout early stopping requires log-weight bounds"
-                )
-            if self.rollout_design != "iid":
-                raise ValueError(
-                    "exact rollout early stopping currently requires iid rollouts"
-                )
-        elif self.rollout_log_weight_bounds is not None:
-            raise ValueError(
-                "rollout_log_weight_bounds require exact_rollout_early_stop=True"
-            )
 
 
 @dataclass(frozen=True, slots=True)

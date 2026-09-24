@@ -46,6 +46,10 @@ from inference_scaling.arllm.rewards.factory import (
 from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
+from inference_scaling.archive.arllm.block_conditional_is import (
+    BlockConditionalISConfig,
+    run_block_conditional_is,
+)
 from inference_scaling.experimental.arllm.iterated_is import run_iterated_conditional_is
 from inference_scaling.shared.evaluation import (
     GSM8KProblem,
@@ -66,7 +70,37 @@ CONDITIONAL_METHODS = frozenset({
     "conditional_is_small_proposal",
     "verifier_conditional_is",
     "verifier_conditional_is_small_proposal",
+    "block_conditional_is",
+    "verifier_block_conditional_is",
 })
+# Methods whose reported results came from the archived block conditional IS.
+ARCHIVED_CONDITIONAL_METHODS = frozenset({
+    "block_conditional_is",
+    "verifier_block_conditional_is",
+    "conditional_is_small_proposal",
+    "verifier_conditional_is_small_proposal",
+})
+# Archived methods draw with the seeds of the names their results were reported under.
+REPORTED_NAMES = {
+    "block_conditional_is": "conditional_is",
+    "verifier_block_conditional_is": "verifier_conditional_is",
+}
+# Rewards that depend on the other sequences scored with them.  Mainline
+# conditional IS reuses the reward of its kept sequence, which needs a fixed
+# per-sequence reward; the archived block variant still accepts these.
+BATCH_DEPENDENT_SOURCES = frozenset({"self_consistency", *NORMALIZED_CONFIDENCE_SOURCES})
+
+
+def conditional_reward_source(config: dict[str, Any], method: str) -> str:
+    """Reward of a conditional method; archived methods keep their reported default."""
+    if method.startswith("verifier_"):
+        return "verifier"
+    if method == "iterated_conditional_is":
+        return str(config.get("iterated_is", {}).get("reward", "frozen_consensus"))
+    table = config.get("conditional_is", {})
+    if method in ARCHIVED_CONDITIONAL_METHODS:
+        return str(table.get("block_reward", table.get("reward", "self_consistency")))
+    return str(table.get("reward", "frozen_consensus"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,20 +300,6 @@ def conditional_diagnostics(result: Any) -> Diagnostics:
             )
             for step in result.steps
         ),
-        "rollout_evaluations_skipped": sum(
-            int(getattr(step, "rollout_evaluations_skipped", 0))
-            for step in result.steps
-        ),
-        "rollout_evaluation_batches": sum(
-            int(getattr(step, "rollout_evaluation_batches", 1)) for step in result.steps
-        ),
-        "exact_early_stop_steps": sum(
-            bool(getattr(step, "exact_early_stop", False)) for step in result.steps
-        ),
-        "selection_invariant_verified_steps": sum(
-            bool(getattr(step, "selection_invariant_verified", False))
-            for step in result.steps
-        ),
         "mean_rollout_ess": statistics.fmean(ess) if ess else 0.0,
         "mean_within_candidate_log_weight_dispersion": (
             statistics.fmean(within_candidate_log_weight_dispersion)
@@ -292,16 +312,6 @@ def conditional_diagnostics(result: Any) -> Diagnostics:
         ],
         "candidate_token_ids_by_step": [
             [candidate.token_ids for candidate in step.candidates]
-            for step in result.steps
-        ],
-        "candidate_log_weight_intervals_by_step": [
-            [
-                [
-                    candidate.log_weight_lower_bound,
-                    candidate.log_weight_upper_bound,
-                ]
-                for candidate in step.candidates
-            ]
             for step in result.steps
         ],
         "selected_candidate_indices": [step.selected_index for step in result.steps],
@@ -373,17 +383,8 @@ def importance_log_ratio_clip(table: dict[str, Any], method: str) -> float | Non
     return None
 
 
-def rollout_log_weight_bounds(table: dict[str, Any]) -> tuple[float, float] | None:
-    if not bool(table.get("exact_rollout_early_stop", False)):
-        return None
-    return (
-        float(table["rollout_log_weight_lower_bound"]),
-        float(table["rollout_log_weight_upper_bound"]),
-    )
-
-
 def conditional_is_config(
-    table: dict[str, Any], *, method: str, maximum: int, reward_temperature: float,
+    table: dict[str, Any], *, maximum: int, reward_temperature: float,
 ) -> ConditionalISConfig:
     return ConditionalISConfig(
         candidate_count=int(table["candidate_count"]),
@@ -391,14 +392,20 @@ def conditional_is_config(
         block_size=int(table["block_size"]),
         total_length=maximum,
         reward_temperature=reward_temperature,
+    )
+
+
+def block_conditional_is_config(
+    table: dict[str, Any], *, method: str, maximum: int, reward_temperature: float,
+) -> BlockConditionalISConfig:
+    return BlockConditionalISConfig(
+        candidate_count=int(table["candidate_count"]),
+        rollout_count=int(table["rollout_count"]),
+        block_size=int(table["block_size"]),
+        total_length=maximum,
+        reward_temperature=reward_temperature,
         importance_log_ratio_clip=importance_log_ratio_clip(table, method),
         apply_importance_correction=bool(table.get("apply_importance_correction", True)),
-        rollout_design=str(table.get("rollout_design", "iid")),
-        exact_rollout_early_stop=bool(table.get("exact_rollout_early_stop", False)),
-        rollout_log_weight_bounds=rollout_log_weight_bounds(table),
-        rollout_evaluation_batch_size=int(table.get("rollout_evaluation_batch_size", 1)),
-        retain_sequence=bool(table.get("retain_sequence", False)),
-        sweeps=int(table.get("sweeps", 1)),
     )
 
 
@@ -552,17 +559,16 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
             raise ValueError("small-proposal method requires a proposal model")
         rollout_backend = run.proposal_backend
     use_matched_target = method.startswith("verifier_")
-    reward_source = (
-        "verifier"
-        if use_matched_target
-        else str(
-            iterated.get("reward", "frozen_consensus")
-            if method == "iterated_conditional_is"
-            else conditional.get("reward", "self_consistency")
-        )
-    )
+    reward_source = conditional_reward_source(config, method)
     if reward_source not in REWARD_SOURCES:
         raise ValueError(f"unknown reward source {reward_source!r}")
+    mainline = method != "iterated_conditional_is" and method not in ARCHIVED_CONDITIONAL_METHODS
+    if mainline and reward_source in BATCH_DEPENDENT_SOURCES:
+        raise ValueError(
+            f"{method} reuses the reward of its kept sequence, so it needs a fixed per-sequence "
+            f"reward; {reward_source!r} depends on the other scored sequences. Use frozen_consensus, "
+            "verifier, consilience or sequence_log_probability; block_conditional_is keeps batch rewards."
+        )
     target_sampling_temperature = 1.0 if use_matched_target else run.sampling_temperature
     reward_temperature = (
         float(config["matched_target"]["reward_temperature"])
@@ -602,11 +608,11 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
             rollout_sampling=base_sampling,
             reward_batch=reward.batch,
         )
-    else:
-        result = run_conditional_is(
+    elif method in ARCHIVED_CONDITIONAL_METHODS:
+        result = run_block_conditional_is(
             cached_base,
             run.prompt,
-            conditional_is_config(
+            block_conditional_is_config(
                 conditional, method=method, maximum=run.maximum, reward_temperature=reward_temperature,
             ),
             reward.pointwise,
@@ -616,35 +622,24 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
             rollout_sampling=base_sampling,
             reward_batch=reward.batch,
         )
+    else:
+        result = run_conditional_is(
+            cached_base,
+            run.prompt,
+            conditional_is_config(conditional, maximum=run.maximum, reward_temperature=reward_temperature),
+            reward.pointwise,
+            SeedStream(run.seed),
+            sampling=base_sampling,
+            reward_batch=reward.batch,
+        )
     diagnostics = conditional_diagnostics(result)
     if reward_source == "consilience":
         assert isinstance(reward.model_reward, ConsilienceReward)
         reward.diagnostics["reward_scope_counts"] = reward.model_reward.scope_statistics()
     diagnostics.update(reward.diagnostics)
-    diagnostics["rollout_design"] = (
-        "iid"
-        if method == "iterated_conditional_is"
-        else str(conditional.get("rollout_design", "iid"))
-    )
-    diagnostics["rollout_ess_is_descriptive"] = diagnostics["rollout_design"] != "iid"
     diagnostics["configured_candidate_count"] = int(conditional["candidate_count"])
     diagnostics["configured_rollout_count"] = int(conditional["rollout_count"])
     diagnostics["configured_block_size"] = int(conditional["block_size"])
-    if bool(conditional.get("retain_sequence", False)):
-        diagnostics["configured_retain_sequence"] = True
-        diagnostics["configured_sweeps"] = int(conditional.get("sweeps", 1))
-        diagnostics["retained_block_kept_steps"] = sum(
-            getattr(step, "retained_candidate", False) and step.selected_index == 0
-            for step in result.steps
-        )
-    diagnostics["exact_rollout_early_stop_enabled"] = bool(
-        conditional.get("exact_rollout_early_stop", False)
-    )
-    diagnostics["rollout_evaluation_batch_size"] = int(
-        conditional.get("rollout_evaluation_batch_size", 1)
-    )
-    bounds = rollout_log_weight_bounds(conditional)
-    diagnostics["declared_rollout_log_weight_bounds"] = list(bounds) if bounds is not None else None
     if method == "iterated_conditional_is":
         diagnostics.update(
             {
@@ -685,6 +680,10 @@ def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
         reward.verifier is not None and reward.verifier.verifier.spec.requires_reference
     )
     diagnostics["uses_matched_reward_temperature"] = use_matched_target
+    if mainline:
+        diagnostics["retained_block_kept_steps"] = sum(
+            step.retained_candidate and step.selected_index == 0 for step in result.steps
+        )
     return result.token_ids, diagnostics
 
 
@@ -710,7 +709,7 @@ def run_method_impl(
         method, backend, problem, prompt, config, seeds, proposal_backend,
         maximum=int(config["generation"]["max_new_tokens"]),
         sampling_temperature=float(config.get("sampling", {}).get("temperature", 1.0)),
-        seed=seeds.derive(method, problem.index),
+        seed=seeds.derive(REPORTED_NAMES.get(method, method), problem.index),
     )
     runner = RUNNERS.get(method)
     if runner is None:
@@ -733,16 +732,12 @@ def run_method(
     source = config.get("reward", {}).get("source")
     if source is not None:
         config.setdefault("conditional_is", {})["reward"] = source
+        config["conditional_is"]["block_reward"] = source
         config.setdefault("iterated_is", {})["reward"] = source
     scoped_algorithm = method in SCOPED_METHODS or "conditional_is" in method
     scope = SamplingScope.from_config(backend, config, active=scoped_algorithm).for_prompt(prompt)
     if scope.scope == "thinking" and method != "mh":
-        source = (
-            "verifier" if method.startswith("verifier_") else
-            config.get("iterated_is", {}).get("reward", "frozen_consensus")
-            if method == "iterated_conditional_is" else
-            config.get("conditional_is", {}).get("reward", "self_consistency")
-        )
+        source = conditional_reward_source(config, method)
         if source not in MODEL_REWARD_SOURCES and config.get("reward", {}).get("input_scope") != "thinking":
             scope = scope.full_fallback("reward_uses_full_sequence")
         elif source == "consilience" and config.get("reward", {}).get("consilience", {}).get("scope") == "full":
@@ -757,7 +752,7 @@ def run_method(
     tokens, output = scope.finish(
         backend, prompt, tokens, max_new_tokens=maximum,
         sampling=SamplingConfig(temperature=temperature, eos_token_id=backend.tokenizer.eos_token_id),
-        seed=seeds.derive(method, problem.index, "final-content"),
+        seed=seeds.derive(REPORTED_NAMES.get(method, method), problem.index, "final-content"),
     )
     diagnostics["generation_budget"] = length_budget
     diagnostics["output_segments"] = output

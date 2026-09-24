@@ -40,12 +40,18 @@ SUBPACKAGES = {
     "shared": ("budget", "evaluation", "model", "rewards", "sampling"),
     "arllm": ("acceleration", "algorithms", "backends", "rewards"),
     "dllm": ("algorithms", "backends", "training"),
+    "archive": ("arllm",),
 }
 # Lower layers never import the layers built on them.
 FORBIDDEN_IMPORTS = {
     "inference_scaling.shared": (
         "inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.experimental",
+        "inference_scaling.archive",
     ),
+    # Archived methods are reached only by name from experiment assembly.
+    "inference_scaling.arllm": ("inference_scaling.archive",),
+    "inference_scaling.dllm": ("inference_scaling.archive",),
+    "inference_scaling.experimental": ("inference_scaling.archive",),
     "inference_scaling.arllm.acceleration": (
         "inference_scaling.arllm.algorithms", "inference_scaling.arllm.backends",
         "inference_scaling.arllm.rewards",

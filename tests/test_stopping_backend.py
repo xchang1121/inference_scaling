@@ -66,10 +66,9 @@ def test_terminal_prefix_is_forced_padding_without_model_calls():
 def test_is_and_mh_use_the_same_stopped_backend_contract():
     backend = _backend()
     result = run_conditional_is(
-        base_backend=backend, rollout_backend=backend, prompt=(),
-        config=ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2),
-        base_sampling=SamplingConfig(eos_token_id=2), rollout_sampling=SamplingConfig(eos_token_id=2),
-        reward=lambda prompt, sequence: float(sequence[0] == 0), seeds=SeedStream(7),
+        backend, (), ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2),
+        lambda prompt, sequence: float(sequence[0] == 0), SeedStream(7),
+        sampling=SamplingConfig(eos_token_id=2),
     )
     mh = run_mh_chain(
         backend, (), MHConfig(total_length=4, block_size=2, steps_per_block=2),

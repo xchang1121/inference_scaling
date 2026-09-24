@@ -40,7 +40,7 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
 | --- | --- | --- | --- |
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散块，再按 Hastings 比接受或拒绝 | 提议分布（proposal）的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/sampling/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
-| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | 为下一个生成块产生候选，用 rollout 估计条件奖励权重后重采样；可选[保留完整序列](docs/methods/ALGORITHMS.md#alg-retained-is) | 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
+| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | AR：保留一条完整答案，在其块边界产生候选与完整补全，按全序列奖励选一整条后缀；dLLM：逐块重采样 | AR 只用同模型补全；dLLM 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/algorithms/replay.py) |
 | [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
 | [联合预算 IS](docs/methods/BUDGET.md#budget-joint) | 按当前前缀与剩余预算选择候选数、补全数、块长 | 首版使用同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/experimental/arllm/joint_budget_is.py)、[CLI](experiments/arllm/joint_budget_is.py) |
@@ -419,20 +419,21 @@ Qwen3-1.7B 的 RTX 3090 检查中，8,192 token 前缀后固定生成 512 token�
 平均时间从 18.89 秒降至 17.56 秒（1.076 倍）；生成 token、逐 token 概率和模型计算量完全一致。
 此数值仅对应缓存专项检查，完整质量比较的速度收益取决于实际生成长度。
 
-### 分块条件 IS 与整序列 SIR 的比较
+### 条件 IS、分块版本与整序列 SIR 的比较
 
-[`retained_is_comparison`](experiments/arllm/retained_is_comparison.py) 在同一 MATH-500 子集上比较标准条件 IS、
-[保留完整序列的条件 IS](docs/methods/ALGORITHMS.md#alg-retained-is) 与整序列 SIR。三者都不设预算上限，每条记录
+[`conditional_is_comparison`](experiments/arllm/conditional_is_comparison.py) 在同一 MATH-500 子集上比较
+[条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is)、它取代的[分块版本](src/inference_scaling/archive/README.md)
+（`block_conditional_is`）与整序列 SIR。三者都不设预算上限，每条记录
 保存后端的实际计数：前向 token 位置数对每个请求重复计入其完整前缀；新生成 token 数只计新 token，更接近复用前缀
-缓存的运行。不同大小的 SIR 使用同一题共享样本池的前 N 条；两种分块方法使用相同的随机种子，作成对比较。
+缓存的运行。不同大小的 SIR 使用同一题共享样本池的前 N 条；条件 IS 与分块版本使用相同的随机种子，作成对比较。
 
 ```powershell
-python -m experiments.arllm.retained_is_comparison `
+python -m experiments.arllm.conditional_is_comparison `
   --split test --limit 30 --config configs/qwen3_math.toml `
   --model Qwen/Qwen3-1.7B --model-revision 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e --allow-download `
-  --max-new-tokens 16384 --candidates 4 --rollouts 1 --block-size 4096 --sweeps 1 `
-  --sir-counts 1 2 4 8 16 --output results/qwen3_retained_is
-python -m experiments.arllm.retained_is_comparison --stage summarize --output results/qwen3_retained_is
+  --max-new-tokens 16384 --candidates 4 --rollouts 1 --block-size 4096 `
+  --sir-counts 1 2 4 8 16 --output results/qwen3_conditional_is
+python -m experiments.arllm.conditional_is_comparison --stage summarize --output results/qwen3_conditional_is
 ```
 
 `--rewards` 可选 `consilience`（默认）与 `sequence_log_probability`。后者在 SIR 中直接使用采样时返回的对数概率，
@@ -457,6 +458,7 @@ python -m pytest
 | `src/inference_scaling/shared/rewards/` | 奖励：外部 verifier 接口与 Consilience 置信度窗口算术 |
 | `src/inference_scaling/shared/` | 以上子包及数据评测（`evaluation/`）、配置校验、随机数和计算量记录 |
 | `src/inference_scaling/experimental/` | 保留但不由默认入口导入或调度的研究实现 |
+| `src/inference_scaling/archive/` | 已被主线取代、只为复现已报告结果而保留的实现，按方法名显式运行，见其 [README](src/inference_scaling/archive/README.md) |
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/shared/` | 两侧共用的组件清单、统计量、配置标识、可续跑调度和结果文件管理 |
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本，目录内只放命令行入口 |

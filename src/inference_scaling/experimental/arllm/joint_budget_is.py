@@ -1,7 +1,9 @@
-"""Joint M/K/block scheduling over the existing on-policy conditional IS kernel.
+"""Joint M/K/block scheduling over the conditional IS kernel.
 
 This module only samples: it runs pilots and production IS steps and keeps the
-budget ledger. Plans come from :mod:`inference_scaling.shared.budget.planners`
+budget ledger. Each production step is a conditional IS step on the kept
+complete sequence, so the carried block and its reused completion cost nothing
+again; pilots evaluate fresh candidates at the current cut and are discarded. Plans come from :mod:`inference_scaling.shared.budget.planners`
 and planned costs from :mod:`inference_scaling.shared.budget.costs`.
 
 Budget units are forward-token slots, including an explicit reward
@@ -16,15 +18,19 @@ than planned when its completions run longer than expected.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import ceil, isfinite
 
 from inference_scaling.arllm.algorithms.conditional_is import (
+    ConditionalCandidate,
     ConditionalISStep,
+    RetainedSequence,
     RewardFunction,
     conditional_is_step,
+    estimate_conditional_weights,
 )
-from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
+from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
@@ -138,14 +144,24 @@ class JointBudgetISResult:
 
 
 def realized_cost(
-    step: ConditionalISStep, *, prefix_length: int, reward_forward_passes: int
+    candidates: Sequence[ConditionalCandidate],
+    *,
+    prefix_length: int,
+    reward_forward_passes: int,
+    carried: bool = False,
 ) -> int:
-    """Forward-token slots a step used: cold prefixes, decoded tokens and scoring."""
+    """Forward-token slots a step used: cold prefixes, decoded tokens and scoring.
+
+    With ``carried``, candidate 0 and its first completion come from the kept
+    sequence, so neither is charged again.
+    """
     total = 0
-    for candidate in step.candidates:
+    for index, candidate in enumerate(candidates):
         block = prefix_length + len(candidate.token_ids)
-        total += block
-        for rollout in candidate.rollouts:
+        reused = carried and index == 0
+        if not reused:
+            total += block
+        for rollout in candidate.rollouts[int(reused):]:
             sequence = block + len(rollout.token_ids)
             total += (sequence if rollout.token_ids else 0) + reward_forward_passes * sequence
     return total
@@ -160,16 +176,16 @@ def run_joint_budget_is(
     *,
     sampling: SamplingConfig | None = None,
 ) -> JointBudgetISResult:
-    """Replan at each prefix; pilots never supply production candidates/weights.
+    """Replan at each cut of the kept sequence; pilots never supply production candidates/weights.
 
     Full-horizon planning includes a complete-to-EOS option. Adaptive chunks
     complete only at the output limit or when the incumbent chunk plus the
     completion reserve no longer fits the remaining budget; completing the
     sequence is never refused. Without ``expected_output_tokens`` one plain
     completion from the prompt measures the initial length estimate; each later
-    estimate is the mean length of the previous step's rollouts. A budget that
-    cannot cover the completion reserve raises, before any backend or reward
-    call when the estimate is given. Only fixed pointwise rewards and
+    estimate is the mean length of the new rollouts of the previous step. A
+    budget that cannot cover the completion reserve raises, before any backend
+    or reward call when the estimate is given. Only fixed pointwise rewards and
     full-support on-policy sampling are supported.
     """
     sampling = sampling or SamplingConfig()
@@ -210,7 +226,7 @@ def run_joint_budget_is(
         expected = max(1, len(probe.token_ids))
         probe_cost = prompt_length + len(probe.token_ids)
         require_budget(probe_cost, expected)
-    generated: TokenSequence = ()
+    state = RetainedSequence()
     steps: list[JointBudgetStep] = []
     remaining_budget = config.forward_token_budget - probe_cost
     pilot_costs: list[int] = []
@@ -220,41 +236,15 @@ def run_joint_budget_is(
         else FullHorizonPlanner(config)
     )
 
-    def evaluate(
-        block: int, candidates: int, rollouts: int, phase: str
-    ) -> ConditionalISStep:
+    def step_seeds(block: int, phase: str) -> SeedStream:
         # A block reaching the output limit completes the sequence; its seed key
         # omits the limit so completions do not depend on it.
-        key = block if len(generated) + block < config.total_length else "rest"
-        return conditional_is_step(
-            base_backend=backend,
-            rollout_backend=backend,
-            prompt=prompt,
-            generated_prefix=generated,
-            config=ConditionalISConfig(
-                candidate_count=candidates,
-                rollout_count=max(1, rollouts),
-                block_size=block,
-                total_length=config.total_length,
-                reward_temperature=config.reward_temperature,
-            ),
-            base_sampling=sampling,
-            rollout_sampling=sampling,
-            reward=reward,
-            seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), phase, key)),
-            step_index=len(steps),
-        )
-
-    def cost_of(step: ConditionalISStep) -> int:
-        return realized_cost(
-            step,
-            prefix_length=prompt_length + len(generated),
-            reward_forward_passes=config.reward_forward_passes,
-        )
+        key = block if state.fixed + block < config.total_length else "rest"
+        return SeedStream(seeds.derive("joint_budget_is", len(steps), phase, key))
 
     def estimate_block(block: int) -> BlockBudgetEstimate:
         candidate_cost, rollout_cost = block_costs(
-            prompt_length=prompt_length, generated_length=len(generated),
+            prompt_length=prompt_length, generated_length=state.fixed,
             total_length=config.total_length, block_size=block,
             reward_forward_passes=config.reward_forward_passes,
             expected_remaining=expected,
@@ -265,64 +255,104 @@ def run_joint_budget_is(
         )
 
     def measure(estimate: BlockBudgetEstimate) -> WeightMoments | None:
-        pilot = evaluate(estimate.block_size, config.pilot_candidates, config.pilot_rollouts, "pilot")
-        pilot_costs.append(cost_of(pilot))
-        weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot.candidates]
+        # Pilots evaluate fresh candidates at the current cut and are then discarded.
+        pilot_seeds = step_seeds(estimate.block_size, "pilot")
+        prefix = state.token_ids[: state.fixed]
+        block = min(estimate.block_size, config.total_length - state.fixed)
+        pilot = estimate_conditional_weights(
+            base_backend=backend,
+            rollout_backend=backend,
+            prompt=prompt,
+            generated_prefix=prefix,
+            candidates=sample_candidates(
+                backend, prompt + prefix, config.pilot_candidates, block, sampling, pilot_seeds, len(steps),
+            ),
+            rollout_length=config.total_length - state.fixed - block,
+            rollout_count=config.pilot_rollouts,
+            base_sampling=sampling,
+            rollout_sampling=sampling,
+            reward_temperature=config.reward_temperature,
+            importance_log_ratio_clip=None,
+            apply_importance_correction=True,
+            reward=reward,
+            seeds=pilot_seeds,
+            step_index=len(steps),
+        )
+        pilot_costs.append(realized_cost(
+            pilot, prefix_length=prompt_length + state.fixed,
+            reward_forward_passes=config.reward_forward_passes,
+        ))
+        weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot]
         if any(not isfinite(value) for group in weights for value in group):
             return None
         return estimate_weight_moments(weights, deterministic=[
             estimate.rollout_cost == 0 or (
                 sampling.eos_token_id is not None and candidate.token_ids[-1] == sampling.eos_token_id
-            ) for candidate in pilot.candidates
+            ) for candidate in pilot
         ])
 
-    while len(generated) < config.total_length:
-        remaining = config.total_length - len(generated)
-        finish_reserve = reserve(len(generated), expected)
+    while not state.token_ids or state.fixed < len(state.token_ids):
+        remaining = config.total_length - state.fixed
+        finish_reserve = reserve(state.fixed, expected)
         # Earlier overruns never block the completion: the planner always sees
         # at least the completion reserve.
-        state = PlanningState(
+        planning = PlanningState(
             remaining=remaining,
             budget=max(remaining_budget, finish_reserve),
             finish_reserve=finish_reserve,
             expected_remaining=min(expected, remaining),
         )
         pilot_costs.clear()
-        selection = planner.select(state, estimate_block, measure)
+        selection = planner.select(planning, estimate_block, measure)
         plan = selection.plan
-        evaluation = evaluate(
-            plan.block_size, plan.candidate_count, plan.rollout_count, "evaluation"
+        evaluation, kept = conditional_is_step(
+            backend=backend,
+            prompt=prompt,
+            state=state,
+            config=ConditionalISConfig(
+                candidate_count=plan.candidate_count,
+                rollout_count=max(1, plan.rollout_count),
+                block_size=plan.block_size,
+                total_length=config.total_length,
+                reward_temperature=config.reward_temperature,
+            ),
+            sampling=sampling,
+            reward=reward,
+            seeds=step_seeds(plan.block_size, "evaluation"),
+            step_index=len(steps),
         )
-        pilot_actual, actual = sum(pilot_costs), cost_of(evaluation)
+        pilot_actual = sum(pilot_costs)
+        actual = realized_cost(
+            evaluation.candidates, prefix_length=prompt_length + state.fixed,
+            reward_forward_passes=config.reward_forward_passes, carried=evaluation.retained_candidate,
+        )
         remaining_budget -= pilot_actual + actual
         steps.append(
             JointBudgetStep(
                 plan, selection.estimates, selection.pilot_reserved_cost, evaluation,
                 remaining_budget, selection.adjustment, pilot_actual, actual,
-                state.expected_remaining,
+                planning.expected_remaining,
             )
         )
         rollout_lengths = [
             len(rollout.token_ids)
-            for candidate in evaluation.candidates
-            for rollout in candidate.rollouts
+            for index, candidate in enumerate(evaluation.candidates)
+            for rollout in candidate.rollouts[int(evaluation.retained_candidate and index == 0):]
             if rollout.token_ids
         ]
         if rollout_lengths:
             expected = max(1, ceil(sum(rollout_lengths) / len(rollout_lengths)))
-        generated += evaluation.selected.token_ids
-        if sampling.eos_token_id is not None and sampling.eos_token_id in generated:
-            break
+        state = kept
     pilot_reserved = sum(step.pilot_reserved_cost for step in steps)
     pilot_actual_total = sum(step.pilot_actual_cost for step in steps)
     return JointBudgetISResult(
         prompt,
-        generated,
+        state.token_ids,
         tuple(steps),
         pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
         pilot_reserved,
         "eos"
-        if sampling.eos_token_id is not None and sampling.eos_token_id in generated
+        if sampling.eos_token_id is not None and sampling.eos_token_id in state.token_ids
         else "length",
         actual_forward_tokens=probe_cost + pilot_actual_total + sum(step.actual_cost for step in steps),
         pilot_actual_forward_tokens=pilot_actual_total,

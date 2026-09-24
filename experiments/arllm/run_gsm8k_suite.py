@@ -88,7 +88,9 @@ def main() -> None:
             "consilience",
             "verifier",
         )
-        reward_methods = ("conditional_is",)
+        # Batch-normalized rewards are accepted only by the archived block
+        # conditional IS, which is also what produced the reported sweep.
+        reward_methods = ("block_conditional_is",)
         temperatures = (0.7,)
         budget_beams = (4,)
         budget_samples = (4,)
@@ -108,9 +110,11 @@ def main() -> None:
             "consilience",
             "verifier",
         )
+        # Batch-normalized rewards are accepted only by the archived block
+        # conditional IS, which is also what produced the reported sweep.
         reward_methods = (
             "best_of_n",
-            "conditional_is",
+            "block_conditional_is",
             "conditional_is_small_proposal",
         )
         temperatures = (0.7, 1.5)

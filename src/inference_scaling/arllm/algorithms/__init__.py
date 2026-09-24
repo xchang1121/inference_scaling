@@ -13,11 +13,12 @@ from inference_scaling.arllm.algorithms.base_replay import (
     write_reserve_records,
 )
 from inference_scaling.arllm.algorithms.conditional_is import (
-    AutoregressiveStepwiseAdapter,
     ConditionalCandidate,
+    ConditionalISAdapter,
     ConditionalISResult,
     ConditionalISStep,
     RolloutEvaluation,
+    RetainedSequence,
     RewardBatchFunction,
     conditional_is_step,
     estimate_conditional_weights,
@@ -46,11 +47,11 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
 )
 
 __all__ = [
-    "AutoregressiveStepwiseAdapter",
     "BaseReplayCandidate",
     "BaseReplayResult",
     "BaseReplayStep",
     "ConditionalCandidate",
+    "ConditionalISAdapter",
     "ConditionalISResult",
     "ConditionalISStep",
     "FrozenReplaySuffixProposal",
@@ -65,6 +66,7 @@ __all__ = [
     "RewardMHChainResult",
     "RewardMHStep",
     "RolloutEvaluation",
+    "RetainedSequence",
     "RewardBatchFunction",
     "base_replay_step",
     "conditional_is_step",

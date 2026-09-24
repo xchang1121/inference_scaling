@@ -207,6 +207,19 @@ def test_real_driver_130k_cap_uses_initial_chunk_not_full_remaining():
     assert result.stopping_reason == "eos"
 
 
+def reused_cost(result, prompt_length, reward_passes):
+    """Planned cost of the kept block and completion, which a step does not pay again."""
+    total = 0
+    for step in result.steps:
+        if not step.evaluation.retained_candidate:
+            continue
+        candidate = step.evaluation.candidates[0]
+        block = prompt_length + step.evaluation.generated_length_before + len(candidate.token_ids)
+        kept = block + len(candidate.rollouts[0].token_ids)
+        total += block + (kept if candidate.rollouts[0].token_ids else 0) + reward_passes * kept
+    return total
+
+
 @pytest.mark.parametrize("reward_passes", [0, 1, 2])
 def test_real_driver_multichunk_and_completion_accounting(reward_passes):
     backend = RecordingBackend()
@@ -226,14 +239,19 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
         assert step.plan.forecast_steps == 1
         if step.adjustment["status"] != "finish":
             assert parameters(step.plan) == (4, 4, 2)
-    # Without EOS every output reaches the limit, so realized equals planned cost.
+    # Without EOS every output reaches the limit, so realized equals planned
+    # cost except for the kept block and completion, which are not paid again.
     actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
     actual += sum(
-        len(candidate.rollouts) * (2 + config.total_length) * reward_passes
-        for step in result.steps for candidate in step.evaluation.candidates
+        (len(candidate.rollouts) - int(step.evaluation.retained_candidate and index == 0))
+        * (2 + config.total_length) * reward_passes
+        for step in result.steps for index, candidate in enumerate(step.evaluation.candidates)
     )
     assert actual == result.actual_forward_tokens <= config.forward_token_budget
-    assert result.actual_forward_tokens == result.reserved_forward_tokens + result.length_probe_forward_tokens
+    assert (
+        result.actual_forward_tokens + reused_cost(result, 2, reward_passes)
+        == result.reserved_forward_tokens + result.length_probe_forward_tokens
+    )
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
 
 
@@ -262,7 +280,10 @@ def test_real_pilots_are_charged_but_never_reused_as_production_samples():
     actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
     actual += len(scored) * (2 + config.total_length)
     assert result.actual_forward_tokens == actual
-    assert result.actual_forward_tokens == result.reserved_forward_tokens + result.length_probe_forward_tokens
+    assert (
+        result.actual_forward_tokens + reused_cost(result, 2, config.reward_forward_passes)
+        == result.reserved_forward_tokens + result.length_probe_forward_tokens
+    )
     assert result.pilot_reserved_forward_tokens > 0
     assert result.pilot_reserved_forward_tokens == sum(step.pilot_reserved_cost for step in result.steps)
     assert result.pilot_actual_forward_tokens == result.pilot_reserved_forward_tokens
