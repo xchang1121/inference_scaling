@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.arllm.algorithms.joint_budget_is import (

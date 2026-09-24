@@ -4,18 +4,8 @@ from math import log
 
 import pytest
 
-from inference_scaling.shared.sampling.importance import (
-    MonteCarloRolloutWeightProvider,
-    ProbabilityObservation,
-    RolloutObservation,
-    TruncatedReplayRolloutWeightProvider,
-)
+from inference_scaling.shared.sampling.importance import MonteCarloRolloutWeightProvider, RolloutObservation
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.smc import (
-    normalize_smc_log_weights,
-    partition_resampled_reservoirs,
-    systematic_resample,
-)
 from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
     normalize_log_weights,
@@ -86,35 +76,3 @@ def test_rollout_provider_covers_identity_importance_and_uncorrected_modes():
     assert identity.log_weight == pytest.approx(1.0)
     assert uncorrected.raw_log_importance_ratio is None
     assert uncorrected.log_weight == pytest.approx(1.0)
-
-
-def test_replay_provider_exposes_history_and_fresh_terms():
-    provider = TruncatedReplayRolloutWeightProvider(
-        truncation=1.5, reward_temperature=1.0
-    )
-    estimate = provider.estimate(
-        [ProbabilityObservation(log(0.8), log(0.5), 1.0)],
-        [ProbabilityObservation(log(0.8), log(0.5), 1.0)],
-    )
-
-    assert len(estimate.history_log_terms) == 1
-    assert len(estimate.fresh_log_terms) == 1
-    assert estimate.log_weight > estimate.history_log_terms[0]
-
-
-def test_common_smc_primitives_normalize_resample_and_split_without_copying():
-    probabilities, ess = normalize_smc_log_weights((0.0, log(3.0)))
-    assert probabilities == pytest.approx((0.25, 0.75))
-    assert ess == pytest.approx(1.6)
-    selected = systematic_resample(
-        probabilities,
-        4,
-        SeedStream(3).generator("smc-test"),
-    )
-    assert len(selected) == 4
-
-    buckets = partition_resampled_reservoirs(
-        (("a", "b", "c", "d"), ("e",)),
-        (0, 0, 1),
-    )
-    assert buckets == (("a", "c"), ("b", "d"), ("e",))

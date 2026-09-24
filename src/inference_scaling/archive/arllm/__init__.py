@@ -1,1 +1,0 @@
-"""Archived autoregressive sampling algorithms."""

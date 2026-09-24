@@ -1,4 +1,5 @@
-from inference_scaling.arllm.backends import ScoreCachingBackend, TabularAutoregressiveBackend
+from inference_scaling.arllm.backends.cache import ScoreCachingBackend
+from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest
 

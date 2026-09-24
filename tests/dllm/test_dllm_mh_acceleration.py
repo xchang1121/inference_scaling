@@ -6,17 +6,11 @@ from math import log
 import numpy as np
 import pytest
 
-from inference_scaling.dllm.algorithms import (
-    run_diffusion_replay_mixture_mh,
-    run_diffusion_reward_mh,
-    run_diffusion_reward_mh_delayed,
-    run_progressive_diffusion_is,
-    run_diffusion_smc_rollout_forest,
-)
-from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
+from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
+from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
+from inference_scaling.dllm.algorithms.mh_acceleration import run_diffusion_replay_mixture_mh
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
-from inference_scaling.shared.config import SMCForestConfig
 
 
 class CountingCoinBackend:
@@ -111,26 +105,6 @@ def test_independence_mh_batch_prefetch_preserves_the_exact_chain():
     assert batched_backend.batch_calls == 1
 
 
-def test_delayed_acceptance_skips_some_exact_reward_evaluations():
-    backend = CountingCoinBackend()
-    result = run_diffusion_reward_mh_delayed(
-        backend=backend,
-        prompt=(9,),
-        config=CONFIG,
-        sampling=EXACT,
-        reward=_reward,
-        surrogate_reward=lambda _prompt, tokens: -100.0 * sum(tokens),
-        seed=0,
-    )
-
-    assert result.exact_reward_evaluations < CONFIG.updates + 1
-    assert result.surrogate_reward_evaluations == CONFIG.updates + 1
-    assert all(
-        step.exact_reward_evaluated == step.stage_one_accepted
-        for step in result.steps
-    )
-
-
 def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():
     backend = CountingCoinBackend()
     history = run_diffusion_reward_mh(
@@ -179,83 +153,3 @@ def test_replay_mixture_rejects_a_cache_from_another_model():
             reward_batch=_zero_reward,
             seed=5,
         )
-
-
-def test_progressive_is_separates_pilot_and_evaluation_rollouts():
-    backend = CountingCoinBackend()
-    result = run_progressive_diffusion_is(
-        backend=backend,
-        prompt=(9,),
-        config=DiffusionISConfig(
-            candidate_count=3,
-            rollout_count=2,
-            block_size=1,
-            total_length=2,
-            reward_temperature=1.0,
-        ),
-        sampling=EXACT,
-        reward_batch=lambda _prompt, values: [float(sum(value)) for value in values],
-        pilot_rollouts_per_candidate=2,
-        evaluation_rollout_budget=6,
-        seed=8,
-    )
-
-    first = result.steps[0]
-    assert first.pilot_rollouts == 6
-    assert sum(item.fresh_count for item in first.allocations) <= 6
-    assert all(item.fresh_count >= 1 for item in first.allocations)
-    assert result.steps[-1].pilot_rollouts == 0
-
-
-def test_progressive_is_does_not_require_a_tractable_trajectory_density():
-    backend = CountingCoinBackend()
-    non_exact = replace(EXACT, temperature=0.0, remasking="low_confidence")
-
-    result = run_progressive_diffusion_is(
-        backend=backend,
-        prompt=(9,),
-        config=DiffusionISConfig(
-            candidate_count=2,
-            rollout_count=1,
-            block_size=1,
-            total_length=2,
-        ),
-        sampling=non_exact,
-        reward_batch=lambda _prompt, values: [float(sum(value)) for value in values],
-        pilot_rollouts_per_candidate=2,
-        evaluation_rollout_budget=2,
-        seed=8,
-    )
-
-    assert len(result.token_ids) == 2
-
-
-def test_diffusion_smc_reuses_conditional_rollout_suffixes():
-    common = dict(
-        particle_count=3,
-        branch_factor=2,
-        rollout_count=2,
-        block_size=1,
-        total_length=3,
-        reward_temperature=1.0,
-    )
-    fresh = run_diffusion_smc_rollout_forest(
-        backend=CountingCoinBackend(),
-        prompt=(9,),
-        config=SMCForestConfig(**common, reuse_rollout_forest=False),
-        sampling=EXACT,
-        reward_batch=lambda _prompt, values: [float(sum(value)) for value in values],
-        seed=17,
-    )
-    reused = run_diffusion_smc_rollout_forest(
-        backend=CountingCoinBackend(),
-        prompt=(9,),
-        config=SMCForestConfig(**common, reuse_rollout_forest=True),
-        sampling=EXACT,
-        reward_batch=lambda _prompt, values: [float(sum(value)) for value in values],
-        seed=17,
-    )
-
-    assert len(fresh.token_ids) == len(reused.token_ids) == 3
-    assert reused.reused_rollouts > 0
-    assert reused.fresh_rollouts < fresh.fresh_rollouts

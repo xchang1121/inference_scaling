@@ -1,12 +1,7 @@
 import numpy as np
 import pytest
 
-from inference_scaling.shared.sampling.mh import (
-    MetropolisHastingsProposal,
-    apply_metropolis_hastings,
-    decide_metropolis_hastings,
-    metropolis_hastings_log_acceptance,
-)
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings, metropolis_hastings_log_acceptance
 
 
 def test_hastings_ratio_includes_forward_and_reverse_proposals() -> None:
@@ -17,21 +12,6 @@ def test_hastings_ratio_includes_forward_and_reverse_proposals() -> None:
         reverse_proposal_log_probability=-2.0,
     )
     assert value == pytest.approx(-0.5)
-
-
-def test_apply_kernel_is_independent_of_state_representation() -> None:
-    proposal = MetropolisHastingsProposal(
-        state={"tokens": (1, 2)},
-        current_target_log_density=-4.0,
-        proposed_target_log_density=-3.0,
-        forward_proposal_log_probability=-1.0,
-        reverse_proposal_log_probability=-1.0,
-    )
-    transition = apply_metropolis_hastings(
-        {"tokens": (0, 0)}, proposal, uniform=0.99
-    )
-    assert transition.decision.accepted
-    assert transition.state == proposal.state
 
 
 def test_invalid_uniform_is_rejected() -> None:

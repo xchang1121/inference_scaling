@@ -10,7 +10,7 @@ from inference_scaling.arllm.algorithms.conditional_is import (
     conditional_is_step,
     run_conditional_is,
 )
-from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest

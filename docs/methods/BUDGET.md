@@ -1,15 +1,12 @@
 # IS 预算控制：候选数、补全数与块长
 
-本文件集中说明预算分配的统计目标、实现与计费。目标分布及 MH/IS 的基础算法见
-[ALGORITHMS.md](ALGORITHMS.md#alg-conditional-is)；准确率和实测成本分别见
-[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
-[执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)。联合调度是各入口的默认方法，目前完成实现与 CPU 测试，尚无模型质量或加速结论。
+本文件集中说明 AR 条件 IS 在每个块边界联合选择候选数 $`M`$、补全数 $`K`$ 与块长 $`B_{\rm blk}`$ 的统计目标、实现与计费。
+目标分布及 MH/IS 的基础算法见[ALGORITHMS.md](ALGORITHMS.md#alg-conditional-is)，设置字段见[设置说明](../SETTINGS.md)。
+联合调度是 AR `is` 的默认规划（`ar.algorithms.is.planning = "full_horizon"`），目前完成实现与 CPU 测试，尚无模型质量或加速结论。
 
 - [目标与方差分解](#budget-moments)
 - [有限候选的误差界](#budget-tv)
 - [联合动态调度](#budget-joint)
-- [固定候选的方差—成本分配](#budget-allocation)
-- [初始估计与最终估计分离](#budget-pilot)
 - [预算单位与执行边界](#budget-accounting)
 - [调用、参数和代码索引](#budget-usage)
 
@@ -148,7 +145,7 @@ $`\overline G_m,s_m^2`$，该组数量为 $`K_m^{\rm pilot}`$。使用
 
 ### 联合配置选择
 
-对当前前缀，用期望剩余长度 $`\hat\ell`$（见[第 6 节](#budget-accounting)）估计剩余选择次数
+对当前前缀，用期望剩余长度 $`\hat\ell`$（见[第 4 节](#budget-accounting)）估计剩余选择次数
 
 ```math
 n(B)=\left\lceil\frac{\hat\ell}{B}\right\rceil,
@@ -176,62 +173,15 @@ n(B)M[c_z(B)+Kc_u(B)]\leq C_{\rm remaining},
 这个预测假设后续位置具有相近的方差与成本；每个新前缀都会重新规划。它可能偏好完整序列 IS，
 并不保证多块路径更优，也没有全局预算最优或准确率提升保证。成本按期望长度估计，不拟合 GPU 时间模型。
 
-<a id="budget-allocation"></a>
-## 4. 固定候选的方差—成本分配
-
-已有 `allocate_variance_cost_budget` 在候选集合确定后分配历史/新样本；它与第 3 节的联合配置选择是独立入口。
-对候选 $`i`$、来源 $`s\in\{\mathrm{history},\mathrm{fresh}\}`$，设外层概率比为 $`\rho_i`$，
-实际估计项标准差为 $`\sigma_{i,s}`$，单样本成本为 $`c_{i,s}`$。连续代理目标为
-
-```math
-\min_{n_{i,s}}\sum_{i,s}\frac{\rho_i^2\sigma_{i,s}^2}{n_{i,s}}
-\quad\mathrm{s.t.}\quad\sum_{i,s}c_{i,s}n_{i,s}\leq C.
-```
-
-对拉格朗日函数求导得到
-
-```math
--\frac{\rho_i^2\sigma_{i,s}^2}{n_{i,s}^2}+\lambda c_{i,s}=0,
-\qquad n_{i,s}\propto\frac{\rho_i\sigma_{i,s}}{\sqrt{c_{i,s}}}.
-```
-
-实现还处理每候选库存上限、同 replay 匹配键的共享容量、最少新样本数和整数取整。方差来自与最终样本分开的设计集，
-并针对含 off-policy 或 replay 校正的实际估计项计算。连续解优化的是方差代理；容量约束与整数舍入后的分配不声称全局最优。
-理论背景见 [Neyman 分层分配](https://doi.org/10.1111/j.2397-2335.1934.tb04184.x)及
-[探索与重复采样的 IS 预算分析](https://doi.org/10.1080/24725854.2021.1953197)。
-
-<a id="budget-pilot"></a>
-## 5. 初始估计与最终估计分离
-
-已有 `run_progressive_conditional_is` 固定候选数和块长，先为同一候选生成初始补全，估计标准差及相对成本，
-然后由 `allocate_fresh_rollout_budget` 冻结每候选的最终补全数。设
-
-```math
-\ell_{ik}=r_{ik}/\tau+\log p(u_{ik}\mid g,z_i)-\log q(u_{ik}\mid g,z_i).
-```
-
-标准差由共用对数平移后的 $`e^{\ell_{ik}}`$ 估计；旧实现的相对成本由补全 token 数乘模型参数量估计，
-off-policy 时另计基础模型重评分。最终条件权重只使用独立的新补全：
-
-```math
-\widehat W_i^{\rm final}
-=\frac1{K_i^{\rm eval}}\sum_{k=1}^{K_i^{\rm eval}}e^{\ell_{ik}^{\rm eval}}.
-```
-
-给定候选和设计数据，样本数已固定、最终补全独立，因此使用精确概率比时条件权重无偏。
-比值截断会改变这一性质。终止候选的确定性奖励可复用。初始轨迹可作为经过验证的推测解码草稿，不能重复当作独立统计观测。
-
-联合调度还会改变候选数和块长，所以第 3 节连候选本身也重新独立生成。先查看最终奖励再决定何时停止，
-或直接把设计样本混入最终平均值，均不自动满足上述证明条件。已有 replay 的独立性与校正要求见
-[历史复用算法](ALGORITHMS.md#alg-base-replay)。
-
+初始样本只用于选择 $`M,K,B_{\rm blk}`$；除沿用保留序列的 0 号候选外，正式候选与补全都使用独立随机种子重新生成，
+最终权重只含正式样本。先查看正式奖励再决定何时停止，或把初始样本混入最终平均值，均不满足第 2 节的独立性条件。
 嵌套估计的非线性归一化和预算选择可参考
 [On Nesting Monte Carlo Estimators](https://proceedings.mlr.press/v80/rainforth18a.html)及
-[Bootstrap-based Budget Allocation for Nested Simulation](https://doi.org/10.1287/opre.2020.2071)。
+[Bootstrap-based Budget Allocation for Nested Simulation](https://doi.org/10.1287/opre.2020.2071)；
 本实现使用样本矩，不包含 bootstrap、训练得到的调度器或任务正确性标签。
 
 <a id="budget-accounting"></a>
-## 6. 预算单位与执行边界
+## 4. 预算单位与执行边界
 
 ### 计划成本与实际记账
 
@@ -261,9 +211,10 @@ $`M_{\min}(1+s)\max\{1,P+L+\hat\ell\}`$ 随前缀更新；给出 `expected_outpu
 第 2 节按可达前缀与预算状态条件化的逐步论证仍然适用。前面步骤超支时，规划器至少按完成预留看待剩余预算，
 完成序列不会被拒绝。
 
-这是请求级的前向 token 位置账本，不是任意后端的实际 FLOPs。自定义奖励应符合声明的
-`reward_forward_passes`；分块评分重复预填充、额外模型调用、推测解码的未采用分支和后端内部实现
-可能使实测成本与账本不同。当前 CLI 的两种模型奖励都按一次评分计；实际开销由后端计数器另外报告。
+这是请求级的前向 token 位置账本，不是任意后端的实际 FLOPs。`logprob` 与 `consilience` 各按一次完整序列评分计
+（$`s=1`$），`verifier` 与 `vote` 按文本计算（$`s=0`$）；`python` 来源 verifier 的内部计算（例如外部评分模型）和
+`vote` 样本池的生成都不进入账本。分块评分重复预填充、额外模型调用和后端内部实现可能使实测成本与账本不同；
+实际开销由后端计数器另外报告（记录的 `cost.phases`）。
 
 0 号候选的块及其保留补全已在之前的步骤生成并评分，实际记账不再计入。规划仍按 $`M`$ 个候选与 $`MK`$ 条补全
 估计成本，因此没有 EOS 时，实际消耗等于计划成本减去这部分复用，计划偏保守。
@@ -279,7 +230,8 @@ $`T`$ 越大，预留越早耗尽预算，调度越早进入块长为 $`T-L`$ �
 只要输出没有触及上限，同一问题与随机种子下的块长、候选数、补全数、调整记录和输出都与 $`T`$ 无关；
 [`test_joint_budget_is.py`](../../tests/test_joint_budget_is.py) 在 $`T=2048,16384,1048576`$ 下验证了这一点。
 代价是预算变为按期望成本规划的软约束：补全比预期更长时，实际消耗可能超过计划和 `forward_token_budget`。
-实际消耗单独报告（`actual_forward_tokens`），正式比较应使用实际值。
+账本的实际消耗单独报告（`trace.planned_forward_tokens_used`），后端实测的前向 token 位置数见
+`cost.forward_token_slots`；正式比较应使用实际值。
 
 ### 实测成本与公平比较
 
@@ -289,54 +241,62 @@ $`T`$ 越大，预留越早耗尽预算，调度越早进入块长为 $`T-L`$ �
 \widehat F_{\rm forward}=2\sum_j N_jS_j.
 ```
 
-预填充、解码、重评分、验证和批量填充均按后端实际执行记录；该估算省略注意力的长度平方项及逐元素计算。
-墙钟、吞吐和显存独立测量。比较应包含初始估计、缓存建立和奖励评分，并分列主模型与辅助模型成本。
+预填充、解码、评分和批量填充均按后端实际执行记录；该估算省略注意力的长度平方项及逐元素计算。
+墙钟、吞吐和显存独立测量。比较应包含长度测量、初始估计、`vote` 样本池和奖励评分。
 相同计划预算不代表相同实际 FLOPs；正式实验需同时给出二者。
 
-联合调度当前仅接入 AR、同模型 on-policy、固定逐序列奖励和完整输出范围。Consilience 奖励仍默认只读 thinking，
-切分失败沿用显式全序列 fallback；这与 IS 修改整个输出范围是两个独立设置。
-thinking-only 采样的停止包装和正文续写、off-policy/replay、候选级不同 $`K_m`$、dLLM 块长适配均未接入这个新入口，
-已有入口的相应功能保持不变。共享选择器不绑定模型族，但其他适配层需要提供有效的统计量、成本和独立采样。
+联合调度只接入 AR 的 `is`，要求同模型 on-policy 补全、固定逐序列奖励和完整输出范围：
+`ar.output.sampling_scope = "thinking"` 时加载前报错，思考段采样只能使用 `planning = "fixed"`。Consilience 奖励
+默认只读 thinking，切分失败沿用显式全序列回退；这与 IS 修改整个输出范围是两个独立设置。候选级不同
+$`K_m`$ 与 dLLM 块长适配均未接入。共享选择器不绑定模型族，但其他适配层需要提供有效的统计量、成本和独立采样。
 
 <a id="budget-usage"></a>
-## 7. 调用、参数与代码索引
+## 5. 调用、参数与代码索引
 
 ### 运行入口
 
-联合预算 IS 是运行脚本的默认方法：不填 `--method` 时，`gsm8k_reproduction` 对配置中的题目逐题运行它。
-参数全部位于配置的 `[joint_budget_is]` 表，用 `--set` 覆盖：
+联合预算是 AR `is` 的默认规划，统一入口的默认选择即运行它：
 
-```powershell
-python -m experiments.arllm.gsm8k_reproduction `
-  --config configs/arllm.toml --model Qwen/Qwen3-1.7B --allow-download `
-  --set joint_budget_is.forward_token_budget=2000000 --limit 1 --tag joint-budget
+```bash
+python -m inference_scaling --algorithm is --model ar --reward vote --dataset gsm8k
 ```
 
-这是调用示例，未作为正式实验运行。奖励取方法默认或 `--reward` 指定的逐序列固定奖励，批量相关奖励会被拒绝；
-答案一致性与 verifier 奖励按文本计算，不计评分前向，模型奖励计一次完整序列评分。
+规划方式由 `ar.algorithms.is.planning` 选择：`fixed` 使用 `ar.algorithms.is.fixed` 中固定的 $`M,K,B_{\rm blk}`$，不做
+预算调度；`full_horizon`（默认）与 `chunk_adaptive` 读取 `ar.algorithms.is.joint`，后者另读
+`ar.algorithms.is.chunk_adaptive`。奖励取 `--reward` 指定的逐序列固定奖励，温度为 `rewards.<name>.temperature`。
+下表的设置键省略前缀 `ar.algorithms.is.`，记录字段位于 `records.jsonl` 每行的 `trace` 中。
 
-| `[joint_budget_is]` 字段 / 记录字段 | 含义 |
+| 设置键 / 记录字段 | 含义 |
 | --- | --- |
-| `forward_token_budget` | 包含长度测量、初始采样和奖励评分的总预算；按期望成本规划，按实际消耗记账 |
-| `block_sizes` | 块长网格；仅 `full_horizon` 模式将完整剩余长度加入正常竞争 |
-| `candidate_counts`、`rollout_counts` | 整数网格，分别为 $`M\geq2`$、非终止时 $`K\geq1`$ |
-| `pilot_candidates`、`pilot_rollouts` | 每个被探测块长的初始样本数 |
-| `pilot_fraction` | 每轮初始估计最多使用当前剩余预算的比例；还受完成预留限制 |
-| `planning_mode` | `full_horizon` 或 `chunk_adaptive` |
-| `initial_block_size`、`initial_candidate_count`、`initial_rollout_count`、`adjustment_min_improvement` | 仅 `chunk_adaptive` 读取的初值与调整门槛 |
+| `joint.forward_token_budget` | 包含长度测量、初始采样和奖励评分的总预算；按期望成本规划，按实际消耗记账 |
+| `joint.block_sizes` | 块长网格；仅 `full_horizon` 模式将完整剩余长度加入正常竞争 |
+| `joint.candidate_counts`、`joint.rollout_counts` | 整数网格，分别为 $`M\geq2`$、非终止时 $`K\geq1`$ |
+| `joint.pilot_candidates`、`joint.pilot_rollouts` | 每个被探测块长的初始样本数 |
+| `joint.pilot_fraction` | 每轮初始估计最多使用当前剩余预算的比例；还受完成预留限制 |
+| `joint.relative_variance_floor` | 预测分数中的相对方差下限 |
+| `joint.expected_output_tokens` | 第一步之前的期望输出长度；`null` 时先生成一条普通补全测量长度 |
+| `chunk_adaptive.initial_block_size`、`initial_candidate_count`、`initial_rollout_count`、`adjustment_min_improvement` | 仅 `chunk_adaptive` 读取的初值与调整门槛 |
 | `steps[].plan` | 选中的 $`M,K,B_{\rm blk}`$、局部误差估计、累计预测分数和是否有对应初始观测；收尾步（$`K=0`$）生成至 EOS，其 `block_size` 只记录生成上限 $`T-L`$ |
-| `reserved_forward_tokens`、`actual_forward_tokens` | 各步计划成本合计与实际消耗合计 |
-| `pilot_actual_forward_tokens`、`length_probe_forward_tokens` | 实际消耗中的初始估计部分与长度测量部分 |
-| `steps[].expected_remaining_tokens`、`steps[].actual_forward_tokens` | 规划该步时的期望剩余长度与该步实际消耗 |
+| `reserved_forward_tokens`、`planned_forward_tokens_used` | 各步计划成本合计与账本实际消耗合计（含长度测量与初始估计） |
+| `steps[].pilot_forward_tokens`、`length_probe_forward_tokens` | 实际消耗中每步的初始估计部分与长度测量部分 |
+| `steps[].expected_remaining_tokens`、`steps[].forward_tokens` | 规划该步时的期望剩余长度与该步正式样本的实际消耗 |
+| `stopping_reason` | `eos` 或 `length` |
 
 ### 按下一块预算动态调整
 
-默认 `planning_mode = "full_horizon"`。选择 `chunk_adaptive` 时读取初值与调整门槛：
+默认 `planning = "full_horizon"`。选择 `chunk_adaptive` 时读取初值与调整门槛，例如把 `ar.algorithms.is` 中的
+以下字段改为：
 
-```bash
-python -m experiments.arllm.gsm8k_reproduction \
-  --set joint_budget_is.planning_mode=chunk_adaptive \
-  --set joint_budget_is.initial_block_size=128 --set joint_budget_is.adjustment_min_improvement=0.1
+```json
+{
+  "planning": "chunk_adaptive",
+  "chunk_adaptive": {
+    "initial_block_size": 128,
+    "initial_candidate_count": 4,
+    "initial_rollout_count": 2,
+    "adjustment_min_improvement": 0.1
+  }
+}
 ```
 
 - 三个初值必须属于各自网格。
@@ -355,20 +315,19 @@ python -m experiments.arllm.gsm8k_reproduction \
 `chunk_adaptive` 统一采用成本优先规则，无需额外策略开关：先枚举本次有效
 pilot 块长上的所有预算可行 M/K，筛选预测误差改善严格超过 `adjustment_min_improvement`
 的方案，再选下一正式块计划成本最低者。同成本时按误差、较大 B、较小 M/K 确定性排序。
-没有合格方案则保持当前值；原有信号检查、pilot 扣费、初值、收尾与预算保护不变。
-不再提供动态调参的误差优先分支；独立的 `full_horizon` 模式保持原有行为。
+没有合格方案则保持当前值；信号检查、pilot 扣费、初值、收尾与预算保护不变。
 
 此处成本指下一正式块按期望长度计算的计划成本，不是同覆盖长度总成本、实际 token、墙钟时间或 GPU FLOPs；
 pilot 成本已在选择前扣除且对本次可选方案相同。跨 B 的误差仍按上述 H 比较。
-新策略不保证每次都比当前配置便宜，只保证在超过改善门槛的可行方案中选择最便宜者；
+该规则不保证每次都比当前配置便宜，只保证在超过改善门槛的可行方案中选择最便宜者；
 它会牺牲进一步降低预测误差的机会，也不保证整题效率或正确率改善。
 `steps[].adjustment` 额外记录 `comparisons[].eligible`、`eligible_count`、
 `selection_reason`、`selected_relative_improvement` 和 `selected_reserved_cost`；
-有合格方案时，`best_score` 在新策略下指所选合格方案的分数，不一定是全局最低误差分数。
+有合格方案时，`best_score` 指所选合格方案的分数，不一定是全局最低误差分数。
 
 底层 `choose_joint_budget(..., forecast_full_horizon=False)` 只接受一个块长估计，
 避免直接比较不同覆盖长度；运行层负责相邻块比较和独立收尾。
-上述命令是配置示例，不代表已经运行真实模型或验证解题准确率。
+上述设置是示例，不代表已经运行真实模型或验证解题准确率。
 
 ### Python 接口
 
@@ -385,7 +344,7 @@ result = run_joint_budget_is(
 )
 ```
 
-`reward(prompt_tokens, complete_sequence_tokens)` 必须是固定逐序列函数。自一致性可以先固定一个独立参考池；
+`reward(prompt_tokens, complete_sequence_tokens)` 必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
 直接在当前候选池内重新统计多数标签会改变候选权重之间的依赖关系，不适用第 2 节证明。
 
 | 职责 | 代码 / 测试 |
@@ -395,19 +354,15 @@ result = run_joint_budget_is(
 | 计划成本与完成预留 | [`shared/budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py)：`block_costs`、`completion_reserve` |
 | AR 循环、独立随机数、预算记账 | [`arllm/algorithms/joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py)：`JointBudgetISConfig`、`run_joint_budget_is` |
 | 实际候选生成、补全和重采样 | [`arllm/algorithms/conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)：`conditional_is_step` |
-| 运行入口的方法组装与记录 | [`method_runners.py`](../../experiments/arllm/assembly/method_runners.py)：`run_joint_budget` |
-| 历史/新样本方差—成本分配 | [`shared/budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py)：`allocate_variance_cost_budget`、`allocate_fresh_rollout_budget` |
-| 固定候选的两阶段估计 | [`AR progressive_is.py`](../../src/inference_scaling/archive/arllm/progressive_is.py)、[`dLLM progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) |
-| 动态候选和外层概率校正 | [`AR dynamic_is.py`](../../src/inference_scaling/archive/arllm/dynamic_is.py)、[`dLLM dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py) |
+| 统一入口的设置读取与记录 | [`app/ar.py`](../../src/inference_scaling/app/ar.py)：`ARFamily._is` |
 | 前向 FLOPs 估算 | [`shared/compute.py`](../../src/inference_scaling/shared/compute.py)：`dense_forward_flops` |
 | 矩估计、联合决策、精确枚举 TV 检查 | [`test_joint_budget.py`](../../tests/test_joint_budget.py) |
 | 预算、EOS、随机数隔离与分布测试 | [`test_joint_budget_is.py`](../../tests/test_joint_budget_is.py) |
-| 运行入口的默认方法 | [`test_sampling_scope.py`](../../tests/test_sampling_scope.py) |
+| 逐块自适应规划与成本优先规则 | [`test_joint_budget_adaptive.py`](../../tests/test_joint_budget_adaptive.py)、[`test_joint_budget_cost_policy.py`](../../tests/test_joint_budget_cost_policy.py) |
+| 统一入口的默认选择与思考范围检查 | [`test_app.py`](../../tests/test_app.py) |
 
 ```powershell
-python -m pytest -q tests/test_joint_budget.py tests/test_joint_budget_is.py tests/test_joint_budget_adaptive.py
+python -m pytest -q tests/test_joint_budget.py tests/test_joint_budget_is.py tests/test_joint_budget_adaptive.py tests/test_joint_budget_cost_policy.py
 ```
 
 小样本方差可能低估稀有分支，完整序列备选可能被频繁选中，初始估计也可能抵消调度收益。
-现有固定候选方差—成本方案的成本结果见[执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md#infra-report-budget)；
-这些历史结果不代表本次联合调度的效果。

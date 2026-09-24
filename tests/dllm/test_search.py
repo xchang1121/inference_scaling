@@ -5,7 +5,7 @@ from math import log
 import numpy as np
 import pytest
 
-from inference_scaling.dllm.algorithms import (
+from inference_scaling.dllm.algorithms.search import (
     run_diffusion_block_beam,
     run_diffusion_trajectory_power_mh,
 )

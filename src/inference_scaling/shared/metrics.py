@@ -12,15 +12,12 @@ import numpy as np
 T = TypeVar("T", bound=Hashable)
 
 
-def normalize_counts(counts: Mapping[T, int]) -> dict[T, float]:
+def empirical_distribution(samples: Iterable[T]) -> dict[T, float]:
+    counts = Counter(samples)
     total = sum(counts.values())
     if total == 0:
         raise ValueError("at least one sample is required")
     return {value: count / total for value, count in counts.items()}
-
-
-def empirical_distribution(samples: Iterable[T]) -> dict[T, float]:
-    return normalize_counts(Counter(samples))
 
 
 def total_variation(left: Mapping[T, float], right: Mapping[T, float]) -> float:
@@ -40,9 +37,4 @@ def importance_effective_sample_size(log_weights: Sequence[float]) -> float:
     return float(weights.sum() ** 2 / denominator) if denominator > 0 else 0.0
 
 
-__all__ = [
-    "empirical_distribution",
-    "importance_effective_sample_size",
-    "normalize_counts",
-    "total_variation",
-]
+__all__ = ["empirical_distribution", "importance_effective_sample_size", "total_variation"]

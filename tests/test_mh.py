@@ -4,12 +4,10 @@ import pytest
 
 from inference_scaling.arllm.algorithms.mh import (
     run_mh_chain,
-    run_mh_chains,
-    run_mh_chains_batched,
-    run_reward_mh_chains,
+    run_reward_mh_chain,
     suffix_length_probabilities,
 )
-from inference_scaling.arllm.backends import TabularAutoregressiveBackend
+from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.algorithms.config import MHConfig, RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
@@ -27,7 +25,6 @@ def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):
 
 
 def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
-    from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
     sampling = SamplingConfig(temperature=0.8)
     explicit = MHConfig(alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3)
@@ -42,19 +39,6 @@ def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
     right = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=7, steps_per_block=3), sampling, reward, SeedStream(2))
     assert left == right
     assert left.attempts == 3
-
-
-def test_reward_mh_observer_preserves_rng_and_reports_every_complete_state():
-    from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
-    backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
-    config = RewardMHConfig(total_length=4, block_size=4, iterations=3)
-    reward = lambda prompt, completion: float(sum(completion))
-    states = []
-    plain = run_reward_mh_chain(backend, (), config, SamplingConfig(), reward, SeedStream(12))
-    observed = run_reward_mh_chain(backend, (), config, SamplingConfig(), reward, SeedStream(12), on_state=states.append)
-    assert observed == plain
-    assert [state.attempts for state in states] == [0, 1, 2, 3]
-    assert states[-1] == observed
 
 
 def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
@@ -108,52 +92,15 @@ def test_mh_empirical_output_approaches_enumerated_power_target(
         total_length=2,
         block_size=2,
         steps_per_block=20,
-        chains=2500,
         suffix_schedule=schedule,
     )
-    outputs = run_mh_chains(
-        backend,
-        (),
-        config,
-        SamplingConfig(temperature=0.7),
-        SeedStream(2026),
-    )
+    outputs = [
+        run_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), SeedStream(2026), chain_id=chain)
+        for chain in range(2500)
+    ]
     empirical = empirical_distribution(result.token_ids for result in outputs)
     target = _power_target(probabilities, length=2, alpha=2)
     assert total_variation(empirical, target) < 0.045
-
-
-@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
-def test_batched_mh_preserves_independent_chain_random_streams_exactly(
-    schedule: str,
-) -> None:
-    config = MHConfig(
-        alpha=3,
-        total_length=7,
-        block_size=2,
-        steps_per_block=4,
-        suffix_schedule=schedule,
-    )
-    proposal = SamplingConfig(temperature=0.5)
-    roots = (SeedStream(17), SeedStream(29), SeedStream(41))
-    sequential = tuple(
-        run_mh_chain(
-            TabularAutoregressiveBackend({}, fallback=[0.6, 0.3, 0.1]),
-            (2,),
-            config,
-            proposal,
-            root,
-        )
-        for root in roots
-    )
-    batched = run_mh_chains_batched(
-        TabularAutoregressiveBackend({}, fallback=[0.6, 0.3, 0.1]),
-        (2,),
-        config,
-        proposal,
-        roots,
-    )
-    assert batched == sequential
 
 
 def test_base_proposal_at_alpha_one_accepts_every_move() -> None:
@@ -215,20 +162,12 @@ def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
     def reward(_, sequence):
         return float(sequence == (1, 1))
 
-    outputs = run_reward_mh_chains(
-        backend,
-        (),
-        RewardMHConfig(
-            total_length=2,
-            block_size=1,
-            steps_per_block=25,
-            reward_temperature=temperature,
-        ),
-        SamplingConfig(temperature=0.7),
-        reward,
-        SeedStream(91),
-        chains=3000,
-    )
+    config = RewardMHConfig(total_length=2, block_size=1, steps_per_block=25, reward_temperature=temperature)
+    outputs = [
+        run_reward_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), reward, SeedStream(91),
+                            chain_id=chain)
+        for chain in range(3000)
+    ]
     weights = {
         sequence: float(
             __import__("math").prod(probabilities[token] for token in sequence)

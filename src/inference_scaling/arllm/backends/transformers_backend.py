@@ -7,24 +7,16 @@ import math
 import threading
 import warnings
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from inference_scaling.arllm.acceleration.primitives import (
-    ActiveBatchSpeculationConfig,
-    DraftProposal,
-    RolloutTokenTree,
-    RolloutTokenTreeSnapshot,
-    SampleCompletionCallback,
-)
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.arllm.backends.causal_scoring import iter_causal_logits, prefill_causal_model
-from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     GenerationRequest,
     ScoreRequest,
@@ -59,11 +51,6 @@ class TransformersBackendSnapshot:
     generation_forward_token_slots: int
     score_forward_token_slots: int
     estimated_dense_forward_flops: int
-    speculative_requests: int = 0
-    speculative_hits: int = 0
-    draft_tokens_proposed: int = 0
-    draft_tokens_accepted: int = 0
-    speculative_verification_forward_token_slots: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +77,6 @@ class TransformersBackend:
         device: str | Any | None = None,
         max_score_batch_size: int = 8,
         score_chunk_size: int = 256,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
@@ -126,7 +111,6 @@ class TransformersBackend:
         forward_parameters = inspect.signature(inspected_model.forward).parameters
         self._supports_logits_to_keep = "logits_to_keep" in forward_parameters
         self._model_lock = threading.RLock()
-        self.cache_growth_tokens = 0
         self._statistics_lock = threading.Lock()
         self._sample_calls = 0
         self._score_calls = 0
@@ -143,23 +127,6 @@ class TransformersBackend:
             int(count_parameters()) if callable(count_parameters)
             else sum(parameter.numel() for parameter in model.parameters())
         )
-        self._speculation = speculation
-        self._draft_tree = (
-            draft_tree
-            if draft_tree is not None
-            else (
-                RolloutTokenTree.from_config(speculation)
-                if speculation is not None
-                else None
-            )
-        )
-        if self._draft_tree is not None and self._speculation is None:
-            raise ValueError("draft_tree requires an active-batch speculation config")
-        self._speculative_requests = 0
-        self._speculative_hits = 0
-        self._draft_tokens_proposed = 0
-        self._draft_tokens_accepted = 0
-        self._speculative_verification_forward_token_slots = 0
 
     @classmethod
     def from_pretrained(
@@ -182,8 +149,6 @@ class TransformersBackend:
         trust_remote_code: bool = False,
         max_score_batch_size: int = 8,
         score_chunk_size: int = 256,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -277,8 +242,6 @@ class TransformersBackend:
             device=input_device,
             max_score_batch_size=max_score_batch_size,
             score_chunk_size=score_chunk_size,
-            draft_tree=draft_tree,
-            speculation=speculation,
         )
 
     @property
@@ -286,10 +249,9 @@ class TransformersBackend:
         return self._model_id
 
     def close(self) -> None:
-        """Release model and draft references after all dispatchers have stopped."""
+        """Release the model reference after all dispatchers have stopped."""
         with self._model_lock:
             self.model = None
-            self._draft_tree = None
 
     @property
     def parameter_count(self) -> int:
@@ -384,64 +346,6 @@ class TransformersBackend:
             return tuple(repeated_layers)
         return None
 
-    @staticmethod
-    def _crop_cache(cache, maximum_length: int):
-        if cache is None:
-            return None
-        crop = getattr(cache, "crop", None)
-        if callable(crop):
-            parameters = inspect.signature(crop).parameters
-            if "tokens_to_remove" in parameters:
-                get_seq_length = getattr(cache, "get_seq_length", None)
-                if not callable(get_seq_length):
-                    return None
-                tokens_to_remove = max(
-                    int(get_seq_length()) - int(maximum_length),
-                    0,
-                )
-                if tokens_to_remove:
-                    crop(-tokens_to_remove)
-            else:
-                crop(int(maximum_length))
-            return cache
-        if isinstance(cache, (tuple, list)):
-            cropped_layers = []
-            for layer in cache:
-                if not isinstance(layer, (tuple, list)):
-                    return None
-                cropped_layers.append(
-                    tuple(value[..., :maximum_length, :] for value in layer)
-                )
-            return tuple(cropped_layers)
-        return None
-
-    @staticmethod
-    def _sample_from_log_probs(log_probs, uniform: float):
-        """Inverse-CDF sample one row with a float64 cumulative sum."""
-
-        torch_module = _require_torch()
-        probabilities = log_probs.exp()
-        cumulative = probabilities.to(dtype=torch_module.float64).cumsum(dim=-1)
-        value = torch_module.tensor(
-            float(uniform), dtype=torch_module.float64, device=log_probs.device
-        )
-        token = (cumulative < value).sum(dim=-1)
-        token = token.clamp_max(probabilities.shape[-1] - 1)
-        selected = log_probs.gather(-1, token[..., None]).squeeze(-1)
-        return token, selected
-
-    @staticmethod
-    def _sample_from_probabilities(probabilities, uniform: float):
-        """Inverse-CDF sample from an already normalized probability row."""
-
-        torch_module = _require_torch()
-        cumulative = probabilities.to(dtype=torch_module.float64).cumsum(dim=-1)
-        value = torch_module.tensor(
-            float(uniform), dtype=torch_module.float64, device=probabilities.device
-        )
-        token = (cumulative < value).sum(dim=-1)
-        return token.clamp_max(probabilities.shape[-1] - 1)
-
     def _sequence_sample(
         self,
         request: GenerationRequest,
@@ -465,288 +369,8 @@ class TransformersBackend:
             reference_policy_id=reference_sampling.policy_id,
         )
 
-    def _verify_draft(
-        self,
-        request: GenerationRequest,
-        proposal: DraftProposal,
-        uniforms: np.ndarray,
-        acceptance_uniforms: np.ndarray | None = None,
-    ) -> tuple[list[int], list[float], list[float], str, int, Any | None, int]:
-        """Verify a deterministic or stochastic draft against the exact policy.
-
-        Deterministic drafts use target-sample equality.  Stochastic drafts use
-        standard speculative sampling: accept with ``min(1, p(x) / q(x))`` and,
-        on rejection, sample from normalized ``(p-q)_+``.  Both paths preserve
-        the requested target policy exactly.
-        """
-
-        torch_module = _require_torch()
-        draft = proposal.token_ids[: request.max_new_tokens]
-        if not draft:
-            return [], [], [], "length", 0, None, 0
-        stochastic = proposal.stochastic
-        if stochastic:
-            if len(proposal.token_distributions) < len(draft):
-                raise RuntimeError("stochastic draft omitted proposal distributions")
-            if acceptance_uniforms is None or len(acceptance_uniforms) < len(draft):
-                raise RuntimeError("stochastic draft omitted acceptance random numbers")
-        prefix = self._model_prefix(request.prefix)
-        sequence = prefix + draft
-        input_ids, attention_mask = self._padded_inputs([sequence])
-        logits_to_keep = len(draft) + 1
-        with self._model_lock, torch_module.inference_mode():
-            outputs = self._prefill_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=self._position_ids(attention_mask),
-                use_cache=True,
-                return_dict=True,
-                logits_to_keep=logits_to_keep,
-            )
-        first_predictor = len(prefix) - 1
-        logits_start = len(sequence) - outputs.logits.shape[1]
-        predictor_rows = (
-            torch_module.arange(
-                first_predictor,
-                first_predictor + len(draft) + 1,
-                device=self.device,
-            )
-            - logits_start
-        )
-        if (
-            int(predictor_rows.min()) < 0
-            or int(predictor_rows.max()) >= outputs.logits.shape[1]
-        ):
-            raise RuntimeError(
-                "draft verification omitted a required predictor position"
-            )
-        token_logits = outputs.logits[0].index_select(0, predictor_rows)
-        policy_log_probs = self._policy_log_probs(token_logits, request.sampling)
-        reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
-        reference_log_probs = (
-            policy_log_probs
-            if request.sampling == reference_sampling
-            else self._policy_log_probs(token_logits, reference_sampling)
-        )
-
-        tokens: list[int] = []
-        token_logprobs: list[float] = []
-        reference_values: list[float] = []
-        accepted = 0
-        consumed = 0
-        finish_reason = "length"
-        for position, draft_token in enumerate(draft):
-            matches_draft = False
-            if stochastic:
-                distribution = proposal.token_distributions[position]
-                proposal_probability = dict(distribution).get(int(draft_token), 0.0)
-                if proposal_probability <= 0:
-                    raise RuntimeError("drafted token has zero proposal probability")
-                target_probability = float(
-                    policy_log_probs[position, int(draft_token)].exp().detach().cpu()
-                )
-                threshold = min(1.0, target_probability / proposal_probability)
-                if float(acceptance_uniforms[position]) < threshold:
-                    sampled_token = int(draft_token)
-                    selected = policy_log_probs[position, sampled_token]
-                    matches_draft = True
-                else:
-                    residual = policy_log_probs[position].exp().clone()
-                    for token, probability in distribution:
-                        residual[int(token)] -= float(probability)
-                    residual.clamp_min_(0.0)
-                    total = residual.sum()
-                    if (
-                        not bool(torch_module.isfinite(total))
-                        or float(total.detach().cpu()) <= 0
-                    ):
-                        raise RuntimeError(
-                            "rejected stochastic draft has no residual mass"
-                        )
-                    residual /= total
-                    sampled = self._sample_from_probabilities(
-                        residual, uniforms[consumed]
-                    )
-                    sampled_token = int(sampled.detach().cpu())
-                    selected = policy_log_probs[position, sampled_token]
-            else:
-                sampled, selected = self._sample_from_log_probs(
-                    policy_log_probs[position], uniforms[consumed]
-                )
-                sampled_token = int(sampled.detach().cpu())
-                matches_draft = sampled_token == int(draft_token)
-            reference_selected = reference_log_probs[position, sampled_token]
-            tokens.append(sampled_token)
-            token_logprobs.append(float(selected.detach().cpu()))
-            reference_values.append(float(reference_selected.detach().cpu()))
-            consumed += 1
-            if matches_draft:
-                accepted += 1
-            if (
-                request.sampling.eos_token_id is not None
-                and sampled_token == request.sampling.eos_token_id
-            ):
-                finish_reason = "eos"
-                break
-            if not matches_draft:
-                break
-        else:
-            # When every draft token is accepted, the last verification logit
-            # supplies the standard speculative-decoding bonus token.
-            if len(tokens) < request.max_new_tokens:
-                sampled, selected = self._sample_from_log_probs(
-                    policy_log_probs[len(draft)], uniforms[consumed]
-                )
-                sampled_token = int(sampled.detach().cpu())
-                tokens.append(sampled_token)
-                token_logprobs.append(float(selected.detach().cpu()))
-                reference_values.append(
-                    float(reference_log_probs[len(draft), sampled_token].detach().cpu())
-                )
-                consumed += 1
-                if (
-                    request.sampling.eos_token_id is not None
-                    and sampled_token == request.sampling.eos_token_id
-                ):
-                    finish_reason = "eos"
-
-        self._draft_tree.record_verification(proposed=len(draft), accepted=accepted)
-        reusable_cache = None
-        cached_continuation_tokens = 0
-        if finish_reason != "eos" and consumed < request.max_new_tokens:
-            # The cache contains the complete hypothetical draft path.  Retain
-            # only the matched draft prefix; the mismatch/bonus token has been
-            # sampled by the base model but has not yet been inserted.
-            cached_continuation_tokens = accepted
-            reusable_cache = self._crop_cache(
-                getattr(outputs, "past_key_values", None),
-                len(prefix) + cached_continuation_tokens,
-            )
-        slots = int(input_ids.numel())
-        with self._statistics_lock:
-            self._speculative_hits += 1
-            self._draft_tokens_proposed += len(draft)
-            self._draft_tokens_accepted += accepted
-            self._speculative_verification_forward_token_slots += slots
-            self._prefill_tokens += len(prefix)
-            self._generation_forward_token_slots += slots
-            self._estimated_dense_forward_flops += self._dense_forward_flops(slots)
-        return (
-            tokens,
-            token_logprobs,
-            reference_values,
-            finish_reason,
-            consumed,
-            reusable_cache,
-            cached_continuation_tokens,
-        )
-
-    def _continue_verified_cache(
-        self,
-        request: GenerationRequest,
-        *,
-        cache: Any,
-        cached_continuation_tokens: int,
-        tokens: list[int],
-        token_logprobs: list[float],
-        reference_logprobs: list[float],
-        uniforms: np.ndarray,
-        consumed: int,
-    ) -> str:
-        """Continue after a rejected draft without recomputing its prefix."""
-
-        torch_module = _require_torch()
-        if not tokens or consumed >= request.max_new_tokens:
-            return "length"
-        prefix_length = len(self._model_prefix(request.prefix))
-        cached_length = prefix_length + cached_continuation_tokens
-        attention_mask = torch_module.ones(
-            (1, cached_length + 1), dtype=torch_module.long, device=self.device
-        )
-        current = torch_module.tensor(
-            [[tokens[-1]]], dtype=torch_module.long, device=self.device
-        )
-        generation_slots = 0
-        reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
-        finish_reason = "length"
-        with self._model_lock, torch_module.inference_mode():
-            outputs = self.model(
-                input_ids=current,
-                attention_mask=attention_mask,
-                position_ids=torch_module.tensor(
-                    [[cached_length]], dtype=torch_module.long, device=self.device
-                ),
-                past_key_values=cache,
-                use_cache=True,
-                return_dict=True,
-                **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
-            )
-            generation_slots += 1
-            logits = outputs.logits[:, -1, :]
-            cache = getattr(outputs, "past_key_values", None)
-            while consumed < request.max_new_tokens:
-                policy = self._policy_log_probs(logits[0], request.sampling)
-                reference = (
-                    policy
-                    if request.sampling == reference_sampling
-                    else self._policy_log_probs(logits[0], reference_sampling)
-                )
-                sampled, selected = self._sample_from_log_probs(
-                    policy, uniforms[consumed]
-                )
-                token = int(sampled.detach().cpu())
-                tokens.append(token)
-                token_logprobs.append(float(selected.detach().cpu()))
-                reference_logprobs.append(float(reference[token].detach().cpu()))
-                consumed += 1
-                if (
-                    request.sampling.eos_token_id is not None
-                    and token == request.sampling.eos_token_id
-                ):
-                    finish_reason = "eos"
-                    break
-                if consumed >= request.max_new_tokens:
-                    break
-                position = attention_mask.shape[1]
-                attention_mask = torch_module.cat(
-                    [
-                        attention_mask,
-                        torch_module.ones(
-                            (1, 1), dtype=attention_mask.dtype, device=self.device
-                        ),
-                    ],
-                    dim=-1,
-                )
-                outputs = self.model(
-                    input_ids=torch_module.tensor(
-                        [[token]], dtype=torch_module.long, device=self.device
-                    ),
-                    attention_mask=attention_mask,
-                    position_ids=torch_module.tensor(
-                        [[position]], dtype=torch_module.long, device=self.device
-                    ),
-                    past_key_values=cache,
-                    use_cache=True,
-                    return_dict=True,
-                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
-                )
-                generation_slots += 1
-                logits = outputs.logits[:, -1, :]
-                cache = getattr(outputs, "past_key_values", None)
-        with self._statistics_lock:
-            self._generation_forward_token_slots += generation_slots
-            self._estimated_dense_forward_flops += self._dense_forward_flops(
-                generation_slots
-            )
-        return finish_reason
-
     def _sample_same_policy(
-        self,
-        indexed_requests: Sequence[tuple[int, GenerationRequest]],
-        *,
-        uniform_streams: Mapping[int, np.ndarray] | None = None,
-        uniform_offsets: Mapping[int, int] | None = None,
-        on_complete: SampleCompletionCallback | None = None,
+        self, indexed_requests: Sequence[tuple[int, GenerationRequest]]
     ) -> list[tuple[int, SequenceSample]]:
         torch_module = _require_torch()
         requests = [request for _, request in indexed_requests]
@@ -774,23 +398,13 @@ class TransformersBackend:
                 reusable_prefixes = list(prefix_positions)
         uniforms = [
             (
-                uniform_streams[original_index]
-                if uniform_streams is not None and original_index in uniform_streams
-                else np.asarray(request.uniforms, dtype=np.float64)
+                np.asarray(request.uniforms, dtype=np.float64)
                 if request.uniforms is not None
                 else np.zeros(request.max_new_tokens, dtype=np.float64)
                 if request.arithmetic_uniform is not None
                 else np.random.default_rng(request.seed).random(request.max_new_tokens)
             )
-            for original_index, request in indexed_requests
-        ]
-        offsets = [
-            (
-                int(uniform_offsets.get(original_index, 0))
-                if uniform_offsets is not None
-                else 0
-            )
-            for original_index, _ in indexed_requests
+            for request in requests
         ]
         arithmetic_mask = torch_module.tensor(
             [request.arithmetic_uniform is not None for request in requests],
@@ -815,7 +429,6 @@ class TransformersBackend:
             len(requests), dtype=torch_module.bool, device=self.device
         )
         finish_reasons = ["length"] * len(requests)
-        callback_completed: set[int] = set()
         maximum_new_tokens = max(request.max_new_tokens for request in requests)
         prefill_tokens = sum(len(prefix) for prefix in prefixes)
         shared_prefill_tokens_saved = 0
@@ -830,12 +443,7 @@ class TransformersBackend:
                     reusable_prefixes
                 )
                 unique_outputs = self._prefill_model(
-                    input_ids=unique_input_ids,
-                    attention_mask=unique_attention_mask,
-                    position_ids=self._position_ids(unique_attention_mask),
-                    use_cache=True,
-                    return_dict=True,
-                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
+                    unique_input_ids, unique_attention_mask
                 )
                 cache = self._repeat_cache(
                     getattr(unique_outputs, "past_key_values", None),
@@ -856,14 +464,7 @@ class TransformersBackend:
                     generation_forward_token_slots = int(unique_input_ids.numel())
             if cache is None:
                 input_ids, attention_mask = self._padded_inputs(prefixes)
-                outputs = self._prefill_model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=self._position_ids(attention_mask),
-                    use_cache=True,
-                    return_dict=True,
-                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
-                )
+                outputs = self._prefill_model(input_ids, attention_mask)
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
             for step in range(maximum_new_tokens):
@@ -884,9 +485,7 @@ class TransformersBackend:
                 probabilities = log_probs.exp()
                 random_values = torch_module.tensor(
                     [
-                        uniforms[index][offsets[index] + step]
-                        if offsets[index] + step < len(uniforms[index])
-                        else 0.0
+                        uniforms[index][step] if step < len(uniforms[index]) else 0.0
                         for index in range(len(requests))
                     ],
                     dtype=torch_module.float64,
@@ -989,22 +588,6 @@ class TransformersBackend:
                         and token == sampling.eos_token_id
                     ):
                         finish_reasons[index] = "eos"
-                    if on_complete is not None and (
-                        finish_reasons[index] == "eos"
-                        or step + 1 >= requests[index].max_new_tokens
-                    ):
-                        original_index, request = indexed_requests[index]
-                        on_complete(
-                            original_index,
-                            self._sequence_sample(
-                                request,
-                                token_lists[index],
-                                logprob_lists[index],
-                                reference_logprob_lists[index],
-                                finish_reasons[index],
-                            ),
-                        )
-                        callback_completed.add(original_index)
 
                 eos_finished = torch_module.tensor(
                     [
@@ -1077,8 +660,6 @@ class TransformersBackend:
                     ),
                 )
             )
-            if on_complete is not None and original_index not in callback_completed:
-                on_complete(original_index, results[-1][1])
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
             self._shared_prefill_tokens_saved += shared_prefill_tokens_saved
@@ -1088,190 +669,33 @@ class TransformersBackend:
             )
         return results
 
-    def _sample_with_verified_draft(
-        self,
-        original_index: int,
-        request: GenerationRequest,
-        proposal: DraftProposal,
-        on_complete: SampleCompletionCallback | None,
-    ) -> SequenceSample:
-        uniforms = (
-            np.asarray(request.uniforms, dtype=np.float64)
-            if request.uniforms is not None
-            else np.random.default_rng(request.seed).random(request.max_new_tokens)
-        )
-        acceptance_uniforms = None
-        if proposal.stochastic:
-            acceptance_uniforms = np.random.default_rng(
-                SeedStream(request.seed).derive(
-                    "stochastic-draft-verification", request.request_id
-                )
-            ).random(len(proposal.token_ids))
-        (
-            tokens,
-            logprobs,
-            reference_logprobs,
-            finish_reason,
-            consumed,
-            reusable_cache,
-            cached_continuation_tokens,
-        ) = self._verify_draft(
-            request, proposal, uniforms, acceptance_uniforms=acceptance_uniforms
-        )
-        if finish_reason != "eos" and consumed < request.max_new_tokens:
-            if reusable_cache is not None:
-                finish_reason = self._continue_verified_cache(
-                    request,
-                    cache=reusable_cache,
-                    cached_continuation_tokens=cached_continuation_tokens,
-                    tokens=tokens,
-                    token_logprobs=logprobs,
-                    reference_logprobs=reference_logprobs,
-                    uniforms=uniforms,
-                    consumed=consumed,
-                )
-            else:
-                tail_request = GenerationRequest(
-                    prefix=request.prefix + tuple(tokens),
-                    max_new_tokens=request.max_new_tokens - consumed,
-                    sampling=request.sampling,
-                    seed=request.seed,
-                    request_id=f"{request.request_id}:verified-tail",
-                )
-                tail = self._sample_same_policy(
-                    [(original_index, tail_request)],
-                    uniform_streams={original_index: uniforms},
-                    uniform_offsets={original_index: consumed},
-                )[0][1]
-                tokens.extend(tail.token_ids)
-                logprobs.extend(tail.token_logprobs)
-                if tail.reference_token_logprobs is None:
-                    raise RuntimeError(
-                        "Transformers tail omitted reference log-probabilities"
-                    )
-                reference_logprobs.extend(tail.reference_token_logprobs)
-                finish_reason = tail.finish_reason
-        sample = self._sequence_sample(
-            request,
-            tokens,
-            logprobs,
-            reference_logprobs,
-            finish_reason,
-        )
-        if on_complete is not None:
-            on_complete(original_index, sample)
-        return sample
-
-    def _sample_batch(
-        self,
-        requests: Sequence[GenerationRequest],
-        on_complete: SampleCompletionCallback | None,
+    def sample_batch(
+        self, requests: Sequence[GenerationRequest]
     ) -> list[SequenceSample]:
         if not requests:
             return []
-        proposals: dict[int, DraftProposal] = {}
-        if self._draft_tree is not None and self._speculation is not None:
-            draft_tokens = self._speculation.draft_tokens(len(requests))
-            if draft_tokens > 0:
-                for index, request in enumerate(requests):
-                    if request.arithmetic_uniform is not None:
-                        continue
-                    proposal = self._draft_tree.draft(
-                        self._model_prefix(request.prefix),
-                        min(draft_tokens, request.max_new_tokens),
-                        stochastic=self._speculation.stochastic_tree,
-                        seed=(
-                            SeedStream(request.seed).derive(
-                                "stochastic-draft", request.request_id
-                            )
-                            if self._speculation.stochastic_tree
-                            else None
-                        ),
-                    )
-                    if proposal.token_ids:
-                        proposals[index] = proposal
-            with self._statistics_lock:
-                self._speculative_requests += len(requests)
-
         grouped: OrderedDict[SamplingConfig, list[tuple[int, GenerationRequest]]] = (
             OrderedDict()
         )
         for index, request in enumerate(requests):
-            if index not in proposals:
-                grouped.setdefault(request.sampling, []).append((index, request))
+            grouped.setdefault(request.sampling, []).append((index, request))
         indexed_outputs: list[tuple[int, SequenceSample]] = []
         for group in grouped.values():
-            indexed_outputs.extend(
-                self._sample_same_policy(group, on_complete=on_complete)
-            )
-        for index, proposal in proposals.items():
-            indexed_outputs.append(
-                (
-                    index,
-                    self._sample_with_verified_draft(
-                        index, requests[index], proposal, on_complete
-                    ),
-                )
-            )
+            indexed_outputs.extend(self._sample_same_policy(group))
         indexed_outputs.sort(key=lambda item: item[0])
         outputs = [sample for _, sample in indexed_outputs]
-        if self._draft_tree is not None:
-            self._draft_tree.observe_samples(outputs)
         with self._statistics_lock:
             self._sample_calls += 1
             self._sampled_sequences += len(outputs)
             self._generated_tokens += sum(len(output.token_ids) for output in outputs)
         return outputs
 
-    def sample_batch(
-        self, requests: Sequence[GenerationRequest]
-    ) -> list[SequenceSample]:
-        return self._sample_batch(requests, None)
-
-    def sample_batch_with_callback(
-        self,
-        requests: Sequence[GenerationRequest],
-        on_complete: SampleCompletionCallback,
-    ) -> list[SequenceSample]:
-        """Invoke ``on_complete`` as each row reaches EOS or its token limit."""
-
-        return self._sample_batch(requests, on_complete)
-
-    def observe_draft_samples(self, samples: Iterable[SequenceSample]) -> None:
-        """Add arbitrary historical/off-policy samples as draft-only material."""
-
-        if self._draft_tree is not None:
-            self._draft_tree.observe_samples(samples)
-
-    def observe_draft_sequences(self, sequences: Iterable[TokenSequence]) -> None:
-        if self._draft_tree is not None:
-            for sequence in sequences:
-                self._draft_tree.observe(sequence)
-
-    def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
-        return None if self._draft_tree is None else self._draft_tree.snapshot()
-
-    def configure_cache_growth(self, block_tokens: int = 0) -> None:
-        """Select lossless, bounded-slack KV storage for subsequent decoding calls."""
-        if not isinstance(block_tokens, int) or block_tokens < 0:
-            raise ValueError("cache growth block must be a non-negative integer")
-        if block_tokens:
-            from inference_scaling.arllm.backends.growing_cache import validate_cache_growth_support
-            validate_cache_growth_support()
-        with self._model_lock:
-            self.cache_growth_tokens = block_tokens
-
-    def _prefill_model(self, *, input_ids, attention_mask, position_ids, use_cache=True,
-                       return_dict=True, logits_to_keep=1):
-        output = prefill_causal_model(
-            self.model, input_ids, attention_mask, position_ids,
-            chunk_size=self.score_chunk_size, logits_to_keep=logits_to_keep,
+    def _prefill_model(self, input_ids, attention_mask):
+        return prefill_causal_model(
+            self.model, input_ids, attention_mask, self._position_ids(attention_mask),
+            chunk_size=self.score_chunk_size, logits_to_keep=1,
             supports_logits_to_keep=self._supports_logits_to_keep,
         )
-        if self.cache_growth_tokens:
-            from inference_scaling.arllm.backends.growing_cache import block_allocated_cache
-            output.past_key_values = block_allocated_cache(output.past_key_values, self.cache_growth_tokens)
-        return output
 
     def _stream_score(
         self, request: ScoreRequest, continuation: TokenSequence, *,
@@ -1557,13 +981,6 @@ class TransformersBackend:
                 generation_forward_token_slots=self._generation_forward_token_slots,
                 score_forward_token_slots=self._score_forward_token_slots,
                 estimated_dense_forward_flops=self._estimated_dense_forward_flops,
-                speculative_requests=self._speculative_requests,
-                speculative_hits=self._speculative_hits,
-                draft_tokens_proposed=self._draft_tokens_proposed,
-                draft_tokens_accepted=self._draft_tokens_accepted,
-                speculative_verification_forward_token_slots=(
-                    self._speculative_verification_forward_token_slots
-                ),
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:

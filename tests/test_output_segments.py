@@ -5,9 +5,11 @@ import pytest
 from inference_scaling.shared.model.output import ThinkingFormat, find_token_sequence
 from inference_scaling.shared.model.structured_output import UnifiedOutputParser
 from inference_scaling.shared.rewards.consilience import confidence_windows
+from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.output import thinking_format_from_backend
-from inference_scaling.arllm.rewards.factory import model_reward_from_config, reward_temperature_from_config
-from inference_scaling.arllm.config import SamplingConfig
+
+# The shipped output settings: automatic thinking format and mode.
+AUTO = load_settings()["ar"]["output"]
 
 
 @pytest.mark.parametrize(
@@ -71,21 +73,8 @@ class _Backend:
 
 
 def test_format_resolution_uses_tokenizer_not_model_name():
-    format_ = thinking_format_from_backend(_Backend(), required=True)
+    format_ = thinking_format_from_backend(_Backend(), AUTO, required=True)
     assert format_.formats == (ThinkingFormat((91,), (90,), name="think"),)
-
-
-def test_factory_separates_reward_probability_and_proposal_temperature():
-    reward = model_reward_from_config(
-        _Backend(), {"conditional_is": {"reward_temperature": 0.1}},
-        source="consilience", sampling=SamplingConfig(temperature=0.6),
-    )
-    assert reward.scope == "thinking"
-    assert reward.sampling.temperature == 1
-    assert reward_temperature_from_config(
-        {"conditional_is": {"reward_temperature": 0.1}}, source="consilience"
-    ) == 2
-    assert reward_temperature_from_config({"reward": {"temperature": 4}}, source="consilience") == 4
 
 
 class _TextTokenizer:
@@ -109,7 +98,7 @@ def _text_parser(template="<think></think>", options=None):
 
     tokenizer = _TextTokenizer(template)
     backend = SimpleNamespace(tokenizer=tokenizer, encode=tokenizer.encode, decode=tokenizer.decode)
-    return thinking_format_from_backend(backend, options), tokenizer
+    return thinking_format_from_backend(backend, {**AUTO, **(options or {})}), tokenizer
 
 
 @pytest.mark.parametrize("opening,closing", (
@@ -154,21 +143,16 @@ def test_unknown_and_disabled_modes_and_empty_prompt_prefill():
     assert parser.split(quoted_prompt, tokenizer.encode("result")).status == "absent"
 
 
-def test_configured_formats_and_template_thinking_switch():
+def test_configured_format_and_template_thinking_switch():
     from inference_scaling.arllm.output import output_settings_from_config
 
-    settings = {"thinking_formats": [
-        {"name": "custom_phase", "start_text": "BEGIN:", "end_text": "FINAL:"},
-        {"name": "bracket", "start_text": "[THINK]", "end_text": "[/THINK]"},
-    ]}
-    parser, tokenizer = _text_parser("", settings)
+    parser, tokenizer = _text_parser("", {"thinking_start_text": "BEGIN:", "thinking_end_text": "FINAL:"})
     assert isinstance(parser, UnifiedOutputParser)
     item = parser.split((), tokenizer.encode("BEGIN:workFINAL:result"))
-    assert item.format_name == "custom_phase"
+    assert item.format_name == "configured"
     assert tokenizer.decode(item.content_token_ids) == "result"
-    assert output_settings_from_config({"prompt": {"chat_template_kwargs": {"enable_thinking": False}}})[
-        "thinking_mode"
-    ] == "disabled"
+    config = {"output": AUTO, "prompt": {"chat_template_kwargs": {"enable_thinking": False}}}
+    assert output_settings_from_config(config)["thinking_mode"] == "disabled"
 
 
 def test_boundary_decision_is_stable_after_final_content_arrives():
@@ -251,7 +235,7 @@ def test_structured_reward_never_retokenizes_a_field_or_splits_a_token():
         return [SimpleNamespace(token_topk_confidences=(1.0, 2.0))]
 
     backend = SimpleNamespace(tokenizer=tokenizer, score_statistics_batch=statistics)
-    reward = ConsilienceReward(backend)
+    reward = ConsilienceReward(backend, thinking_format=thinking_format_from_backend(backend, AUTO))
     assert reward((), (1, 2)) == -1
     assert scored[0].continuations == ((1, 2),)
     assert reward.describe_completion((), (1, 2))["reward_fallback_reason"] == "unaligned_thinking_tokens"

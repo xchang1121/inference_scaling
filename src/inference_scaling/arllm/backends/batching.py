@@ -95,6 +95,13 @@ class ContinuousBatchingBackend:
     def model_id(self) -> str:
         return self._backend.model_id
 
+    def __getattr__(self, name: str):
+        # Tokenizer, decoding, direct generation and score statistics go straight
+        # to the wrapped backend, which serializes its own model access.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._backend, name)
+
     @staticmethod
     def _generation_token_cost(request: GenerationRequest) -> int:
         return max(1, len(request.prefix) + request.max_new_tokens)

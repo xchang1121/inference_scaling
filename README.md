@@ -1,477 +1,166 @@
 # inference_scaling
 
-本仓库同时实现自回归语言模型（AR-LLM）和掩码扩散语言模型（dLLM）的训练与推理扩展。AR-LLM
-提供通用因果语言模型加载接口及组相对策略优化（Group Relative Policy Optimization，GRPO）；已保存的 AR 实验使用 Qwen2.5。dLLM 使用 LLaDA-MoE 与
-方差缩减偏好优化（Variance-Reduced Preference Optimization，VRPO）。两侧共享 GSM8K 数据、奖励、统计量、计算量记录和
-可续跑调度，并分别实现 Metropolis--Hastings（MH）、重要性采样（IS）与 rollout replay。
+本仓库实现自回归语言模型（AR-LLM）与掩码扩散语言模型（dLLM）的推理扩展与训练对照。推理只有一个入口：
+命令行选择算法、模型族、奖励和数据集，其余参数全部写在 [`settings/inference.json`](settings/inference.json)。
+训练（GRPO、VRPO、数据与权重下载）是独立的一套入口，读取 [`settings/training.json`](settings/training.json)。
 
-## 目标分布与方法
+## 目标分布
 
-给定提示 $`x`$、基础模型分布 $`p(y\mid x)`$、序列奖励 $`r(y)`$ 和奖励温度 $`\tau`$，考虑在完整
-序列分布上求解 KL 正则化目标：
+给定提示 $`x`$、基础模型分布 $`p(y\mid x)`$、序列奖励 $`r(x,y)`$ 和奖励温度 $`\tau`$，考虑在完整序列分布上的
+KL 正则化目标：
 
 ```math
 \max_{\pi(\cdot\mid x)}
 \left\{
-\sum_y \pi(y\mid x)r(y)
+\sum_y \pi(y\mid x)r(x,y)
 -\tau D_{\mathrm{KL}}\!\left(\pi(\cdot\mid x)\,\|\,p(\cdot\mid x)\right)
 \right\},
 \qquad \sum_y\pi(y\mid x)=1.
 ```
 
-第一项提高期望序列奖励，第二项限制新分布偏离基础模型；$`\tau`$ 是两者的权衡系数。对归一化约束加入
-拉格朗日乘子后，一阶条件为
-
-```math
-r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
-```
-
-因此 $`\pi(y\mid x)\propto p(y\mid x)\exp\{r(y)/\tau\}`$，归一化后得到仓库采用的主要目标分布：
+加入归一化约束的拉格朗日乘子后，一阶条件给出
 
 ```math
 \pi_r(y\mid x)
-=\frac{p(y\mid x)\exp\{r(y)/\tau\}}
-       {\sum_{y'}p(y'\mid x)\exp\{r(y')/\tau\}}.
+=\frac{p(y\mid x)\exp\{r(x,y)/\tau\}}
+       {\sum_{y'}p(y'\mid x)\exp\{r(x,y')/\tau\}}.
 ```
 
-该闭式解按照奖励重新分配基础模型已有完整序列的概率质量。仓库直接对这一
-分布进行采样或近似，提供以下路径：
+`is` 与 `reward_mh` 直接对这一分布采样；`mh` 采样幂分布 $`p(y\mid x)^\alpha`$；其余算法是生成与选择基线。
+奖励只用于打分，不回传给模型。
 
-| 路径 | 核心操作 | off-policy / replay 处理 | 主要实现 |
-| --- | --- | --- | --- |
-| [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散块，再按 Hastings 比接受或拒绝 | 提议分布（proposal）的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/sampling/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
-| [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | AR：保留一条完整答案，在其块边界产生候选与完整补全，按全序列奖励选一整条后缀；dLLM：逐块重采样 | AR 只用同模型补全；dLLM 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
-| [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/algorithms/replay.py) |
-| [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [归档实现](src/inference_scaling/archive/arllm/dynamic_is.py) |
-| [动态预算 IS（默认方法）](docs/methods/BUDGET.md#budget-joint) | 在保留序列的每个块边界，按剩余预算重新选择候选数、补全数、块长 | 同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/arllm/algorithms/joint_budget_is.py) |
-| [可枚举候选 logit adjustment](docs/methods/ALGORITHMS.md#alg-logit-adjustment) | 将估计条件权重的对数加到基础候选 logits，再在完整候选集上归一化 | 可直接使用新生成、off-policy 或 replay 条件权重 | 理论参考；当前没有 CLI、代码实现或实验结果 |
+## 快速开始
 
-共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
-未归一化目标概率的对数差、正反 proposal 比和接受/拒绝核。AR-LLM 与 dLLM 目录只实现 token 后缀、掩码块或扩散
-轨迹的生成和概率评分。实验方法及其适用组件集中登记在
-[`experiments/shared/methods.py`](experiments/shared/methods.py)，两侧入口、配对协议和汇总程序不再分别维护
-方法名称清单。
-
-训练对照采用 GRPO 与 [VRPO](https://arxiv.org/abs/2505.19223)。VRPO 以掩码扩散的证据下界（ELBO）
-代替序列对数似然：每个偏好对采样 8 个独立掩码比例，每个比例采样 1 个掩码，并让当前策略与冻结的参考模型
-使用相同掩码。LoRA 适配器与关闭适配器后得到的参考模型共同使用同一份已加载基础模型。
-
-MH/IS 的目标、采样步骤、模型职责及执行实现见[算法基础、原理与实现](docs/methods/ALGORITHMS.md)。
-候选数、补全数、块长的联合调度，以及历史/新样本的方差—成本分配、两阶段估计和计费定义，集中在
-[BUDGET.md](docs/methods/BUDGET.md)；该文档包含推导、调用示例与代码索引。联合调度（动态预算 IS）是各入口
-不填参数时运行的默认方法；目前只有 CPU 正确性测试，尚无真实模型的质量或速度结论。
-
-## 奖励与 verifier 配置
-
-MH、IS 与 replay 的算法层统一接收
-`reward(prompt_tokens, completion_tokens) -> float`，或保持相同逐序列定义的批量版本。数据集读取、文本解析、
-远程服务和模型族均不进入算法实现。外部 verifier 由顶层 `[verifier]` 表选择；默认 GSM8K 配置使用数值
-参考值插件，但该插件只是一个可替换实现：
-
-```toml
-[verifier]
-provider = "python"
-name = "numeric_reference"
-factory = "inference_scaling.shared.evaluation.numeric:build_numeric_reference_verifier"
-requires_reference = true
-
-[verifier.options]
-correct_reward = 1.0
-incorrect_reward = 0.0
-unparseable_reward = 0.0
+```bash
+python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward vote --dataset gsm8k
+python -m inference_scaling --algorithm best_of_n --reward verifier
+python -m inference_scaling --algorithm mh --dataset math500
+python -m inference_scaling --algorithm is --model dllm --reward verifier --output results
 ```
 
-`python` provider 从可信的本地模块加载工厂函数。工厂接收 `context` 和 `[verifier.options]`，返回
-`score(prompt, completion)` 对象或等价可调用对象；可选的 `score_batch(inputs)` 用于批量服务。
-`requires_reference = false` 时，实验入口不会把数据集参考值传给 verifier。配置、工厂路径和参数共同生成稳定
-版本号，replay 只复用版本一致的奖励记录。核心接口位于
-[`shared/rewards/verifier.py`](src/inference_scaling/shared/rewards/verifier.py)，独立配置示例位于
-[`configs/verifiers/`](configs/verifiers/)；所有统一入口都接受 `--verifier-config`：
+| 参数 | 取值 | 默认 |
+| --- | --- | --- |
+| `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`reward_mh`、`is` | `is` |
+| `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
+| `--reward` | `verifier`、`vote`、`logprob`、`consilience`；只用于 `best_of_n`、`reward_mh`、`is` | `vote` |
+| `--dataset` | `gsm8k`、`math500` | `gsm8k` |
+| `--output` | 结果根目录 | `results` |
 
-```powershell
-python -m experiments.arllm.gsm8k_reproduction `
-  --config configs/gsm8k_3090_aligned.toml `
-  --method verifier_conditional_is `
-  --verifier-config configs\verifiers\gsm8k_numeric_reference.toml `
-  --limit 1 --tag verifier-check
-```
+没有其他命令行参数。块长、候选数、温度、引擎与优化选项都在设置文件中，缺少、多出或类型不符的字段在加载模型前
+报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。例如对齐模型的采样只需在 `ar.model.adapter` 填入
+GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 
-GRPO 的批量奖励适配器也读取同一 `[verifier]` 表；`gold_answer` 仅在
-`requires_reference = true` 时交给 verifier。VRPO 偏好数据按 verifier 分数选择最高与最低的生成；默认配置把
-公开训练集解答作为一个额外候选并同样评分，设置
-`vrpo_training.include_reference_completion = false` 可完全排除该候选。训练与推理可使用同一
-`--verifier-config`，也可在各自配置文件中选择不同 verifier。
+## 算法
 
-AR-LLM 还实现与外部 verifier 分离的长度归一化对数概率奖励（`sequence_log_probability`）：
+| 算法 | AR-LLM | dLLM |
+| --- | --- | --- |
+| `sample` | 基础策略采样一次 | 按 `dllm.sampling` 分块解码一次 |
+| `greedy` | 贪心解码 | 温度 0 的分块解码 |
+| `beam` | token 级 beam search | 按轨迹概率保留的分块 beam |
+| `best_of_n` | $`N`$ 个样本中按奖励选一个；`vote` 时取得票最多的答案 | 同左 |
+| `mh` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
+| `reward_mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
+| `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 条件扩散 IS；补全来自主模型或早退 proposal（可做轨迹概率校正与截断） |
 
-```math
-r_{\log p}(x,y)=\frac{c}{L}\log p(y\mid x),
-\qquad
-p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
-=p(y\mid x)^{1+c/(\tau L)}.
-```
+原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
+不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。
 
-其中 $`L`$ 是有效 completion 的 token 数，包含实际生成的 EOS 或停止标记，不包含停止后的吸收态
-padding；空 completion 的奖励为 0。`Best-of-N` 直接复用生成时保存的 token 对数概率并取均值；
-条件 IS 与迭代 IS 通过后端批量评分，使用相同的归一化。这里的 $`p`$ 是评分采用的采样策略。
-这是对旧版求和奖励的行为变更：变长序列不再对应固定指数的 $`p^\alpha`$，旧实验的 reward temperature
-需要重新校准。需要固定 $`p^\alpha`$ 目标时仍使用 `--method mh --set mh.alpha=<alpha>`。
-重要性采样的 $`p/q`$ 概率与 MH 接受率中的序列 logprob 仍保持求和，不做长度归一化。
-该奖励模式要求模型后端返回精确 token 对数概率：
+## 奖励
 
-```powershell
-python -m experiments.arllm.gsm8k_reproduction `
-  --config configs/gsm8k_3090_aligned.toml `
-  --method conditional_is --reward sequence_log_probability `
-  --set conditional_is.reward_temperature=0.5 --set reward.logprob_scale=0.5 `
-  --limit 1 --tag mean-logprob-is
-```
+| 奖励 | 定义 | 实现 |
+| --- | --- | --- |
+| `verifier` | 外部奖励来源，即只有模型自身时拿不到的信息：数据集判定器对照参考答案（正确/错误/无答案三个取值）、Python 工厂 $`r=f(x,y)`$（如外部评分模型）或常数 | [`shared/rewards/verifier.py`](src/inference_scaling/shared/rewards/verifier.py) |
+| `vote` | `best_of_n`：候选互相投票，平票在最高票中按种子随机选；`is`/`reward_mh`：与冻结的 `pool_size` 个独立样本答案一致的比例 | [`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
+| `logprob` | 有效输出 token 的平均对数概率（AR） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
+| `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
-AR-LLM 还支持 [Consilience](https://arxiv.org/abs/2608.09898) 的置信度轨迹奖励。它只读取同一模型逐 token
-的 top-$`K`$ 对数概率，不读取参考答案或外部 verifier。默认优先对思考段评分，跳过开头 5%，分别取随后 20% 与末尾
-20% 的置信度均值，并计算“末段均值减去 3 倍首段均值”。该原始分数不做候选组内归一化，因此是固定的
-逐序列奖励，可用于条件 IS、迭代 IS 和奖励 MH。思考模型配置中可加入：
+四种奖励都是逐序列的固定分数，因此条件 IS 可以复用保留序列的奖励，MH 的接受率只含奖励差。温度写在各奖励的
+设置中。答案文本取思考段之后的内容；`thinking_mode = "enabled"` 时未完成的思考没有最终答案。
 
-```toml
-[reward]
-source = "consilience"
-temperature = 2.0
+## 数据集
 
-[reward.consilience]
-scope = "thinking"
-top_k = 5
-window_fraction = 0.2
-skip_fraction = 0.05
-initial_penalty = 3.0
-scale = 1.0
+[`datasets/`](src/inference_scaling/datasets/) 为每个数据集提供题目、提示模板、答案规则（投票比较答案用）与判定器，
+评测总是用数据集判定器。`gsm8k` 读取 OpenAI 官方拆分并校验 SHA-256，按最终数值判定；`math500` 读取固定提交的
+MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/huggingface/Math-Verify) 在独立进程中判定。
 
-[output]
-sampling_scope = "thinking"
-thinking_mode = "auto"
-thinking_format = "auto"
-```
+## 输出
 
-分段支持 `<think>`、`[THINK]` 等成对标记，以及 XML 元素、JSON 字段和嵌套路径。标记可来自 tokenizer、
-chat template 或显式配置。关闭思考、缺少完整思考段、结构解析失败或 token 边界无法对齐时，使用全序列
-Consilience，并记录回退原因。`reward.consilience.scope = "full"` 可直接选择全序列评分。
-vLLM 路径需要配置 Transformers 精确评分后端。
+每次运行写入 `<output>/<数据集>/<模型族>/<算法>[-<奖励>]/<指纹>/`：
 
-AR 统一入口及单方法入口的 `--sampling-scope full|thinking` 独立控制 IS/MH
-的采样范围：`full` 操作完整生成，`thinking` 在可靠的结束标记处选择思考段，再由基模型生成最终内容。
-XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍可仅评价思考字段。输出记录区分请求范围、
-实际范围、思考文本、最终内容和回退原因。字段配置与示例见[输出格式与模式识别](docs/methods/ALGORITHMS.md#alg-output-formats)。
-奖励 MH 使用 `--method reward_mh --reward consilience`。依赖最终内容的 verifier 与自一致性配置使用 `full`。
-公式、实现边界与成本见[奖励信号](docs/methods/ALGORITHMS.md#alg-rewards)，评测设置见
-[Consilience 评测设置](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#consilience-protocol)。
-
-## 通用模型与生成配置
-
-单方法入口默认读取 [`configs/arllm.toml`](configs/arllm.toml)，使用 `--model` 指定权重。
-命令行只有两类参数：按名称选择的字段（`--method`、`--reward`、`--backend`、套件的 `--components` 等），
-以及覆盖配置中已有字段的 `--set 表.字段=值`（可重复，字段名写错会报错）。候选数、块长、温度等算法参数
-只在配置中定义，不再各有单独的命令行参数；小模型补全的消融用方法名表示，如 `conditional_is_small_proposal_uncorrected`。
-默认生成上限为 **32,768 token**，包括思考和最终内容；EOS 可提前结束生成。
-每个提示的实际预算取配置上限与主模型、proposal 模型剩余上下文长度的较小值。更长输出可通过
-`--max-new-tokens` 设置；结果记录请求上限、实际上限及上下文截断标记。
-`gsm8k_quick.toml` 保留短序列冒烟设置，历史实验配置保留原有预算。
-
-```powershell
-python -m experiments.arllm.gsm8k_reproduction `
-  --model "D:\models\my-causal-lm" `
-  --method conditional_is --reward consilience `
-  --sampling-scope thinking --max-new-tokens 32768 `
-  --limit 1 --tag thinking-is
-```
-
-`--model` 也接受 Hub 模型 ID；默认读取本地目录或已缓存文件，`--allow-download` 开启下载。
-模型选项按 `[model_loading]` 与 `[model_loading.base|proposal|rl]` 合并：
-
-| 配置或参数 | 用途 |
+| 文件 | 内容 |
 | --- | --- |
-| `--model`、`--proposal-model` | 主模型与 rollout 模型的目录或 Hub ID |
-| `--model-revision` | 主模型版本；建议使用固定提交 ID |
-| `--tokenizer`、`--tokenizer-revision` | 独立 tokenizer 及其版本 |
-| `model_loading.adapter_revision` | 适配器版本，与基础模型版本分开 |
-| `model_loading.device_map` | Transformers 的设备放置策略，如 `"auto"` |
-| `model_loading.attn_implementation` | Transformers 注意力实现，如 `"sdpa"` |
-| `model_loading.model_kwargs`、`tokenizer_kwargs` | 对应加载接口的附加配置 |
-| `--score-chunk-size` | 长序列评分与前缀预填充的分块长度，默认 256 |
-| `--mh-iterations` | 固定完整长度目标上的 MH 更新次数，与生成上限独立 |
-| `--thinking-mode auto|enabled|disabled` | 思考模式声明及支持该开关的 chat template 设置 |
-| `--thinking-format auto|tags|xml|json` | 思考与最终内容的解析格式 |
+| `manifest.json` | 命令行选择、完整设置及其哈希、有效设置、git 提交与是否有未提交改动、依赖版本与硬件、模型权重与元数据哈希、数据文件哈希与所选题目、创建时间 |
+| `records.jsonl` | 每题每次抽取一行：问题、参考答案、输出（全文、思考段、内容、token 数、是否以 EOS 结束）、判定出的答案、是否可解析与正确、输出的奖励、算法轨迹、按阶段（奖励池、搜索、收尾）与模型的计算量、回退原因、耗时 |
+| `summary.json` | 准确率与 Wilson 95% 区间、`draws > 1` 时的 pass@k、奖励统计、计算量与时间合计、输出长度、失败计数 |
 
-权重校验支持单文件、索引分片和 PEFT 适配器；所有实际使用的分片参与校验。
-vLLM 与精确评分后端使用相同的已解析权重和 tokenizer。Consilience 的 vLLM 路径需要
-`vllm.exact_scoring_backend = "transformers"`；设备、显存比例及量化选项仍由 `[vllm]` 设置。
-详细接口、数值检查和模块分工见[模型加载与长序列执行](docs/methods/ALGORITHMS.md#alg-model-loading)。
+指纹由有效设置、模型与数据哈希和包源码哈希决定。相同指纹的目录会续跑缺少的记录；增加 `run.draws` 也在原目录继续。
+计算量以前向 token 位置计：FLOPs 约为 `2 × 参数量 × 前向 token 位置数`（LLaDA 用激活参数量）。
 
-范围控制已接入基础 IS、迭代 IS、replay、动态候选 IS、MH、pass@k 和异步比较。
-依赖最终内容的奖励会显式采用全序列采样。两个固定任务的 infra 微基准使用 `full`，并在加载模型前检查范围。
-通用 AR 加载器面向支持因果 logits、tokenizer 和 KV 缓存的模型；具体架构由所选 Transformers 或 vLLM 版本支持。
-dLLM 继续使用独立的扩散后端接口。
+## 执行优化
 
-## 文档
-
-| 文档 | 内容 |
+| 优化 | 设置 |
 | --- | --- |
-| [算法基础、原理与实现](docs/methods/ALGORITHMS.md) | MH/IS 完整流程、数学目标、模型职责、参数、关键代码、直观收敛说明、执行优化和 vLLM 配置 |
-| [运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md) | 数据配置、方法标识、训练与推理命令、统计量和输出目录 |
-| [算法设计与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md) | 固定实验设置下的准确率、pass@k、奖励与 proposal 对照，以及结果适用范围 |
-| [思考模式与模型自身奖励](docs/reports/QWEN3_MATH500_REASONING.md) | Qwen3-1.7B / MATH-500 Level 5 的 30 题结果，比较 Base、IS、MH 的准确率与实际计算量 |
-| [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md) | 批处理、IS/MH 复用和奖励调度的墙钟、分模型 FLOPs、建库与设计成本 |
-| [非默认方案记录](docs/methods/ALGORITHMS.md#alg-nondefault-notes) | 已筛选方案的主要成本问题与适用条件 |
+| 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
+| vLLM 引擎、前缀缓存、同步引擎上 MH 的融合概率 | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.mh_fused_logprobs` |
+| 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
+| 多尺度 MH 后缀 | `ar.algorithms.mh.suffix_schedule = "multiscale"` |
+| 冻结历史 MH proposal | `ar.algorithms.reward_mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
-## 实现范围
+互相冲突的组合（如异步引擎上的融合概率、预算规划的 IS 配思考段采样）在加载模型前报错；与所选算法无关的优化不生效。
 
-| 模型族 | 模型与训练对照 | 推理组件 | 执行接口 |
-| --- | --- | --- | --- |
-| AR-LLM | 通用因果模型与 GRPO；报告覆盖 Qwen2.5-1.5B 与 Qwen3-1.7B，0.5B 作 proposal/rollout | MH、条件 IS、replay、可选研究方法 | Transformers 与 vLLM；主模型与辅助模型的计算量分别记录 |
-| dLLM | LLaDA-MoE-7B-A1B 与 VRPO | 分块生成、轨迹 MH、条件 IS 与 replay | 批量 Transformers；提供轻量测试和大显存机器入口 |
-| 公共层 | 与模型无关 | 逐步候选、IS/replay 权重、MH 接受核、预算分配、SMC、统计与计算量记录 | AR/dLLM 共用同一实现 |
+## 训练
 
-统一入口默认使用 `multiscale` 后缀 MH。replay 要求历史记录与当前提示、模型和采样策略匹配；IS 的最终估计
-记录还必须尚未使用。候选缓存与连续批处理可复用已有请求，历史库构建成本单独统计。具体执行顺序见
-[Qwen 复现流程](docs/methods/ALGORITHMS.md#alg-qwen-default-mh)。
+```bash
+python -m training
+```
 
-版本控制保留代码、配置、测试、使用文档和两份精选实验报告。运行产生的原始数据、汇总、日志和清单写入
-`results/`，由 Git 统一忽略。报告分别讨论算法质量与执行成本，非默认方案的简要结论集中在算法文档中。
+按 `settings/training.json` 的 `stages` 依次运行，没有命令行参数，各阶段可续跑：
+
+| 阶段 | 内容 | 代码 |
+| --- | --- | --- |
+| `download` | 下载并校验 GSM8K 训练/测试拆分与固定版本的模型权重（Hugging Face 或 ModelScope） | [`training/download.py`](training/download.py) |
+| `grpo` | 在 GSM8K 训练集上训练 GRPO LoRA，奖励为配置的 verifier；记录墙钟、生成 token、显存与 GPU 功率积分 | [`training/grpo.py`](training/grpo.py) |
+| `vrpo_preferences` | 用 LLaDA 生成候选并按 verifier 选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
+| `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |
+
+训练得到的适配器填入推理设置的 `ar.model.adapter` 或 `dllm.model.adapter` 即可评测。
 
 ## 安装
 
-AR-LLM 与官方 LLaDA-MoE 使用不同的 Transformers 版本。单独运行一侧时可直接使用当前 Python；完整成对
-运行时使用两个解释器。
-
-### 当前 Python
-
-AR-LLM 依赖：
-
-```powershell
-python -m pip install --upgrade pip
-python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
-python -m pip install -e ".[dev,gpu,training]"
-```
-
-LLaDA-MoE 与 VRPO 依赖应安装到另一个 Python，或在只运行 dLLM 时安装到当前 Python：
-
-```powershell
-python -m pip install --upgrade pip
-python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
-python -m pip install -e ".[dev,dllm,dllm-training]"
-python -m experiments.dllm.download_llada `
-  --config configs\gsm8k_llada_moe_3090.toml --source modelscope
-```
-
-### 已有的 `.venv`
-
-仓库根目录已有 `.venv` 时可直接作为控制器、dLLM 解释器或测试解释器，无需激活：
-
-```powershell
-.\.venv\Scripts\python -m pip install -e ".[dev,dllm,dllm-training]"
-.\.venv\Scripts\python -m experiments.dllm.run_llada_suite --profile smoke
-.\.venv\Scripts\python -m pytest
-```
-
-### 两个显式解释器
-
-解释器可以来自系统安装、已有 `.venv`、Conda 或其他 Python 安装。变量值既可为绝对路径，也可为 `PATH`
-中的可执行文件名：
-
-```powershell
-$env:AR_PYTHON = "C:\path\to\ar-python.exe"
-$env:DLLM_PYTHON = ".\.venv\Scripts\python.exe"
-
-& $env:AR_PYTHON -m pip install -e ".[dev,gpu,training]"
-& $env:DLLM_PYTHON -m pip install -e ".[dev,dllm,dllm-training]"
-```
-
-### Linux / WSL2 vLLM
-
-vLLM `0.25.x`--`0.26.x` 使用 Linux GPU wheel，并按官方 wheel 要求安装
-PyTorch `2.11.0`。建议使用独立环境，避免改变已有训练环境中的 PyTorch。Windows 主机在 WSL2 的
-Linux 文件系统中使用兼容的 Python：
+AR-LLM 与官方 LLaDA-MoE 需要不同的 Transformers 版本，两个模型族分别安装到各自的 Python 环境：
 
 ```bash
-python3.12 -m pip install --upgrade pip
-python3.12 -m pip install -e ".[dev,vllm]"
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+python -m pip install -e ".[dev,gpu,training,evaluation]"      # AR-LLM
+python -m pip install -e ".[dev,dllm,dllm-training,evaluation]" # LLaDA-MoE 与 VRPO（另一个环境）
+python -m pip install -e ".[dev,vllm]"                          # vLLM（Linux 或 WSL2 的独立环境）
 ```
-
-幂目标 MH 在 vLLM `0.26.x` 上可把 proposal 概率和基础模型概率合并到同一次解码，省去生成后的整段
-重评分。该路径使用同步入口，且不与 speculative decoding 同时启用：
-
-```bash
-python -m experiments.arllm.gsm8k_reproduction \
-  --config configs/gsm8k_3090_aligned.toml \
-  --backend vllm-sync --method mh --set vllm.base.mh_fused_logprobs=true \
-  --tag mh-fused --limit 32
-```
-
-实现约束、概率记账和统计字段见[算法与实现文档](docs/methods/ALGORITHMS.md#infra-vllm)。
-
-## 统一复现入口
-
-[`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理。不填参数时只运行默认实验：
-AR 动态预算 IS 的 `quality` 组件；其他方法与组件用 `--ar-methods`、`--components` 指定，冻结的 AR↔dLLM
-成对设计用 `--family both`。
-AR 默认配置使用 Qwen2.5-1.5B；dLLM 通过 `--family dllm` 或 `--family both` 显式选择。两个 Python 路径分别
-指向上述解释器。AR 的低成本功能检查（`smoke`）使用 1 题、缩短预算和一次 GRPO 更新。显式选择 dLLM 时，`smoke` 执行
-CPU VRPO 反向传播、临时 LoRA 保存与重新加载检查；真实 LLaDA 推理子进程结束后释放模型显存。
-
-解释器选择顺序为：CLI 的 `--ar-python` / `--dllm-python`、环境变量 `AR_PYTHON` / `DLLM_PYTHON`、
-启动统一入口的当前 Python。单侧运行可省略两个解释器参数：
-
-```powershell
-python experiments\run_reproduction.py `
-  --family arllm --stage all --profile smoke --tag local-qwen
-```
-
-环境变量方式无需在命令中重复路径：
-
-```powershell
-python experiments\run_reproduction.py `
-  --family both --stage all --profile smoke --tag local-check `
-  --ar-methods base mh conditional_is rl_sample `
-  --dllm-methods base trajectory_power_mh conditional_is_reduced_layer_proposal `
-  --components quality replay
-```
-
-大显存机器上的完整训练和推理使用相同入口。dLLM 阶段依次构造公开训练集偏好对、续跑 VRPO LoRA、加载
-适配器，并运行配置中的推理方法；`--stage all` 会先下载或校验固定版本的 LLaDA 权重。AR 阶段依次
-准备数据与权重、续跑 GRPO 和运行所选实验族，并把本次训练输出的适配器路径显式传给质量、pass@k、
-消融和分布诊断，避免误用配置文件中的旧适配器。推理阶段显式选择 `vrpo_sample` 或 `vrpo_greedy` 时会
-加载已有适配器；适配器不存在时入口在启动模型前报错。
-
-Qwen2.5-1.5B 正式路线使用：
-
-```powershell
-python experiments\run_reproduction.py `
-  --family arllm --stage all --profile full --tag qwen15b-full `
-  --ar-python $env:AR_PYTHON
-```
-
-主要 CLI 参数：
-
-| 参数 | 作用 |
-| --- | --- |
-| `--family arllm\|dllm\|both` | 运行一侧或成对运行 |
-| `--stage prepare\|train\|inference\|all` | 选择模型准备、RL 训练、推理或完整流程 |
-| `--profile smoke\|full` | 低成本实现检查或正式配置 |
-| `--ar-methods ...`、`--dllm-methods ...` | 选择具体推理方法 |
-| `--ar-set 表.字段=值` | 覆盖 AR 配置中已有的字段，可重复；AR 套件默认 `mh.suffix_schedule=multiscale`，基线复现用 `--ar-set mh.suffix_schedule=uniform` |
-| `--components ...` | 选择质量、matched target、replay、动态 IS、异步、pass@k、消融、infra 等实验族 |
-| `--verifier-config ...` | 用独立 TOML 文件替换外部 verifier，不修改数据集或算法配置 |
-| `--ar-python ...`、`--dllm-python ...` | 覆盖环境变量与当前解释器 |
-| `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
-| `--dry-run` | 只写入清单并打印子命令，不启动训练或推理 |
-
-成对设计（`--family both`）的 `full` 档默认调度 `quality`、`matched_target`、`replay`、`async`、`passk` 和
-`distribution`；AR 单侧不填 `--components` 时只运行 `quality`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
-`--components` 中显式指定时运行；它们用于研究消融或特定后端验证。dLLM 使用分块 beam、反向轨迹 MH、
-低层 proposal、轨迹 replay、分块 SMC 与 VRPO 对应 AR 的 token 级方法。
-AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。replay 入口将建库时已经生成的基础模型候选
-直接交给在线选择，避免第二次生成同一候选；连续批处理仍由 `async` 组件和执行后端承担。
-方法标识、配对关系与各组件统计量见[运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md#method-labels)。
-
-两侧也可独立启动：
-
-```powershell
-& $env:AR_PYTHON -m experiments.arllm.run_arllm_suite `
-  --stage all --profile full --tag full-ar
-
-& $env:DLLM_PYTHON -m experiments.dllm.run_llada_suite `
-  --profile full --vrpo train --tag full-dllm
-```
-
-所有入口写入命令清单和已完成子任务数。模型族入口位于 `experiments/arllm/` 与 `experiments/dllm/`，仓库根级
-实验目录只保留成对调度入口。完整统计定义见
-[运行与评测](docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。
-
-### 思考模式与模型内在奖励比较
-
-[`reasoning_benchmark`](experiments/arllm/reasoning_benchmark.py) 使用公开 MATH-500 的固定分层子集，比较
-非思考/思考采样、多数投票、完整序列候选 IS 和后缀 MH。标准答案仅交给最终评测；自一致性奖励使用两个独立生成后固定的
-输出，log-probability 使用实际采样策略的序列概率，Consilience 默认只评价思考段。
-数学等价性由 [Math-Verify](https://github.com/huggingface/Math-Verify) 检查。
-
-```powershell
-python -m pip install -e ".[evaluation]"
-python -m experiments.arllm.reasoning_benchmark `
-  --stage compare --split test --config configs/qwen3_math.toml `
-  --model Qwen/Qwen3-1.7B --model-revision 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e --allow-download `
-  --budgets 32768 131072 --candidate-counts 2 4 --limit 30 `
-  --output results/qwen3_math
-python -m experiments.arllm.reasoning_benchmark --stage summarize --limit 30 --require-complete --output results/qwen3_math
-```
-
-`--model`、`--model-revision` 和 `--allow-download` 控制通用模型加载；缺少数据时，`--allow-download` 同时下载
-固定版本的 MATH-500。`--limit`、`--draws`、`--methods`、`--rewards` 分别控制题数、随机重复和比较范围。
-运行与汇总使用相同的 `--limit`，按固定抽题顺序取前 N 题；已有结果和候选池保持不变。
-`--candidate-counts` 同时确定 IS 候选数与 MH 状态数，MH 更新次数为状态数减一；`--modes` 用于独立的 `base` 阶段。
-共同参考策略保留完整词表支持，比较阶段要求 `sampling.top_p = 1` 且不设置 `top_k`。
-汇总检查完整的题目、方法与预算组合；部分结果可省略 `--require-complete` 查看。相同题目的多次随机重复按题目统计置信区间。
-预算单位为模型前向 token 位置数，包括重复提示、候选、`pilot_agreement` 的独立样本和奖励评分；FLOPs 沿用 `2 × 参数量 × 前向 token 位置数`。
-`base` 使用 IS/MH 共同的单条长度上限，比较相同生成范围下的选择效果；`budget_base` 则允许单次生成使用
-整档预算，受模型上下文和 `generation.max_new_tokens` 约束，用于比较同总预算下的质量。
-IS/MH 每组预算预留完整生成与评分成本，再确定单条长度上限。EOS 产生的剩余预算与实际消耗分开记录。
-不同 IS 奖励共享同一候选池作成对比较，但分别计入各自使用的生成与评分成本。候选池和中间结果存放在被 Git 忽略的输出目录中。
-同一题内完全相同的 MH 请求也可复用，计费仍包含独立执行该请求所需的前向计算；`--no-reuse-identical-requests`
-关闭此项实验加速。该缓存的命中数用于检查实验开销，不作为算法吞吐提升的测量结果。
-Transformers 下，不同预算共用的 MH 初始化序列按最大所需长度生成一次；短预算只使用其前缀，
-仍计入短预算独立运行时的生成成本，额外预生成的后缀不进入该方法的选择或评分。
-`--cache-growth-tokens 512` 为 Transformers 的逐 token 解码启用按块扩容的 KV 存储，减少已有缓存的复制；
-默认值 `0` 使用原生存储。该选项仅支持旧版 `DynamicCache` 接口（已测试 Transformers 4.53.2），
-不支持缓存卸载或量化。注意力仍只读取有效长度，采样策略及 token/FLOPs 计费保持不变。
-Qwen3-1.7B 的 RTX 3090 检查中，8,192 token 前缀后固定生成 512 token，交替执行各两次，
-平均时间从 18.89 秒降至 17.56 秒（1.076 倍）；生成 token、逐 token 概率和模型计算量完全一致。
-此数值仅对应缓存专项检查，完整质量比较的速度收益取决于实际生成长度。
-
-### 条件 IS、分块版本与整序列 SIR 的比较
-
-[`conditional_is_comparison`](experiments/arllm/conditional_is_comparison.py) 在同一 MATH-500 子集上比较
-[条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is)、它取代的[分块版本](src/inference_scaling/archive/README.md)
-（`block_conditional_is`）与整序列 SIR。三者都不设预算上限，每条记录
-保存后端的实际计数：前向 token 位置数对每个请求重复计入其完整前缀；新生成 token 数只计新 token，更接近复用前缀
-缓存的运行。不同大小的 SIR 使用同一题共享样本池的前 N 条；条件 IS 与分块版本使用相同的随机种子，作成对比较。
-
-```powershell
-python -m experiments.arllm.conditional_is_comparison `
-  --split test --limit 30 --config configs/qwen3_math.toml `
-  --model Qwen/Qwen3-1.7B --model-revision 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e --allow-download `
-  --max-new-tokens 16384 --candidates 4 --rollouts 1 --block-size 4096 `
-  --sir-counts 1 2 4 8 16 --output results/qwen3_conditional_is
-python -m experiments.arllm.conditional_is_comparison --stage summarize --output results/qwen3_conditional_is
-```
-
-`--rewards` 可选 `consilience`（默认）与 `sequence_log_probability`。后者在 SIR 中直接使用采样时返回的对数概率，
-在分块方法中需要重新评分。
 
 ## 测试与目录
 
-```powershell
+```bash
 python -m pytest
-
-# 或使用仓库中已有的解释器
-.\.venv\Scripts\python -m pytest
 ```
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/inference_scaling/arllm/` | AR-LLM。根目录为采样策略（`config.py`）、请求与后端契约（`types.py`）、思考段格式与采样范围（`output.py`、`scope.py`）；子包为 `algorithms/`（MH、IS、replay 及其数据池，`algorithms/config.py` 为算法配置）、`backends/`（Transformers 与 vLLM 执行）、`acceleration/`（推测解码、rollout 调度等执行加速）、`rewards/`（模型自身奖励及其配置工厂） |
-| `src/inference_scaling/dllm/` | LLaDA-MoE。根目录为采样策略与契约；子包为 `algorithms/`（分块生成、MH、IS、replay、动态候选）、`backends/`、`training/`（VRPO） |
-| `src/inference_scaling/shared/sampling/` | 两侧共用的采样算法核：逐步 SIR、IS/replay 权重、MH 接受核、SMC 重采样 |
-| `src/inference_scaling/shared/budget/` | 预算分配：方差—成本分配、候选数/补全数/块长联合选择、逐块规划器与预留成本模型 |
-| `src/inference_scaling/shared/model/` | 模型配置：加载、提示模板、生成长度上限与思考段/正文分段 |
-| `src/inference_scaling/shared/rewards/` | 奖励：外部 verifier 接口与 Consilience 置信度窗口算术 |
-| `src/inference_scaling/shared/` | 以上子包及数据评测（`evaluation/`）、配置校验、随机数和计算量记录 |
-| `src/inference_scaling/archive/` | 被主线取代或筛选后未进入主线、但报告结果依赖的实现，按方法名或对应基准显式运行，见其 [README](src/inference_scaling/archive/README.md) |
-| `configs/` | 模型、数据与预算配置 |
-| `experiments/shared/` | 两侧共用的组件清单、统计量、配置标识、可续跑调度和结果文件管理 |
-| `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本，目录内只放命令行入口 |
-| `experiments/arllm/assembly/`、`experiments/dllm/assembly/` | 各入口共用的组装代码：AR 的 `method_runners.py`（方法 → 算法调用与奖励）、`common.py`（提示与后端加载）、`runtime.py`（权重校验）等；奖励统一由 `arllm/rewards/factory.py` 按名称构造 |
-| `experiments/run_reproduction.py` | 成对调度 AR-LLM 与 dLLM 的统一入口 |
-| `tests/` | 分布、实现一致性和结果处理测试 |
-| `docs/` | 算法原理与实现、运行说明，以及算法质量和执行成本两份报告 |
-| `results/` | 运行时生成的原始数据、汇总和清单，Git 忽略 |
-| `online-speculation/` | 独立的在线推测解码项目，使用其目录内的说明与入口 |
+| `src/inference_scaling/app/` | 推理入口：命令行、设置 schema、运行与续跑、结果记录、两个模型族的算法组装、奖励绑定 |
+| `src/inference_scaling/datasets/` | 数据集：题目、提示、答案规则与判定器 |
+| `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS、预算 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（logprob、Consilience） |
+| `src/inference_scaling/dllm/` | LLaDA：`algorithms/`（条件扩散 IS、MH、分块 beam）、`backends/`、`training/`（VRPO） |
+| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`budget/`（预算规划）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（verifier、投票、Consilience 算术） |
+| `settings/` | 推理与训练设置 |
+| `training/` | 训练入口与各阶段 |
+| `tests/` | 分布、实现一致性、端到端运行与结果处理测试 |
+| `docs/` | [设置说明](docs/SETTINGS.md)、[算法](docs/methods/ALGORITHMS.md)、[预算](docs/methods/BUDGET.md)与实验报告 |
+| `results/` | 运行结果，Git 忽略 |
+| `online-speculation/` | 独立的在线推测解码项目 |
 
-公共算法接口位于 `inference_scaling.shared`；模型特定代码只负责生成状态、proposal 与概率评分。
-`tests/test_repository_layout.py` 检查分层：`shared` 不依赖模型族或研究实现，模块之间不导入下划线私有名称。
+[`tests/test_repository_layout.py`](tests/test_repository_layout.py) 检查分层：底层不依赖上层，两个模型族互不依赖。
+
+## 历史结果
+
+[GSM8K 算法与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、
+[Qwen3 / MATH-500 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)与
+[推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告由统一入口之前的实验脚本产生，其中部分方法和优化
+已删除。报告中的数字与命令对应 git 标签 `pre-unified-cli`，从该标签可完整复现。

@@ -1,63 +1,26 @@
 """Reward definitions shared by every model family.
 
-- ``verifier``: configurable external verifiers and their token-level reward adapters
+- ``verifier``: external reward sources (dataset grader, Python factory, constant)
+- ``vote``: answer votes and the frozen-pool agreement reward
 - ``consilience``: confidence-trajectory arithmetic of the Consilience score
-- ``consensus``: answer-agreement rewards; datasets supply only an answer rule
 
 Rewards computed from a model's own probabilities live with each model family
-(``inference_scaling.arllm.rewards``); dataset-specific verifier plugins live in
-``inference_scaling.shared.evaluation``.
+(``inference_scaling.arllm.rewards``).
 """
 
-from inference_scaling.shared.rewards.consensus import (
-    AnswerRule,
-    CumulativeConsensusReward,
-    consensus_index,
-    frozen_consensus_reward,
-    modal_answer,
-    pilot_agreement_reward,
-)
 from inference_scaling.shared.rewards.consilience import ConfidenceWindows, confidence_windows
-from inference_scaling.shared.rewards.verifier import (
-    BatchTextVerifier,
-    ConfiguredTrainingVerifierReward,
-    ConfiguredVerifier,
-    TextVerifier,
-    TokenBatchReward,
-    TokenReward,
-    TokenVerifierReward,
-    VerifierContext,
-    VerifierInput,
-    VerifierSpec,
-    build_token_verifier_reward,
-    build_verifier,
-    load_verifier_table,
-    replace_verifier_from_file,
-    verifier_spec_from_config,
-)
+from inference_scaling.shared.rewards.verifier import VERIFIER_SOURCES, Verifier, VerifierContext, build_verifier
+from inference_scaling.shared.rewards.vote import AnswerRule, answer_groups, pool_agreement_reward, vote_index
 
 __all__ = [
     "AnswerRule",
-    "BatchTextVerifier",
     "ConfidenceWindows",
-    "CumulativeConsensusReward",
-    "ConfiguredTrainingVerifierReward",
-    "ConfiguredVerifier",
-    "TextVerifier",
-    "TokenBatchReward",
-    "TokenReward",
-    "TokenVerifierReward",
+    "VERIFIER_SOURCES",
+    "Verifier",
     "VerifierContext",
-    "VerifierInput",
-    "VerifierSpec",
-    "build_token_verifier_reward",
+    "answer_groups",
     "build_verifier",
     "confidence_windows",
-    "consensus_index",
-    "frozen_consensus_reward",
-    "load_verifier_table",
-    "modal_answer",
-    "pilot_agreement_reward",
-    "replace_verifier_from_file",
-    "verifier_spec_from_config",
+    "pool_agreement_reward",
+    "vote_index",
 ]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import numpy as np
 
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
@@ -18,104 +17,12 @@ from inference_scaling.shared.sampling.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
 )
-from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.stepwise import (
-    StepwiseCandidate,
-    normalize_log_weights,
-    run_stepwise_generation,
-)
-from inference_scaling.shared.types import TokenSequence
-from inference_scaling.shared.rewards.verifier import TokenBatchReward, TokenReward
+from inference_scaling.shared.sampling.stepwise import StepwiseCandidate, run_stepwise_generation
+from inference_scaling.shared.types import TokenBatchReward, TokenReward, TokenSequence
 
 DiffusionRewardFunction = TokenReward
 DiffusionRewardBatchFunction = TokenBatchReward
-
-
-@dataclass(frozen=True, slots=True)
-class DiffusionSIRItem:
-    sample: DiffusionSample
-    reward: float
-    target_trajectory_logprob: float | None
-    raw_log_importance_ratio: float | None
-    applied_log_importance_ratio: float | None
-    log_weight: float
-
-
-@dataclass(frozen=True, slots=True)
-class DiffusionSIRResult:
-    items: tuple[DiffusionSIRItem, ...]
-    probabilities: tuple[float, ...]
-    selected_index: int
-    effective_sample_size: float
-
-    @property
-    def selected(self) -> DiffusionSIRItem:
-        return self.items[self.selected_index]
-
-
-def resample_diffusion_candidates(
-    *,
-    samples: Sequence[DiffusionSample],
-    rewards: Sequence[float],
-    reward_temperature: float,
-    rng: np.random.Generator,
-    target_trajectory_logprobs: Sequence[float] | None = None,
-    importance_log_ratio_clip: float | None = None,
-) -> DiffusionSIRResult:
-    """Sample once from reward-reweighted on-policy or trajectory-IS weights."""
-
-    if len(samples) != len(rewards) or not samples:
-        raise ValueError("samples and rewards must have the same positive length")
-    if reward_temperature <= 0:
-        raise ValueError("reward_temperature must be positive")
-    if target_trajectory_logprobs is not None and len(target_trajectory_logprobs) != len(samples):
-        raise ValueError("one target trajectory score is required per sample")
-
-    provider = MonteCarloRolloutWeightProvider[DiffusionSample](
-        reward_temperature=reward_temperature,
-        correction=("importance" if target_trajectory_logprobs is not None else "none"),
-        log_ratio_clip=(
-            importance_log_ratio_clip
-            if target_trajectory_logprobs is not None
-            else None
-        ),
-    )
-    items: list[DiffusionSIRItem] = []
-    for index, (sample, reward_value) in enumerate(zip(samples, rewards, strict=True)):
-        target_logprob: float | None = None
-        if target_trajectory_logprobs is not None:
-            if sample.trajectory_logprob is None:
-                raise ValueError("off-policy IS requires an exact proposal trajectory density")
-            target_logprob = float(target_trajectory_logprobs[index])
-        weighted = provider.weight(
-            RolloutObservation(
-                reward=float(reward_value),
-                target_logprob=target_logprob,
-                proposal_logprob=sample.trajectory_logprob,
-                payload=sample,
-            )
-        )
-        items.append(
-            DiffusionSIRItem(
-                sample=sample,
-                reward=float(reward_value),
-                target_trajectory_logprob=target_logprob,
-                raw_log_importance_ratio=weighted.raw_log_importance_ratio,
-                applied_log_importance_ratio=weighted.applied_log_importance_ratio,
-                log_weight=weighted.log_weight,
-            )
-        )
-
-    log_weights = [item.log_weight for item in items]
-    probabilities = normalize_log_weights(log_weights)
-    selected_index = int(rng.choice(len(items), p=probabilities))
-    return DiffusionSIRResult(
-        items=tuple(items),
-        probabilities=probabilities,
-        selected_index=selected_index,
-        effective_sample_size=importance_effective_sample_size(log_weights),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,9 +429,6 @@ __all__ = [
     "DiffusionRewardBatchFunction",
     "DiffusionRewardFunction",
     "DiffusionRolloutEvaluation",
-    "DiffusionSIRItem",
-    "DiffusionSIRResult",
     "DiffusionStepwiseAdapter",
-    "resample_diffusion_candidates",
     "run_conditional_diffusion_is",
 ]

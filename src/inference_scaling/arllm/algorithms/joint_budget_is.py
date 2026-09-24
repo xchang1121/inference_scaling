@@ -260,8 +260,7 @@ def run_joint_budget_is(
         prefix = state.token_ids[: state.fixed]
         block = min(estimate.block_size, config.total_length - state.fixed)
         pilot = estimate_conditional_weights(
-            base_backend=backend,
-            rollout_backend=backend,
+            backend=backend,
             prompt=prompt,
             generated_prefix=prefix,
             candidates=sample_candidates(
@@ -269,11 +268,8 @@ def run_joint_budget_is(
             ),
             rollout_length=config.total_length - state.fixed - block,
             rollout_count=config.pilot_rollouts,
-            base_sampling=sampling,
-            rollout_sampling=sampling,
+            sampling=sampling,
             reward_temperature=config.reward_temperature,
-            importance_log_ratio_clip=None,
-            apply_importance_correction=True,
             reward=reward,
             seeds=pilot_seeds,
             step_index=len(steps),

@@ -7,7 +7,7 @@ from inference_scaling.arllm.backends.transformers_backend import TransformersBa
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest
 from inference_scaling.arllm.types import GenerationRequest
-from inference_scaling.shared.model.generation import generation_config_for_prompt
+from inference_scaling.shared.model.generation import generation_budget
 
 
 @pytest.mark.parametrize("family", ["gpt2", "qwen2"])
@@ -45,22 +45,18 @@ def test_chunked_scoring_matches_complete_causal_context(family):
     del model, complete, chunked
 
 
-def test_context_budget_preserves_requested_config_and_caps_blocks():
+def test_context_budget_caps_the_requested_length():
     backend = SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace(max_position_embeddings=1024)),
                               tokenizer=SimpleNamespace(model_max_length=10**30))
-    source = {"mh": {"block_size": 256}, "conditional_is": {"block_size": 64}}
-    config, metadata = generation_config_for_prompt(source, 1000, [backend])
-    assert config["generation"]["max_new_tokens"] == 24
-    assert metadata["requested_max_new_tokens"] == 32768
-    assert config["mh"]["block_size"] == 24
-    assert "generation" not in source
+    budget = generation_budget(32768, 1000, [backend], context_window=None)
+    assert budget["effective_max_new_tokens"] == 24
+    assert budget["requested_max_new_tokens"] == 32768
     with pytest.raises(ValueError, match="fills"):
-        generation_config_for_prompt(source, 1024, [backend])
+        generation_budget(32768, 1024, [backend], context_window=None)
 
 
-def test_proposal_context_is_also_respected():
-    config, _ = generation_config_for_prompt(
-        {"generation": {"max_new_tokens": 100}}, 8,
-        [SimpleNamespace(max_model_len=200), SimpleNamespace(max_model_len=24)],
+def test_every_backend_context_is_respected():
+    budget = generation_budget(
+        100, 8, [SimpleNamespace(max_model_len=200), SimpleNamespace(max_model_len=24)], context_window=None,
     )
-    assert config["generation"]["max_new_tokens"] == 16
+    assert budget["effective_max_new_tokens"] == 16

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -32,31 +31,24 @@ def context_limit(backend: Any) -> int | None:
     return min(limits) if limits else None
 
 
-def generation_config_for_prompt(
-    config: Mapping[str, Any], prompt_length: int, backends: Sequence[Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    result = deepcopy(dict(config))
-    requested = result.get("generation", {}).get("max_new_tokens", DEFAULT_MAX_NEW_TOKENS)
+def generation_budget(
+    requested: int, prompt_length: int, backends: Sequence[Any], *, context_window: int | None,
+) -> dict[str, Any]:
+    """The output length a prompt leaves within the models' context limits."""
     if isinstance(requested, bool) or not isinstance(requested, int) or requested <= 0:
-        raise ValueError("generation.max_new_tokens must be a positive integer")
+        raise ValueError("max_new_tokens must be a positive integer")
     if prompt_length < 0:
         raise ValueError("prompt_length must be non-negative")
     limits = [limit for backend in backends if backend is not None and (limit := context_limit(backend)) is not None]
-    explicit = result.get("runtime", {}).get("context_window")
-    if explicit is not None:
-        if isinstance(explicit, bool) or not isinstance(explicit, int) or explicit <= 0:
-            raise ValueError("runtime.context_window must be a positive integer")
-        limits.append(explicit)
+    if context_window is not None:
+        if isinstance(context_window, bool) or not isinstance(context_window, int) or context_window <= 0:
+            raise ValueError("context_window must be a positive integer")
+        limits.append(context_window)
     available = min(limits) - max(1, prompt_length) if limits else requested
     if available <= 0:
         raise ValueError("prompt fills the model context window; shorten the prompt or select a longer-context model")
     effective = min(requested, available)
-    result.setdefault("generation", {})["max_new_tokens"] = effective
-    for section in ("mh", "conditional_is", "iterated_is"):
-        table = result.get(section, {})
-        if "block_size" in table:
-            table["block_size"] = min(int(table["block_size"]), effective)
-    return result, {
+    return {
         "requested_max_new_tokens": requested, "effective_max_new_tokens": effective,
         "context_limit": min(limits) if limits else None,
         "prompt_tokens": prompt_length, "length_limited_by_context": effective < requested,

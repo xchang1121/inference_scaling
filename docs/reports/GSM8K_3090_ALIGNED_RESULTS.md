@@ -1,5 +1,7 @@
 # 算法设计与准确率：Qwen2.5-1.5B / GSM8K
 
+> 本报告的数值与命令来自 git 标签 [`pre-unified-cli`](https://github.com/xchang1121/inference_scaling/tree/pre-unified-cli) 的代码，从该标签可完整复现；其中部分方法与优化不在当前实现中。
+
 本报告比较采样方法、奖励信号、rollout 来源和 MH 更新策略对任务准确率的影响。
 [执行成本报告](RTX3090_ROLLOUT_INFRA.md)单独比较墙钟、吞吐和 FLOPs；
 方法原理与实现见[算法文档](../methods/ALGORITHMS.md)。
@@ -17,9 +19,9 @@
 | GRPO | 同一 1.5B 模型的 LoRA，秩 16；累计 205 步（100 + 105 步续训），每提示 4 条 rollout，KL 系数 0.04 |
 | 统计 | 单次评测为每题生成一次；多次采样为每题独立运行 8 次。差值区间采用题目级配对自助法，置信水平 95% |
 
-模型 revision 和基础参数见[质量配置](../../configs/gsm8k_3090_aligned.toml)与
-[训练配置](../../configs/gsm8k_grpo.toml)。各方法共享题目和长度上限，额外候选、rollout 与 MH 更新预算按上表设置。
-第 5 节的后缀调度对照采用较短预算，单独列出结果；当前统一入口的默认调度为多尺度后缀。
+模型 revision 和基础参数见[质量配置](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/configs/gsm8k_3090_aligned.toml)与
+[训练配置](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/configs/gsm8k_grpo.toml)。各方法共享题目和长度上限，额外候选、rollout 与 MH 更新预算按上表设置。
+第 5 节的后缀调度对照采用较短预算，单独列出结果；该标签的统一入口默认使用多尺度后缀。
 
 ## 2. 采样选择不读取测试答案的质量比较
 
@@ -164,7 +166,7 @@ verifier-MH、标准 verifier-IS 和带修正的 0.5B verifier-IS 均为 0.2500�
 
 8 题奖励筛选中，自一致性、token 平均对数概率、平均负熵和自确定度分别得到 6、4、5、5 题正确。
 这些结果支持在该设置中保留自一致性；迭代 IS、随机化 rollout 等小规模筛选的结论集中在
-[非默认方案记录](../methods/ALGORITHMS.md#alg-nondefault-notes)。
+[非默认方案记录](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/ALGORITHMS.md#alg-nondefault-notes)。
 
 ## 6. 结论与数据依据
 
@@ -173,4 +175,4 @@ verifier-MH、标准 verifier-IS 和带修正的 0.5B verifier-IS 均为 0.2500�
 其主要采用依据应结合单独测量的成本。结论范围限于上述模型、题目和预算。
 
 数值来自[已完成实验的汇总](https://github.com/xchang1121/inference_scaling/tree/f56bae2ab50b36be2cb5d178b1bdabb4b0dc7c88/results)，
-对应汇总保留在 Git 历史中；当前目录保存精选报告。现有命令与统计方式见[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)。
+对应汇总保留在 Git 历史中；当前目录保存精选报告。命令与统计方式见该标签的[运行与评测](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)。

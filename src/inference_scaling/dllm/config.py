@@ -6,7 +6,7 @@ Algorithm settings live in :mod:`inference_scaling.dllm.algorithms.config`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 from inference_scaling.shared.config import (
     canonical_float,
@@ -108,6 +108,17 @@ class DiffusionSamplingConfig:
         return generation_length // self.block_length * self.steps_per_block
 
 
+def sampling_from_settings(section: Mapping[str, Any], mask_token_id: int) -> DiffusionSamplingConfig:
+    """A sampling policy from a ``sampling`` / ``exact_sampling`` settings section."""
+
+    return DiffusionSamplingConfig(
+        block_length=int(section["block_length"]), steps_per_block=int(section["steps_per_block"]),
+        temperature=float(section["temperature"]), top_k=int(section["top_k"]), top_p=float(section["top_p"]),
+        cfg_scale=float(section["cfg_scale"]), remasking=section["remasking"],
+        confidence_threshold=float(section["confidence_threshold"]), mask_token_id=mask_token_id,
+    )
+
+
 def diffusion_decision_stage_lengths(
     *,
     prompt_length: int,
@@ -169,4 +180,5 @@ __all__ = [
     "DiffusionSamplingConfig",
     "RemaskingStrategy",
     "VRPOSamplingConfig",
+    "sampling_from_settings",
 ]

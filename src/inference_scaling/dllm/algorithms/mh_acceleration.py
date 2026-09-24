@@ -1,4 +1,4 @@
-"""Exact acceleration variants for whole-continuation diffusion MH."""
+"""The frozen-history proposal for whole-continuation diffusion MH (replay-mixture MH)."""
 
 from __future__ import annotations
 
@@ -22,132 +22,6 @@ from inference_scaling.dllm.types import DiffusionBackend, DiffusionSample
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-
-
-@dataclass(frozen=True, slots=True)
-class DelayedDiffusionMHStep:
-    update: int
-    stage_one_accepted: bool
-    exact_reward_evaluated: bool
-    accepted: bool
-    stage_one_log_acceptance: float
-    stage_two_log_acceptance: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class DelayedDiffusionMHResult:
-    prompt: TokenSequence
-    initial: DiffusionSample
-    final: DiffusionSample
-    final_reward: float
-    final_surrogate_reward: float
-    steps: tuple[DelayedDiffusionMHStep, ...]
-    exact_reward_evaluations: int
-    surrogate_reward_evaluations: int
-
-    @property
-    def acceptance_rate(self) -> float:
-        return (
-            sum(step.accepted for step in self.steps) / len(self.steps)
-            if self.steps
-            else 0.0
-        )
-
-
-def run_diffusion_reward_mh_delayed(
-    *,
-    backend: DiffusionBackend,
-    prompt: TokenSequence,
-    config: DiffusionMHConfig,
-    sampling: DiffusionSamplingConfig,
-    reward: DiffusionRewardFunction | None = None,
-    reward_batch: DiffusionRewardBatchFunction | None = None,
-    surrogate_reward: DiffusionRewardFunction | None = None,
-    surrogate_reward_batch: DiffusionRewardBatchFunction | None = None,
-    proposal_batch_size: int | None = None,
-    seed: int = 0,
-) -> DelayedDiffusionMHResult:
-    """Use a fixed surrogate for stage one and correct it exactly at stage two."""
-
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one exact reward callback")
-    if (surrogate_reward is None) == (surrogate_reward_batch is None):
-        raise ValueError("provide exactly one surrogate reward callback")
-    sampling.validate_generation_length(config.total_length, prefix_length=len(prompt))
-    seeds = SeedStream(seed)
-    requests = _mh_requests(prompt, config, sampling, seeds)
-    samples = _sample_mh_requests(backend, requests, proposal_batch_size)
-    surrogate_values = _evaluate_mh_rewards(
-        prompt, samples, surrogate_reward, surrogate_reward_batch
-    )
-    current = samples[0]
-    current_surrogate = surrogate_values[0]
-    current_reward = _evaluate_mh_rewards(
-        prompt, (current,), reward, reward_batch
-    )[0]
-    exact_evaluations = 1
-    steps: list[DelayedDiffusionMHStep] = []
-    for update, (proposal, proposed_surrogate) in enumerate(
-        zip(samples[1:], surrogate_values[1:], strict=True), start=1
-    ):
-        stage_one = decide_metropolis_hastings(
-            current_target_log_density=current_surrogate / config.reward_temperature,
-            proposed_target_log_density=proposed_surrogate
-            / config.reward_temperature,
-            uniform=float(
-                seeds.generator("dllm-mh", "delayed", update, "stage-one").random()
-            ),
-        )
-        proposed_reward: float | None = None
-        stage_two_log_acceptance: float | None = None
-        accepted = False
-        if stage_one.accepted:
-            proposed_reward = _evaluate_mh_rewards(
-                prompt, (proposal,), reward, reward_batch
-            )[0]
-            exact_evaluations += 1
-            stage_two = decide_metropolis_hastings(
-                current_target_log_density=(
-                    current_reward - current_surrogate
-                )
-                / config.reward_temperature,
-                proposed_target_log_density=(
-                    proposed_reward - proposed_surrogate
-                )
-                / config.reward_temperature,
-                uniform=float(
-                    seeds.generator(
-                        "dllm-mh", "delayed", update, "stage-two"
-                    ).random()
-                ),
-            )
-            stage_two_log_acceptance = stage_two.log_acceptance
-            accepted = stage_two.accepted
-        if accepted:
-            assert proposed_reward is not None
-            current = proposal
-            current_reward = proposed_reward
-            current_surrogate = proposed_surrogate
-        steps.append(
-            DelayedDiffusionMHStep(
-                update=update,
-                stage_one_accepted=stage_one.accepted,
-                exact_reward_evaluated=stage_one.accepted,
-                accepted=accepted,
-                stage_one_log_acceptance=stage_one.log_acceptance,
-                stage_two_log_acceptance=stage_two_log_acceptance,
-            )
-        )
-    return DelayedDiffusionMHResult(
-        prompt=prompt,
-        initial=samples[0],
-        final=current,
-        final_reward=current_reward,
-        final_surrogate_reward=current_surrogate,
-        steps=tuple(steps),
-        exact_reward_evaluations=exact_evaluations,
-        surrogate_reward_evaluations=len(samples),
-    )
 
 
 def _trajectory_key(sample: DiffusionSample) -> Hashable:
@@ -315,10 +189,7 @@ def run_diffusion_replay_mixture_mh(
 
 
 __all__ = [
-    "DelayedDiffusionMHResult",
-    "DelayedDiffusionMHStep",
     "ReplayMixtureDiffusionMHResult",
     "ReplayMixtureDiffusionMHStep",
     "run_diffusion_replay_mixture_mh",
-    "run_diffusion_reward_mh_delayed",
 ]

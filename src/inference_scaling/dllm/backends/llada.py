@@ -195,14 +195,8 @@ class LLaDATransformersBackend:
             for start in range(0, len(group), chunk_size)
         )
 
-    def encode_chat(
-        self,
-        user_text: str,
-        *,
-        system_text: str = "You are a helpful AI assistant.",
-    ) -> tuple[int, ...]:
-        messages = [
-            {"role": "system", "content": system_text},
+    def encode_chat(self, user_text: str, *, system_text: str | None) -> tuple[int, ...]:
+        messages = ([{"role": "system", "content": system_text}] if system_text is not None else []) + [
             {"role": "user", "content": user_text},
         ]
         if hasattr(self.tokenizer, "apply_chat_template"):

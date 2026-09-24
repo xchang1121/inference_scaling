@@ -9,10 +9,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.arllm.acceleration.primitives import ActiveBatchSpeculationConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
-from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
-from inference_scaling.arllm.backends.vllm_backend import _load_vllm_sampling_api
+from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
@@ -61,13 +59,6 @@ def test_vllm_sampling_api_uses_025_and_026_public_import_paths(
     monkeypatch.setitem(sys.modules, "vllm.sampling_params", sampling_params)
 
     assert _load_vllm_sampling_api() == (_SamplingParams, dict, _BeamParams)
-
-
-@dataclass
-class _Metric:
-    name: str
-    value: int
-    labels: dict[str, str]
 
 
 class _Tokenizer:
@@ -137,24 +128,6 @@ class _BeamEngine(_Engine):
         prompt = self._ids(kwargs["prompts"][0])
         sequence = type("Beam", (), {"tokens": prompt + [4, 2]})()
         return [type("BeamOutput", (), {"sequences": [sequence]})()]
-
-
-class _MetricEngine(_Engine):
-    def get_metrics(self):
-        return [
-            _Metric("vllm:spec_decode_num_drafts", 3, {"model_name": "fake"}),
-            _Metric("vllm:spec_decode_num_draft_tokens", 7, {"model_name": "fake"}),
-            _Metric(
-                "vllm:spec_decode_num_accepted_tokens",
-                2,
-                {"model_name": "fake"},
-            ),
-            _Metric(
-                "vllm:spec_decode_num_draft_tokens",
-                100,
-                {"model_name": "another-model"},
-            ),
-        ]
 
 
 class _FusedEngine(_Engine):
@@ -389,26 +362,6 @@ def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
     assert beam_call["use_tqdm"] is False
 
 
-def test_vllm_snapshot_accounts_rejected_native_draft_slots() -> None:
-    backend = VLLMBackend(
-        _MetricEngine(),
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-        native_suffix_speculation=True,
-    )
-
-    snapshot = backend.snapshot()
-
-    assert snapshot.native_speculative_drafts == 3
-    assert snapshot.native_draft_tokens == 7
-    assert snapshot.native_accepted_draft_tokens == 2
-    assert snapshot.rejected_verification_token_slots == 5
-    assert snapshot.generation_forward_token_slots == 5
-    assert snapshot.estimated_dense_forward_flops == 1000
-
-
 class _AsyncEngine(_Engine):
     def __init__(self):
         super().__init__()
@@ -457,35 +410,3 @@ def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
     assert backend.direct_generate((1,), max_new_tokens=2, num_beams=2) == (3, 3)
     backend.close()
     assert engine.closed
-
-
-def test_async_vllm_streams_completion_callbacks_and_draft_observations() -> None:
-    engine = _AsyncEngine()
-    config = ActiveBatchSpeculationConfig(min_context_tokens=1)
-    backend = AsyncVLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-        speculation=config,
-        native_suffix_speculation=True,
-    )
-    completed = []
-    requests = [
-        GenerationRequest((1,), 1, SamplingConfig(), seed, f"r{seed}")
-        for seed in (1, 2, 3)
-    ]
-    try:
-        outputs = backend.sample_batch_with_callback(
-            requests,
-            lambda index, sample: completed.append((index, sample.request_id)),
-        )
-        assert sorted(completed) == [(0, "r1"), (1, "r2"), (2, "r3")]
-        assert [sample.request_id for sample in outputs] == ["r1", "r2", "r3"]
-        snapshot = backend.snapshot()
-        assert snapshot.native_suffix_speculation
-        assert snapshot.observed_draft_sequences == 3
-        assert backend.draft_cache_snapshot() is None
-    finally:
-        backend.close()

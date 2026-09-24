@@ -7,12 +7,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from inference_scaling.dllm.algorithms import (
-    resample_diffusion_candidates,
-    run_conditional_diffusion_is,
-    run_diffusion_reward_mh,
-)
-from inference_scaling.dllm.backends import LLaDATransformersBackend
+from inference_scaling.dllm.algorithms.is_sampling import run_conditional_diffusion_is
+from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
+from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample
@@ -206,21 +203,6 @@ def _empty_sample(value: int, request_id: str) -> DiffusionSample:
         model_id="coin",
         request_id=request_id,
     )
-
-
-def test_reward_only_sir_does_not_require_a_dllm_likelihood():
-    samples = [_empty_sample(0, "zero"), _empty_sample(1, "one")]
-    counts = 0
-    for seed in range(3000):
-        result = resample_diffusion_candidates(
-            samples=samples,
-            rewards=(0.0, 1.0),
-            reward_temperature=1.0,
-            rng=np.random.default_rng(seed),
-        )
-        counts += result.selected.sample.token_ids[0]
-    expected = np.e / (1.0 + np.e)
-    assert counts / 3000 == pytest.approx(expected, abs=0.025)
 
 
 class CoinBackend:

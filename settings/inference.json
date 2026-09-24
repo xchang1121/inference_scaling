@@ -1,0 +1,231 @@
+{
+  "run": {
+    "seed": 20260808,
+    "draws": 1,
+    "hash_cache_dir": ".cache/artifact_hashes"
+  },
+  "datasets": {
+    "gsm8k": {
+      "path": "data/gsm8k/test.jsonl",
+      "download": true,
+      "source": {
+        "url": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl",
+        "sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14",
+        "rows": 1319
+      },
+      "selection": {"count": 32, "seed": 20260808},
+      "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer.",
+      "max_new_tokens": 192
+    },
+    "math500": {
+      "path": "data/math500/test.jsonl",
+      "download": true,
+      "source": {
+        "repository": "HuggingFaceH4/MATH-500",
+        "revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+        "filename": "test.jsonl"
+      },
+      "selection": {
+        "seed": 20260911,
+        "minimum_level": 5,
+        "excluded_ids": [
+          "test/prealgebra/954.json", "test/precalculus/1133.json",
+          "test/algebra/1082.json", "test/counting_and_probability/913.json",
+          "test/precalculus/1291.json", "test/intermediate_algebra/1210.json",
+          "test/number_theory/847.json", "test/intermediate_algebra/1555.json"
+        ],
+        "skip": 8,
+        "count": 64
+      },
+      "prompt_template": "{question}\nPlease reason step by step, and put your final answer within \\boxed{}.",
+      "judge_timeout_seconds": 20,
+      "max_new_tokens": 32768
+    }
+  },
+  "rewards": {
+    "verifier": {
+      "temperature": 0.04,
+      "source": "dataset",
+      "dataset": {"correct": 1.0, "incorrect": 0.0, "unparseable": 0.0},
+      "python": {"factory": null, "options": {}, "requires_reference": false},
+      "constant": {"value": 0.0}
+    },
+    "vote": {"temperature": 0.1, "pool_size": 8},
+    "logprob": {"temperature": 0.1, "score_temperature": 1.0},
+    "consilience": {
+      "temperature": 2.0,
+      "score_temperature": 1.0,
+      "scope": "thinking",
+      "top_k": 5,
+      "window_fraction": 0.2,
+      "window_tokens": null,
+      "skip_fraction": 0.05,
+      "initial_penalty": 3.0
+    }
+  },
+  "ar": {
+    "model": {
+      "path": "models/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "adapter": null,
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "tokenizer_kwargs": {},
+      "cache_dir": null,
+      "local_files_only": true,
+      "trust_remote_code": false
+    },
+    "engine": {
+      "backend": "transformers",
+      "device": "cuda",
+      "dtype": "float32",
+      "context_window": null,
+      "transformers": {
+        "attn_implementation": "sdpa",
+        "device_map": null,
+        "model_kwargs": {},
+        "max_score_batch_size": 12,
+        "score_chunk_size": 256
+      },
+      "vllm": {
+        "asynchronous": true,
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.62,
+        "max_model_len": null,
+        "max_num_seqs": 48,
+        "max_num_batched_tokens": 12288,
+        "quantization": null,
+        "enforce_eager": false,
+        "enable_prefix_caching": true,
+        "max_lora_rank": 16,
+        "mh_fused_logprobs": false,
+        "exact_scoring": "none",
+        "parameter_count": null,
+        "engine_kwargs": {"enable_chunked_prefill": true}
+      },
+      "continuous_batching": {
+        "workers": 1,
+        "max_batch_size": 24,
+        "max_batch_tokens": 12288,
+        "batch_wait_seconds": 0.01
+      }
+    },
+    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {}},
+    "output": {
+      "thinking_mode": "auto",
+      "thinking_format": "auto",
+      "thinking_start_text": null,
+      "thinking_end_text": null,
+      "starts_in_thinking": null,
+      "thinking_path": null,
+      "content_path": null,
+      "sampling_scope": "full",
+      "generation_chunk_size": 256
+    },
+    "sampling": {"temperature": 1.0, "top_p": 1.0, "top_k": null},
+    "algorithms": {
+      "sample": {},
+      "greedy": {},
+      "beam": {"num_beams": 8},
+      "best_of_n": {"samples": 8},
+      "mh": {
+        "alpha": 4.0,
+        "proposal_temperature": 0.25,
+        "block_size": 12,
+        "steps_per_block": 3,
+        "iterations": null,
+        "suffix_schedule": "uniform"
+      },
+      "reward_mh": {
+        "block_size": 12,
+        "steps_per_block": 3,
+        "iterations": null,
+        "suffix_schedule": "uniform",
+        "proposal": "base",
+        "frozen_history": {"samples": 8, "mixture": 0.25}
+      },
+      "is": {
+        "planning": "full_horizon",
+        "fixed": {"candidate_count": 8, "rollout_count": 3, "block_size": 48},
+        "joint": {
+          "forward_token_budget": 98304,
+          "block_sizes": [32, 64, 128],
+          "candidate_counts": [2, 4, 8, 16],
+          "rollout_counts": [1, 2, 4],
+          "pilot_candidates": 2,
+          "pilot_rollouts": 2,
+          "pilot_fraction": 0.15,
+          "relative_variance_floor": 0.0001,
+          "expected_output_tokens": null
+        },
+        "chunk_adaptive": {
+          "initial_block_size": 64,
+          "initial_candidate_count": 4,
+          "initial_rollout_count": 2,
+          "adjustment_min_improvement": 0.1
+        }
+      }
+    }
+  },
+  "dllm": {
+    "model": {
+      "path": "models/LLaDA-MoE-7B-A1B-Instruct-783d3467",
+      "revision": "783d3467f108d28ac0a78d3e41af16ab05cabd8d",
+      "weight_files": [
+        "model-00001-of-00003.safetensors",
+        "model-00002-of-00003.safetensors",
+        "model-00003-of-00003.safetensors"
+      ],
+      "weight_bytes": [4999258928, 4997188984, 4717712520],
+      "weight_sha256": [
+        "84a7f34af2f3f14d767b0106b8fa7f0d7f9b95a0eeac74f2ab3f21bd69a03908",
+        "2ddb9174a03003263250c789942372382e2ce97f115377e28cb749c082f0b2d7",
+        "b1998424a021938681487ece097838f7131324eb4f776b8b0ce0c515526b31f4"
+      ],
+      "mask_token_id": 156895,
+      "trust_remote_code": true,
+      "adapter": null,
+      "proposal_layers": 8
+    },
+    "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8},
+    "prompt": {"system": "You are a helpful AI assistant."},
+    "sampling": {
+      "block_length": 48,
+      "steps_per_block": 12,
+      "temperature": 1.0,
+      "top_k": 0,
+      "top_p": 1.0,
+      "cfg_scale": 0.0,
+      "remasking": "low_confidence",
+      "confidence_threshold": 0.85
+    },
+    "exact_sampling": {
+      "block_length": 48,
+      "steps_per_block": 12,
+      "temperature": 1.0,
+      "top_k": 0,
+      "top_p": 1.0,
+      "cfg_scale": 0.0,
+      "remasking": "random",
+      "confidence_threshold": 0.85
+    },
+    "algorithms": {
+      "sample": {},
+      "greedy": {},
+      "beam": {"decision_block_size": 48, "width": 8, "branching_factor": 2},
+      "best_of_n": {"samples": 8},
+      "mh": {"alpha": 4.0, "decision_block_size": 48, "updates_per_stage": 12},
+      "reward_mh": {"updates": 48, "proposal": "base", "frozen_history": {"samples": 8, "mixture": 0.25}},
+      "is": {
+        "candidate_count": 8,
+        "rollout_count": 3,
+        "decision_block_size": 48,
+        "rollout_model": "base",
+        "importance_correction": true,
+        "importance_log_ratio_clip": 10.0
+      }
+    }
+  }
+}

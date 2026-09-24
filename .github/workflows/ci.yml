@@ -20,8 +20,8 @@ jobs:
           python -m pip check
       - name: Static checks
         run: |
-          python -m ruff check experiments src tests
-          python -m mypy src/inference_scaling/shared experiments/shared --ignore-missing-imports
+          python -m ruff check src tests training
+          python -m mypy src/inference_scaling/shared src/inference_scaling/datasets src/inference_scaling/app training --ignore-missing-imports --python-version 3.12
 
   test:
     runs-on: ubuntu-latest

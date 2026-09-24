@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from math import isclose, isfinite
 from threading import Lock
 from typing import Any, Literal, Sequence
 
@@ -12,29 +11,22 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest
 from inference_scaling.shared.types import TokenSequence
 from inference_scaling.shared.rewards.consilience import confidence_windows
-from inference_scaling.shared.model.output import OutputParser, ThinkingFormat, ThinkingParser
-from inference_scaling.arllm.output import thinking_format_from_backend
+from inference_scaling.shared.model.output import OutputParser
 
 
 @dataclass(frozen=True, slots=True)
 class SequenceLogProbabilityReward:
-    """Return scaled mean token log-probability over the effective completion.
+    """Return the mean token log-probability over the effective completion.
 
     This is a model-derived reward, not an external verifier.  The backend must
-    support exact scoring under ``sampling``.  With scale ``c`` and reward
-    temperature ``tau``, reward reweighting targets
-    ``p(completion | prompt) ** (1 + c / (tau * length))`` for nonempty
-    completions. Stop tokens count toward length, but absorbing padding does
-    not. Empty completions have neutral reward zero.
+    support exact scoring under ``sampling``.  With reward temperature ``tau``,
+    reward reweighting targets ``p(completion | prompt) ** (1 + 1 / (tau * length))``
+    for nonempty completions. Stop tokens count toward length, but absorbing
+    padding does not. Empty completions have neutral reward zero.
     """
 
     backend: AutoregressiveBackend
     sampling: SamplingConfig | None = None
-    scale: float = 1.0
-
-    def __post_init__(self) -> None:
-        if not isfinite(self.scale):
-            raise ValueError("log-probability reward scale must be finite")
 
     def __call__(self, prompt: TokenSequence, completion: TokenSequence) -> float:
         return self.batch(prompt, (completion,))[0]
@@ -81,14 +73,13 @@ class SequenceLogProbabilityReward:
             backend = getattr(backend, "backend", getattr(backend, "_backend", None))
         if eos is not None and eos in completion:
             length = min(length, completion.index(eos) + 1)
-        return self.scale * float(sum(token_scores[:length])) / length if length else 0.0
+        return float(sum(token_scores[:length])) / length if length else 0.0
 
     def describe(self) -> dict[str, object]:
         return {
             "source": "model_sequence_log_probability",
             "model_id": self.backend.model_id,
             "policy_id": self.sampling.policy_id if self.sampling is not None else None,
-            "scale": self.scale,
             "normalization": "mean_per_effective_token",
         }
 
@@ -114,8 +105,6 @@ class ConsilienceReward:
     window_tokens: int | None = None
     skip_fraction: float = 0.05
     initial_penalty: float = 3.0
-    scale: float = 1.0
-    reasoning_end_token_ids: TokenSequence | None = None
     thinking_format: OutputParser | None = None
     scope: Literal["thinking", "full"] = "thinking"
     _scope_counts: Counter[tuple[str, str | None]] = field(default_factory=Counter, init=False, repr=False, compare=False)
@@ -125,23 +114,10 @@ class ConsilienceReward:
         if self.top_k <= 0:
             raise ValueError("Consilience top_k must be positive")
         self._trajectory_score((0.0,))
-        if not isfinite(self.scale) or self.scale <= 0:
-            raise ValueError("Consilience scale must be finite and positive")
-        if self.reasoning_end_token_ids is not None and not self.reasoning_end_token_ids:
-            raise ValueError("reasoning_end_token_ids must be nonempty when provided")
         if self.scope not in {"thinking", "full"}:
             raise ValueError("Consilience scope must be thinking or full")
-        if self.thinking_format is not None and self.reasoning_end_token_ids is not None:
-            raise ValueError("provide thinking_format or reasoning_end_token_ids, not both")
         if self.scope == "thinking" and self.thinking_format is None:
-            resolved = (
-                ThinkingFormat(end_token_ids=tuple(self.reasoning_end_token_ids))
-                if self.reasoning_end_token_ids is not None
-                else thinking_format_from_backend(self.backend)
-            )
-            object.__setattr__(self, "thinking_format", resolved)
-        if isinstance(self.thinking_format, ThinkingFormat):
-            object.__setattr__(self, "thinking_format", ThinkingParser((self.thinking_format,)))
+            raise ValueError("the thinking scope needs a thinking format")
 
     def __call__(self, prompt: TokenSequence, completion: TokenSequence) -> float:
         return self.batch(prompt, (completion,))[0]
@@ -190,10 +166,7 @@ class ConsilienceReward:
             skip_fraction=self.skip_fraction,
             initial_penalty=self.initial_penalty,
         )
-        score = self.scale * windows.score
-        if not isfinite(score):
-            raise ValueError("Consilience scaled score must be finite")
-        return score
+        return windows.score
 
     def batch(
         self,
@@ -251,8 +224,6 @@ class ConsilienceReward:
             "window_tokens": self.window_tokens,
             "skip_fraction": self.skip_fraction,
             "initial_penalty": self.initial_penalty,
-            "scale": self.scale,
-            "reasoning_end_token_ids": self.reasoning_end_token_ids,
             "scope": self.scope,
             "fallback": "full_sequence",
             "thinking_format": (
@@ -261,40 +232,4 @@ class ConsilienceReward:
         }
 
 
-_CONFIDENCE_STATISTICS = {
-    "log_probability": "mean_logprob",
-    "negative_entropy": "mean_negative_entropy",
-    "self_certainty": "mean_self_certainty",
-}
-
-
-def minmax_rewards(values: Sequence[float]) -> tuple[float, ...]:
-    """Normalize confidence rewards within one decision batch."""
-
-    if not values:
-        raise ValueError("reward normalization requires at least one value")
-    lower, upper = min(values), max(values)
-    if isclose(lower, upper, rel_tol=1e-12, abs_tol=1e-12):
-        return (0.0,) * len(values)
-    return tuple((float(value) - lower) / (upper - lower) for value in values)
-
-
-def confidence_rewards(
-    backend: Any,
-    prompt: TokenSequence,
-    sequences: Sequence[TokenSequence],
-    *,
-    sampling: SamplingConfig,
-    source: str,
-) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """Raw mean confidence statistics and their min-max normalization within the batch."""
-
-    statistic = _CONFIDENCE_STATISTICS.get(source)
-    if statistic is None:
-        raise ValueError(f"{source!r} is not a confidence reward")
-    statistics = backend.score_statistics_batch([ScoreRequest(prompt, tuple(sequences), sampling)])
-    raw = tuple(float(getattr(item, statistic)) for item in statistics)
-    return raw, minmax_rewards(raw)
-
-
-__all__ = ["ConsilienceReward", "SequenceLogProbabilityReward", "confidence_rewards", "minmax_rewards"]
+__all__ = ["ConsilienceReward", "SequenceLogProbabilityReward"]

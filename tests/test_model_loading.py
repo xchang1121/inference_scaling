@@ -1,99 +1,22 @@
+import copy
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.assembly.runtime import model_metadata, validate_model_artifacts
-from experiments.shared.artifacts import checkpoint_weight_hashes
-from inference_scaling.arllm.backends import loader
-from inference_scaling.shared.model.loading import model_loading_options
+from inference_scaling.app.ar import ARFamily
+from inference_scaling.app.run import Choices
+from inference_scaling.app.settings import load_settings
+from inference_scaling.shared.model.loading import checkpoint_weight_files
 
 
-def test_shared_cli_retains_all_options_for_existing_entry_points():
-    import argparse
-    from experiments.shared.model_cli import add_model_output_arguments
-    parser = argparse.ArgumentParser()
-    add_model_output_arguments(parser)
-    args = parser.parse_args(["--proposal-model", "org/proposal", "--mh-iterations", "7",
-                              "--thinking-mode", "enabled"])
-    assert args.proposal_model == "org/proposal" and args.mh_iterations == 7
-    assert args.thinking_mode == "enabled"
+def _family(tmp_path, model_path, **model):
+    settings = copy.deepcopy(load_settings())
+    settings["run"]["hash_cache_dir"] = str(tmp_path / "hashes")
+    settings["ar"]["model"].update({"path": str(model_path), "revision": None, "weight_sha256": None, **model})
+    return ARFamily(settings, Choices("sample", "ar", None, "gsm8k"), dataset=type("D", (), {"settings": {"max_new_tokens": 8}})())
 
 
-def test_role_loading_overrides_are_merged_and_validated():
-    config = {"model_loading": {"revision": "main", "local_files_only": True,
-                               "tokenizer_kwargs": {"use_fast": True},
-                               "proposal": {"revision": "fixed", "tokenizer_kwargs": {"legacy": False}}}}
-    values = model_loading_options(config, "proposal")
-    assert values["revision"] == "fixed"
-    assert values["tokenizer_kwargs"] == {"use_fast": True, "legacy": False}
-    config["model_loading"]["revison"] = "typo"
-    with pytest.raises(ValueError, match="revison"):
-        model_loading_options(config)
-
-
-def test_explicit_role_distinguishes_two_revisions_of_one_model(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(loader.TransformersBackend, "from_pretrained", lambda model, **kw: captured.update(kw))
-    config = {"models": {"base": "org/same", "proposal": "org/same"},
-              "model_loading": {"base": {"revision": "base-ref"}, "proposal": {"revision": "proposal-ref"}}}
-    loader.load_backend_from_config("org/same", config, role="proposal")
-    assert captured["revision"] == "proposal-ref"
-
-
-def test_plain_model_prompt_and_explicit_chat_requirement():
-    from inference_scaling.shared.model.prompting import render_prompt
-    messages = [{"role": "user", "content": "problem"}]
-    assert render_prompt(SimpleNamespace(chat_template=None), messages, {}) == "problem"
-    with pytest.raises(ValueError, match="requires"):
-        render_prompt(SimpleNamespace(chat_template=None), messages, {"prompt": {"format": "chat"}})
-
-
-def test_vllm_revision_is_visible_to_artifact_resolution():
-    config = {"runtime": {"backend": "vllm"}, "vllm": {"revision": "base-ref", "proposal": {"revision": "proposal-ref"}}}
-    assert model_loading_options(config, "base")["revision"] == "base-ref"
-    assert model_loading_options(config, "proposal")["revision"] == "proposal-ref"
-
-
-def test_generic_transformers_loader_forwards_independent_tokenizer_and_adapter(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(loader.TransformersBackend, "from_pretrained", lambda model, **kw: captured.update(model=model, **kw))
-    config = {"models": {"base": "org/model", "rl": "org/adapter", "rl_kind": "peft_adapter"},
-              "model_loading": {"revision": "model-commit", "tokenizer_name_or_path": "org/tokenizer",
-                                "tokenizer_revision": "tokenizer-commit", "adapter_revision": "adapter-commit",
-                                "local_files_only": False, "device_map": "auto", "attn_implementation": "sdpa"},
-              "runtime": {"dtype": "auto", "score_chunk_size": 128}}
-    loader.load_backend_from_config("org/adapter", config, adapter_base="org/model")
-    assert captured["model"] == "org/model"
-    assert captured["adapter_name_or_path"] == "org/adapter"
-    assert captured["tokenizer_name_or_path"] == "org/tokenizer"
-    assert captured["revision"] == "model-commit"
-    assert captured["adapter_revision"] == "adapter-commit"
-    assert captured["score_chunk_size"] == 128
-    assert captured["local_files_only"] is False
-
-
-def test_vllm_async_uses_public_signature_and_same_revision_for_exact_scoring(monkeypatch):
-    calls = []
-    config = {"models": {"base": "local-model"}, "runtime": {"backend": "vllm"},
-              "model_loading": {"revision": "pinned", "tokenizer_name_or_path": "tokenizer-path"},
-              "vllm": {"exact_scoring_backend": "transformers"}}
-    monkeypatch.setattr(loader.TransformersBackend, "from_pretrained", lambda model, **kw: calls.append(("score", kw)) or SimpleNamespace())
-
-    def load(model, **kw):
-        import inspect
-        assert set(kw) <= set(inspect.signature(loader.AsyncVLLMBackend.from_pretrained_original).parameters)
-        calls.append(("engine", kw))
-
-    monkeypatch.setattr(loader.AsyncVLLMBackend, "from_pretrained_original", loader.AsyncVLLMBackend.from_pretrained, raising=False)
-    monkeypatch.setattr(loader.AsyncVLLMBackend, "from_pretrained", load)
-    loader.load_backend_from_config("local-model", config)
-    assert all(kw["revision"] == "pinned" for _, kw in calls)
-    assert "enable_mh_fused_logprobs" not in calls[-1][1]
-
-
-def test_sharded_checkpoint_manifest_and_pinned_load(tmp_path, monkeypatch):
+def test_sharded_weights_are_hashed_and_a_pin_is_enforced(tmp_path):
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text('{"model_type":"fixture"}')
@@ -101,42 +24,35 @@ def test_sharded_checkpoint_manifest_and_pinned_load(tmp_path, monkeypatch):
         "a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}))
     for number in (1, 2):
         (model / f"model-{number:05d}-of-00002.safetensors").write_bytes(bytes([number]))
-    import experiments.arllm.assembly.runtime as runtime
-    monkeypatch.setattr(runtime, "HASH_CACHE", tmp_path / "hashes")
-    config = {"models": {"base": str(model)}}
-    artifacts = validate_model_artifacts(config, ["base"])
-    assert len(artifacts["shard_sha256"]["base"]) == 2
-    assert Path(config["_resolved_models"]["base"]["model"]) == model
-    assert model_metadata(config, "base")["source"] == str(model)
-    previous = artifacts["weight_sha256"]["base"]
+
+    identity = _family(tmp_path, model).artifacts()["base"]
+    assert sorted(identity["weight_files"]) == ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+    assert "config.json" in identity["metadata_sha256"]
+    assert _family(tmp_path, model, weight_sha256=identity["weight_sha256"]).artifacts()["base"] == identity
     (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
-    assert validate_model_artifacts(config, ["base"])["weight_sha256"]["base"] != previous
+    with pytest.raises(ValueError, match="hash to"):
+        _family(tmp_path, model, weight_sha256=identity["weight_sha256"]).artifacts()
+
+
+def test_adapter_files_are_part_of_the_model_identity(tmp_path):
+    base, adapter = tmp_path / "base", tmp_path / "adapter"
+    base.mkdir()
+    adapter.mkdir()
+    (base / "pytorch_model.bin").write_bytes(b"tiny fixture")
+    (adapter / "adapter_config.json").write_text("{}")
+    (adapter / "adapter_model.bin").write_bytes(b"adapter fixture")
+    identity = _family(tmp_path, base, adapter={"path": str(adapter), "revision": None}).artifacts()["base"]
+    assert set(identity["adapter"]["sha256"]) == {"adapter_config.json", "adapter_model.bin"}
 
 
 def test_checkpoint_shards_require_safe_existing_names(tmp_path):
     index = tmp_path / "model.safetensors.index.json"
     index.write_text('{"weight_map":{"a":"../outside.safetensors"}}')
     with pytest.raises(ValueError, match="relative"):
-        checkpoint_weight_hashes(tmp_path, cache_directory=tmp_path / "hashes")
+        checkpoint_weight_files(tmp_path)
     index.write_text('{"weight_map":{"a":"missing.safetensors"}}')
     with pytest.raises(FileNotFoundError):
-        checkpoint_weight_hashes(tmp_path, cache_directory=tmp_path / "hashes")
-
-
-def test_binary_adapter_and_full_rl_checkpoints(tmp_path, monkeypatch):
-    import experiments.arllm.assembly.runtime as runtime
-    monkeypatch.setattr(runtime, "HASH_CACHE", tmp_path / "hashes")
-    base, adapter = tmp_path / "base", tmp_path / "adapter"
-    base.mkdir()
-    adapter.mkdir()
-    (base / "pytorch_model.bin").write_bytes(b"tiny fixture")
-    (adapter / "adapter_config.json").write_text('{}')
-    (adapter / "adapter_model.bin").write_bytes(b"adapter fixture")
-    config = {"models": {"base": str(base), "rl": str(adapter), "rl_kind": "peft_adapter"}}
-    manifest = validate_model_artifacts(config, ["rl"])
-    assert "rl_adapter" in manifest["weight_sha256"]
-    config["models"].update(rl=str(base), rl_kind="full_model")
-    assert "rl" in validate_model_artifacts(config, ["rl"])["weight_sha256"]
+        checkpoint_weight_files(tmp_path)
 
 
 def test_local_sharded_transformer_round_trip_uses_independent_tokenizer(tmp_path):

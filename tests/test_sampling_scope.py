@@ -1,4 +1,3 @@
-from fractions import Fraction
 from math import exp
 from types import SimpleNamespace
 
@@ -10,30 +9,6 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.model.output import ThinkingFormat
-from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.evaluation import GSM8KProblem
-from experiments.arllm.assembly.method_runners import method_reward_source, run_method, run_best_of_n_selection
-from experiments.arllm.gsm8k_reproduction import _apply_overrides
-
-
-def test_best_of_n_log_probability_selects_mean_not_sum_without_rescoring():
-    candidates = [
-        SimpleNamespace(token_ids=(0,), token_logprobs=(-0.8,)),
-        SimpleNamespace(token_ids=(1, 1, 1), token_logprobs=(-0.4, -0.4, -0.4)),
-    ]
-    backend = SimpleNamespace(
-        model_id="recorded", tokenizer=SimpleNamespace(eos_token_id=2),
-        sample_batch=lambda requests: candidates, decode=lambda tokens: "1",
-    )
-    selected, diagnostics = run_best_of_n_selection(
-        backend, None, (), max_new_tokens=4, samples=2, temperature=1.0,
-        seeds=SeedStream(0), problem_index=0, reward_source="sequence_log_probability",
-        config={},
-    )
-    assert selected == (1, 1, 1)
-    assert diagnostics["raw_reward_values"] == pytest.approx([-0.8, -0.4])
-    assert diagnostics["model_reward"]["normalization"] == "mean_per_effective_token"
-    assert diagnostics["reward_normalization"] == "mean_per_effective_token"
 
 
 class _Tokenizer:
@@ -98,84 +73,3 @@ def test_scope_finishes_content_from_original_backend_with_remaining_budget():
     assert info["content_token_ids"] == (0,)
     assert info["final_content_generated_tokens"] == 2
     assert info["thinking_status"] == "complete"
-
-
-@pytest.mark.parametrize("method", ("mh", "conditional_is", "iterated_conditional_is", "reward_mh"))
-@pytest.mark.parametrize("scope", ("full", "thinking"))
-@pytest.mark.parametrize("reward_source", ("sequence_log_probability", "consilience"))
-def test_experiment_dispatch_preserves_thinking_content_for_all_core_methods(method, scope, reward_source):
-    config = {
-        "generation": {"max_new_tokens": 6}, "sampling": {"temperature": 0.6},
-        "mh": {"alpha": 2, "block_size": 2, "steps_per_block": 1},
-        "conditional_is": {"candidate_count": 2, "rollout_count": 1, "block_size": 2, "reward_temperature": 1},
-        "reward": {"source": reward_source},
-        "output": {"sampling_scope": scope, "generation_chunk_size": 1},
-    }
-    backend = _Backend()
-    problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, diagnostics = run_method(method, backend, problem, (3,), config, SeedStream(1), None)
-    assert backend.decode(tokens) == "77"
-    output = diagnostics["output_segments"]
-    assert output["thinking_text"] == "7"
-    assert output["content_text"] == "7"
-    assert output["sampling_scope"] == scope
-
-
-def test_cli_selects_the_reward_by_name_and_sets_its_fields():
-    args = SimpleNamespace(backend=None, limit=None, method="reward_mh", reward="consilience",
-                           config_overrides=["reward.consilience.top_k=7", "reward.consilience.scale=2.0"],
-                           sampling_scope="thinking", thinking_end_text="</think>")
-    config = {"reward": {"consilience": {"top_k": 5, "scale": 1.0}}}
-    _apply_overrides(config, args)
-    assert config["reward"] == {"source": "consilience", "consilience": {"top_k": 7, "scale": 2.0}}
-    assert config["output"] == {"sampling_scope": "thinking", "thinking_end_text": "</think>"}
-
-
-def test_passk_adapter_preserves_token_format_and_confidence_scoring():
-    from inference_scaling.arllm.backends.execution import ExecutionBackend
-    from inference_scaling.arllm.rewards.factory import model_reward_from_config
-
-    raw = _Backend()
-    adapter = ExecutionBackend(raw, raw)
-    reward = model_reward_from_config(adapter, {}, source="consilience")
-    assert reward((3,), (0, 1, 0, 2)) == -2.0
-
-
-def test_default_method_replans_blocks_within_its_budget():
-    config = {
-        "generation": {"max_new_tokens": 6}, "sampling": {"temperature": 1.0},
-        "reward": {"source": "sequence_log_probability"}, "conditional_is": {"reward_temperature": 1.0},
-        "joint_budget_is": {
-            "forward_token_budget": 500, "block_sizes": [2], "candidate_counts": [2], "rollout_counts": [1],
-            "pilot_candidates": 2, "pilot_rollouts": 2, "pilot_fraction": 0.0, "planning_mode": "full_horizon",
-            "initial_block_size": 2, "initial_candidate_count": 2, "initial_rollout_count": 1,
-            "adjustment_min_improvement": 0.1,
-        },
-    }
-    problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, diagnostics = run_method("joint_budget_is", _Backend(), problem, (3,), config, SeedStream(1), None)
-    assert _Backend().decode(tokens) == "77"
-    assert diagnostics["steps"] and 0 < diagnostics["actual_forward_tokens"] <= 500
-    assert diagnostics["joint_budget"]["reward_forward_passes"] == 1
-
-
-def test_best_of_n_votes_unless_a_reward_source_is_chosen():
-    config = {"conditional_is": {"reward": "frozen_consensus"}}
-    assert method_reward_source(config, "best_of_n") == "self_consistency"
-    assert method_reward_source({**config, "reward": {"source": "consilience"}}, "best_of_n") == "consilience"
-
-
-@pytest.mark.parametrize(
-    "method,reward",
-    [("conditional_is", "frozen_consensus"), ("block_conditional_is", "self_consistency")],
-)
-def test_thinking_scope_reports_full_fallback_for_final_content_rewards(method, reward):
-    config = {
-        "output": {"sampling_scope": "thinking"}, "generation": {"max_new_tokens": 6},
-        "conditional_is": {"reward": reward, "candidate_count": 2, "rollout_count": 1, "block_size": 2},
-    }
-    problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, info = run_method(method, _Backend(), problem, (3,), config, SeedStream(1), None)
-    assert _Backend().decode(tokens) == "77"
-    assert info["output_segments"]["sampling_scope"] == "full"
-    assert info["output_segments"]["sampling_fallback_reason"] == "reward_uses_full_sequence"

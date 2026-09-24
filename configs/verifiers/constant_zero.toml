@@ -1,5 +1,0 @@
-[verifier]
-provider = "constant"
-name = "constant_zero_control"
-value = 0.0
-requires_reference = false

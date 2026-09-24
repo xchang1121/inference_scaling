@@ -13,11 +13,6 @@ proportion to its reward weight.  This is a conditional SIR move: given the
 prefix before the cut it leaves the target invariant, and every step ends with a
 complete sequence.  The kept completion's reward is reused, so the reward must
 depend only on the sequence it scores.
-
-The block variant, which commits only the selected block and discards the
-completions, is archived in ``inference_scaling.archive.arllm.block_conditional_is``.
-``estimate_conditional_weights`` also serves block-level research methods and
-therefore still accepts off-policy completions.
 """
 
 from __future__ import annotations
@@ -26,19 +21,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import (
-    sample_candidates,
-    score_samples,
-    validate_base_sampling,
-    validate_rollout_sampling,
-)
+from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.shared.sampling.importance import (
-    MonteCarloRolloutWeightProvider,
-    RolloutObservation,
-    logmeanexp,
-)
+from inference_scaling.shared.sampling.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
@@ -48,7 +34,7 @@ from inference_scaling.shared.sampling.stepwise import (
     run_stepwise_generation,
     stepwise_generation_step,
 )
-from inference_scaling.shared.rewards.verifier import TokenBatchReward, TokenReward
+from inference_scaling.shared.types import TokenBatchReward, TokenReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -62,16 +48,12 @@ RewardBatchFunction = TokenBatchReward
 
 @dataclass(frozen=True, slots=True)
 class RolloutEvaluation:
+    """One base-policy completion of a candidate; its log weight is reward / temperature."""
+
     token_ids: TokenSequence
     reward: float
-    base_logprob: float | None
-    proposal_logprob: float
-    raw_log_importance_ratio: float | None
-    applied_log_importance_ratio: float | None
     log_weight: float
-    proposal_model_id: str
-    proposal_policy_id: str
-    # Actual rollout-policy log-probabilities of token_ids.
+    # Base-policy log-probabilities of token_ids.
     token_logprobs: tuple[float, ...] = ()
 
 
@@ -109,32 +91,27 @@ class ConditionalISResult:
 
 def estimate_conditional_weights(
     *,
-    base_backend: AutoregressiveBackend,
-    rollout_backend: AutoregressiveBackend,
+    backend: AutoregressiveBackend,
     prompt: TokenSequence,
     generated_prefix: TokenSequence,
     candidates: Sequence[SequenceSample],
     rollout_length: int,
     rollout_count: int,
-    base_sampling: SamplingConfig,
-    rollout_sampling: SamplingConfig,
+    sampling: SamplingConfig,
     reward_temperature: float,
-    importance_log_ratio_clip: float | None,
-    apply_importance_correction: bool,
     reward: RewardFunction | None,
     seeds: SeedStream,
     step_index: int,
     reward_batch: RewardBatchFunction | None = None,
     retained: RolloutEvaluation | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
-    """Estimate each candidate's conditional weight with on/off-policy rollouts.
+    """Estimate each candidate's conditional weight with base-policy completions.
 
     ``retained`` is an already evaluated completion of candidate 0.  It counts
     as one of that candidate's ``rollout_count`` rollouts and is neither
     regenerated nor re-scored.
     """
 
-    validate_rollout_sampling(rollout_sampling)
     if rollout_count <= 0:
         raise ValueError("rollout_count must be positive")
     if reward_temperature <= 0:
@@ -144,9 +121,8 @@ def estimate_conditional_weights(
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
-    rollout_prefixes: list[TokenSequence] = []
     terminal_candidates: set[int] = set()
-    eos = rollout_sampling.eos_token_id
+    eos = sampling.eos_token_id
     retained_tokens = None if retained is None else retained.token_ids
 
     for candidate_index, candidate in enumerate(candidates):
@@ -169,7 +145,7 @@ def estimate_conditional_weights(
                 GenerationRequest(
                     prefix=rollout_prefix,
                     max_new_tokens=rollout_length,
-                    sampling=rollout_sampling,
+                    sampling=sampling,
                     seed=seeds.derive(
                         "conditional_is",
                         step_index,
@@ -186,72 +162,22 @@ def estimate_conditional_weights(
                 )
             )
             request_candidates.append(candidate_index)
-            rollout_prefixes.append(rollout_prefix)
 
-    samples = rollout_backend.sample_batch(requests) if requests else []
+    samples = backend.sample_batch(requests) if requests else []
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
-    if rollout_backend is not base_backend:
-        observe = getattr(base_backend, "observe_draft_samples", None)
-        if callable(observe):
-            observe(samples)
-    rollout_is_base_policy = (
-        rollout_backend.model_id == base_backend.model_id
-        and rollout_sampling == base_sampling
-    )
-    if rollout_is_base_policy:
-        base_totals: list[float | None] = [sample.logprob for sample in samples]
-    elif apply_importance_correction:
-        base_totals = (
-            score_samples(
-                base_backend,
-                rollout_prefixes,
-                samples,
-                base_sampling,
-            )
-            if samples
-            else []
-        )
-    else:
-        # This is a deliberate biased ablation, not an IS estimate of the base
-        # continuation distribution.  Keep the score absent so diagnostics and
-        # backend accounting cannot mistake it for an evaluated zero log-ratio.
-        base_totals = [None for _ in samples]
 
-    pending_by_candidate: list[
-        list[tuple[TokenSequence, float, float, str, str, tuple[float, ...], TokenSequence]]
-    ] = [[] for _ in candidates]
+    # (completion tokens, their log-probabilities, the generated sequence the reward scores)
+    pending_by_candidate: list[list[tuple[TokenSequence, tuple[float, ...], TokenSequence]]] = [
+        [] for _ in candidates
+    ]
     for candidate_index in terminal_candidates:
-        generated = generated_prefix + candidates[candidate_index].token_ids
         pending_by_candidate[candidate_index].append(
-            (
-                (),
-                0.0,
-                0.0,
-                rollout_backend.model_id,
-                rollout_sampling.policy_id,
-                (),
-                generated,
-            )
+            ((), (), generated_prefix + candidates[candidate_index].token_ids)
         )
-    for candidate_index, sample, base_logprob in zip(
-        request_candidates, samples, base_totals, strict=True
-    ):
-        generated = (
-            generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
-        )
-        proposal_logprob = sample.logprob
-        pending_by_candidate[candidate_index].append(
-            (
-                sample.token_ids,
-                base_logprob,
-                proposal_logprob,
-                sample.model_id,
-                sample.policy_id,
-                sample.token_logprobs,
-                generated,
-            )
-        )
+    for candidate_index, sample in zip(request_candidates, samples, strict=True):
+        generated = generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
+        pending_by_candidate[candidate_index].append((sample.token_ids, sample.token_logprobs, generated))
 
     pending = [item for group in pending_by_candidate for item in group]
     generated_sequences = [item[-1] for item in pending]
@@ -271,51 +197,15 @@ def estimate_conditional_weights(
     if any(not isfinite(value) for value in rewards):
         raise ValueError("reward must be finite")
 
-    importance_weights = MonteCarloRolloutWeightProvider[
-        tuple[TokenSequence, str, str]
-    ](
-        reward_temperature=reward_temperature,
-        correction="importance",
-        log_ratio_clip=importance_log_ratio_clip,
-    )
-    reward_only_weights = MonteCarloRolloutWeightProvider[
-        tuple[TokenSequence, str, str]
-    ](
-        reward_temperature=reward_temperature,
-        correction="none",
-    )
     by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
     if retained is not None:
         by_candidate[0].append(retained)
-    reward_index = 0
+    reward_values = iter(rewards)
     for candidate_index, group in enumerate(pending_by_candidate):
-        for token_ids, base_logprob, proposal_logprob, model_id, policy_id, token_logprobs, _ in group:
-            reward_value = rewards[reward_index]
-            reward_index += 1
-            observation = RolloutObservation(
-                reward=reward_value,
-                target_logprob=base_logprob,
-                proposal_logprob=proposal_logprob,
-                payload=(token_ids, model_id, policy_id),
-            )
-            weighted = (
-                importance_weights.weight(observation)
-                if base_logprob is not None
-                else reward_only_weights.weight(observation)
-            )
+        for token_ids, token_logprobs, _ in group:
+            reward_value = next(reward_values)
             by_candidate[candidate_index].append(
-                RolloutEvaluation(
-                    token_ids=token_ids,
-                    reward=reward_value,
-                    base_logprob=base_logprob,
-                    proposal_logprob=proposal_logprob,
-                    raw_log_importance_ratio=weighted.raw_log_importance_ratio,
-                    applied_log_importance_ratio=weighted.applied_log_importance_ratio,
-                    log_weight=weighted.log_weight,
-                    proposal_model_id=model_id,
-                    proposal_policy_id=policy_id,
-                    token_logprobs=token_logprobs,
-                )
+                RolloutEvaluation(token_ids, reward_value, reward_value / reward_temperature, token_logprobs)
             )
 
     evaluated: list[ConditionalCandidate] = []
@@ -325,13 +215,12 @@ def estimate_conditional_weights(
             raise RuntimeError(
                 "each candidate must have at least one weight contribution"
             )
-        candidate_log_weight = logmeanexp([item.log_weight for item in evaluations])
         evaluated.append(
             ConditionalCandidate(
                 token_ids=candidate.token_ids,
                 base_token_logprobs=candidate.token_logprobs,
                 rollouts=tuple(evaluations),
-                log_weight=candidate_log_weight,
+                log_weight=logmeanexp([item.log_weight for item in evaluations]),
             )
         )
     return tuple(evaluated)
@@ -441,33 +330,21 @@ class ConditionalISAdapter:
         retained = None
         if state.token_ids:
             start = state.fixed + len(proposals[0].token_ids)
-            completion_logprobs = state.token_logprobs[start:]
-            logprob = float(sum(completion_logprobs))
             retained = RolloutEvaluation(
                 token_ids=state.token_ids[start:],
                 reward=state.reward,
-                base_logprob=logprob,
-                proposal_logprob=logprob,
-                raw_log_importance_ratio=0.0,
-                applied_log_importance_ratio=0.0,
                 log_weight=state.reward / self.config.reward_temperature,
-                proposal_model_id=self.backend.model_id,
-                proposal_policy_id=self.sampling.policy_id,
-                token_logprobs=completion_logprobs,
+                token_logprobs=state.token_logprobs[start:],
             )
         evaluated = estimate_conditional_weights(
-            base_backend=self.backend,
-            rollout_backend=self.backend,
+            backend=self.backend,
             prompt=self.prompt,
             generated_prefix=state.token_ids[: state.fixed],
             candidates=proposals,
             rollout_length=self.config.total_length - state.fixed - length,
             rollout_count=self.config.rollout_count,
-            base_sampling=self.sampling,
-            rollout_sampling=self.sampling,
+            sampling=self.sampling,
             reward_temperature=self.config.reward_temperature,
-            importance_log_ratio_clip=None,
-            apply_importance_correction=True,
             reward=self.reward,
             seeds=seeds,
             step_index=step_index,

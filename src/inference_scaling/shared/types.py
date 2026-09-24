@@ -1,5 +1,10 @@
 """Model-independent data types."""
 
-TokenSequence = tuple[int, ...]
+from collections.abc import Callable, Sequence
 
-__all__ = ["TokenSequence"]
+TokenSequence = tuple[int, ...]
+# A fixed per-sequence reward r(prompt, completion) and its batched form.
+TokenReward = Callable[[TokenSequence, TokenSequence], float]
+TokenBatchReward = Callable[[TokenSequence, Sequence[TokenSequence]], Sequence[float]]
+
+__all__ = ["TokenBatchReward", "TokenReward", "TokenSequence"]

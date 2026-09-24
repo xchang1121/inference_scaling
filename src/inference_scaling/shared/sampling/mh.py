@@ -11,26 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import exp, isfinite, log
 from sys import float_info
-from typing import Generic, TypeVar
-
-
-StateT = TypeVar("StateT")
-
-
-@dataclass(frozen=True, slots=True)
-class MetropolisHastingsProposal(Generic[StateT]):
-    """A proposed state together with all terms in the Hastings ratio.
-
-    Target log densities may omit a shared additive constant.  Likewise, terms
-    known to cancel between target and proposal may be removed before this
-    object is built, as in base-model independence MH for reward targets.
-    """
-
-    state: StateT
-    current_target_log_density: float
-    proposed_target_log_density: float
-    forward_proposal_log_probability: float = 0.0
-    reverse_proposal_log_probability: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,16 +20,6 @@ class MetropolisHastingsDecision:
     log_acceptance: float
     acceptance_probability: float
     accepted: bool
-
-
-@dataclass(frozen=True, slots=True)
-class MetropolisHastingsTransition(Generic[StateT]):
-    """State and diagnostics after applying one proposal."""
-
-    previous_state: StateT
-    proposal: MetropolisHastingsProposal[StateT]
-    state: StateT
-    decision: MetropolisHastingsDecision
 
 
 def metropolis_hastings_log_acceptance(
@@ -105,34 +75,4 @@ def decide_metropolis_hastings(
     )
 
 
-def apply_metropolis_hastings(
-    current_state: StateT,
-    proposal: MetropolisHastingsProposal[StateT],
-    *,
-    uniform: float,
-) -> MetropolisHastingsTransition[StateT]:
-    """Apply the common MH kernel without knowing how either state was generated."""
-
-    decision = decide_metropolis_hastings(
-        current_target_log_density=proposal.current_target_log_density,
-        proposed_target_log_density=proposal.proposed_target_log_density,
-        forward_proposal_log_probability=proposal.forward_proposal_log_probability,
-        reverse_proposal_log_probability=proposal.reverse_proposal_log_probability,
-        uniform=uniform,
-    )
-    return MetropolisHastingsTransition(
-        previous_state=current_state,
-        proposal=proposal,
-        state=proposal.state if decision.accepted else current_state,
-        decision=decision,
-    )
-
-
-__all__ = [
-    "MetropolisHastingsDecision",
-    "MetropolisHastingsProposal",
-    "MetropolisHastingsTransition",
-    "apply_metropolis_hastings",
-    "decide_metropolis_hastings",
-    "metropolis_hastings_log_acceptance",
-]
+__all__ = ["MetropolisHastingsDecision", "decide_metropolis_hastings", "metropolis_hastings_log_acceptance"]

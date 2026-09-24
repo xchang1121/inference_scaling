@@ -46,13 +46,13 @@ class SamplingScope:
     @classmethod
     def from_config(cls, backend: Any, config: Mapping[str, Any], *, active: bool = True):
         options = output_settings_from_config(config)
-        scope = options.get("sampling_scope", "full") if active else "full"
+        scope = options["sampling_scope"] if active else "full"
         if scope not in {"full", "thinking"}:
             raise ValueError("sampling scope must be full or thinking")
         return cls(
             scope="thinking" if scope == "thinking" else "full",
             thinking_format=thinking_format_from_backend(backend, options),
-            generation_chunk_size=int(options.get("generation_chunk_size", 256)),
+            generation_chunk_size=int(options["generation_chunk_size"]),
         )
 
     def full_fallback(self, reason: str):

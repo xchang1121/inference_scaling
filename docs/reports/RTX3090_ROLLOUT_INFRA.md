@@ -1,5 +1,7 @@
 # 推理成本与执行效率：RTX 3090
 
+> 本报告的数值与命令来自 git 标签 [`pre-unified-cli`](https://github.com/xchang1121/inference_scaling/tree/pre-unified-cli) 的代码，从该标签可完整复现；其中部分方法与优化不在当前实现中。
+
 本报告比较批处理、rollout 复用、MH proposal 和奖励调度的执行成本。
 [算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)比较对应的准确率；
 机制与实现见[算法文档](../methods/ALGORITHMS.md#alg-runtime)，预算分配和成本口径见
@@ -48,7 +50,7 @@ Base 的墙钟下降 79.4%，每秒完成题目数约为基线的 4.85 倍；IS 
 ### 已有历史的在线成本
 
 32 题 replay 对照使用固定数值正确性奖励。纯新生成每候选使用 3 条新 rollout；replay 最多读取 2 条历史，
-再加入 1 条新样本校正。[记录管理](../methods/ALGORITHMS.md#alg-replay-lifecycle)要求最终估计记录与当前条件匹配，且只使用一次。
+再加入 1 条新样本校正。[记录管理](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/ALGORITHMS.md#alg-replay-lifecycle)要求最终估计记录与当前条件匹配，且只使用一次。
 
 | 路径 | 总 PFLOPs | 墙钟（s） | FLOPs 比 | 墙钟比 |
 | --- | ---: | ---: | ---: | ---: |
@@ -158,13 +160,13 @@ MH 各行对比相同设置下的普通基础模型 proposal。
 
 序贯蒙特卡洛（Sequential Monte Carlo，SMC）复用匹配前缀的补全后，在线墙钟从 2.99 s 降至 2.57 s，
 成对墙钟比为 0.856 ± 0.099，FLOPs 比为 0.963，新生成 rollout 均值由 35.3 降至 24.7。
-该收益以同一 SMC 的纯新生成版本为基线。方法定义见[SMC 多树搜索](../methods/ALGORITHMS.md#alg-smc-forest)。
+该收益以同一 SMC 的纯新生成版本为基线。方法定义见[SMC 多树搜索](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/ALGORITHMS.md#alg-smc-forest)。
 
 另在 8 题 × 2 次、BF16、最长 128 token 的 0.5B 草稿实验中，草稿长 2 的接受率为 86.50%，
 相对普通 1.5B 生成的墙钟比为 1.058、吞吐比为 0.952、总 FLOPs 比为 1.439，未取得加速。
 
 有界提前停止、随机化 rollout 和初始样本分配的其他筛选结论见
-[非默认方案记录](../methods/ALGORITHMS.md#alg-nondefault-notes)。
+[非默认方案记录](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/ALGORITHMS.md#alg-nondefault-notes)。
 
 ## 6. 算法配置的成本分解
 
@@ -193,7 +195,7 @@ verifier 组在同一会话中成对运行，墙钟从 476.5 s 增至 556.2 s，
 ### 动态候选与方差—成本分配
 
 使用质量报告第 4 节的 32 题配置。下表按“建库、独立设计样本、最终权重估计”分解 FLOPs，完整成本包含三项。
-分配规则见[固定候选预算](../methods/BUDGET.md#budget-allocation)；这些历史结果未测试新加入的联合块长调度。
+分配规则见[固定候选预算](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/BUDGET.md#budget-allocation)；这些历史结果未测试新加入的联合块长调度。
 
 | 路径 | 建库 PFLOPs | 设计 PFLOPs | 最终估计 PFLOPs | 完整 PFLOPs | 完整墙钟（s） |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -219,5 +221,5 @@ verifier 组在同一会话中成对运行，墙钟从 476.5 s 增至 556.2 s，
 奖励调度的收益依赖可重叠的等待时间。方案选择应同时比较墙钟、两种模型的 FLOPs，以及当前请求实际承担的建库和设计成本。
 
 数值来自[已完成实验的汇总](https://github.com/xchang1121/inference_scaling/tree/f56bae2ab50b36be2cb5d178b1bdabb4b0dc7c88/results)，
-对应汇总保留在 Git 历史中；当前目录保存精选报告。现有测量入口见[运行与评测](../experiments/GSM8K_EXPERIMENT_DESIGN.md)，
+对应汇总保留在 Git 历史中；当前目录保存精选报告。测量入口见该标签的[运行与评测](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/experiments/GSM8K_EXPERIMENT_DESIGN.md)，
 vLLM 实现见[后端说明](../methods/ALGORITHMS.md#infra-vllm)。

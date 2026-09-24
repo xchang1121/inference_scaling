@@ -1,64 +1,53 @@
 from __future__ import annotations
 
+import copy
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-import sys
 
 import pytest
 
+from inference_scaling.app.settings import load_settings
 from inference_scaling.dllm.backends.loader import load_llada_backend
 
 
-def _config(tmp_path: Path):
-    return {
-        "model": {"path": str(tmp_path / "base")},
-        "proposal": {"kind": "shared_prefix_layers", "layers": 8},
-        "alignment": {"adapter": str(tmp_path / "adapter")},
-        "runtime": {"device": "cpu", "dtype": "float32", "max_batch_size": 3},
-    }
+def _sections(tmp_path: Path):
+    dllm = copy.deepcopy(load_settings()["dllm"])
+    dllm["model"]["path"] = str(tmp_path / "base")
+    dllm["engine"].update(device="cpu", dtype="float32", max_batch_size=3)
+    return dllm["model"], dllm["engine"]
 
 
-def test_base_and_proposal_roles_share_the_loaded_model(monkeypatch, tmp_path):
+def test_base_model_receives_the_engine_options(monkeypatch, tmp_path):
     calls = []
-
-    class FakeBackend:
-        def with_prefix_layers(self, layers):
-            calls.append(("prefix", layers))
-            return "proposal"
-
-    base = FakeBackend()
-
-    def fake_loader(cls, path, **kwargs):
-        calls.append((path, kwargs))
-        return base
-
     monkeypatch.setattr(
         "inference_scaling.dllm.backends.loader.LLaDATransformersBackend.from_pretrained",
-        classmethod(fake_loader),
+        classmethod(lambda cls, path, **kwargs: calls.append((path, kwargs)) or "base"),
     )
-    config = _config(tmp_path)
+    model, engine = _sections(tmp_path)
 
-    loaded = load_llada_backend(config, "base")
-    proposal = load_llada_backend(config, "proposal", base_backend=loaded)
-
-    assert calls[0][1] == {
-        "device": "cpu",
-        "dtype": "float32",
-        "mask_token_id": 156895,
-        "max_batch_size": 3,
-    }
-    assert calls[1] == ("prefix", 8)
-    assert proposal == "proposal"
+    assert load_llada_backend(model, engine) == "base"
+    assert calls == [(str(tmp_path / "base"), {
+        "device": "cpu", "dtype": "float32", "mask_token_id": model["mask_token_id"], "max_batch_size": 3,
+        "trust_remote_code": True, "attn_implementation": "sdpa",
+    })]
 
 
-def test_aligned_role_requires_a_completed_adapter(tmp_path):
-    with pytest.raises(FileNotFoundError, match="run the VRPO stage first"):
-        load_llada_backend(_config(tmp_path), "aligned")
+def test_a_configured_adapter_must_exist(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "inference_scaling.dllm.backends.loader.LLaDATransformersBackend.from_pretrained",
+        classmethod(lambda cls, path, **kwargs: SimpleNamespace()),
+    )
+    model, engine = _sections(tmp_path)
+    model["adapter"] = {"path": str(tmp_path / "missing")}
+    with pytest.raises(FileNotFoundError, match="train it first"):
+        load_llada_backend(model, engine)
 
 
-def test_aligned_role_retains_the_runtime_batch_cap(monkeypatch, tmp_path):
-    config = _config(tmp_path)
-    Path(config["alignment"]["adapter"]).mkdir(parents=True)
+def test_the_adapter_wraps_the_base_model_and_keeps_the_batch_cap(monkeypatch, tmp_path):
+    model, engine = _sections(tmp_path)
+    model["adapter"] = {"path": str(tmp_path / "adapter")}
+    Path(model["adapter"]["path"]).mkdir()
     constructed = []
     base = SimpleNamespace(model=object(), tokenizer=object(), mask_token_id=17)
 
@@ -75,13 +64,10 @@ def test_aligned_role_retains_the_runtime_batch_cap(monkeypatch, tmp_path):
         def from_pretrained(model, adapter):
             return SimpleNamespace(eval=lambda: "aligned-model")
 
-    monkeypatch.setattr(
-        "inference_scaling.dllm.backends.loader.LLaDATransformersBackend",
-        FakeBackend,
-    )
+    monkeypatch.setattr("inference_scaling.dllm.backends.loader.LLaDATransformersBackend", FakeBackend)
     monkeypatch.setitem(sys.modules, "peft", SimpleNamespace(PeftModel=FakePeftModel))
 
-    load_llada_backend(config, "aligned")
-
-    assert constructed[0][2]["max_batch_size"] == 3
-    assert constructed[0][2]["mask_token_id"] == 17
+    load_llada_backend(model, engine)
+    assert constructed == [("aligned-model", base.tokenizer, {
+        "model_id": model["adapter"]["path"], "mask_token_id": 17, "max_batch_size": 3,
+    })]

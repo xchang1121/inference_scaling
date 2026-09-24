@@ -1,70 +1,40 @@
-"""Role-aware LLaDA backend construction for paired experiments."""
+"""Construct the configured LLaDA backend from the ``dllm`` settings."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 
-LLaDARole = Literal["base", "proposal", "aligned"]
 
+def load_llada_backend(model: Mapping[str, Any], engine: Mapping[str, Any]) -> LLaDATransformersBackend:
+    """Load ``dllm.model`` on ``dllm.engine``; a configured adapter (e.g. VRPO) is applied on top."""
 
-def load_llada_backend(
-    config: Mapping[str, Any],
-    role: LLaDARole,
-    *,
-    base_backend: LLaDATransformersBackend | None = None,
-) -> LLaDATransformersBackend:
-    """Load the full model, shared early-exit proposal, or aligned adapter."""
-
-    model = config["model"]
-    runtime = config["runtime"]
-    base_path = str(model["path"])
-    common = {
-        "device": str(runtime.get("device", "cuda")),
-        "dtype": str(runtime.get("dtype", "bfloat16")),
-        "mask_token_id": int(model.get("mask_token_id", 156895)),
-        "max_batch_size": int(runtime.get("max_batch_size", 8)),
+    options: dict[str, Any] = {
+        "device": str(engine["device"]),
+        "dtype": str(engine["dtype"]),
+        "mask_token_id": int(model["mask_token_id"]),
+        "max_batch_size": int(engine["max_batch_size"]),
+        "trust_remote_code": bool(model["trust_remote_code"]),
     }
-    attention = runtime.get("attention")
-    if attention:
-        common["attn_implementation"] = str(attention)
-    if role == "base":
-        return LLaDATransformersBackend.from_pretrained(base_path, **common)
+    if engine["attn_implementation"] is not None:
+        options["attn_implementation"] = str(engine["attn_implementation"])
+    base = LLaDATransformersBackend.from_pretrained(str(model["path"]), **options)
+    if model["adapter"] is None:
+        return base
+    adapter = Path(str(model["adapter"]["path"]))
+    if not adapter.is_dir():
+        raise FileNotFoundError(f"the LLaDA adapter {adapter} is absent; train it first")
+    from peft import PeftModel
 
-    if role == "proposal":
-        proposal = config["proposal"]
-        if str(proposal.get("kind")) != "shared_prefix_layers":
-            raise ValueError("only the shared prefix-layer LLaDA proposal is supported")
-        layers = int(proposal["layers"])
-        if layers <= 0:
-            raise ValueError("proposal.layers must be positive")
-        shared_base = base_backend or LLaDATransformersBackend.from_pretrained(
-            base_path, **common
-        )
-        return shared_base.with_prefix_layers(layers)
-
-    if role != "aligned":
-        raise ValueError(f"unknown LLaDA role {role!r}")
-    adapter_path = Path(str(config["alignment"]["adapter"]))
-    if not adapter_path.is_dir():
-        raise FileNotFoundError(
-            f"aligned LLaDA adapter is absent: {adapter_path}; run the VRPO stage first"
-        )
-    try:
-        from peft import PeftModel
-    except ImportError as exc:  # pragma: no cover - optional training dependency
-        raise RuntimeError("loading the aligned LLaDA adapter requires PEFT") from exc
-    base = LLaDATransformersBackend.from_pretrained(base_path, **common)
-    aligned_model = PeftModel.from_pretrained(base.model, adapter_path).eval()
     return LLaDATransformersBackend(
-        aligned_model,
+        PeftModel.from_pretrained(base.model, adapter).eval(),
         base.tokenizer,
-        model_id=str(adapter_path),
+        model_id=str(adapter),
         mask_token_id=base.mask_token_id,
-        max_batch_size=int(runtime.get("max_batch_size", 8)),
+        max_batch_size=int(engine["max_batch_size"]),
     )
 
 
-__all__ = ["LLaDARole", "load_llada_backend"]
+__all__ = ["load_llada_backend"]

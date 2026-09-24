@@ -1,6 +1,7 @@
 from math import isinf
 
-from inference_scaling.arllm.backends import AbsorbingEOSBackend, TabularAutoregressiveBackend
+from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
+from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 

@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from inference_scaling.dllm.backends import LLaDATransformersBackend
+from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import (
     DiffusionGenerationRequest,

@@ -1,5 +1,7 @@
 # Qwen3-1.7B：思考模式、IS 与 MH 的质量和计算量
 
+> 本报告的数值与命令来自 git 标签 [`pre-unified-cli`](https://github.com/xchang1121/inference_scaling/tree/pre-unified-cli) 的代码，从该标签可完整复现；其中部分方法与优化不在当前实现中。
+
 ## 实验设置
 
 使用 [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) 的固定权重，在
@@ -71,7 +73,7 @@ MH 与 IS 共用思考段切分及奖励实现。MH 历史记录保留了最终�
 
 ## 复现
 
-使用 [README 中的统一入口](../../README.md#思考模式与模型内在奖励比较)与
-[`qwen3_math.toml`](../../configs/qwen3_math.toml)，运行和汇总均设置 `--limit 30`。
+使用该标签 [README 中的统一入口](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/README.md#思考模式与模型内在奖励比较)与
+[`qwen3_math.toml`](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/configs/qwen3_math.toml)，运行和汇总均设置 `--limit 30`。
 配置与加载器固定了模型、数据版本和抽题顺序；完整性检查要求 30 题的 660 条方法与预算记录全部存在。
 本次结果通过全部记录的预算、模型与数据版本、IS 权重及随机选择核对，重新评分与保存值完全一致。

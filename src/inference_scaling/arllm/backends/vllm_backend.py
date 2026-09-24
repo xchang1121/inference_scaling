@@ -24,7 +24,7 @@ import json
 import itertools
 import os
 import threading
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from math import isclose, isfinite
 from pathlib import Path
@@ -32,12 +32,6 @@ from typing import Any
 
 from packaging.version import Version
 
-from inference_scaling.arllm.acceleration.primitives import (
-    ActiveBatchSpeculationConfig,
-    RolloutTokenTree,
-    RolloutTokenTreeSnapshot,
-    SampleCompletionCallback,
-)
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import (
@@ -73,6 +67,8 @@ _PROTECTED_ENGINE_KWARGS = frozenset(
         "max_num_batched_tokens",
         "worker_cls",
         "async_scheduling",
+        # Rejected draft tokens would escape the forward-token accounting.
+        "speculative_config",
     }
 )
 
@@ -122,12 +118,6 @@ class VLLMBackendSnapshot:
     mh_fused_logprobs: bool = False
     fused_reference_sequences: int = 0
     fused_reference_tokens: int = 0
-    native_suffix_speculation: bool = False
-    observed_draft_sequences: int = 0
-    native_speculative_drafts: int = 0
-    native_draft_tokens: int = 0
-    native_accepted_draft_tokens: int = 0
-    rejected_verification_token_slots: int = 0
 
 
 class _AsyncLoopRunner:
@@ -298,9 +288,6 @@ class VLLMBackend:
         beam_search_params_factory: Callable[..., Any] | None = None,
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
-        native_suffix_speculation: bool = False,
         mh_fused_logprobs: bool = False,
     ) -> None:
         if parameter_count <= 0:
@@ -310,25 +297,13 @@ class VLLMBackend:
         self._engine = engine
         self.tokenizer = tokenizer
         self._model_id = str(model_id)
-        self._metric_model_name = self._model_id.split("+adapter:", 1)[0].split(";", 1)[0]
         self._parameter_count = int(parameter_count)
         self._sampling_params_factory = sampling_params_factory
         self._tokens_prompt_factory = tokens_prompt_factory
         self._beam_search_params_factory = beam_search_params_factory
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
-        self._speculation = speculation
-        # Native suffix decoding owns its global tree inside vLLM.  A separate
-        # Python tree would consume CPU and memory without influencing drafts;
-        # retain one only when a caller explicitly requests diagnostics.
-        self._draft_tree = draft_tree
-        self._native_suffix_speculation = bool(native_suffix_speculation)
         self._mh_fused_logprobs = bool(mh_fused_logprobs)
-        if self._mh_fused_logprobs and speculation is not None:
-            raise ValueError(
-                "MH fused log-probabilities currently require speculative decoding "
-                "to be disabled"
-            )
         pad = getattr(tokenizer, "pad_token_id", None)
         eos = getattr(tokenizer, "eos_token_id", None)
         if pad is None and eos is not None:
@@ -359,7 +334,6 @@ class VLLMBackend:
         self._delegated_estimated_dense_forward_flops = 0
         self._active_engine_requests = 0
         self._maximum_in_flight_requests = 0
-        self._observed_draft_sequences = 0
         self._fused_reference_sequences = 0
         self._fused_reference_tokens = 0
 
@@ -391,9 +365,6 @@ class VLLMBackend:
         scoring_backend: AutoregressiveBackend | None = None,
         enable_prefix_caching: bool = True,
         max_lora_rank: int = 16,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
-        dynamic_speculation: bool = False,
         enable_mh_fused_logprobs: bool = False,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "VLLMBackend":
@@ -420,11 +391,6 @@ class VLLMBackend:
 
         if enable_mh_fused_logprobs:
             _validate_mh_fused_vllm_version()
-            if speculation is not None:
-                raise ValueError(
-                    "MH fused log-probabilities cannot be combined with speculative "
-                    "decoding"
-                )
 
         kwargs: dict[str, Any] = {
             "model": base_model,
@@ -460,16 +426,7 @@ class VLLMBackend:
         kwargs.update(
             {name: value for name, value in optional.items() if value is not None}
         )
-        if speculation is not None:
-            kwargs["speculative_config"] = speculation.vllm_suffix_config(
-                dynamic=dynamic_speculation
-            )
         if engine_kwargs:
-            if speculation is not None and "speculative_config" in engine_kwargs:
-                raise ValueError(
-                    "engine_kwargs.speculative_config conflicts with the explicit "
-                    "active-batch speculation config"
-                )
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
@@ -525,9 +482,6 @@ class VLLMBackend:
             beam_search_params_factory=BeamSearchParams,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
-            draft_tree=draft_tree,
-            speculation=speculation,
-            native_suffix_speculation=speculation is not None,
             mh_fused_logprobs=enable_mh_fused_logprobs,
         )
 
@@ -718,49 +672,6 @@ class VLLMBackend:
                 raise RuntimeError("vLLM in-flight request accounting became negative")
 
     @staticmethod
-    def _sum_metric_values(
-        metrics: Any, *, model_name: str | None = None
-    ) -> tuple[int, int, int]:
-        totals = {
-            "vllm:spec_decode_num_drafts": 0.0,
-            "vllm:spec_decode_num_draft_tokens": 0.0,
-            "vllm:spec_decode_num_accepted_tokens": 0.0,
-        }
-        for metric in metrics or ():
-            labels = getattr(metric, "labels", {}) or {}
-            if (
-                model_name is not None
-                and labels.get("model_name") is not None
-                and str(labels["model_name"]) != model_name
-            ):
-                continue
-            name = str(getattr(metric, "name", ""))
-            if name not in totals:
-                continue
-            value = getattr(metric, "value", 0.0)
-            if isinstance(value, (list, tuple)):
-                totals[name] += sum(float(item) for item in value)
-            else:
-                totals[name] += float(value)
-        return (
-            int(totals["vllm:spec_decode_num_drafts"]),
-            int(totals["vllm:spec_decode_num_draft_tokens"]),
-            int(totals["vllm:spec_decode_num_accepted_tokens"]),
-        )
-
-    def _native_speculation_totals(self) -> tuple[int, int, int]:
-        callback = getattr(self._engine, "get_metrics", None)
-        if callback is None or self._closed:
-            return 0, 0, 0
-        try:
-            metrics = callback()
-        except (AssertionError, RuntimeError):
-            return 0, 0, 0
-        if inspect.isawaitable(metrics):
-            raise RuntimeError("an asynchronous metrics API requires AsyncVLLMBackend")
-        return self._sum_metric_values(metrics, model_name=self._metric_model_name)
-
-    @staticmethod
     def _completion(output: Any) -> Any:
         completions = getattr(output, "outputs", None)
         if not completions or len(completions) != 1:
@@ -847,36 +758,6 @@ class VLLMBackend:
             prompt_length - cached + max(0, len(tokens) - 1),
         )
 
-    def _record_sample_batch(
-        self,
-        samples: Sequence[SequenceSample],
-        *,
-        prefill_tokens: int,
-        cached_tokens: int,
-        forward_slots: int,
-    ) -> None:
-        with self._statistics_lock:
-            self._sample_calls += 1
-            self._sampled_sequences += len(samples)
-            self._generated_tokens += sum(len(sample.token_ids) for sample in samples)
-            self._prefill_tokens += prefill_tokens
-            self._shared_prefill_tokens_saved += cached_tokens
-            self._generation_forward_token_slots += forward_slots
-            self._estimated_dense_forward_flops += dense_forward_flops(
-                self.parameter_count, forward_slots
-            )
-            self._engine_requests += len(samples)
-            fused = [
-                sample
-                for sample in samples
-                if sample.reference_token_logprobs is not None
-                and sample.reference_policy_id != sample.policy_id
-            ]
-            self._fused_reference_sequences += len(fused)
-            self._fused_reference_tokens += sum(
-                len(sample.token_ids) for sample in fused
-            )
-
     def sample_batch(
         self, requests: Sequence[GenerationRequest]
     ) -> list[SequenceSample]:
@@ -898,46 +779,29 @@ class VLLMBackend:
             )
             parsed.append(self._sample_from_output(request, output, reference))
         samples = [item[0] for item in parsed]
-        self._record_sample_batch(
-            samples,
-            prefill_tokens=sum(item[1] for item in parsed),
-            cached_tokens=sum(item[2] for item in parsed),
-            forward_slots=sum(item[3] for item in parsed),
-        )
-        self.observe_draft_samples(samples)
-        return samples
-
-    def sample_batch_with_callback(
-        self,
-        requests: Sequence[GenerationRequest],
-        on_complete: SampleCompletionCallback,
-    ) -> list[SequenceSample]:
-        """Synchronous LLM fallback; AsyncVLLMBackend overrides this hook."""
-
-        samples = self.sample_batch(requests)
-        for index, sample in enumerate(samples):
-            on_complete(index, sample)
-        return samples
-
-    def observe_draft_samples(self, samples: Iterable[SequenceSample]) -> None:
-        materialized = tuple(samples)
-        if self._draft_tree is not None:
-            self._draft_tree.observe_samples(materialized)
+        forward_slots = sum(item[3] for item in parsed)
         with self._statistics_lock:
-            self._observed_draft_sequences += len(materialized)
-
-    def observe_draft_sequences(self, sequences: Iterable[TokenSequence]) -> None:
-        materialized = tuple(
-            tuple(int(token) for token in sequence) for sequence in sequences
-        )
-        if self._draft_tree is not None:
-            for sequence in materialized:
-                self._draft_tree.observe(sequence)
-        with self._statistics_lock:
-            self._observed_draft_sequences += len(materialized)
-
-    def draft_cache_snapshot(self) -> RolloutTokenTreeSnapshot | None:
-        return None if self._draft_tree is None else self._draft_tree.snapshot()
+            self._sample_calls += 1
+            self._sampled_sequences += len(samples)
+            self._generated_tokens += sum(len(sample.token_ids) for sample in samples)
+            self._prefill_tokens += sum(item[1] for item in parsed)
+            self._shared_prefill_tokens_saved += sum(item[2] for item in parsed)
+            self._generation_forward_token_slots += forward_slots
+            self._estimated_dense_forward_flops += dense_forward_flops(
+                self.parameter_count, forward_slots
+            )
+            self._engine_requests += len(samples)
+            fused = [
+                sample
+                for sample in samples
+                if sample.reference_token_logprobs is not None
+                and sample.reference_policy_id != sample.policy_id
+            ]
+            self._fused_reference_sequences += len(fused)
+            self._fused_reference_tokens += sum(
+                len(sample.token_ids) for sample in fused
+            )
+        return samples
 
     @staticmethod
     def _supports_native_score(sampling: SamplingConfig | None) -> bool:
@@ -1137,8 +1001,6 @@ class VLLMBackend:
         return list(outputs)
 
     def snapshot(self) -> VLLMBackendSnapshot:
-        drafts, draft_tokens, accepted = self._native_speculation_totals()
-        rejected = max(0, draft_tokens - accepted)
         with self._statistics_lock:
             return VLLMBackendSnapshot(
                 sample_calls=self._sample_calls,
@@ -1148,14 +1010,9 @@ class VLLMBackend:
                 prefill_tokens=self._prefill_tokens,
                 shared_prefill_tokens_saved=self._shared_prefill_tokens_saved,
                 scored_tokens=self._scored_tokens,
-                generation_forward_token_slots=(
-                    self._generation_forward_token_slots + rejected
-                ),
+                generation_forward_token_slots=self._generation_forward_token_slots,
                 score_forward_token_slots=self._score_forward_token_slots,
-                estimated_dense_forward_flops=(
-                    self._estimated_dense_forward_flops
-                    + dense_forward_flops(self.parameter_count, rejected)
-                ),
+                estimated_dense_forward_flops=self._estimated_dense_forward_flops,
                 engine_requests=self._engine_requests,
                 native_score_sequences=self._native_score_sequences,
                 delegated_score_sequences=self._delegated_score_sequences,
@@ -1169,12 +1026,6 @@ class VLLMBackend:
                 mh_fused_logprobs=self._mh_fused_logprobs,
                 fused_reference_sequences=self._fused_reference_sequences,
                 fused_reference_tokens=self._fused_reference_tokens,
-                native_suffix_speculation=self._native_suffix_speculation,
-                observed_draft_sequences=self._observed_draft_sequences,
-                native_speculative_drafts=drafts,
-                native_draft_tokens=draft_tokens,
-                native_accepted_draft_tokens=accepted,
-                rejected_verification_token_slots=rejected,
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -1233,8 +1084,8 @@ class VLLMBackend:
                     )
                 )
             raise ValueError(
-                "beam search requires runtime.backend='vllm-sync' or a "
-                "Transformers exact_scoring_backend"
+                "beam search requires ar.engine.vllm.asynchronous = false or "
+                'ar.engine.vllm.exact_scoring = "transformers"'
             )
         kwargs: dict[str, Any] = {
             "prompts": [prompt],
@@ -1296,9 +1147,6 @@ class AsyncVLLMBackend(VLLMBackend):
         scoring_backend: AutoregressiveBackend | None = None,
         lora_request: Any | None = None,
         engine_factory: Callable[[], Any] | None = None,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
-        native_suffix_speculation: bool = False,
     ) -> None:
         if (engine is None) == (engine_factory is None):
             raise ValueError("provide exactly one of engine or engine_factory")
@@ -1317,9 +1165,6 @@ class AsyncVLLMBackend(VLLMBackend):
             beam_search_params_factory=beam_search_params_factory,
             scoring_backend=scoring_backend,
             lora_request=lora_request,
-            draft_tree=draft_tree,
-            speculation=speculation,
-            native_suffix_speculation=native_suffix_speculation,
         )
 
     @classmethod
@@ -1350,9 +1195,6 @@ class AsyncVLLMBackend(VLLMBackend):
         scoring_backend: AutoregressiveBackend | None = None,
         enable_prefix_caching: bool = True,
         max_lora_rank: int = 16,
-        draft_tree: RolloutTokenTree | None = None,
-        speculation: ActiveBatchSpeculationConfig | None = None,
-        dynamic_speculation: bool = False,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> "AsyncVLLMBackend":
         try:
@@ -1404,16 +1246,7 @@ class AsyncVLLMBackend(VLLMBackend):
         kwargs.update(
             {name: value for name, value in optional.items() if value is not None}
         )
-        if speculation is not None:
-            kwargs["speculative_config"] = speculation.vllm_suffix_config(
-                dynamic=dynamic_speculation
-            )
         if engine_kwargs:
-            if speculation is not None and "speculative_config" in engine_kwargs:
-                raise ValueError(
-                    "engine_kwargs.speculative_config conflicts with the explicit "
-                    "active-batch speculation config"
-                )
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
@@ -1453,38 +1286,12 @@ class AsyncVLLMBackend(VLLMBackend):
             scoring_backend=scoring_backend,
             lora_request=lora_request,
             engine_factory=create_engine,
-            draft_tree=draft_tree,
-            speculation=speculation,
-            native_suffix_speculation=speculation is not None,
         )
 
     def _next_request_id(self) -> str:
         with self._request_counter_lock:
             value = next(self._request_counter)
         return f"inference-scaling:{self.model_id}:{value}"
-
-    def _native_speculation_totals(self) -> tuple[int, int, int]:
-        if self._closed:
-            return 0, 0, 0
-
-        async def read() -> tuple[int, int, int]:
-            callback = getattr(self._engine, "get_metrics", None)
-            try:
-                if callback is None:
-                    # AsyncLLM does not expose LLM.get_metrics(), but records
-                    # the same counters in the process-wide Prometheus registry.
-                    from vllm.v1.metrics.reader import get_metrics_snapshot
-
-                    metrics = get_metrics_snapshot()
-                else:
-                    metrics = callback()
-                    if inspect.isawaitable(metrics):
-                        metrics = await metrics
-            except (AssertionError, ImportError, RuntimeError):
-                return 0, 0, 0
-            return self._sum_metric_values(metrics, model_name=self._metric_model_name)
-
-        return self._runner.run(read())
 
     async def _generate_one(self, prompt: Any, params: Any) -> Any:
         kwargs = {
@@ -1520,80 +1327,10 @@ class AsyncVLLMBackend(VLLMBackend):
             )
         )
 
-    async def _generate_many_as_completed(
-        self,
-        prompts: Sequence[Any],
-        params: Any,
-        requests: Sequence[GenerationRequest],
-        on_complete: SampleCompletionCallback,
-    ) -> list[tuple[SequenceSample, int, int, int]]:
-        policies = params if isinstance(params, list) else [params] * len(prompts)
-        if len(policies) != len(prompts) or len(requests) != len(prompts):
-            raise ValueError(
-                "vLLM prompts, policies, and requests must have equal length"
-            )
-
-        async def indexed(index: int, prompt: Any, policy: Any):
-            return index, await self._generate_one(prompt, policy)
-
-        tasks = [
-            asyncio.create_task(indexed(index, prompt, policy))
-            for index, (prompt, policy) in enumerate(
-                zip(prompts, policies, strict=True)
-            )
-        ]
-        parsed: list[tuple[SequenceSample, int, int, int] | None] = [None] * len(tasks)
-        try:
-            for completed in asyncio.as_completed(tasks):
-                index, output = await completed
-                item = self._sample_from_output(requests[index], output)
-                parsed[index] = item
-                self.observe_draft_samples((item[0],))
-                on_complete(index, item[0])
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-        if any(item is None for item in parsed):
-            raise RuntimeError("asynchronous vLLM omitted a request result")
-        return [item for item in parsed if item is not None]
-
     def _generate(self, prompts: Sequence[Any], params: Any) -> list[Any]:
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
         return self._runner.run(self._generate_many(tuple(prompts), params))
-
-    def sample_batch_with_callback(
-        self,
-        requests: Sequence[GenerationRequest],
-        on_complete: SampleCompletionCallback,
-    ) -> list[SequenceSample]:
-        """Stream final request outputs from the persistent AsyncLLM engine."""
-
-        if not requests:
-            return []
-        if self._closed:
-            raise RuntimeError("vLLM backend is closed")
-        prompts = tuple(self._prompt(request.prefix) for request in requests)
-        params = [self._sampling_params(request) for request in requests]
-        parsed = self._runner.run(
-            self._generate_many_as_completed(
-                prompts,
-                params,
-                tuple(requests),
-                on_complete,
-            )
-        )
-        samples = [item[0] for item in parsed]
-        self._record_sample_batch(
-            samples,
-            prefill_tokens=sum(item[1] for item in parsed),
-            cached_tokens=sum(item[2] for item in parsed),
-            forward_slots=sum(item[3] for item in parsed),
-        )
-        return samples
 
     def _beam_score(self, tokens: Sequence[int], cumulative_logprob: float) -> float:
         length = len(tokens)
