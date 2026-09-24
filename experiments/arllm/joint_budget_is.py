@@ -62,6 +62,11 @@ def build_parser():
     parser.add_argument("--initial-candidate-count", type=int)
     parser.add_argument("--initial-rollout-count", type=int)
     parser.add_argument("--adjustment-min-improvement", type=float, default=0.1)
+    parser.add_argument(
+        "--expected-output-tokens",
+        type=int,
+        help="initial expected output length for cost planning; default: measure one plain completion",
+    )
     parser.add_argument("--reward", choices=MODEL_REWARD_SOURCES, default="consilience")
     parser.add_argument("--reward-temperature", type=float)
     parser.add_argument("--backend", choices=BACKEND_CHOICES)
@@ -100,6 +105,7 @@ def run(args):
         initial_candidate_count=args.initial_candidate_count,
         initial_rollout_count=args.initial_rollout_count,
         adjustment_min_improvement=args.adjustment_min_improvement,
+        expected_output_tokens=args.expected_output_tokens,
     )
     JointBudgetISConfig(**options)
     backend = load_backend_from_config(config["models"]["base"], config, role="base")
@@ -148,6 +154,9 @@ def run(args):
                 "plan": asdict(step.plan),
                 "estimates": [asdict(item) for item in step.estimates],
                 "pilot_reserved_forward_tokens": step.pilot_reserved_cost,
+                "pilot_actual_forward_tokens": step.pilot_actual_cost,
+                "actual_forward_tokens": step.actual_cost,
+                "expected_remaining_tokens": step.expected_remaining,
                 "remaining_budget": step.remaining_budget,
                 "selected_index": step.evaluation.selected_index,
                 **({"adjustment": step.adjustment} if step.adjustment is not None else {}),
@@ -171,6 +180,9 @@ def run(args):
             "stopping_reason": result.stopping_reason,
             "reserved_forward_tokens": result.reserved_forward_tokens,
             "pilot_reserved_forward_tokens": result.pilot_reserved_forward_tokens,
+            "actual_forward_tokens": result.actual_forward_tokens,
+            "pilot_actual_forward_tokens": result.pilot_actual_forward_tokens,
+            "length_probe_forward_tokens": result.length_probe_forward_tokens,
             "actual_backend_cost": cost,
             "inference_seconds": seconds,
             "steps": steps,

@@ -3,12 +3,12 @@ from dataclasses import replace
 import pytest
 
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.shared.budget.planners import AdaptiveBudgetController
+from inference_scaling.shared.budget.planners import AdaptiveBudgetController, PlanningState
 from inference_scaling.experimental.arllm.joint_budget_is import (
     JointBudgetISConfig,
     run_joint_budget_is,
 )
-from inference_scaling.shared.budget.costs import block_costs
+from inference_scaling.shared.budget.costs import block_costs, completion_reserve
 from inference_scaling.shared.budget.joint import BlockBudgetEstimate, WeightMoments
 from inference_scaling.shared.rng import SeedStream
 from test_joint_budget_is import RecordingBackend
@@ -24,37 +24,42 @@ def settings(**overrides):
     } | overrides))
 
 
+def finish_reserve(config, prefix=0):
+    # These unit tests price every completion at the output limit.
+    return completion_reserve(
+        prompt_length=2, generated_length=prefix, total_length=config.total_length,
+        expected_remaining=config.total_length - prefix,
+        candidates=min(config.candidate_counts), reward_forward_passes=config.reward_forward_passes,
+    )
+
+
 def select(controller, prefix=0, budget=None, moments=None):
     config = controller.config
     measured = []
+    remaining = config.total_length - prefix
+    budget = config.forward_token_budget if budget is None else budget
+    reserve = finish_reserve(config, prefix)
 
     def estimate(block):
         costs = block_costs(prompt_length=2, generated_length=prefix,
                             total_length=config.total_length, block_size=block,
-                            reward_forward_passes=config.reward_forward_passes)
+                            reward_forward_passes=config.reward_forward_passes,
+                            expected_remaining=remaining)
         return BlockBudgetEstimate(block, WeightMoments(1, 0 if costs[1] == 0 else 1), *costs)
 
     def measure(estimate):
         measured.append(estimate.block_size)
         return moments(estimate.block_size) if callable(moments) else moments
 
-    selection = controller.select(
-        config.total_length - prefix,
-        config.forward_token_budget if budget is None else budget,
-        estimate, measure,
-    )
-    assert selection.remaining_budget == (
-        (config.forward_token_budget if budget is None else budget) - selection.pilot_reserved_cost
-    )
-    protected = controller.finish_reserve if selection.plan.rollout_count else 0
+    selection = controller.select(PlanningState(remaining, budget, reserve, remaining), estimate, measure)
+    assert selection.remaining_budget == budget - selection.pilot_reserved_cost
+    protected = reserve if selection.plan.rollout_count else 0
     assert selection.plan.reserved_cost + protected <= selection.remaining_budget
     return selection, measured
 
 
 def controller(**overrides):
-    config = settings(**overrides)
-    reserve = min(config.candidate_counts) * (2 + config.total_length) * (1 + config.reward_forward_passes)
-    return AdaptiveBudgetController(config, reserve)
+    return AdaptiveBudgetController(settings(**overrides))
 
 
 def parameters(plan):
@@ -195,7 +200,9 @@ def test_real_driver_130k_cap_uses_initial_chunk_not_full_remaining():
         sampling=SamplingConfig(eos_token_id=0),
     )
     assert parameters(result.steps[0].plan) == (100, 4, 2)
-    assert all(request.max_new_tokens == 100 for request in backend.requests)
+    probe, *chunk = backend.requests
+    assert probe.request_id == "joint-budget-is:length-probe"
+    assert all(request.max_new_tokens == 100 for request in chunk)
     assert result.pilot_reserved_forward_tokens == 0
     assert result.stopping_reason == "eos"
 
@@ -212,19 +219,21 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
     assert len(result.steps) > 1
     assert parameters(result.steps[0].plan) == (4, 4, 2)
     assert result.steps[-1].adjustment["status"] == "finish"
-    before = config.forward_token_budget
+    before = config.forward_token_budget - result.length_probe_forward_tokens
     for step in result.steps:
-        before -= step.pilot_reserved_cost + step.plan.reserved_cost
+        before -= step.pilot_actual_cost + step.actual_cost
         assert step.remaining_budget == before >= 0
         assert step.plan.forecast_steps == 1
         if step.adjustment["status"] != "finish":
             assert parameters(step.plan) == (4, 4, 2)
+    # Without EOS every output reaches the limit, so realized equals planned cost.
     actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
     actual += sum(
         len(candidate.rollouts) * (2 + config.total_length) * reward_passes
         for step in result.steps for candidate in step.evaluation.candidates
     )
-    assert actual == result.reserved_forward_tokens <= config.forward_token_budget
+    assert actual == result.actual_forward_tokens <= config.forward_token_budget
+    assert result.actual_forward_tokens == result.reserved_forward_tokens + result.length_probe_forward_tokens
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
 
 
@@ -252,12 +261,14 @@ def test_real_pilots_are_charged_but_never_reused_as_production_samples():
     result = run_joint_budget_is(backend, (1, 1), config, reward, SeedStream(8))
     actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
     actual += len(scored) * (2 + config.total_length)
-    assert result.reserved_forward_tokens == actual
+    assert result.actual_forward_tokens == actual
+    assert result.actual_forward_tokens == result.reserved_forward_tokens + result.length_probe_forward_tokens
     assert result.pilot_reserved_forward_tokens > 0
     assert result.pilot_reserved_forward_tokens == sum(step.pilot_reserved_cost for step in result.steps)
+    assert result.pilot_actual_forward_tokens == result.pilot_reserved_forward_tokens
     assert all(len(step.evaluation.candidates) == step.plan.candidate_count for step in result.steps)
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
-    assert result.reserved_forward_tokens <= config.forward_token_budget
+    assert result.actual_forward_tokens <= config.forward_token_budget
 
 
 @pytest.mark.parametrize("overrides", [

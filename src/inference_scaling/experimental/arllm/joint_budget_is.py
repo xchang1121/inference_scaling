@@ -2,16 +2,22 @@
 
 This module only samples: it runs pilots and production IS steps and keeps the
 budget ledger. Plans come from :mod:`inference_scaling.shared.budget.planners`
-and reserved costs from :mod:`inference_scaling.shared.budget.costs`.
+and planned costs from :mod:`inference_scaling.shared.budget.costs`.
 
-Budget units are reserved forward-token slots, including an explicit reward
-forward-pass allowance. They are not measured GPU FLOPs or elapsed time.
+Budget units are forward-token slots, including an explicit reward
+forward-pass allowance; they are not measured GPU FLOPs or elapsed time.
+Rollouts and completions run until EOS, so their cost is planned from the
+expected remaining length observed in earlier completions, and the ledger
+charges the tokens each step actually used. The output limit ``total_length``
+only caps generation: chunk sizes and counts do not depend on it unless
+outputs reach it. The budget is a planning target, and a step can spend more
+than planned when its completions run longer than expected.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, isfinite
 
 from inference_scaling.arllm.algorithms.conditional_is import (
     ConditionalISStep,
@@ -21,7 +27,7 @@ from inference_scaling.arllm.algorithms.conditional_is import (
 from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
 from inference_scaling.shared.budget.costs import block_costs, completion_reserve
 from inference_scaling.shared.budget.joint import (
     BlockBudgetEstimate,
@@ -30,7 +36,11 @@ from inference_scaling.shared.budget.joint import (
     estimate_weight_moments,
     positive_integer,
 )
-from inference_scaling.shared.budget.planners import AdaptiveBudgetController, FullHorizonPlanner
+from inference_scaling.shared.budget.planners import (
+    AdaptiveBudgetController,
+    FullHorizonPlanner,
+    PlanningState,
+)
 from inference_scaling.shared.model.generation import DEFAULT_MAX_NEW_TOKENS
 from inference_scaling.shared.rng import SeedStream
 
@@ -53,6 +63,8 @@ class JointBudgetISConfig:
     initial_candidate_count: int | None = None
     initial_rollout_count: int | None = None
     adjustment_min_improvement: float = 0.1
+    # Initial expected output length; None measures one plain completion.
+    expected_output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.planning_mode not in {"full_horizon", "chunk_adaptive"}:
@@ -95,6 +107,8 @@ class JointBudgetISConfig:
             raise ValueError("adjustment_min_improvement must be in (0, 1)")
         if self.planning_mode != "chunk_adaptive" and self.adjustment_min_improvement != 0.1:
             raise ValueError("adjustment_min_improvement requires chunk_adaptive")
+        if self.expected_output_tokens is not None:
+            positive_integer("expected_output_tokens", self.expected_output_tokens)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +119,9 @@ class JointBudgetStep:
     evaluation: ConditionalISStep
     remaining_budget: int
     adjustment: dict[str, object] | None = None
+    pilot_actual_cost: int = 0
+    actual_cost: int = 0
+    expected_remaining: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +132,23 @@ class JointBudgetISResult:
     reserved_forward_tokens: int
     pilot_reserved_forward_tokens: int
     stopping_reason: str
+    actual_forward_tokens: int = 0
+    pilot_actual_forward_tokens: int = 0
+    length_probe_forward_tokens: int = 0
+
+
+def realized_cost(
+    step: ConditionalISStep, *, prefix_length: int, reward_forward_passes: int
+) -> int:
+    """Forward-token slots a step used: cold prefixes, decoded tokens and scoring."""
+    total = 0
+    for candidate in step.candidates:
+        block = prefix_length + len(candidate.token_ids)
+        total += block
+        for rollout in candidate.rollouts:
+            sequence = block + len(rollout.token_ids)
+            total += (sequence if rollout.token_ids else 0) + reward_forward_passes * sequence
+    return total
 
 
 def run_joint_budget_is(
@@ -128,37 +162,70 @@ def run_joint_budget_is(
 ) -> JointBudgetISResult:
     """Replan at each prefix; pilots never supply production candidates/weights.
 
-    Full-horizon planning includes a full-remaining-length completion option.
-    Adaptive chunks use completion only at the output boundary or when the
-    incumbent chunk plus completion reserve no longer fits the budget.
-    Insufficient initial budget raises before any backend/reward call.
-    Only fixed pointwise rewards and full-support on-policy sampling are supported.
+    Full-horizon planning includes a complete-to-EOS option. Adaptive chunks
+    complete only at the output limit or when the incumbent chunk plus the
+    completion reserve no longer fits the remaining budget; completing the
+    sequence is never refused. Without ``expected_output_tokens`` one plain
+    completion from the prompt measures the initial length estimate; each later
+    estimate is the mean length of the previous step's rollouts. A budget that
+    cannot cover the completion reserve raises, before any backend or reward
+    call when the estimate is given. Only fixed pointwise rewards and
+    full-support on-policy sampling are supported.
     """
     sampling = sampling or SamplingConfig()
     validate_base_sampling(sampling)
-    finish_cost = completion_reserve(
-        prompt_length=len(prompt),
-        total_length=config.total_length,
-        candidates=min(config.candidate_counts),
-        reward_forward_passes=config.reward_forward_passes,
-    )
-    if config.forward_token_budget < finish_cost:
-        raise ValueError(
-            f"budget must reserve at least {finish_cost} forward-token slots"
+    prompt_length = len(prompt)
+
+    def reserve(generated_length: int, expected: int) -> int:
+        return completion_reserve(
+            prompt_length=prompt_length,
+            generated_length=generated_length,
+            total_length=config.total_length,
+            expected_remaining=expected,
+            candidates=min(config.candidate_counts),
+            reward_forward_passes=config.reward_forward_passes,
         )
+
+    def require_budget(spent: int, expected: int) -> None:
+        needed = spent + reserve(0, expected)
+        if config.forward_token_budget < needed:
+            raise ValueError(f"budget must cover at least {needed} forward-token slots")
+
+    probe_cost = 0
+    if config.expected_output_tokens is not None:
+        expected = config.expected_output_tokens
+        require_budget(0, expected)
+    else:
+        # Reject budgets that cannot finish even one token per candidate before probing.
+        require_budget(0, 1)
+        probe = backend.sample_batch([
+            GenerationRequest(
+                prompt,
+                config.total_length,
+                sampling,
+                seeds.derive("joint_budget_is", "length_probe"),
+                "joint-budget-is:length-probe",
+            )
+        ])[0]
+        expected = max(1, len(probe.token_ids))
+        probe_cost = prompt_length + len(probe.token_ids)
+        require_budget(probe_cost, expected)
     generated: TokenSequence = ()
     steps: list[JointBudgetStep] = []
-    remaining_budget = config.forward_token_budget
-    pilot_spent = 0
+    remaining_budget = config.forward_token_budget - probe_cost
+    pilot_costs: list[int] = []
     planner = (
-        AdaptiveBudgetController(config, finish_cost)
+        AdaptiveBudgetController(config)
         if config.planning_mode == "chunk_adaptive"
-        else FullHorizonPlanner(config, finish_cost)
+        else FullHorizonPlanner(config)
     )
 
     def evaluate(
         block: int, candidates: int, rollouts: int, phase: str
     ) -> ConditionalISStep:
+        # A block reaching the output limit completes the sequence; its seed key
+        # omits the limit so completions do not depend on it.
+        key = block if len(generated) + block < config.total_length else "rest"
         return conditional_is_step(
             base_backend=backend,
             rollout_backend=backend,
@@ -174,15 +241,23 @@ def run_joint_budget_is(
             base_sampling=sampling,
             rollout_sampling=sampling,
             reward=reward,
-            seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), phase, block)),
+            seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), phase, key)),
             step_index=len(steps),
+        )
+
+    def cost_of(step: ConditionalISStep) -> int:
+        return realized_cost(
+            step,
+            prefix_length=prompt_length + len(generated),
+            reward_forward_passes=config.reward_forward_passes,
         )
 
     def estimate_block(block: int) -> BlockBudgetEstimate:
         candidate_cost, rollout_cost = block_costs(
-            prompt_length=len(prompt), generated_length=len(generated),
+            prompt_length=prompt_length, generated_length=len(generated),
             total_length=config.total_length, block_size=block,
             reward_forward_passes=config.reward_forward_passes,
+            expected_remaining=expected,
         )
         return BlockBudgetEstimate(
             block, WeightMoments(1.0, 0.0 if rollout_cost == 0 else 1.0),
@@ -191,6 +266,7 @@ def run_joint_budget_is(
 
     def measure(estimate: BlockBudgetEstimate) -> WeightMoments | None:
         pilot = evaluate(estimate.block_size, config.pilot_candidates, config.pilot_rollouts, "pilot")
+        pilot_costs.append(cost_of(pilot))
         weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot.candidates]
         if any(not isfinite(value) for group in weights for value in group):
             return None
@@ -201,32 +277,54 @@ def run_joint_budget_is(
         ])
 
     while len(generated) < config.total_length:
-        selection = planner.select(
-            config.total_length - len(generated), remaining_budget, estimate_block, measure
+        remaining = config.total_length - len(generated)
+        finish_reserve = reserve(len(generated), expected)
+        # Earlier overruns never block the completion: the planner always sees
+        # at least the completion reserve.
+        state = PlanningState(
+            remaining=remaining,
+            budget=max(remaining_budget, finish_reserve),
+            finish_reserve=finish_reserve,
+            expected_remaining=min(expected, remaining),
         )
-        remaining_budget -= selection.pilot_reserved_cost
-        pilot_spent += selection.pilot_reserved_cost
+        pilot_costs.clear()
+        selection = planner.select(state, estimate_block, measure)
         plan = selection.plan
         evaluation = evaluate(
             plan.block_size, plan.candidate_count, plan.rollout_count, "evaluation"
         )
-        remaining_budget -= int(plan.reserved_cost)
-        generated += evaluation.selected.token_ids
+        pilot_actual, actual = sum(pilot_costs), cost_of(evaluation)
+        remaining_budget -= pilot_actual + actual
         steps.append(
             JointBudgetStep(
                 plan, selection.estimates, selection.pilot_reserved_cost, evaluation,
-                remaining_budget, selection.adjustment,
+                remaining_budget, selection.adjustment, pilot_actual, actual,
+                state.expected_remaining,
             )
         )
+        rollout_lengths = [
+            len(rollout.token_ids)
+            for candidate in evaluation.candidates
+            for rollout in candidate.rollouts
+            if rollout.token_ids
+        ]
+        if rollout_lengths:
+            expected = max(1, ceil(sum(rollout_lengths) / len(rollout_lengths)))
+        generated += evaluation.selected.token_ids
         if sampling.eos_token_id is not None and sampling.eos_token_id in generated:
             break
+    pilot_reserved = sum(step.pilot_reserved_cost for step in steps)
+    pilot_actual_total = sum(step.pilot_actual_cost for step in steps)
     return JointBudgetISResult(
         prompt,
         generated,
         tuple(steps),
-        config.forward_token_budget - remaining_budget,
-        pilot_spent,
+        pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
+        pilot_reserved,
         "eos"
         if sampling.eos_token_id is not None and sampling.eos_token_id in generated
         else "length",
+        actual_forward_tokens=probe_cost + pilot_actual_total + sum(step.actual_cost for step in steps),
+        pilot_actual_forward_tokens=pilot_actual_total,
+        length_probe_forward_tokens=probe_cost,
     )

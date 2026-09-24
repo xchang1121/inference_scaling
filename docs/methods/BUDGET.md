@@ -60,7 +60,7 @@ K^*=\sqrt{\frac{v_{\rm within}c_z}{v_{\rm between}c_u}},\qquad
 M^*=\frac{C}{c_z+K^*c_u}.
 ```
 
-该式解释宽度与重复补全的权衡。实际实现枚举整数配置，同时处理终止块、最小候选数和完整生成预留量。
+该式解释宽度与重复补全的权衡。实际实现枚举整数配置，同时处理终止块、最小候选数和完成预留。
 候选已覆盖剩余全部序列时，直接评分，记录 $`K=0`$，内部确定性权重按一次评估处理。
 
 <a id="budget-tv"></a>
@@ -112,11 +112,12 @@ $`\mathbb E[\widehat H_A/\widehat Z]`$。由于 $`0\leq\widehat H_A/\widehat Z\l
 
 预算侧与采样侧分开实现：共享选择器 `choose_joint_budget` 与两种规划器 `FullHorizonPlanner`、`AdaptiveBudgetController` 位于 `shared/budget/`，只接收成本估计和初始样本矩；AR 执行器 `run_joint_budget_is` 只负责生成初始样本与正式样本并记账。每到一个新前缀：
 
-1. 将配置块长截到剩余长度、去重，并加入“直接生成至长度上限”的完整候选选项。
-2. 在 `pilot_fraction` 限制内，按块长升序生成少量初始候选及补全；完成预算始终预留。
+1. 去重配置块长（只有接近输出上限时才截到剩余长度），并加入“生成至 EOS”的完成选项。
+2. 在 `pilot_fraction` 限制内，按块长升序生成少量初始候选及补全；始终保留按期望长度计算的完成预算。
 3. 估计各块长的两类相对方差，枚举整数 $`M,K`$，选择误差预测分数最低的可行配置。
 4. 冻结本轮配置，使用独立随机种子重新生成候选及补全；仅这批样本进入最终权重。
-5. 提交重采样选中的块，扣除预留成本，在新前缀重新执行上述步骤，直至 EOS 或长度上限。
+5. 提交重采样选中的块，按实际消耗记账，用本步 rollout 的平均长度更新期望剩余长度，
+   在新前缀重新执行上述步骤，直至 EOS 或长度上限。
 
 ### 初始统计量
 
@@ -146,11 +147,13 @@ $`\overline G_m,s_m^2`$，该组数量为 $`K_m^{\rm pilot}`$。使用
 
 ### 联合配置选择
 
-对当前前缀，估计剩余选择次数
+对当前前缀，用期望剩余长度 $`\hat\ell`$（见[第 6 节](#budget-accounting)）估计剩余选择次数
 
 ```math
-n(B)=\left\lceil\frac{T-|g|}{B}\right\rceil.
+n(B)=\left\lceil\frac{\hat\ell}{B}\right\rceil,
 ```
+
+完成选项记 $`n=1`$。旧版本以输出上限剩余量 $`T-|g|`$ 代替 $`\hat\ell`$，使预测随上限增长。
 
 实现最小化下列插入样本矩的预测分数，枚举范围由配置给出：
 
@@ -170,7 +173,7 @@ n(B)M[c_z(B)+Kc_u(B)]\leq C_{\rm remaining},
 并在非终止块执行后保留一次最小完整候选 IS 的成本。相同分数依次按本轮成本更低、块长更长、候选数和补全数更少打破平局。
 
 这个预测假设后续位置具有相近的方差与成本；每个新前缀都会重新规划。它可能偏好完整序列 IS，
-并不保证多块路径更优，也没有全局预算最优或准确率提升保证。首版使用保守请求成本，不拟合 GPU 时间模型。
+并不保证多块路径更优，也没有全局预算最优或准确率提升保证。成本按期望长度估计，不拟合 GPU 时间模型。
 
 <a id="budget-allocation"></a>
 ## 4. 固定候选的方差—成本分配
@@ -229,24 +232,50 @@ off-policy 时另计基础模型重评分。最终条件权重只使用独立的
 <a id="budget-accounting"></a>
 ## 6. 预算单位与执行边界
 
-### 预留成本
+### 计划成本与实际记账
 
-AR 联合调度器以 `forward_token_budget` 控制预留前向 token 位置数。设提示长度为 $`P`$，
-当前已生成长度为 $`L`$，一次奖励最多需要 $`s`$ 次完整序列评分。非终止块采用
+补全和完成都生成到 EOS，成本取决于剩余输出的实际长度。设提示长度为 $`P`$，当前已生成长度为 $`L`$，
+输出上限为 $`T`$，一次奖励需要 $`s`$ 次完整序列评分。规划使用期望剩余长度
+
+```math
+\hat\ell=\min\{\hat\ell_{\rm obs},\,T-L\},
+```
+
+其中 $`\hat\ell_{\rm obs}`$ 是上一步全部正式 rollout 的平均长度。第一步之前使用
+`expected_output_tokens`；未给出时从提示生成一条普通补全测量长度，其消耗记为
+`length_probe_forward_tokens` 并计入预算，这条补全不作为候选。非终止块采用
 
 ```math
 c_z(B)=\max\{1,P+L+B\},\qquad
-c_u(B)=(1+s)\max\{1,P+T\}.
+c_u(B)=(1+s)\max\{1,P+L+\max(\hat\ell,B)\}.
 ```
 
-每次补全包含重新预填充、解码以及奖励评分预留。终止块采用
-$`c_z=(1+s)\max\{1,P+T\}`$、$`c_u=0`$。
-始终保留 $`M_{\min}(1+s)\max\{1,P+T\}`$ 作为直接完成生成的成本；初始预算不足时在调用模型前报错。
-EOS 提前结束和缓存命中不退回预留量，避免以随机长度改变已经冻结的样本集合。
+每次补全包含重新预填充、解码与奖励评分。到达输出上限的块（$`B=T-L`$）为终止块：候选生成至 EOS
+并直接评分，$`c_z=(1+s)\max\{1,P+L+\hat\ell\}`$、$`c_u=0`$。完成预留
+$`M_{\min}(1+s)\max\{1,P+L+\hat\ell\}`$ 随前缀更新；给出 `expected_output_tokens` 时，
+初始预算不足会在调用模型前报错。
 
-这是一套明确的请求级预留账本，不是任意后端的实际 FLOPs 硬上限。自定义奖励应符合声明的
+每步结束后按实际生成的候选、rollout 与评分长度记账，剩余预算取实际余额；
+早于预期结束的补全因此不再占用预算。计划只依赖此前步骤的样本，在本步正式样本生成前固定，
+第 2 节按可达前缀与预算状态条件化的逐步论证仍然适用。前面步骤超支时，规划器至少按完成预留看待剩余预算，
+完成序列不会被拒绝。
+
+这是请求级的前向 token 位置账本，不是任意后端的实际 FLOPs。自定义奖励应符合声明的
 `reward_forward_passes`；分块评分重复预填充、额外模型调用、推测解码的未采用分支和后端内部实现
-可能使实测成本与预留不同。当前 CLI 的两种模型奖励都预留一次评分；实际开销由后端计数器另外报告。
+可能使实测成本与账本不同。当前 CLI 的两种模型奖励都按一次评分计；实际开销由后端计数器另外报告。
+
+### 块长与输出上限解耦
+
+块长网格本身不含 $`T`$，旧版本却让 $`B_{\rm blk}`$ 随 $`T`$ 变化：每次 rollout 与完成预留都按生成到
+$`T`$ 计价（$`c_u=(1+s)(P+T)`$，完成预留 $`M_{\min}(1+s)(P+T)`$），且 EOS 提前结束不退款。
+$`T`$ 越大，预留越早耗尽预算，调度越早进入块长为 $`T-L`$ 的收尾；`full_horizon` 还以 $`T-L`$
+作为预测视界。根源是硬预算保证：rollout 必须生成到 EOS，只有按最坏情况 $`T`$ 预留才能保证不超预算。
+
+现在 $`T`$ 只是生成的硬上限：它截断接近上限的块，决定哪个块是终止块，并在期望长度达到上限时进入成本。
+只要输出没有触及上限，同一问题与随机种子下的块长、候选数、补全数、调整记录和输出都与 $`T`$ 无关；
+[`test_joint_budget_is.py`](../../tests/test_joint_budget_is.py) 在 $`T=2048,16384,1048576`$ 下验证了这一点。
+代价是预算变为按期望成本规划的软约束：补全比预期更长时，实际消耗可能超过计划和 `forward_token_budget`。
+实际消耗单独报告（`actual_forward_tokens`），正式比较应使用实际值。
 
 ### 实测成本与公平比较
 
@@ -258,7 +287,7 @@ EOS 提前结束和缓存命中不退回预留量，避免以随机长度改变�
 
 预填充、解码、重评分、验证和批量填充均按后端实际执行记录；该估算省略注意力的长度平方项及逐元素计算。
 墙钟、吞吐和显存独立测量。比较应包含初始估计、缓存建立和奖励评分，并分列主模型与辅助模型成本。
-相同预留预算不代表相同实际 FLOPs；正式实验需同时给出二者。
+相同计划预算不代表相同实际 FLOPs；正式实验需同时给出二者。
 
 联合调度当前仅接入 AR、同模型 on-policy、固定逐序列奖励和完整输出范围。Consilience 奖励仍默认只读 thinking，
 切分失败沿用显式全序列 fallback；这与 IS 修改整个输出范围是两个独立设置。
@@ -289,16 +318,19 @@ python -m experiments.arllm.joint_budget_is `
 
 | 参数 / 字段 | 含义 |
 | --- | --- |
-| `--budget-forward-tokens` | 包含初始采样和奖励评分的总预留量 |
+| `--budget-forward-tokens` | 包含长度测量、初始采样和奖励评分的总预算；按期望成本规划，按实际消耗记账 |
+| `--expected-output-tokens` | 第一步使用的期望输出长度；缺省时生成一条普通补全测量 |
 | `--block-sizes` | 块长网格；仅旧 `full_horizon` 模式将完整剩余长度加入正常竞争 |
 | `--candidate-counts`、`--rollout-counts` | 整数网格，分别为 $`M\geq2`$、非终止时 $`K\geq1`$ |
 | `--pilot-candidates`、`--pilot-rollouts` | 每个被探测块长的初始样本数，均默认 2 |
-| `--pilot-fraction` | 每轮初始估计最多使用当前剩余预算的比例，默认 0.15；还受完成预留量限制 |
+| `--pilot-fraction` | 每轮初始估计最多使用当前剩余预算的比例，默认 0.15；还受完成预留限制 |
 | `JointBudgetISConfig.relative_variance_floor` | 调度用相对方差下限，默认 $`10^{-4}`$ |
-| `JointBudgetISConfig.reward_forward_passes` | 自定义奖励的完整序列评分预留次数；CLI 固定为 1 |
-| `steps[].plan` | 选中的 $`M,K,B_{\rm blk}`$、局部误差估计、累计预测分数和是否有对应初始观测 |
+| `JointBudgetISConfig.reward_forward_passes` | 自定义奖励的完整序列评分次数；CLI 固定为 1 |
+| `steps[].plan` | 选中的 $`M,K,B_{\rm blk}`$、局部误差估计、累计预测分数和是否有对应初始观测；收尾步（$`K=0`$）生成至 EOS，其 `block_size` 只记录生成上限 $`T-L`$ |
 | `steps[].estimates` | 每个块长的相对方差、初始候选数和成本 |
-| `reserved_forward_tokens`、`pilot_reserved_forward_tokens` | 总预留消耗及初始估计部分 |
+| `reserved_forward_tokens`、`pilot_reserved_forward_tokens` | 各步计划成本合计及初始估计部分 |
+| `actual_forward_tokens`、`pilot_actual_forward_tokens`、`length_probe_forward_tokens` | 实际消耗合计、初始估计部分与长度测量部分 |
+| `steps[].expected_remaining_tokens`、`steps[].actual_forward_tokens` | 规划该步时的期望剩余长度与该步实际消耗 |
 | `actual_backend_cost`、`inference_seconds` | 实测前向计数、估算 FLOPs 与不含模型加载的执行时间 |
 
 ### 按下一块预算动态调整
@@ -321,21 +353,21 @@ python -m experiments.arllm.joint_budget_is \
   改善超过阈值且预算可负担时调整。没有证据或 pilot 预算不足则保持 B/M/K。
 - B 每次最多探测一个相邻网格值；比较 B 需要当前块与邻居的两组独立 pilot。
   只容得下一组时，只允许调整 M/K；单元素 `--block-sizes` 固定 B。
-- 正式执行只预留下一块成本，另保护收尾预算；pilot 同时受比例上限和保护预算限制。
-  候选、rollout 和奖励评分仍按上限预留，提前结束不退款。15% 是可配置比例，不保证 pilot 能启动。
-- 仅当当前 B/M/K 已无法负担，或剩余输出额度不超过当前 B 时，进入最少候选数、K=0 的收尾。
-  完整剩余长度不参与正常块长竞争；输出上限仍约束生成，未被 chunk 大小替代。
+- 正式执行按期望成本检查下一块，另保护按期望长度计算的收尾预算；pilot 同时受比例上限和保护预算限制。
+  每步结束后按实际消耗记账。15% 是可配置比例，不保证 pilot 能启动。
+- 仅当当前 B/M/K 已无法负担，或剩余输出额度不超过当前 B 时，进入最少候选数、K=0 的收尾：
+  候选生成至 EOS（至多到输出上限）并直接评分。收尾不是块长选择，完整剩余长度不参与正常块长竞争。
 - 跨块长使用 `H = max(本次有效 pilot 的 B)`、`ceil(H/B) * local_error` 比较，
   不用最大输出上限预测整个 thinking。这是小样本启发式指标，不是正确率或显著性保证。
 - `steps[].adjustment` 记录初值、保持/调整/收尾原因及比较分数；pilot 不进入正式候选池。
 
 `chunk_adaptive` 统一采用成本优先规则，无需额外策略开关：先枚举本次有效
 pilot 块长上的所有预算可行 M/K，筛选预测误差改善严格超过 `--adjustment-min-improvement`
-的方案，再选下一正式块预留成本最低者。同成本时按误差、较大 B、较小 M/K 确定性排序。
+的方案，再选下一正式块计划成本最低者。同成本时按误差、较大 B、较小 M/K 确定性排序。
 没有合格方案则保持当前值；原有信号检查、pilot 扣费、初值、收尾与预算保护不变。
 不再提供动态调参的误差优先分支；独立的 `full_horizon` 模式保持原有行为。
 
-此处成本指下一正式块的保守预留，不是同覆盖长度总成本、实际 token、墙钟时间或 GPU FLOPs；
+此处成本指下一正式块按期望长度计算的计划成本，不是同覆盖长度总成本、实际 token、墙钟时间或 GPU FLOPs；
 pilot 成本已在选择前扣除且对本次可选方案相同。跨 B 的误差仍按上述 H 比较。
 新策略不保证每次都比当前配置便宜，只保证在超过改善门槛的可行方案中选择最便宜者；
 它会牺牲进一步降低预测误差的机会，也不保证整题效率或正确率改善。
@@ -369,7 +401,7 @@ result = run_joint_budget_is(
 | --- | --- |
 | 相对方差估计、联合整数选择 | [`shared/budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)：`estimate_weight_moments`、`choose_joint_budget` |
 | 全视界规划与逐块自适应规划 | [`shared/budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)：`FullHorizonPlanner`、`AdaptiveBudgetController` |
-| 预留成本与完成预留 | [`shared/budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py)：`block_costs`、`completion_reserve` |
+| 计划成本与完成预留 | [`shared/budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py)：`block_costs`、`completion_reserve` |
 | AR 循环、独立随机数、预算记账 | [`experimental/arllm/joint_budget_is.py`](../../src/inference_scaling/experimental/arllm/joint_budget_is.py)：`JointBudgetISConfig`、`run_joint_budget_is` |
 | 实际候选生成、补全和重采样 | [`arllm/algorithms/conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)：`conditional_is_step` |
 | CLI、通用加载与实际成本输出 | [`experiments/arllm/joint_budget_is.py`](../../experiments/arllm/joint_budget_is.py) |

@@ -1,11 +1,20 @@
-"""Reserved forward-token cost model for sequential block generation.
+"""Forward-token cost model for sequential block generation.
 
-Costs are conservative request-level reservations: cold prefix + decode for a
-candidate block, and a full-length rollout plus reward scoring for each
-completion. They are not measured FLOPs; early EOS does not refund them.
+A rollout or a completion runs until EOS, so its cost depends on how long the
+remaining output actually is. The planners price it with ``expected_remaining``,
+the expected number of tokens from the current prefix to EOS estimated from
+observed completions. The output limit ``total_length`` only caps generation:
+it enters a cost when the expected completion would run into it, and a block
+that reaches it is terminal. Planned costs are therefore independent of the
+output limit whenever that limit does not bind.
 """
 
 from __future__ import annotations
+
+
+def _completion_length(generated_length: int, total_length: int, expected_remaining: int) -> int:
+    """Expected tokens from the prefix to EOS, never beyond the output limit."""
+    return min(max(1, expected_remaining), total_length - generated_length)
 
 
 def block_costs(
@@ -15,32 +24,37 @@ def block_costs(
     total_length: int,
     block_size: int,
     reward_forward_passes: int,
+    expected_remaining: int,
 ) -> tuple[int, int]:
     """Return ``(candidate_cost, rollout_cost)`` for one block choice.
 
-    All samples use the same model. Reward callbacks must fit the declared number
-    of full-sequence scoring passes; auxiliary models require a separate cost model.
-    A block that reaches ``total_length`` is terminal: its candidates are scored
-    directly and it has no rollout cost.
+    A candidate costs its cold prefix plus decoded block. A rollout continues it
+    until EOS and is scored ``reward_forward_passes`` times. A block reaching the
+    output limit is terminal: candidates run to EOS and are scored directly.
+    All samples use the same model; auxiliary models need a separate cost model.
     """
-    full = max(1, prompt_length + total_length)
-    candidate = max(1, prompt_length + generated_length + block_size)
-    scoring = reward_forward_passes * full
+    prefix = prompt_length + generated_length
+    remaining = _completion_length(generated_length, total_length, expected_remaining)
     if generated_length + block_size == total_length:
-        return candidate + scoring, 0
+        full = max(1, prefix + remaining)
+        return full * (1 + reward_forward_passes), 0
     # Early-EOS candidates are scored once rather than K times; K >= 1 covers them.
-    return candidate, full + scoring
+    full = max(1, prefix + max(remaining, block_size))
+    return max(1, prefix + block_size), full * (1 + reward_forward_passes)
 
 
 def completion_reserve(
     *,
     prompt_length: int,
+    generated_length: int,
     total_length: int,
+    expected_remaining: int,
     candidates: int,
     reward_forward_passes: int,
 ) -> int:
-    """Cost of finishing from any prefix with ``candidates`` full-length samples."""
-    return candidates * max(1, prompt_length + total_length) * (1 + reward_forward_passes)
+    """Expected cost of finishing from the prefix with ``candidates`` scored completions."""
+    remaining = _completion_length(generated_length, total_length, expected_remaining)
+    return candidates * max(1, prompt_length + generated_length + remaining) * (1 + reward_forward_passes)
 
 
 __all__ = ["block_costs", "completion_reserve"]

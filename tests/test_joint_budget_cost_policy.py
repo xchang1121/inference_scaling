@@ -4,7 +4,7 @@ import pytest
 
 from inference_scaling.experimental.arllm.joint_budget_is import JointBudgetISConfig
 from inference_scaling.shared.budget.joint import WeightMoments, choose_joint_budget
-from test_joint_budget_adaptive import controller, parameters, select, settings
+from test_joint_budget_adaptive import controller, finish_reserve, parameters, select, settings
 
 
 def test_default_enumerates_mk_and_prefers_cost_to_error_minimum():
@@ -53,7 +53,7 @@ def test_cost_policy_matches_exhaustive_feasible_oracle(budget, between, within)
                 plan = choose_joint_budget(
                     [estimate], remaining_length=28, remaining_budget=choice.remaining_budget,
                     candidate_counts=(candidate_count,), rollout_counts=(rollout_count,),
-                    finish_reserve=scheduler.finish_reserve, forecast_full_horizon=False,
+                    finish_reserve=finish_reserve(scheduler.config, 4), forecast_full_horizon=False,
                 )
                 if plan is not None:
                     score = ceil(decision["comparison_horizon"] / plan.block_size) * plan.local_error_estimate

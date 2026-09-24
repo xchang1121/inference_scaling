@@ -122,6 +122,7 @@ def choose_joint_budget(
     finish_reserve: float = 0.0,
     relative_variance_floor: float = 1e-4,
     forecast_full_horizon: bool = True,
+    forecast_length: int | None = None,
 ) -> JointBudgetPlan | None:
     """Enumerate integer plans under forecast and next-step reservation limits.
 
@@ -129,13 +130,18 @@ def choose_joint_budget(
     prevents a cheap-looking first action from consuming the completion budget.
     Terminal blocks score full candidates directly and have rollout_count == 0.
     Disable the full-horizon forecast for next-step planning at a fixed block size.
-    The remaining length still defines the hard output boundary, not a prediction.
+    ``remaining_length`` is the hard output boundary: a block equal to it is
+    terminal. The forecast counts ``ceil(forecast_length / block)`` selections;
+    pass the expected remaining length so the plan does not scale with the limit.
+    It defaults to ``remaining_length``.
     """
     if not isinstance(forecast_full_horizon, bool):
         raise ValueError("forecast_full_horizon must be a boolean")
     if not forecast_full_horizon and len(estimates) > 1:
         raise ValueError("next-chunk planning requires a single block estimate")
     positive_integer("remaining_length", remaining_length)
+    horizon = remaining_length if forecast_length is None else forecast_length
+    positive_integer("forecast_length", horizon)
     for name, value in (
         ("remaining_budget", remaining_budget),
         ("finish_reserve", finish_reserve),
@@ -161,7 +167,7 @@ def choose_joint_budget(
             raise ValueError("terminal block has no rollout variance")
         if not terminal and estimate.rollout_cost <= 0:
             raise ValueError("nonterminal block requires positive rollout cost")
-        stages = ceil(remaining_length / block) if forecast_full_horizon else 1
+        stages = ceil(horizon / block) if forecast_full_horizon and not terminal else 1
         for candidates in sorted(set(candidate_counts)):
             for rollouts in (0,) if terminal else sorted(set(rollout_counts)):
                 cost = candidates * (

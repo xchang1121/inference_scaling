@@ -95,6 +95,7 @@ def test_completion_reserve_and_infeasibility():
         {"candidate_counts": (2.5,)},
         {"relative_variance_floor": -1},
         {"forecast_full_horizon": 1},
+        {"forecast_length": 0},
     ],
 )
 def test_invalid_planning_inputs(kwargs):
@@ -125,6 +126,19 @@ def test_next_step_planning_does_not_treat_output_cap_as_forecast_length():
     assert plan.forecast_steps == 1
     assert plan.forecast_error_score == plan.local_error_estimate
     assert plan.reserved_cost + settings["finish_reserve"] <= settings["remaining_budget"]
+
+
+def test_full_horizon_forecast_uses_the_expected_length_not_the_output_limit():
+    chunk = BlockBudgetEstimate(64, WeightMoments(1, 1), 70, 300)
+    settings = dict(remaining_budget=40_000, candidate_counts=(2, 4), rollout_counts=(1, 2))
+    plans = [
+        choose_joint_budget([chunk], remaining_length=limit, forecast_length=256, **settings)
+        for limit in (1_024, 131_072)
+    ]
+    assert plans[0] == plans[1]
+    assert plans[0].forecast_steps == 4
+    # Forecasting the output limit instead makes the same chunk unaffordable.
+    assert choose_joint_budget([chunk], remaining_length=131_072, **settings) is None
 
 
 def test_next_step_planning_still_requires_completion_reserve():
