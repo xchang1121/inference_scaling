@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from xml.parsers import expat
 
-from inference_scaling.shared.output import OutputSegments, ThinkingParser, full_sequence_segments
+from inference_scaling.shared.model.output import OutputSegments, ThinkingParser, full_sequence_segments
 from inference_scaling.shared.types import TokenSequence
 
 FieldSpan = tuple[Any, int, int]

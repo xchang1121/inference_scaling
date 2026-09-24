@@ -9,9 +9,9 @@ from inference_scaling.arllm.backends import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.experimental.arllm.joint_budget_is import (
     JointBudgetISConfig,
-    block_costs,
     run_joint_budget_is,
 )
+from inference_scaling.shared.budget.costs import block_costs
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -63,14 +63,14 @@ def test_budget_includes_pilots_and_independent_production_samples():
 
 
 def test_multistep_plan_recomputes_budget_and_preserves_fixed_horizon(monkeypatch):
-    from inference_scaling.experimental.arllm import joint_budget_is as driver
+    from inference_scaling.shared.budget import planners
 
-    original = driver.choose_joint_budget
+    original = planners.choose_joint_budget
 
     def short_blocks(estimates, **kwargs):
         return original(estimates[:1], **kwargs) or original(estimates, **kwargs)
 
-    monkeypatch.setattr(driver, "choose_joint_budget", short_blocks)
+    monkeypatch.setattr(planners, "choose_joint_budget", short_blocks)
     result = run_joint_budget_is(
         RecordingBackend(),
         (),

@@ -22,19 +22,15 @@ import torch
 from experiments.arllm.runtime import set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.methods import AR_PASSK_METHODS
 
-from experiments.arllm.gsm8k_reproduction import (
-    IMPLEMENTATION_FILES,
-    _file_sha256,
-    _fingerprint,
-    _implementation_hashes,
-    _load_backend,
-    _prompt_tokens,
-    _run_method,
-    _sample_one,
-    _snapshot_delta,
-    _timed,
-    _trim_eos,
+from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
+from experiments.shared.artifacts import (
+    file_sha256,
+    json_fingerprint,
+    implementation_hashes,
+    dataclass_snapshot_delta,
 )
+from experiments.arllm.common import load_backend, prompt_tokens, sample_one, timed, trim_eos
+from experiments.arllm.method_runners import run_method
 from inference_scaling.arllm.algorithms import run_mh_chains_batched
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
@@ -44,7 +40,8 @@ from inference_scaling.arllm.backends import (
     close_backend,
     set_backend_override,
 )
-from inference_scaling.arllm.config import MHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import MHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
     load_gsm8k,
@@ -53,25 +50,22 @@ from inference_scaling.shared.evaluation import (
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.verifier import replace_verifier_from_file
 from experiments.shared.statistics import estimated_pass_at_k
-from experiments.shared.artifacts import load_jsonl as _load_jsonl
+from experiments.shared.artifacts import load_jsonl
 
 PASSK_METHODS = AR_PASSK_METHODS
+# Files under src/inference_scaling and experiments/shared are hashed automatically.
 PASSK_IMPLEMENTATION_FILES = (
     *IMPLEMENTATION_FILES,
     "experiments/arllm/gsm8k_passk.py",
-    "src/inference_scaling/arllm/backends/batching.py",
 )
 
 
-from inference_scaling.arllm.backends.execution import ExecutionBackend as _MethodBackend
+from inference_scaling.arllm.backends.execution import ExecutionBackend
 from inference_scaling.arllm.scope import SamplingScope
-from inference_scaling.shared.generation import generation_config_for_prompt
+from inference_scaling.shared.model.generation import generation_config_for_prompt
 
 
-_estimated_pass_at_k = estimated_pass_at_k
-
-
-def _chunk_plan(
+def chunk_plan(
     methods: Sequence[str],
     draws: int,
     problem_indices: Sequence[int],
@@ -92,7 +86,7 @@ def _chunk_plan(
     return plan
 
 
-def _prepare_manifest(
+def prepare_manifest(
     *,
     config: dict[str, Any],
     data_path: Path,
@@ -109,7 +103,7 @@ def _prepare_manifest(
     effective = {
         "config": config,
         "data_path": str(data_path),
-        "data_sha256": _file_sha256(data_path),
+        "data_sha256": file_sha256(data_path),
         "methods": list(methods),
         "draws": draws,
         "workers": workers,
@@ -119,7 +113,7 @@ def _prepare_manifest(
         "input_adapter_sha256": input_adapter_sha256 or {},
         "implementation_sha256": implementation_sha256,
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     manifest = {"schema_version": 1, "fingerprint": fingerprint, "effective": effective}
     manifest_path = raw_path.with_suffix(".manifest.json")
     if manifest_path.is_file():
@@ -139,7 +133,7 @@ def _prepare_manifest(
     return manifest, fingerprint, manifest_path
 
 
-def _validate_chunks(
+def validate_chunks(
     chunks: Sequence[dict[str, Any]],
     fingerprint: str,
     plan: dict[tuple[str, int], tuple[tuple[int, int], ...]],
@@ -182,7 +176,7 @@ def _run_chunk(
         max_batch_tokens=int(config["runtime"]["max_batch_tokens"]),
         batch_wait_seconds=0.01,
     ) as batching:
-        backend = _MethodBackend(batching, raw_backend)
+        backend = ExecutionBackend(batching, raw_backend)
 
         def run_one(task_key: tuple[int, int]):
             draw, problem_index = task_key
@@ -190,7 +184,7 @@ def _run_chunk(
             seeds = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("draw", draw)
             )
-            tokens, diagnostics = _run_method(
+            tokens, diagnostics = run_method(
                 method,
                 backend,
                 problem,
@@ -247,7 +241,7 @@ def _run_chunk(
             )
             return [
                 (
-                    _trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id),
+                    trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id),
                     {
                         "alpha": alpha,
                         "block_size": int(section["block_size"]),
@@ -260,13 +254,13 @@ def _run_chunk(
                         "acceptance_rate": result.acceptance_rate,
                         "execution": "lockstep_vectorized_independent_chains",
                         "generation_budget": length_budget,
-                        "output_segments": SamplingScope.from_config(raw_backend, config, active=False).describe_output(raw_backend, prompt, _trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id)),
+                        "output_segments": SamplingScope.from_config(raw_backend, config, active=False).describe_output(raw_backend, prompt, trim_eos(result.token_ids, raw_backend.tokenizer.eos_token_id)),
                     },
                 )
                 for result in results
             ]
 
-        outputs, elapsed = _timed(run_parallel)
+        outputs, elapsed = timed(run_parallel)
         batching_snapshot = asdict(batching.snapshot())
     after = raw_backend.snapshot()
 
@@ -298,7 +292,7 @@ def _run_chunk(
         "chunk_index": chunk_index,
         "records": records,
         "seconds_excluding_model_load": elapsed,
-        "backend_delta": _snapshot_delta(before, after),
+        "backend_delta": dataclass_snapshot_delta(before, after),
         "continuous_batching": batching_snapshot,
     }
 
@@ -323,15 +317,15 @@ def _run_pending_chunks(
         adapter_base = None
         if model_key == "rl" and config["models"].get("rl_kind") == "peft_adapter":
             adapter_base = str(config["models"]["rl_base"])
-        raw_backend = _load_backend(
+        raw_backend = load_backend(
             str(config["models"][model_key]), config, adapter_base=adapter_base, role=model_key
         )
         prompts_by_index = {
-            index: _prompt_tokens(raw_backend, problem, config)
+            index: prompt_tokens(raw_backend, problem, config)
             for index, problem in problems_by_index.items()
         }
         first_prompt = prompts_by_index[next(iter(problems_by_index))]
-        _sample_one(
+        sample_one(
             raw_backend,
             first_prompt,
             max_new_tokens=2,
@@ -377,7 +371,7 @@ def _bootstrap_pass_at_k(
 ) -> tuple[float, float]:
     rng = random.Random(seed)
     values = [
-        _estimated_pass_at_k(int(item["correct_draws"]), draws, k)
+        estimated_pass_at_k(int(item["correct_draws"]), draws, k)
         for item in per_problem
     ]
     estimates = sorted(
@@ -387,7 +381,7 @@ def _bootstrap_pass_at_k(
     return estimates[int(0.025 * replicates)], estimates[int(0.975 * replicates)]
 
 
-def _summarize_method(
+def summarize_method(
     records: Sequence[dict[str, Any]],
     chunks: Sequence[dict[str, Any]],
     problem_indices: Sequence[int],
@@ -436,7 +430,7 @@ def _summarize_method(
     pass_at_k_bootstrap = {}
     for k in ks:
         values = [
-            _estimated_pass_at_k(int(item["correct_draws"]), draws, k)
+            estimated_pass_at_k(int(item["correct_draws"]), draws, k)
             for item in per_problem
         ]
         pass_at_k[str(k)] = statistics.fmean(values)
@@ -564,7 +558,7 @@ def main() -> None:
     profile = str(config["run"]["name"])
     output = args.output or Path(f"results/{profile}_{args.tag}.json")
     raw_path = args.raw_output or output.with_suffix(".chunks.jsonl")
-    implementation_sha256 = _implementation_hashes(
+    implementation_sha256 = implementation_hashes(
         Path(__file__).resolve().parents[2],
         entrypoints=PASSK_IMPLEMENTATION_FILES,
     )
@@ -573,7 +567,7 @@ def main() -> None:
         roles.add("rl")
     input_artifacts = validate_model_artifacts(config, roles)
     input_weight_sha256 = input_artifacts["weight_sha256"]
-    _, fingerprint, _ = _prepare_manifest(
+    _, fingerprint, _ = prepare_manifest(
         config=config,
         data_path=args.data,
         methods=methods,
@@ -586,8 +580,8 @@ def main() -> None:
         input_metadata_sha256=input_artifacts["metadata_sha256"],
         input_adapter_sha256=input_artifacts["adapter_sha256"],
     )
-    plan = _chunk_plan(methods, args.draws, problem_indices, args.workers)
-    completed = _validate_chunks(_load_jsonl(raw_path), fingerprint, plan)
+    plan = chunk_plan(methods, args.draws, problem_indices, args.workers)
+    completed = validate_chunks(load_jsonl(raw_path), fingerprint, plan)
     if not args.summarize_only:
         _run_pending_chunks(
             raw_path=raw_path,
@@ -599,8 +593,8 @@ def main() -> None:
             config=config,
             workers=args.workers,
         )
-    chunks = _load_jsonl(raw_path)
-    completed = _validate_chunks(chunks, fingerprint, plan)
+    chunks = load_jsonl(raw_path)
+    completed = validate_chunks(chunks, fingerprint, plan)
     if len(completed) != len(plan):
         raise RuntimeError(
             f"pass@k grid is incomplete: {len(completed)}/{len(plan)} chunks"
@@ -615,7 +609,7 @@ def main() -> None:
         method_records = [
             record for chunk in method_chunks for record in chunk["records"]
         ]
-        table[method] = _summarize_method(
+        table[method] = summarize_method(
             method_records,
             method_chunks,
             problem_indices,
@@ -633,7 +627,7 @@ def main() -> None:
         "draws_per_problem": args.draws,
         "workers": args.workers,
         "manifest_fingerprint": fingerprint,
-        "raw_chunks_sha256": _file_sha256(raw_path),
+        "raw_chunks_sha256": file_sha256(raw_path),
         "input_weight_sha256": input_weight_sha256,
         "input_metadata_sha256": input_artifacts["metadata_sha256"],
         "input_adapter_sha256": input_artifacts["adapter_sha256"],

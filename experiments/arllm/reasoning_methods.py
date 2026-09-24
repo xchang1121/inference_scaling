@@ -11,10 +11,11 @@ from typing import Any, Callable
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
-from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import RewardMHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.reward_factory import model_reward_from_config
 from inference_scaling.shared.compute import dense_forward_flops
-from inference_scaling.shared.stepwise import normalize_log_weights, categorical_index_from_uniform
+from inference_scaling.shared.sampling.stepwise import normalize_log_weights, categorical_index_from_uniform
 from inference_scaling.shared.rng import SeedStream
 
 REWARDS = ("self_consistency", "sequence_log_probability", "consilience")

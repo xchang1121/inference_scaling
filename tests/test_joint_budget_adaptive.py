@@ -3,13 +3,13 @@ from dataclasses import replace
 import pytest
 
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.experimental.arllm.adaptive_budget import AdaptiveBudgetController
+from inference_scaling.shared.budget.planners import AdaptiveBudgetController
 from inference_scaling.experimental.arllm.joint_budget_is import (
     JointBudgetISConfig,
-    block_costs,
     run_joint_budget_is,
 )
-from inference_scaling.shared.joint_budget import BlockBudgetEstimate, WeightMoments
+from inference_scaling.shared.budget.costs import block_costs
+from inference_scaling.shared.budget.joint import BlockBudgetEstimate, WeightMoments
 from inference_scaling.shared.rng import SeedStream
 from test_joint_budget_is import RecordingBackend
 

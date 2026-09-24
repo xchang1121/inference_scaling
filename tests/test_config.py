@@ -1,12 +1,12 @@
 import pytest
 
-from inference_scaling.arllm.config import (
+from inference_scaling.arllm.algorithms.config import (
     BaseReplayConfig,
     ConditionalISConfig,
     DynamicISConfig,
     MHConfig,
-    SamplingConfig,
 )
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
 

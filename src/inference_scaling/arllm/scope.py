@@ -10,7 +10,7 @@ from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import thinking_format_from_backend, output_settings_from_config
 from inference_scaling.arllm.types import GenerationRequest
-from inference_scaling.shared.output import OutputParser, full_sequence_segments
+from inference_scaling.shared.model.output import OutputParser, full_sequence_segments
 from inference_scaling.shared.types import TokenSequence
 
 

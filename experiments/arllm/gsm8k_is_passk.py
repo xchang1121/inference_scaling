@@ -26,24 +26,21 @@ from experiments.shared.methods import AR_IS_PASSK_METHODS
 
 from experiments.arllm.gsm8k_passk import (
     PASSK_IMPLEMENTATION_FILES,
-    _MethodBackend,
-    _chunk_plan,
-    _estimated_pass_at_k,
-    _load_jsonl,
-    _prepare_manifest,
-    _summarize_method,
-    _validate_chunks,
+    chunk_plan,
+    prepare_manifest,
+    summarize_method,
+    validate_chunks,
 )
-from experiments.arllm.gsm8k_reproduction import (
-    _file_sha256,
-    _implementation_hashes,
-    _load_backend,
-    _prompt_tokens,
-    _run_method,
-    _sample_one,
-    _snapshot_delta,
-    _timed,
+from inference_scaling.arllm.backends.execution import ExecutionBackend
+from experiments.shared.statistics import estimated_pass_at_k
+from experiments.shared.artifacts import load_jsonl
+from experiments.shared.artifacts import (
+    file_sha256,
+    implementation_hashes,
+    dataclass_snapshot_delta,
 )
+from experiments.arllm.common import load_backend, prompt_tokens, sample_one, timed
+from experiments.arllm.method_runners import run_method
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,
@@ -202,9 +199,9 @@ def _run_chunk(
             if raw_proposal is not None
             else None
         )
-        base = _MethodBackend(base_batching, raw_base)
+        base = ExecutionBackend(base_batching, raw_base)
         proposal = (
-            _MethodBackend(proposal_batching, raw_proposal)
+            ExecutionBackend(proposal_batching, raw_proposal)
             if proposal_batching is not None and raw_proposal is not None
             else None
         )
@@ -217,7 +214,7 @@ def _run_chunk(
             execution_method, execution_config = _execution_method_and_config(
                 method, config
             )
-            tokens, diagnostics = _run_method(
+            tokens, diagnostics = run_method(
                 execution_method,
                 base,
                 problems_by_index[problem_index],
@@ -237,7 +234,7 @@ def _run_chunk(
             ) as executor:
                 return list(executor.map(run_one, task_keys))
 
-        outputs, elapsed = _timed(run_parallel)
+        outputs, elapsed = timed(run_parallel)
         base_batching_snapshot = asdict(base_batching.snapshot())
         proposal_batching_snapshot = (
             asdict(proposal_batching.snapshot())
@@ -247,9 +244,9 @@ def _run_chunk(
 
     base_after = raw_base.snapshot()
     proposal_after = raw_proposal.snapshot() if raw_proposal is not None else None
-    base_delta = _snapshot_delta(base_before, base_after)
+    base_delta = dataclass_snapshot_delta(base_before, base_after)
     proposal_delta = (
-        _snapshot_delta(proposal_before, proposal_after)
+        dataclass_snapshot_delta(proposal_before, proposal_after)
         if proposal_before is not None and proposal_after is not None
         else None
     )
@@ -312,9 +309,9 @@ def _run_pending_chunks(
         pending = [key for key in plan if key[0] == method and key not in completed]
         if not pending:
             continue
-        raw_base = _load_backend(str(config["models"]["base"]), config, role="base")
+        raw_base = load_backend(str(config["models"]["base"]), config, role="base")
         raw_proposal = (
-            _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+            load_backend(str(config["models"]["proposal"]), config, role="proposal")
             if _uses_small_proposal(method)
             else None
         )
@@ -324,18 +321,18 @@ def _run_pending_chunks(
         ):
             raise ValueError("base and proposal tokenizers do not have identical vocabularies")
         prompts_by_index = {
-            index: _prompt_tokens(raw_base, problem, config)
+            index: prompt_tokens(raw_base, problem, config)
             for index, problem in problems_by_index.items()
         }
         if raw_proposal is not None:
             proposal_prompts = {
-                index: _prompt_tokens(raw_proposal, problem, config)
+                index: prompt_tokens(raw_proposal, problem, config)
                 for index, problem in problems_by_index.items()
             }
             if proposal_prompts != prompts_by_index:
                 raise ValueError("base and proposal tokenizers render different prompts")
         first_prompt = prompts_by_index[next(iter(problems_by_index))]
-        _sample_one(
+        sample_one(
             raw_base,
             first_prompt,
             max_new_tokens=2,
@@ -344,7 +341,7 @@ def _run_pending_chunks(
             request_id=f"is-passk-warmup:{method}:base",
         )
         if raw_proposal is not None:
-            _sample_one(
+            sample_one(
                 raw_proposal,
                 first_prompt,
                 max_new_tokens=2,
@@ -409,8 +406,8 @@ def _paired_pass_at_k_difference(
     for k_text in reference["estimated_pass_at_k"]:
         k = int(k_text)
         differences = [
-            _estimated_pass_at_k(candidate_by_problem[index], draws, k)
-            - _estimated_pass_at_k(reference_by_problem[index], draws, k)
+            estimated_pass_at_k(candidate_by_problem[index], draws, k)
+            - estimated_pass_at_k(reference_by_problem[index], draws, k)
             for index in problem_indices
         ]
         bootstrap = sorted(
@@ -517,7 +514,7 @@ def main() -> None:
     profile = str(config["run"]["name"])
     output = args.output or Path(f"results/{profile}_{args.tag}.json")
     raw_path = args.raw_output or output.with_suffix(".chunks.jsonl")
-    implementation_sha256 = _implementation_hashes(
+    implementation_sha256 = implementation_hashes(
         Path(__file__).resolve().parents[2],
         entrypoints=IS_PASSK_IMPLEMENTATION_FILES,
     )
@@ -526,7 +523,7 @@ def main() -> None:
         roles.add("proposal")
     input_artifacts = validate_model_artifacts(config, roles)
     input_weight_sha256 = input_artifacts["weight_sha256"]
-    _, fingerprint, _ = _prepare_manifest(
+    _, fingerprint, _ = prepare_manifest(
         config=config,
         data_path=args.data,
         methods=methods,
@@ -539,8 +536,8 @@ def main() -> None:
         input_metadata_sha256=input_artifacts["metadata_sha256"],
         input_adapter_sha256=input_artifacts["adapter_sha256"],
     )
-    plan = _chunk_plan(methods, args.draws, problem_indices, args.workers)
-    completed = _validate_chunks(_load_jsonl(raw_path), fingerprint, plan)
+    plan = chunk_plan(methods, args.draws, problem_indices, args.workers)
+    completed = validate_chunks(load_jsonl(raw_path), fingerprint, plan)
     if not args.summarize_only:
         _run_pending_chunks(
             raw_path=raw_path,
@@ -553,8 +550,8 @@ def main() -> None:
             workers=args.workers,
         )
 
-    chunks = _load_jsonl(raw_path)
-    completed = _validate_chunks(chunks, fingerprint, plan)
+    chunks = load_jsonl(raw_path)
+    completed = validate_chunks(chunks, fingerprint, plan)
     if len(completed) != len(plan):
         raise RuntimeError(f"IS pass@k grid is incomplete: {len(completed)}/{len(plan)} chunks")
 
@@ -565,7 +562,7 @@ def main() -> None:
         method_records = [
             record for chunk in method_chunks for record in chunk["records"]
         ]
-        summary = _summarize_method(
+        summary = summarize_method(
             method_records,
             method_chunks,
             problem_indices,
@@ -685,7 +682,7 @@ def main() -> None:
         "workers": args.workers,
         "method_definitions": config["is_passk"]["method_definitions"],
         "manifest_fingerprint": fingerprint,
-        "raw_chunks_sha256": _file_sha256(raw_path),
+        "raw_chunks_sha256": file_sha256(raw_path),
         "input_weight_sha256": input_weight_sha256,
         "input_metadata_sha256": input_artifacts["metadata_sha256"],
         "input_adapter_sha256": input_artifacts["adapter_sha256"],

@@ -7,7 +7,7 @@ from inference_scaling.arllm.backends.transformers_backend import TransformersBa
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest
 from inference_scaling.arllm.types import GenerationRequest
-from inference_scaling.shared.generation import generation_config_for_prompt
+from inference_scaling.shared.model.generation import generation_config_for_prompt
 
 
 @pytest.mark.parametrize("family", ["gpt2", "qwen2"])

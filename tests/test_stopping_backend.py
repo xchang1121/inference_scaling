@@ -5,12 +5,13 @@ import pytest
 
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import ConditionalISConfig, MHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.output import ThinkingFormat, ThinkingParser
+from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
 from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 
 

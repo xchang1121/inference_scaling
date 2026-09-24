@@ -6,13 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.conditional_is import (
-    RewardFunction,
-    _sample_candidates,
-    _validate_base_sampling,
-)
-from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
-from inference_scaling.shared.importance import (
+from inference_scaling.arllm.algorithms.conditional_is import RewardFunction
+from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
+from inference_scaling.arllm.algorithms.config import BaseReplayConfig
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.shared.sampling.importance import (
     ProbabilityObservation,
     ReplayWeightEstimate as SharedReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
@@ -32,7 +30,7 @@ from inference_scaling.arllm.replay import (
     validate_record_probabilities,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import normalize_log_weights
+from inference_scaling.shared.sampling.stepwise import normalize_log_weights
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     ScoreRequest,
@@ -73,7 +71,7 @@ class BaseReplayResult:
     reserve_records_written: int
 
 
-def _score_base(
+def score_replay_completions(
     backend: AutoregressiveBackend,
     key: ReplayKey,
     completions: Sequence[TokenSequence],
@@ -222,7 +220,7 @@ def estimate_replay_weight(
     behavior_counts = dict(claim.behavior_counts)
     history_completions = [record.completion for record in history_records]
     fresh_completions = [record.completion for record in fresh_records]
-    history_base = _score_base(
+    history_base = score_replay_completions(
         base_backend,
         claim.key,
         history_completions,
@@ -288,14 +286,14 @@ def base_replay_step(
     draw is checked before the samples enter the statistical calculation.
     """
 
-    _validate_base_sampling(base_sampling)
+    validate_base_sampling(base_sampling)
     remaining = config.total_length - len(generated_prefix)
     if remaining <= 0:
         raise ValueError("generated prefix has already reached total_length")
     block_length = min(config.block_size, remaining)
     candidate_prefix = prompt + generated_prefix
     if candidate_samples is None:
-        source_candidates = _sample_candidates(
+        source_candidates = sample_candidates(
             base_backend,
             candidate_prefix,
             config.candidate_count,
@@ -431,7 +429,7 @@ def write_reserve_records(
     if remaining <= 0 or config.reserve_rollouts == 0:
         return 0
     block_length = min(config.block_size, remaining)
-    reserve_candidates = _sample_candidates(
+    reserve_candidates = sample_candidates(
         base_backend,
         prompt + generated_prefix,
         config.reserve_rollouts,
@@ -481,7 +479,7 @@ def run_base_replay(
     reserve_policy: BehaviorPolicy | None = None,
 ) -> BaseReplayResult:
     base_sampling = base_sampling or SamplingConfig()
-    _validate_base_sampling(base_sampling)
+    validate_base_sampling(base_sampling)
     base_policy = BehaviorPolicy.for_backend(base_backend, base_sampling, label="base")
     registry.register(base_policy)
     reserve_policy = reserve_policy or base_policy

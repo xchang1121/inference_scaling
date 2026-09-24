@@ -21,15 +21,13 @@ from dataclasses import dataclass
 from math import isfinite
 
 from inference_scaling.arllm.acceleration import StreamingRewardEvaluator
-from inference_scaling.arllm.algorithms.conditional_is import (
-    RewardBatchFunction,
-    RewardFunction,
-    _validate_base_sampling,
-)
-from inference_scaling.arllm.config import SMCForestConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.conditional_is import RewardBatchFunction, RewardFunction
+from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
+from inference_scaling.shared.config import SMCForestConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.importance import logmeanexp
-from inference_scaling.shared.smc import (
+from inference_scaling.shared.sampling.importance import logmeanexp
+from inference_scaling.shared.sampling.smc import (
     normalize_smc_log_weights,
     partition_resampled_reservoirs,
     systematic_resample,
@@ -336,7 +334,7 @@ def run_smc_rollout_forest(
     """Run the backend-independent rollout forest on Transformers or vLLM."""
 
     sampling = base_sampling or SamplingConfig()
-    _validate_base_sampling(sampling)
+    validate_base_sampling(sampling)
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
     particles = tuple(

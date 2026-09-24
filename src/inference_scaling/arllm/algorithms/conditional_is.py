@@ -17,14 +17,21 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import exp, isfinite, log
 
-from inference_scaling.arllm.config import ConditionalISConfig, SamplingConfig
-from inference_scaling.shared.importance import (
+from inference_scaling.arllm.algorithms.candidates import (
+    sample_candidates,
+    score_samples,
+    validate_base_sampling,
+    validate_rollout_sampling,
+)
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.shared.sampling.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import (
+from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
     categorical_index_from_uniform,
     normalize_log_weights,
@@ -35,7 +42,6 @@ from inference_scaling.shared.verifier import TokenBatchReward, TokenReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
-    ScoreRequest,
     SequenceSample,
     TokenSequence,
 )
@@ -92,85 +98,6 @@ class ConditionalISResult:
     steps: tuple[ConditionalISStep, ...]
 
 
-def _validate_base_sampling(sampling: SamplingConfig) -> None:
-    if sampling.top_p < 1 or sampling.top_k is not None:
-        raise ValueError(
-            "base candidates must use a full-support autoregressive policy: "
-            "top_p=1 and top_k=None"
-        )
-
-
-def _validate_rollout_sampling(sampling: SamplingConfig) -> None:
-    if sampling.top_p < 1 or sampling.top_k is not None:
-        raise ValueError(
-            "off-policy IS requires proposal support wherever the base weighted target is positive; "
-            "hard top-k/top-p truncation is not accepted"
-        )
-
-
-def _score_samples(
-    base_backend: AutoregressiveBackend,
-    prefixes: Sequence[TokenSequence],
-    samples: Sequence[SequenceSample],
-    base_sampling: SamplingConfig,
-) -> list[float]:
-    requests = [
-        ScoreRequest(prefix, (sample.token_ids,), base_sampling)
-        for prefix, sample in zip(prefixes, samples, strict=True)
-    ]
-    token_scores = base_backend.score_batch(requests)
-    if len(token_scores) != len(samples):
-        raise RuntimeError("backend returned an invalid number of base scores")
-    totals: list[float] = []
-    for sample, scores in zip(samples, token_scores, strict=True):
-        if len(scores) != len(sample.token_ids):
-            raise RuntimeError("backend returned an invalid base token score shape")
-        total = float(sum(scores))
-        if not isfinite(total):
-            raise ValueError(
-                "rollout proposal generated a completion outside base-model support"
-            )
-        totals.append(total)
-    return totals
-
-
-def _sample_candidates(
-    base_backend: AutoregressiveBackend,
-    prefix: TokenSequence,
-    count: int,
-    block_length: int,
-    sampling: SamplingConfig,
-    seeds: SeedStream,
-    step_index: int,
-) -> list[SequenceSample]:
-    requests = [
-        GenerationRequest(
-            prefix=prefix,
-            max_new_tokens=block_length,
-            sampling=sampling,
-            seed=seeds.derive(
-                "conditional_is", step_index, "candidate", candidate_index
-            ),
-            request_id=f"conditional-is:step:{step_index}:candidate:{candidate_index}",
-        )
-        for candidate_index in range(count)
-    ]
-    candidates = base_backend.sample_batch(requests)
-    if len(candidates) != count:
-        raise RuntimeError("backend returned an invalid number of candidates")
-    for candidate in candidates:
-        if not candidate.token_ids:
-            raise RuntimeError("a candidate block must contain at least one token")
-        if (
-            candidate.model_id != base_backend.model_id
-            or candidate.policy_id != sampling.policy_id
-        ):
-            raise RuntimeError(
-                "candidate was not sampled and scored by the requested base policy"
-            )
-    return candidates
-
-
 def estimate_conditional_weights(
     *,
     base_backend: AutoregressiveBackend,
@@ -194,7 +121,7 @@ def estimate_conditional_weights(
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional weight with on/off-policy rollouts."""
 
-    _validate_rollout_sampling(rollout_sampling)
+    validate_rollout_sampling(rollout_sampling)
     if rollout_count <= 0:
         raise ValueError("rollout_count must be positive")
     if reward_temperature <= 0:
@@ -309,7 +236,7 @@ def estimate_conditional_weights(
         base_totals: list[float | None] = [sample.logprob for sample in samples]
     elif apply_importance_correction:
         base_totals = (
-            _score_samples(
+            score_samples(
                 base_backend,
                 rollout_prefixes,
                 samples,
@@ -479,11 +406,11 @@ class AutoregressiveStepwiseAdapter:
         step_index: int,
         seeds: SeedStream,
     ) -> Sequence[SequenceSample]:
-        _validate_base_sampling(self.base_sampling)
+        validate_base_sampling(self.base_sampling)
         remaining = self.config.total_length - len(state)
         if remaining <= 0:
             raise ValueError("generated prefix has already reached total_length")
-        return _sample_candidates(
+        return sample_candidates(
             self.base_backend,
             self.prompt + state,
             self.config.candidate_count,
@@ -564,12 +491,12 @@ def _bounded_conditional_is_step(
         raise ValueError("exact rollout early stopping requires log-weight bounds")
     if config.rollout_design != "iid":
         raise ValueError("exact rollout early stopping currently requires iid rollouts")
-    _validate_base_sampling(base_sampling)
+    validate_base_sampling(base_sampling)
     remaining_length = config.total_length - len(generated_prefix)
     if remaining_length <= 0:
         raise ValueError("generated prefix has already reached total_length")
     candidate_length = min(config.block_size, remaining_length)
-    proposals = _sample_candidates(
+    proposals = sample_candidates(
         base_backend,
         prompt + generated_prefix,
         config.candidate_count,
@@ -799,8 +726,8 @@ def run_conditional_is(
     base_sampling = base_sampling or SamplingConfig()
     rollout_backend = rollout_backend or base_backend
     rollout_sampling = rollout_sampling or base_sampling
-    _validate_base_sampling(base_sampling)
-    _validate_rollout_sampling(rollout_sampling)
+    validate_base_sampling(base_sampling)
+    validate_rollout_sampling(rollout_sampling)
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
 

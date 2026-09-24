@@ -9,9 +9,10 @@ from inference_scaling.arllm.algorithms.base_replay import (
     corrected_replay_log_weight,
     run_base_replay,
 )
-from inference_scaling.arllm.algorithms.conditional_is import _sample_candidates
+from inference_scaling.arllm.algorithms.candidates import sample_candidates
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import BaseReplayConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
@@ -289,7 +290,7 @@ def test_base_replay_can_reuse_frozen_candidate_draws() -> None:
     )
     sampling = SamplingConfig()
     seeds = SeedStream(37)
-    candidates = _sample_candidates(
+    candidates = sample_candidates(
         backend,
         (),
         4,
@@ -327,7 +328,7 @@ def test_base_replay_can_reuse_frozen_candidate_draws() -> None:
 
 def test_base_replay_rejects_a_mismatched_frozen_candidate() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.6, 0.4])
-    candidates = _sample_candidates(
+    candidates = sample_candidates(
         backend,
         (),
         1,

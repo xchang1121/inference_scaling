@@ -9,10 +9,11 @@ from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBacken
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
-from inference_scaling.shared.output import ThinkingFormat
+from inference_scaling.shared.model.output import ThinkingFormat
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.evaluation import GSM8KProblem
-from experiments.arllm.gsm8k_reproduction import _run_method, _apply_overrides, _run_best_of_n
+from experiments.arllm.method_runners import run_method, run_best_of_n_selection
+from experiments.arllm.gsm8k_reproduction import _apply_overrides
 
 
 def test_best_of_n_log_probability_selects_mean_not_sum_without_rescoring():
@@ -24,7 +25,7 @@ def test_best_of_n_log_probability_selects_mean_not_sum_without_rescoring():
         model_id="recorded", tokenizer=SimpleNamespace(eos_token_id=2),
         sample_batch=lambda requests: candidates, decode=lambda tokens: "1",
     )
-    selected, diagnostics = _run_best_of_n(
+    selected, diagnostics = run_best_of_n_selection(
         backend, None, (), max_new_tokens=4, samples=2, temperature=1.0,
         seeds=SeedStream(0), problem_index=0, reward_source="sequence_log_probability",
         config={},
@@ -112,7 +113,7 @@ def test_experiment_dispatch_preserves_thinking_content_for_all_core_methods(met
     }
     backend = _Backend()
     problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, diagnostics = _run_method(method, backend, problem, (3,), config, SeedStream(1), None)
+    tokens, diagnostics = run_method(method, backend, problem, (3,), config, SeedStream(1), None)
     assert backend.decode(tokens) == "77"
     output = diagnostics["output_segments"]
     assert output["thinking_text"] == "7"
@@ -144,11 +145,11 @@ def test_cli_overrides_common_and_legacy_reward_settings_consistently():
 
 
 def test_passk_adapter_preserves_token_format_and_confidence_scoring():
-    from experiments.arllm.gsm8k_passk import _MethodBackend
+    from inference_scaling.arllm.backends.execution import ExecutionBackend
     from inference_scaling.arllm.reward_factory import model_reward_from_config
 
     raw = _Backend()
-    adapter = _MethodBackend(raw, raw)
+    adapter = ExecutionBackend(raw, raw)
     reward = model_reward_from_config(adapter, {}, source="consilience")
     assert reward((3,), (0, 1, 0, 2)) == -2.0
 
@@ -159,7 +160,7 @@ def test_thinking_scope_reports_full_fallback_for_final_content_rewards():
         "conditional_is": {"reward": "self_consistency", "candidate_count": 2, "rollout_count": 1, "block_size": 2},
     }
     problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
-    tokens, info = _run_method("conditional_is", _Backend(), problem, (3,), config, SeedStream(1), None)
+    tokens, info = run_method("conditional_is", _Backend(), problem, (3,), config, SeedStream(1), None)
     assert _Backend().decode(tokens) == "77"
     assert info["output_segments"]["sampling_scope"] == "full"
     assert info["output_segments"]["sampling_fallback_reason"] == "reward_uses_full_sequence"

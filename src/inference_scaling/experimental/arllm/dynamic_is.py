@@ -20,11 +20,10 @@ from inference_scaling.arllm.algorithms.base_replay import (
     estimate_replay_weight,
     write_reserve_records,
 )
-from inference_scaling.arllm.algorithms.conditional_is import (
-    RewardFunction,
-    _validate_base_sampling,
-)
-from inference_scaling.arllm.config import DynamicISConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.conditional_is import RewardFunction
+from inference_scaling.arllm.algorithms.candidates import validate_base_sampling
+from inference_scaling.arllm.algorithms.config import DynamicISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
     BehaviorRegistry,
@@ -517,7 +516,7 @@ def dynamic_is_step(
 ) -> DynamicISStep:
     """Run one two-phase dynamic-candidate decision."""
 
-    _validate_base_sampling(base_sampling)
+    validate_base_sampling(base_sampling)
     remaining = config.total_length - len(generated_prefix)
     if remaining <= 0:
         raise ValueError("generated prefix has already reached total_length")
@@ -734,7 +733,7 @@ def run_dynamic_is(
     reserve_policy: BehaviorPolicy | None = None,
 ) -> DynamicISResult:
     base_sampling = base_sampling or SamplingConfig()
-    _validate_base_sampling(base_sampling)
+    validate_base_sampling(base_sampling)
     base_policy = BehaviorPolicy.for_backend(base_backend, base_sampling, label="base")
     registry.register(base_policy)
     reserve_policy = reserve_policy or base_policy

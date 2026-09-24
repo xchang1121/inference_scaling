@@ -6,7 +6,7 @@ import pytest
 from inference_scaling.experimental.shared.bounded_selection import (
     invariant_categorical_index,
 )
-from inference_scaling.shared.stepwise import categorical_index_from_uniform
+from inference_scaling.shared.sampling.stepwise import categorical_index_from_uniform
 
 
 def test_explicit_categorical_uniform_matches_numpy_choice() -> None:

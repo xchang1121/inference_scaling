@@ -32,8 +32,8 @@ from inference_scaling.experimental.arllm.joint_budget_is import (
     JointBudgetISConfig,
     run_joint_budget_is,
 )
-from inference_scaling.shared.generation import generation_config_for_prompt
-from inference_scaling.shared.prompting import render_prompt
+from inference_scaling.shared.model.generation import generation_config_for_prompt
+from inference_scaling.shared.model.prompting import render_prompt
 from inference_scaling.shared.rng import SeedStream
 
 

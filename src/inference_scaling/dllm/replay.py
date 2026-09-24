@@ -15,14 +15,14 @@ from inference_scaling.dllm.types import (
     DiffusionSample,
     DiffusionTrajectoryScoreRequest,
 )
-from inference_scaling.shared.importance import (
+from inference_scaling.shared.sampling.importance import (
     ProbabilityObservation,
     ReplayWeightEstimate,
     TruncatedReplayRolloutWeightProvider,
     logmeanexp,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import normalize_log_weights
+from inference_scaling.shared.sampling.stepwise import normalize_log_weights
 from inference_scaling.shared.types import TokenSequence
 from inference_scaling.shared.verifier import TokenBatchReward
 

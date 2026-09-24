@@ -10,7 +10,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-from experiments.arllm.gsm8k_passk import _estimated_pass_at_k
+from experiments.shared.statistics import estimated_pass_at_k
 from experiments.shared.artifacts import file_sha256 as _file_sha256
 from inference_scaling.shared.rng import SeedStream
 
@@ -41,8 +41,8 @@ def _paired_difference(
             raise ValueError("paired pass@k methods do not contain the same k values")
         k = int(k_text)
         differences = [
-            _estimated_pass_at_k(candidate_by_problem[index], draws, k)
-            - _estimated_pass_at_k(reference_by_problem[index], draws, k)
+            estimated_pass_at_k(candidate_by_problem[index], draws, k)
+            - estimated_pass_at_k(reference_by_problem[index], draws, k)
             for index in problem_indices
         ]
         rng = random.Random(SeedStream(seed).derive("paired", k))

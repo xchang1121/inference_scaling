@@ -12,7 +12,7 @@ from inference_scaling.arllm.acceleration import (
 )
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
-from inference_scaling.shared.model_loading import (
+from inference_scaling.shared.model.loading import (
     model_loading_options, model_role, resolve_checkpoint_path,
 )
 

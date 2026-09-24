@@ -29,8 +29,8 @@ from inference_scaling.arllm.backends.loader import load_backend_from_config, cl
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest
-from inference_scaling.shared.generation import generation_config_for_prompt
-from inference_scaling.shared.prompting import render_prompt
+from inference_scaling.shared.model.generation import generation_config_for_prompt
+from inference_scaling.shared.model.prompting import render_prompt
 from inference_scaling.shared.rng import SeedStream
 
 

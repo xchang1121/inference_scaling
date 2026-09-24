@@ -9,7 +9,7 @@ from typing import Generic, TypeVar
 
 import numpy as np
 
-from inference_scaling.shared.stepwise import StepwiseCandidate, normalize_log_weights
+from inference_scaling.shared.sampling.stepwise import StepwiseCandidate, normalize_log_weights
 
 
 StateT = TypeVar("StateT")

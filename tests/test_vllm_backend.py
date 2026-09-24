@@ -13,7 +13,8 @@ from inference_scaling.arllm.acceleration import ActiveBatchSpeculationConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends import AsyncVLLMBackend, VLLMBackend
 from inference_scaling.arllm.backends.vllm_backend import _load_vllm_sampling_api
-from inference_scaling.arllm.config import MHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import MHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.rng import SeedStream
 

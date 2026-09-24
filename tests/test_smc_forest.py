@@ -5,7 +5,7 @@ from math import log
 
 from inference_scaling.experimental.arllm.smc_forest import run_smc_rollout_forest
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import SMCForestConfig
+from inference_scaling.shared.config import SMCForestConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
 

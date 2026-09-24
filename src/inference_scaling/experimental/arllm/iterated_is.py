@@ -14,22 +14,22 @@ from inference_scaling.arllm.algorithms.conditional_is import (
     ConditionalCandidate,
     RewardBatchFunction,
     RewardFunction,
-    _sample_candidates,
-    _validate_base_sampling,
-    _validate_rollout_sampling,
     estimate_conditional_weights,
 )
-from inference_scaling.arllm.config import (
-    IteratedConditionalISConfig,
-    SamplingConfig,
+from inference_scaling.arllm.algorithms.candidates import (
+    sample_candidates,
+    validate_base_sampling,
+    validate_rollout_sampling,
 )
+from inference_scaling.arllm.algorithms.config import IteratedConditionalISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.experimental.shared.iterated_sir import (
     IteratedSIRTransition,
     iterated_sir_transition,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import StepwiseCandidate
+from inference_scaling.shared.sampling.stepwise import StepwiseCandidate
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,15 +104,15 @@ def iterated_conditional_is_step(
     therefore do not satisfy the i-SIR invariance argument.
     """
 
-    _validate_base_sampling(base_sampling)
-    _validate_rollout_sampling(rollout_sampling)
+    validate_base_sampling(base_sampling)
+    validate_rollout_sampling(rollout_sampling)
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
     remaining = config.total_length - len(generated_prefix)
     if remaining <= 0:
         raise ValueError("generated prefix has already reached total_length")
     block_length = min(config.block_size, remaining)
-    candidates = _sample_candidates(
+    candidates = sample_candidates(
         base_backend,
         prompt + generated_prefix,
         config.fresh_candidate_evaluations,
@@ -190,8 +190,8 @@ def run_iterated_conditional_is(
     base_sampling = base_sampling or SamplingConfig()
     rollout_backend = rollout_backend or base_backend
     rollout_sampling = rollout_sampling or base_sampling
-    _validate_base_sampling(base_sampling)
-    _validate_rollout_sampling(rollout_sampling)
+    validate_base_sampling(base_sampling)
+    validate_rollout_sampling(rollout_sampling)
     if base_sampling.eos_token_id != rollout_sampling.eos_token_id:
         raise ValueError("candidate and rollout policies must agree on eos_token_id")
 

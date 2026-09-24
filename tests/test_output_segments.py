@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from inference_scaling.shared.output import ThinkingFormat, find_token_sequence
-from inference_scaling.shared.structured_output import UnifiedOutputParser
+from inference_scaling.shared.model.output import ThinkingFormat, find_token_sequence
+from inference_scaling.shared.model.structured_output import UnifiedOutputParser
 from inference_scaling.shared.consilience import confidence_windows
 from inference_scaling.arllm.output import thinking_format_from_backend
 from inference_scaling.arllm.reward_factory import model_reward_from_config, reward_temperature_from_config

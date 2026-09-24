@@ -13,11 +13,8 @@ from inference_scaling.dllm.algorithms import (
     run_diffusion_reward_mh,
 )
 from inference_scaling.dllm.backends import LLaDATransformersBackend
-from inference_scaling.dllm.config import (
-    DiffusionISConfig,
-    DiffusionMHConfig,
-    DiffusionSamplingConfig,
-)
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample
 
 

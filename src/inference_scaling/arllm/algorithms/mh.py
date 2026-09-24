@@ -17,8 +17,9 @@ from math import isfinite
 
 import numpy as np
 
-from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
-from inference_scaling.shared.mh import decide_metropolis_hastings
+from inference_scaling.arllm.algorithms.config import MHConfig, RewardMHConfig
+from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.verifier import TokenReward
 from inference_scaling.arllm.types import (

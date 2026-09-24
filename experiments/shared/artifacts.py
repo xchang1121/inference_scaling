@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from inference_scaling.shared.model_loading import checkpoint_weight_files
+from inference_scaling.shared.model.loading import checkpoint_weight_files
 import hashlib
 import json
 import os

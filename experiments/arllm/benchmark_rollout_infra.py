@@ -41,12 +41,9 @@ from inference_scaling.arllm.backends import (
     close_backend,
     load_backend_from_config,
 )
-from inference_scaling.arllm.config import (
-    ConditionalISConfig,
-    ProgressiveISConfig,
-    SMCForestConfig,
-    SamplingConfig,
-)
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, ProgressiveISConfig
+from inference_scaling.shared.config import SMCForestConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import (
     extract_numeric_answer,
     gsm8k_prompt,
@@ -55,7 +52,7 @@ from inference_scaling.shared.evaluation import (
 )
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.verifier import replace_verifier_from_file
-from experiments.arllm.gsm8k_reproduction import _configured_verifier_reward
+from experiments.arllm.common import configured_verifier_reward
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample, TokenSequence
 
 
@@ -129,7 +126,7 @@ class _NvidiaMonitor:
         }
 
 
-def _measure(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
+def measure_call(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
     _cuda_sync()
@@ -168,13 +165,13 @@ def _numeric_snapshot(value: Any) -> dict[str, int | float]:
     }
 
 
-def _delta(before: Any, after: Any) -> dict[str, int | float]:
+def snapshot_delta(before: Any, after: Any) -> dict[str, int | float]:
     left = _numeric_snapshot(before)
     right = _numeric_snapshot(after)
     return {name: right[name] - left.get(name, 0) for name in right}
 
 
-def _snapshot(backend: Any) -> Any:
+def backend_snapshot(backend: Any) -> Any:
     raw = backend.backend if isinstance(backend, LowPriorityRunAheadBackend) else backend
     return raw.snapshot()
 
@@ -185,8 +182,8 @@ def _draft_snapshot(backend: Any) -> Any:
     return callback() if callable(callback) else None
 
 
-def _prompt_tokens(tokenizer: Any, question: str, config: dict[str, Any] | None = None) -> TokenSequence:
-    from inference_scaling.shared.prompting import render_prompt
+def question_prompt_tokens(tokenizer: Any, question: str, config: dict[str, Any] | None = None) -> TokenSequence:
+    from inference_scaling.shared.model.prompting import render_prompt
     rendered = render_prompt(
         tokenizer,
         [{"role": "user", "content": gsm8k_prompt(question)}],
@@ -198,7 +195,7 @@ def _prompt_tokens(tokenizer: Any, question: str, config: dict[str, Any] | None 
     )
 
 
-def _speculation(
+def speculation_config(
     *,
     maximum_batch: int,
     maximum_draft_tokens: int,
@@ -236,7 +233,7 @@ def _speculation(
     )
 
 
-class _BackendFactory:
+class BackendFactory:
     def __init__(self, config: dict[str, Any], backend_kind: str, dtype: str) -> None:
         self.config = copy.deepcopy(config)
         self.backend_kind = backend_kind
@@ -252,7 +249,7 @@ class _BackendFactory:
             from transformers import AutoTokenizer
 
             path = str(self.config["models"]["base"])
-            from inference_scaling.shared.model_loading import model_loading_options
+            from inference_scaling.shared.model.loading import model_loading_options
             options = model_loading_options(self.config, "base")
             self.tokenizer = AutoTokenizer.from_pretrained(
                 options.get("tokenizer_name_or_path", path),
@@ -317,7 +314,7 @@ class _BackendFactory:
             close_backend(self._shared)
 
 
-def _warmup(backend: Any, tokenizer: Any, eos: int | None) -> None:
+def warm_up(backend: Any, tokenizer: Any, eos: int | None) -> None:
     prefix = tuple(
         int(token)
         for token in tokenizer.encode(
@@ -337,7 +334,7 @@ def _warmup(backend: Any, tokenizer: Any, eos: int | None) -> None:
     )
 
 
-def _history_batches(
+def build_history_batches(
     prompts: Sequence[TokenSequence],
     *,
     count: int,
@@ -422,8 +419,8 @@ def _quality(
     }
 
 
-def _decode_arm(
-    factory: _BackendFactory,
+def decode_arm(
+    factory: BackendFactory,
     *,
     name: str,
     speculation: ActiveBatchSpeculationConfig | None,
@@ -435,22 +432,22 @@ def _decode_arm(
     backend = factory.create(speculation, dynamic_vllm=dynamic_vllm)
     try:
         eos = backend.tokenizer.eos_token_id
-        _warmup(backend, backend.tokenizer, eos)
-        cache_before = _snapshot(backend)
+        warm_up(backend, backend.tokenizer, eos)
+        cache_before = backend_snapshot(backend)
         if speculation is None:
             cache_samples: list[SequenceSample] = []
             cache_telemetry = {"wall_seconds": 0.0}
         else:
-            cache_samples, cache_telemetry = _measure(
+            cache_samples, cache_telemetry = measure_call(
                 lambda: _run_batches(backend, history_batches)
             )
-        cache_after = _snapshot(backend)
+        cache_after = backend_snapshot(backend)
         draft_before = _draft_snapshot(backend)
-        online_before = _snapshot(backend)
-        samples, online_telemetry = _measure(
+        online_before = backend_snapshot(backend)
+        samples, online_telemetry = measure_call(
             lambda: _run_batches(backend, evaluation_batches)
         )
-        online_after = _snapshot(backend)
+        online_after = backend_snapshot(backend)
         draft_after = _draft_snapshot(backend)
         quality = _quality(backend, samples, gold_by_prompt)
         quality["output_tokens_per_second"] = (
@@ -469,14 +466,14 @@ def _decode_arm(
                 ),
                 "cache_build": {
                     "telemetry": cache_telemetry,
-                    "main_model": _delta(cache_before, cache_after),
+                    "main_model": snapshot_delta(cache_before, cache_after),
                     "sequences": len(cache_samples),
                     "tokens": sum(len(sample.token_ids) for sample in cache_samples),
                 },
                 "online": {
                     "telemetry": online_telemetry,
-                    "main_model": _delta(online_before, online_after),
-                    "draft_cache": _delta(draft_before, draft_after),
+                    "main_model": snapshot_delta(online_before, online_after),
+                    "draft_cache": snapshot_delta(draft_before, draft_after),
                     "quality": quality,
                 },
             },
@@ -487,7 +484,7 @@ def _decode_arm(
 
 
 def _algorithm_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     speculation: ActiveBatchSpeculationConfig,
@@ -516,13 +513,13 @@ def _algorithm_arm(
         )
         backend = run_ahead
     try:
-        _warmup(backend, raw.tokenizer, raw.tokenizer.eos_token_id)
-        cache_before = _snapshot(backend)
-        cache_samples, cache_telemetry = _measure(
+        warm_up(backend, raw.tokenizer, raw.tokenizer.eos_token_id)
+        cache_before = backend_snapshot(backend)
+        cache_samples, cache_telemetry = measure_call(
             lambda: _run_batches(backend, history_batches)
         )
-        cache_after = _snapshot(backend)
-        online_before = _snapshot(backend)
+        cache_after = backend_snapshot(backend)
+        online_before = backend_snapshot(backend)
         draft_before = _draft_snapshot(backend)
         sampling = SamplingConfig(eos_token_id=raw.tokenizer.eos_token_id)
         diagnostics: list[dict[str, Any]] = []
@@ -530,7 +527,7 @@ def _algorithm_arm(
         def run_all() -> list[TokenSequence]:
             outputs: list[TokenSequence] = []
             for problem, prompt in zip(problems, prompts, strict=True):
-                verifier_reward = _configured_verifier_reward(
+                verifier_reward = configured_verifier_reward(
                     raw, problem, factory.config
                 )
 
@@ -645,17 +642,17 @@ def _algorithm_arm(
                 outputs.append(result.token_ids)
             return outputs
 
-        outputs, online_telemetry = _measure(run_all)
-        online_after = _snapshot(backend)
+        outputs, online_telemetry = measure_call(run_all)
+        online_after = backend_snapshot(backend)
         draft_after = _draft_snapshot(backend)
         drain_telemetry: dict[str, Any] = {"wall_seconds": 0.0}
         drain_main_model: dict[str, int | float] = {}
         run_ahead_snapshot = None
         if run_ahead is not None:
-            drain_before = _snapshot(backend)
-            _, drain_telemetry = _measure(run_ahead.wait_for_run_ahead)
-            drain_after = _snapshot(backend)
-            drain_main_model = _delta(drain_before, drain_after)
+            drain_before = backend_snapshot(backend)
+            _, drain_telemetry = measure_call(run_ahead.wait_for_run_ahead)
+            drain_after = backend_snapshot(backend)
+            drain_main_model = snapshot_delta(drain_before, drain_after)
             run_ahead_snapshot = asdict(run_ahead.snapshot())
         predictions = [extract_numeric_answer(raw.decode(tokens)) for tokens in outputs]
         correct = [
@@ -668,14 +665,14 @@ def _algorithm_arm(
             "backend": factory.backend_kind,
             "cache_build": {
                 "telemetry": cache_telemetry,
-                "main_model": _delta(cache_before, cache_after),
+                "main_model": snapshot_delta(cache_before, cache_after),
                 "sequences": len(cache_samples),
                 "tokens": sum(len(sample.token_ids) for sample in cache_samples),
             },
             "online": {
                 "telemetry": online_telemetry,
-                "main_model": _delta(online_before, online_after),
-                "draft_cache": _delta(draft_before, draft_after),
+                "main_model": snapshot_delta(online_before, online_after),
+                "draft_cache": snapshot_delta(draft_before, draft_after),
                 "problems": len(problems),
                 "output_tokens": output_tokens,
                 "output_tokens_per_second": (
@@ -703,7 +700,7 @@ def _algorithm_arm(
         factory.release(raw)
 
 
-def _machine() -> dict[str, Any]:
+def machine_metadata() -> dict[str, Any]:
     cuda = torch.cuda.is_available()
     return {
         "platform": platform.platform(),
@@ -758,17 +755,17 @@ def main() -> None:
     problems = select_problems(
         load_gsm8k(args.data), args.limit, seed=int(config["run"]["subset_seed"])
     )
-    factory = _BackendFactory(config, args.backend, args.dtype)
+    factory = BackendFactory(config, args.backend, args.dtype)
     try:
         prompts = tuple(
-            _prompt_tokens(factory.tokenizer, problem.question, config) for problem in problems
+            question_prompt_tokens(factory.tokenizer, problem.question, config) for problem in problems
         )
         gold_by_prompt = {
             prompt: problem.gold_answer
             for prompt, problem in zip(prompts, problems, strict=True)
         }
         sampling = SamplingConfig(eos_token_id=factory.tokenizer.eos_token_id)
-        histories = _history_batches(
+        histories = build_history_batches(
             prompts,
             count=args.history_rollouts,
             length=args.max_new_tokens,
@@ -782,12 +779,12 @@ def main() -> None:
             sampling=sampling,
             seeds=SeedStream(args.seed),
         )
-        static_speculation = _speculation(
+        static_speculation = speculation_config(
             maximum_batch=max(batch_sizes),
             maximum_draft_tokens=args.draft_tokens,
             dynamic=False,
         )
-        dynamic_speculation = _speculation(
+        dynamic_speculation = speculation_config(
             maximum_batch=max(batch_sizes),
             maximum_draft_tokens=args.draft_tokens,
             dynamic=True,
@@ -795,7 +792,7 @@ def main() -> None:
         report: dict[str, Any] = {
             "schema_version": 1,
             "created_at_unix": time.time(),
-            "machine": _machine(),
+            "machine": machine_metadata(),
             "setting": {
                 "backend": args.backend,
                 "dtype": args.dtype,
@@ -835,7 +832,7 @@ def main() -> None:
                 ("history_tree_static", static_speculation, False),
                 ("history_tree_load_aware", dynamic_speculation, True),
             ):
-                arm, trace = _decode_arm(
+                arm, trace = decode_arm(
                     factory,
                     name=name,
                     speculation=spec,

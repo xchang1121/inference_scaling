@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from inference_scaling.shared.output import ThinkingFormat, ThinkingParser
-from inference_scaling.shared.structured_output import UnifiedOutputParser
+from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
+from inference_scaling.shared.model.structured_output import UnifiedOutputParser
 
 
 _THINKING_MARKERS = (

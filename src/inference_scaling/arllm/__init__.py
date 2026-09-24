@@ -1,12 +1,12 @@
 """Autoregressive language-model algorithms and execution backends."""
 
-from inference_scaling.arllm.config import (
+from inference_scaling.arllm.algorithms.config import (
     BaseReplayConfig,
     ConditionalISConfig,
     MHConfig,
     RewardMHConfig,
-    SamplingConfig,
 )
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.rewards import (
     ConsilienceReward,
     SequenceLogProbabilityReward,

@@ -244,7 +244,7 @@ def test_consilience_defaults_to_thinking_and_reports_full_fallback_without_form
 
 
 def test_consilience_missing_empty_and_truncated_thinking_use_pointwise_full_scores() -> None:
-    from inference_scaling.shared.output import ThinkingFormat
+    from inference_scaling.shared.model.output import ThinkingFormat
 
     backend = _ConsilienceBackend({
         (1, 2): (1.0, 3.0), (5, 6): (2.0, 5.0),
@@ -271,7 +271,7 @@ def test_consilience_missing_empty_and_truncated_thinking_use_pointwise_full_sco
 
 
 def test_consilience_ignores_content_but_preserves_opening_token_context() -> None:
-    from inference_scaling.shared.output import ThinkingFormat
+    from inference_scaling.shared.model.output import ThinkingFormat
 
     backend = _ConsilienceBackend({(1, 2): (1.0, 3.0)})
     reward = ConsilienceReward(

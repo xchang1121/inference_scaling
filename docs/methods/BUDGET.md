@@ -110,7 +110,7 @@ $`\mathbb E[\widehat H_A/\widehat Z]`$。由于 $`0\leq\widehat H_A/\widehat Z\l
 <a id="budget-joint"></a>
 ## 3. 联合动态调度
 
-共享选择器为 `choose_joint_budget`；AR 执行器为 `run_joint_budget_is`。每到一个新前缀：
+预算侧与采样侧分开实现：共享选择器 `choose_joint_budget` 与两种规划器 `FullHorizonPlanner`、`AdaptiveBudgetController` 位于 `shared/budget/`，只接收成本估计和初始样本矩；AR 执行器 `run_joint_budget_is` 只负责生成初始样本与正式样本并记账。每到一个新前缀：
 
 1. 将配置块长截到剩余长度、去重，并加入“直接生成至长度上限”的完整候选选项。
 2. 在 `pilot_fraction` 限制内，按块长升序生成少量初始候选及补全；完成预算始终预留。
@@ -367,11 +367,13 @@ result = run_joint_budget_is(
 
 | 职责 | 代码 / 测试 |
 | --- | --- |
-| 相对方差估计、联合整数选择 | [`shared/joint_budget.py`](../../src/inference_scaling/shared/joint_budget.py)：`estimate_weight_moments`、`choose_joint_budget` |
-| AR 循环、独立随机数、完成预留 | [`experimental/arllm/joint_budget_is.py`](../../src/inference_scaling/experimental/arllm/joint_budget_is.py)：`JointBudgetISConfig`、`block_costs`、`run_joint_budget_is` |
+| 相对方差估计、联合整数选择 | [`shared/budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)：`estimate_weight_moments`、`choose_joint_budget` |
+| 全视界规划与逐块自适应规划 | [`shared/budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)：`FullHorizonPlanner`、`AdaptiveBudgetController` |
+| 预留成本与完成预留 | [`shared/budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py)：`block_costs`、`completion_reserve` |
+| AR 循环、独立随机数、预算记账 | [`experimental/arllm/joint_budget_is.py`](../../src/inference_scaling/experimental/arllm/joint_budget_is.py)：`JointBudgetISConfig`、`run_joint_budget_is` |
 | 实际候选生成、补全和重采样 | [`arllm/algorithms/conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)：`conditional_is_step` |
 | CLI、通用加载与实际成本输出 | [`experiments/arllm/joint_budget_is.py`](../../experiments/arllm/joint_budget_is.py) |
-| 历史/新样本方差—成本分配 | [`shared/budget.py`](../../src/inference_scaling/shared/budget.py)：`allocate_variance_cost_budget`、`allocate_fresh_rollout_budget` |
+| 历史/新样本方差—成本分配 | [`shared/budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py)：`allocate_variance_cost_budget`、`allocate_fresh_rollout_budget` |
 | 固定候选的两阶段估计 | [`AR progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py)、[`dLLM progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) |
 | 动态候选和外层概率校正 | [`AR dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`dLLM dynamic_is.py`](../../src/inference_scaling/dllm/dynamic_is.py) |
 | 前向 FLOPs 估算 | [`shared/compute.py`](../../src/inference_scaling/shared/compute.py)：`dense_forward_flops` |

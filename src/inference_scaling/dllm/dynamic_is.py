@@ -8,11 +8,8 @@ from typing import Literal, Sequence
 
 import numpy as np
 
-from inference_scaling.dllm.config import (
-    DiffusionISConfig,
-    DiffusionSamplingConfig,
-    diffusion_decision_stage_lengths,
-)
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
 from inference_scaling.dllm.replay import (
     DiffusionReplayHistory,
     DiffusionReplayRewardBatch,

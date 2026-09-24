@@ -9,11 +9,11 @@ from inference_scaling.dllm.algorithms import (
     run_diffusion_block_beam,
     run_diffusion_trajectory_power_mh,
 )
-from inference_scaling.dllm.config import (
+from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionPowerMHConfig,
-    DiffusionSamplingConfig,
 )
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
 
 

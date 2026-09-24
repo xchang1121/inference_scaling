@@ -7,7 +7,7 @@ import pytest
 from experiments.arllm.runtime import model_metadata, validate_model_artifacts
 from experiments.shared.artifacts import checkpoint_weight_hashes
 from inference_scaling.arllm.backends import loader
-from inference_scaling.shared.model_loading import model_loading_options
+from inference_scaling.shared.model.loading import model_loading_options
 
 
 def test_shared_cli_retains_all_options_for_existing_entry_points():
@@ -43,7 +43,7 @@ def test_explicit_role_distinguishes_two_revisions_of_one_model(monkeypatch):
 
 
 def test_plain_model_prompt_and_explicit_chat_requirement():
-    from inference_scaling.shared.prompting import render_prompt
+    from inference_scaling.shared.model.prompting import render_prompt
     messages = [{"role": "user", "content": "problem"}]
     assert render_prompt(SimpleNamespace(chat_template=None), messages, {}) == "problem"
     with pytest.raises(ValueError, match="requires"):

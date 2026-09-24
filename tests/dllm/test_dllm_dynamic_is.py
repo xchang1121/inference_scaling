@@ -5,7 +5,8 @@ from math import exp, log
 import numpy as np
 import pytest
 
-from inference_scaling.dllm.config import DiffusionISConfig, DiffusionSamplingConfig
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.dynamic_is import (
     draw_defensive_diffusion_candidates,
     run_dynamic_diffusion_is,

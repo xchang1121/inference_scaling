@@ -7,7 +7,8 @@ from inference_scaling.experimental.arllm.progressive_is import (
     run_progressive_conditional_is,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import ProgressiveISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
 

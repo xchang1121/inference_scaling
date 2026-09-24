@@ -13,11 +13,8 @@ from inference_scaling.dllm.algorithms import (
     run_progressive_diffusion_is,
     run_diffusion_smc_rollout_forest,
 )
-from inference_scaling.dllm.config import (
-    DiffusionISConfig,
-    DiffusionMHConfig,
-    DiffusionSamplingConfig,
-)
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
 from inference_scaling.shared.config import SMCForestConfig
 

@@ -1,10 +1,12 @@
 """Diffusion language-model sampling, weighting, and alignment utilities."""
 
-from inference_scaling.dllm.config import (
+from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
     DiffusionMHConfig,
     DiffusionPowerMHConfig,
+)
+from inference_scaling.dllm.config import (
     DiffusionSamplingConfig,
     VRPOSamplingConfig,
     diffusion_decision_stage_lengths,

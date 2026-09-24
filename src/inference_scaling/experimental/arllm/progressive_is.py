@@ -22,14 +22,17 @@ from inference_scaling.arllm.algorithms.conditional_is import (
     RewardBatchFunction,
     RewardFunction,
     RolloutEvaluation,
-    _sample_candidates,
-    _score_samples,
-    _validate_base_sampling,
-    _validate_rollout_sampling,
 )
-from inference_scaling.arllm.config import ProgressiveISConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.candidates import (
+    sample_candidates,
+    score_samples,
+    validate_base_sampling,
+    validate_rollout_sampling,
+)
+from inference_scaling.arllm.algorithms.config import ProgressiveISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.budget import allocate_fresh_rollout_budget
-from inference_scaling.shared.importance import logmeanexp
+from inference_scaling.shared.sampling.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
@@ -221,7 +224,7 @@ def _draw_rollouts(
     base_totals = (
         [sample.logprob for sample in samples]
         if on_policy
-        else _score_samples(base_backend, rollout_prefixes, samples, base_sampling)
+        else score_samples(base_backend, rollout_prefixes, samples, base_sampling)
     )
     grouped: list[list[RolloutEvaluation]] = [[] for _ in candidates]
     for candidate_index in terminal:
@@ -327,15 +330,15 @@ def progressive_is_step(
     reward_batch: RewardBatchFunction | None = None,
     streaming_evaluator: StreamingRewardEvaluator | None = None,
 ) -> ProgressiveISStep:
-    _validate_base_sampling(base_sampling)
-    _validate_rollout_sampling(rollout_sampling)
+    validate_base_sampling(base_sampling)
+    validate_rollout_sampling(rollout_sampling)
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
     remaining = config.total_length - len(generated_prefix)
     if remaining <= 0:
         raise ValueError("generated prefix has already reached total_length")
     block_length = min(config.block_size, remaining)
-    candidates = _sample_candidates(
+    candidates = sample_candidates(
         base_backend,
         prompt + generated_prefix,
         config.candidate_count,

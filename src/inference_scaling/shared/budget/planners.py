@@ -1,45 +1,137 @@
-"""Evidence-gated next-chunk planning with an independent completion fallback."""
+"""Next-block planners that choose the block size B, candidates M and rollouts K.
+
+A planner only turns cost estimates and pilot moments into a plan. The caller
+owns sampling: ``estimate_block(B)`` returns the reserved costs of block size
+``B`` with default moments, and ``measure(estimate)`` runs an independent pilot
+at that block size and returns its moments, or ``None`` for unusable pilots.
+
+- :class:`FullHorizonPlanner` pilots every block size, adds the full remaining
+  length as a completion option, and forecasts the remaining selections.
+- :class:`AdaptiveBudgetController` keeps (B, M, K) between prefixes and adjusts
+  them only on fresh pilot evidence, with an independent completion fallback.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from math import ceil
-from typing import TYPE_CHECKING
+from typing import Protocol
 
-from inference_scaling.shared.joint_budget import (
+from inference_scaling.shared.budget.joint import (
     BlockBudgetEstimate,
     JointBudgetPlan,
     WeightMoments,
     choose_joint_budget,
 )
 
-if TYPE_CHECKING:
-    from inference_scaling.experimental.arllm.joint_budget_is import JointBudgetISConfig
+EstimateBlock = Callable[[int], BlockBudgetEstimate]
+MeasureBlock = Callable[[BlockBudgetEstimate], WeightMoments | None]
+
+
+class JointPlannerSettings(Protocol):
+    """Grid, pilot and adjustment settings read by the planners."""
+
+    @property
+    def block_sizes(self) -> tuple[int, ...]: ...
+    @property
+    def candidate_counts(self) -> tuple[int, ...]: ...
+    @property
+    def rollout_counts(self) -> tuple[int, ...]: ...
+    @property
+    def pilot_candidates(self) -> int: ...
+    @property
+    def pilot_rollouts(self) -> int: ...
+    @property
+    def pilot_fraction(self) -> float: ...
+    @property
+    def relative_variance_floor(self) -> float: ...
+    @property
+    def initial_block_size(self) -> int | None: ...
+    @property
+    def initial_candidate_count(self) -> int | None: ...
+    @property
+    def initial_rollout_count(self) -> int | None: ...
+    @property
+    def adjustment_min_improvement(self) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
-class AdaptiveBudgetSelection:
+class PlanSelection:
     plan: JointBudgetPlan
     estimates: tuple[BlockBudgetEstimate, ...]
     pilot_reserved_cost: int
     remaining_budget: int
-    adjustment: dict[str, object]
+    adjustment: dict[str, object] | None = None
+
+
+def pilot_cost(settings: JointPlannerSettings, estimate: BlockBudgetEstimate) -> float:
+    return settings.pilot_candidates * (
+        estimate.candidate_cost + settings.pilot_rollouts * estimate.rollout_cost
+    )
 
 
 def _parameters(plan: JointBudgetPlan) -> tuple[int, int, int]:
     return plan.block_size, plan.candidate_count, plan.rollout_count
 
 
-class AdaptiveBudgetController:
-    def __init__(self, config: JointBudgetISConfig, finish_reserve: int):
-        self.config = config
+class FullHorizonPlanner:
+    """Pilot each block size within ``pilot_fraction``, then forecast the horizon."""
+
+    def __init__(self, settings: JointPlannerSettings, finish_reserve: int):
+        self.settings = settings
         self.finish_reserve = finish_reserve
-        self.parameters = (
-            config.initial_block_size,
-            config.initial_candidate_count,
-            config.initial_rollout_count,
+
+    def select(
+        self,
+        remaining: int,
+        budget: int,
+        estimate_block: EstimateBlock,
+        measure: MeasureBlock,
+    ) -> PlanSelection:
+        settings = self.settings
+        blocks = sorted({min(value, remaining) for value in settings.block_sizes} | {remaining})
+        pilot_limit = min(int(settings.pilot_fraction * budget), budget - self.finish_reserve)
+        spent = 0
+        estimates: list[BlockBudgetEstimate] = []
+        for block in blocks:
+            estimate = estimate_block(block)
+            cost = int(pilot_cost(settings, estimate))
+            if spent + cost <= pilot_limit:
+                moments = measure(estimate)
+                if moments is None:
+                    raise ValueError("pilot log-weights must be finite")
+                estimate = replace(estimate, moments=moments)
+                spent += cost
+            estimates.append(estimate)
+        plan = choose_joint_budget(
+            estimates,
+            remaining_length=remaining,
+            remaining_budget=budget - spent,
+            candidate_counts=settings.candidate_counts,
+            rollout_counts=settings.rollout_counts,
+            finish_reserve=self.finish_reserve,
+            relative_variance_floor=settings.relative_variance_floor,
         )
+        if plan is None:
+            raise RuntimeError("completion reservation invariant violated")
+        return PlanSelection(plan, tuple(estimates), spent, budget - spent)
+
+
+class AdaptiveBudgetController:
+    """Evidence-gated next-chunk planning with an independent completion fallback."""
+
+    def __init__(self, settings: JointPlannerSettings, finish_reserve: int):
+        block, candidates, rollouts = (
+            settings.initial_block_size,
+            settings.initial_candidate_count,
+            settings.initial_rollout_count,
+        )
+        if block is None or candidates is None or rollouts is None:
+            raise ValueError("adaptive planning requires initial block, candidate and rollout counts")
+        self.config = settings
+        self.finish_reserve = finish_reserve
+        self.parameters: tuple[int, int, int] = (block, candidates, rollouts)
         self.started = False
         self.neighbor_cursor = 0
 
@@ -47,14 +139,16 @@ class AdaptiveBudgetController:
         self,
         remaining: int,
         budget: int,
-        estimate_block: Callable[[int], BlockBudgetEstimate],
-        measure: Callable[[BlockBudgetEstimate], WeightMoments | None],
-    ) -> AdaptiveBudgetSelection:
+        estimate_block: EstimateBlock,
+        measure: MeasureBlock,
+    ) -> PlanSelection:
         config = self.config
         spent = 0
         decision: dict[str, object] = {"previous_parameters": self.parameters}
 
-        def choose(estimate, parameters=None):
+        def choose(
+            estimate: BlockBudgetEstimate, parameters: tuple[int, int, int] | None = None
+        ) -> JointBudgetPlan | None:
             return choose_joint_budget(
                 [estimate], remaining_length=remaining, remaining_budget=budget,
                 candidate_counts=(parameters[1],) if parameters else config.candidate_counts,
@@ -64,23 +158,20 @@ class AdaptiveBudgetController:
                 forecast_full_horizon=False,
             )
 
-        def result(plan, estimates, status):
+        def result(
+            plan: JointBudgetPlan | None, estimates: list[BlockBudgetEstimate], status: str
+        ) -> PlanSelection:
             if plan is None:
                 raise RuntimeError("adaptive completion reservation invariant violated")
             decision["status"] = status
             if status != "finish":
                 self.parameters = _parameters(plan)
             self.started = True
-            return AdaptiveBudgetSelection(plan, tuple(estimates), spent, budget, decision)
+            return PlanSelection(plan, tuple(estimates), spent, budget, decision)
 
-        def pilot_cost(estimate):
-            return config.pilot_candidates * (
-                estimate.candidate_cost + config.pilot_rollouts * estimate.rollout_cost
-            )
-
-        def measured(estimate):
+        def measured(estimate: BlockBudgetEstimate) -> BlockBudgetEstimate | None:
             nonlocal spent, budget
-            cost = int(pilot_cost(estimate))
+            cost = int(pilot_cost(config, estimate))
             spent += cost
             budget -= cost
             moments = measure(estimate)
@@ -104,7 +195,7 @@ class AdaptiveBudgetController:
             return result(incumbent, [estimate], "kept_pilot_disabled")
         pilot_limit = int(config.pilot_fraction * budget)
         protected = incumbent.reserved_cost + self.finish_reserve
-        current_cost = pilot_cost(estimate)
+        current_cost = pilot_cost(config, estimate)
         if current_cost > min(pilot_limit, budget - protected):
             return result(incumbent, [estimate], "kept_no_pilot_budget")
 
@@ -122,7 +213,7 @@ class AdaptiveBudgetController:
             )
             pair_protected = max(incumbent.reserved_cost, minimum_neighbor) + self.finish_reserve
             decision.update(neighbor_block=candidate.block_size, neighbor_status="skipped_for_budget")
-            if current_cost + pilot_cost(candidate) <= min(pilot_limit, budget - pair_protected):
+            if current_cost + pilot_cost(config, candidate) <= min(pilot_limit, budget - pair_protected):
                 neighbor = candidate
 
         current = measured(estimate)
@@ -146,16 +237,16 @@ class AdaptiveBudgetController:
             raise RuntimeError("adaptive incumbent reservation invariant violated")
         horizon = max(item.block_size for item in estimates)
 
-        def score(plan):
+        def score(plan: JointBudgetPlan) -> float:
             return ceil(horizon / plan.block_size) * plan.local_error_estimate
 
-        candidates = [
+        options = [
             choose(item, (item.block_size, candidate_count, rollout_count))
             for item in estimates
             for candidate_count in sorted(set(config.candidate_counts))
             for rollout_count in sorted(set(config.rollout_counts))
         ]
-        candidates = [plan for plan in candidates if plan is not None]
+        candidates = [plan for plan in options if plan is not None]
         best = min(candidates, key=lambda plan: (score(plan), plan.reserved_cost))
         threshold = score(incumbent) * (1 - config.adjustment_min_improvement)
         eligible = [plan for plan in candidates if score(plan) < threshold]
@@ -184,3 +275,12 @@ class AdaptiveBudgetController:
                         selected_relative_improvement=0.0,
                         selected_reserved_cost=incumbent.reserved_cost)
         return result(incumbent, estimates, "kept_no_improvement")
+
+
+__all__ = [
+    "AdaptiveBudgetController",
+    "FullHorizonPlanner",
+    "JointPlannerSettings",
+    "PlanSelection",
+    "pilot_cost",
+]

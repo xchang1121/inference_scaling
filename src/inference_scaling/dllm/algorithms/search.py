@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from inference_scaling.dllm.config import (
+from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionPowerMHConfig,
-    DiffusionSamplingConfig,
-    diffusion_decision_stage_lengths,
 )
+from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
 from inference_scaling.dllm.types import (
     DiffusionBackend,
     DiffusionGenerationRequest,
@@ -16,7 +15,7 @@ from inference_scaling.dllm.types import (
     DiffusionTraceStep,
     DiffusionTrajectoryScoreRequest,
 )
-from inference_scaling.shared.mh import decide_metropolis_hastings
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 

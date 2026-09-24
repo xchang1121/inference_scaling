@@ -21,17 +21,15 @@ import torch
 from experiments.arllm.runtime import set_rl_adapter_override, validate_model_artifacts
 from experiments.shared.methods import AR_DISTRIBUTION_METHODS
 
-from experiments.arllm.gsm8k_reproduction import (
-    IMPLEMENTATION_FILES,
-    _file_sha256,
-    _fingerprint,
-    _implementation_hashes,
-    _load_backend,
-    _prompt_tokens,
-    _run_method,
-    _sample_one,
-    _snapshot_delta,
+from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
+from experiments.shared.artifacts import (
+    file_sha256,
+    json_fingerprint,
+    implementation_hashes as _implementation_hashes,
+    dataclass_snapshot_delta,
 )
+from experiments.arllm.common import load_backend, prompt_tokens, sample_one
+from experiments.arllm.method_runners import run_method
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
@@ -112,8 +110,8 @@ def _method_backend(config: dict[str, Any], method: str):
             if config["models"].get("rl_kind") == "peft_adapter"
             else None
         )
-        return _load_backend(str(config["models"]["rl"]), config, adapter_base=adapter_base, role="rl")
-    return _load_backend(str(config["models"]["base"]), config, role="base")
+        return load_backend(str(config["models"]["rl"]), config, adapter_base=adapter_base, role="rl")
+    return load_backend(str(config["models"]["base"]), config, role="base")
 
 
 def _prepare_manifest(
@@ -138,7 +136,7 @@ def _prepare_manifest(
         "input_adapter_sha256": input_adapter_hashes or {},
         "implementation_sha256": implementation_hashes,
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     manifest = {"schema_version": 1, "fingerprint": fingerprint, "effective": effective}
     manifest_path = raw_path.with_suffix(".manifest.json")
     if manifest_path.is_file():
@@ -199,13 +197,13 @@ def _run_pending_samples(
             backend = _method_backend(config, method)
             proposal_backend = None
             if method.endswith("small_proposal"):
-                proposal_backend = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+                proposal_backend = load_backend(str(config["models"]["proposal"]), config, role="proposal")
                 if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
                     raise ValueError(
                         "base and proposal tokenizers do not have identical vocabularies"
                     )
-            warm_prompt = _prompt_tokens(backend, problems[0], config)
-            _sample_one(
+            warm_prompt = prompt_tokens(backend, problems[0], config)
+            sample_one(
                 backend,
                 warm_prompt,
                 max_new_tokens=2,
@@ -214,7 +212,7 @@ def _run_pending_samples(
                 request_id=f"distribution-audit-warmup:{method}",
             )
             if proposal_backend is not None:
-                _sample_one(
+                sample_one(
                     proposal_backend,
                     warm_prompt,
                     max_new_tokens=2,
@@ -227,13 +225,13 @@ def _run_pending_samples(
                 draw_config = copy.deepcopy(config)
                 draw_config["run"]["seed"] = int(config["run"]["seed"]) + 1_000_003 * draw
                 seeds = SeedStream(int(draw_config["run"]["seed"]))
-                prompt = _prompt_tokens(backend, problem, config)
+                prompt = prompt_tokens(backend, problem, config)
                 backend_before = backend.snapshot()
                 proposal_before = proposal_backend.snapshot() if proposal_backend else None
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 started = time.perf_counter()
-                tokens, diagnostics = _run_method(
+                tokens, diagnostics = run_method(
                     method,
                     backend,
                     problem,
@@ -257,9 +255,9 @@ def _run_pending_samples(
                     "answer": _answer_key(answer),
                     "correct": answer == problem.gold_answer,
                     "seconds": elapsed,
-                    "base_delta": _snapshot_delta(backend_before, backend_after),
+                    "base_delta": dataclass_snapshot_delta(backend_before, backend_after),
                     "proposal_delta": (
-                        _snapshot_delta(proposal_before, proposal_after)
+                        dataclass_snapshot_delta(proposal_before, proposal_after)
                         if proposal_before is not None and proposal_after is not None
                         else None
                     ),
@@ -461,7 +459,7 @@ def main() -> None:
     report = {
         "schema_version": 2,
         "manifest_fingerprint": manifest_fingerprint,
-        "raw_records_sha256": _file_sha256(raw_path),
+        "raw_records_sha256": file_sha256(raw_path),
         "public_dataset": "OpenAI GSM8K official test split",
         "problem_indices": problem_indices,
         "input_weight_sha256": input_weight_hashes,

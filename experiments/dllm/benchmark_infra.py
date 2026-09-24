@@ -39,7 +39,7 @@ from inference_scaling.dllm.algorithms import (
     run_progressive_diffusion_is,
 )
 from inference_scaling.dllm.backends import load_llada_backend
-from inference_scaling.dllm.config import DiffusionISConfig, DiffusionMHConfig
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
 from inference_scaling.dllm.dynamic_is import run_dynamic_diffusion_is
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.config import SMCForestConfig
@@ -66,8 +66,8 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/algorithms/smc_forest.py",
     "src/inference_scaling/dllm/dynamic_is.py",
     "src/inference_scaling/dllm/replay.py",
-    "src/inference_scaling/shared/budget.py",
-    "src/inference_scaling/shared/mh.py",
+    "src/inference_scaling/shared/budget/allocation.py",
+    "src/inference_scaling/shared/sampling/mh.py",
 )
 
 ASYNC_FAMILIES = (

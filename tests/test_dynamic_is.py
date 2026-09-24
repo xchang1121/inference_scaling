@@ -13,7 +13,8 @@ from inference_scaling.experimental.arllm.dynamic_is import (
     empirical_design_statistics,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import DynamicISConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import DynamicISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.budget import allocate_fresh_rollout_budget
 from inference_scaling.arllm.replay import (

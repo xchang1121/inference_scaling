@@ -211,8 +211,8 @@ def test_is_passk_chunk_accounts_both_models_and_keeps_draws_independent(
         proposal_backend.sample_batch([request])
         return (1,), {"fake": True, "output_segments": {"content_text": "1"}}
 
-    monkeypatch.setattr(is_passk, "_run_method", fake_run_method)
-    monkeypatch.setattr(is_passk, "_timed", lambda call: (call(), 0.25))
+    monkeypatch.setattr(is_passk, "run_method", fake_run_method)
+    monkeypatch.setattr(is_passk, "timed", lambda call: (call(), 0.25))
     base = _CountingRawBackend("base", 10)
     proposal = _CountingRawBackend("proposal", 3)
     chunk = is_passk._run_chunk(

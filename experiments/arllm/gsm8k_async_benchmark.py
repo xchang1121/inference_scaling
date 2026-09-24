@@ -23,16 +23,14 @@ import transformers
 from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.methods import AR_ASYNC_METHODS
 
-from experiments.arllm.gsm8k_reproduction import (
-    IMPLEMENTATION_FILES,
-    _file_sha256,
-    _implementation_hashes,
-    _load_backend,
-    _run_method,
-    _prompt_tokens,
-    _snapshot_delta,
-    _timed,
+from experiments.arllm.gsm8k_reproduction import IMPLEMENTATION_FILES
+from experiments.shared.artifacts import (
+    file_sha256,
+    implementation_hashes,
+    dataclass_snapshot_delta,
 )
+from experiments.arllm.common import load_backend, prompt_tokens, timed
+from experiments.arllm.method_runners import run_method
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,
@@ -50,10 +48,10 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenSequence
 
 METHODS = AR_ASYNC_METHODS
+# Files under src/inference_scaling and experiments/shared are hashed automatically.
 ASYNC_IMPLEMENTATION_FILES = (
     *IMPLEMENTATION_FILES,
     "experiments/arllm/gsm8k_async_benchmark.py",
-    "src/inference_scaling/arllm/backends/batching.py",
 )
 
 
@@ -79,7 +77,7 @@ def _run_one(
 ) -> TokenSequence:
     wrapped = ExecutionBackend(base_backend, raw_backend)
     proposal = None if proposal_backend is None else ExecutionBackend(proposal_backend, execution_model(proposal_backend))
-    tokens, _ = _run_method(
+    tokens, _ = run_method(
         method, wrapped, problem, prompt, config,
         SeedStream(SeedStream(root_seed).derive("async-benchmark", method, problem.index)), proposal,
     )
@@ -168,9 +166,9 @@ def _output_agreement(raw_backend, synchronous, asynchronous, problems) -> dict[
 
 
 def _compute_delta(base_before, base_after, proposal_before, proposal_after):
-    base = _snapshot_delta(base_before, base_after)
+    base = dataclass_snapshot_delta(base_before, base_after)
     proposal = (
-        _snapshot_delta(proposal_before, proposal_after)
+        dataclass_snapshot_delta(proposal_before, proposal_after)
         if proposal_before is not None and proposal_after is not None
         else {}
     )
@@ -250,10 +248,10 @@ def main() -> None:
     base_weight_hash = input_artifacts["weight_sha256"]["base"]
     proposal_weight_hash = input_artifacts["weight_sha256"].get("proposal")
 
-    raw_backend = _load_backend(str(config["models"]["base"]), config, role="base")
+    raw_backend = load_backend(str(config["models"]["base"]), config, role="base")
     try:
         raw_proposal = (
-            _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+            load_backend(str(config["models"]["proposal"]), config, role="proposal")
             if needs_proposal
             else None
         )
@@ -267,7 +265,7 @@ def main() -> None:
         close_backend(raw_proposal)
         close_backend(raw_backend)
         raise ValueError("base and proposal tokenizers do not have identical vocabularies")
-    prompts = [_prompt_tokens(raw_backend, problem, config) for problem in problems]
+    prompts = [prompt_tokens(raw_backend, problem, config) for problem in problems]
     root_seed = int(config["run"]["seed"])
     warm_sampling = SamplingConfig(temperature=float(config.get("sampling", {}).get("temperature", 1.0)), eos_token_id=raw_backend.tokenizer.eos_token_id)
     raw_backend.sample_batch(
@@ -290,7 +288,7 @@ def main() -> None:
         )
         base_before = raw_backend.snapshot()
         proposal_before = raw_proposal.snapshot() if uses_proposal else None
-        synchronous, synchronous_seconds = _timed(
+        synchronous, synchronous_seconds = timed(
             lambda method=method,
             synchronous_base=synchronous_base,
             synchronous_proposal=synchronous_proposal: [
@@ -351,7 +349,7 @@ def main() -> None:
                     ]
                     return [future.result() for future in futures]
 
-            asynchronous, asynchronous_seconds = _timed(run_parallel)
+            asynchronous, asynchronous_seconds = timed(run_parallel)
             batching = {
                 "base": asdict(base_batching.snapshot()),
                 "proposal": (
@@ -411,11 +409,11 @@ def main() -> None:
         },
         "experiment_config": {
             "path": str(args.config),
-            "sha256": _file_sha256(args.config),
+            "sha256": file_sha256(args.config),
         },
         "evaluation": {
             "dataset_path": str(args.data),
-            "dataset_sha256": _file_sha256(args.data),
+            "dataset_sha256": file_sha256(args.data),
             "problem_indices": [problem.index for problem in problems],
         },
         "runtime_config": {
@@ -464,7 +462,7 @@ def main() -> None:
                 "loaded": raw_proposal is not None,
             },
         },
-        "implementation_sha256": _implementation_hashes(
+        "implementation_sha256": implementation_hashes(
             Path(__file__).resolve().parents[2],
             entrypoints=ASYNC_IMPLEMENTATION_FILES,
         ),

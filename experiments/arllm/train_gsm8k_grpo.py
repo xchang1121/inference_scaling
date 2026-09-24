@@ -28,7 +28,7 @@ import transformers
 from datasets import Dataset
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer
-from inference_scaling.shared.model_loading import model_loading_options, resolve_checkpoint_path
+from inference_scaling.shared.model.loading import model_loading_options, resolve_checkpoint_path
 from trl import GRPOConfig, GRPOTrainer
 
 from inference_scaling.shared.compute import (

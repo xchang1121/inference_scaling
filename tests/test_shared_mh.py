@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from inference_scaling.shared.mh import (
+from inference_scaling.shared.sampling.mh import (
     MetropolisHastingsProposal,
     apply_metropolis_hastings,
     decide_metropolis_hastings,

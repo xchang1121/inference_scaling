@@ -22,7 +22,7 @@ from inference_scaling.arllm.acceleration import (
 )
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.compute import dense_forward_flops
-from inference_scaling.shared.model_loading import model_identity
+from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.arllm.backends.causal_scoring import iter_causal_logits, prefill_causal_model
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import (

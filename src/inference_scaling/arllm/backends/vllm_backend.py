@@ -15,7 +15,7 @@ using incorrect importance ratios.
 
 from __future__ import annotations
 
-from inference_scaling.shared.model_loading import model_identity, checkpoint_weight_files
+from inference_scaling.shared.model.loading import model_identity, checkpoint_weight_files
 
 import asyncio
 import importlib.metadata

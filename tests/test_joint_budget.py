@@ -7,7 +7,7 @@ from math import log, sqrt
 import numpy as np
 import pytest
 
-from inference_scaling.shared.joint_budget import (
+from inference_scaling.shared.budget.joint import (
     BlockBudgetEstimate,
     WeightMoments,
     choose_joint_budget,

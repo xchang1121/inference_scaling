@@ -14,7 +14,7 @@ from huggingface_hub import snapshot_download
 from inference_scaling.shared.evaluation import download_gsm8k
 
 from experiments.shared.artifacts import checkpoint_weight_hashes, weight_manifest_digest
-from inference_scaling.shared.model_loading import model_loading_options, resolve_checkpoint_path
+from inference_scaling.shared.model.loading import model_loading_options, resolve_checkpoint_path
 
 
 def _weight_digest(directory: str) -> str:

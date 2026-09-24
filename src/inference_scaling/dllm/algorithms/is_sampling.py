@@ -6,24 +6,21 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import numpy as np
 
-from inference_scaling.dllm.config import (
-    DiffusionISConfig,
-    DiffusionSamplingConfig,
-    diffusion_decision_stage_lengths,
-)
+from inference_scaling.dllm.algorithms.config import DiffusionISConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
 from inference_scaling.dllm.types import (
     DiffusionBackend,
     DiffusionGenerationRequest,
     DiffusionSample,
     DiffusionTrajectoryScoreRequest,
 )
-from inference_scaling.shared.importance import (
+from inference_scaling.shared.sampling.importance import (
     MonteCarloRolloutWeightProvider,
     RolloutObservation,
 )
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.stepwise import (
+from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
     normalize_log_weights,
     run_stepwise_generation,

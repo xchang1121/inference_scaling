@@ -17,7 +17,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.dllm.gsm8k_reproduction import (
     IMPLEMENTATION_FILES as QUALITY_IMPLEMENTATION_FILES,
-    _configured_verifier_reward,
+    configured_verifier_reward,
 )
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
@@ -56,7 +56,7 @@ IMPLEMENTATION_FILES = (
     *QUALITY_IMPLEMENTATION_FILES,
     "experiments/dllm/gsm8k_replay_benchmark.py",
     "src/inference_scaling/dllm/replay.py",
-    "src/inference_scaling/shared/importance.py",
+    "src/inference_scaling/shared/sampling/importance.py",
 )
 
 
@@ -436,7 +436,7 @@ def main() -> None:
                     continue
                 prompt = backend.encode_chat(gsm8k_prompt(problem.question))
                 problem_seed = seeds.derive("dllm-replay-benchmark", problem.index)
-                reward_batch = _configured_verifier_reward(
+                reward_batch = configured_verifier_reward(
                     backend, problem, config
                 ).batch
 

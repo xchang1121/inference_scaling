@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.dllm.config import DiffusionMHConfig, DiffusionSamplingConfig
+from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest, DiffusionSample
-from inference_scaling.shared.mh import decide_metropolis_hastings
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 from inference_scaling.shared.verifier import TokenBatchReward, TokenReward

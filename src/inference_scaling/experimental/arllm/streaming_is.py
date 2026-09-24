@@ -16,7 +16,7 @@ from math import isfinite
 import numpy as np
 
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.importance import logmeanexp
+from inference_scaling.shared.sampling.importance import logmeanexp
 from inference_scaling.shared.metrics import importance_effective_sample_size
 
 

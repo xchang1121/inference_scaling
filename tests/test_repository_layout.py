@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +23,20 @@ REMOVED_COMPATIBILITY_MODULES = (
     "types.py",
     "vllm_suffix_proposer.py",
 )
+# Now grouped as shared/sampling, shared/budget and shared/model.
+MOVED_SHARED_MODULES = (
+    "budget.py", "generation.py", "importance.py", "joint_budget.py", "mh.py", "model_loading.py",
+    "output.py", "prompting.py", "smc.py", "stepwise.py", "structured_output.py",
+)
+
+
+def _module_imports(root: str):
+    for path in Path(root).rglob("*.py"):
+        parts = path.with_suffix("").parts
+        module = ".".join(parts[1:] if parts[0] == "src" else parts).removesuffix(".__init__")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                yield module, node.module, [alias.name for alias in node.names]
 
 
 def test_model_families_and_shared_code_have_distinct_namespaces():
@@ -35,6 +50,36 @@ def test_model_families_and_shared_code_have_distinct_namespaces():
             assert not path.exists()
         else:
             assert not any(path.glob("*.py"))
+    for name in MOVED_SHARED_MODULES:
+        assert not (package / "shared" / name).exists()
+    for subpackage in ("sampling", "budget", "model"):
+        assert (package / "shared" / subpackage / "__init__.py").is_file()
+
+
+def test_shared_layer_never_depends_on_model_families_or_research_code():
+    forbidden = ("inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.experimental")
+    violations = [
+        (module, target)
+        for module, target, _ in _module_imports("src/inference_scaling/shared")
+        if target.startswith(forbidden)
+    ]
+    assert violations == []
+
+
+def test_private_names_are_not_imported_across_modules():
+    # Acceleration modules extend the MH kernel beside them in the same package.
+    extensions = {
+        ("inference_scaling.arllm.algorithms.mh_acceleration", "inference_scaling.arllm.algorithms.mh"),
+        ("inference_scaling.dllm.algorithms.mh_acceleration", "inference_scaling.dllm.algorithms.mh"),
+    }
+    violations = [
+        (module, target, name)
+        for root in ("src", "experiments")
+        for module, target, names in _module_imports(root)
+        for name in names
+        if name.startswith("_") and not name.startswith("__") and (module, target) not in extensions
+    ]
+    assert violations == []
 
 
 def test_production_defaults_exclude_research_components():

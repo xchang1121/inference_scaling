@@ -28,19 +28,21 @@ from experiments.arllm.scoped_execution import fixed_experiment_reward, with_out
 from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
-from experiments.arllm.gsm8k_reproduction import (
-    _configured_verifier_reward,
-    _file_sha256,
-    _implementation_hashes,
-    _fingerprint,
-    _fraction_text,
-    _load_backend,
-    _prompt_tokens,
-    _snapshot_delta,
-    _timed,
+from experiments.arllm.common import (
+    configured_verifier_reward,
+    fraction_text,
+    load_backend,
+    prompt_tokens,
+    timed,
+)
+from experiments.shared.artifacts import (
+    file_sha256,
+    implementation_hashes,
+    json_fingerprint,
+    dataclass_snapshot_delta,
 )
 from experiments.arllm.summarize_gsm8k_dynamic_is import METHODS, build_summary
-from inference_scaling.arllm.algorithms.base_replay import _score_base
+from inference_scaling.arllm.algorithms.base_replay import score_replay_completions
 from inference_scaling.experimental.arllm.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
@@ -56,7 +58,8 @@ from inference_scaling.arllm.backends import (
     close_backend,
     set_backend_override,
 )
-from inference_scaling.arllm.config import DynamicISConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import DynamicISConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.shared.metrics import importance_effective_sample_size
 from inference_scaling.arllm.replay import (
@@ -71,19 +74,11 @@ from inference_scaling.arllm.replay import (
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.verifier import replace_verifier_from_file
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample
+# Files under src/inference_scaling and experiments/shared are hashed automatically.
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_dynamic_is_benchmark.py",
     "experiments/arllm/summarize_gsm8k_dynamic_is.py",
-    "src/inference_scaling/experimental/arllm/dynamic_is.py",
-    "src/inference_scaling/arllm/algorithms/base_replay.py",
-    "src/inference_scaling/arllm/backends/candidate_cache.py",
-    "src/inference_scaling/arllm/backends/cache.py",
-    "src/inference_scaling/arllm/backends/loader.py",
-    "src/inference_scaling/arllm/backends/transformers_backend.py",
-    "src/inference_scaling/arllm/backends/vllm_backend.py",
-    "src/inference_scaling/arllm/replay.py",
-    "src/inference_scaling/arllm/config.py",
-    "src/inference_scaling/arllm/types.py",
+    "experiments/arllm/common.py",
 )
 def _sum_delta(
     left: dict[str, int | float], right: dict[str, int | float]
@@ -101,7 +96,7 @@ def _subtract_delta(
 
 
 def _zero_delta(snapshot) -> dict[str, int | float]:
-    return _snapshot_delta(snapshot, snapshot)
+    return dataclass_snapshot_delta(snapshot, snapshot)
 
 
 def _compute_fields(
@@ -440,15 +435,15 @@ class BatchedDesignPool:
                     }
                 )
 
-        _, seconds = _timed(build)
+        _, seconds = timed(build)
         self.seconds += seconds
         self.base_delta = _sum_delta(
             self.base_delta,
-            _snapshot_delta(base_before, self.base_backend.snapshot()),
+            dataclass_snapshot_delta(base_before, self.base_backend.snapshot()),
         )
         self.proposal_delta = _sum_delta(
             self.proposal_delta,
-            _snapshot_delta(proposal_before, self.proposal_backend.snapshot()),
+            dataclass_snapshot_delta(proposal_before, self.proposal_backend.snapshot()),
         )
 
     def __call__(self, context: DesignStatisticsContext) -> VarianceCostEstimate:
@@ -537,7 +532,7 @@ def _prepare_replay_cache(
         )
     validate_record_probabilities(records, registry)
     for key, completions in by_key.items():
-        _score_base(cached_base, key, completions, base_sampling)
+        score_replay_completions(cached_base, key, completions, base_sampling)
     for record in records:
         store.add_evaluation(record)
 
@@ -627,7 +622,7 @@ def _run_method(
             generated_count = 0
             cache_seconds = 0.0
         else:
-            (cache_samples, generated_count), cache_seconds = _timed(
+            (cache_samples, generated_count), cache_seconds = timed(
                 lambda generated_prefix=tuple(generated),
                 block_length=block_length,
                 rollout_length=rollout_length,
@@ -656,11 +651,11 @@ def _run_method(
         history_generated += generated_count
         cache_base_delta = _sum_delta(
             cache_base_delta,
-            _snapshot_delta(cache_base_before, backend.snapshot()),
+            dataclass_snapshot_delta(cache_base_before, backend.snapshot()),
         )
         cache_proposal_delta = _sum_delta(
             cache_proposal_delta,
-            _snapshot_delta(cache_proposal_before, proposal_backend.snapshot()),
+            dataclass_snapshot_delta(cache_proposal_before, proposal_backend.snapshot()),
         )
 
         budget = MatchedProxyBudget(
@@ -721,7 +716,7 @@ def _run_method(
         )
         online_base_before = backend.snapshot()
         online_proposal_before = proposal_backend.snapshot()
-        step, seconds = _timed(
+        step, seconds = timed(
             lambda generated_prefix=tuple(generated),
             algorithm=algorithm,
             step_index=step_index,
@@ -749,11 +744,11 @@ def _run_method(
         online_total_seconds += seconds
         online_base_delta = _sum_delta(
             online_base_delta,
-            _snapshot_delta(online_base_before, backend.snapshot()),
+            dataclass_snapshot_delta(online_base_before, backend.snapshot()),
         )
         online_proposal_delta = _sum_delta(
             online_proposal_delta,
-            _snapshot_delta(online_proposal_before, proposal_backend.snapshot()),
+            dataclass_snapshot_delta(online_proposal_before, proposal_backend.snapshot()),
         )
         if design is not None:
             design_seconds += design.seconds
@@ -1006,7 +1001,7 @@ def main() -> None:
         "tag": args.tag,
         "extension_config": {
             "path": str(args.extension_config),
-            "sha256": _file_sha256(args.extension_config),
+            "sha256": file_sha256(args.extension_config),
         },
         "problem_indices": [problem.index for problem in problems],
         "settings": {
@@ -1027,12 +1022,12 @@ def main() -> None:
         },
         "input_weight_sha256": {"base": base_hash, "proposal": proposal_hash},
         "input_metadata_sha256": input_artifacts["metadata_sha256"],
-        "implementation_sha256": _implementation_hashes(
+        "implementation_sha256": implementation_hashes(
             Path(__file__).resolve().parents[2],
             entrypoints=IMPLEMENTATION_FILES,
         ),
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     manifest = {
         "schema_version": 1,
         "fingerprint": fingerprint,
@@ -1070,8 +1065,8 @@ def main() -> None:
         print(serialized)
         return
 
-    backend = _load_backend(str(config["models"]["base"]), config, role="base")
-    proposal_backend = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+    backend = load_backend(str(config["models"]["base"]), config, role="base")
+    proposal_backend = load_backend(str(config["models"]["proposal"]), config, role="proposal")
     if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
         raise ValueError("base and proposal tokenizers must match")
     manifest["models"] = {
@@ -1089,7 +1084,7 @@ def main() -> None:
         1.0 + proposal_backend.parameter_count / backend.parameter_count
     )
     # The parameter counts affect the allocation proxy, so include them in the final fingerprint.
-    manifest["fingerprint"] = _fingerprint(manifest["effective"])
+    manifest["fingerprint"] = json_fingerprint(manifest["effective"])
     fingerprint = manifest["fingerprint"]
     if manifest_path.is_file():
         previous = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1100,7 +1095,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    warm_prompt = _prompt_tokens(backend, pending[0], config)
+    warm_prompt = prompt_tokens(backend, pending[0], config)
     warm_sampling = SamplingConfig(eos_token_id=backend.tokenizer.eos_token_id)
     backend.sample_batch(
         [GenerationRequest(warm_prompt, 2, warm_sampling, 1, "base-warmup")]
@@ -1111,8 +1106,8 @@ def main() -> None:
 
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem, config)
-            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, _configured_verifier_reward)
+            prompt = prompt_tokens(backend, problem, config)
+            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, configured_verifier_reward)
             method_results: dict[str, dict[str, Any]] = {}
             for method in METHODS:
                 seed = SeedStream(
@@ -1133,7 +1128,7 @@ def main() -> None:
                 output = backend.decode(tokens)
                 prediction = extract_numeric_answer(info["output_segments"]["content_text"])
                 method_results[method] = {
-                    "prediction": _fraction_text(prediction),
+                    "prediction": fraction_text(prediction),
                     "correct": prediction == problem.gold_answer,
                     "output": output,
                     **info,
@@ -1143,7 +1138,7 @@ def main() -> None:
                 "manifest_fingerprint": fingerprint,
                 "problem_index": problem.index,
                 "question_sha256": hashlib.sha256(problem.question.encode()).hexdigest(),
-                "gold_answer": _fraction_text(problem.gold_answer),
+                "gold_answer": fraction_text(problem.gold_answer),
                 "methods": method_results,
             }
             sink.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")

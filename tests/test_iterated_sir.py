@@ -7,7 +7,7 @@ from inference_scaling.experimental.shared.iterated_sir import (
     iterated_sir_transition,
     iterated_sir_tv_bound,
 )
-from inference_scaling.shared.stepwise import StepwiseCandidate
+from inference_scaling.shared.sampling.stepwise import StepwiseCandidate
 
 
 def _transition_matrix(target, proposal, pool_size):

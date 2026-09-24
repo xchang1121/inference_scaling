@@ -12,7 +12,7 @@ from dataclasses import replace
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample
-from inference_scaling.shared.output import find_token_sequence, OutputParser
+from inference_scaling.shared.model.output import find_token_sequence, OutputParser
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 

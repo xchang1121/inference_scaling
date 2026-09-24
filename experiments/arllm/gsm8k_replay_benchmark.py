@@ -23,25 +23,31 @@ from experiments.arllm.scoped_execution import fixed_experiment_reward, with_out
 from experiments.arllm.runtime import validate_model_artifacts
 from experiments.shared.artifacts import load_jsonl as _load_records
 
-from experiments.arllm.gsm8k_reproduction import (
-    _configured_verifier_reward,
-    _fingerprint,
-    _implementation_hashes,
-    _fraction_text,
-    _load_backend,
-    _prompt_tokens,
-    _snapshot_delta,
-    _timed,
+from experiments.arllm.common import (
+    configured_verifier_reward,
+    fraction_text,
+    load_backend,
+    prompt_tokens,
+    timed,
 )
-from inference_scaling.arllm.algorithms.base_replay import _score_base, base_replay_step
-from inference_scaling.arllm.algorithms.conditional_is import _sample_candidates
+from experiments.shared.artifacts import (
+    json_fingerprint,
+    implementation_hashes,
+    dataclass_snapshot_delta,
+)
+from inference_scaling.arllm.algorithms.base_replay import (
+    score_replay_completions,
+    base_replay_step,
+)
+from inference_scaling.arllm.algorithms.candidates import sample_candidates
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ScoreCachingBackend,
     close_backend,
     set_backend_override,
 )
-from inference_scaling.arllm.config import BaseReplayConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import BaseReplayConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import extract_numeric_answer, load_gsm8k, select_problems
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
@@ -56,17 +62,10 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.verifier import replace_verifier_from_file
 from inference_scaling.arllm.types import GenerationRequest
 
+# Files under src/inference_scaling and experiments/shared are hashed automatically.
 IMPLEMENTATION_FILES = (
     "experiments/arllm/gsm8k_replay_benchmark.py",
-    "src/inference_scaling/arllm/algorithms/base_replay.py",
-    "src/inference_scaling/arllm/algorithms/conditional_is.py",
-    "src/inference_scaling/arllm/backends/cache.py",
-    "src/inference_scaling/arllm/backends/loader.py",
-    "src/inference_scaling/arllm/backends/transformers_backend.py",
-    "src/inference_scaling/arllm/backends/vllm_backend.py",
-    "src/inference_scaling/arllm/replay.py",
-    "src/inference_scaling/arllm/config.py",
-    "src/inference_scaling/arllm/types.py",
+    "experiments/arllm/common.py",
 )
 
 
@@ -187,7 +186,7 @@ def _run_warm(
             remaining=remaining,
             step_index=step_index,
         ):
-            candidates = _sample_candidates(
+            candidates = sample_candidates(
                 cached_base,
                 prompt + generated_prefix,
                 algorithm.candidate_count,
@@ -233,19 +232,19 @@ def _run_warm(
             for record in records:
                 records_by_key.setdefault(record.key, []).append(record.completion)
             for key, completions in records_by_key.items():
-                _score_base(cached_base, key, completions, sampling)
+                score_replay_completions(cached_base, key, completions, sampling)
             for record in records:
                 store.add_evaluation(record)
             return candidates, len(records)
 
-        (cached_candidates, generated_count), build_seconds = _timed(build_history)
+        (cached_candidates, generated_count), build_seconds = timed(build_history)
         cache_base_after = backend.snapshot()
         cache_proposal_after = proposal_backend.snapshot()
         cache_build_seconds += build_seconds
         history_generated += generated_count
         online_before = backend.snapshot()
         online_proposal_before = proposal_backend.snapshot()
-        (step, decision_seconds) = _timed(
+        (step, decision_seconds) = timed(
             lambda generated_prefix=tuple(generated),
             step_index=step_index,
             candidate_samples=cached_candidates: base_replay_step(
@@ -272,13 +271,13 @@ def _run_warm(
         candidate_draws_reused += len(cached_candidates)
         generated.extend(step.selected.token_ids)
         steps.append(step)
-        cache_base_deltas.append(_snapshot_delta(cache_base_before, cache_base_after))
+        cache_base_deltas.append(dataclass_snapshot_delta(cache_base_before, cache_base_after))
         cache_proposal_deltas.append(
-            _snapshot_delta(cache_proposal_before, cache_proposal_after)
+            dataclass_snapshot_delta(cache_proposal_before, cache_proposal_after)
         )
-        online_base_deltas.append(_snapshot_delta(online_before, online_after))
+        online_base_deltas.append(dataclass_snapshot_delta(online_before, online_after))
         online_proposal_deltas.append(
-            _snapshot_delta(online_proposal_before, online_proposal_after)
+            dataclass_snapshot_delta(online_proposal_before, online_proposal_after)
         )
         eos = backend.tokenizer.eos_token_id
         if eos in step.selected.token_ids:
@@ -411,7 +410,7 @@ def main() -> None:
         "config": config,
         "tag": args.tag,
         "problem_indices": [problem.index for problem in problems],
-        "implementation_sha256": _implementation_hashes(
+        "implementation_sha256": implementation_hashes(
             Path(__file__).resolve().parents[2],
             entrypoints=IMPLEMENTATION_FILES,
         ),
@@ -421,7 +420,7 @@ def main() -> None:
         },
         "input_metadata_sha256": input_artifacts["metadata_sha256"],
     }
-    fingerprint = _fingerprint(effective)
+    fingerprint = json_fingerprint(effective)
     manifest = {
         "schema_version": 4,
         "fingerprint": fingerprint,
@@ -442,8 +441,8 @@ def main() -> None:
     backend = None
     proposal = None
     if pending:
-        backend = _load_backend(str(config["models"]["base"]), config, role="base")
-        proposal = _load_backend(str(config["models"]["proposal"]), config, role="proposal")
+        backend = load_backend(str(config["models"]["base"]), config, role="base")
+        proposal = load_backend(str(config["models"]["proposal"]), config, role="proposal")
         if backend.tokenizer.get_vocab() != proposal.tokenizer.get_vocab():
             raise ValueError("base and replay proposal tokenizers must match")
         manifest["models"] = {
@@ -460,7 +459,7 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        prompt = _prompt_tokens(backend, pending[0], config)
+        prompt = prompt_tokens(backend, pending[0], config)
         backend.sample_batch(
             [
                 # Warm model kernels; the request is excluded by per-method snapshots.
@@ -478,14 +477,14 @@ def main() -> None:
 
     with records_path.open("a", encoding="utf-8", buffering=1) as sink:
         for ordinal, problem in enumerate(pending, 1):
-            prompt = _prompt_tokens(backend, problem, config)
-            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, _configured_verifier_reward)
+            prompt = prompt_tokens(backend, problem, config)
+            verifier_reward, reward_version = fixed_experiment_reward(backend, problem, config, configured_verifier_reward)
             seed = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("replay", problem.index)
             )
 
             fresh_before = backend.snapshot()
-            (fresh_tokens, fresh_info), fresh_seconds = _timed(
+            (fresh_tokens, fresh_info), fresh_seconds = timed(
                 lambda prompt=prompt,
                 reward=verifier_reward,
                 reward_version=reward_version,
@@ -496,7 +495,7 @@ def main() -> None:
             fresh_after = backend.snapshot()
             warm_base_before = backend.snapshot()
             warm_proposal_before = proposal.snapshot()
-            (warm_tokens, warm_info), warm_total_seconds = _timed(
+            (warm_tokens, warm_info), warm_total_seconds = timed(
                 lambda prompt=prompt,
                 reward=verifier_reward,
                 reward_version=reward_version,
@@ -512,7 +511,7 @@ def main() -> None:
             )
             warm_base_after = backend.snapshot()
             warm_proposal_after = proposal.snapshot()
-            fresh_delta = _snapshot_delta(fresh_before, fresh_after)
+            fresh_delta = dataclass_snapshot_delta(fresh_before, fresh_after)
             fresh_forward_slots = int(
                 fresh_delta["generation_forward_token_slots"]
             ) + int(fresh_delta["score_forward_token_slots"])
@@ -532,10 +531,10 @@ def main() -> None:
                 "manifest_fingerprint": fingerprint,
                 "problem_index": problem.index,
                 "question_sha256": hashlib.sha256(problem.question.encode()).hexdigest(),
-                "gold_answer": _fraction_text(problem.gold_answer),
+                "gold_answer": fraction_text(problem.gold_answer),
                 "fresh": {
                     "seconds": fresh_seconds,
-                    "prediction": _fraction_text(extract_numeric_answer(fresh_text)),
+                    "prediction": fraction_text(extract_numeric_answer(fresh_text)),
                     "correct": extract_numeric_answer(fresh_text) == problem.gold_answer,
                     "output": fresh_text,
                     "backend_delta": fresh_delta,
@@ -545,11 +544,11 @@ def main() -> None:
                 },
                 "warm_replay": {
                     "measured_total_seconds": warm_total_seconds,
-                    "prediction": _fraction_text(extract_numeric_answer(warm_text)),
+                    "prediction": fraction_text(extract_numeric_answer(warm_text)),
                     "correct": extract_numeric_answer(warm_text) == problem.gold_answer,
                     "output": warm_text,
-                    "base_backend_delta": _snapshot_delta(warm_base_before, warm_base_after),
-                    "proposal_backend_delta": _snapshot_delta(
+                    "base_backend_delta": dataclass_snapshot_delta(warm_base_before, warm_base_after),
+                    "proposal_backend_delta": dataclass_snapshot_delta(
                         warm_proposal_before, warm_proposal_after
                     ),
                     **warm_info,

@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 
 from experiments.arllm.gsm8k_passk import (
-    _chunk_plan,
-    _prepare_manifest,
-    _summarize_method,
-    _validate_chunks,
+    chunk_plan,
+    prepare_manifest,
+    summarize_method,
+    validate_chunks,
 )
 
 
@@ -31,7 +31,7 @@ def _chunk(
 
 
 def test_passk_chunk_plan_preserves_draw_problem_grid() -> None:
-    plan = _chunk_plan(("base", "mh"), 2, (11, 13, 17), 4)
+    plan = chunk_plan(("base", "mh"), 2, (11, 13, 17), 4)
     assert plan[("base", 0)] == ((0, 11), (1, 11))
     assert plan[("base", 1)] == ((0, 13), (1, 13))
     assert plan[("base", 2)] == ((0, 17), (1, 17))
@@ -54,24 +54,24 @@ def test_passk_manifest_allows_only_identical_resume_grid(tmp_path: Path) -> Non
         "implementation_sha256": {"script": "code"},
         "raw_path": raw,
     }
-    _, fingerprint, manifest_path = _prepare_manifest(**arguments)
+    _, fingerprint, manifest_path = prepare_manifest(**arguments)
     assert manifest_path.is_file()
-    assert _prepare_manifest(**arguments)[1] == fingerprint
+    assert prepare_manifest(**arguments)[1] == fingerprint
     with pytest.raises(ValueError, match="different pass@k grid"):
-        _prepare_manifest(**{**arguments, "draws": 3})
+        prepare_manifest(**{**arguments, "draws": 3})
 
 
 def test_passk_chunk_validation_rejects_duplicates_and_wrong_tasks() -> None:
-    plan = _chunk_plan(("base",), 2, (3, 5), 2)
+    plan = chunk_plan(("base",), 2, (3, 5), 2)
     first = _chunk("run", "base", 0, plan[("base", 0)])
     second = _chunk("run", "base", 1, plan[("base", 1)])
-    assert len(_validate_chunks((first, second), "run", plan)) == 2
+    assert len(validate_chunks((first, second), "run", plan)) == 2
     with pytest.raises(ValueError, match="duplicate pass@k chunk"):
-        _validate_chunks((first, first), "run", plan)
+        validate_chunks((first, first), "run", plan)
     wrong = json.loads(json.dumps(second))
     wrong["records"][0]["problem_index"] = 999
     with pytest.raises(ValueError, match="wrong task grid"):
-        _validate_chunks((first, wrong), "run", plan)
+        validate_chunks((first, wrong), "run", plan)
 
 
 def test_passk_summary_uses_all_draws_and_chunk_compute() -> None:
@@ -102,7 +102,7 @@ def test_passk_summary_uses_all_draws_and_chunk_compute() -> None:
             "maximum_score_batch": 3,
         },
     }
-    summary = _summarize_method(
+    summary = summarize_method(
         records,
         (chunk,),
         (1, 2),

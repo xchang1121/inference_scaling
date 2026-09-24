@@ -1,4 +1,4 @@
-from experiments.arllm.gsm8k_passk import _estimated_pass_at_k
+from experiments.shared.statistics import estimated_pass_at_k
 from experiments.arllm.summarize_gsm8k_compute import _comparison
 from experiments.arllm.summarize_gsm8k_batching import _compare_method
 from experiments.arllm.summarize_gsm8k_replay import (
@@ -67,9 +67,9 @@ def test_grpo_logs_reconstruct_padded_generation_and_training_slots() -> None:
 
 
 def test_standard_pass_at_k_estimator() -> None:
-    assert _estimated_pass_at_k(correct=1, draws=4, k=1) == 0.25
-    assert _estimated_pass_at_k(correct=1, draws=4, k=2) == 0.5
-    assert _estimated_pass_at_k(correct=1, draws=4, k=4) == 1.0
+    assert estimated_pass_at_k(correct=1, draws=4, k=1) == 0.25
+    assert estimated_pass_at_k(correct=1, draws=4, k=2) == 0.5
+    assert estimated_pass_at_k(correct=1, draws=4, k=4) == 1.0
 
 
 def test_compute_break_even_does_not_claim_distribution_match_without_audit() -> None:

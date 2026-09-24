@@ -4,19 +4,19 @@ from math import log
 
 import pytest
 
-from inference_scaling.shared.importance import (
+from inference_scaling.shared.sampling.importance import (
     MonteCarloRolloutWeightProvider,
     ProbabilityObservation,
     RolloutObservation,
     TruncatedReplayRolloutWeightProvider,
 )
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.smc import (
+from inference_scaling.shared.sampling.smc import (
     normalize_smc_log_weights,
     partition_resampled_reservoirs,
     systematic_resample,
 )
-from inference_scaling.shared.stepwise import (
+from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
     normalize_log_weights,
     run_stepwise_generation,

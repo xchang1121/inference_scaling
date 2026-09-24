@@ -1,4 +1,10 @@
-"""Infrastructure shared by autoregressive and diffusion language models."""
+"""Infrastructure shared by autoregressive and diffusion language models.
+
+Subpackages separate the concerns that experiments assemble:
+``sampling`` (algorithm kernels), ``budget`` (compute allocation),
+``model`` (loading, prompting, generation limits, output parsing) and
+``evaluation`` (benchmarks and answer checking).
+"""
 
 from inference_scaling.shared.budget import (
     BudgetAllocation,
@@ -7,32 +13,26 @@ from inference_scaling.shared.budget import (
     allocate_variance_cost_budget,
 )
 from inference_scaling.shared.config import RuntimeConfig, SMCForestConfig
-from inference_scaling.shared.importance import (
-    MonteCarloWeightEstimate,
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.sampling import (
+    MetropolisHastingsDecision,
+    MetropolisHastingsProposal,
+    MetropolisHastingsTransition,
     MonteCarloRolloutWeightProvider,
+    MonteCarloWeightEstimate,
     ProbabilityObservation,
     ReplayWeightEstimate,
     RolloutObservation,
     TruncatedReplayRolloutWeightProvider,
     WeightedRollout,
-    corrected_replay_log_weight,
-    logmeanexp,
-)
-from inference_scaling.shared.mh import (
-    MetropolisHastingsDecision,
-    MetropolisHastingsProposal,
-    MetropolisHastingsTransition,
     apply_metropolis_hastings,
+    corrected_replay_log_weight,
     decide_metropolis_hastings,
+    logmeanexp,
     metropolis_hastings_log_acceptance,
-)
-from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.smc import (
     normalize_smc_log_weights,
     partition_resampled_reservoirs,
     systematic_resample,
-)
-from inference_scaling.shared.stepwise import (
     StepwiseCandidate,
     StepwiseGenerationBackend,
     StepwiseGenerationResult,

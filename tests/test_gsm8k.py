@@ -4,11 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from experiments.arllm.gsm8k_reproduction import (
-    _answer_counts,
-    _apply_overrides,
-    _minmax_rewards,
-)
+from experiments.arllm.common import answer_counts
+from experiments.arllm.gsm8k_reproduction import _apply_overrides
+from experiments.arllm.reward_sources import minmax_rewards
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
     GSM8KProblem,
@@ -57,12 +55,12 @@ def test_select_problems_is_seeded_and_retains_public_order() -> None:
 
 
 def test_confidence_reward_normalization_is_decision_local_and_stable() -> None:
-    assert _minmax_rewards((-4.0, -2.0, -3.0)) == pytest.approx((0.0, 1.0, 0.5))
-    assert _minmax_rewards((7.0, 7.0)) == (0.0, 0.0)
+    assert minmax_rewards((-4.0, -2.0, -3.0)) == pytest.approx((0.0, 1.0, 0.5))
+    assert minmax_rewards((7.0, 7.0)) == (0.0, 0.0)
 
 
 def test_best_of_n_answer_counts_are_json_stable_with_unparseable_outputs() -> None:
-    counts = _answer_counts((Fraction(3), None, Fraction(3, 2), None))
+    counts = answer_counts((Fraction(3), None, Fraction(3, 2), None))
 
     assert counts == {"3": 1, "3/2": 1, "<unparseable>": 2}
     assert json.loads(json.dumps({"answer_counts": counts}, sort_keys=True)) == {

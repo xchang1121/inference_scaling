@@ -12,7 +12,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, ScoreRequest
 from inference_scaling.shared.types import TokenSequence
 from inference_scaling.shared.consilience import confidence_windows
-from inference_scaling.shared.output import OutputParser, ThinkingFormat, ThinkingParser
+from inference_scaling.shared.model.output import OutputParser, ThinkingFormat, ThinkingParser
 from inference_scaling.arllm.output import thinking_format_from_backend
 
 

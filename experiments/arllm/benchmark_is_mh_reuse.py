@@ -23,16 +23,16 @@ from typing import Any, Sequence
 
 from experiments.arllm.benchmark_rollout_infra import (
     ROOT,
-    _BackendFactory,
-    _decode_arm,
-    _delta,
-    _history_batches,
-    _machine,
-    _measure,
-    _prompt_tokens,
-    _snapshot,
-    _speculation,
-    _warmup,
+    BackendFactory,
+    decode_arm,
+    snapshot_delta,
+    build_history_batches,
+    machine_metadata,
+    measure_call,
+    question_prompt_tokens,
+    backend_snapshot,
+    speculation_config,
+    warm_up,
 )
 from inference_scaling.arllm.acceleration import sample_batch_with_callback
 from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
@@ -46,7 +46,8 @@ from inference_scaling.experimental.arllm.streaming_is import (
     FrozenStreamingISEstimator,
     ordinary_importance_log_weight,
 )
-from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import RewardMHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.evaluation import load_gsm8k, select_problems
 from inference_scaling.arllm.replay import (
     BehaviorPolicy,
@@ -118,7 +119,7 @@ def _consume_record(
 
 
 def _broker_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     prompt: TokenSequence,
@@ -128,7 +129,7 @@ def _broker_arm(
 ) -> dict[str, Any]:
     backend = factory.create(None)
     try:
-        _warmup(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
+        warm_up(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
         sampling = SamplingConfig()
         policy = BehaviorPolicy.for_backend(backend, sampling, label="base-fixed-length")
         lengths = (chunk_tokens, chunk_tokens) + (3 * chunk_tokens,) * 6
@@ -148,7 +149,7 @@ def _broker_arm(
         estimator = _frozen_estimator(
             tuple(request.record_id for request in requests), candidate_by_id
         )
-        before = _snapshot(backend)
+        before = backend_snapshot(backend)
 
         def run() -> dict[str, Any]:
             records: list[ReplayRecord] = []
@@ -229,13 +230,13 @@ def _broker_arm(
                 "is_estimator": asdict(estimator.snapshot()),
             }
 
-        result, telemetry = _measure(run)
-        after = _snapshot(backend)
+        result, telemetry = measure_call(run)
+        after = backend_snapshot(backend)
         return {
             "name": name,
             "online": {
                 "telemetry": telemetry,
-                "main_model": _delta(before, after),
+                "main_model": snapshot_delta(before, after),
                 **result,
             },
         }
@@ -244,7 +245,7 @@ def _broker_arm(
 
 
 def _streaming_is_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     prompt: TokenSequence,
@@ -255,7 +256,7 @@ def _streaming_is_arm(
 ) -> dict[str, Any]:
     backend = factory.create(None)
     try:
-        _warmup(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
+        warm_up(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
         sampling = SamplingConfig()
         lengths = tuple(
             chunk_tokens * (index % 4 + 1)
@@ -298,7 +299,7 @@ def _streaming_is_arm(
             with update_lock:
                 update_times.append(time.perf_counter() - started_at)
 
-        before = _snapshot(backend)
+        before = backend_snapshot(backend)
 
         def run() -> dict[str, Any]:
             nonlocal started_at
@@ -331,14 +332,14 @@ def _streaming_is_arm(
                 "output_hashes": [_token_hash(sample.token_ids) for sample in samples],
             }
 
-        result, telemetry = _measure(run)
-        after = _snapshot(backend)
+        result, telemetry = measure_call(run)
+        after = backend_snapshot(backend)
         return {
             "name": name,
             "verifier_delay_seconds_per_sequence": verifier_delay_seconds,
             "online": {
                 "telemetry": telemetry,
-                "main_model": _delta(before, after),
+                "main_model": snapshot_delta(before, after),
                 **result,
             },
         }
@@ -347,7 +348,7 @@ def _streaming_is_arm(
 
 
 def _speculation_arms(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     prompt: TokenSequence,
     gold: Any,
@@ -357,7 +358,7 @@ def _speculation_arms(
     seed: int,
 ) -> list[dict[str, Any]]:
     sampling = SamplingConfig(eos_token_id=factory.tokenizer.eos_token_id)
-    histories = _history_batches(
+    histories = build_history_batches(
         (prompt,),
         count=history_rollouts,
         length=maximum,
@@ -376,7 +377,7 @@ def _speculation_arms(
         ]
         for draw in range(4)
     ]
-    deterministic = _speculation(
+    deterministic = speculation_config(
         maximum_batch=1,
         maximum_draft_tokens=draft_tokens,
         dynamic=False,
@@ -389,7 +390,7 @@ def _speculation_arms(
         ("deterministic_history_draft", deterministic),
         ("stochastic_history_draft_exact", stochastic),
     ):
-        arm, trace = _decode_arm(
+        arm, trace = decode_arm(
             factory,
             name=name,
             speculation=config,
@@ -413,7 +414,7 @@ def _speculation_arms(
 
 
 def _mh_standard_or_prefetch_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     prompt: TokenSequence,
@@ -424,7 +425,7 @@ def _mh_standard_or_prefetch_arm(
 ) -> dict[str, Any]:
     backend = factory.create(None)
     try:
-        _warmup(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
+        warm_up(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
         calls = 0
         calls_lock = threading.Lock()
 
@@ -436,9 +437,9 @@ def _mh_standard_or_prefetch_arm(
                 time.sleep(reward_delay_seconds)
             return _sequence_reward((), sequence)
 
-        before = _snapshot(backend)
+        before = backend_snapshot(backend)
         if prefetch:
-            result, telemetry = _measure(
+            result, telemetry = measure_call(
                 lambda: run_reward_mh_chain_prefetched(
                     backend,
                     prompt,
@@ -451,7 +452,7 @@ def _mh_standard_or_prefetch_arm(
             chain = result.chain
             scheduling = asdict(result.snapshot)
         else:
-            chain, telemetry = _measure(
+            chain, telemetry = measure_call(
                 lambda: run_reward_mh_chain(
                     backend,
                     prompt,
@@ -467,13 +468,13 @@ def _mh_standard_or_prefetch_arm(
                 "unused_prefetched_proposals": 0,
                 "reward_evaluations": calls,
             }
-        after = _snapshot(backend)
+        after = backend_snapshot(backend)
         return {
             "name": name,
             "reward_delay_seconds_per_evaluation": reward_delay_seconds,
             "online": {
                 "telemetry": telemetry,
-                "main_model": _delta(before, after),
+                "main_model": snapshot_delta(before, after),
                 "reward_evaluations": calls,
                 "scheduling": scheduling,
                 "acceptance_rate": chain.acceptance_rate,
@@ -488,7 +489,7 @@ def _mh_standard_or_prefetch_arm(
 
 
 def _mh_delayed_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     prompt: TokenSequence,
@@ -499,7 +500,7 @@ def _mh_delayed_arm(
 ) -> dict[str, Any]:
     backend = factory.create(None)
     try:
-        _warmup(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
+        warm_up(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
         calls = 0
 
         def surrogate(_prompt: TokenSequence, sequence: TokenSequence) -> float:
@@ -512,9 +513,9 @@ def _mh_delayed_arm(
                 time.sleep(reward_delay_seconds)
             return surrogate(prompt_tokens, sequence)
 
-        before = _snapshot(backend)
+        before = backend_snapshot(backend)
         if delayed:
-            result, telemetry = _measure(
+            result, telemetry = measure_call(
                 lambda: run_reward_mh_chain_delayed(
                     backend,
                     prompt,
@@ -535,7 +536,7 @@ def _mh_delayed_arm(
             )
             trace = [asdict(step) for step in result.trace]
         else:
-            result, telemetry = _measure(
+            result, telemetry = measure_call(
                 lambda: run_reward_mh_chain(
                     backend,
                     prompt,
@@ -552,14 +553,14 @@ def _mh_delayed_arm(
             final_reward = result.reward
             early_rejections = 0
             trace = [asdict(step) for step in result.trace]
-        after = _snapshot(backend)
+        after = backend_snapshot(backend)
         return {
             "name": name,
             "reward_delay_seconds_per_evaluation": reward_delay_seconds,
             "surrogate": "exact token predicate without the controlled delay",
             "online": {
                 "telemetry": telemetry,
-                "main_model": _delta(before, after),
+                "main_model": snapshot_delta(before, after),
                 "exact_reward_evaluations": exact_evaluations,
                 "surrogate_reward_evaluations": surrogate_evaluations,
                 "early_rejections": early_rejections,
@@ -575,7 +576,7 @@ def _mh_delayed_arm(
 
 
 def _mh_replay_arm(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     name: str,
     prompt: TokenSequence,
@@ -587,7 +588,7 @@ def _mh_replay_arm(
 ) -> dict[str, Any]:
     backend = factory.create(None)
     try:
-        _warmup(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
+        warm_up(backend, backend.tokenizer, backend.tokenizer.eos_token_id)
 
         def reward(_prompt: TokenSequence, sequence: TokenSequence) -> float:
             return float(bool(sequence) and int(sequence[-1]) % 2 == 0)
@@ -603,18 +604,18 @@ def _mh_replay_arm(
                 )
                 for index in range(history_rollouts)
             )
-            cache_before = _snapshot(backend)
-            histories, cache_telemetry = _measure(
+            cache_before = backend_snapshot(backend)
+            histories, cache_telemetry = measure_call(
                 lambda: backend.sample_batch(history_requests)
             )
-            cache_after = _snapshot(backend)
+            cache_after = backend_snapshot(backend)
             proposal = FrozenReplaySuffixProposal(
                 backend,
                 history_mixture=0.7,
             )
             proposal.observe_sequences(prompt, (sample.token_ids for sample in histories))
-            before = _snapshot(backend)
-            results, telemetry = _measure(
+            before = backend_snapshot(backend)
+            results, telemetry = measure_call(
                 lambda: tuple(
                     run_reward_mh_chain_replay_proposal(
                         proposal,
@@ -627,7 +628,7 @@ def _mh_replay_arm(
                     for chain_id in range(chains)
                 )
             )
-            after = _snapshot(backend)
+            after = backend_snapshot(backend)
             proposal_snapshot = asdict(proposal.snapshot())
             source_counts = {
                 source: sum(
@@ -639,13 +640,13 @@ def _mh_replay_arm(
             }
             cache = {
                 "telemetry": cache_telemetry,
-                "main_model": _delta(cache_before, cache_after),
+                "main_model": snapshot_delta(cache_before, cache_after),
                 "sequences": len(histories),
                 "tokens": sum(len(sample.token_ids) for sample in histories),
             }
         else:
-            before = _snapshot(backend)
-            results, telemetry = _measure(
+            before = backend_snapshot(backend)
+            results, telemetry = measure_call(
                 lambda: tuple(
                     run_reward_mh_chain(
                         backend,
@@ -659,7 +660,7 @@ def _mh_replay_arm(
                     for chain_id in range(chains)
                 )
             )
-            after = _snapshot(backend)
+            after = backend_snapshot(backend)
             proposal_snapshot = None
             source_counts = {"base": config.updates * chains, "history": 0}
             cache = _zero_cost()
@@ -670,7 +671,7 @@ def _mh_replay_arm(
             "cache_build": cache,
             "online": {
                 "telemetry": telemetry,
-                "main_model": _delta(before, after),
+                "main_model": snapshot_delta(before, after),
                 "chains": chains,
                 "acceptance_rate": accepted / attempts if attempts else 0.0,
                 "mean_final_reward": sum(result.reward for result in results) / chains,
@@ -688,7 +689,7 @@ def _mh_replay_arm(
 
 
 def _prefetch_group(
-    factory: _BackendFactory,
+    factory: BackendFactory,
     *,
     prompt: TokenSequence,
     chunk_tokens: int,
@@ -774,13 +775,13 @@ def main() -> None:
     problem = select_problems(
         load_gsm8k(args.data), 1, seed=int(config["run"]["subset_seed"])
     )[0]
-    factory = _BackendFactory(config, args.backend, args.dtype)
+    factory = BackendFactory(config, args.backend, args.dtype)
     try:
-        prompt = _prompt_tokens(factory.tokenizer, problem.question, config)
+        prompt = question_prompt_tokens(factory.tokenizer, problem.question, config)
         report: dict[str, Any] = {
             "schema_version": 1,
             "created_at_unix": time.time(),
-            "machine": _machine(),
+            "machine": machine_metadata(),
             "setting": {
                 "backend": args.backend,
                 "dtype": args.dtype,

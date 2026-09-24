@@ -42,13 +42,13 @@ from inference_scaling.dllm.algorithms import (
 )
 from inference_scaling.dllm.backends import load_llada_backend
 from inference_scaling.dllm.dynamic_is import run_dynamic_diffusion_is
-from inference_scaling.dllm.config import (
+from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionISConfig,
     DiffusionMHConfig,
     DiffusionPowerMHConfig,
-    DiffusionSamplingConfig,
 )
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.evaluation import (
     CumulativeConsensusReward,
@@ -87,13 +87,13 @@ IMPLEMENTATION_FILES = (
     "src/inference_scaling/dllm/backends/loader.py",
     "src/inference_scaling/dllm/config.py",
     "src/inference_scaling/dllm/dynamic_is.py",
-    "src/inference_scaling/shared/budget.py",
+    "src/inference_scaling/shared/budget/allocation.py",
     "src/inference_scaling/shared/evaluation/numeric.py",
     "src/inference_scaling/shared/verifier.py",
 )
 
 
-def _configured_verifier_reward(
+def configured_verifier_reward(
     backend: Any,
     problem: GSM8KProblem,
     config: dict[str, Any],
@@ -400,7 +400,7 @@ def run_method(
 
     if method == "verifier_mh":
         mh = config["mh"]
-        verifier_reward = _configured_verifier_reward(backend, problem, config)
+        verifier_reward = configured_verifier_reward(backend, problem, config)
         result = run_diffusion_reward_mh(
             backend=backend,
             prompt=prompt,
@@ -430,7 +430,7 @@ def run_method(
         raise ValueError("reduced-layer conditional IS requires its proposal backend")
     verifier = method.startswith("verifier_")
     verifier_reward = (
-        _configured_verifier_reward(backend, problem, config) if verifier else None
+        configured_verifier_reward(backend, problem, config) if verifier else None
     )
     uncorrected = method.endswith("_uncorrected")
     unclipped = method.endswith("_unclipped")

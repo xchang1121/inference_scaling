@@ -11,9 +11,9 @@ from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.replay import DiffusionReplayRewardBatch
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest
 from inference_scaling.shared.config import SMCForestConfig
-from inference_scaling.shared.importance import logmeanexp
+from inference_scaling.shared.sampling.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.smc import (
+from inference_scaling.shared.sampling.smc import (
     normalize_smc_log_weights,
     partition_resampled_reservoirs,
     systematic_resample,

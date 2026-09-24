@@ -16,9 +16,10 @@ from inference_scaling.dllm.algorithms.mh import (
     _mh_requests,
     _sample_mh_requests,
 )
-from inference_scaling.dllm.config import DiffusionMHConfig, DiffusionSamplingConfig
+from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
+from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionSample
-from inference_scaling.shared.mh import decide_metropolis_hastings
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 

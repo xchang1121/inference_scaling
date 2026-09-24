@@ -10,7 +10,8 @@ from inference_scaling.arllm.algorithms.mh import (
     suffix_length_probabilities,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import MHConfig, RewardMHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import MHConfig, RewardMHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.types import SequenceSample

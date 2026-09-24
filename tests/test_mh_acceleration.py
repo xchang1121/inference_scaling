@@ -12,7 +12,8 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
     run_reward_mh_chains_replay_proposal,
 )
 from inference_scaling.arllm.backends import TabularAutoregressiveBackend
-from inference_scaling.arllm.config import RewardMHConfig, SamplingConfig
+from inference_scaling.arllm.algorithms.config import RewardMHConfig
+from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
 from inference_scaling.shared.rng import SeedStream
 
