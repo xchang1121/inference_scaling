@@ -329,6 +329,20 @@ python -m experiments.arllm.joint_budget_is \
   不用最大输出上限预测整个 thinking。这是小样本启发式指标，不是正确率或显著性保证。
 - `steps[].adjustment` 记录初值、保持/调整/收尾原因及比较分数；pilot 不进入正式候选池。
 
+`chunk_adaptive` 统一采用成本优先规则，无需额外策略开关：先枚举本次有效
+pilot 块长上的所有预算可行 M/K，筛选预测误差改善严格超过 `--adjustment-min-improvement`
+的方案，再选下一正式块预留成本最低者。同成本时按误差、较大 B、较小 M/K 确定性排序。
+没有合格方案则保持当前值；原有信号检查、pilot 扣费、初值、收尾与预算保护不变。
+不再提供动态调参的误差优先分支；独立的 `full_horizon` 模式保持原有行为。
+
+此处成本指下一正式块的保守预留，不是同覆盖长度总成本、实际 token、墙钟时间或 GPU FLOPs；
+pilot 成本已在选择前扣除且对本次可选方案相同。跨 B 的误差仍按上述 H 比较。
+新策略不保证每次都比当前配置便宜，只保证在超过改善门槛的可行方案中选择最便宜者；
+它会牺牲进一步降低预测误差的机会，也不保证整题效率或正确率改善。
+`steps[].adjustment` 额外记录 `comparisons[].eligible`、`eligible_count`、
+`selection_reason`、`selected_relative_improvement` 和 `selected_reserved_cost`；
+有合格方案时，`best_score` 在新策略下指所选合格方案的分数，不一定是全局最低误差分数。
+
 底层 `choose_joint_budget(..., forecast_full_horizon=False)` 只接受一个块长估计，
 避免直接比较不同覆盖长度；运行层负责相邻块比较和独立收尾。
 上述命令是配置示例，不代表已经运行真实模型或验证解题准确率。

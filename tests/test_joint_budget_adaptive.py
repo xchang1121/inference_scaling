@@ -113,7 +113,7 @@ def test_paired_pilot_can_change_b_to_an_adjacent_value():
     )
     assert measured == [4, 2]
     assert selection.adjustment["status"] == "adjusted"
-    assert parameters(selection.plan) == (2, 8, 4)
+    assert parameters(selection.plan) == (2, 2, 1)
     assert selection.adjustment["comparison_horizon"] == 4
 
 
@@ -148,9 +148,9 @@ def test_old_pilot_is_not_reused_when_next_prefix_cannot_afford_new_evidence():
     scheduler = controller(block_sizes=(4,))
     select(scheduler)
     adjusted, _ = select(scheduler, prefix=4, moments=WeightMoments(1, 1, 2))
-    assert parameters(adjusted.plan) == (4, 8, 4)
-    selection, measured = select(scheduler, prefix=8, budget=1300)
-    assert parameters(selection.plan) == (4, 8, 4)
+    assert parameters(adjusted.plan) == (4, 8, 1)
+    selection, measured = select(scheduler, prefix=8, budget=600)
+    assert parameters(selection.plan) == (4, 8, 1)
     assert selection.adjustment["status"] == "kept_no_pilot_budget"
     assert not selection.plan.used_pilot and not measured
 

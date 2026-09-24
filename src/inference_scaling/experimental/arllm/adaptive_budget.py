@@ -149,15 +149,38 @@ class AdaptiveBudgetController:
         def score(plan):
             return ceil(horizon / plan.block_size) * plan.local_error_estimate
 
-        candidates = [choose(item) for item in estimates]
+        candidates = [
+            choose(item, (item.block_size, candidate_count, rollout_count))
+            for item in estimates
+            for candidate_count in sorted(set(config.candidate_counts))
+            for rollout_count in sorted(set(config.rollout_counts))
+        ]
         candidates = [plan for plan in candidates if plan is not None]
         best = min(candidates, key=lambda plan: (score(plan), plan.reserved_cost))
+        threshold = score(incumbent) * (1 - config.adjustment_min_improvement)
+        eligible = [plan for plan in candidates if score(plan) < threshold]
+        if eligible:
+            best = min(eligible, key=lambda plan: (
+                plan.reserved_cost, score(plan), -plan.block_size,
+                plan.candidate_count, plan.rollout_count,
+            ))
         decision.update(
             comparison_horizon=horizon, incumbent_score=score(incumbent), best_score=score(best),
+            incumbent_reserved_cost=incumbent.reserved_cost,
+            eligible_count=len(eligible),
             required_relative_improvement=config.adjustment_min_improvement,
             comparisons=[{"parameters": _parameters(plan), "score": score(plan),
-                          "reserved_cost": plan.reserved_cost} for plan in candidates],
+                          "reserved_cost": plan.reserved_cost,
+                          "eligible": score(plan) < threshold} for plan in candidates],
         )
-        if _parameters(best) != self.parameters and score(best) < score(incumbent) * (1 - config.adjustment_min_improvement):
+        if _parameters(best) != self.parameters and score(best) < threshold:
+            decision.update(
+                selection_reason="cheapest_sufficient_improvement",
+                selected_relative_improvement=1 - score(best) / score(incumbent),
+                selected_reserved_cost=best.reserved_cost,
+            )
             return result(best, estimates, "adjusted")
+        decision.update(selection_reason="no_sufficient_improvement",
+                        selected_relative_improvement=0.0,
+                        selected_reserved_cost=incumbent.reserved_cost)
         return result(incumbent, estimates, "kept_no_improvement")

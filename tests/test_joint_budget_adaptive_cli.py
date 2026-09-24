@@ -61,6 +61,7 @@ def test_cli_forwards_mode_presets_and_reports_adjustments(monkeypatch):
     ))
     result = cli.run(arguments(*ADAPTIVE, "--pilot-fraction", "0"))
     assert result["config"]["planning_mode"] == "chunk_adaptive"
+    assert "selection_policy" not in result["config"]
     first = result["steps"][0]
     assert tuple(first["plan"][name] for name in ("block_size", "candidate_count", "rollout_count")) == (4, 4, 2)
     assert first["adjustment"]["status"] == "initial"
@@ -87,3 +88,11 @@ def test_cli_default_stays_full_horizon():
     args = arguments()
     assert args.planning_mode == "full_horizon"
     assert args.initial_block_size is None
+    assert not hasattr(args, "selection_policy")
+
+
+@pytest.mark.parametrize("policy", ["min_error", "min_cost_improvement"])
+def test_cli_rejects_removed_selection_policy(policy):
+    with pytest.raises(SystemExit) as error:
+        arguments(*ADAPTIVE, "--selection-policy", policy)
+    assert error.value.code == 2
