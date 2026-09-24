@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from experiments.shared.config_overrides import add_config_override_argument, apply_config_overrides
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 
 import argparse
@@ -520,10 +521,7 @@ def main() -> None:
     parser.add_argument("--methods", default=",".join(PASSK_METHODS))
     parser.add_argument("--rl-adapter", type=Path)
     parser.add_argument("--verifier-config", type=Path)
-    parser.add_argument(
-        "--mh-suffix-schedule",
-        choices=("uniform", "inverse_length", "multiscale"),
-    )
+    add_config_override_argument(parser)
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--raw-output", type=Path)
     parser.add_argument("--output", type=Path)
@@ -543,8 +541,7 @@ def main() -> None:
         config = tomllib.load(source)
     apply_model_output_overrides(config, args)
     replace_verifier_from_file(config, args.verifier_config)
-    if args.mh_suffix_schedule is not None:
-        config["mh"]["suffix_schedule"] = args.mh_suffix_schedule
+    config = apply_config_overrides(config, args.config_overrides)
     set_backend_override(config, args.backend)
     set_rl_adapter_override(config, args.rl_adapter)
     config["run"]["sample_count"] = args.limit

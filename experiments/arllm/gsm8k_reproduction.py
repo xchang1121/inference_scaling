@@ -36,7 +36,8 @@ from experiments.shared.artifacts import (
     json_fingerprint,
     load_jsonl,
 )
-from experiments.shared.methods import AR_ARCHIVED_METHODS, AR_METHODS
+from experiments.shared.config_overrides import add_config_override_argument, apply_config_overrides
+from experiments.shared.methods import AR_ARCHIVED_METHODS, AR_METHODS, METHOD_REGISTRY
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.statistics import wilson_interval
 from inference_scaling.arllm.backends import (
@@ -194,91 +195,24 @@ def _summary(
 
 
 def _apply_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+    """Apply the named fields, then ``--set`` overrides of existing TOML fields."""
     apply_model_output_overrides(config, args)
     set_backend_override(config, args.backend)
-    if getattr(args, "vllm_mh_fused_logprobs", False):
-        if args.method != "mh":
-            raise ValueError("--vllm-mh-fused-logprobs requires --method mh")
-        config.setdefault("vllm", {}).setdefault("base", {})[
-            "mh_fused_logprobs"
-        ] = True
     set_rl_adapter_override(config, getattr(args, "rl_adapter", None))
     replace_verifier_from_file(config, getattr(args, "verifier_config", None))
     if args.limit is not None:
         config["run"]["sample_count"] = args.limit
-    if args.sampling_temperature is not None:
-        config.setdefault("sampling", {})["temperature"] = args.sampling_temperature
-    if args.num_beams is not None:
-        config["beam"]["num_beams"] = args.num_beams
-    if args.best_of_n_samples is not None:
-        config["best_of_n"]["samples"] = args.best_of_n_samples
-    if args.conditional_reward is not None:
-        config["conditional_is"]["reward"] = args.conditional_reward
-        config.setdefault("iterated_is", {})["reward"] = args.conditional_reward
-        config.setdefault("reward", {})["source"] = args.conditional_reward
-    if args.reward_temperature is not None:
-        config["conditional_is"]["reward_temperature"] = args.reward_temperature
-        config.setdefault("reward", {})["temperature"] = args.reward_temperature
-    if getattr(args, "logprob_reward_scale", None) is not None:
-        config["conditional_is"]["logprob_reward_scale"] = args.logprob_reward_scale
-        config.setdefault("reward", {})["logprob_scale"] = args.logprob_reward_scale
-    for argument, setting in (
-        ("consilience_top_k", "consilience_top_k"),
-        ("consilience_window_fraction", "consilience_window_fraction"),
-        ("consilience_window_tokens", "consilience_window_tokens"),
-        ("consilience_skip_fraction", "consilience_skip_fraction"),
-        ("consilience_initial_penalty", "consilience_initial_penalty"),
-        ("consilience_reward_scale", "consilience_reward_scale"),
-        ("consilience_reasoning_end_text", "consilience_reasoning_end_text"),
-    ):
-        value = getattr(args, argument, None)
-        if value is not None:
-            config["conditional_is"][setting] = value
-            if setting == "consilience_reasoning_end_text":
-                config.setdefault("output", {})["thinking_end_text"] = value
-            else:
-                name = "scale" if setting == "consilience_reward_scale" else setting.removeprefix("consilience_")
-                config.setdefault("reward", {}).setdefault("consilience", {})[name] = value
-    if args.importance_log_ratio_clip is not None:
-        value = args.importance_log_ratio_clip.strip().lower()
-        parsed_clip = None if value == "none" else float(value)
-        if parsed_clip is not None and parsed_clip <= 0:
-            raise ValueError("importance log-ratio clip must be positive or 'none'")
-        config["conditional_is"]["importance_log_ratio_clip"] = parsed_clip
-    if args.disable_importance_correction:
-        if not args.method.endswith("small_proposal"):
-            raise ValueError(
-                "--disable-importance-correction requires a small-proposal method"
-            )
-        config["conditional_is"]["apply_importance_correction"] = False
-        config["conditional_is"]["importance_log_ratio_clip"] = None
-    if args.mh_alpha is not None:
-        config["mh"]["alpha"] = args.mh_alpha
-    if args.mh_steps is not None:
-        config["mh"]["steps_per_block"] = args.mh_steps
-    if getattr(args, "mh_suffix_schedule", None) is not None:
-        config["mh"]["suffix_schedule"] = args.mh_suffix_schedule
-    if args.candidate_count is not None:
-        config["conditional_is"]["candidate_count"] = args.candidate_count
-    if args.rollout_count is not None:
-        config["conditional_is"]["rollout_count"] = args.rollout_count
-    if getattr(args, "iterated_pool_size", None) is not None:
-        config.setdefault("iterated_is", {})["pool_size"] = args.iterated_pool_size
-    if getattr(args, "iterated_updates", None) is not None:
-        config.setdefault("iterated_is", {})["updates"] = args.iterated_updates
-    if getattr(args, "consensus_pilot_samples", None) is not None:
-        config.setdefault("iterated_is", {})["pilot_samples"] = (
-            args.consensus_pilot_samples
-        )
-    if args.block_size is not None:
-        if args.method in {"mh", "verifier_mh", "reward_mh"}:
-            config["mh"]["block_size"] = args.block_size
-        else:
-            config["conditional_is"]["block_size"] = args.block_size
+    if getattr(args, "reward", None) is not None:
+        config.setdefault("reward", {})["source"] = args.reward
+    overridden = apply_config_overrides(config, getattr(args, "config_overrides", []))
+    config.clear()
+    config.update(overridden)
+    if config.get("vllm", {}).get("base", {}).get("mh_fused_logprobs") and args.method != "mh":
+        raise ValueError("vllm.base.mh_fused_logprobs requires --method mh")
 
 
 def _model_metadata(config: dict[str, Any], method: str) -> dict[str, Any]:
-    return model_metadata(config, "rl" if method.startswith("rl_") else "base")
+    return model_metadata(config, "rl" if METHOD_REGISTRY["arllm", method].requires_adapter else "base")
 
 
 def main() -> None:
@@ -289,23 +223,13 @@ def main() -> None:
         choices=BACKEND_CHOICES,
         help="override runtime.backend before the experiment fingerprint is computed",
     )
-    parser.add_argument(
-        "--vllm-mh-fused-logprobs",
-        action="store_true",
-        help=(
-            "return proposal and base token probabilities from one vLLM decode; "
-            "requires --backend vllm-sync and vLLM 0.26.x"
-        ),
-    )
     parser.add_argument("--method", choices=METHODS, required=True)
-    parser.add_argument("--sampling-scope", choices=("full", "thinking"))
-    parser.add_argument("--thinking-mode", choices=("auto", "enabled", "disabled"))
-    parser.add_argument("--thinking-format", choices=("auto", "tags", "json", "xml"))
-    parser.add_argument("--thinking-path", help="structured thinking field, e.g. response.reasoning")
-    parser.add_argument("--content-path", help="structured final-content field, e.g. response.answer")
-    parser.add_argument("--thinking-start-text")
-    parser.add_argument("--thinking-end-text")
-    parser.add_argument("--starts-in-thinking", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--reward",
+        choices=REWARD_SOURCES,
+        help="reward of every method that uses one; the verifier has its own [verifier] table",
+    )
+    add_config_override_argument(parser)
     parser.add_argument("--tag", default="default")
     parser.add_argument("--data", type=Path, default=Path("data/gsm8k/test.jsonl"))
     parser.add_argument("--output-root", type=Path, default=Path("results/gsm8k"))
@@ -316,64 +240,6 @@ def main() -> None:
         help="standalone TOML file whose [verifier] table replaces the default",
     )
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--max-new-tokens", type=int)
-    parser.add_argument("--sampling-temperature", type=float)
-    parser.add_argument("--num-beams", type=int)
-    parser.add_argument("--best-of-n-samples", type=int)
-    parser.add_argument(
-        "--conditional-reward", "--reward",
-        choices=REWARD_SOURCES,
-        help=(
-            "reward used by Best-of-N and conditional methods; verifier uses "
-            "the separately configured [verifier] component"
-        ),
-    )
-    parser.add_argument("--reward-temperature", type=float)
-    parser.add_argument(
-        "--logprob-reward-scale",
-        type=float,
-        help=(
-            "c in r=c*log p(y|x); combined with reward temperature tau this "
-            "targets the power 1+c/tau"
-        ),
-    )
-    parser.add_argument("--consilience-top-k", type=int)
-    parser.add_argument("--consilience-window-fraction", type=float)
-    parser.add_argument("--consilience-window-tokens", type=int)
-    parser.add_argument("--consilience-skip-fraction", type=float)
-    parser.add_argument("--consilience-initial-penalty", type=float)
-    parser.add_argument("--consilience-reward-scale", type=float)
-    parser.add_argument(
-        "--consilience-reasoning-end-text",
-        help=(
-            "optional model-specific delimiter after the reasoning phase; "
-            "the delimiter and final-answer tokens are excluded from the reward"
-        ),
-    )
-    parser.add_argument(
-        "--importance-log-ratio-clip",
-        help="positive symmetric clip or 'none' for exact untruncated weights",
-    )
-    parser.add_argument(
-        "--disable-importance-correction",
-        action="store_true",
-        help=(
-            "skip base-model rescoring of small-model rollouts and use proposal-model "
-            "continuation reward weighting as a biased lookahead signal"
-        ),
-    )
-    parser.add_argument("--mh-alpha", type=float)
-    parser.add_argument("--mh-steps", type=int)
-    parser.add_argument(
-        "--mh-suffix-schedule",
-        choices=("uniform", "inverse_length", "multiscale"),
-    )
-    parser.add_argument("--candidate-count", type=int)
-    parser.add_argument("--rollout-count", type=int)
-    parser.add_argument("--iterated-pool-size", type=int)
-    parser.add_argument("--iterated-updates", type=int)
-    parser.add_argument("--consensus-pilot-samples", type=int)
-    parser.add_argument("--block-size", type=int)
     parser.add_argument(
         "--draw-index",
         type=int,
@@ -398,11 +264,8 @@ def main() -> None:
         int(config["run"]["sample_count"]),
         seed=int(config["run"]["subset_seed"]),
     )
-    roles = {"base"}
-    if args.method.startswith("rl_"):
-        roles.add("rl")
-    if args.method.endswith("small_proposal"):
-        roles.add("proposal")
+    spec = METHOD_REGISTRY["arllm", args.method]
+    roles = {"base"} | ({"rl"} if spec.requires_adapter else set()) | ({"proposal"} if spec.requires_proposal else set())
     input_artifacts = validate_model_artifacts(config, roles)
     input_weight_hashes = input_artifacts["weight_sha256"]
     actual_base_hash = input_weight_hashes["base"]
@@ -449,7 +312,7 @@ def main() -> None:
         ),
         "proposal_model": (
             model_metadata(config, "proposal")
-            if args.method.endswith("small_proposal")
+            if spec.requires_proposal
             else None
         ),
         "environment": {
@@ -500,7 +363,7 @@ def main() -> None:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         return
 
-    model_key = "rl" if args.method.startswith("rl_") else "base"
+    model_key = "rl" if spec.requires_adapter else "base"
     adapter_base = None
     if model_key == "rl" and config["models"].get("rl_kind") == "peft_adapter":
         adapter_base = str(config["models"]["rl_base"])
@@ -513,7 +376,7 @@ def main() -> None:
             adapter_base=adapter_base, role=model_key,
         )
         proposal_backend = None
-        if args.method.endswith("small_proposal"):
+        if spec.requires_proposal:
             proposal_backend = load_backend(str(config["models"]["proposal"]), config, role="proposal")
             if backend.tokenizer.get_vocab() != proposal_backend.tokenizer.get_vocab():
                 raise ValueError(

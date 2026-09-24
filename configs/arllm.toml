@@ -36,6 +36,7 @@ temperature = 1.0
 [reward]
 source = "consilience"
 temperature = 2.0
+logprob_scale = 1.0
 
 [reward.consilience]
 scope = "thinking"

@@ -5,7 +5,6 @@ from __future__ import annotations
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 
 import argparse
-import copy
 import gc
 import hashlib
 import json
@@ -40,7 +39,7 @@ from experiments.shared.artifacts import (
     dataclass_snapshot_delta,
 )
 from experiments.arllm.assembly.common import load_backend, prompt_tokens, sample_one, timed
-from experiments.arllm.assembly.method_runners import run_method
+from experiments.arllm.assembly.method_runners import run_method, resolve_method
 from inference_scaling.arllm.backends import (
     BACKEND_CHOICES,
     ContinuousBatchingBackend,
@@ -71,22 +70,6 @@ _BATCHING_MAX_FIELDS = ("maximum_sample_batch", "maximum_score_batch")
 
 def _uses_small_proposal(method: str) -> bool:
     return method.startswith("conditional_is_small_proposal")
-
-
-def _execution_method_and_config(
-    method: str, config: dict[str, Any]
-) -> tuple[str, dict[str, Any]]:
-    if method not in {
-        "conditional_is_small_proposal_unclipped",
-        "conditional_is_small_proposal_uncorrected",
-    }:
-        return method, config
-    effective = copy.deepcopy(config)
-    effective["conditional_is"]["importance_log_ratio_clip"] = None
-    effective["conditional_is"]["apply_importance_correction"] = (
-        method != "conditional_is_small_proposal_uncorrected"
-    )
-    return "conditional_is_small_proposal", effective
 
 
 def _combine_numeric_deltas(
@@ -211,9 +194,7 @@ def _run_chunk(
             seeds = SeedStream(
                 SeedStream(int(config["run"]["seed"])).derive("draw", draw)
             )
-            execution_method, execution_config = _execution_method_and_config(
-                method, config
-            )
+            execution_method, execution_config = resolve_method(method, config)
             tokens, diagnostics = run_method(
                 execution_method,
                 base,

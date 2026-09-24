@@ -279,9 +279,8 @@ proposal。
 | — | `reward_version` | 奖励与 replay 匹配版本 | 版本改变时历史记录失配 |
 | — | `runtime.max_batch_size` / `max_batch_tokens` / `max_score_batch_size` | 生成与评分批量 | 提高 GPU 利用率，也可能增加填充与峰值显存 |
 
-统一 CLI 的 `--ar-mh-suffix-schedule` 与 AR 套件的 `--mh-suffix-schedule` 默认值均为
-`multiscale`。底层 `MHConfig`、`RewardMHConfig` 和 TOML 使用 `uniform` 作为基线；
-统一入口显式覆盖后缀调度，运行清单记录最终生效配置。
+AR 套件默认以 `--set mh.suffix_schedule=multiscale` 运行，统一入口可用 `--ar-set` 另行覆盖。
+底层 `MHConfig`、`RewardMHConfig` 和 TOML 使用 `uniform` 作为基线；运行清单记录最终生效配置。
 
 <a id="alg-sources"></a>
 ### 2.3 方法来源
@@ -1493,7 +1492,7 @@ mh_fused_logprobs = true
 ```bash
 python -m experiments.arllm.gsm8k_reproduction \
   --config configs/gsm8k_3090_aligned.toml \
-  --backend vllm-sync --method mh --vllm-mh-fused-logprobs \
+  --backend vllm-sync --method mh --set vllm.base.mh_fused_logprobs=true \
   --tag mh-fused --limit 32
 ```
 

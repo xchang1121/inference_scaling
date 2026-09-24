@@ -19,7 +19,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.shared.paired_protocol import load_pairing
 from experiments.shared.artifacts import load_jsonl as _load_records
-from experiments.shared.config_overrides import apply_config_overrides
+from experiments.shared.config_overrides import add_config_override_argument, apply_config_overrides
 from experiments.shared.statistics import wilson_interval
 from experiments.dllm.assembly.profiles import apply_execution_profile
 from experiments.dllm.assembly.runtime import (
@@ -668,14 +668,7 @@ def main() -> None:
         type=Path,
         help="standalone TOML file whose [verifier] table replaces the default",
     )
-    parser.add_argument(
-        "--set",
-        dest="config_overrides",
-        action="append",
-        default=[],
-        metavar="SECTION.KEY=VALUE",
-        help="override an existing TOML field; repeat for multiple fields",
-    )
+    add_config_override_argument(parser)
     args = parser.parse_args()
 
     config, _ = load_pairing(args.config)

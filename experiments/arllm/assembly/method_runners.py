@@ -9,6 +9,7 @@ and reports ``(tokens, diagnostics)``.
 
 from __future__ import annotations
 
+import copy
 import statistics
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -79,11 +80,26 @@ ARCHIVED_CONDITIONAL_METHODS = frozenset({
     "conditional_is_small_proposal",
     "verifier_conditional_is_small_proposal",
 })
+# Small-proposal ablations are named for the [conditional_is] fields they change.
+METHOD_VARIANTS = {
+    "_unclipped": {"importance_log_ratio_clip": None, "apply_importance_correction": True},
+    "_uncorrected": {"importance_log_ratio_clip": None, "apply_importance_correction": False},
+}
 # Archived methods draw with the seeds of the names their results were reported under.
 REPORTED_NAMES = {
     "block_conditional_is": "conditional_is",
     "verifier_block_conditional_is": "verifier_conditional_is",
 }
+
+
+def resolve_method(method: str, config: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The method a variant name runs and the config it runs with."""
+    for suffix, fields in METHOD_VARIANTS.items():
+        if method.endswith(suffix):
+            config = copy.deepcopy(config)
+            config["conditional_is"].update(fields)
+            return method.removesuffix(suffix), config
+    return method, config
 
 
 def method_reward_source(config: dict[str, Any], method: str) -> str:
@@ -738,6 +754,7 @@ def run_method(
 ) -> tuple[TokenSequence, Diagnostics]:
     """Run one method inside its sampling scope and finish the final content."""
 
+    method, config = resolve_method(method, config)
     config, length_budget = generation_config_for_prompt(config, len(prompt), [backend, proposal_backend])
     source = method_reward_source(config, method)
     scoped_algorithm = method in SCOPED_METHODS or "conditional_is" in method

@@ -121,26 +121,13 @@ def test_experiment_dispatch_preserves_thinking_content_for_all_core_methods(met
     assert output["sampling_scope"] == scope
 
 
-def test_cli_overrides_common_and_legacy_reward_settings_consistently():
-    args = SimpleNamespace(**dict.fromkeys((
-        "backend", "limit", "max_new_tokens", "sampling_temperature", "num_beams",
-        "best_of_n_samples", "importance_log_ratio_clip", "mh_alpha", "mh_steps",
-        "candidate_count", "rollout_count", "block_size",
-    )))
-    args.method = "reward_mh"
-    args.disable_importance_correction = False
-    args.conditional_reward = "consilience"
-    args.reward_temperature = 4.0
-    args.consilience_reward_scale = 2.0
-    args.consilience_top_k = 7
-    args.sampling_scope = "thinking"
-    args.thinking_end_text = "</think>"
-    config = {"conditional_is": {}, "reward": {"consilience": {"top_k": 5, "scale": 1.0}}}
+def test_cli_selects_the_reward_by_name_and_sets_its_fields():
+    args = SimpleNamespace(backend=None, limit=None, method="reward_mh", reward="consilience",
+                           config_overrides=["reward.consilience.top_k=7", "reward.consilience.scale=2.0"],
+                           sampling_scope="thinking", thinking_end_text="</think>")
+    config = {"reward": {"consilience": {"top_k": 5, "scale": 1.0}}}
     _apply_overrides(config, args)
-    assert config["reward"] == {
-        "source": "consilience", "temperature": 4.0,
-        "consilience": {"top_k": 7, "scale": 2.0},
-    }
+    assert config["reward"] == {"source": "consilience", "consilience": {"top_k": 7, "scale": 2.0}}
     assert config["output"] == {"sampling_scope": "thinking", "thinking_end_text": "</think>"}
 
 

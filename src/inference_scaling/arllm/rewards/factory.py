@@ -107,25 +107,13 @@ def model_reward_from_config(
     sampling: SamplingConfig | None = None,
 ) -> ConsilienceReward | SequenceLogProbabilityReward:
     common = config.get("reward", {})
-    legacy = config.get("conditional_is", {})
     if source == "sequence_log_probability":
-        return SequenceLogProbabilityReward(
-            backend,
-            sampling,
-            scale=float(common.get("logprob_scale", legacy.get("logprob_reward_scale", 1.0))),
-        )
+        return SequenceLogProbabilityReward(backend, sampling, scale=float(common.get("logprob_scale", 1.0)))
     if source != "consilience":
         raise ValueError(f"unknown model reward source: {source}")
     options = common.get("consilience", {})
-
-    def setting(name: str, default: Any) -> Any:
-        legacy_name = "reward_scale" if name == "scale" else name
-        return options.get(name, legacy.get(f"consilience_{legacy_name}", default))
-
+    setting = options.get
     output = output_settings_from_config(config)
-    legacy_end = legacy.get("consilience_reasoning_end_text")
-    if legacy_end is not None:
-        output.setdefault("thinking_end_text", legacy_end)
     scope = str(options.get("scope", "thinking"))
     if scope not in {"thinking", "full"}:
         raise ValueError("Consilience scope must be thinking or full")

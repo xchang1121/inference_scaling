@@ -539,7 +539,6 @@ def main() -> None:
     parser.add_argument("--distribution-problems", type=int)
     parser.add_argument("--distribution-draws", type=int)
     parser.add_argument("--infra-limit", type=int)
-    parser.add_argument("--with-aligned", action="store_true")
     parser.add_argument(
         "--vrpo",
         choices=("skip", "preflight", "train"),
@@ -600,8 +599,10 @@ def main() -> None:
     if "length_ablation" in components:
         required_methods.add("vrpo_greedy")
 
+    # Naming an aligned method selects the aligned stage and all its methods.
+    requested_aligned = any(method in ALIGNED_METHODS for method in methods)
     include_aligned = (
-        args.with_aligned
+        requested_aligned
         or args.vrpo == "train"
         or any(method in ALIGNED_METHODS for method in required_methods)
     )
@@ -611,12 +612,10 @@ def main() -> None:
             raise FileNotFoundError(
                 f"aligned LLaDA adapter is absent: {adapter}; run the VRPO stage first"
             )
-    if args.with_aligned or args.vrpo == "train":
+    if requested_aligned or args.vrpo == "train":
         for method in ALIGNED_METHODS:
             if method not in methods:
                 methods.append(method)
-    elif any(method in ALIGNED_METHODS for method in methods) and not include_aligned:
-        raise ValueError("aligned methods require --with-aligned")
 
     tag = args.tag or f"llada-{args.profile}"
     commands = build_commands(args, REPOSITORY_ROOT, config, pairing, methods, tag)
@@ -630,7 +629,7 @@ def main() -> None:
             "tag": tag,
             "methods": methods,
             "components": args.components,
-            "with_aligned": include_aligned,
+            "include_aligned": include_aligned,
             "vrpo": args.vrpo,
             "verifier_config": (
                 str(args.verifier_config) if args.verifier_config is not None else None

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 import experiments.arllm.gsm8k_is_passk as is_passk
+from experiments.arllm.assembly.method_runners import resolve_method
 from experiments.arllm.gsm8k_is_passk import (
     _combine_batching_snapshots,
     _combine_numeric_deltas,
-    _execution_method_and_config,
     _paired_pass_at_k_difference,
     _summarize_batching_by_model,
     _summarize_model_compute,
@@ -273,7 +273,7 @@ def test_is_passk_unclipped_method_changes_only_the_clip_override() -> None:
             "candidate_count": 8,
         }
     }
-    method, effective = _execution_method_and_config(
+    method, effective = resolve_method(
         "conditional_is_small_proposal_unclipped", config
     )
     assert method == "conditional_is_small_proposal"
@@ -292,7 +292,7 @@ def test_is_passk_uncorrected_method_disables_rescoring_and_clipping() -> None:
             "candidate_count": 8,
         }
     }
-    method, effective = _execution_method_and_config(
+    method, effective = resolve_method(
         "conditional_is_small_proposal_uncorrected", config
     )
     assert method == "conditional_is_small_proposal"

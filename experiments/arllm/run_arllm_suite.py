@@ -11,11 +11,18 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from experiments.shared.config_overrides import add_config_override_argument
 from experiments.shared.model_cli import add_model_output_arguments, model_output_cli_arguments
 from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
 from experiments.shared.environment import validate_environment
 from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
 from experiments.shared.suite_runner import run_manifested_commands
+
+# Reported AR suite runs used multiscale MH suffixes; later --set values win.
+DEFAULT_CONFIG_OVERRIDES = ("mh.suffix_schedule=multiscale",)
+GSM8K_SUITE_COMPONENTS = (
+    "matched_target", "replay", "dynamic_is", "async", "passk", "ablations", "budget_curve", "length_ablation",
+)
 
 
 def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
@@ -93,7 +100,9 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             "--profile",
             args.profile,
             "--methods",
-            ",".join(methods),
+            *methods,
+            "--components",
+            *(component for component in GSM8K_SUITE_COMPONENTS if component in components),
             "--summary-root",
             str(args.summary_root),
             "--ablation-limit",
@@ -105,25 +114,12 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             *adapter_args,
             *verifier_args,
         ]
-        mh_suffix_schedule = getattr(args, "mh_suffix_schedule", "multiscale")
-        if mh_suffix_schedule is not None:
-            command.extend(("--mh-suffix-schedule", mh_suffix_schedule))
+        for value in (*DEFAULT_CONFIG_OVERRIDES, *getattr(args, "config_overrides", ())):
+            command.extend(("--set", value))
         if args.backend is not None:
             command.extend(("--backend", args.backend))
         if args.limit is not None:
             command.extend(("--limit", str(args.limit)))
-        for component, flag in (
-            ("matched_target", "--with-matched-target"),
-            ("replay", "--with-replay"),
-            ("dynamic_is", "--with-dynamic-is"),
-            ("async", "--with-async"),
-            ("passk", "--with-passk"),
-            ("ablations", "--with-ablations"),
-            ("budget_curve", "--with-budget-curve"),
-            ("length_ablation", "--with-length-ablation"),
-        ):
-            if component in components:
-                command.append(flag)
         commands.append(command)
 
     args.summary_root.mkdir(parents=True, exist_ok=True)
@@ -215,12 +211,7 @@ def main() -> None:
     parser.add_argument("--components", nargs="+", choices=COMPONENTS)
     parser.add_argument("--backend", choices=("transformers", "vllm", "vllm-sync"))
     parser.add_argument("--dtype", default="bfloat16")
-    parser.add_argument(
-        "--mh-suffix-schedule",
-        choices=("uniform", "inverse_length", "multiscale"),
-        default="multiscale",
-        help="MH suffix-length proposal schedule",
-    )
+    add_config_override_argument(parser)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--training-output", type=Path)

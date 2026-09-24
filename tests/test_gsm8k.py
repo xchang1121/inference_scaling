@@ -77,69 +77,19 @@ def test_best_of_n_answer_counts_are_json_stable_with_unparseable_outputs() -> N
     }
 
 
-def test_cli_can_disable_small_proposal_importance_correction() -> None:
-    args = SimpleNamespace(
-        backend=None,
-        limit=None,
-        max_new_tokens=None,
-        sampling_temperature=None,
-        num_beams=None,
-        best_of_n_samples=None,
-        conditional_reward=None,
-        reward_temperature=None,
-        importance_log_ratio_clip=None,
-        disable_importance_correction=True,
-        method="verifier_conditional_is_small_proposal",
-        mh_alpha=None,
-        mh_steps=None,
-        candidate_count=None,
-        rollout_count=None,
-        block_size=None,
-    )
-    config = {
-        "conditional_is": {
-            "apply_importance_correction": True,
-            "importance_log_ratio_clip": 10.0,
-        }
-    }
+def test_cli_sets_existing_fields_and_keeps_fused_logprobs_to_power_mh() -> None:
+    args = SimpleNamespace(backend="vllm-sync", limit=None, reward=None, method="mh",
+                           config_overrides=["vllm.base.mh_fused_logprobs=true", "mh.alpha=2.0"])
+    config = {"runtime": {}, "mh": {"alpha": 4.0}, "vllm": {"base": {"mh_fused_logprobs": False}}}
 
     _apply_overrides(config, args)
 
-    assert config["conditional_is"]["apply_importance_correction"] is False
-    assert config["conditional_is"]["importance_log_ratio_clip"] is None
-
-    args.method = "verifier_conditional_is"
-    with pytest.raises(ValueError, match="requires a small-proposal method"):
-        _apply_overrides(config, args)
-
-
-def test_cli_enables_fused_vllm_accounting_only_for_power_mh() -> None:
-    args = SimpleNamespace(
-        backend="vllm-sync",
-        vllm_mh_fused_logprobs=True,
-        limit=None,
-        max_new_tokens=None,
-        sampling_temperature=None,
-        num_beams=None,
-        best_of_n_samples=None,
-        conditional_reward=None,
-        reward_temperature=None,
-        importance_log_ratio_clip=None,
-        disable_importance_correction=False,
-        method="mh",
-        mh_alpha=None,
-        mh_steps=None,
-        candidate_count=None,
-        rollout_count=None,
-        block_size=None,
-    )
-    config = {"runtime": {}, "conditional_is": {}, "mh": {}}
-
-    _apply_overrides(config, args)
-
-    assert config["vllm"]["base"]["mh_fused_logprobs"] is True
+    assert config["vllm"]["base"]["mh_fused_logprobs"] is True and config["mh"]["alpha"] == 2.0
     args.method = "base"
     with pytest.raises(ValueError, match="requires --method mh"):
+        _apply_overrides(config, args)
+    args.method, args.config_overrides = "mh", ["mh.alfa=2.0"]
+    with pytest.raises(KeyError, match="unknown config override"):
         _apply_overrides(config, args)
 
 

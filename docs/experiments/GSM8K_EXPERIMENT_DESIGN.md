@@ -90,7 +90,7 @@ RL 方法要求配置中的适配器已经存在。`--dry-run` 写出命令清�
 | `--max-completion-length` | 训练补全长度 |
 | `--passk-limit`、`--passk-draws` | pass@k 题目与独立重复数量 |
 | `--ar-methods`、`--dllm-methods` | 两侧的具体推理方法 |
-| `--ar-mh-suffix-schedule` | `uniform`、`inverse_length` 或 `multiscale`；统一入口默认 `multiscale` |
+| `--ar-set` | 覆盖 AR 配置中已有的字段，如 `mh.suffix_schedule=uniform`；AR 套件默认 `multiscale` |
 | `--verifier-config` | 独立奖励配置 |
 | `--output-root` | 调度清单和组件汇总的输出目录 |
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from copy import deepcopy
 import tomllib
 from typing import Any, Mapping, Sequence
@@ -16,6 +17,17 @@ def parse_override_value(text: str) -> Any:
         return tomllib.loads(f"value = {text}")["value"]
     except tomllib.TOMLDecodeError:
         return text
+
+
+def add_config_override_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--set",
+        dest="config_overrides",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="override an existing TOML field; repeat for multiple fields",
+    )
 
 
 def apply_config_overrides(
@@ -44,5 +56,5 @@ def apply_config_overrides(
     return result
 
 
-__all__ = ["apply_config_overrides", "parse_override_value"]
+__all__ = ["add_config_override_argument", "apply_config_overrides", "parse_override_value"]
 

@@ -58,9 +58,8 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             command.extend(("--verifier-config", str(args.verifier_config)))
         if args.backend is not None:
             command.extend(("--backend", args.backend))
-        ar_mh_suffix_schedule = getattr(args, "ar_mh_suffix_schedule", "multiscale")
-        if ar_mh_suffix_schedule is not None:
-            command.extend(("--mh-suffix-schedule", ar_mh_suffix_schedule))
+        for value in getattr(args, "ar_config_overrides", ()):
+            command.extend(("--set", value))
         for flag, value in (
             ("--limit", args.limit),
             ("--train-limit", args.train_limit),
@@ -193,11 +192,6 @@ def build_commands(args: argparse.Namespace, root: Path) -> list[list[str]]:
             ):
                 if value is not None:
                     command.extend((flag, str(value)))
-            if (
-                any(method.startswith("vrpo_") for method in args.dllm_methods)
-                and vrpo != "train"
-            ):
-                command.append("--with-aligned")
             if args.dry_run:
                 command.append("--dry-run")
             if getattr(args, "restart", False):
@@ -235,10 +229,12 @@ def main() -> None:
         help="AR-LLM inference backend; ignored values are rejected for --family dllm",
     )
     parser.add_argument(
-        "--ar-mh-suffix-schedule",
-        choices=("uniform", "inverse_length", "multiscale"),
-        default="multiscale",
-        help="AR-LLM MH suffix schedule; multiscale is the production default",
+        "--ar-set",
+        dest="ar_config_overrides",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="override an existing field of the AR config; repeat for multiple fields",
     )
     parser.add_argument(
         "--ar-python",
@@ -299,7 +295,7 @@ def main() -> None:
             "ar_methods": args.ar_methods,
             "dllm_methods": args.dllm_methods,
             "components": args.components,
-            "ar_mh_suffix_schedule": args.ar_mh_suffix_schedule,
+            "ar_config_overrides": args.ar_config_overrides,
             "verifier_config": (
                 str(args.verifier_config) if args.verifier_config is not None else None
             ),

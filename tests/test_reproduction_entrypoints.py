@@ -19,6 +19,12 @@ from experiments.arllm.run_gsm8k_suite import SUPPORTED_METHODS
 from experiments.shared.methods import AR_DEFAULT_METHODS
 
 
+def _values(command, flag):
+    """Values of a list-valued flag in a planned command."""
+    start = command.index(flag) + 1
+    return command[start:next((i for i in range(start, len(command)) if command[i].startswith("--")), len(command))]
+
+
 def _ar_args(**overrides):
     values = {
         "stage": "all",
@@ -80,20 +86,12 @@ def test_ar_full_entry_preserves_training_and_every_suite_family(tmp_path):
         "run_vllm_backend_benchmark.py",
     ]
     suite = commands[2]
-    for flag in (
-        "--with-matched-target",
-        "--with-replay",
-        "--with-dynamic-is",
-        "--with-async",
-        "--with-passk",
-        "--with-ablations",
-        "--with-budget-curve",
-        "--with-length-ablation",
-    ):
-        assert flag in suite
-    assert suite[suite.index("--methods") + 1] == "base,mh,conditional_is,rl_sample"
+    assert _values(suite, "--components") == [
+        "matched_target", "replay", "dynamic_is", "async", "passk", "ablations", "budget_curve", "length_ablation",
+    ]
+    assert _values(suite, "--methods") == ["base", "mh", "conditional_is", "rl_sample"]
     assert suite[suite.index("--profile") + 1] == "full"
-    assert suite[suite.index("--mh-suffix-schedule") + 1] == "multiscale"
+    assert _values(suite, "--set") == ["mh.suffix_schedule=multiscale"]
 
 
 def test_shared_model_and_scope_flags_reach_every_ar_command(tmp_path):
@@ -130,8 +128,8 @@ def test_ar_component_without_quality_does_not_run_main_methods(tmp_path):
     )
 
     assert len(commands) == 1
-    assert commands[0][commands[0].index("--methods") + 1] == ""
-    assert "--with-replay" in commands[0]
+    assert _values(commands[0], "--methods") == []
+    assert _values(commands[0], "--components") == ["replay"]
 
 
 def test_ar_entry_accepts_existing_verifier_methods(tmp_path):
@@ -145,8 +143,7 @@ def test_ar_entry_accepts_existing_verifier_methods(tmp_path):
         Path.cwd(),
     )
 
-    methods = commands[0][commands[0].index("--methods") + 1]
-    assert methods == "verifier_mh,verifier_conditional_is"
+    assert _values(commands[0], "--methods") == ["verifier_mh", "verifier_conditional_is"]
     assert {
         "verifier_mh",
         "verifier_conditional_is",
@@ -196,11 +193,8 @@ def test_verifier_configuration_is_routed_to_all_reward_consumers(tmp_path):
 
 def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_path):
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        ar_matrix,
-        "_run",
-        lambda command, _environment: commands.append(command),
-    )
+    # Capture after _run, which forwards --set to the scripts that accept it.
+    monkeypatch.setattr(ar_matrix.subprocess, "run", lambda command, **_: commands.append(command))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -209,12 +203,12 @@ def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_p
             "--config",
             "configs/gsm8k_quick.toml",
             "--methods",
-            "",
             "--profile",
             "smoke",
-            "--with-passk",
-            "--mh-suffix-schedule",
-            "multiscale",
+            "--components",
+            "passk",
+            "--set",
+            "mh.suffix_schedule=multiscale",
             "--passk-limit",
             "1",
             "--passk-draws",
@@ -232,11 +226,9 @@ def test_ar_passk_component_runs_general_and_is_variant_grids(monkeypatch, tmp_p
     ]
     general_grid = commands[0]
     assert Path(general_grid[general_grid.index("--output") + 1]).parent == tmp_path
-    assert (
-        general_grid[general_grid.index("--mh-suffix-schedule") + 1]
-        == "multiscale"
-    )
+    assert general_grid[general_grid.index("--set") + 1] == "mh.suffix_schedule=multiscale"
     is_grid = commands[1]
+    assert "--set" not in is_grid
     assert is_grid[is_grid.index("--workers") + 1] == "2"
     assert Path(is_grid[is_grid.index("--output") + 1]).parent == tmp_path
 
@@ -258,12 +250,12 @@ def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
             "--config",
             "configs/gsm8k_quick.toml",
             "--methods",
-            "",
             "--profile",
             "smoke",
-            "--with-ablations",
-            "--with-budget-curve",
-            "--with-length-ablation",
+            "--components",
+            "ablations",
+            "budget_curve",
+            "length_ablation",
             "--ablation-limit",
             "1",
             "--summary-root",
@@ -297,10 +289,7 @@ def test_ar_smoke_profile_exercises_each_sweep_with_bounded_lengths(
         command for command in commands if "default-length-32" in command
     ]
     assert len(length_commands) == 6
-    assert all(
-        command[command.index("--max-new-tokens") + 1] == "32"
-        for command in length_commands
-    )
+    assert all("generation.max_new_tokens=32" in command for command in length_commands)
 
 
 def test_ar_adapter_is_not_forwarded_to_replay_or_dynamic_scripts(
@@ -324,8 +313,9 @@ def test_ar_adapter_is_not_forwarded_to_replay_or_dynamic_scripts(
             "rl_sample",
             "--rl-adapter",
             str(adapter),
-            "--with-replay",
-            "--with-dynamic-is",
+            "--components",
+            "replay",
+            "dynamic_is",
             "--summary-root",
             str(tmp_path),
         ],
@@ -381,10 +371,9 @@ def test_paired_full_entry_routes_grpo_and_vrpo_training():
     assert commands[1][0] == "python-dllm"
     assert Path(commands[0][1]).name == "run_arllm_suite.py"
     assert "--stage" in commands[0] and "all" in commands[0]
-    assert (
-        commands[0][commands[0].index("--mh-suffix-schedule") + 1]
-        == "multiscale"
-    )
+    assert "--set" not in commands[0]
+    forwarded = build_paired_commands(_paired_args(ar_config_overrides=["mh.alpha=2.0"]), Path.cwd())
+    assert _values(forwarded[0], "--set") == ["mh.alpha=2.0"]
     assert Path(commands[1][1]).name == "download_llada.py"
     assert Path(commands[2][1]).name == "run_llada_suite.py"
     assert commands[2][commands[2].index("--vrpo") + 1] == "train"
@@ -414,7 +403,7 @@ def test_dllm_inference_with_aligned_method_loads_existing_adapter():
     )
 
     assert len(commands) == 1
-    assert "--with-aligned" in commands[0]
+    assert {"vrpo_sample", "vrpo_greedy"} <= set(_values(commands[0], "--methods"))
     assert commands[0][commands[0].index("--vrpo") + 1] == "skip"
 
 

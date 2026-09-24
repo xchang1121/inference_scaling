@@ -115,15 +115,15 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 padding；空 completion 的奖励为 0。`Best-of-N` 直接复用生成时保存的 token 对数概率并取均值；
 条件 IS 与迭代 IS 通过后端批量评分，使用相同的归一化。这里的 $`p`$ 是评分采用的采样策略。
 这是对旧版求和奖励的行为变更：变长序列不再对应固定指数的 $`p^\alpha`$，旧实验的 reward temperature
-需要重新校准。需要固定 $`p^\alpha`$ 目标时仍使用 `mh --mh-alpha <alpha>`。
+需要重新校准。需要固定 $`p^\alpha`$ 目标时仍使用 `--method mh --set mh.alpha=<alpha>`。
 重要性采样的 $`p/q`$ 概率与 MH 接受率中的序列 logprob 仍保持求和，不做长度归一化。
 该奖励模式要求模型后端返回精确 token 对数概率：
 
 ```powershell
 python -m experiments.arllm.gsm8k_reproduction `
   --config configs/gsm8k_3090_aligned.toml `
-  --method conditional_is --conditional-reward sequence_log_probability `
-  --reward-temperature 0.5 --logprob-reward-scale 0.5 `
+  --method conditional_is --reward sequence_log_probability `
+  --set conditional_is.reward_temperature=0.5 --set reward.logprob_scale=0.5 `
   --limit 1 --tag mean-logprob-is
 ```
 
@@ -167,6 +167,9 @@ XML/JSON 结构解析需要完整输出，目前使用 `full` 采样，奖励仍
 ## 通用模型与生成配置
 
 单方法入口默认读取 [`configs/arllm.toml`](configs/arllm.toml)，使用 `--model` 指定权重。
+命令行只有两类参数：按名称选择的字段（`--method`、`--reward`、`--backend`、套件的 `--components` 等），
+以及覆盖配置中已有字段的 `--set 表.字段=值`（可重复，字段名写错会报错）。候选数、块长、温度等算法参数
+只在配置中定义，不再各有单独的命令行参数；小模型补全的消融用方法名表示，如 `conditional_is_small_proposal_uncorrected`。
 默认生成上限为 **32,768 token**，包括思考和最终内容；EOS 可提前结束生成。
 每个提示的实际预算取配置上限与主模型、proposal 模型剩余上下文长度的较小值。更长输出可通过
 `--max-new-tokens` 设置；结果记录请求上限、实际上限及上下文截断标记。
@@ -298,7 +301,7 @@ python3.12 -m pip install -e ".[dev,vllm]"
 ```bash
 python -m experiments.arllm.gsm8k_reproduction \
   --config configs/gsm8k_3090_aligned.toml \
-  --backend vllm-sync --method mh --vllm-mh-fused-logprobs \
+  --backend vllm-sync --method mh --set vllm.base.mh_fused_logprobs=true \
   --tag mh-fused --limit 32
 ```
 
@@ -351,7 +354,7 @@ python experiments\run_reproduction.py `
 | `--stage prepare\|train\|inference\|all` | 选择模型准备、RL 训练、推理或完整流程 |
 | `--profile smoke\|full` | 低成本实现检查或正式配置 |
 | `--ar-methods ...`、`--dllm-methods ...` | 选择具体推理方法 |
-| `--ar-mh-suffix-schedule ...` | 选择 AR-MH 后缀分布；默认值为 `multiscale`，`uniform` 用于基线复现 |
+| `--ar-set 表.字段=值` | 覆盖 AR 配置中已有的字段，可重复；AR 套件默认 `mh.suffix_schedule=multiscale`，基线复现用 `--ar-set mh.suffix_schedule=uniform` |
 | `--components ...` | 选择质量、matched target、replay、动态 IS、异步、pass@k、消融、infra 等实验族 |
 | `--verifier-config ...` | 用独立 TOML 文件替换外部 verifier，不修改数据集或算法配置 |
 | `--ar-python ...`、`--dllm-python ...` | 覆盖环境变量与当前解释器 |
