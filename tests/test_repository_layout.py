@@ -37,18 +37,16 @@ SUBPACKAGES = {
     "shared": ("budget", "evaluation", "model", "rewards", "sampling"),
     "arllm": ("acceleration", "algorithms", "backends", "rewards"),
     "dllm": ("algorithms", "backends", "training"),
-    "archive": ("arllm",),
+    "archive": ("arllm", "shared"),
 }
 # Lower layers never import the layers built on them.
 FORBIDDEN_IMPORTS = {
     "inference_scaling.shared": (
-        "inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.experimental",
-        "inference_scaling.archive",
+        "inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.archive",
     ),
     # Archived methods are reached only by name from experiment assembly.
     "inference_scaling.arllm": ("inference_scaling.archive",),
     "inference_scaling.dllm": ("inference_scaling.archive",),
-    "inference_scaling.experimental": ("inference_scaling.archive",),
     "inference_scaling.arllm.acceleration": (
         "inference_scaling.arllm.algorithms", "inference_scaling.arllm.backends",
         "inference_scaling.arllm.rewards",
@@ -127,7 +125,7 @@ def test_production_defaults_exclude_research_components():
     )
 
 
-def test_production_algorithm_import_does_not_load_experimental_modules():
+def test_production_algorithm_import_does_not_load_archived_modules():
     completed = subprocess.run(
         [
             sys.executable,
@@ -135,7 +133,7 @@ def test_production_algorithm_import_does_not_load_experimental_modules():
             (
                 "import sys; "
                 "import inference_scaling.arllm.algorithms; "
-                "assert not any(name.startswith('inference_scaling.experimental') "
+                "assert not any(name.startswith('inference_scaling.archive') "
                 "for name in sys.modules)"
             ),
         ],

@@ -13,9 +13,9 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 
 from experiments.shared.config_overrides import add_config_override_argument
 from experiments.shared.model_cli import add_model_output_arguments, model_output_cli_arguments
-from experiments.shared.components import COMPONENTS, FULL_COMPONENTS
+from experiments.shared.components import COMPONENTS
 from experiments.shared.environment import validate_environment
-from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
+from experiments.shared.methods import AR_METHODS, DEFAULT_AR_METHOD
 from experiments.shared.suite_runner import run_manifested_commands
 
 # Reported AR suite runs used multiscale MH suffixes; later --set values win.
@@ -248,11 +248,9 @@ def main() -> None:
             if args.profile == "smoke"
             else "configs/gsm8k_3090_aligned.toml"
         )
-    args.methods = tuple(args.methods or AR_DEFAULT_METHODS)
-    args.components = tuple(
-        args.components
-        or (("quality",) if args.profile == "smoke" else FULL_COMPONENTS)
-    )
+    # Without names the suite runs the default experiment; other methods and components are named.
+    args.methods = tuple(args.methods or (DEFAULT_AR_METHOD,))
+    args.components = tuple(args.components or ("quality",))
     if args.profile == "smoke":
         if args.training_output is None and args.stage in {"train", "all"}:
             args.training_output = Path(

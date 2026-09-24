@@ -46,6 +46,7 @@ METHOD_SPECS = (
     _spec("arllm", "reward_mh", "quality", paired=False),
     _spec("arllm", "conditional_is", "quality", "default_quality", "is_passk", "async"),
     _spec("arllm", "iterated_conditional_is", "quality", paired=False),
+    _spec("arllm", "joint_budget_is", "quality", paired=False),
     _spec(
         "arllm",
         "conditional_is_small_proposal",
@@ -171,6 +172,9 @@ METHOD_SPECS = (
 )
 
 
+# What every AR entry point runs when no method is named.
+DEFAULT_AR_METHOD = "joint_budget_is"
+
 METHOD_REGISTRY = {(spec.family, spec.name): spec for spec in METHOD_SPECS}
 if len(METHOD_REGISTRY) != len(METHOD_SPECS):
     raise RuntimeError("duplicate method specification")
@@ -210,6 +214,7 @@ DLLM_DYNAMIC_METHODS = methods_for("dllm", "dynamic_is")
 
 __all__ = [
     "AR_ARCHIVED_METHODS",
+    "DEFAULT_AR_METHOD",
     "AR_ASYNC_METHODS",
     "AR_DEFAULT_METHODS",
     "AR_DISTRIBUTION_METHODS",

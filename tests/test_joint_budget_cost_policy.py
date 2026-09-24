@@ -2,7 +2,7 @@ from math import ceil
 
 import pytest
 
-from inference_scaling.experimental.arllm.joint_budget_is import JointBudgetISConfig
+from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig
 from inference_scaling.shared.budget.joint import WeightMoments, choose_joint_budget
 from test_joint_budget_adaptive import controller, finish_reserve, parameters, select, settings
 

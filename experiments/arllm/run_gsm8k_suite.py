@@ -18,10 +18,10 @@ from typing import Any
 from experiments.shared.config_overrides import add_config_override_argument
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides, model_output_cli_arguments
 from inference_scaling.arllm.backends import BACKEND_CHOICES
-from experiments.shared.methods import AR_DEFAULT_METHODS, AR_METHODS
+from experiments.shared.methods import AR_METHODS, DEFAULT_AR_METHOD
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_METHODS = AR_DEFAULT_METHODS
+DEFAULT_METHODS = (DEFAULT_AR_METHOD,)
 SUPPORTED_METHODS = AR_METHODS
 SUITE_COMPONENTS = (
     "matched_target", "replay", "dynamic_is", "async", "passk", "ablations", "budget_curve", "length_ablation",

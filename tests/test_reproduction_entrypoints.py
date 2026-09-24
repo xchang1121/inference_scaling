@@ -16,7 +16,7 @@ from experiments.run_reproduction import (
     build_commands as build_paired_commands,
 )
 from experiments.arllm.run_gsm8k_suite import SUPPORTED_METHODS
-from experiments.shared.methods import AR_DEFAULT_METHODS
+from experiments.shared.methods import DEFAULT_AR_METHOD
 
 
 def _values(command, flag):
@@ -496,7 +496,8 @@ def test_unified_entry_defaults_to_the_registered_qwen_methods(monkeypatch, tmp_
     reproduction_entry.main()
 
     assert captured["metadata"]["family"] == "arllm"
-    assert tuple(captured["metadata"]["ar_methods"]) == AR_DEFAULT_METHODS
+    assert tuple(captured["metadata"]["ar_methods"]) == (DEFAULT_AR_METHOD,)
+    assert tuple(captured["metadata"]["components"]) == ("quality",)
     assert len(captured["commands"]) == 1
     assert "iterated_conditional_is" not in captured["commands"][0]
 

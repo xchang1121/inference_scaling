@@ -42,7 +42,7 @@ from experiments.shared.artifacts import (
 )
 from experiments.arllm.summarize_gsm8k_dynamic_is import METHODS, build_summary
 from inference_scaling.arllm.algorithms.base_replay import score_replay_completions
-from inference_scaling.experimental.arllm.dynamic_is import (
+from inference_scaling.archive.arllm.dynamic_is import (
     CandidateProposal,
     DesignStatisticsContext,
     RolloutBudgetContext,

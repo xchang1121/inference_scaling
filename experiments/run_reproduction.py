@@ -15,6 +15,7 @@ for _path in (REPOSITORY_ROOT, REPOSITORY_ROOT / "src"):
 from experiments.shared.methods import (
     AR_DEFAULT_METHODS,
     AR_METHODS,
+    DEFAULT_AR_METHOD,
     DLLM_DEFAULT_METHODS,
     DLLM_METHODS,
 )
@@ -272,15 +273,15 @@ def main() -> None:
     if args.family == "dllm" and model_output_cli_arguments(args):
         parser.error("model/output override flags in this entry point apply to arllm; configure dllm through --dllm-config")
 
-    # Keep research-only methods available through an explicit CLI selection,
-    # but do not place rejected or unmatched methods in the default Qwen run.
-    args.ar_methods = tuple(args.ar_methods or AR_DEFAULT_METHODS)
+    # Without names only the default experiment runs: AR dynamic-budget IS quality.
+    # The frozen AR--dLLM design needs --family both (or dllm); other methods and
+    # components are always named.
+    paired = args.family != "arllm"
+    args.ar_methods = tuple(args.ar_methods or (AR_DEFAULT_METHODS if paired else (DEFAULT_AR_METHOD,)))
     args.dllm_methods = tuple(args.dllm_methods or DLLM_DEFAULT_METHODS)
     args.components_explicit = args.components is not None
-    args.components = tuple(
-        args.components
-        or (("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS)
-    )
+    paired_components = ("quality", "replay") if args.profile == "smoke" else FULL_COMPONENTS
+    args.components = tuple(args.components or (paired_components if paired else ("quality",)))
     root = REPOSITORY_ROOT
     commands = build_commands(args, root)
     run_manifested_commands(

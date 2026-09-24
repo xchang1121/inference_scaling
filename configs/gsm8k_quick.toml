@@ -84,6 +84,23 @@ reward = "frozen_consensus"
 block_reward = "self_consistency"
 importance_log_ratio_clip = 10.0
 
+[joint_budget_is]
+# Default method: B (block_sizes), M (candidate_counts) and K (rollout_counts)
+# are re-planned at each block boundary within this forward-token budget.
+forward_token_budget = 65536
+block_sizes = [32, 64, 128]
+candidate_counts = [2, 4, 8, 16]
+rollout_counts = [1, 2, 4]
+pilot_candidates = 2
+pilot_rollouts = 2
+pilot_fraction = 0.15
+planning_mode = "full_horizon"
+# Read only when planning_mode = "chunk_adaptive".
+initial_block_size = 64
+initial_candidate_count = 4
+initial_rollout_count = 2
+adjustment_min_improvement = 0.1
+
 [iterated_is]
 pool_size = 3
 updates = 4

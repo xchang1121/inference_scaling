@@ -24,7 +24,7 @@ from inference_scaling.arllm.algorithms.candidates import (
 from inference_scaling.arllm.algorithms.config import IteratedConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
-from inference_scaling.experimental.shared.iterated_sir import (
+from inference_scaling.archive.shared.iterated_sir import (
     IteratedSIRTransition,
     iterated_sir_transition,
 )

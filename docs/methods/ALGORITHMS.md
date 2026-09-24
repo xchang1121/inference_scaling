@@ -97,23 +97,23 @@ $`\log q(y\mid y')`$。共享核计算
 | 幂分布 MH | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | `shared/sampling/mh.py` + 两侧 proposal 适配 |
 | 奖励目标 MH | 式 (1) | 目标分布保持不变；每次 proposal 通常需完整奖励 | `shared/sampling/mh.py` + 两侧目标评分 |
 | 条件 IS | AR：在当前完整序列的块边界上做条件 SIR；dLLM：式 (1) 的逐块 SIR | AR 首步是整序列 SIR，此后每步保持目标不变；dLLM 在 $`K,M\to\infty`$ 时趋近目标 | `shared/sampling/stepwise.py` + 两侧生成适配 |
-| 迭代条件 IS | 式 (1) 的逐块 i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `experimental/shared/iterated_sir.py` + AR 补全适配 |
+| 迭代条件 IS | 式 (1) 的逐块 i-SIR | 固定非负权重下，有限候选池的转移核保持扩展目标不变 | `archive/shared/iterated_sir.py` + AR 补全适配 |
 | off-policy 条件 IS | 逐块 SIR，补全来自其他 proposal；AR 版本已归档 | 未截断普通 IS 对条件奖励权重无偏 | `shared/sampling/importance.py` + 两侧轨迹评分 |
 | 未校正 rollout 加权 | $`p(z)\,\mathbb E_q[e^{r/\tau}\mid z]`$ | 有意改变目标的消融 | 同上，`apply_importance_correction=False` |
 | 基础模型候选的 rollout replay | 式 (1) 的逐块 SIR | 历史样本与独立新样本组成的条件权重估计无偏 | `shared/sampling/importance.py` + 两侧 replay 存储 |
 | 可枚举候选 logit adjustment | 式 (1) 的下一步条件分布 | 枚举候选后直接归一化；误差只来自条件权重估计 | 理论参考，当前未接入执行入口 |
 | 动态候选 IS | 辅助候选、外层 IS、replay | 使用实际候选 proposal 的 $`p/q_c`$ | `shared/budget/allocation.py` + 两侧候选适配 |
 | 分阶段 IS | 初始样本分配预算，独立样本执行最终估计 | 最终权重仅使用独立的最终估计样本 | `shared/budget/allocation.py` + 两侧 rollout 适配 |
-| 联合预算 IS | 每个前缀重新选择候选数、补全数和块长 | 独立最终采样；样本矩仅用于调度，详见 [BUDGET.md](BUDGET.md#budget-joint) | `shared/budget/joint.py` + `experimental/arllm/joint_budget_is.py` |
-| 固定样本的流式 IS | 固定设计下允许样本异步到达 | 固定样本集合上的顺序不变性 | `experimental/arllm/streaming_is.py` |
+| 联合预算 IS（默认方法） | 每个前缀重新选择候选数、补全数和块长 | 独立最终采样；样本矩仅用于调度，详见 [BUDGET.md](BUDGET.md#budget-joint) | `shared/budget/joint.py` + `arllm/algorithms/joint_budget_is.py` |
+| 固定样本的流式 IS | 固定设计下允许样本异步到达 | 固定样本集合上的顺序不变性 | `archive/arllm/streaming_is.py` |
 | SMC 多树搜索 | 分块粒子近似 | 有限粒子、有限后续权重估计的 SMC 近似 | `shared/sampling/smc.py` + 两侧粒子状态 |
 | 两阶段延迟接受 MH | 式 (1) | 两阶段接受率保持目标不变 | 公共接受核 + 两侧近似/精确奖励评分 |
 | 冻结历史混合 proposal 的 MH | 式 (1) | 冻结混合 proposal 的正反概率均进入 Hastings 比 | 公共接受核 + 两侧历史 proposal |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | AR token 对数似然 / dLLM 掩码证据下界（ELBO） |
 
 表中的相对源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
-默认组件由 `experiments/shared/components.py` 定义。表中位于 `experimental/` 的实现以及动态
-候选、分阶段 IS、SMC、两阶段延迟接受和草稿模型专项实验均需显式选择，不会随 `full` 自动运行。
+默认组件由 `experiments/shared/components.py` 定义；各入口不填方法时运行联合预算 IS。表中位于 `archive/`
+的实现以及两阶段延迟接受均需按名称显式选择，不会随 `full` 自动运行。
 
 ### 2.1 Qwen2.5-1.5B 复现配置的执行规则
 
@@ -613,8 +613,8 @@ for update in range(updates):
     current = iterated_sir_transition(current, fresh, rng=rng).selected
 ```
 
-公共转移位于 [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py)，Qwen 生成块与 rollout
-适配位于 [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py)。
+公共转移位于 [`iterated_sir.py`](../../src/inference_scaling/archive/shared/iterated_sir.py)，Qwen 生成块与 rollout
+适配位于 [`iterated_is.py`](../../src/inference_scaling/archive/arllm/iterated_is.py)。
 
 <a id="alg-logit-adjustment"></a>
 ### 6.2 可枚举候选的 logit adjustment
@@ -921,7 +921,7 @@ off-policy/replay 修正。
 
 每个候选在固定的带重复样本集合上计算 `logmeanexp`，因此结果与到达顺序无关。GPU 完成回调可立即启动 CPU
 verifier。实现见
-[`streaming_is.py`](../../src/inference_scaling/experimental/arllm/streaming_is.py)，墙钟重叠见
+[`streaming_is.py`](../../src/inference_scaling/archive/arllm/streaming_is.py)，墙钟重叠见
 [流式奖励计算](#infra-streaming-reward)。
 
 <a id="alg-smc-forest"></a>
@@ -1322,15 +1322,8 @@ proposal $`q_t`$ 抽取草稿 $`a`$，按下式接受：
 Transformers 一次验证 `prefix + drafts`，并在拒绝点裁剪 `DynamicCache`。草稿长度由当前批量大小
 $`b`$ 的分段函数 $`K(b)`$ 控制，避免大批量下的低接受率验证开销。
 
-草稿分布 $`q_t`$ 可以来自历史 token 树，也可以来自共享 tokenizer 的小型自回归模型。后者由
-`DraftModelSpeculativeBackend` 实现：小模型自回归提出至多 $`K`$ 个 token，目标模型一次计算整个草稿块的
-logits，再对各 token 执行上述接受与残差抽样。每个请求使用独立随机数序列；拒绝后将草稿模型的 KV 缓存
-裁剪到已接受前缀，避免后续请求读取被拒绝位置。目标模型与草稿模型参与前向计算的 token 位置数、FLOPs 和峰值显存
-分别记录。
-
-Transformers 的 `assisted generation` 接口目前只支持批量大小为 1；批量请求由普通目标模型批处理执行。
-小模型草稿后端默认关闭，筛选结论见[非默认方案记录](#alg-nondefault-notes)。实现位于
-[`draft_model_speculation.py`](../../src/inference_scaling/experimental/arllm/draft_model_speculation.py)。
+草稿分布 $`q_t`$ 来自历史 token 树。共享 tokenizer 的 0.5B 自回归草稿模型也做过筛选：接受率较高但没有加速
+（见[非默认方案记录](#alg-nondefault-notes)），实现已删除，最后见于提交 `4fcb376`。
 
 `AsyncRolloutBroker` 将长生成拆成固定 token 块。达到所需完整轨迹数后，过量提交产生的部分轨迹保存
 token、实际生成分布/参考分布概率、后续生成随机种子和剩余长度；下一次从“原始前缀 + 已保存 token”继续。
@@ -1613,13 +1606,13 @@ logit adjustment 当前只有第 6.2 节的算法定义，没有对应函数、C
 | --- | --- | --- | --- | --- |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`arllm/algorithms/`](../../src/inference_scaling/arllm/algorithms/) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_conditional_is.py`、`dllm/test_algorithms.py` |
 | 归档实现 | [说明](../../src/inference_scaling/archive/README.md) | [`block_conditional_is.py`](../../src/inference_scaling/archive/arllm/block_conditional_is.py) | — | `archive/test_block_conditional_is.py` |
-| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/experimental/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/experimental/arllm/iterated_is.py) | — | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
+| 迭代 SIR | [`iterated_sir.py`](../../src/inference_scaling/archive/shared/iterated_sir.py) | [`iterated_is.py`](../../src/inference_scaling/archive/arllm/iterated_is.py) | — | `test_iterated_sir.py`、`test_iterated_conditional_is.py` |
 | replay | 通用截断恒等式与 ESS 位于 [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`base_replay.py`](../../src/inference_scaling/arllm/algorithms/base_replay.py) | [`replay.py`](../../src/inference_scaling/dllm/algorithms/replay.py) | `test_replay.py`、`dllm/test_dllm_replay.py` |
-| 动态候选与预算 | [`budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py) | [`dynamic_is.py`](../../src/inference_scaling/experimental/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/experimental/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
-| 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/experimental/arllm/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py` |
+| 动态候选与预算 | [`budget/allocation.py`](../../src/inference_scaling/shared/budget/allocation.py) | [`dynamic_is.py`](../../src/inference_scaling/archive/arllm/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/archive/arllm/progressive_is.py) | [`dynamic_is.py`](../../src/inference_scaling/dllm/algorithms/dynamic_is.py)、[`progressive_is.py`](../../src/inference_scaling/dllm/algorithms/progressive_is.py) | `test_dynamic_is.py`、`test_progressive_is.py`、`dllm/test_dllm_dynamic_is.py` |
+| 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py` |
-| SMC | [`smc.py`](../../src/inference_scaling/shared/sampling/smc.py) | [`smc_forest.py`](../../src/inference_scaling/experimental/arllm/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
-| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration/`](../../src/inference_scaling/arllm/acceleration/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_draft_model_speculation.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
+| SMC | [`smc.py`](../../src/inference_scaling/shared/sampling/smc.py) | [`smc_forest.py`](../../src/inference_scaling/archive/arllm/smc_forest.py) | [`smc_forest.py`](../../src/inference_scaling/dllm/algorithms/smc_forest.py) | `test_smc_forest.py`、`dllm/test_algorithms.py` |
+| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/)、[`acceleration/`](../../src/inference_scaling/arllm/acceleration/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`dllm/test_llada_backend.py` |
 | RL 对照 | 公共 GSM8K 奖励与统计位于 [`evaluation/`](../../src/inference_scaling/shared/evaluation/) | [`train_gsm8k_grpo.py`](../../experiments/arllm/train_gsm8k_grpo.py) | [`vrpo.py`](../../src/inference_scaling/dllm/training/vrpo.py)、[`train_gsm8k_vrpo.py`](../../experiments/dllm/train_gsm8k_vrpo.py) | `test_gsm8k.py`、`dllm/test_vrpo.py`、`dllm/test_vrpo_training.py` |
 | 配置 | 校验工具位于 [`config.py`](../../src/inference_scaling/shared/config.py)；模型加载、提示、生成长度与输出分段位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | 采样策略 [`arllm/config.py`](../../src/inference_scaling/arllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/arllm/algorithms/config.py) | 采样策略 [`dllm/config.py`](../../src/inference_scaling/dllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/dllm/algorithms/config.py) | `test_config.py`、`dllm/test_dllm_config.py` |
 | 奖励 | verifier、答案一致性奖励与 Consilience 算术位于 [`rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励与按名称构造全部奖励的工厂位于 [`rewards/`](../../src/inference_scaling/arllm/rewards/) | — | `test_verifier.py`、`test_rewards.py`、`test_gsm8k.py` |
@@ -1638,10 +1631,10 @@ logit adjustment 当前只有第 6.2 节的算法定义，没有对应函数、C
 
 | 方案 | 比较对象 | 观察与采用条件 |
 | --- | --- | --- |
-| 多轮 i-SIR | 普通条件 IS、相同候选-rollout 状态预算的一次性大池 | 额外轮次的质量—成本收益不足，保持显式可选 |
+| 多轮 i-SIR | 普通条件 IS、相同候选-rollout 状态预算的一次性大池 | 额外轮次的质量—成本收益不足；已归档，按方法名 `iterated_conditional_is` 运行 |
 | Sobol 与算术格点 rollout | 相同候选数与 rollout 数的 IID | 部分权重离散度下降，准确率未提高，墙钟与 FLOPs 略增；已删除，最后见于提交 `642f617` |
 | 有界精确提前停止 | 完成全部 rollout | 成对输出一致，跳过的补全未抵消额外批次与前缀预填充；已删除，最后见于提交 `642f617` |
-| 0.5B 草稿模型推测解码 | 1.5B 普通生成 | 草稿接受率较高，但验证与小模型成本使墙钟和总 FLOPs 增加；默认关闭 |
+| 0.5B 草稿模型推测解码 | 1.5B 普通生成 | 草稿接受率较高，但验证与小模型成本使墙钟和总 FLOPs 增加；已删除，最后见于提交 `4fcb376` |
 | 历史 token 树及无条件历史树 | 普通自回归 rollout | 验证成本增加，墙钟收益不稳定；按请求命中率单独评估 |
 | 初始样本后再分配 rollout | 固定 rollout 数 | 初始估计与额外调用增加墙钟和 FLOPs；保持显式可选 |
 | 方差—成本预算分配 | 固定分配 | 筛选中未形成质量或墙钟收益，设计样本增加 FLOPs；保持显式可选 |

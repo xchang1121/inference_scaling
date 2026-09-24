@@ -36,10 +36,10 @@ from inference_scaling.archive.arllm.block_conditional_is import (
     BlockConditionalISConfig,
     run_block_conditional_is,
 )
-from inference_scaling.experimental.arllm.progressive_is import (
+from inference_scaling.archive.arllm.progressive_is import (
     run_progressive_conditional_is,
 )
-from inference_scaling.experimental.arllm.smc_forest import run_smc_rollout_forest
+from inference_scaling.archive.arllm.smc_forest import run_smc_rollout_forest
 from inference_scaling.arllm.backends import (
     TransformersBackend,
     close_backend,

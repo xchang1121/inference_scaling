@@ -141,6 +141,24 @@ def test_passk_adapter_preserves_token_format_and_confidence_scoring():
     assert reward((3,), (0, 1, 0, 2)) == -2.0
 
 
+def test_default_method_replans_blocks_within_its_budget():
+    config = {
+        "generation": {"max_new_tokens": 6}, "sampling": {"temperature": 1.0},
+        "reward": {"source": "sequence_log_probability"}, "conditional_is": {"reward_temperature": 1.0},
+        "joint_budget_is": {
+            "forward_token_budget": 500, "block_sizes": [2], "candidate_counts": [2], "rollout_counts": [1],
+            "pilot_candidates": 2, "pilot_rollouts": 2, "pilot_fraction": 0.0, "planning_mode": "full_horizon",
+            "initial_block_size": 2, "initial_candidate_count": 2, "initial_rollout_count": 1,
+            "adjustment_min_improvement": 0.1,
+        },
+    }
+    problem = GSM8KProblem(index=0, question="seven", gold_solution="#### 7", gold_answer=Fraction(7))
+    tokens, diagnostics = run_method("joint_budget_is", _Backend(), problem, (3,), config, SeedStream(1), None)
+    assert _Backend().decode(tokens) == "77"
+    assert diagnostics["steps"] and 0 < diagnostics["actual_forward_tokens"] <= 500
+    assert diagnostics["joint_budget"]["reward_forward_passes"] == 1
+
+
 def test_best_of_n_votes_unless_a_reward_source_is_chosen():
     config = {"conditional_is": {"reward": "frozen_consensus"}}
     assert method_reward_source(config, "best_of_n") == "self_consistency"

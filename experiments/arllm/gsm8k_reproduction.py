@@ -37,7 +37,7 @@ from experiments.shared.artifacts import (
     load_jsonl,
 )
 from experiments.shared.config_overrides import add_config_override_argument, apply_config_overrides
-from experiments.shared.methods import AR_ARCHIVED_METHODS, AR_METHODS, METHOD_REGISTRY
+from experiments.shared.methods import AR_ARCHIVED_METHODS, AR_METHODS, DEFAULT_AR_METHOD, METHOD_REGISTRY
 from experiments.shared.model_cli import add_model_output_arguments, apply_model_output_overrides
 from experiments.shared.statistics import wilson_interval
 from inference_scaling.arllm.backends import (
@@ -223,7 +223,7 @@ def main() -> None:
         choices=BACKEND_CHOICES,
         help="override runtime.backend before the experiment fingerprint is computed",
     )
-    parser.add_argument("--method", choices=METHODS, required=True)
+    parser.add_argument("--method", choices=METHODS, default=DEFAULT_AR_METHOD)
     parser.add_argument(
         "--reward",
         choices=REWARD_SOURCES,

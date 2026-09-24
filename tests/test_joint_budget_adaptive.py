@@ -4,7 +4,7 @@ import pytest
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.budget.planners import AdaptiveBudgetController, PlanningState
-from inference_scaling.experimental.arllm.joint_budget_is import (
+from inference_scaling.arllm.algorithms.joint_budget_is import (
     JointBudgetISConfig,
     run_joint_budget_is,
 )

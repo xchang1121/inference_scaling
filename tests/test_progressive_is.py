@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from inference_scaling.experimental.arllm.progressive_is import (
+from inference_scaling.archive.arllm.progressive_is import (
     progressive_is_step,
     run_progressive_conditional_is,
 )

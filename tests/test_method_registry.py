@@ -3,6 +3,7 @@ from experiments.shared.methods import (
     AR_METHODS,
     AR_DEFAULT_METHODS,
     AR_PAIRED_METHODS,
+    DEFAULT_AR_METHOD,
     DLLM_METHODS,
     METHOD_REGISTRY,
     METHOD_SPECS,
@@ -17,6 +18,8 @@ def test_method_registry_has_unique_family_scoped_names():
     assert "iterated_conditional_is" in AR_METHODS
     assert "iterated_conditional_is" not in AR_DEFAULT_METHODS
     assert "iterated_conditional_is" not in AR_PAIRED_METHODS
+    # The default method has no dLLM counterpart, so it stays out of the paired design.
+    assert DEFAULT_AR_METHOD in AR_METHODS and DEFAULT_AR_METHOD not in AR_DEFAULT_METHODS + AR_PAIRED_METHODS
     assert set(DLLM_METHODS) == {
         spec.name for spec in METHOD_SPECS if spec.family == "dllm"
     }

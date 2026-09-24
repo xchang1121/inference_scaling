@@ -42,8 +42,8 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 | [后缀 MH](docs/methods/ALGORITHMS.md#alg-power-mh) | 重生成随机后缀或扩散块，再按 Hastings 比接受或拒绝 | 提议分布（proposal）的正反概率进入接受率 | [共享接受核](src/inference_scaling/shared/sampling/mh.py)、[AR 适配](src/inference_scaling/arllm/algorithms/mh.py)、[dLLM 适配](src/inference_scaling/dllm/algorithms/search.py) |
 | [条件 IS](docs/methods/ALGORITHMS.md#alg-conditional-is) | AR：保留一条完整答案，在其块边界产生候选与完整补全，按全序列奖励选一整条后缀；dLLM：逐块重采样 | AR 只用同模型补全；dLLM 补全来自其他模型时乘 $`p/q`$ | [AR 实现](src/inference_scaling/arllm/algorithms/conditional_is.py)、[dLLM 实现](src/inference_scaling/dllm/algorithms/is_sampling.py) |
 | [rollout replay](docs/methods/ALGORITHMS.md#alg-base-replay) | 复用历史补全，并保留本次新生成的 rollout 以覆盖支持集 | 使用实际生成分布的概率和新样本校正项 | [AR replay](src/inference_scaling/arllm/algorithms/base_replay.py)、[dLLM replay](src/inference_scaling/dllm/algorithms/replay.py) |
-| [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [显式研究实现](src/inference_scaling/experimental/arllm/dynamic_is.py) |
-| [联合预算 IS](docs/methods/BUDGET.md#budget-joint) | 按当前前缀与剩余预算选择候选数、补全数、块长 | 首版使用同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/experimental/arllm/joint_budget_is.py)、[CLI](experiments/arllm/joint_budget_is.py) |
+| [动态候选](docs/methods/ALGORITHMS.md#alg-dynamic-is) | 由辅助提议分布生成候选，并按方差与成本分配 rollout | 外层 $`p/q_c`$ 修正候选来源 | [归档实现](src/inference_scaling/archive/arllm/dynamic_is.py) |
+| [动态预算 IS（默认方法）](docs/methods/BUDGET.md#budget-joint) | 在保留序列的每个块边界，按剩余预算重新选择候选数、补全数、块长 | 同模型 on-policy、独立初始估计与最终采样 | [AR 实现](src/inference_scaling/arllm/algorithms/joint_budget_is.py) |
 | [可枚举候选 logit adjustment](docs/methods/ALGORITHMS.md#alg-logit-adjustment) | 将估计条件权重的对数加到基础候选 logits，再在完整候选集上归一化 | 可直接使用新生成、off-policy 或 replay 条件权重 | 理论参考；当前没有 CLI、代码实现或实验结果 |
 
 共享算法层不依赖模型的生成方向。条件 IS 使用统一的逐步候选、rollout 权重与重采样接口；MH 使用统一的
@@ -58,8 +58,8 @@ r(y)-\tau\left(\log\frac{\pi(y\mid x)}{p(y\mid x)}+1\right)+\lambda=0.
 
 MH/IS 的目标、采样步骤、模型职责及执行实现见[算法基础、原理与实现](docs/methods/ALGORITHMS.md)。
 候选数、补全数、块长的联合调度，以及历史/新样本的方差—成本分配、两阶段估计和计费定义，集中在
-[BUDGET.md](docs/methods/BUDGET.md)；该文档包含推导、调用示例与代码索引。联合调度为显式可选的研究入口，
-已有 CPU 正确性测试，尚无模型质量或速度收益结论，不会自动加入默认复现实验。
+[BUDGET.md](docs/methods/BUDGET.md)；该文档包含推导、调用示例与代码索引。联合调度（动态预算 IS）是各入口
+不填参数时运行的默认方法；目前只有 CPU 正确性测试，尚无真实模型的质量或速度结论。
 
 ## 奖励与 verifier 配置
 
@@ -309,7 +309,9 @@ python -m experiments.arllm.gsm8k_reproduction \
 
 ## 统一复现入口
 
-[`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理，默认只运行 AR-LLM。
+[`run_reproduction.py`](experiments/run_reproduction.py) 调度两侧的准备、训练和推理。不填参数时只运行默认实验：
+AR 动态预算 IS 的 `quality` 组件；其他方法与组件用 `--ar-methods`、`--components` 指定，冻结的 AR↔dLLM
+成对设计用 `--family both`。
 AR 默认配置使用 Qwen2.5-1.5B；dLLM 通过 `--family dllm` 或 `--family both` 显式选择。两个 Python 路径分别
 指向上述解释器。AR 的低成本功能检查（`smoke`）使用 1 题、缩短预算和一次 GRPO 更新。显式选择 dLLM 时，`smoke` 执行
 CPU VRPO 反向传播、临时 LoRA 保存与重新加载检查；真实 LLaDA 推理子进程结束后释放模型显存。
@@ -361,8 +363,8 @@ python experiments\run_reproduction.py `
 | `--limit`、`--max-train-steps` 等 | 覆盖样本数和训练预算 |
 | `--dry-run` | 只写入清单并打印子命令，不启动训练或推理 |
 
-`full` 默认调度 `quality`、`matched_target`、`replay`、`async`、`passk` 和
-`distribution`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
+成对设计（`--family both`）的 `full` 档默认调度 `quality`、`matched_target`、`replay`、`async`、`passk` 和
+`distribution`；AR 单侧不填 `--components` 时只运行 `quality`。`dynamic_is`、`ablations`、`budget_curve`、`length_ablation`、`infra` 与 `vllm` 只在
 `--components` 中显式指定时运行；它们用于研究消融或特定后端验证。dLLM 使用分块 beam、反向轨迹 MH、
 低层 proposal、轨迹 replay、分块 SMC 与 VRPO 对应 AR 的 token 级方法。
 AR 统一入口将 `multiscale` 传给质量与 pass@$`k`$ 的 MH 路径。replay 入口将建库时已经生成的基础模型候选
@@ -460,8 +462,7 @@ python -m pytest
 | `src/inference_scaling/shared/model/` | 模型配置：加载、提示模板、生成长度上限与思考段/正文分段 |
 | `src/inference_scaling/shared/rewards/` | 奖励：外部 verifier 接口与 Consilience 置信度窗口算术 |
 | `src/inference_scaling/shared/` | 以上子包及数据评测（`evaluation/`）、配置校验、随机数和计算量记录 |
-| `src/inference_scaling/experimental/` | 保留但不由默认入口导入或调度的研究实现 |
-| `src/inference_scaling/archive/` | 已被主线取代、只为复现已报告结果而保留的实现，按方法名显式运行，见其 [README](src/inference_scaling/archive/README.md) |
+| `src/inference_scaling/archive/` | 被主线取代或筛选后未进入主线、但报告结果依赖的实现，按方法名或对应基准显式运行，见其 [README](src/inference_scaling/archive/README.md) |
 | `configs/` | 模型、数据与预算配置 |
 | `experiments/shared/` | 两侧共用的组件清单、统计量、配置标识、可续跑调度和结果文件管理 |
 | `experiments/arllm/`、`experiments/dllm/` | 两侧独立复现入口与模型特定训练脚本，目录内只放命令行入口 |

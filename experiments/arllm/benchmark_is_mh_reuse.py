@@ -42,7 +42,7 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
     run_reward_mh_chain_prefetched,
     run_reward_mh_chain_replay_proposal,
 )
-from inference_scaling.experimental.arllm.streaming_is import (
+from inference_scaling.archive.arllm.streaming_is import (
     FrozenStreamingISEstimator,
     ordinary_importance_log_weight,
 )

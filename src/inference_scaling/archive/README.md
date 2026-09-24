@@ -1,7 +1,7 @@
 # 归档实现
 
-本目录保存已被主线取代、但已有报告结果依赖的实现。主线包（`shared`、`arllm`、`dllm`、`experimental`）不导入这里的模块；
-实验组装代码按方法名选择它们，只用于复现已报告的结果。
+本目录保存被主线取代或筛选后未进入主线、但报告结果依赖的实现。主线包（`shared`、`arllm`、`dllm`）不导入这里的模块；
+实验组装代码按方法名或对应基准选择它们，只用于复现已报告的结果。
 
 - 主线只保留收益最高的版本。被取代、但报告结果依赖的实现移入本目录，并尽量复用主线组件；没有收益的实现直接删除，
   需要时从 git 历史检出。
@@ -9,10 +9,17 @@
 
 ## 当前内容
 
-[分块条件 IS](arllm/block_conditional_is.py)：每步按条件权重选择候选后只提交该块，用于估价的补全随即丢弃；支持小模型
-补全的 $`p/q`$ 修正、比值截断与未校正消融。取代它的主线实现是[条件 IS](../arllm/algorithms/conditional_is.py)：保留一条
-完整序列，在其块边界做条件 SIR。只属于分块版本的 RQMC rollout 与精确提前停止在筛选中没有收益，已删除，最后的实现见
-提交 `642f617`。
+| 实现 | 归档原因 | 运行方式 |
+| --- | --- | --- |
+| [分块条件 IS](arllm/block_conditional_is.py) | 主线改为保留完整序列的[条件 IS](../arllm/algorithms/conditional_is.py)；GSM8K 报告依赖分块版本 | `--method block_conditional_is`、小模型补全变体（见下） |
+| [迭代条件 IS](arllm/iterated_is.py)、[i-SIR 核](shared/iterated_sir.py) | 额外轮次的质量—成本收益不足 | `--method iterated_conditional_is` |
+| [两阶段 IS](arllm/progressive_is.py) | 执行成本报告中墙钟与 FLOPs 均高于固定 IS | `benchmark_rollout_infra.py` 的算法组 |
+| [SMC 多树搜索](arllm/smc_forest.py) | 非默认搜索；报告比较其后缀复用 | `benchmark_rollout_infra.py` 的算法组 |
+| [动态候选 IS](arllm/dynamic_is.py) | 报告中设计阶段开销较大 | 组件 `dynamic_is`（`gsm8k_dynamic_is_benchmark.py`） |
+| [流式 IS](arllm/streaming_is.py) | 报告中额外调度未形成收益 | `benchmark_is_mh_reuse.py` |
+
+分块版本独有的 RQMC rollout 与精确提前停止，以及 0.5B 草稿模型推测解码，在筛选中没有收益且不再有运行入口，
+已删除；最后的实现分别见提交 `642f617` 与 `4fcb376`。
 
 ## 复现
 

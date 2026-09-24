@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 import statistics
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from experiments.arllm.assembly.common import (
@@ -28,6 +28,7 @@ from inference_scaling.arllm.algorithms.config import (
     MHConfig,
     RewardMHConfig,
 )
+from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
 from inference_scaling.arllm.backends import AbsorbingEOSBackend, ScoreCachingBackend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -50,7 +51,7 @@ from inference_scaling.archive.arllm.block_conditional_is import (
     BlockConditionalISConfig,
     run_block_conditional_is,
 )
-from inference_scaling.experimental.arllm.iterated_is import run_iterated_conditional_is
+from inference_scaling.archive.arllm.iterated_is import run_iterated_conditional_is
 from inference_scaling.shared.evaluation import (
     NUMERIC_ANSWERS,
     GSM8KProblem,
@@ -577,6 +578,62 @@ def run_reward_mh(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
     }
 
 
+def run_joint_budget(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
+    """Dynamic-budget IS: B, M and K re-planned at each block boundary of the kept sequence."""
+    backend, config = run.backend, run.config
+    table = config["joint_budget_is"]
+    source = method_reward_source(config, run.method)
+    if source in BATCH_DEPENDENT_SOURCES:
+        raise ValueError(f"joint_budget_is needs a fixed per-sequence reward; {source!r} depends on other sequences")
+    sampling = SamplingConfig(temperature=run.sampling_temperature, eos_token_id=backend.tokenizer.eos_token_id)
+    reward = problem_reward(
+        source, backend=backend, problem=run.problem, prompt=run.prompt, config=config,
+        sampling=sampling, maximum=run.maximum, seeds=run.seeds,
+    )
+    adaptive = table["planning_mode"] == "chunk_adaptive"
+    settings = JointBudgetISConfig(
+        forward_token_budget=int(table["forward_token_budget"]),
+        total_length=run.maximum,
+        block_sizes=tuple(table["block_sizes"]),
+        candidate_counts=tuple(table["candidate_counts"]),
+        rollout_counts=tuple(table["rollout_counts"]),
+        pilot_candidates=int(table["pilot_candidates"]),
+        pilot_rollouts=int(table["pilot_rollouts"]),
+        pilot_fraction=float(table["pilot_fraction"]),
+        reward_temperature=reward_temperature_from_config(config, source=source),
+        # Answer-agreement and verifier rewards read text; only model rewards cost a forward pass.
+        reward_forward_passes=int(source in MODEL_REWARD_SOURCES),
+        planning_mode=str(table["planning_mode"]),
+        **({name: table[name] for name in (
+            "initial_block_size", "initial_candidate_count", "initial_rollout_count", "adjustment_min_improvement",
+        )} if adaptive else {}),
+    )
+    result = run_joint_budget_is(backend, run.prompt, settings, reward.pointwise, SeedStream(run.seed), sampling=sampling)
+    return trim_eos(result.token_ids, backend.tokenizer.eos_token_id), {
+        "target": "base_probability_times_exp_reward_over_temperature",
+        "reward_source": source,
+        **reward.diagnostics,
+        "joint_budget": asdict(settings),
+        "stopping_reason": result.stopping_reason,
+        "reserved_forward_tokens": result.reserved_forward_tokens,
+        "actual_forward_tokens": result.actual_forward_tokens,
+        "pilot_actual_forward_tokens": result.pilot_actual_forward_tokens,
+        "length_probe_forward_tokens": result.length_probe_forward_tokens,
+        "steps": [
+            {
+                "prefix_length": step.evaluation.generated_length_before,
+                "plan": asdict(step.plan),
+                "pilot_actual_forward_tokens": step.pilot_actual_cost,
+                "actual_forward_tokens": step.actual_cost,
+                "expected_remaining_tokens": step.expected_remaining,
+                "selected_index": step.evaluation.selected_index,
+                **({"adjustment": step.adjustment} if step.adjustment is not None else {}),
+            }
+            for step in result.steps
+        ],
+    }
+
+
 def run_conditional(run: MethodRun) -> tuple[TokenSequence, Diagnostics]:
     method, backend, config = run.method, run.backend, run.config
     conditional = config["conditional_is"]
@@ -723,6 +780,7 @@ RUNNERS: dict[str, Runner] = {
     "mh": run_power_mh,
     "reward_mh": run_reward_mh,
     "verifier_mh": run_reward_mh,
+    "joint_budget_is": run_joint_budget,
     **dict.fromkeys(sorted(CONDITIONAL_METHODS), run_conditional),
 }
 
