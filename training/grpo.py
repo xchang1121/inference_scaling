@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,7 @@ from inference_scaling.app.records import (
 )
 from inference_scaling.datasets.base import Problem
 from inference_scaling.datasets.gsm8k import GSM8K
-from inference_scaling.shared.compute import estimate_grpo_compute, estimate_grpo_compute_from_logs
+from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import checkpoint_weight_files, resolve_checkpoint_path
 from inference_scaling.shared.rewards.verifier import Verifier, VerifierContext, build_verifier
 
@@ -319,4 +319,157 @@ def run(settings: Mapping[str, Any]) -> None:
     print(f"GRPO complete: {output} (step {state.global_step})", flush=True)
 
 
-__all__ = ["PowerMonitor", "VerifierReward", "run"]
+@dataclass(frozen=True, slots=True)
+class GRPOComputeEstimate:
+    trainer_observed_prompt_plus_completion_tokens: int
+    generated_completions: int
+    rollout_generation_forward_token_slots: int
+    reference_scoring_forward_token_slots: int
+    policy_forward_backward_equivalent_token_slots: int
+    total_forward_equivalent_token_slots: int
+    total_parameters: int
+    trainable_parameters: int
+    optimizer_steps: int
+    estimated_dense_model_flops: int
+    estimated_optimizer_flops: int
+    estimated_total_flops: int
+    estimated_total_petaflops: float
+    accounting_basis: str
+    definition: str
+    exclusions: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _grpo_estimate(
+    *, observed_tokens: int, generated_completions: int, rollout_slots: int, sequence_slots: int,
+    total_parameters: int, trainable_parameters: int, optimizer_steps: int, gradient_checkpointing: bool,
+    reference_scoring: bool, accounting_basis: str, definition: str,
+) -> GRPOComputeEstimate:
+    """Reference scoring is one forward over the sequences; a frozen-base LoRA update two, three with checkpointing."""
+
+    reference_slots = sequence_slots if reference_scoring else 0
+    policy_slots = (3 if gradient_checkpointing else 2) * sequence_slots
+    total_slots = rollout_slots + reference_slots + policy_slots
+    dense_flops = dense_forward_flops(total_parameters, total_slots)
+    optimizer_flops = 10 * trainable_parameters * optimizer_steps
+    return GRPOComputeEstimate(
+        observed_tokens, generated_completions, rollout_slots, reference_slots, policy_slots, total_slots,
+        total_parameters, trainable_parameters, optimizer_steps, dense_flops, optimizer_flops,
+        dense_flops + optimizer_flops, (dense_flops + optimizer_flops) / 1e15, accounting_basis, definition,
+        "quadratic attention, elementwise kernels, reward parsing, data loading, tokenization, sampling, and host work",
+    )
+
+
+def estimate_grpo_compute(
+    *,
+    model_sequence_tokens: int,
+    generated_completions: int,
+    total_parameters: int,
+    trainable_parameters: int,
+    optimizer_steps: int,
+    gradient_checkpointing: bool,
+    reference_scoring: bool,
+) -> GRPOComputeEstimate:
+    """Estimate this LoRA GRPO run from observed model-token counts.
+
+    For a frozen dense base, a policy forward/backward pass is approximately
+    two forward-equivalent dense passes. Gradient-checkpoint recomputation adds
+    one more. The adapter overhead is included conservatively through the total
+    parameter count. AdamW is charged only to trainable parameters.
+    """
+
+    if any(value < 0 for value in (model_sequence_tokens, generated_completions, total_parameters,
+                                   trainable_parameters, optimizer_steps)):
+        raise ValueError("GRPO compute inputs must be non-negative")
+    if generated_completions > model_sequence_tokens:
+        raise ValueError("each generated completion requires at least one model token")
+    return _grpo_estimate(
+        observed_tokens=model_sequence_tokens, generated_completions=generated_completions,
+        rollout_slots=model_sequence_tokens - generated_completions, sequence_slots=model_sequence_tokens,
+        total_parameters=total_parameters, trainable_parameters=trainable_parameters,
+        optimizer_steps=optimizer_steps, gradient_checkpointing=gradient_checkpointing,
+        reference_scoring=reference_scoring,
+        accounting_basis=("non-padding trainer token count; use estimate_grpo_compute_from_logs "
+                          "when per-step mean and maximum completion lengths are available"),
+        definition=("rollout generation uses observed prompt+completion tokens minus one input slot per "
+                    "completion; reference scoring uses one forward pass when beta is nonzero; a frozen-base LoRA "
+                    "policy update uses two forward-equivalent passes plus one more when gradient checkpointing "
+                    "recomputes activations; dominant dense FLOPs are 2 * total parameters * forward-equivalent "
+                    "token slots; AdamW is 10 * trainable parameters * optimizer steps"),
+    )
+
+
+def estimate_grpo_compute_from_logs(
+    *,
+    log_history: Sequence[dict[str, Any]],
+    sequences_per_optimizer_step: int,
+    generated_completions: int,
+    total_parameters: int,
+    trainable_parameters: int,
+    optimizer_steps: int,
+    gradient_checkpointing: bool,
+    reference_scoring: bool,
+) -> GRPOComputeEstimate:
+    """Reconstruct padded GRPO token slots from trainer step metrics.
+
+    TRL reports the cumulative non-padding model tokens, the batch mean
+    completion length, and the mean of each microbatch's maximum completion
+    length. Since every optimizer step has a fixed number of sequences, these
+    values recover the prompt tokens and the padded prompt+completion tensor
+    shapes used by generation, reference scoring, and policy training.
+    """
+
+    if sequences_per_optimizer_step <= 0:
+        raise ValueError("sequences_per_optimizer_step must be positive")
+    if generated_completions != sequences_per_optimizer_step * optimizer_steps:
+        raise ValueError("generated completion count does not match batch size times optimizer steps")
+    keys = ("num_tokens", "completions/mean_length", "completions/max_length", "step")
+    step_logs = sorted({int(entry["step"]): entry for entry in log_history
+                        if all(key in entry for key in keys)}.values(), key=lambda entry: int(entry["step"]))
+    if not step_logs:
+        raise ValueError("trainer log history has no complete GRPO step metrics")
+    prior_tokens = prior_step = 0
+    rollout_slots = sequence_slots = 0.0
+    for entry in step_logs:
+        current_step = int(entry["step"])
+        if current_step <= prior_step:
+            raise ValueError("trainer steps are not strictly increasing")
+        sequences = sequences_per_optimizer_step * (current_step - prior_step)
+        prior_step = current_step
+        cumulative_tokens = int(entry["num_tokens"])
+        if cumulative_tokens < prior_tokens:
+            raise ValueError("trainer num_tokens is not cumulative")
+        observed_step_tokens, prior_tokens = cumulative_tokens - prior_tokens, cumulative_tokens
+        mean_completion = float(entry["completions/mean_length"])
+        maximum_completion = float(entry["completions/max_length"])
+        if maximum_completion < mean_completion or mean_completion < 0:
+            raise ValueError("invalid trainer completion-length metrics")
+        prompt_tokens = observed_step_tokens - mean_completion * sequences
+        if prompt_tokens < -1e-6:
+            raise ValueError("completion metrics exceed trainer-observed model tokens")
+        prompt_tokens = max(0.0, prompt_tokens)
+        padded_completion_tokens = maximum_completion * sequences
+        sequence_slots += prompt_tokens + padded_completion_tokens
+        rollout_slots += prompt_tokens + max(0.0, padded_completion_tokens - sequences)
+    if prior_step != optimizer_steps:
+        raise ValueError("trainer log history does not cover the requested optimizer-step count")
+    return _grpo_estimate(
+        observed_tokens=prior_tokens, generated_completions=generated_completions,
+        rollout_slots=round(rollout_slots), sequence_slots=round(sequence_slots),
+        total_parameters=total_parameters, trainable_parameters=trainable_parameters,
+        optimizer_steps=optimizer_steps, gradient_checkpointing=gradient_checkpointing,
+        reference_scoring=reference_scoring,
+        accounting_basis=("padded forward token slots reconstructed per optimizer step from cumulative num_tokens, "
+                          "mean completion length, and microbatch maximum completion length"),
+        definition=("generation counts repeated prompts and every padded decode row except the final generated "
+                    "token; reference scoring counts each padded full sequence; a frozen-base LoRA policy update "
+                    "uses two forward-equivalent passes plus one gradient-checkpoint recomputation; dominant dense "
+                    "FLOPs are 2 * total parameters * reconstructed token slots; AdamW is 10 * trainable parameters "
+                    "* optimizer steps"),
+    )
+
+
+__all__ = ["GRPOComputeEstimate", "PowerMonitor", "VerifierReward", "estimate_grpo_compute",
+           "estimate_grpo_compute_from_logs", "run"]

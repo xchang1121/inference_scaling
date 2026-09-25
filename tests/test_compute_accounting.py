@@ -1,8 +1,5 @@
 from inference_scaling.app.records import pass_at_k
-from inference_scaling.shared.compute import (
-    estimate_grpo_compute,
-    estimate_grpo_compute_from_logs,
-)
+from training.grpo import estimate_grpo_compute, estimate_grpo_compute_from_logs
 
 
 def test_grpo_compute_is_split_into_observed_forward_equivalents() -> None:
