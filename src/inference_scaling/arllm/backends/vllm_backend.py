@@ -22,6 +22,7 @@ import importlib.metadata
 import inspect
 import json
 import itertools
+from functools import partial
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -478,6 +479,8 @@ class VLLMBackend:
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
         policy = request.sampling
+        # Single-token stop sequences end generation in the engine; the caller cuts longer ones.
+        stops = [stop[0] for stop in request.stop_sequences if len(stop) == 1]
         return self._sampling_params_factory(
             max_tokens=int(request.max_new_tokens),
             temperature=float(policy.temperature),
@@ -487,9 +490,9 @@ class VLLMBackend:
             logprobs=0,
             flat_logprobs=False,
             ignore_eos=True,
-            stop_token_ids=(
-                [] if policy.eos_token_id is None else [int(policy.eos_token_id)]
-            ),
+            stop_token_ids=[int(token) for token in (
+                stops if policy.eos_token_id is None else [policy.eos_token_id, *stops]
+            )],
             detokenize=False,
             skip_special_tokens=False,
             spaces_between_special_tokens=False,
@@ -632,13 +635,11 @@ class VLLMBackend:
             _logprob_value(position, token)
             for position, token in zip(positions, tokens, strict=True)
         )
-        reference_values = None if reference_token_logprobs is None else tuple(
+        # The fused MH worker reports the base probabilities at temperature 1.
+        reference_values = None if reference_token_logprobs is None or request.reference_temperature != 1 else tuple(
             float(value) for value in reference_token_logprobs
         )
-
-        reference_sampling = SamplingConfig(
-            eos_token_id=request.sampling.eos_token_id
-        )
+        reference_sampling = request.reference_policy
         if reference_values is None and request.sampling == reference_sampling:
             reference_values = token_logprobs
         if reference_values is not None:
@@ -736,34 +737,20 @@ class VLLMBackend:
     ) -> tuple[int, int, int]:
         if not items:
             return 0, 0, 0
-        prompts = [
-            self._prompt(self._model_prefix(request.prefix) + continuation)
-            for _, request, continuation in items
-        ]
+        prompts = [self._prompt(self._model_prefix(request.prefix) + continuation) for _, request, continuation in items]
         outputs = self._generate(prompts, self._score_params())
         if len(outputs) != len(items):
             raise RuntimeError("vLLM returned an invalid number of scoring outputs")
-        forward_slots = 0
-        cached_tokens = 0
+        forward_slots = cached_tokens = 0
         for (index, request, continuation), output in zip(items, outputs, strict=True):
             prompt_logprobs = getattr(output, "prompt_logprobs", None)
             prefix = self._model_prefix(request.prefix)
-            if prompt_logprobs is None or len(prompt_logprobs) != len(prefix) + len(
-                continuation
-            ):
-                raise RuntimeError(
-                    "vLLM returned an invalid prompt log-probability shape"
-                )
-            positions = prompt_logprobs[len(prefix) :]
-            results[index] = tuple(
-                _logprob_value(position, token)
-                for position, token in zip(positions, continuation, strict=True)
-            )
+            if prompt_logprobs is None or len(prompt_logprobs) != len(prefix) + len(continuation):
+                raise RuntimeError("vLLM returned an invalid prompt log-probability shape")
+            results[index] = tuple(_logprob_value(position, token)
+                                   for position, token in zip(prompt_logprobs[len(prefix):], continuation, strict=True))
             prompt_length = len(prefix) + len(continuation)
-            cached = min(
-                prompt_length,
-                int(getattr(output, "num_cached_tokens", 0) or 0),
-            )
+            cached = min(prompt_length, int(getattr(output, "num_cached_tokens", 0) or 0))
             forward_slots += prompt_length - cached
             cached_tokens += cached
         return len(items), forward_slots, cached_tokens
@@ -788,73 +775,37 @@ class VLLMBackend:
         )
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
-        flattened = [
-            (request, continuation)
-            for request in requests
-            for continuation in request.continuations
-        ]
+        flattened = [(request, continuation) for request in requests for continuation in request.continuations]
         results: list[tuple[float, ...]] = [()] * len(flattened)
         native: list[tuple[int, ScoreRequest, TokenSequence]] = []
         delegated: list[tuple[int, ScoreRequest, TokenSequence]] = []
         for index, (request, continuation) in enumerate(flattened):
-            if not continuation:
-                continue
-            item = (index, request, continuation)
-            if self._supports_native_score(request.sampling):
-                native.append(item)
-            else:
-                delegated.append(item)
-
+            if continuation:
+                (native if self._supports_native_score(request.sampling) else delegated).append(
+                    (index, request, continuation))
         native_count, score_slots, cached_tokens = self._score_native(native, results)
-        delegated_slots = 0
-        delegated_flops = 0
+        delegated_slots = delegated_flops = 0
         if delegated:
             if self._scoring_backend is None:
-                policies = sorted(
-                    {
-                        item[1].sampling.policy_id
-                        for item in delegated
-                        if item[1].sampling
-                    }
-                )
-                raise ValueError(
-                    "vLLM prompt log-probabilities cannot exactly score temperature/top-k/top-p "
-                    "policies; configure an exact scoring_backend for: "
-                    + ", ".join(policies)
-                )
-            delegated_requests = [
-                ScoreRequest(request.prefix, (continuation,), request.sampling)
-                for _, request, continuation in delegated
-            ]
-            delegated_outputs, delegated_slots, delegated_flops = (
-                self._run_delegated_score(
-                    delegated_requests,
-                    "score_batch",
-                )
+                policies = sorted({item[1].sampling.policy_id for item in delegated if item[1].sampling})
+                raise ValueError("vLLM prompt log-probabilities cannot exactly score temperature/top-k/top-p "
+                                 "policies; configure an exact scoring_backend for: " + ", ".join(policies))
+            delegated_outputs, delegated_slots, delegated_flops = self._run_delegated_score(
+                [ScoreRequest(request.prefix, (continuation,), request.sampling) for _, request, continuation in delegated],
+                "score_batch",
             )
             if len(delegated_outputs) != len(delegated):
-                raise RuntimeError(
-                    "exact scoring backend returned an invalid result count"
-                )
-            for (index, _, continuation), scores in zip(
-                delegated, delegated_outputs, strict=True
-            ):
+                raise RuntimeError("exact scoring backend returned an invalid result count")
+            for (index, _, continuation), scores in zip(delegated, delegated_outputs, strict=True):
                 if len(scores) != len(continuation):
-                    raise RuntimeError(
-                        "exact scoring backend returned an invalid score shape"
-                    )
+                    raise RuntimeError("exact scoring backend returned an invalid score shape")
                 results[index] = scores
-
         with self._statistics_lock:
             self._score_calls += 1
-            self._scored_tokens += sum(
-                len(continuation) for _, continuation in flattened
-            )
+            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
             self._shared_prefill_tokens_saved += cached_tokens
             self._score_forward_token_slots += score_slots + delegated_slots
-            self._estimated_dense_forward_flops += (
-                dense_forward_flops(self.parameter_count, score_slots) + delegated_flops
-            )
+            self._estimated_dense_forward_flops += dense_forward_flops(self.parameter_count, score_slots) + delegated_flops
             self._engine_requests += native_count
             self._native_score_sequences += native_count
             self._delegated_score_sequences += len(delegated)
@@ -874,16 +825,9 @@ class VLLMBackend:
         base policy, but top-K confidences need the whole next-token distribution.
         """
 
-        flattened = [
-            continuation
-            for request in requests
-            for continuation in request.continuations
-        ]
-        outputs, slots, flops = self._run_delegated_score(
-            requests,
-            "score_statistics_batch",
-            confidence_top_k=confidence_top_k,
-        )
+        flattened = [continuation for request in requests for continuation in request.continuations]
+        outputs, slots, flops = self._run_delegated_score(requests, "score_statistics_batch",
+                                                          confidence_top_k=confidence_top_k)
         if len(outputs) != len(flattened):
             raise RuntimeError("exact scoring backend returned an invalid result count")
         with self._statistics_lock:
@@ -912,12 +856,8 @@ class VLLMBackend:
                 engine_requests=self._engine_requests,
                 native_score_sequences=self._native_score_sequences,
                 delegated_score_sequences=self._delegated_score_sequences,
-                delegated_score_forward_token_slots=(
-                    self._delegated_score_forward_token_slots
-                ),
-                delegated_estimated_dense_forward_flops=(
-                    self._delegated_estimated_dense_forward_flops
-                ),
+                delegated_score_forward_token_slots=self._delegated_score_forward_token_slots,
+                delegated_estimated_dense_forward_flops=self._delegated_estimated_dense_forward_flops,
                 maximum_in_flight_requests=self._maximum_in_flight_requests,
                 mh_fused_logprobs=self._mh_fused_logprobs,
                 fused_reference_sequences=self._fused_reference_sequences,
@@ -925,17 +865,10 @@ class VLLMBackend:
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
-        return tuple(
-            int(token)
-            for token in self.tokenizer.encode(
-                text, add_special_tokens=add_special_tokens
-            )
-        )
+        return tuple(int(token) for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens))
 
     def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True) -> str:
-        return str(
-            self.tokenizer.decode(list(tokens), skip_special_tokens=skip_special_tokens)
-        )
+        return str(self.tokenizer.decode(list(tokens), skip_special_tokens=skip_special_tokens))
 
     def direct_generate(
         self,
@@ -1029,8 +962,12 @@ class AsyncVLLMBackend(VLLMBackend):
         if mh_fused_logprobs:
             raise ValueError("MH fused log-probabilities need the synchronous vLLM engine")
         from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.sampling_params import RequestOutputKind
         from vllm.v1.engine.async_llm import AsyncLLM
 
+        # Only a request's finished output is read, so the engine need not stream every step.
+        options["sampling_params_factory"] = partial(options["sampling_params_factory"],
+                                                     output_kind=RequestOutputKind.FINAL_ONLY)
         return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_arguments)),
                    **options)
 

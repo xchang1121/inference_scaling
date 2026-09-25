@@ -771,7 +771,7 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 回退分支使用实际生成的全序列和相应奖励。停止规则选取第一个完整、非空的思考块，之后的标记归入最终内容，
 使后续生成保持已有分段决定。若直到 EOS 或长度上限仍未找到该边界，采样与评分保留全序列。
 [`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 把结束标记作为停止序列交给后端，
-后端在解码中遇到标记即停（不支持停止序列的后端生成后截断）；停在不构成边界的标记（如空思考块）后继续生成，
+后端在解码中遇到标记即停（vLLM 只在单 token 标记处停止，其余情形生成后截断）；停在不构成边界的标记（如空思考块）后继续生成，
 在第一个停止处结束；越过停止处的续写概率为 0。IS 与 MH 共用这一生成和评分约定。成功分段
 分支可对最终内容的概率求和；回退分支按完整序列计算。因此，固定的分段与回退规则共同定义目标，选择完成后
 保持原奖励和概率不变。
@@ -900,7 +900,7 @@ AR-LLM 由 `ar.engine.backend` 选择引擎，vLLM 再由 `ar.engine.vllm.asynch
 | 设置 | 引擎 | 适用路径 |
 | --- | --- | --- |
 | `transformers` | 显式 KV、批处理和完整概率评分 | 参考实现、概率诊断、全词表与 top-$`K`$ 统计 |
-| `vllm`，`asynchronous = true` | 长期运行的 `AsyncLLM` | 连续调度与 APC |
+| `vllm`，`asynchronous = true` | 长期运行的 `AsyncLLM`，只返回完成的输出 | 连续调度与 APC |
 | `vllm`，`asynchronous = false` | 同步 `LLM` | MH 融合概率与原生 beam |
 
 | 能力 | Transformers | vLLM |

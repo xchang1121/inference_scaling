@@ -230,6 +230,17 @@ def test_vllm_sampling_preserves_per_request_seed_policy_and_order() -> None:
     assert snapshot.prefill_tokens == 0
 
 
+def test_vllm_stops_at_single_token_markers_and_labels_the_reference_policy() -> None:
+    backend, engine = _backend()
+    request = GenerationRequest((1,), 2, SamplingConfig(temperature=0.5, eos_token_id=2), 11, "r",
+                                stop_sequences=((5,), (6, 7)), reference_temperature=0.5)
+    sample = backend.sample_batch([request])[0]
+    # The two-token marker is left to the caller.
+    assert engine.calls[0][1][0].stop_token_ids == [2, 5]
+    assert sample.reference_token_logprobs == sample.token_logprobs
+    assert sample.reference_policy_id == request.reference_policy.policy_id
+
+
 def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     engine = _FusedEngine()
     backend = VLLMBackend(
