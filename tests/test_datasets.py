@@ -113,7 +113,10 @@ def test_math500_skips_held_out_problems_and_grades_with_math_verify(tmp_path) -
         problem = dataset.problems[0]
         assert dataset.grade(r"Therefore $\boxed{0.5}$.", problem).correct
         assert not dataset.grade("unfinished thought", problem).parseable
-        assert dataset.same(dataset.answer(r"\boxed{2/4}"), dataset.answer(r"\boxed{0.5}"))
+        # Equal parsed answers agree at once; other pairs are judged once and cached.
+        assert dataset.same(dataset.answer(r"\boxed{2/4}"), dataset.answer(r"so \boxed{0.5}")) and not dataset._verdicts
+        assert not dataset.same(dataset.answer(r"\boxed{2}"), dataset.answer(r"\boxed{3}")) and len(dataset._verdicts) == 1
+        assert dataset.answer("unfinished thought") is None
     finally:
         dataset.close()
 

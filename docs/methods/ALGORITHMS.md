@@ -673,7 +673,8 @@ r_{\mathrm{vote}}(x,y)=\frac1P\sum_{j=1}^{P}
 ```
 
 其中 $`P`$ 为 `rewards.vote.pool_size`，$`y^{(j)}`$ 是算法运行前从基础模型独立生成并冻结的样本，$`a(y)`$ 为答案文本中的
-最终答案，$`\equiv`$ 为数据集的答案规则：GSM8K 比较最终数值，MATH-500 用 Math-Verify 判断等价。无法解析的答案
+最终答案，$`\equiv`$ 为数据集的答案规则：GSM8K 比较最终数值；MATH-500 先把答案解析为规范形式，形式相同即等价，
+否则用 Math-Verify 判断，结论按形式对缓存。无法解析的答案
 得 0。样本池在运行期间固定，奖励因而是逐序列的固定函数；样本池的生成成本记入奖励阶段
 （`cost.phases.reward`），不计入联合预算 IS 的 `forward_token_budget`。实现位于
 [`shared/rewards/vote.py`](../../src/inference_scaling/shared/rewards/vote.py)。

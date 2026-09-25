@@ -6,6 +6,7 @@ import json
 import multiprocessing as mp
 import random
 from collections import defaultdict
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -99,6 +100,15 @@ class MathJudge:
             self._process = self._connection = None
 
 
+@dataclass(frozen=True)
+class MathAnswer:
+    """A parsed final answer; answers with equal keys agree without a Math-Verify call."""
+
+    key: str
+    # The text it was parsed from, for Math-Verify when the keys differ.
+    text: str = field(compare=False, repr=False)
+
+
 def stratified_order(problems: list[Problem], *, seed: int, minimum_level: int,
                      excluded_ids: frozenset[str]) -> list[Problem]:
     """Round-robin over shuffled subject/level strata, independent of the answers."""
@@ -147,17 +157,24 @@ class MATH500(Dataset):
             raise ValueError(f"selection.skip + selection.count must lie within the {len(ordered)} eligible problems")
         super().__init__(settings, tuple(ordered[skip:skip + count]), file_sha256(path))
         self.judge = MathJudge(float(settings["judge_timeout_seconds"]))
+        self._verdicts: dict[tuple[str, str], bool] = {}
         for problem in self.problems:
             if not self.judge.grade("\\boxed{" + problem.answer + "}", problem.answer)["correct"]:
                 self.close()
                 raise ValueError(f"the grader cannot verify the reference answer of {problem.id}")
 
-    # Math-Verify parses answers inside ``same``; a text stands for its own answer.
-    def answer(self, text: str) -> str | None:
-        return text or None
+    def answer(self, text: str) -> MathAnswer | None:
+        key = self.judge.answer_key(text) if text else None
+        return None if key is None else MathAnswer(key, text)
 
     def same(self, left: Any, right: Any) -> bool:
-        return self.judge.equivalent(str(left), str(right))
+        if left.key == right.key:
+            return True
+        # Math-Verify verdicts depend only on the parsed answers, so every vote shares them.
+        pair = (min(left.key, right.key), max(left.key, right.key))
+        if pair not in self._verdicts:
+            self._verdicts[pair] = self.judge.equivalent(left.text, right.text)
+        return self._verdicts[pair]
 
     def grade(self, text: str, problem: Problem) -> Grade:
         result = self.judge.grade(text, problem.answer)
@@ -167,4 +184,4 @@ class MATH500(Dataset):
         self.judge.close()
 
 
-__all__ = ["MATH500", "MathJudge", "stratified_order"]
+__all__ = ["MATH500", "MathAnswer", "MathJudge", "stratified_order"]
