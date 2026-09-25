@@ -24,6 +24,7 @@ def _identity(model: Mapping[str, Any]) -> dict[str, Any]:
         "tokenizer_kwargs": dict(model["tokenizer_kwargs"]),
         "local_files_only": bool(model["local_files_only"]),
         "trust_remote_code": bool(model["trust_remote_code"]),
+        "token_penalty": model["token_penalty"],
     }
 
 
@@ -59,6 +60,8 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
     vllm = engine["vllm"]
     if vllm["mh_fused_logprobs"] and vllm["asynchronous"]:
         raise ValueError("vllm.mh_fused_logprobs needs the synchronous engine (vllm.asynchronous = false)")
+    if vllm["mh_fused_logprobs"] and model["token_penalty"] is not None:
+        raise ValueError("vllm.mh_fused_logprobs reads the unpenalized logits; disable it or ar.model.token_penalty")
     # Resolve Hub names once so the engine and the exact scorer read the same files.
     path = str(model["path"])
     if not Path(path).is_dir():

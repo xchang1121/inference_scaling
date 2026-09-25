@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
@@ -70,21 +70,20 @@ class TransformersBackend:
         device: str | Any | None = None,
         max_score_batch_size: int,
         score_chunk_size: int,
+        token_penalty: TokenPenalty | None = None,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
         self.tokenizer = tokenizer
-        self._model_id = model_id or str(
-            getattr(
-                getattr(model, "config", None), "_name_or_path", "transformers-model"
-            )
-        )
-        inferred_device = getattr(model, "device", None)
+        self._model_id = model_id or str(getattr(getattr(model, "config", None), "_name_or_path", "transformers-model"))
         self.device = torch_module.device(
-            device
-            or inferred_device
-            or ("cuda" if torch_module.cuda.is_available() else "cpu")
+            device or getattr(model, "device", None) or ("cuda" if torch_module.cuda.is_available() else "cpu")
         )
+        # A token penalty makes the penalized model the model, so it is part of the identity.
+        self._penalty = token_penalty
+        if token_penalty is not None:
+            self._model_id += f"|{token_penalty.penalty_id}"
+            self._penalty_index = torch_module.tensor(token_penalty.token_ids, device=self.device)
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if pad_token_id is None:
             pad_token_id = getattr(tokenizer, "eos_token_id", None)
@@ -144,6 +143,7 @@ class TransformersBackend:
         trust_remote_code: bool = False,
         max_score_batch_size: int,
         score_chunk_size: int,
+        token_penalty: Mapping[str, Any] | None,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -237,6 +237,8 @@ class TransformersBackend:
             device=input_device,
             max_score_batch_size=max_score_batch_size,
             score_chunk_size=score_chunk_size,
+            token_penalty=None if token_penalty is None else TokenPenalty.from_words(
+                tokenizer, token_penalty["words"], token_penalty["strength"]),
         )
 
     @property
@@ -277,31 +279,25 @@ class TransformersBackend:
         position_ids = attention_mask.to(dtype=torch.long).cumsum(dim=-1) - 1
         return position_ids.masked_fill(attention_mask == 0, 0)
 
-    @staticmethod
-    def _policy_log_probs(logits, sampling: SamplingConfig | None):
+    def _policy_log_probs(self, logits, sampling: SamplingConfig | None):
+        """Log-probabilities of ``sampling`` over the (penalized) model's logits; sampling and scoring share them."""
+
         torch_module = _require_torch()
         policy = sampling or SamplingConfig()
         transformed = logits.to(dtype=torch_module.float32) / policy.temperature
-        vocabulary_size = transformed.shape[-1]
-        if policy.top_k is not None and policy.top_k < vocabulary_size:
-            threshold = torch_module.topk(transformed, policy.top_k, dim=-1).values[
-                ..., -1, None
-            ]
-            transformed = transformed.masked_fill(
-                transformed < threshold, float("-inf")
-            )
+        if self._penalty is not None:
+            # The penalty belongs to the model's logits, so the temperature scales it too.
+            transformed[..., self._penalty_index.to(transformed.device)] -= self._penalty.strength / policy.temperature
+        if policy.top_k is not None and policy.top_k < transformed.shape[-1]:
+            threshold = torch_module.topk(transformed, policy.top_k, dim=-1).values[..., -1, None]
+            transformed = transformed.masked_fill(transformed < threshold, float("-inf"))
         if policy.top_p < 1:
-            sorted_logits, sorted_indices = torch_module.sort(
-                transformed, descending=True, dim=-1
-            )
-            sorted_probabilities = torch_module.softmax(sorted_logits, dim=-1)
-            remove = sorted_probabilities.cumsum(dim=-1) > policy.top_p
+            sorted_logits, sorted_indices = torch_module.sort(transformed, descending=True, dim=-1)
+            remove = torch_module.softmax(sorted_logits, dim=-1).cumsum(dim=-1) > policy.top_p
             remove[..., 1:] = remove[..., :-1].clone()
             remove[..., 0] = False
-            remove_original = torch_module.zeros_like(remove).scatter(
-                -1, sorted_indices, remove
-            )
-            transformed = transformed.masked_fill(remove_original, float("-inf"))
+            transformed = transformed.masked_fill(torch_module.zeros_like(remove).scatter(-1, sorted_indices, remove),
+                                                  float("-inf"))
         return torch_module.log_softmax(transformed, dim=-1)
 
     def _padded_inputs(self, prefixes: Sequence[TokenSequence]):
@@ -639,6 +635,8 @@ class TransformersBackend:
             [prefix], dtype=torch_module.long, device=self.device
         )
         attention_mask = torch_module.ones_like(input_ids)
+        # Beam search adds up the processed scores, so they are the penalized model's normalized log-probabilities.
+        penalized = None if self._penalty is None else [lambda _ids, scores: self._policy_log_probs(scores, None)]
         with self._model_lock, torch_module.inference_mode():
             output = self.model.generate(
                 input_ids=input_ids,
@@ -649,5 +647,6 @@ class TransformersBackend:
                 use_cache=True,
                 pad_token_id=self.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
+                logits_processor=penalized,
             )
         return tuple(int(token) for token in output[0, input_ids.shape[1] :].tolist())

@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
-from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 
 
@@ -52,8 +52,9 @@ class RepeatableCache:
         return None
 
 
-def _backend(model):
-    return TransformersBackend(model, TinyTokenizer(), device="cpu", max_score_batch_size=8, score_chunk_size=256)
+def _backend(model, token_penalty=None):
+    return TransformersBackend(model, TinyTokenizer(), device="cpu", max_score_batch_size=8, score_chunk_size=256,
+                               token_penalty=token_penalty)
 
 
 def test_request_local_randomness_is_independent_of_batch_order() -> None:
@@ -262,22 +263,55 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
     assert snapshot.score_forward_token_slots == 2
 
 
-def test_confidence_statistics_reject_truncated_support() -> None:
-    model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = _backend(model)
-
+def test_confidence_statistics_reject_truncated_support_and_nonpositive_top_k() -> None:
+    backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]))
     with pytest.raises(ValueError, match="full-support"):
-        backend.score_statistics_batch(
-            [ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))], confidence_top_k=2
-        )
-
-
-def test_confidence_statistics_reject_nonpositive_top_k() -> None:
-    model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = _backend(model)
-
+        backend.score_statistics_batch([ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))], confidence_top_k=2)
     with pytest.raises(ValueError, match="confidence_top_k must be positive"):
-        backend.score_statistics_batch(
-            [ScoreRequest((0,), ((1,),), SamplingConfig())],
-            confidence_top_k=0,
-        )
+        backend.score_statistics_batch([ScoreRequest((0,), ((1,),), SamplingConfig())], confidence_top_k=0)
+
+
+def test_token_penalty_is_the_model_for_sampling_scoring_and_identity() -> None:
+    penalty = TokenPenalty((1,), float(np.log(2)))
+    backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]), penalty)
+    assert backend.model_id == f"constant-logit-model|{penalty.penalty_id}"
+    # (0.5, 0.3, 0.2) becomes (0.5, 0.15, 0.2) / 0.85, and a temperature acts on the penalized logits.
+    scores = backend.score_batch([ScoreRequest((0,), ((0,), (1,), (2,)), SamplingConfig()),
+                                  ScoreRequest((0,), ((1,),), SamplingConfig(temperature=0.5))])
+    assert [row[0] for row in scores] == pytest.approx(np.log([0.5 / 0.85, 0.15 / 0.85, 0.2 / 0.85, 0.0225 / 0.3125]))
+    sampling = SamplingConfig(temperature=0.5)
+    samples = backend.sample_batch([GenerationRequest((0,), 4, sampling, seed, str(seed)) for seed in range(4)])
+    for policy, field in ((sampling, "token_logprobs"), (SamplingConfig(), "reference_token_logprobs")):
+        rescored = backend.score_batch([ScoreRequest(sample.prefix, (sample.token_ids,), policy) for sample in samples])
+        assert [getattr(sample, field) for sample in samples] == pytest.approx(rescored)
+
+
+def test_token_penalty_steers_native_greedy_and_beam_generation() -> None:
+    from transformers import AutoModelForCausalLM, GPT2Config
+
+    with torch.random.fork_rng():
+        torch.manual_seed(3)
+        model = AutoModelForCausalLM.from_config(GPT2Config(vocab_size=16, n_layer=1, n_head=1, n_embd=8, n_positions=32))
+    tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2, bos_token_id=1)
+    plain = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=8)
+    for beams in (1, 3):
+        chosen = tuple(sorted(set(plain.direct_generate((1, 4), max_new_tokens=4, num_beams=beams)) - {2}))
+        penalized = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=8,
+                                        token_penalty=TokenPenalty(chosen, 30.0))
+        assert not set(penalized.direct_generate((1, 4), max_new_tokens=4, num_beams=beams)) & set(chosen)
+
+
+def test_token_penalty_words_take_their_single_token_forms() -> None:
+    class Tokenizer:
+        pieces = {" wait": 5, " Wait": 6, "Wait": 7, " hmm": 8}
+
+        def encode(self, text, add_special_tokens):
+            # "Hmm" is an unknown word and the rest take two pieces.
+            return [self.pieces[text]] if text in self.pieces else [0] if text == "Hmm" else [3, 4]
+
+        def decode(self, ids):
+            return {value: key for key, value in self.pieces.items()}.get(ids[0], "[UNK]")
+
+    assert TokenPenalty.from_words(Tokenizer(), ["wait", "hmm"], 2) == TokenPenalty((5, 6, 7, 8), 2.0)
+    with pytest.raises(ValueError, match="single token"):
+        TokenPenalty.from_words(Tokenizer(), ["perhaps"], 1.0)

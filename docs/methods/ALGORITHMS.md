@@ -85,6 +85,25 @@ $`\log q(y\mid y')`$。共享核计算
 再以 $`\log U\leq\log A`$ 接受 proposal，其中 $`U`$ 为 $`[0,1)`$ 上的均匀随机数。后缀切点、扩散
 生成块和批处理属于 proposal 的执行方式，不改变该接受核。
 
+<a id="token-penalty"></a>
+### 1.2 词表惩罚
+
+`ar.model.token_penalty` 在任何策略读取 logit 之前把固定 token 集 $`S`$ 的 logit 减去 $`\lambda`$（`strength`）：
+
+```math
+\tilde p(v\mid c)=\frac{p(v\mid c)\,e^{-\lambda\mathbf 1[v\in S]}}{1-(1-e^{-\lambda})\,p(S\mid c)}.
+```
+
+$`\tilde p`$ 取代 $`p`$ 成为模型：温度作用于惩罚后的 logit，采样、参考概率、评分与读取模型概率的奖励都来自它，
+式 (1)、式 (2) 与上述性质对 $`\tilde p`$ 原样成立；它仍是全支撑分布，重要性修正条件不受影响。整条序列上，
+$`\tilde p(y)`$ 等于 $`p(y)e^{-\lambda N_S(y)}`$ 再除以各步分母之积，$`N_S`$ 为 $`S`$ 中 token 的出现次数。
+默认词集是推理中表示犹豫、转向与回溯的 wait、hmm、alternatively、actually、however、but、maybe、perhaps，
+$`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切换；arXiv:2606.00206 在量化模型上对 50 个同类
+标记在 $`\lambda\in[0.5,4]`$ 上扫描，思维链缩短 12%–23%，准确率持平或提高。该文只取前有空格的形式；这里另取行首的
+首字母大写形式（段首的 “Wait”），不取无空格的小写形式，因为它多是其他词的片段。vLLM 用 `logit_bias` 施加惩罚，
+它在温度之前生效；原生评分与 `mh_fused_logprobs` 读未惩罚的 logit，所以评分转交精确后端，同步引擎的 beam search
+报错。$`\lambda`$ 应在 `selection.skip` 跳过的留出题上选择，并在相同 FLOP 下与幂指数 $`\alpha`$ 比较。
+
 <a id="alg-overview"></a>
 ## 2. 方法总览
 

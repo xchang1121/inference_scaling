@@ -35,6 +35,7 @@ def test_transformers_loader_passes_every_configured_option(monkeypatch) -> None
         "tokenizer_kwargs": {},
         "local_files_only": True,
         "trust_remote_code": False,
+        "token_penalty": model["token_penalty"],
         "cache_dir": None,
         "device": engine["device"],
         "dtype": engine["dtype"],
@@ -83,16 +84,20 @@ def test_async_vllm_uses_its_public_signature_and_shares_files_with_the_exact_sc
     assert "enable_mh_fused_logprobs" not in kwargs
 
 
-def test_fused_mh_logprobs_need_the_synchronous_engine(monkeypatch, tmp_path) -> None:
+def test_fused_mh_logprobs_need_the_synchronous_engine_and_no_token_penalty(monkeypatch, tmp_path) -> None:
     model, engine = _sections("vllm")
     model["path"] = str(tmp_path)
+    model["token_penalty"] = {"words": ["wait"], "strength": 1.0}
     engine["vllm"]["mh_fused_logprobs"] = True
     with pytest.raises(ValueError, match="synchronous"):
+        loader.load_backend(model, engine, seed=0, logprobs=0)
+    engine["vllm"]["asynchronous"] = False
+    with pytest.raises(ValueError, match="unpenalized"):
         loader.load_backend(model, engine, seed=0, logprobs=0)
 
     captured = {}
     monkeypatch.setattr(loader.VLLMBackend, "from_pretrained", lambda model, **kwargs: captured.update(kwargs))
-    engine["vllm"]["asynchronous"] = False
+    model["token_penalty"] = None
     loader.load_backend(model, engine, seed=0, logprobs=0)
     assert captured["enable_mh_fused_logprobs"] is True
     assert "max_logprobs" not in captured["engine_kwargs"]

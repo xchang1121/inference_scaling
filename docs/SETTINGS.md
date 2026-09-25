@@ -89,6 +89,7 @@
 | `adapter` | `null` 或 `{path, revision}` | 叠加在基础模型上的 PEFT 适配器（如 GRPO 训练结果） |
 | `tokenizer` / `tokenizer_revision` / `tokenizer_kwargs` | 字符串或 `null` / 字符串或 `null` / 对象 | 独立的 tokenizer 及其参数 |
 | `cache_dir` / `local_files_only` / `trust_remote_code` | 字符串或 `null` / 布尔 / 布尔 | Hub 缓存与加载选项 |
+| `token_penalty` | `null` 或 `{words, strength}` | 每个词前有空格的小写与首字母大写形式、以及行首的首字母大写形式（只取单个 token 的形式），其 logit 在温度之前减去 `strength`；惩罚后的分布就是模型本身，采样、参考概率与评分都用它（见[算法说明](methods/ALGORITHMS.md#token-penalty)）。vLLM 的原生评分与 `mh_fused_logprobs` 读未惩罚的 logit，所以评分需要 `exact_scoring = "transformers"`，同步引擎也不能做 beam search；`null` 关闭 |
 
 ### `ar.engine`
 

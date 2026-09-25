@@ -13,7 +13,7 @@ import pytest
 from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
 from inference_scaling.arllm.algorithms.config import PowerMHConfig
-from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.rng import SeedStream
 
@@ -335,6 +335,25 @@ def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
     beam_call = engine.calls[-1]
     assert beam_call["params"].beam_width == 4
     assert beam_call["use_tqdm"] is False
+
+
+def test_vllm_token_penalty_biases_every_request_and_is_scored_exactly_elsewhere() -> None:
+    engine, penalty, fallback = _BeamEngine(), TokenPenalty((4, 5), 1.5), _Fallback()
+    fallback.model_id = f"fake|{penalty.penalty_id}"
+    options = {"model_id": "fake", "parameter_count": 100, "sampling_params_factory": _SamplingParams,
+               "token_penalty": penalty}
+    backend = VLLMBackend(engine, _Tokenizer(), scoring_backend=fallback, **options)
+    assert backend.model_id == fallback.model_id
+    backend.sample_batch([GenerationRequest((1,), 2, SamplingConfig(), 11, "r")])
+    backend.direct_generate((1,), max_new_tokens=2)
+    assert engine.calls[0][1][0].logit_bias == engine.calls[1][1].logit_bias == {4: -1.5, 5: -1.5}
+    # Prompt log-probabilities would miss the bias.
+    assert backend.score_batch([ScoreRequest((1,), ((2, 3),), SamplingConfig())]) == [(-0.5, -0.5)]
+    assert backend.snapshot().native_score_sequences == 0
+    with pytest.raises(ValueError, match="offline beam search"):
+        backend.direct_generate((1,), max_new_tokens=2, num_beams=2)
+    with pytest.raises(ValueError, match="token_penalty"):
+        VLLMBackend(_Engine(), _Tokenizer(), **options).score_batch([ScoreRequest((1,), ((2,),), SamplingConfig())])
 
 
 class _AsyncEngine(_Engine):

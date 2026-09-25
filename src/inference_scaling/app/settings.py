@@ -85,6 +85,7 @@ SCHEMA: dict[str, Any] = {
             "cache_dir": _NULLABLE_STR,
             "local_files_only": bool,
             "trust_remote_code": bool,
+            "token_penalty": (None, {"words": [str], "strength": float}),
         },
         "engine": {
             "backend": _Choices({"transformers", "vllm"}),
