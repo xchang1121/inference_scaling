@@ -1,8 +1,17 @@
 """Forward-token cost model for sequential block generation.
 
-A rollout or a completion runs until EOS, so its cost depends on how long the
-remaining output actually is. The planners price it with ``expected_remaining``,
-the expected number of tokens from the current prefix to EOS estimated from
+Requests that share a prefix in one batch prefill it once, as the backends do:
+Transformers prefills each repeated prefix of a batch once and vLLM caches
+prefixes. A step at prefix length ``P`` draws its fresh candidates as complete
+outputs, so a candidate's block and its first completion come from one request:
+the step prefills ``P`` once and decodes ``B + d`` tokens per candidate, where
+``d`` is the expected length after the block. A candidate with ``K > 1``
+completions prefills its own prefix ``P + B`` once more and decodes ``K - 1``
+further completions. Every completion is scored ``reward_forward_passes`` times
+at its full length.
+
+Completions run until EOS, so ``d`` comes from ``expected_remaining``, the
+expected number of tokens from the current prefix to EOS estimated from
 observed completions. The output limit ``total_length`` only caps generation:
 it enters a cost when the expected completion would run into it, and a block
 that reaches it is terminal. Planned costs are therefore independent of the
@@ -25,22 +34,21 @@ def block_costs(
     block_size: int,
     reward_forward_passes: int,
     expected_remaining: int,
-) -> tuple[int, int]:
-    """Return ``(candidate_cost, rollout_cost)`` for one block choice.
+) -> tuple[int, int, int, int]:
+    """Return ``(shared_cost, candidate_cost, rollout_cost, branch_cost)`` for one block choice.
 
-    A candidate costs its cold prefix plus decoded block. A rollout continues it
-    until EOS and is scored ``reward_forward_passes`` times. A block reaching the
-    output limit is terminal: candidates run to EOS and are scored directly.
-    All samples use the same model; auxiliary models need a separate cost model.
+    ``M`` candidates with ``K`` completions each cost
+    ``shared + M * (candidate + K * rollout) + (M * branch if K > 1 else 0)``.
+    A block reaching the output limit is terminal: its candidates are complete
+    outputs scored directly, with ``K = 0``.
     """
     prefix = prompt_length + generated_length
     remaining = _completion_length(generated_length, total_length, expected_remaining)
     if generated_length + block_size == total_length:
-        full = max(1, prefix + remaining)
-        return full * (1 + reward_forward_passes), 0
+        return prefix, remaining + reward_forward_passes * (prefix + remaining), 0, 0
     # Early-EOS candidates are scored once rather than K times; K >= 1 covers them.
-    full = max(1, prefix + max(remaining, block_size))
-    return max(1, prefix + block_size), full * (1 + reward_forward_passes)
+    after = max(1, remaining - block_size)
+    return prefix, block_size, after + reward_forward_passes * (prefix + block_size + after), prefix + block_size
 
 
 def completion_reserve(
@@ -52,9 +60,10 @@ def completion_reserve(
     candidates: int,
     reward_forward_passes: int,
 ) -> int:
-    """Expected cost of finishing from the prefix with ``candidates`` scored completions."""
+    """Expected cost of finishing from the prefix with ``candidates`` scored complete outputs."""
+    prefix = prompt_length + generated_length
     remaining = _completion_length(generated_length, total_length, expected_remaining)
-    return candidates * max(1, prompt_length + generated_length + remaining) * (1 + reward_forward_passes)
+    return prefix + candidates * (remaining + reward_forward_passes * (prefix + remaining))
 
 
 __all__ = ["block_costs", "completion_reserve"]

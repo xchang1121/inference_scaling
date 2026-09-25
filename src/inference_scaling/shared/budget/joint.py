@@ -87,17 +87,27 @@ def estimate_weight_moments(
 
 @dataclass(frozen=True, slots=True)
 class BlockBudgetEstimate:
+    """Moments and the cost terms of :func:`inference_scaling.shared.budget.costs.block_costs`."""
+
     block_size: int
     moments: WeightMoments
+    shared_cost: float
     candidate_cost: float
     rollout_cost: float
+    branch_cost: float
 
     def __post_init__(self) -> None:
         positive_integer("block_size", self.block_size)
         if not isfinite(self.candidate_cost) or self.candidate_cost <= 0:
             raise ValueError("candidate_cost must be finite and positive")
-        if not isfinite(self.rollout_cost) or self.rollout_cost < 0:
-            raise ValueError("rollout_cost must be finite and non-negative")
+        for name in ("shared_cost", "rollout_cost", "branch_cost"):
+            if not isfinite(getattr(self, name)) or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+
+    def cost(self, candidates: int, rollouts: int) -> float:
+        """Planned cost of ``candidates`` candidates with ``rollouts`` completions each."""
+        branch = self.branch_cost if rollouts > 1 else 0.0
+        return self.shared_cost + candidates * (self.candidate_cost + rollouts * self.rollout_cost + branch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +180,7 @@ def choose_joint_budget(
         stages = ceil(horizon / block) if forecast_full_horizon and not terminal else 1
         for candidates in sorted(set(candidate_counts)):
             for rollouts in (0,) if terminal else sorted(set(rollout_counts)):
-                cost = candidates * (
-                    estimate.candidate_cost + rollouts * estimate.rollout_cost
-                )
+                cost = estimate.cost(candidates, rollouts)
                 if (
                     max(stages * cost, cost + (0 if terminal else finish_reserve))
                     > remaining_budget

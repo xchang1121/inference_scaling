@@ -3,17 +3,19 @@
 This module only samples: it runs pilots and production IS steps and keeps the
 budget ledger. Each production step is a conditional IS step on the kept
 complete sequence, so the carried block and its reused completion cost nothing
-again; pilots evaluate fresh candidates at the current cut and are discarded. Plans come from :mod:`inference_scaling.shared.budget.planners`
-and planned costs from :mod:`inference_scaling.shared.budget.costs`.
+again; pilots cut one pool of fresh complete outputs at the current cut and are
+discarded. Plans come from :mod:`inference_scaling.shared.budget.planners` and
+planned costs from :mod:`inference_scaling.shared.budget.costs`.
 
-Budget units are forward-token slots, including an explicit reward
+Budget units are forward-token slots under the cost model of
+:mod:`inference_scaling.shared.budget.costs`, including an explicit reward
 forward-pass allowance; they are not measured GPU FLOPs or elapsed time.
 Rollouts and completions run until they stop, so their cost is planned from the
 expected remaining length observed in earlier completions, and the ledger
-charges the tokens each step actually used. The output limit ``total_length``
-only caps generation: chunk sizes and counts do not depend on it unless
-outputs reach it. The budget is a planning target, and a step can spend more
-than planned when its completions run longer than expected.
+charges the requests each step actually made. The output limit
+``total_length`` only caps generation: chunk sizes and counts do not depend on
+it unless outputs reach it. The budget is a planning target, and a step can
+spend more than planned when its completions run longer than expected.
 """
 
 from __future__ import annotations
@@ -22,17 +24,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import ceil, isfinite
 
+from inference_scaling.arllm.algorithms.candidates import cut_block, sample_outputs, validate_base_sampling
 from inference_scaling.arllm.algorithms.conditional_is import (
-    ConditionalCandidate,
     ConditionalISStep,
     RetainedSequence,
     conditional_is_step,
     estimate_conditional_weights,
 )
-from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
+from inference_scaling.arllm.types import (
+    AutoregressiveBackend,
+    GenerationRequest,
+    ScoreRequest,
+    SequenceSample,
+    TokenSequence,
+)
 from inference_scaling.shared.budget.costs import block_costs, completion_reserve
 from inference_scaling.shared.budget.joint import (
     BlockBudgetEstimate,
@@ -145,28 +152,36 @@ class JointBudgetISResult:
     length_probe_forward_tokens: int = 0
 
 
-def realized_cost(
-    candidates: Sequence[ConditionalCandidate],
-    *,
-    prefix_length: int,
-    reward_forward_passes: int,
-    carried: bool = False,
-) -> int:
-    """Forward-token slots a step used: cold prefixes, decoded tokens and scoring.
+class _Ledger:
+    """The backend and reward of one run, charging their calls under the cost model.
 
-    With ``carried``, candidate 0 and its first completion come from the kept
-    sequence, so neither is charged again.
+    A batch prefills each distinct prefix once and decodes every generated
+    token. Rewards are fixed per sequence, so each distinct sequence is scored
+    ``reward_forward_passes`` times once per run.
     """
-    total = 0
-    for index, candidate in enumerate(candidates):
-        block = prefix_length + len(candidate.token_ids)
-        reused = carried and index == 0
-        if not reused:
-            total += block
-        for rollout in candidate.rollouts[int(reused):]:
-            sequence = block + len(rollout.token_ids)
-            total += (sequence if rollout.token_ids else 0) + reward_forward_passes * sequence
-    return total
+
+    def __init__(self, backend: AutoregressiveBackend, reward: GeneratedBatchReward, passes: int) -> None:
+        self.backend, self.model_id = backend, backend.model_id
+        self._reward, self._passes = reward, passes
+        self._scored: set[int] = set()
+        self.slots = 0
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        samples = self.backend.sample_batch(requests)
+        self.slots += sum(map(len, {request.prefix for request in requests}))
+        self.slots += sum(len(sample.token_ids) for sample in samples)
+        return samples
+
+    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
+        return self.backend.score_batch(requests)
+
+    def reward(
+        self, prompt: TokenSequence, sequences: Sequence[TokenSequence], logprobs: Sequence[Sequence[float]],
+    ) -> Sequence[float]:
+        fresh = {hash(sequence): len(sequence) for sequence in sequences if hash(sequence) not in self._scored}
+        self._scored.update(fresh)
+        self.slots += self._passes * sum(len(prompt) + length for length in fresh.values())
+        return self._reward(prompt, sequences, logprobs)
 
 
 def run_joint_budget_is(
@@ -193,6 +208,7 @@ def run_joint_budget_is(
     sampling = sampling or SamplingConfig()
     validate_base_sampling(sampling)
     prompt_length = len(prompt)
+    ledger = _Ledger(backend, reward, config.reward_forward_passes)
 
     def reserve(generated_length: int, expected: int) -> int:
         return completion_reserve(
@@ -209,14 +225,13 @@ def run_joint_budget_is(
         if config.forward_token_budget < needed:
             raise ValueError(f"budget must cover at least {needed} forward-token slots")
 
-    probe_cost = 0
     if config.expected_output_tokens is not None:
         expected = config.expected_output_tokens
         require_budget(0, expected)
     else:
         # Reject budgets that cannot finish even one token per candidate before probing.
         require_budget(0, 1)
-        probe = backend.sample_batch([
+        probe = ledger.sample_batch([
             GenerationRequest(
                 prompt,
                 config.total_length,
@@ -226,70 +241,64 @@ def run_joint_budget_is(
             )
         ])[0]
         expected = max(1, len(probe.token_ids))
-        probe_cost = prompt_length + len(probe.token_ids)
-        require_budget(probe_cost, expected)
+        require_budget(ledger.slots, expected)
+    probe_cost = ledger.slots
     state = RetainedSequence()
     steps: list[JointBudgetStep] = []
     remaining_budget = config.forward_token_budget - probe_cost
-    pilot_costs: list[int] = []
+    # The pilots' shared complete outputs at the current cut.
+    pool: list[SequenceSample] = []
     planner = (
         AdaptiveBudgetController(config)
         if config.planning_mode == "chunk_adaptive"
         else FullHorizonPlanner(config)
     )
 
-    def step_seeds(block: int, phase: str) -> SeedStream:
+    def block_key(block: int) -> int | str:
         # A block reaching the output limit completes the sequence; its seed key
         # omits the limit so completions do not depend on it.
-        key = block if state.fixed + block < config.total_length else "rest"
-        return SeedStream(seeds.derive("joint_budget_is", len(steps), phase, key))
+        return block if state.fixed + block < config.total_length else "rest"
 
     def estimate_block(block: int) -> BlockBudgetEstimate:
-        candidate_cost, rollout_cost = block_costs(
+        costs = block_costs(
             prompt_length=prompt_length, generated_length=state.fixed,
             total_length=config.total_length, block_size=block,
             reward_forward_passes=config.reward_forward_passes,
             expected_remaining=expected,
         )
-        return BlockBudgetEstimate(
-            block, WeightMoments(1.0, 0.0 if rollout_cost == 0 else 1.0),
-            candidate_cost, rollout_cost,
-        )
+        return BlockBudgetEstimate(block, WeightMoments(1.0, 0.0 if costs[2] == 0 else 1.0), *costs)
 
-    def measure(estimate: BlockBudgetEstimate) -> WeightMoments | None:
-        # Pilots evaluate fresh candidates at the current cut and are then discarded.
-        pilot_seeds = step_seeds(estimate.block_size, "pilot")
+    def measure(estimates: Sequence[BlockBudgetEstimate]) -> list[WeightMoments | None]:
+        # Every pilot cuts the same pool of complete outputs; one batch completes all of them.
         prefix = state.token_ids[: state.fixed]
-        block = min(estimate.block_size, config.total_length - state.fixed)
-        pilot = estimate_conditional_weights(
-            backend=backend,
-            prompt=prompt,
-            generated_prefix=prefix,
+        if not pool:
+            pool.extend(sample_outputs(
+                ledger, prompt + prefix, config.pilot_candidates, config.total_length - state.fixed, sampling,
+                SeedStream(seeds.derive("joint_budget_is", len(steps), "pilot")), len(steps),
+            ))
+        cuts = [cut_block(output, estimate.block_size) for estimate in estimates for output in pool]
+        pilots = estimate_conditional_weights(
+            backend=ledger, prompt=prompt, generated_prefix=prefix,
             generated_prefix_logprobs=state.token_logprobs[: state.fixed],
-            candidates=sample_candidates(
-                backend, prompt + prefix, config.pilot_candidates, block, sampling, pilot_seeds, len(steps),
-            ),
-            rollout_length=config.total_length - state.fixed - block,
-            rollout_count=config.pilot_rollouts,
-            sampling=sampling,
-            reward_temperature=config.reward_temperature,
-            reward=reward,
-            seeds=pilot_seeds,
+            candidates=[candidate for candidate, _ in cuts], first_completions=[first for _, first in cuts],
+            total_length=config.total_length, rollout_count=config.pilot_rollouts, sampling=sampling,
+            reward_temperature=config.reward_temperature, reward=ledger.reward,
+            seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), "pilot",
+                                          *(block_key(estimate.block_size) for estimate in estimates))),
             step_index=len(steps),
         )
-        pilot_costs.append(realized_cost(
-            pilot, prefix_length=prompt_length + state.fixed,
-            reward_forward_passes=config.reward_forward_passes,
-        ))
-        weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot]
-        if any(not isfinite(value) for group in weights for value in group):
-            return None
-        # A candidate that ends the sequence has one empty completion and a known weight.
-        return estimate_weight_moments(weights, deterministic=[
-            not candidate.rollouts[0].token_ids for candidate in pilot
-        ])
+        moments: list[WeightMoments | None] = []
+        for start in range(0, len(pilots), len(pool)):
+            pilot = pilots[start : start + len(pool)]
+            weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot]
+            # A candidate that ends the sequence has one empty completion and a known weight.
+            moments.append(None if any(not isfinite(value) for group in weights for value in group)
+                           else estimate_weight_moments(weights, deterministic=[
+                               not candidate.rollouts[0].token_ids for candidate in pilot]))
+        return moments
 
     while not state.token_ids or state.fixed < len(state.token_ids):
+        pool.clear()
         remaining = config.total_length - state.fixed
         finish_reserve = reserve(state.fixed, expected)
         # Earlier overruns never block the completion: the planner always sees
@@ -300,11 +309,12 @@ def run_joint_budget_is(
             finish_reserve=finish_reserve,
             expected_remaining=min(expected, remaining),
         )
-        pilot_costs.clear()
+        before = ledger.slots
         selection = planner.select(planning, estimate_block, measure)
         plan = selection.plan
+        pilot_actual = ledger.slots - before
         evaluation, kept = conditional_is_step(
-            backend=backend,
+            backend=ledger,
             prompt=prompt,
             state=state,
             config=ConditionalISConfig(
@@ -315,15 +325,11 @@ def run_joint_budget_is(
                 reward_temperature=config.reward_temperature,
             ),
             sampling=sampling,
-            reward=reward,
-            seeds=step_seeds(plan.block_size, "evaluation"),
+            reward=ledger.reward,
+            seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), "evaluation", block_key(plan.block_size))),
             step_index=len(steps),
         )
-        pilot_actual = sum(pilot_costs)
-        actual = realized_cost(
-            evaluation.candidates, prefix_length=prompt_length + state.fixed,
-            reward_forward_passes=config.reward_forward_passes, carried=evaluation.retained_candidate,
-        )
+        actual = ledger.slots - before - pilot_actual
         remaining_budget -= pilot_actual + actual
         steps.append(
             JointBudgetStep(
@@ -342,7 +348,6 @@ def run_joint_budget_is(
             expected = max(1, ceil(sum(rollout_lengths) / len(rollout_lengths)))
         state = kept
     pilot_reserved = sum(step.pilot_reserved_cost for step in steps)
-    pilot_actual_total = sum(step.pilot_actual_cost for step in steps)
     return JointBudgetISResult(
         prompt,
         state.token_ids,
@@ -351,7 +356,7 @@ def run_joint_budget_is(
         pilot_reserved,
         "eos" if sampling.eos_token_id is not None and state.token_ids[-1] == sampling.eos_token_id
         else "length" if len(state.token_ids) >= config.total_length else "stop",
-        actual_forward_tokens=probe_cost + pilot_actual_total + sum(step.actual_cost for step in steps),
-        pilot_actual_forward_tokens=pilot_actual_total,
+        actual_forward_tokens=ledger.slots,
+        pilot_actual_forward_tokens=sum(step.pilot_actual_cost for step in steps),
         length_probe_forward_tokens=probe_cost,
     )

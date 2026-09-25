@@ -9,7 +9,7 @@ from inference_scaling.shared.budget.costs import block_costs, completion_reserv
 from inference_scaling.shared.budget.joint import BlockBudgetEstimate, WeightMoments
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import pointwise
-from test_joint_budget_is import RecordingBackend, joint_config
+from test_joint_budget_is import RecordingBackend, charged, joint_config
 
 
 def settings(**overrides):
@@ -43,11 +43,11 @@ def select(controller, prefix=0, budget=None, moments=None):
                             total_length=config.total_length, block_size=block,
                             reward_forward_passes=config.reward_forward_passes,
                             expected_remaining=remaining)
-        return BlockBudgetEstimate(block, WeightMoments(1, 0 if costs[1] == 0 else 1), *costs)
+        return BlockBudgetEstimate(block, WeightMoments(1, 0 if costs[2] == 0 else 1), *costs)
 
-    def measure(estimate):
-        measured.append(estimate.block_size)
-        return moments(estimate.block_size) if callable(moments) else moments
+    def measure(estimates):
+        measured.extend(estimate.block_size for estimate in estimates)
+        return [moments(estimate.block_size) if callable(moments) else moments for estimate in estimates]
 
     selection = controller.select(PlanningState(remaining, budget, reserve, remaining), estimate, measure)
     assert selection.remaining_budget == budget - selection.pilot_reserved_cost
@@ -100,7 +100,7 @@ def test_missing_or_flat_pilot_does_not_tune(moments, status):
 def test_current_only_pilot_changes_mk_but_not_b():
     scheduler = controller()
     select(scheduler)
-    selection, measured = select(scheduler, prefix=4, budget=600, moments=WeightMoments(100, 0, 2))
+    selection, measured = select(scheduler, prefix=4, budget=480, moments=WeightMoments(100, 0, 2))
     assert measured == [4]
     assert selection.adjustment["neighbor_status"] == "skipped_for_budget"
     assert selection.adjustment["status"] == "adjusted"
@@ -152,7 +152,7 @@ def test_old_pilot_is_not_reused_when_next_prefix_cannot_afford_new_evidence():
     select(scheduler)
     adjusted, _ = select(scheduler, prefix=4, moments=WeightMoments(1, 1, 2))
     assert parameters(adjusted.plan) == (4, 8, 1)
-    selection, measured = select(scheduler, prefix=8, budget=600)
+    selection, measured = select(scheduler, prefix=8, budget=380)
     assert parameters(selection.plan) == (4, 8, 1)
     assert selection.adjustment["status"] == "kept_no_pilot_budget"
     assert not selection.plan.used_pilot and not measured
@@ -166,7 +166,7 @@ def test_threshold_keeps_parameters_when_improvement_is_too_small():
     assert parameters(selection.plan) == (4, 4, 2)
 
 
-@pytest.mark.parametrize("budget, status", [(379, "finish"), (380, "kept_no_pilot_budget")])
+@pytest.mark.parametrize("budget, status", [(315, "finish"), (316, "kept_no_pilot_budget")])
 def test_incumbent_budget_boundary_is_exact(budget, status):
     scheduler = controller()
     select(scheduler)
@@ -198,23 +198,23 @@ def test_real_driver_130k_cap_uses_initial_chunk_not_full_remaining():
         sampling=SamplingConfig(eos_token_id=0),
     )
     assert parameters(result.steps[0].plan) == (100, 4, 2)
-    probe, *chunk = backend.requests
+    probe, *outputs = backend.requests
     assert probe.request_id == "joint-budget-is:length-probe"
-    assert all(request.max_new_tokens == 100 for request in chunk)
+    # Fresh candidates are complete outputs cut at the chunk; here each stops at EOS at once.
+    assert all(request.max_new_tokens == 130407 for request in outputs) and result.token_ids == (0,)
     assert result.pilot_reserved_forward_tokens == 0
     assert result.stopping_reason == "eos"
 
 
 def reused_cost(result, prompt_length, reward_passes):
-    """Planned cost of the kept block and completion, which a step does not pay again."""
+    """Planned cost of the kept block and completion, which a step neither decodes nor scores again."""
     total = 0
     for step in result.steps:
         if not step.evaluation.retained_candidate:
             continue
         candidate = step.evaluation.candidates[0]
-        block = prompt_length + step.evaluation.generated_length_before + len(candidate.token_ids)
-        kept = block + len(candidate.rollouts[0].token_ids)
-        total += block + (kept if candidate.rollouts[0].token_ids else 0) + reward_passes * kept
+        kept = len(candidate.token_ids) + len(candidate.rollouts[0].token_ids)
+        total += kept + reward_passes * (prompt_length + step.evaluation.generated_length_before + kept)
     return total
 
 
@@ -225,7 +225,9 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
         forward_token_budget=750 * (1 + reward_passes), pilot_fraction=0,
         reward_forward_passes=reward_passes,
     )
-    result = run_joint_budget_is(backend, (1, 1), config, pointwise(lambda _prompt, _tokens: 0.0), SeedStream(4))
+    scored = []
+    result = run_joint_budget_is(backend, (1, 1), config, pointwise(lambda _prompt, tokens: scored.append(tokens) or 0.0),
+                                 SeedStream(4))
     assert len(result.token_ids) == config.total_length
     assert len(result.steps) > 1
     assert parameters(result.steps[0].plan) == (4, 4, 2)
@@ -237,18 +239,12 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
         assert step.plan.forecast_steps == 1
         if step.adjustment["status"] != "finish":
             assert parameters(step.plan) == (4, 4, 2)
-    # Without EOS every output reaches the limit, so realized equals planned
-    # cost except for the kept block and completion, which are not paid again.
-    actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
-    actual += sum(
-        (len(candidate.rollouts) - int(step.evaluation.retained_candidate and index == 0))
-        * (2 + config.total_length) * reward_passes
-        for step in result.steps for index, candidate in enumerate(step.evaluation.candidates)
-    )
-    assert actual == result.actual_forward_tokens <= config.forward_token_budget
+    assert charged(backend, scored, 2, reward_passes) == result.actual_forward_tokens <= config.forward_token_budget
+    # Without EOS every output reaches the limit, so realized cost is planned cost less the
+    # kept block and completion, and less any repeated sequence, which is scored once.
     assert (
         result.actual_forward_tokens + reused_cost(result, 2, reward_passes)
-        == result.reserved_forward_tokens + result.length_probe_forward_tokens
+        <= result.reserved_forward_tokens + result.length_probe_forward_tokens
     )
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
 
@@ -275,16 +271,14 @@ def test_real_pilots_are_charged_but_never_reused_as_production_samples():
         return 0.0
 
     result = run_joint_budget_is(backend, (1, 1), config, pointwise(reward), SeedStream(8))
-    actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
-    actual += len(scored) * (2 + config.total_length)
-    assert result.actual_forward_tokens == actual
+    assert result.actual_forward_tokens == charged(backend, scored, 2, config.reward_forward_passes)
     assert (
         result.actual_forward_tokens + reused_cost(result, 2, config.reward_forward_passes)
-        == result.reserved_forward_tokens + result.length_probe_forward_tokens
+        <= result.reserved_forward_tokens + result.length_probe_forward_tokens
     )
     assert result.pilot_reserved_forward_tokens > 0
     assert result.pilot_reserved_forward_tokens == sum(step.pilot_reserved_cost for step in result.steps)
-    assert result.pilot_actual_forward_tokens == result.pilot_reserved_forward_tokens
+    assert 0 < result.pilot_actual_forward_tokens <= result.pilot_reserved_forward_tokens
     assert all(len(step.evaluation.candidates) == step.plan.candidate_count for step in result.steps)
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
     assert result.actual_forward_tokens <= config.forward_token_budget

@@ -49,12 +49,12 @@ v_{\rm between}(B)+v_{\rm within}(B)=\mathrm{Var}(G\mid g),\qquad
 等于短块条件权重；再用全方差公式，得到块长增加时候选间方差不减、候选内方差不增。
 这一结论要求奖励、最终长度上限及生成策略固定。改变 Consilience 的评分窗口定义或补全截断规则会改变目标。
 
-固定块长，设生成一个候选成本为 $`c_z`$、一次补全及评分成本为 $`c_u`$，预算为 $`C=M(c_z+Kc_u)`$。
-代入上式并求导，在两类方差和成本均为正的连续情形下得到
+固定块长，设整步共享前缀的成本为 $`c_0`$、每个候选的固定成本为 $`c_z`$、每条补全及评分成本为 $`c_u`$，
+预算为 $`C=c_0+M(c_z+Kc_u)`$（第 4 节给出各项）。代入上式并求导，在两类方差和成本均为正的连续情形下得到
 
 ```math
 K^*=\sqrt{\frac{v_{\rm within}c_z}{v_{\rm between}c_u}},\qquad
-M^*=\frac{C}{c_z+K^*c_u}.
+M^*=\frac{C-c_0}{c_z+K^*c_u}.
 ```
 
 该式解释宽度与重复补全的权衡。实际实现枚举整数配置，同时处理终止块、最小候选数和完成预留。
@@ -110,7 +110,8 @@ $`\mathbb E[\widehat H_A/\widehat Z]`$。由于 $`0\leq\widehat H_A/\widehat Z\l
 预算侧与采样侧分开实现：共享选择器 `choose_joint_budget` 与两种规划器 `FullHorizonPlanner`、`AdaptiveBudgetController` 位于 `shared/budget/`，只接收成本估计和初始样本矩；AR 执行器 `run_joint_budget_is` 只负责生成初始样本与正式样本并记账。每到一个新前缀：
 
 1. 去重配置块长（只有接近输出上限时才截到剩余长度），并加入“生成至 EOS”的完成选项。
-2. 在 `pilot_fraction` 限制内，按块长升序生成少量初始候选及补全；始终保留按期望长度计算的完成预算。
+2. 在 `pilot_fraction` 限制内按块长升序选出可负担的块长：各块长在同一组共享的完整输出（pilot 池）上切出初始
+   候选，所有块长的其余补全在一次批处理中生成；始终保留按期望长度计算的完成预算。
 3. 估计各块长的两类相对方差，枚举整数 $`M,K`$，选择误差预测分数最低的可行配置。
 4. 冻结本轮配置，执行一次[条件 IS](ALGORITHMS.md#alg-conditional-is) 步：0 号候选沿用当前完整序列的下一块及其
    补全，其余候选与补全使用独立随机种子新生成；初始样本不进入最终权重。
@@ -165,7 +166,7 @@ J(M,K,B)=n(B)
 可行配置同时满足
 
 ```math
-n(B)M[c_z(B)+Kc_u(B)]\leq C_{\rm remaining},
+n(B)\,[c_0+M(c_z(B)+Kc_u(B))]\leq C_{\rm remaining},
 ```
 
 并在非终止块执行后保留一次最小完整候选 IS 的成本。相同分数依次按本轮成本更低、块长更长、候选数和补全数更少打破平局。
@@ -194,19 +195,26 @@ n(B)M[c_z(B)+Kc_u(B)]\leq C_{\rm remaining},
 
 其中 $`\hat\ell_{\rm obs}`$ 是上一步新生成的正式补全的平均长度。第一步之前使用
 `expected_output_tokens`；未给出时从提示生成一条普通补全测量长度，其消耗记为
-`length_probe_forward_tokens` 并计入预算，这条补全不作为候选。非终止块采用
+`length_probe_forward_tokens` 并计入预算，这条补全不作为候选。
+
+后端对同一批中相同的前缀只预填充一次（Transformers 在批内复用，vLLM 缓存前缀），成本按此计算。新候选以
+完整输出生成，块与第一条补全来自同一请求：整步预填充一次前缀，每个候选解码 $`B+d`$ 个 token，
+$`d=\max\{1,\hat\ell-B\}`$；$`K\gt1`$ 时每个候选再预填充一次自己的前缀 $`P+L+B`$，解码其余 $`K-1`$ 条补全。
+于是非终止块
 
 ```math
-c_z(B)=\max\{1,P+L+B\},\qquad
-c_u(B)=(1+s)\max\{1,P+L+\max(\hat\ell,B)\}.
+c_0=P+L,\qquad
+c_z(B)=B+\mathbf 1\{K\gt1\}(P+L+B),\qquad
+c_u(B)=d+s\,(P+L+B+d).
 ```
 
-每次补全包含重新预填充、解码与奖励评分。到达输出上限的块（$`B=T-L`$）为终止块：候选生成至停止
-并直接评分，$`c_z=(1+s)\max\{1,P+L+\hat\ell\}`$、$`c_u=0`$。完成预留
-$`M_{\min}(1+s)\max\{1,P+L+\hat\ell\}`$ 随前缀更新；给出 `expected_output_tokens` 时，
-初始预算不足会在调用模型前报错。
+到达输出上限的块（$`B=T-L`$）为终止块：候选就是生成至停止的完整输出并直接评分，
+$`c_z=\hat\ell+s(P+L+\hat\ell)`$、$`c_u=0`$。完成预留 $`c_0+M_{\min}c_z`$ 随前缀更新；给出
+`expected_output_tokens` 时，初始预算不足会在调用模型前报错。pilot 池本身就是 `pilot_candidates` 条完成候选，
+由当前前缀的第一个 pilot 支付，每个非终止块长只再付其候选分支前缀与 `pilot_rollouts - 1` 条补全。
 
-每步结束后按实际生成的候选、rollout 与评分长度记账，剩余预算取实际余额；
+每步结束后按实际请求记账：每批中相同的前缀计一次，生成的 token 逐个计入，每条不同的完整序列只评分一次；
+剩余预算取实际余额；
 早于预期结束的补全因此不再占用预算。计划只依赖此前步骤的样本，在本步正式样本生成前固定，
 第 2 节按可达前缀与预算状态条件化的逐步论证仍然适用。前面步骤超支时，规划器至少按完成预留看待剩余预算，
 完成序列不会被拒绝。
@@ -217,7 +225,7 @@ $`M_{\min}(1+s)\max\{1,P+L+\hat\ell\}`$ 随前缀更新；给出 `expected_outpu
 实际开销由后端计数器另外报告（记录的 `cost.phases`）。
 
 0 号候选的块及其保留补全已在之前的步骤生成并评分，实际记账不再计入。规划仍按 $`M`$ 个候选与 $`MK`$ 条补全
-估计成本，因此没有 EOS 时，实际消耗等于计划成本减去这部分复用，计划偏保守。
+估计成本，因此没有 EOS 与重复序列时，实际消耗等于计划成本减去这部分复用，计划偏保守。
 
 ### 块长与输出上限解耦
 
@@ -271,7 +279,7 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
 | `joint.forward_token_budget` | 包含长度测量、初始采样和奖励评分的总预算；按期望成本规划，按实际消耗记账 |
 | `joint.block_sizes` | 块长网格；仅 `full_horizon` 模式将完整剩余长度加入正常竞争 |
 | `joint.candidate_counts`、`joint.rollout_counts` | 整数网格，分别为 $`M\geq2`$、非终止时 $`K\geq1`$ |
-| `joint.pilot_candidates`、`joint.pilot_rollouts` | 每个被探测块长的初始样本数 |
+| `joint.pilot_candidates`、`joint.pilot_rollouts` | 共享 pilot 池的完整输出数与每个被探测块长的每候选补全数 |
 | `joint.pilot_fraction` | 每轮初始估计最多使用当前剩余预算的比例；还受完成预留限制 |
 | `joint.relative_variance_floor` | 预测分数中的相对方差下限 |
 | `joint.expected_output_tokens` | 第一步之前的期望输出长度；`null` 时先生成一条普通补全测量长度 |
@@ -302,7 +310,7 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
 - 三个初值必须属于各自网格。
 - 每次运行从初值开始，第一块不先做 pilot；后续仅在新 pilot 有效、存在方差信号、
   改善超过阈值且预算可负担时调整。没有证据或 pilot 预算不足则保持 B/M/K。
-- B 每次最多探测一个相邻网格值；比较 B 需要当前块与邻居的两组独立 pilot。
+- B 每次最多探测一个相邻网格值；比较 B 需要当前块与邻居的两组 pilot（切分同一 pilot 池）。
   只容得下一组时，只允许调整 M/K；单元素 `block_sizes` 固定 B。
 - 正式执行按期望成本检查下一块，另保护按期望长度计算的收尾预算；pilot 同时受比例上限和保护预算限制。
   每步结束后按实际消耗记账。15% 是可配置比例，不保证 pilot 能启动。

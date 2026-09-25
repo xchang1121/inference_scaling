@@ -35,10 +35,21 @@ class RecordingBackend(TabularAutoregressiveBackend):
     def __init__(self, probabilities=(0.65, 0.35)):
         super().__init__({}, fallback=probabilities)
         self.requests = []
+        self.batches = []
 
     def sample_batch(self, requests):
         self.requests.extend(requests)
-        return super().sample_batch(requests)
+        samples = super().sample_batch(requests)
+        self.batches.append((list(requests), samples))
+        return samples
+
+
+def charged(backend, scored, prompt_length, passes):
+    """The ledger: each batch's distinct prefixes once, every generated token, each distinct scored sequence."""
+
+    generated = sum(sum(map(len, {request.prefix for request in requests})) + sum(len(sample.token_ids) for sample in samples)
+                    for requests, samples in backend.batches)
+    return generated + passes * sum(prompt_length + len(sequence) for sequence in set(scored))
 
 
 def test_budget_includes_pilots_and_independent_production_samples():
@@ -217,13 +228,14 @@ def test_reward_cost_and_support_checks():
             block_size=block, reward_forward_passes=1, expected_remaining=expected,
         )
 
-    # An expected completion reaching the output limit prices every rollout at it.
-    assert costs(2) == (7, 22)
-    assert costs(6) == (22, 0)
-    assert costs(2, expected=100) == (7, 22)
-    # Otherwise the limit does not enter the cost: rollouts end at the expected EOS.
-    assert costs(2, expected=3) == costs(2, total_length=10_000, expected=3) == (7, 16)
-    assert costs(4, expected=3) == (9, 18)
+    # (shared prefix, candidate block, completion, branch prefix); an expected
+    # completion reaching the output limit prices every completion at it.
+    assert costs(2) == (5, 2, 15, 7)
+    assert costs(6) == (5, 17, 0, 0)
+    assert costs(2, expected=100) == (5, 2, 15, 7)
+    # Otherwise the limit does not enter the cost: completions end at the expected EOS.
+    assert costs(2, expected=3) == costs(2, total_length=10_000, expected=3) == (5, 2, 9, 7)
+    assert costs(4, expected=3) == (5, 4, 11, 9)
     backend = RecordingBackend()
     with pytest.raises(ValueError, match="full-support"):
         run_joint_budget_is(

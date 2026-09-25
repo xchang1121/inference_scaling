@@ -1,14 +1,21 @@
 """Candidate proposal and support check shared by the AR importance samplers.
 
-Fixed and budgeted conditional IS draw candidate blocks from the full-support
-base policy with the same seeds and request ids.
+A fresh candidate is drawn as a complete output and cut at the block boundary:
+the block is the candidate and the rest is its first completion, a draw from
+the base policy given the block. Fixed and budgeted conditional IS use the
+same seeds and request ids.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, SequenceSample, TokenSequence
 from inference_scaling.shared.rng import SeedStream
+
+# A generated completion: its tokens and their base-policy log-probabilities.
+Completion = tuple[TokenSequence, tuple[float, ...]]
 
 
 def validate_base_sampling(sampling: SamplingConfig) -> None:
@@ -19,42 +26,48 @@ def validate_base_sampling(sampling: SamplingConfig) -> None:
         )
 
 
-def sample_candidates(
+def sample_outputs(
     base_backend: AutoregressiveBackend,
     prefix: TokenSequence,
     count: int,
-    block_length: int,
+    horizon: int,
     sampling: SamplingConfig,
     seeds: SeedStream,
     step_index: int,
     first_index: int = 0,
 ) -> list[SequenceSample]:
+    """Complete outputs of up to ``horizon`` tokens after ``prefix``, one per candidate."""
+
     requests = [
         GenerationRequest(
             prefix=prefix,
-            max_new_tokens=block_length,
+            max_new_tokens=horizon,
             sampling=sampling,
-            seed=seeds.derive(
-                "conditional_is", step_index, "candidate", candidate_index
-            ),
+            seed=seeds.derive("conditional_is", step_index, "candidate", candidate_index),
             request_id=f"conditional-is:step:{step_index}:candidate:{candidate_index}",
         )
         for candidate_index in range(first_index, first_index + count)
     ]
-    candidates = base_backend.sample_batch(requests)
-    if len(candidates) != count:
+    outputs = base_backend.sample_batch(requests)
+    if len(outputs) != count:
         raise RuntimeError("backend returned an invalid number of candidates")
-    for candidate in candidates:
-        if not candidate.token_ids:
+    for output in outputs:
+        if not output.token_ids:
             raise RuntimeError("a candidate block must contain at least one token")
-        if (
-            candidate.model_id != base_backend.model_id
-            or candidate.policy_id != sampling.policy_id
-        ):
-            raise RuntimeError(
-                "candidate was not sampled and scored by the requested base policy"
-            )
-    return candidates
+        if output.model_id != base_backend.model_id or output.policy_id != sampling.policy_id:
+            raise RuntimeError("candidate was not sampled and scored by the requested base policy")
+    return outputs
 
 
-__all__ = ["sample_candidates", "validate_base_sampling"]
+def cut_block(output: SequenceSample, length: int) -> tuple[SequenceSample, Completion | None]:
+    """A complete output as a candidate block and, when it continues, the block's first completion."""
+
+    if len(output.token_ids) <= length:
+        return output, None
+    reference = output.reference_token_logprobs
+    block = replace(output, token_ids=output.token_ids[:length], token_logprobs=output.token_logprobs[:length],
+                    reference_token_logprobs=None if reference is None else reference[:length], finish_reason="length")
+    return block, (output.token_ids[length:], output.token_logprobs[length:])
+
+
+__all__ = ["Completion", "cut_block", "sample_outputs", "validate_base_sampling"]

@@ -12,6 +12,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 
 # The prompt (3,) opens thinking, token 1 closes it and token 2 is EOS.
 PARSER = ThinkingParser((ThinkingFormat((1,), (3,)),))
@@ -77,7 +78,7 @@ def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
     backend = _backend()
     result = run_conditional_is(
         backend, (3,), ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2, reward_temperature=1.0),
-        lambda prompt, sequence: float(sequence[0] == 0), SeedStream(7),
+        pointwise(lambda prompt, sequence: float(sequence[0] == 0)), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
     mh = run_power_mh_chain(

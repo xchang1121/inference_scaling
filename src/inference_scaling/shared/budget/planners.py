@@ -2,8 +2,11 @@
 
 A planner only turns cost estimates and pilot moments into a plan. The caller
 owns sampling: ``estimate_block(B)`` returns the planned costs of block size
-``B`` with default moments, and ``measure(estimate)`` runs an independent pilot
-at that block size and returns its moments, or ``None`` for unusable pilots.
+``B`` with default moments, and ``measure(estimates)`` runs one independent
+pilot per estimate, all in one batch, and returns their moments, ``None`` for
+unusable pilots. The pilots at a prefix cut one shared pool of
+``pilot_candidates`` complete outputs, so the first pilot there also pays for
+the pool and a completion pilot costs nothing more.
 :class:`PlanningState` describes the current prefix. Its output limit only
 clips blocks; forecasts use the expected remaining length instead.
 
@@ -15,7 +18,7 @@ clips blocks; forecasts use the expected remaining length instead.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from math import ceil
 from typing import Protocol
@@ -28,7 +31,7 @@ from inference_scaling.shared.budget.joint import (
 )
 
 EstimateBlock = Callable[[int], BlockBudgetEstimate]
-MeasureBlock = Callable[[BlockBudgetEstimate], WeightMoments | None]
+MeasureBlocks = Callable[[Sequence[BlockBudgetEstimate]], Sequence[WeightMoments | None]]
 
 
 class JointPlannerSettings(Protocol):
@@ -84,9 +87,17 @@ class PlanSelection:
 
 
 def pilot_cost(settings: JointPlannerSettings, estimate: BlockBudgetEstimate) -> float:
+    """A pilot's planned cost beyond the shared pool: the extra completions of its cut candidates."""
+    if estimate.rollout_cost == 0:
+        return 0.0
     return settings.pilot_candidates * (
-        estimate.candidate_cost + settings.pilot_rollouts * estimate.rollout_cost
+        estimate.branch_cost + (settings.pilot_rollouts - 1) * estimate.rollout_cost
     )
+
+
+def pool_cost(settings: JointPlannerSettings, completion: BlockBudgetEstimate) -> float:
+    """Planned cost of the pilots' shared pool: ``pilot_candidates`` scored complete outputs."""
+    return completion.cost(settings.pilot_candidates, 0)
 
 
 def _parameters(plan: JointBudgetPlan) -> tuple[int, int, int]:
@@ -103,24 +114,26 @@ class FullHorizonPlanner:
         self,
         state: PlanningState,
         estimate_block: EstimateBlock,
-        measure: MeasureBlock,
+        measure: MeasureBlocks,
     ) -> PlanSelection:
         settings = self.settings
         remaining, budget = state.remaining, state.budget
         blocks = sorted({min(value, remaining) for value in settings.block_sizes} | {remaining})
         pilot_limit = min(int(settings.pilot_fraction * budget), budget - state.finish_reserve)
-        spent = 0
-        estimates: list[BlockBudgetEstimate] = []
-        for block in blocks:
-            estimate = estimate_block(block)
-            cost = int(pilot_cost(settings, estimate))
+        estimates = [estimate_block(block) for block in blocks]
+        # The last block completes the sequence; its candidates are the pool itself.
+        pool = int(pool_cost(settings, estimates[-1]))
+        spent, piloted = 0, list[int]()
+        for index, estimate in enumerate(estimates):
+            cost = int(pilot_cost(settings, estimate)) + (0 if piloted else pool)
             if spent + cost <= pilot_limit:
-                moments = measure(estimate)
-                if moments is None:
-                    raise ValueError("pilot log-weights must be finite")
-                estimate = replace(estimate, moments=moments)
+                piloted.append(index)
                 spent += cost
-            estimates.append(estimate)
+        measured = measure([estimates[index] for index in piloted]) if piloted else []
+        for index, moments in zip(piloted, measured, strict=True):
+            if moments is None:
+                raise ValueError("pilot log-weights must be finite")
+            estimates[index] = replace(estimates[index], moments=moments)
         plan = choose_joint_budget(
             estimates,
             remaining_length=remaining,
@@ -156,11 +169,13 @@ class AdaptiveBudgetController:
         self,
         state: PlanningState,
         estimate_block: EstimateBlock,
-        measure: MeasureBlock,
+        measure: MeasureBlocks,
     ) -> PlanSelection:
         config = self.config
         remaining, budget, finish_reserve = state.remaining, state.budget, state.finish_reserve
         spent = 0
+        # The first pilot at this prefix pays for the shared pool.
+        pool = int(pool_cost(config, estimate_block(remaining)))
         decision: dict[str, object] = {"previous_parameters": self.parameters}
 
         def choose(
@@ -188,10 +203,10 @@ class AdaptiveBudgetController:
 
         def measured(estimate: BlockBudgetEstimate) -> BlockBudgetEstimate | None:
             nonlocal spent, budget
-            cost = int(pilot_cost(config, estimate))
+            cost = int(pilot_cost(config, estimate)) + (0 if spent else pool)
             spent += cost
             budget -= cost
-            moments = measure(estimate)
+            moments = measure([estimate])[0]
             if moments is None or moments.candidate_count < 2:
                 return None
             return replace(estimate, moments=moments)
@@ -212,7 +227,7 @@ class AdaptiveBudgetController:
             return result(incumbent, [estimate], "kept_pilot_disabled")
         pilot_limit = int(config.pilot_fraction * budget)
         protected = incumbent.reserved_cost + finish_reserve
-        current_cost = pilot_cost(config, estimate)
+        current_cost = pilot_cost(config, estimate) + pool
         if current_cost > min(pilot_limit, budget - protected):
             return result(incumbent, [estimate], "kept_no_pilot_budget")
 
@@ -225,9 +240,7 @@ class AdaptiveBudgetController:
         if neighbors:
             candidate = estimate_block(neighbors[self.neighbor_cursor % len(neighbors)])
             self.neighbor_cursor += 1
-            minimum_neighbor = min(config.candidate_counts) * (
-                candidate.candidate_cost + min(config.rollout_counts) * candidate.rollout_cost
-            )
+            minimum_neighbor = candidate.cost(min(config.candidate_counts), min(config.rollout_counts))
             pair_protected = max(incumbent.reserved_cost, minimum_neighbor) + finish_reserve
             decision.update(neighbor_block=candidate.block_size, neighbor_status="skipped_for_budget")
             if current_cost + pilot_cost(config, candidate) <= min(pilot_limit, budget - pair_protected):
@@ -301,4 +314,5 @@ __all__ = [
     "PlanSelection",
     "PlanningState",
     "pilot_cost",
+    "pool_cost",
 ]

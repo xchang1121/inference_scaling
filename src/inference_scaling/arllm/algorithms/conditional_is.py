@@ -4,9 +4,10 @@ The target is ``p(y | x) exp(r(x, y) / tau)`` for a reward ``r`` of the complete
 sequence.  Each step cuts the kept sequence at the next block boundary.
 Candidate 0 is the kept sequence's next block, and the rest of the kept
 sequence counts as one of that candidate's completions; the other candidates,
-and the other completions of candidate 0, are fresh base-policy samples.  Every
-completion runs until it stops (at EOS or a scope boundary) or reaches the
-length limit, and is scored as a complete sequence.
+and the other completions of candidate 0, are fresh base-policy samples.  A
+fresh candidate is cut from a complete output, whose rest is its first
+completion.  Every completion runs until it stops (at EOS or a scope boundary)
+or reaches the length limit, and is scored as a complete sequence.
 A candidate is selected with probability proportional to the mean
 ``exp(r / tau)`` of its completions, and one of its completions is kept with
 probability proportional to its own weight, so a step selects a whole suffix in
@@ -22,7 +23,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
+from inference_scaling.arllm.algorithms.candidates import (
+    Completion,
+    cut_block,
+    sample_outputs,
+    validate_base_sampling,
+)
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
@@ -90,7 +96,8 @@ def estimate_conditional_weights(
     generated_prefix: TokenSequence,
     generated_prefix_logprobs: Sequence[float],
     candidates: Sequence[SequenceSample],
-    rollout_length: int,
+    first_completions: Sequence[Completion | None],
+    total_length: int,
     rollout_count: int,
     sampling: SamplingConfig,
     reward_temperature: float,
@@ -99,111 +106,74 @@ def estimate_conditional_weights(
     step_index: int,
     retained: RolloutEvaluation | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
-    """Estimate each candidate's conditional weight with base-policy completions.
+    """Estimate each candidate's weight with ``rollout_count`` base-policy completions.
 
-    ``retained`` is an already evaluated completion of candidate 0.  It counts
-    as one of that candidate's ``rollout_count`` rollouts and is neither
-    regenerated nor re-scored.
+    A candidate that ends the sequence has one empty completion. The first
+    completion of any other candidate is given: ``retained``, an already
+    evaluated completion of candidate 0 that is neither regenerated nor
+    re-scored, or the rest of the output the candidate was cut from. The others
+    are generated here, all in one batch, and scored in one reward batch.
     """
 
     if rollout_count <= 0:
         raise ValueError("rollout_count must be positive")
     if reward_temperature <= 0:
         raise ValueError("reward_temperature must be positive")
+    if len(first_completions) != len(candidates):
+        raise ValueError("each candidate needs its first completion or None")
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
-    terminal_candidates: set[int] = set()
-    retained_tokens = None if retained is None else retained.token_ids
-
-    for candidate_index, candidate in enumerate(candidates):
-        kept = retained_tokens is not None and candidate_index == 0
-        if kept and not retained_tokens:
-            # The kept sequence ends with this block.
-            continue
+    # Completions of each candidate still to be scored.
+    unscored: list[list[Completion]] = [[] for _ in candidates]
+    for index, candidate in enumerate(candidates):
+        kept = retained is not None and index == 0
+        rollout_length = total_length - len(generated_prefix) - len(candidate.token_ids)
         if rollout_length == 0 or candidate.finish_reason != "length":
-            terminal_candidates.add(candidate_index)
+            if not kept:
+                unscored[index].append(((), ()))
             continue
-        rollout_prefix = prompt + generated_prefix + candidate.token_ids
-        for rollout_index in range(int(kept), rollout_count):
-            requests.append(
-                GenerationRequest(
-                    prefix=rollout_prefix,
-                    max_new_tokens=rollout_length,
-                    sampling=sampling,
-                    seed=seeds.derive(
-                        "conditional_is",
-                        step_index,
-                        "candidate",
-                        candidate_index,
-                        "rollout",
-                        rollout_index,
-                    ),
-                    request_id=(
-                        "conditional-is:"
-                        f"step:{step_index}:candidate:{candidate_index}:"
-                        f"rollout:{rollout_index}"
-                    ),
-                )
-            )
-            request_candidates.append(candidate_index)
-
+        first = first_completions[index]
+        if not kept:
+            if first is None:
+                raise ValueError("a continuing candidate needs its first completion")
+            unscored[index].append(first)
+        for rollout_index in range(1, rollout_count):
+            requests.append(GenerationRequest(
+                prefix=prompt + generated_prefix + candidate.token_ids, max_new_tokens=rollout_length,
+                sampling=sampling,
+                seed=seeds.derive("conditional_is", step_index, "candidate", index, "rollout", rollout_index),
+                request_id=f"conditional-is:step:{step_index}:candidate:{index}:rollout:{rollout_index}",
+            ))
+            request_candidates.append(index)
     samples = backend.sample_batch(requests) if requests else []
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
+    for index, sample in zip(request_candidates, samples, strict=True):
+        unscored[index].append((sample.token_ids, sample.token_logprobs))
 
-    # (completion tokens, their log-probabilities, the generated sequence the reward scores, its log-probabilities)
-    pending_by_candidate: list[list[tuple[TokenSequence, tuple[float, ...], TokenSequence, tuple[float, ...]]]] = [
-        [] for _ in candidates
-    ]
     prefix_logprobs = tuple(generated_prefix_logprobs)
-    for candidate_index in terminal_candidates:
-        candidate = candidates[candidate_index]
-        pending_by_candidate[candidate_index].append(
-            ((), (), generated_prefix + candidate.token_ids, prefix_logprobs + candidate.token_logprobs)
-        )
-    for candidate_index, sample in zip(request_candidates, samples, strict=True):
-        candidate = candidates[candidate_index]
-        pending_by_candidate[candidate_index].append((
-            sample.token_ids, sample.token_logprobs, generated_prefix + candidate.token_ids + sample.token_ids,
-            prefix_logprobs + candidate.token_logprobs + sample.token_logprobs,
-        ))
-
-    pending = [item for group in pending_by_candidate for item in group]
-    rewards = tuple(float(value) for value in reward(prompt, [item[2] for item in pending],
-                                                        [item[3] for item in pending])) if pending else ()
+    pending = [(index, completion) for index, group in enumerate(unscored) for completion in group]
+    rewards = tuple(float(value) for value in reward(
+        prompt,
+        [generated_prefix + candidates[index].token_ids + tokens for index, (tokens, _) in pending],
+        [prefix_logprobs + candidates[index].token_logprobs + logprobs for index, (_, logprobs) in pending],
+    )) if pending else ()
     if len(rewards) != len(pending):
         raise ValueError("reward returned an invalid number of values")
     if any(not isfinite(value) for value in rewards):
         raise ValueError("reward must be finite")
-
     by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
     if retained is not None:
         by_candidate[0].append(retained)
-    reward_values = iter(rewards)
-    for candidate_index, group in enumerate(pending_by_candidate):
-        for token_ids, token_logprobs, _, _ in group:
-            reward_value = next(reward_values)
-            by_candidate[candidate_index].append(
-                RolloutEvaluation(token_ids, reward_value, reward_value / reward_temperature, token_logprobs)
-            )
+    for (index, (tokens, logprobs)), value in zip(pending, rewards, strict=True):
+        by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature, logprobs))
 
-    evaluated: list[ConditionalCandidate] = []
-    for candidate_index, candidate in enumerate(candidates):
-        evaluations = by_candidate[candidate_index]
-        if not evaluations:
-            raise RuntimeError(
-                "each candidate must have at least one weight contribution"
-            )
-        evaluated.append(
-            ConditionalCandidate(
-                token_ids=candidate.token_ids,
-                base_token_logprobs=candidate.token_logprobs,
-                rollouts=tuple(evaluations),
-                log_weight=logmeanexp([item.log_weight for item in evaluations]),
-            )
-        )
-    return tuple(evaluated)
+    return tuple(
+        ConditionalCandidate(candidate.token_ids, candidate.token_logprobs, tuple(group),
+                             logmeanexp([item.log_weight for item in group]))
+        for candidate, group in zip(candidates, by_candidate, strict=True)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,31 +190,15 @@ class RetainedSequence:
     fixed: int = 0
 
 
-@dataclass(frozen=True, slots=True)
-class RetainedCandidate:
-    """An evaluated candidate and the completion kept if it is selected."""
-
-    candidate: ConditionalCandidate
-    completion_index: int
-
-
+@dataclass(frozen=True, kw_only=True)
 class ConditionalISAdapter:
     """One conditional IS move: propose candidates, weight them, keep one completion."""
 
-    def __init__(
-        self,
-        *,
-        backend: AutoregressiveBackend,
-        prompt: TokenSequence,
-        config: ConditionalISConfig,
-        sampling: SamplingConfig,
-        reward: GeneratedBatchReward,
-    ) -> None:
-        self.backend = backend
-        self.prompt = prompt
-        self.config = config
-        self.sampling = sampling
-        self.reward = reward
+    backend: AutoregressiveBackend
+    prompt: TokenSequence
+    config: ConditionalISConfig
+    sampling: SamplingConfig
+    reward: GeneratedBatchReward
 
     @property
     def initial_state(self) -> RetainedSequence:
@@ -261,131 +215,80 @@ class ConditionalISAdapter:
         state: RetainedSequence,
         step_index: int,
         seeds: SeedStream,
-    ) -> Sequence[SequenceSample]:
+    ) -> list[tuple[SequenceSample, Completion | None]]:
+        """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs."""
+
         validate_base_sampling(self.sampling)
         prefix = self.prompt + state.token_ids[: state.fixed]
         length = self._block_length(state)
-        proposals: list[SequenceSample] = []
+        proposals: list[tuple[SequenceSample, Completion | None]] = []
         if state.token_ids:
             end = state.fixed + length
-            proposals.append(
-                SequenceSample(
-                    prefix=prefix,
-                    token_ids=state.token_ids[state.fixed : end],
-                    token_logprobs=state.token_logprobs[state.fixed : end],
-                    policy_id=self.sampling.policy_id,
-                    model_id=self.backend.model_id,
-                    request_id=f"conditional-is:step:{step_index}:retained",
-                    # The kept sequence either continues after the block or ends with it.
-                    finish_reason="length" if end < len(state.token_ids) else "stop",
-                )
-            )
+            proposals.append((SequenceSample(
+                prefix=prefix,
+                token_ids=state.token_ids[state.fixed : end],
+                token_logprobs=state.token_logprobs[state.fixed : end],
+                policy_id=self.sampling.policy_id,
+                model_id=self.backend.model_id,
+                request_id=f"conditional-is:step:{step_index}:retained",
+                # The kept sequence either continues after the block or ends with it.
+                finish_reason="length" if end < len(state.token_ids) else "stop",
+            ), None))
         fresh = self.config.candidate_count - len(proposals)
         if fresh:
-            proposals.extend(
-                sample_candidates(
-                    self.backend,
-                    prefix,
-                    fresh,
-                    length,
-                    self.sampling,
-                    seeds,
-                    step_index,
-                    first_index=len(proposals),
-                )
-            )
+            outputs = sample_outputs(self.backend, prefix, fresh, self.config.total_length - state.fixed,
+                                     self.sampling, seeds, step_index, first_index=len(proposals))
+            proposals.extend(cut_block(output, length) for output in outputs)
         return proposals
-
-    def evaluate(
-        self,
-        state: RetainedSequence,
-        proposals: Sequence[SequenceSample],
-        step_index: int,
-        seeds: SeedStream,
-    ) -> tuple[RetainedCandidate, ...]:
-        length = self._block_length(state)
-        retained = None
-        if state.token_ids:
-            start = state.fixed + len(proposals[0].token_ids)
-            retained = RolloutEvaluation(
-                token_ids=state.token_ids[start:],
-                reward=state.reward,
-                log_weight=state.reward / self.config.reward_temperature,
-                token_logprobs=state.token_logprobs[start:],
-            )
-        evaluated = estimate_conditional_weights(
-            backend=self.backend,
-            prompt=self.prompt,
-            generated_prefix=state.token_ids[: state.fixed],
-            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
-            candidates=proposals,
-            rollout_length=self.config.total_length - state.fixed - length,
-            rollout_count=self.config.rollout_count,
-            sampling=self.sampling,
-            reward_temperature=self.config.reward_temperature,
-            reward=self.reward,
-            seeds=seeds,
-            step_index=step_index,
-            retained=retained,
-        )
-        kept: list[RetainedCandidate] = []
-        for index, candidate in enumerate(evaluated):
-            # Drawn for every candidate so the kept completion is independent
-            # of which candidate the step selects.
-            probabilities = normalize_log_weights(
-                [rollout.log_weight for rollout in candidate.rollouts]
-            )
-            uniform = float(
-                seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()
-            )
-            kept.append(RetainedCandidate(candidate, categorical_index_from_uniform(probabilities, uniform)))
-        return tuple(kept)
-
-    def advance(
-        self,
-        state: RetainedSequence,
-        selected: RetainedCandidate,
-        step_index: int,
-    ) -> RetainedSequence:
-        del step_index
-        candidate = selected.candidate
-        completion = candidate.rollouts[selected.completion_index]
-        token_ids = state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids
-        token_logprobs = (
-            state.token_logprobs[: state.fixed]
-            + candidate.base_token_logprobs
-            + completion.token_logprobs
-        )
-        if len(token_logprobs) != len(token_ids):
-            raise RuntimeError("kept sequence lost token log-probabilities")
-        return RetainedSequence(
-            token_ids,
-            token_logprobs,
-            completion.reward,
-            state.fixed + len(candidate.token_ids),
-        )
 
     def step(
         self, state: RetainedSequence, step_index: int, seeds: SeedStream,
     ) -> tuple[ConditionalISStep, RetainedSequence]:
-        """Select a candidate in proportion to its weight and advance the kept sequence."""
+        """Select a candidate in proportion to its weight, keep one of its completions and advance."""
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        kept = self.evaluate(state, self.propose(state, step_index, seeds), step_index, seeds)
-        probabilities = normalize_log_weights([item.candidate.log_weight for item in kept])
-        selected = categorical_index_from_uniform(
-            probabilities, float(seeds.generator("conditional_is", step_index, "select").random()),
+        proposals = self.propose(state, step_index, seeds)
+        retained = None
+        if state.token_ids:
+            start = state.fixed + len(proposals[0][0].token_ids)
+            retained = RolloutEvaluation(state.token_ids[start:], state.reward,
+                                         state.reward / self.config.reward_temperature, state.token_logprobs[start:])
+        candidates = estimate_conditional_weights(
+            backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
+            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
+            candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
+            total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
+            reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
+            step_index=step_index, retained=retained,
         )
-        candidates = tuple(item.candidate for item in kept)
+        # Drawn for every candidate so the kept completion is independent of which candidate the step selects.
+        completions = [
+            categorical_index_from_uniform(
+                normalize_log_weights([rollout.log_weight for rollout in candidate.rollouts]),
+                float(seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()),
+            )
+            for index, candidate in enumerate(candidates)
+        ]
+        selected = categorical_index_from_uniform(
+            normalize_log_weights([candidate.log_weight for candidate in candidates]),
+            float(seeds.generator("conditional_is", step_index, "select").random()),
+        )
+        candidate = candidates[selected]
+        completion = candidate.rollouts[completions[selected]]
         carried = bool(state.token_ids)
         record = ConditionalISStep(
             generated_length_before=state.fixed, candidates=candidates, selected_index=selected,
-            completion_index=kept[selected].completion_index, retained_candidate=carried,
+            completion_index=completions[selected], retained_candidate=carried,
             # The carried completion was evaluated in an earlier step.
-            rollout_evaluations_performed=sum(len(candidate.rollouts) for candidate in candidates) - int(carried),
+            rollout_evaluations_performed=sum(len(item.rollouts) for item in candidates) - int(carried),
         )
-        return record, self.advance(state, kept[selected], step_index)
+        return record, RetainedSequence(
+            state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
+            state.token_logprobs[: state.fixed] + candidate.base_token_logprobs + completion.token_logprobs,
+            completion.reward,
+            state.fixed + len(candidate.token_ids),
+        )
 
 
 def conditional_is_step(

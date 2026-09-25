@@ -141,7 +141,7 @@
 | `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |
 | `is.joint.forward_token_budget` | 每题的前向 token 位置预算 |
 | `is.joint.block_sizes` / `candidate_counts` / `rollout_counts` | B、M、K 的候选网格 |
-| `is.joint.pilot_candidates` / `pilot_rollouts` / `pilot_fraction` | 试点估计的规模与最多占用的预算比例 |
+| `is.joint.pilot_candidates` / `pilot_rollouts` / `pilot_fraction` | 试点共享的完整输出数、每候选补全数与最多占用的预算比例 |
 | `is.joint.relative_variance_floor` | 规划时相对方差的下限 |
 | `is.joint.expected_output_tokens` | 初始期望输出长度；`null` 时先生成一条完整输出测量 |
 | `is.chunk_adaptive.initial_block_size` / `initial_candidate_count` / `initial_rollout_count` / `adjustment_min_improvement` | `chunk_adaptive` 的起始配置与调整所需的最小改进比例 |

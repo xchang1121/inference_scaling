@@ -63,23 +63,28 @@ def plan_for(estimates, **kwargs):
 
 
 def test_joint_choice_changes_width_replication_and_block():
-    broad = BlockBudgetEstimate(4, WeightMoments(100, 0), 5, 5)
+    broad = BlockBudgetEstimate(4, WeightMoments(100, 0), 0, 5, 5, 0)
     noisy = replace(broad, moments=WeightMoments(0, 100))
     width = plan_for([broad])
     replication = plan_for([noisy])
     assert width is not None and replication is not None
     assert width.candidate_count > replication.candidate_count
     assert width.rollout_count < replication.rollout_count
-    short = BlockBudgetEstimate(2, WeightMoments(0.001, 0.001), 2, 1)
-    long = BlockBudgetEstimate(8, WeightMoments(100, 0), 8, 0)
+    short = BlockBudgetEstimate(2, WeightMoments(0.001, 0.001), 0, 2, 1, 0)
+    long = BlockBudgetEstimate(8, WeightMoments(100, 0), 0, 8, 0, 0)
     assert plan_for([short, long]).block_size == 2
     long = replace(long, moments=WeightMoments(0, 0))
     assert plan_for([short, long]).block_size == 8
     assert plan_for([short, long]).rollout_count == 0
 
 
+def test_shared_prefix_is_paid_once_and_a_branch_only_for_repeated_completions():
+    estimate = BlockBudgetEstimate(4, WeightMoments(1, 1), 10, 4, 20, 14)
+    assert (estimate.cost(3, 0), estimate.cost(3, 1), estimate.cost(3, 2)) == (22, 82, 184)
+
+
 def test_completion_reserve_and_infeasibility():
-    estimate = BlockBudgetEstimate(4, WeightMoments(1, 1), 10, 1)
+    estimate = BlockBudgetEstimate(4, WeightMoments(1, 1), 0, 10, 1, 0)
     plan = plan_for([estimate], finish_reserve=360)
     assert plan is not None and plan.reserved_cost + 360 <= 400
     assert plan_for([estimate], finish_reserve=400) is None
@@ -108,12 +113,12 @@ def test_invalid_planning_inputs(kwargs):
     inputs.update(kwargs)
     with pytest.raises(ValueError):
         choose_joint_budget(
-            [BlockBudgetEstimate(1, WeightMoments(1, 1), 1, 1)], **inputs
+            [BlockBudgetEstimate(1, WeightMoments(1, 1), 0, 1, 1, 0)], **inputs
         )
 
 
 def test_next_step_planning_does_not_treat_output_cap_as_forecast_length():
-    estimate = BlockBudgetEstimate(400, WeightMoments(1, 1), 2857, 132864)
+    estimate = BlockBudgetEstimate(400, WeightMoments(1, 1), 0, 2857, 132864, 0)
     settings = dict(
         remaining_length=130407, remaining_budget=3463530,
         candidate_counts=(2, 4, 8), rollout_counts=(1, 2, 4), finish_reserve=265728,
@@ -129,7 +134,7 @@ def test_next_step_planning_does_not_treat_output_cap_as_forecast_length():
 
 
 def test_full_horizon_forecast_uses_the_expected_length_not_the_output_limit():
-    chunk = BlockBudgetEstimate(64, WeightMoments(1, 1), 70, 300)
+    chunk = BlockBudgetEstimate(64, WeightMoments(1, 1), 0, 70, 300, 0)
     settings = dict(remaining_budget=40_000, candidate_counts=(2, 4), rollout_counts=(1, 2))
     plans = [
         choose_joint_budget([chunk], remaining_length=limit, forecast_length=256, **settings)
@@ -142,7 +147,7 @@ def test_full_horizon_forecast_uses_the_expected_length_not_the_output_limit():
 
 
 def test_next_step_planning_still_requires_completion_reserve():
-    estimate = BlockBudgetEstimate(100, WeightMoments(1, 1), 102, 1002)
+    estimate = BlockBudgetEstimate(100, WeightMoments(1, 1), 0, 102, 1002, 0)
     settings = dict(
         remaining_length=1000, candidate_counts=(2,), rollout_counts=(1,),
         finish_reserve=2004, forecast_full_horizon=False,
@@ -157,10 +162,10 @@ def test_next_step_planning_changes_m_and_k_with_measured_moments():
         rollout_counts=(1, 2, 4), forecast_full_horizon=False,
     )
     between = choose_joint_budget(
-        [BlockBudgetEstimate(100, WeightMoments(100, 0, 2), 100, 10)], **settings,
+        [BlockBudgetEstimate(100, WeightMoments(100, 0, 2), 0, 100, 10, 0)], **settings,
     )
     within = choose_joint_budget(
-        [BlockBudgetEstimate(100, WeightMoments(0, 100, 2), 100, 10)], **settings,
+        [BlockBudgetEstimate(100, WeightMoments(0, 100, 2), 0, 100, 10, 0)], **settings,
     )
     assert (between.candidate_count, between.rollout_count) == (8, 1)
     assert (within.candidate_count, within.rollout_count) == (4, 4)
@@ -169,7 +174,7 @@ def test_next_step_planning_changes_m_and_k_with_measured_moments():
 
 def test_next_step_forecast_does_not_change_terminal_definition():
     plan = choose_joint_budget(
-        [BlockBudgetEstimate(1000, WeightMoments(1, 0), 1002, 0)],
+        [BlockBudgetEstimate(1000, WeightMoments(1, 0), 0, 1002, 0, 0)],
         remaining_length=1000, remaining_budget=2004, candidate_counts=(2,),
         rollout_counts=(1, 2), finish_reserve=2004, forecast_full_horizon=False,
     )
@@ -178,8 +183,8 @@ def test_next_step_forecast_does_not_change_terminal_definition():
 
 def test_next_step_planning_rejects_mixed_block_horizons():
     estimates = [
-        BlockBudgetEstimate(100, WeightMoments(1, 1), 2557, 132864),
-        BlockBudgetEstimate(130407, WeightMoments(1, 0), 132864, 0),
+        BlockBudgetEstimate(100, WeightMoments(1, 1), 0, 2557, 132864, 0),
+        BlockBudgetEstimate(130407, WeightMoments(1, 0), 0, 132864, 0, 0),
     ]
     with pytest.raises(ValueError, match="single block"):
         choose_joint_budget(
