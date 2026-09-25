@@ -31,11 +31,9 @@
     "retries": 5,
     "retry_wait_seconds": 2.0,
     "huggingface": {"endpoint": null, "max_workers": 1},
-    "modelscope": {"max_workers": 1, "parallel_workers": 8, "part_size_mb": 32, "max_retries": 20, "timeout_seconds": 120},
     "models": [
       {
         "path": "models/Qwen2.5-1.5B-Instruct",
-        "source": "huggingface",
         "repository": "Qwen/Qwen2.5-1.5B-Instruct",
         "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
         "allow_patterns": null,
@@ -43,7 +41,6 @@
       },
       {
         "path": "models/LLaDA-MoE-7B-A1B-Instruct-783d3467",
-        "source": "huggingface",
         "repository": "inclusionAI/LLaDA-MoE-7B-A1B-Instruct",
         "revision": "783d3467f108d28ac0a78d3e41af16ab05cabd8d",
         "allow_patterns": ["*.json", "*.py", "README.md", "*.safetensors"],

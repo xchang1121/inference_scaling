@@ -31,8 +31,6 @@ class OutputSegments:
     status: str
     ended_by_eos: bool
     format_name: str | None = None
-    thinking_text: str | None = None
-    content_text: str | None = None
 
     @property
     def has_complete_thinking(self) -> bool:

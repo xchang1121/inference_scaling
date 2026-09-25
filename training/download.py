@@ -26,26 +26,13 @@ def _verified(model: Mapping[str, Any], cache_dir: Path) -> bool:
 
 
 def _fetch(model: Mapping[str, Any], download: Mapping[str, Any]) -> None:
-    destination = str(model["path"])
-    if model["source"] == "huggingface":
-        from huggingface_hub import snapshot_download
+    from huggingface_hub import snapshot_download
 
-        options = download["huggingface"]
-        if options["endpoint"] is not None:
-            os.environ["HF_ENDPOINT"] = str(options["endpoint"])
-        snapshot_download(str(model["repository"]), revision=str(model["revision"]), local_dir=destination,
-                          allow_patterns=model["allow_patterns"], max_workers=int(options["max_workers"]))
-        return
-    options = download["modelscope"]
-    # ModelScope reads its transfer tuning from the environment.
-    os.environ["MODELSCOPE_DOWNLOAD_PARALLEL_WORKERS"] = str(options["parallel_workers"])
-    os.environ["MODELSCOPE_DOWNLOAD_PART_SIZE_MB"] = str(options["part_size_mb"])
-    os.environ["MODELSCOPE_DOWNLOAD_MAX_RETRIES"] = str(options["max_retries"])
-    os.environ["MODELSCOPE_DOWNLOAD_TIMEOUT"] = str(options["timeout_seconds"])
-    from modelscope.hub.snapshot_download import snapshot_download as modelscope_download
-
-    modelscope_download(str(model["repository"]), revision=str(model["revision"]), local_dir=destination,
-                        allow_patterns=model["allow_patterns"], max_workers=int(options["max_workers"]))
+    options = download["huggingface"]
+    if options["endpoint"] is not None:
+        os.environ["HF_ENDPOINT"] = str(options["endpoint"])
+    snapshot_download(str(model["repository"]), revision=str(model["revision"]), local_dir=str(model["path"]),
+                      allow_patterns=model["allow_patterns"], max_workers=int(options["max_workers"]))
 
 
 def run(settings: Mapping[str, Any]) -> None:

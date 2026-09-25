@@ -29,11 +29,8 @@ SCHEMA: dict[str, Any] = {
         "retries": int,
         "retry_wait_seconds": float,
         "huggingface": {"endpoint": _NULLABLE_STR, "max_workers": int},
-        "modelscope": {"max_workers": int, "parallel_workers": int, "part_size_mb": int, "max_retries": int,
-                       "timeout_seconds": int},
         "models": [{
             "path": str,
-            "source": frozenset({"huggingface", "modelscope"}),
             "repository": str,
             "revision": str,
             "allow_patterns": ([str], None),

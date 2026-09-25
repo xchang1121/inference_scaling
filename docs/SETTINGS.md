@@ -118,9 +118,7 @@
 | `prompt.format` | `auto` \| `chat` \| `plain` | 使用 chat template、强制使用，或直接用用户文本 |
 | `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的参数（如 `enable_thinking`） |
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
-| `output.thinking_format` | `auto` \| `tags` \| `json` \| `xml` | 思考段与最终内容的解析格式 |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
-| `output.thinking_path` / `content_path` | 字符串或 `null` | JSON/XML 中思考与内容字段的路径 |
 | `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
 | `output.generation_chunk_size` | 整数 | 思考段采样时检查结束标记的分块长度 |
 | `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`mh_power`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
@@ -181,8 +179,7 @@
 | `gsm8k.train` / `gsm8k.test` | 对象 | 字段同 `datasets.gsm8k`；训练集供 GRPO 与 VRPO，测试集只用于检查训练/测试题目重叠 |
 | `download.retries` / `retry_wait_seconds` | 整数 / 数 | 下载重试 |
 | `download.huggingface.endpoint` / `max_workers` | 字符串或 `null` / 整数 | Hugging Face 镜像与并发 |
-| `download.modelscope.*` | 整数 | ModelScope 并发、分片大小、重试与超时 |
-| `download.models[]` | 数组 | 每项：`path`、`source`（`huggingface` \| `modelscope`）、`repository`、`revision`、`allow_patterns`（数组或 `null`）、`weight_sha256`（文件名到哈希的对象，或 `null` 表示不校验） |
+| `download.models[]` | 数组 | 每项：`path`、`repository`、`revision`、`allow_patterns`（数组或 `null`）、`weight_sha256`（文件名到哈希的对象，或 `null` 表示不校验） |
 | `grpo.model` | 对象 | `path`、`revision`、`weight_sha256`、`tokenizer`、`tokenizer_revision`、`tokenizer_kwargs`、`cache_dir`、`local_files_only`、`trust_remote_code`，以及加载模型用的 `model_kwargs` |
 | `grpo.output` / `grpo.resume` | 字符串 / 布尔 | LoRA 输出目录；从最新检查点续跑 |
 | `grpo.lora` | 对象 | `r`、`lora_alpha`、`lora_dropout`、`bias`、`target_modules` |

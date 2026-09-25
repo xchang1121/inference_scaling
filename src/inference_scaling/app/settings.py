@@ -126,12 +126,9 @@ SCHEMA: dict[str, Any] = {
         "prompt": {"system": _NULLABLE_STR, "format": _Choices({"auto", "chat", "plain"}), "chat_template_kwargs": dict},
         "output": {
             "thinking_mode": _Choices({"auto", "enabled", "disabled"}),
-            "thinking_format": _Choices({"auto", "tags", "json", "xml"}),
             "thinking_start_text": _NULLABLE_STR,
             "thinking_end_text": _NULLABLE_STR,
             "starts_in_thinking": (bool, None),
-            "thinking_path": _NULLABLE_STR,
-            "content_path": _NULLABLE_STR,
             "sampling_scope": _Choices({"full", "thinking"}),
             "generation_chunk_size": int,
         },

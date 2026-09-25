@@ -32,11 +32,8 @@ class SamplingScope:
             reason = None
             if getattr(format_, "mode", None) == "disabled":
                 reason = "disabled"
-            elif format_ is None or not getattr(format_, "supports_early_stop", True):
-                reason = (
-                    "structured_format_requires_full_sequence" if getattr(format_, "kind", None) in {"json", "xml"}
-                    else "unrecognized_format"
-                )
+            elif format_ is None or not getattr(format_, "formats", True):
+                reason = "unrecognized_format"
             if reason is not None:
                 object.__setattr__(self, "scope", "full")
                 object.__setattr__(self, "fallback_reason", reason)
@@ -100,8 +97,6 @@ class SamplingScope:
         effective_scope, reason = self.scope, self.fallback_reason
         if self.scope == "thinking" and information["thinking_status"] != "complete":
             effective_scope, reason = "full", information["thinking_status"]
-        elif self.requested_scope == "thinking" and information.get("thinking_format_name") in {"json", "xml"}:
-            effective_scope, reason = "full", "structured_format_requires_full_sequence"
         information["requested_sampling_scope"] = self.requested_scope
         information["sampling_scope"] = effective_scope
         information["sampling_fallback_reason"] = reason
@@ -125,9 +120,9 @@ class SamplingScope:
         return {
             **segments.describe(),
             "thinking_token_ids": segments.thinking_token_ids,
-            "thinking_text": segments.thinking_text if segments.thinking_text is not None else backend.decode(segments.thinking_token_ids),
+            "thinking_text": backend.decode(segments.thinking_token_ids),
             "content_token_ids": segments.content_token_ids,
-            "content_text": segments.content_text if segments.content_text is not None else backend.decode(segments.content_token_ids),
+            "content_text": backend.decode(segments.content_token_ids),
             "thinking_format": self.thinking_format.describe() if self.thinking_format is not None else None,
         }
 

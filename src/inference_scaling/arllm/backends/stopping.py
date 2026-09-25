@@ -54,14 +54,9 @@ class StoppedSequenceBackend:
         """End of the first boundary in the generated tokens: the thinking close or EOS."""
 
         ends = []
-        callback = getattr(self.thinking_parser, "stop_boundary", None)
-        if callback is not None:
-            boundary = callback(self.thinking_prompt, generated, eos_token_id=self.eos_token_id)
-        else:
-            segments = self.thinking_parser.split(self.thinking_prompt, generated, eos_token_id=self.eos_token_id)
-            boundary = segments.boundary_end if segments.has_complete_thinking else None
-        if boundary is not None:
-            ends.append(boundary)
+        segments = self.thinking_parser.split(self.thinking_prompt, generated, eos_token_id=self.eos_token_id)
+        if segments.has_complete_thinking and segments.boundary_end is not None:
+            ends.append(segments.boundary_end)
         if self.eos_token_id in generated:
             ends.append(generated.index(self.eos_token_id) + 1)
         return min(ends) if ends else None

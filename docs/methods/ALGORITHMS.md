@@ -851,45 +851,20 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 <a id="alg-output-formats"></a>
 ### 输出格式与模式识别
 
-输出解析与奖励计算分别位于 [`shared/model/output.py`](../../src/inference_scaling/shared/model/output.py)、
-[`shared/model/structured_output.py`](../../src/inference_scaling/shared/model/structured_output.py) 和
+输出解析与奖励计算分别位于 [`shared/model/output.py`](../../src/inference_scaling/shared/model/output.py) 和
 [`arllm/rewards/intrinsic.py`](../../src/inference_scaling/arllm/rewards/intrinsic.py)。采样范围与评分范围独立设置，
 字段均位于 `ar.output`。
 
 | 格式 | 识别与切分 | `thinking` 采样范围 |
 | --- | --- | --- |
-| `<think>…</think>`、`<thinking>…</thinking>`、`[THINK]…[/THINK]`、`<reasoning>…</reasoning>` | `thinking_format = "auto"` 或 `"tags"`；结合 tokenizer、chat template 与生成 token；支持提示中预填起始标记 | 在完整非空思考块结束处停止，再生成最终内容 |
+| `<think>…</think>`、`<thinking>…</thinking>`、`[THINK]…[/THINK]`、`<reasoning>…</reasoning>` | 结合 tokenizer、chat template 与生成 token；支持提示中预填起始标记 | 在完整非空思考块结束处停止，再生成最终内容 |
 | 自定义标记 | `thinking_start_text` / `thinking_end_text`；`starts_in_thinking` 声明生成是否从思考段内开始 | 使用相同停止与概率规则 |
-| XML | 解析元素路径、嵌套结构、同级片段及实体转义；禁用 DTD 和外部实体 | 实际采样范围为 `full`，奖励可只取思考元素 |
-| JSON | 解析字符串字段、嵌套路径及转义；支持 JSON 代码块包装 | 实际采样范围为 `full`，奖励可只取思考字段 |
 | 非思考模式或解析失败 | 保留完整输出；Consilience 使用全序列统计 | `full`，并记录原因 |
 
 `thinking_mode` 取 `auto`、`enabled` 或 `disabled`。自动模式结合 `ar.prompt.chat_template_kwargs.enable_thinking`、
 提示末尾的空思考块和实际输出判断；模板预填的空思考块视为关闭思考。缺少已知格式时保留“格式未识别”状态，
 使用全序列模式。模型名称不参与判断。`sampling_scope` 取 `full` 或 `thinking`，控制 `mh`、`mh_power` 与 `is`
 的采样范围。
-
-JSON 的思考字段默认匹配 `thinking`、`reasoning`、`analysis` 或 `think`，最终内容匹配 `answer`、`content`
-或 `final`。多个匹配字段使用点分路径消除歧义。XML 使用相同的元素名与路径规则。例如把 `ar.output` 中的以下字段
-改为：
-
-```json
-{
-  "thinking_mode": "auto",
-  "thinking_format": "json",
-  "thinking_path": "response.reasoning",
-  "content_path": "response.answer",
-  "sampling_scope": "thinking"
-}
-```
-
-该设置对应 `{"response":{"reasoning":"…","answer":"…"}}`。将格式改为 `xml` 后，相同路径对应
-`<response><reasoning>…</reasoning><answer>…</answer></response>`。XML/JSON 当前需要完整对象解析，实际采样
-范围为 `full`，记录原因为 `structured_format_requires_full_sequence`。
-
-结构化字段映射到原始生成 token 的区间，评分前缀保留字段前的全部原始 token。字段切点落在单个 token 内时，
-回退为全序列评分，记录 `unaligned_thinking_tokens` 或 `unaligned_content_tokens`。字段文本不重新分词。
-输出文本使用已解析的字符串，概率与置信度统计始终基于原始生成 token。
 
 记录的 `output` 给出完整文本、思考段、最终内容、思考段状态和实际采样范围；`fallbacks` 列出采样范围的回退原因，
 以及最终输出的 Consilience 评分回退，`summary.json` 的 `failures.fallbacks` 汇总各原因次数。最终内容单独进入任务
@@ -1120,7 +1095,7 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 以及独立 tokenizer 与分片权重的本地加载。浮点精度、不同后端和批形状可能造成数值偏差；这些测试验证实现的一致性，
 模型与后端组合的正式质量和吞吐结果由独立实验记录。
 
-`shared/model/output.py` 与 `shared/model/structured_output.py` 负责分段，`arllm/scope.py` 负责采样范围及最终内容
+`shared/model/output.py` 负责分段，`arllm/scope.py` 负责采样范围及最终内容
 生成，`shared/rewards/consilience.py` 计算置信度窗口分数。算法层只接受概率后端与奖励接口；数据集提示、答案规则
 和评分器位于 [`datasets/`](../../src/inference_scaling/datasets/)，统一入口的组装位于
 [`app/`](../../src/inference_scaling/app/)：`app/ar.py` 与 `app/dllm.py` 把算法名映射到算法配置、奖励与调用，

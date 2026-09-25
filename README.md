@@ -118,7 +118,7 @@ python -m training
 
 | 阶段 | 内容 | 代码 |
 | --- | --- | --- |
-| `download` | 下载并校验 GSM8K 训练/测试拆分与固定版本的模型权重（Hugging Face 或 ModelScope） | [`training/download.py`](training/download.py) |
+| `download` | 下载并校验 GSM8K 训练/测试拆分与固定版本的模型权重（Hugging Face） | [`training/download.py`](training/download.py) |
 | `grpo` | 在 GSM8K 训练集上训练 GRPO LoRA，奖励为配置的 verifier；记录墙钟、生成 token、显存与 GPU 功率积分 | [`training/grpo.py`](training/grpo.py) |
 | `vrpo_preferences` | 用 LLaDA 生成候选并按 verifier 选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
 | `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |

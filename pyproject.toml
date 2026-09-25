@@ -42,7 +42,6 @@ vllm = [
 ]
 training = [
   "datasets==5.0.1",
-  "modelscope==1.39.1",
   "peft==0.20.0",
   "pyarrow==25.0.0",
   "trl==1.9.2",
