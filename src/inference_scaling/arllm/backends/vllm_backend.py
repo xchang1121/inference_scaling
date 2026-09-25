@@ -513,11 +513,6 @@ class VLLMBackend:
         return self._tokens_prompt_factory(prompt_token_ids=token_ids)
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
-        if request.uniforms is not None or request.arithmetic_uniform is not None:
-            raise NotImplementedError(
-                "vLLM does not expose request-local token uniforms or arithmetic uniforms; "
-                "use the Transformers backend for randomized QMC rollouts"
-            )
         policy = request.sampling
         return self._sampling_params_factory(
             max_tokens=int(request.max_new_tokens),

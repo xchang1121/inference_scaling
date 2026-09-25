@@ -2,7 +2,7 @@ import pytest
 
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, SequenceSample
+from inference_scaling.arllm.types import SequenceSample
 
 
 def test_sampling_config_identifies_actual_policy() -> None:
@@ -38,35 +38,3 @@ def test_invalid_configs_fail_early(factory) -> None:
 def test_sampled_token_logprob_must_be_finite() -> None:
     with pytest.raises(ValueError, match="finite"):
         SequenceSample((), (1,), (float("nan"),), "policy", "model", "request")
-
-
-@pytest.mark.parametrize(
-    "uniforms",
-    [(0.1,), (0.1, float("nan")), (0.1, 1.0), (0.1, -0.1)],
-)
-def test_generation_request_validates_explicit_uniforms(uniforms) -> None:
-    with pytest.raises(ValueError, match="uniform"):
-        GenerationRequest((), 2, SamplingConfig(), 1, "invalid", uniforms=uniforms)
-
-
-def test_generation_request_validates_arithmetic_uniform() -> None:
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        GenerationRequest(
-            (),
-            2,
-            SamplingConfig(),
-            1,
-            "invalid",
-            uniforms=(0.1, 0.2),
-            arithmetic_uniform=0.3,
-        )
-    for value in (-0.1, 1.0, float("inf")):
-        with pytest.raises(ValueError, match="arithmetic sampling uniform"):
-            GenerationRequest(
-                (),
-                2,
-                SamplingConfig(),
-                1,
-                "invalid",
-                arithmetic_uniform=value,
-            )

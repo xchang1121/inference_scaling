@@ -335,15 +335,6 @@ class TransformersBackend:
         if callable(repeat_method):
             repeat_method(repeats)
             return cache
-        if isinstance(cache, (tuple, list)):
-            repeated_layers = []
-            for layer in cache:
-                if not isinstance(layer, (tuple, list)):
-                    return None
-                repeated_layers.append(
-                    tuple(value.repeat_interleave(repeats, dim=0) for value in layer)
-                )
-            return tuple(repeated_layers)
         return None
 
     def _sequence_sample(
@@ -396,31 +387,8 @@ class TransformersBackend:
                 requests = [request for _, request in indexed_requests]
                 prefixes = [self._model_prefix(request.prefix) for request in requests]
                 reusable_prefixes = list(prefix_positions)
-        uniforms = [
-            (
-                np.asarray(request.uniforms, dtype=np.float64)
-                if request.uniforms is not None
-                else np.zeros(request.max_new_tokens, dtype=np.float64)
-                if request.arithmetic_uniform is not None
-                else np.random.default_rng(request.seed).random(request.max_new_tokens)
-            )
-            for request in requests
-        ]
-        arithmetic_mask = torch_module.tensor(
-            [request.arithmetic_uniform is not None for request in requests],
-            dtype=torch_module.bool,
-            device=self.device,
-        )
-        arithmetic_uniforms = torch_module.tensor(
-            [
-                0.0
-                if request.arithmetic_uniform is None
-                else request.arithmetic_uniform
-                for request in requests
-            ],
-            dtype=torch_module.float64,
-            device=self.device,
-        )
+        # Request-local uniforms keep each sample independent of the batch it runs in.
+        uniforms = [np.random.default_rng(request.seed).random(request.max_new_tokens) for request in requests]
         token_lists: list[list[int]] = [[] for _ in requests]
         logprob_lists: list[list[float]] = [[] for _ in requests]
         reference_logprob_lists: list[list[float]] = [[] for _ in requests]
@@ -503,65 +471,6 @@ class TransformersBackend:
                 cumulative[:, -1] = 1.0
                 sampled_tokens = (cumulative < random_values[:, None]).sum(dim=-1)
                 sampled_tokens = sampled_tokens.clamp_max(probabilities.shape[-1] - 1)
-                if bool(arithmetic_mask.any()):
-                    ordered_probabilities, order = torch_module.sort(
-                        probabilities_64,
-                        dim=-1,
-                        descending=True,
-                        stable=True,
-                    )
-                    ordered_cumulative = ordered_probabilities.cumsum(dim=-1)
-                    ordered_cumulative[:, -1] = 1.0
-                    arithmetic_ranks = (
-                        ordered_cumulative < arithmetic_uniforms[:, None]
-                    ).sum(dim=-1)
-                    arithmetic_ranks = arithmetic_ranks.clamp_max(
-                        probabilities.shape[-1] - 1
-                    )
-                    arithmetic_tokens = order.gather(
-                        -1, arithmetic_ranks[:, None]
-                    ).squeeze(-1)
-                    sampled_tokens = torch_module.where(
-                        arithmetic_mask,
-                        arithmetic_tokens,
-                        sampled_tokens,
-                    )
-                    arithmetic_probabilities = ordered_probabilities.gather(
-                        -1, arithmetic_ranks[:, None]
-                    ).squeeze(-1)
-                    padded_cumulative = torch_module.cat(
-                        [
-                            torch_module.zeros(
-                                (len(requests), 1),
-                                dtype=torch_module.float64,
-                                device=self.device,
-                            ),
-                            ordered_cumulative,
-                        ],
-                        dim=-1,
-                    )
-                    arithmetic_lower = padded_cumulative.gather(
-                        -1, arithmetic_ranks[:, None]
-                    ).squeeze(-1)
-                    arithmetic_active = arithmetic_mask & step_active
-                    if bool((arithmetic_probabilities[arithmetic_active] <= 0).any()):
-                        raise RuntimeError(
-                            "arithmetic sampling selected a zero-probability token"
-                        )
-                    updated_arithmetic_uniforms = (
-                        arithmetic_uniforms - arithmetic_lower
-                    ) / arithmetic_probabilities.clamp_min(
-                        torch_module.finfo(torch_module.float64).tiny
-                    )
-                    updated_arithmetic_uniforms = updated_arithmetic_uniforms.clamp(
-                        min=0.0,
-                        max=float(np.nextafter(1.0, 0.0)),
-                    )
-                    arithmetic_uniforms = torch_module.where(
-                        arithmetic_active,
-                        updated_arithmetic_uniforms,
-                        arithmetic_uniforms,
-                    )
                 sampled_logprobs = log_probs.gather(
                     -1, sampled_tokens[:, None]
                 ).squeeze(-1)

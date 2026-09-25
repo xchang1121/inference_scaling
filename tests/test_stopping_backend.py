@@ -18,9 +18,17 @@ PARSER = ThinkingParser((ThinkingFormat((1,), (3,)),))
 RAW = TabularAutoregressiveBackend({}, fallback=(0.5, 0.3, 0.2))
 
 
-def _backend(*, chunk=2, parser=PARSER):
+def _backend(*, chunk=2, parser=PARSER, raw=RAW):
     return StoppedSequenceBackend(
-        RAW, thinking_parser=parser, thinking_prompt=(3,), eos_token_id=2, generation_chunk_size=chunk,
+        raw, thinking_parser=parser, thinking_prompt=(3,), eos_token_id=2, generation_chunk_size=chunk,
+    )
+
+
+def _path(*steps):
+    """A model that follows ``steps`` deterministically: each (context, token) forces one transition."""
+    return TabularAutoregressiveBackend(
+        {context: tuple(float(index == token) for index in range(3)) for context, token in steps},
+        fallback=(0.5, 0.3, 0.2),
     )
 
 
@@ -43,17 +51,17 @@ def test_stopped_outputs_form_a_normalized_measure():
 
 
 def test_generation_stops_across_chunks_and_scores_identically():
-    backend = _backend(chunk=1, parser=ThinkingParser((ThinkingFormat((0, 1), (3,)),)))
+    raw = _path(((3,), 1), ((3, 1), 0), ((3, 1, 0), 1))
+    backend = _backend(chunk=1, parser=ThinkingParser((ThinkingFormat((0, 1), (3,)),)), raw=raw)
     policy = SamplingConfig()
     # The two-token end marker completes across chunks.
-    sample = backend.sample_batch([GenerationRequest((3,), 5, policy, 4, "test", uniforms=(0.6, 0.1, 0.6, 0.1, 0.1))])[0]
+    sample = backend.sample_batch([GenerationRequest((3,), 5, policy, 4, "test")])[0]
     assert (sample.token_ids, sample.finish_reason) == ((1, 0, 1), "stop")
-    assert sample.token_logprobs == pytest.approx((log(0.3), log(0.5), log(0.3)))
     assert backend.score_batch([ScoreRequest((3,), (sample.token_ids,), policy)])[0] == sample.token_logprobs
     # ... and across the request prefix and the generation.
-    sample = backend.sample_batch([GenerationRequest((3, 1, 0), 3, policy, 4, "cross", uniforms=(0.6, 0.1, 0.1))])[0]
+    sample = backend.sample_batch([GenerationRequest((3, 1, 0), 3, policy, 4, "cross")])[0]
     assert sample.token_ids == (1,)
-    assert backend.score_batch([ScoreRequest((3, 1, 0), ((1, 0),))])[0] == pytest.approx((log(0.3), float("-inf")))
+    assert backend.score_batch([ScoreRequest((3, 1, 0), ((1, 0),))])[0] == (0.0, float("-inf"))
 
 
 def test_a_stopped_prefix_has_no_continuation():
@@ -105,7 +113,6 @@ def test_thinking_scope_projects_the_full_reward_target():
 
 
 def test_empty_thinking_block_continues_to_full_sequence():
-    request = GenerationRequest((3,), 3, SamplingConfig(), 0, "empty", uniforms=(0.6, 0.1, 0.9))
-    result = _backend(chunk=1).sample_batch([request])[0]
-    assert result.token_ids == (1, 0, 2)
-    assert result.token_logprobs == pytest.approx((log(0.3), log(0.5), log(0.2)))
+    raw = _path(((3,), 1), ((3, 1), 0), ((3, 1, 0), 2))
+    result = _backend(chunk=1, raw=raw).sample_batch([GenerationRequest((3,), 3, SamplingConfig(), 0, "empty")])[0]
+    assert (result.token_ids, result.finish_reason) == ((1, 0, 2), "stop")

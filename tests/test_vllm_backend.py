@@ -280,21 +280,6 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     assert len(engine.rpc_calls) == 2
 
 
-def test_vllm_rejects_explicit_token_uniforms() -> None:
-    backend, _ = _backend()
-    request = GenerationRequest(
-        (1,),
-        2,
-        SamplingConfig(),
-        11,
-        "explicit-uniforms",
-        uniforms=(0.1, 0.2),
-    )
-
-    with pytest.raises(NotImplementedError, match="request-local token uniforms"):
-        backend.sample_batch([request])
-
-
 def test_vllm_native_score_extracts_continuation_prompt_logprobs() -> None:
     backend, _ = _backend()
 

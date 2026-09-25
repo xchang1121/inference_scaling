@@ -46,19 +46,6 @@ class StoppedSequenceBackend:
     def tokenizer(self):
         return getattr(self.backend, "tokenizer")
 
-    @property
-    def parameter_count(self):
-        return getattr(self.backend, "parameter_count")
-
-    def encode(self, text: str, *, add_special_tokens: bool = True):
-        return getattr(self.backend, "encode")(text, add_special_tokens=add_special_tokens)
-
-    def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True):
-        return getattr(self.backend, "decode")(tokens, skip_special_tokens=skip_special_tokens)
-
-    def snapshot(self):
-        return getattr(self.backend, "snapshot")()
-
     def score_statistics_batch(self, requests, *, confidence_top_k=None):
         # Statistic spans are chosen explicitly by the reward; these remain original model statistics.
         return getattr(self.backend, "score_statistics_batch")(requests, confidence_top_k=confidence_top_k)
@@ -106,19 +93,12 @@ class StoppedSequenceBackend:
                 offset = len(tokens[index])
                 if done[index] or offset >= request.max_new_tokens:
                     continue
-                remaining = request.max_new_tokens - offset
-                # Arithmetic coding uses one interval throughout a request.
-                # Preserve that request intact rather than resetting its interval.
-                chunk = remaining if request.arithmetic_uniform is not None else min(
-                    remaining, self.generation_chunk_size
-                )
+                chunk = min(request.max_new_tokens - offset, self.generation_chunk_size)
                 seed = request.seed if offset == 0 else SeedStream(request.seed).derive("stop-chunk", offset)
                 pending.append(GenerationRequest(
                     prefix=request.prefix + tuple(tokens[index]), max_new_tokens=chunk,
                     sampling=self._inner_policy(request.sampling), seed=seed,
                     request_id=f"{request.request_id}:stop-chunk:{offset}",
-                    uniforms=None if request.uniforms is None else request.uniforms[offset : offset + chunk],
-                    arithmetic_uniform=request.arithmetic_uniform,
                 ))
                 indices.append(index)
             if not pending:

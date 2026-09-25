@@ -115,48 +115,13 @@ class TabularAutoregressiveBackend:
         outputs: list[SequenceSample] = []
         for request in requests:
             rng = np.random.default_rng(request.seed)
-            arithmetic_uniform = request.arithmetic_uniform
             context = list(request.prefix)
             tokens: list[int] = []
             logprobs: list[float] = []
             finish_reason = "length"
-            for step in range(request.max_new_tokens):
+            for _ in range(request.max_new_tokens):
                 probs = self.probabilities(tuple(context), request.sampling)
-                if arithmetic_uniform is not None:
-                    order = np.argsort(-probs, kind="stable")
-                    ordered = probs[order]
-                    cumulative = np.cumsum(ordered, dtype=np.float64)
-                    cumulative[-1] = 1.0
-                    rank = int(
-                        np.searchsorted(
-                            cumulative,
-                            arithmetic_uniform,
-                            side="right",
-                        )
-                    )
-                    rank = min(rank, self._vocab_size - 1)
-                    token = int(order[rank])
-                    lower = 0.0 if rank == 0 else float(cumulative[rank - 1])
-                    probability = float(ordered[rank])
-                    if probability <= 0:
-                        raise RuntimeError(
-                            "arithmetic sampling selected a zero-probability token"
-                        )
-                    arithmetic_uniform = min(
-                        max((arithmetic_uniform - lower) / probability, 0.0),
-                        float(np.nextafter(1.0, 0.0)),
-                    )
-                elif request.uniforms is None:
-                    token = int(rng.choice(self._vocab_size, p=probs))
-                else:
-                    token = int(
-                        np.searchsorted(
-                            np.cumsum(probs, dtype=np.float64),
-                            request.uniforms[step],
-                            side="right",
-                        )
-                    )
-                    token = min(token, self._vocab_size - 1)
+                token = int(rng.choice(self._vocab_size, p=probs))
                 tokens.append(token)
                 logprobs.append(float(np.log(probs[token])))
                 context.append(token)
