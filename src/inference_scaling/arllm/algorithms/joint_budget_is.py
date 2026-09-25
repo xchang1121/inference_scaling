@@ -47,30 +47,30 @@ from inference_scaling.shared.budget.planners import (
     FullHorizonPlanner,
     PlanningState,
 )
-from inference_scaling.shared.model.generation import DEFAULT_MAX_NEW_TOKENS
 from inference_scaling.shared.rng import SeedStream
 
 
 @dataclass(frozen=True, slots=True)
 class JointBudgetISConfig:
     forward_token_budget: int
-    total_length: int = DEFAULT_MAX_NEW_TOKENS
-    block_sizes: tuple[int, ...] = (64, 128, 256)
-    candidate_counts: tuple[int, ...] = (2, 4, 8, 16)
-    rollout_counts: tuple[int, ...] = (1, 2, 4, 8)
-    pilot_candidates: int = 2
-    pilot_rollouts: int = 2
-    pilot_fraction: float = 0.15
-    reward_temperature: float = 1.0
-    reward_forward_passes: int = 1
-    relative_variance_floor: float = 1e-4
-    planning_mode: str = "full_horizon"
+    total_length: int
+    block_sizes: tuple[int, ...]
+    candidate_counts: tuple[int, ...]
+    rollout_counts: tuple[int, ...]
+    pilot_candidates: int
+    pilot_rollouts: int
+    pilot_fraction: float
+    reward_temperature: float
+    reward_forward_passes: int
+    relative_variance_floor: float
+    # Initial expected output length; None measures one plain completion.
+    expected_output_tokens: int | None
+    planning_mode: str
+    # chunk_adaptive only.
     initial_block_size: int | None = None
     initial_candidate_count: int | None = None
     initial_rollout_count: int | None = None
-    adjustment_min_improvement: float = 0.1
-    # Initial expected output length; None measures one plain completion.
-    expected_output_tokens: int | None = None
+    adjustment_min_improvement: float | None = None
 
     def __post_init__(self) -> None:
         if self.planning_mode not in {"full_horizon", "chunk_adaptive"}:
@@ -109,10 +109,12 @@ class JointBudgetISConfig:
                     raise ValueError(f"{name} must belong to its configured grid")
             elif value is not None:
                 raise ValueError(f"{name} requires chunk_adaptive")
-        if not isfinite(self.adjustment_min_improvement) or not 0 < self.adjustment_min_improvement < 1:
+        improvement = self.adjustment_min_improvement
+        if self.planning_mode != "chunk_adaptive":
+            if improvement is not None:
+                raise ValueError("adjustment_min_improvement requires chunk_adaptive")
+        elif improvement is None or not isfinite(improvement) or not 0 < improvement < 1:
             raise ValueError("adjustment_min_improvement must be in (0, 1)")
-        if self.planning_mode != "chunk_adaptive" and self.adjustment_min_improvement != 0.1:
-            raise ValueError("adjustment_min_improvement requires chunk_adaptive")
         if self.expected_output_tokens is not None:
             positive_integer("expected_output_tokens", self.expected_output_tokens)
 

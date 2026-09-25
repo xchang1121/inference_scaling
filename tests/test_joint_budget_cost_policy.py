@@ -125,7 +125,7 @@ def test_grid_order_and_duplicates_do_not_change_cost_selection():
 
 
 def test_config_has_no_selection_policy_switch():
-    assert not hasattr(JointBudgetISConfig(forward_token_budget=1000), "selection_policy")
+    assert "selection_policy" not in JointBudgetISConfig.__dataclass_fields__
     assert not hasattr(settings(), "selection_policy")
     with pytest.raises(TypeError, match="selection_policy"):
         settings(selection_policy="min_cost_improvement")

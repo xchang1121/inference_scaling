@@ -167,7 +167,7 @@ def test_score_requests_are_flattened_and_split_without_reordering() -> None:
 
 
 def test_closed_batching_backend_rejects_new_work() -> None:
-    batched = ContinuousBatchingBackend(RecordingBackend())
+    batched = ContinuousBatchingBackend(RecordingBackend(), max_batch_size=4, max_batch_tokens=100, batch_wait_seconds=0.0)
     batched.close()
     with pytest.raises(RuntimeError, match="closed"):
         batched.sample_batch(

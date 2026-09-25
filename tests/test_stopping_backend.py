@@ -76,12 +76,12 @@ def test_a_stopped_prefix_has_no_continuation():
 def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
     backend = _backend()
     result = run_conditional_is(
-        backend, (3,), ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2),
+        backend, (3,), ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2, reward_temperature=1.0),
         lambda prompt, sequence: float(sequence[0] == 0), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
     mh = run_power_mh_chain(
-        backend, (3,), PowerMHConfig(total_length=4, block_size=2, steps_per_block=2),
+        backend, (3,), PowerMHConfig(total_length=4, block_size=2, steps_per_block=2, alpha=4.0, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.5, eos_token_id=2), SeedStream(8),
     )
     for tokens in (result.token_ids, mh.token_ids):

@@ -244,7 +244,7 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     result = run_power_mh_chain(
         backend,
         (1,),
-        PowerMHConfig(alpha=2.0, total_length=2, block_size=2, steps_per_block=1),
+        PowerMHConfig(alpha=2.0, total_length=2, block_size=2, steps_per_block=1, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.5),
         SeedStream(7),
     )

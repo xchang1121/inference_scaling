@@ -16,6 +16,20 @@ from inference_scaling.shared.budget.costs import block_costs
 from inference_scaling.shared.rng import SeedStream
 
 
+def joint_config(**overrides):
+    """A joint-budget configuration; each test overrides only what it exercises."""
+
+    values = {
+        "total_length": 32768, "block_sizes": (64, 128, 256), "candidate_counts": (2, 4, 8, 16),
+        "rollout_counts": (1, 2, 4, 8), "pilot_candidates": 2, "pilot_rollouts": 2, "pilot_fraction": 0.15,
+        "reward_temperature": 1.0, "reward_forward_passes": 1, "relative_variance_floor": 1e-4,
+        "expected_output_tokens": None, "planning_mode": "full_horizon",
+    } | overrides
+    if values["planning_mode"] == "chunk_adaptive":
+        values.setdefault("adjustment_min_improvement", 0.1)
+    return JointBudgetISConfig(**values)
+
+
 class RecordingBackend(TabularAutoregressiveBackend):
     def __init__(self, probabilities=(0.65, 0.35)):
         super().__init__({}, fallback=probabilities)
@@ -31,7 +45,7 @@ def test_budget_includes_pilots_and_independent_production_samples():
     result = run_joint_budget_is(
         backend,
         (),
-        JointBudgetISConfig(
+        joint_config(
             forward_token_budget=400,
             total_length=4,
             block_sizes=(1, 2),
@@ -77,7 +91,7 @@ def test_multistep_plan_recomputes_budget_and_preserves_fixed_horizon(monkeypatc
     result = run_joint_budget_is(
         RecordingBackend(),
         (),
-        JointBudgetISConfig(
+        joint_config(
             forward_token_budget=1000,
             total_length=8,
             block_sizes=(1, 2),
@@ -105,7 +119,7 @@ def test_initial_insufficient_budget_has_no_side_effects():
         run_joint_budget_is(
             backend,
             (),
-            JointBudgetISConfig(forward_token_budget=7, total_length=4, expected_output_tokens=4),
+            joint_config(forward_token_budget=7, total_length=4, expected_output_tokens=4),
             lambda _p, _y: pytest.fail("reward called"),
             SeedStream(1),
         )
@@ -118,7 +132,7 @@ def test_length_probe_is_the_only_call_before_an_insufficient_budget_error():
         run_joint_budget_is(
             backend,
             (),
-            JointBudgetISConfig(forward_token_budget=7, total_length=4),
+            joint_config(forward_token_budget=7, total_length=4),
             lambda _p, _y: pytest.fail("reward called"),
             SeedStream(1),
         )
@@ -126,7 +140,7 @@ def test_length_probe_is_the_only_call_before_an_insufficient_budget_error():
 
 
 def test_terminal_fallback_and_early_eos():
-    config = JointBudgetISConfig(forward_token_budget=16, total_length=4, expected_output_tokens=4)
+    config = joint_config(forward_token_budget=16, total_length=4, expected_output_tokens=4)
     result = run_joint_budget_is(
         RecordingBackend(), (), config, lambda _p, _y: 0.0, SeedStream(8)
     )
@@ -147,7 +161,7 @@ def test_terminal_fallback_and_early_eos():
 
 
 def test_constant_reward_preserves_base_and_repeated_seed_is_identical():
-    config = JointBudgetISConfig(
+    config = joint_config(
         forward_token_budget=100,
         total_length=2,
         block_sizes=(1,),
@@ -174,7 +188,7 @@ def test_constant_reward_preserves_base_and_repeated_seed_is_identical():
 
 
 def test_full_sequence_sir_approaches_reward_target():
-    config = JointBudgetISConfig(
+    config = joint_config(
         forward_token_budget=64,
         total_length=1,
         candidate_counts=(64,),
@@ -214,7 +228,7 @@ def test_reward_cost_and_support_checks():
         run_joint_budget_is(
             backend,
             (),
-            JointBudgetISConfig(forward_token_budget=100, total_length=2),
+            joint_config(forward_token_budget=100, total_length=2),
             lambda _p, _y: 0.0,
             SeedStream(0),
             sampling=SamplingConfig(top_p=0.9),
@@ -243,7 +257,7 @@ def test_reward_cost_and_support_checks():
 )
 def test_invalid_config(kwargs):
     with pytest.raises(ValueError):
-        JointBudgetISConfig(**({"forward_token_budget": 100} | kwargs))
+        joint_config(**({"forward_token_budget": 100} | kwargs))
 
 
 class BoundedLengthBackend:
@@ -277,7 +291,7 @@ def test_plans_do_not_depend_on_an_output_limit_that_is_never_reached(options):
     def run(total_length):
         return run_joint_budget_is(
             BoundedLengthBackend(), (5,) * 10,
-            JointBudgetISConfig(forward_token_budget=12_000, total_length=total_length, **options),
+            joint_config(forward_token_budget=12_000, total_length=total_length, **options),
             lambda _p, y: float(np.mean(y[:20])) / 4, SeedStream(6),
             sampling=SamplingConfig(eos_token_id=0),
         )

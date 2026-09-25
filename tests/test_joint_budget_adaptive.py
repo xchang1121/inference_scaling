@@ -4,18 +4,15 @@ import pytest
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.budget.planners import AdaptiveBudgetController, PlanningState
-from inference_scaling.arllm.algorithms.joint_budget_is import (
-    JointBudgetISConfig,
-    run_joint_budget_is,
-)
+from inference_scaling.arllm.algorithms.joint_budget_is import run_joint_budget_is
 from inference_scaling.shared.budget.costs import block_costs, completion_reserve
 from inference_scaling.shared.budget.joint import BlockBudgetEstimate, WeightMoments
 from inference_scaling.shared.rng import SeedStream
-from test_joint_budget_is import RecordingBackend
+from test_joint_budget_is import RecordingBackend, joint_config
 
 
 def settings(**overrides):
-    return JointBudgetISConfig(**({
+    return joint_config(**({
         "forward_token_budget": 20000, "total_length": 32,
         "block_sizes": (2, 4, 8), "candidate_counts": (2, 4, 8), "rollout_counts": (1, 2, 4),
         "planning_mode": "chunk_adaptive", "initial_block_size": 4,
@@ -307,4 +304,4 @@ def test_full_horizon_does_not_silently_ignore_adaptive_settings():
     with pytest.raises(ValueError, match="requires chunk_adaptive"):
         replace(settings(), planning_mode="full_horizon")
     with pytest.raises(ValueError, match="requires chunk_adaptive"):
-        JointBudgetISConfig(forward_token_budget=1000, adjustment_min_improvement=0.2)
+        joint_config(forward_token_budget=1000, adjustment_min_improvement=0.2)

@@ -5,9 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-DEFAULT_MAX_NEW_TOKENS = 32768
-
-
 def context_limit(backend: Any) -> int | None:
     """Read advertised limits; ignore tokenizer 'unlimited' sentinel values."""
     limits = []

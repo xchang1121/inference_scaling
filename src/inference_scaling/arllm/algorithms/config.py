@@ -13,17 +13,16 @@ from inference_scaling.shared.config import (
     require_finite,
     require_positive,
 )
-from inference_scaling.shared.model.generation import DEFAULT_MAX_NEW_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
 class PowerMHConfig:
-    alpha: float = 4.0
-    total_length: int = DEFAULT_MAX_NEW_TOKENS
-    block_size: int = 32
-    steps_per_block: int = 10
-    suffix_schedule: str = "uniform"
-    iterations: int | None = None
+    alpha: float
+    total_length: int
+    block_size: int
+    steps_per_block: int
+    suffix_schedule: str
+    iterations: int | None
 
     def __post_init__(self) -> None:
         require_finite("alpha", self.alpha)
@@ -54,12 +53,12 @@ class PowerMHConfig:
 class RewardMHConfig:
     """Full-sequence MH budget for a base-times-exponentiated-reward target."""
 
-    total_length: int = DEFAULT_MAX_NEW_TOKENS
-    block_size: int = 32
-    steps_per_block: int = 10
-    reward_temperature: float = 0.1
-    suffix_schedule: str = "uniform"
-    iterations: int | None = None
+    total_length: int
+    block_size: int
+    steps_per_block: int
+    reward_temperature: float
+    suffix_schedule: str
+    iterations: int | None
 
     def __post_init__(self) -> None:
         for name in ("total_length", "block_size", "steps_per_block"):
@@ -88,11 +87,11 @@ class ConditionalISConfig:
     per candidate usually suffice; the budget is better spent on candidates.
     """
 
-    candidate_count: int = 4
-    rollout_count: int = 4
-    block_size: int = 16
-    total_length: int = DEFAULT_MAX_NEW_TOKENS
-    reward_temperature: float = 1.0
+    candidate_count: int
+    rollout_count: int
+    block_size: int
+    total_length: int
+    reward_temperature: float
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):

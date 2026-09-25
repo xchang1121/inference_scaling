@@ -64,7 +64,7 @@ def _step(backend, config, *, state=RetainedSequence(), reward=_reward, sampling
 
 def test_first_block_approaches_the_exact_conditional_target() -> None:
     config = ConditionalISConfig(
-        candidate_count=12, rollout_count=8, block_size=1, total_length=2
+        candidate_count=12, rollout_count=8, block_size=1, total_length=2, reward_temperature=1.0
     )
     counts: Counter[int] = Counter()
     trials = 500
@@ -78,7 +78,7 @@ def test_first_block_approaches_the_exact_conditional_target() -> None:
 def test_completions_run_from_the_end_of_the_block() -> None:
     step, kept = _step(
         TabularAutoregressiveBackend({}, fallback=[0.5, 0.5]),
-        ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=2, total_length=5),
+        ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=2, total_length=5, reward_temperature=1.0),
         reward=lambda _prompt, generated: float(sum(generated)),
         seed=4,
     )
@@ -98,7 +98,7 @@ def test_early_eos_candidate_does_not_lengthen_other_completions(total_length) -
     # block is terminal: length-capped candidates must be scored without rollouts.
     backend = TabularAutoregressiveBackend({(): [0.25, 0.25, 0.5]}, fallback=[0.49, 0.49, 0.02])
     config = ConditionalISConfig(
-        candidate_count=4, rollout_count=1, block_size=3, total_length=total_length,
+        candidate_count=4, rollout_count=1, block_size=3, total_length=total_length, reward_temperature=1.0,
     )
     step, _ = _step(
         backend,
@@ -123,7 +123,7 @@ def test_conditional_is_returns_a_complete_sequence_within_total_length() -> Non
         backend,
         (),
         ConditionalISConfig(
-            candidate_count=2, rollout_count=2, block_size=2, total_length=5
+            candidate_count=2, rollout_count=2, block_size=2, total_length=5, reward_temperature=1.0
         ),
         lambda _prompt, generated: float(sum(generated)),
         SeedStream(17),
@@ -140,7 +140,7 @@ def test_conditional_is_rejects_policies_that_break_the_weight_formula(sampling)
             _backend(),
             (),
             ConditionalISConfig(
-                candidate_count=2, rollout_count=2, block_size=1, total_length=2
+                candidate_count=2, rollout_count=2, block_size=1, total_length=2, reward_temperature=1.0
             ),
             _reward,
             SeedStream(1),
@@ -182,7 +182,7 @@ def test_kept_completion_is_reused_without_rescoring() -> None:
         scored.append(tuple(generated))
         return float(sum(generated))
 
-    config = ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=1, total_length=3)
+    config = ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0)
     result = run_conditional_is(_backend(), (), config, reward, SeedStream(7))
     sequence: tuple[int, ...] | None = None
     kept_reward = 0.0
@@ -224,7 +224,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
     adapter = ConditionalISAdapter(
         backend=backend,
         prompt=(),
-        config=ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=3),
+        config=ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0),
         sampling=sampling,
         reward=reward,
     )

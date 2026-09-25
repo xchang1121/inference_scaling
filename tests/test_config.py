@@ -22,12 +22,12 @@ def test_policy_id_preserves_distinct_float_values() -> None:
     [
         lambda: SamplingConfig(temperature=0),
         lambda: SamplingConfig(top_p=1.1),
-        lambda: PowerMHConfig(total_length=4, block_size=8),
-        lambda: PowerMHConfig(suffix_schedule="unknown"),
+        lambda: PowerMHConfig(total_length=4, block_size=8, alpha=4.0, steps_per_block=10, suffix_schedule="uniform", iterations=None),
+        lambda: PowerMHConfig(suffix_schedule="unknown", alpha=4.0, total_length=32768, block_size=32, steps_per_block=10, iterations=None),
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
-        lambda: ConditionalISConfig(reward_temperature=float("inf")),
-        lambda: ConditionalISConfig(block_size=8, total_length=4),
+        lambda: ConditionalISConfig(reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),
+        lambda: ConditionalISConfig(block_size=8, total_length=4, candidate_count=4, rollout_count=4, reward_temperature=1.0),
     ],
 )
 def test_invalid_configs_fail_early(factory) -> None:

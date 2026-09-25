@@ -47,9 +47,9 @@ class ContinuousBatchingBackend:
         self,
         backend: AutoregressiveBackend,
         *,
-        max_batch_size: int = 32,
-        max_batch_tokens: int = 4096,
-        batch_wait_seconds: float = 0.002,
+        max_batch_size: int,
+        max_batch_tokens: int,
+        batch_wait_seconds: float,
     ) -> None:
         if max_batch_size <= 0 or max_batch_tokens <= 0:
             raise ValueError("batch limits must be positive")

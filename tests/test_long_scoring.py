@@ -25,8 +25,8 @@ def test_chunked_scoring_matches_complete_causal_context(family):
         torch.manual_seed(21)
         model = AutoModelForCausalLM.from_config(config).eval()
     tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2, bos_token_id=1)
-    complete = TransformersBackend(model, tokenizer, device="cpu", score_chunk_size=128)
-    chunked = TransformersBackend(model, tokenizer, device="cpu", score_chunk_size=4)
+    complete = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=128)
+    chunked = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=4)
     requests = [ScoreRequest((1, 4, 3, 5, 8, 9), ((8, 4, 3, 9, 1, 6, 2), (5, 6)), SamplingConfig(temperature=0.7)),
                 ScoreRequest((), ((8,),), SamplingConfig())]
     expected = complete.score_statistics_batch(requests, confidence_top_k=5)

@@ -69,8 +69,8 @@ class TransformersBackend:
         *,
         model_id: str | None = None,
         device: str | Any | None = None,
-        max_score_batch_size: int = 8,
-        score_chunk_size: int = 256,
+        max_score_batch_size: int,
+        score_chunk_size: int,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
@@ -128,8 +128,8 @@ class TransformersBackend:
         model_name_or_path: str,
         *,
         adapter_name_or_path: str | None = None,
-        device: str = "cuda",
-        dtype: str = "float32",
+        device: str,
+        dtype: str,
         cache_dir: str | None = None,
         revision: str | None = None,
         tokenizer_name_or_path: str | None = None,
@@ -141,8 +141,8 @@ class TransformersBackend:
         tokenizer_kwargs: Mapping[str, Any] | None = None,
         local_files_only: bool = False,
         trust_remote_code: bool = False,
-        max_score_batch_size: int = 8,
-        score_chunk_size: int = 256,
+        max_score_batch_size: int,
+        score_chunk_size: int,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:

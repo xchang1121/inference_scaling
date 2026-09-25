@@ -47,9 +47,13 @@ class RepeatableCache:
         return None
 
 
+def _backend(model):
+    return TransformersBackend(model, TinyTokenizer(), device="cpu", max_score_batch_size=8, score_chunk_size=256)
+
+
 def test_request_local_randomness_is_independent_of_batch_order() -> None:
     model = ConstantLogitModel([0.55, 0.3, 0.15])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     requests = [
         GenerationRequest((0,), 5, SamplingConfig(), seed, f"request-{seed}")
         for seed in (3, 9, 27)
@@ -66,7 +70,7 @@ def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
     vocabulary_size = 1000
     seed = 12434
     model = ConstantLogitModel([1 / vocabulary_size] * vocabulary_size)
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
 
     sample = backend.sample_batch(
         [GenerationRequest((0,), 1, SamplingConfig(), seed, "large-vocabulary")]
@@ -84,7 +88,7 @@ def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
 
 def test_sampled_logprobabilities_match_exact_rescoring() -> None:
     model = ConstantLogitModel([0.5, 0.35, 0.15])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     sampling = SamplingConfig(temperature=0.7, top_k=2)
     samples = backend.sample_batch(
         [
@@ -115,7 +119,7 @@ def test_sampled_logprobabilities_match_exact_rescoring() -> None:
 
 def test_top_p_scoring_uses_the_actual_truncated_policy() -> None:
     model = ConstantLogitModel([0.6, 0.3, 0.1])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     scores = backend.score_batch(
         [ScoreRequest((0,), ((0,), (1,), (2,)), SamplingConfig(top_p=0.7))]
     )
@@ -126,7 +130,7 @@ def test_top_p_scoring_uses_the_actual_truncated_policy() -> None:
 
 def test_eos_stops_generation_and_statistics_count_real_tokens() -> None:
     model = ConstantLogitModel([0.0, 0.0, 1.0])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     samples = backend.sample_batch(
         [
             GenerationRequest(
@@ -149,7 +153,7 @@ def test_eos_stops_generation_and_statistics_count_real_tokens() -> None:
 
 def test_identical_prefix_prefill_is_computed_once_then_forked() -> None:
     model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     backend.sample_batch(
         [
             GenerationRequest((0, 1, 0), 1, SamplingConfig(), index, str(index))
@@ -166,7 +170,7 @@ def test_identical_prefix_prefill_is_computed_once_then_forked() -> None:
 
 def test_each_repeated_prefix_group_is_prefilled_once_then_forked() -> None:
     model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     prefixes = ((0, 1), (1, 0), (0, 1), (1, 0), (0, 1), (1, 0))
     outputs = backend.sample_batch(
         [
@@ -186,7 +190,7 @@ def test_each_repeated_prefix_group_is_prefilled_once_then_forked() -> None:
 
 def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:
     model = ConstantLogitModel([0.6, 0.3, 0.1])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     backend.score_batch([ScoreRequest((0,), ((0,), (1,), (0, 1)), SamplingConfig())])
 
     snapshot = backend.snapshot()
@@ -198,7 +202,7 @@ def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:
 
 def test_scoring_keeps_only_required_tail_logits() -> None:
     model = ConstantLogitModel([0.6, 0.3, 0.1])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
     scores = backend.score_batch(
         [ScoreRequest((0, 1, 0, 1), ((0,), (1,), (0, 1)), SamplingConfig())]
     )
@@ -210,7 +214,7 @@ def test_scoring_keeps_only_required_tail_logits() -> None:
 def test_confidence_statistics_match_reference_policy_definitions() -> None:
     probabilities = np.asarray([0.5, 0.3, 0.2])
     model = ConstantLogitModel(probabilities)
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
 
     result = backend.score_statistics_batch(
         [ScoreRequest((0,), ((0, 1),), SamplingConfig())],
@@ -227,7 +231,7 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
 
 def test_confidence_statistics_reject_truncated_support() -> None:
     model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
 
     with pytest.raises(ValueError, match="full-support"):
         backend.score_statistics_batch(
@@ -237,7 +241,7 @@ def test_confidence_statistics_reject_truncated_support() -> None:
 
 def test_confidence_statistics_reject_nonpositive_top_k() -> None:
     model = ConstantLogitModel([0.5, 0.3, 0.2])
-    backend = TransformersBackend(model, TinyTokenizer(), device="cpu")
+    backend = _backend(model)
 
     with pytest.raises(ValueError, match="confidence_top_k must be positive"):
         backend.score_statistics_batch(
