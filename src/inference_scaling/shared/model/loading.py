@@ -2,8 +2,31 @@
 
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
+
+
+def synchronize_accelerator(device: str) -> None:
+    """Wait for queued CUDA work so timings and counters cover it."""
+
+    if str(device).startswith("cuda"):
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+
+def release_accelerator_memory() -> None:
+    """Collect dropped models and return cached CUDA blocks."""
+
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def resolve_checkpoint_path(

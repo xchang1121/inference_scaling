@@ -9,13 +9,14 @@ built by the family that owns the model.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.rewards.verifier import VerifierContext, build_verifier
-from inference_scaling.shared.rewards.vote import pool_agreement_reward
+from inference_scaling.shared.rewards.vote import pool_agreement_reward, vote_index
 from inference_scaling.shared.types import TokenSequence
 
 REWARDS = ("verifier", "vote", "logprob", "consilience")
@@ -70,6 +71,16 @@ def text_reward(
         0,
         {"pool": [{"answer": grade.answer, "correct": grade.correct} for grade in grades]},
     )
+
+
+
+def best_index(rule: Any, texts: Sequence[str], values: Sequence[float] | None, rng: random.Random) -> int:
+    """Best-of-N: the majority answer without a reward, else the highest reward; ties go to the seeded RNG."""
+
+    if values is None:
+        return vote_index(rule, texts, rng)
+    top = max(values)
+    return rng.choice([index for index, value in enumerate(values) if value == top])
 
 
 __all__ = ["REWARDS", "Reward", "text_reward"]

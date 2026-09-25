@@ -10,7 +10,7 @@ from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
 from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
 from inference_scaling.dllm.algorithms.mh_acceleration import run_diffusion_replay_mixture_mh
 from inference_scaling.dllm.config import DiffusionSamplingConfig
-from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
+from inference_scaling.dllm.types import DiffusionGenerationRequest, DiffusionSample, DiffusionTraceStep
 
 
 class CountingCoinBackend:
@@ -83,14 +83,7 @@ def test_independence_mh_draws_every_proposal_in_one_batch():
 
 def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():
     backend = CountingCoinBackend()
-    history = run_diffusion_reward_mh(
-        backend=backend,
-        prompt=(9,),
-        config=DiffusionMHConfig(total_length=2, updates=1, reward_temperature=1.0),
-        sampling=EXACT,
-        reward_batch=_zero_reward,
-        seed=2,
-    ).initial
+    history = backend.sample_batch([DiffusionGenerationRequest((9,), 2, EXACT, 2, "history")])[0]
     result = run_diffusion_replay_mixture_mh(
         backend=backend,
         prompt=(9,),
@@ -103,20 +96,12 @@ def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():
     )
 
     assert result.history_draws == 0
-    assert result.base_draws == CONFIG.updates + 1
     assert result.acceptance_rate == 1.0
 
 
 def test_replay_mixture_rejects_a_cache_from_another_model():
     backend = CountingCoinBackend()
-    history = run_diffusion_reward_mh(
-        backend=backend,
-        prompt=(9,),
-        config=DiffusionMHConfig(total_length=2, updates=1, reward_temperature=1.0),
-        sampling=EXACT,
-        reward_batch=_zero_reward,
-        seed=2,
-    ).initial
+    history = backend.sample_batch([DiffusionGenerationRequest((9,), 2, EXACT, 2, "history")])[0]
 
     with pytest.raises(ValueError, match="match the prompt and exact policy"):
         run_diffusion_replay_mixture_mh(

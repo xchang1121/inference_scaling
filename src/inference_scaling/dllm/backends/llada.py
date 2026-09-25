@@ -31,6 +31,20 @@ class LLaDABackendSnapshot:
     resident_parameters: int
 
 
+def active_parameter_counts(model: Any) -> tuple[int, int]:
+    """Total parameters and those active per token: routed experts count by their routing share."""
+
+    config = getattr(model, "config", None)
+    experts = int(getattr(config, "num_experts", 0) or 0)
+    active_experts = int(getattr(config, "num_experts_per_tok", 0) or 0)
+    share = active_experts / experts if 0 < active_experts <= experts else 1.0
+    total, active = 0, 0.0
+    for name, parameter in model.named_parameters():
+        total += int(parameter.numel())
+        active += parameter.numel() * (share if ".experts." in name else 1.0)
+    return total, int(round(active))
+
+
 class LLaDATransformersBackend:
     """Execute blockwise masked diffusion and record committed trajectories.
 
@@ -68,7 +82,7 @@ class LLaDATransformersBackend:
         self._resident_parameters = int(
             sum(parameter.numel() for parameter in model.parameters())
         )
-        self._total_parameters, self._active_parameters = self._effective_parameter_counts()
+        self._total_parameters, self._active_parameters = active_parameter_counts(model)
         self._lock = Lock()
         self._sample_requests = 0
         self._forward_calls = 0
@@ -191,23 +205,6 @@ class LLaDATransformersBackend:
             return next(self.model.parameters()).device
         except StopIteration:
             return self._torch.device("cpu")
-
-    def _effective_parameter_counts(self) -> tuple[int, int]:
-        config = getattr(self.model, "config", None)
-        expert_count = int(getattr(config, "num_experts", 0) or 0)
-        active_experts = int(getattr(config, "num_experts_per_tok", 0) or 0)
-        expert_fraction = (
-            active_experts / expert_count
-            if 0 < active_experts <= expert_count
-            else 1.0
-        )
-        total = 0
-        active = 0.0
-        for name, parameter in self.model.named_parameters():
-            count = int(parameter.numel())
-            total += count
-            active += count * expert_fraction if ".experts." in name else count
-        return total, int(round(active))
 
     def _record_forward(self, batch_size: int, sequence_length: int) -> None:
         with self._lock:
@@ -429,4 +426,4 @@ class LLaDATransformersBackend:
             )
         return samples
 
-__all__ = ["LLaDABackendSnapshot", "LLaDATransformersBackend"]
+__all__ = ["LLaDABackendSnapshot", "LLaDATransformersBackend", "active_parameter_counts"]

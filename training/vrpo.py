@@ -8,7 +8,6 @@ the variance-reduced masked-diffusion preference loss against the frozen base.
 
 from __future__ import annotations
 
-import gc
 import json
 import random
 import time
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 from inference_scaling.app.records import (
-    cached_file_sha256,
     checkpoint_metadata_hashes,
     json_sha256,
     load_jsonl,
@@ -27,6 +25,8 @@ from inference_scaling.app.records import (
     write_json_atomic,
 )
 from inference_scaling.datasets.gsm8k import GSM8K
+from inference_scaling.app.dllm import pinned_weight_hashes
+from inference_scaling.dllm.backends.llada import active_parameter_counts
 from inference_scaling.dllm.backends.loader import load_llada_backend
 from inference_scaling.dllm.config import VRPOSamplingConfig, sampling_from_settings
 from inference_scaling.dllm.training.preferences import select_scored_preference_pair
@@ -37,25 +37,8 @@ from inference_scaling.dllm.training.vrpo import (
 )
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.rewards.verifier import VerifierContext, build_verifier
+from inference_scaling.shared.model.loading import release_accelerator_memory
 from inference_scaling.shared.rng import SeedStream
-
-
-def _weights(vrpo: Mapping[str, Any], cache_dir: Path) -> dict[str, str]:
-    model = vrpo["model"]
-    directory = Path(str(model["path"]))
-    return {name: cached_file_sha256(directory / name, cache_dir=cache_dir, expected=str(digest))
-            for name, digest in zip(model["weight_files"], model["weight_sha256"], strict=True)}
-
-
-def _release() -> None:
-    gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
 
 
 def preferences(settings: Mapping[str, Any]) -> None:
@@ -65,7 +48,7 @@ def preferences(settings: Mapping[str, Any]) -> None:
     data_path, manifest_path = Path(str(options["data"])), Path(str(options["manifest"]))
     effective = {"vrpo": {key: vrpo[key] for key in ("model", "engine", "prompt", "sampling", "max_new_tokens",
                                                      "preferences", "verifier")},
-                 "train": dataset.describe(), "weight_sha256": _weights(vrpo, Path(str(settings["hash_cache_dir"]))),
+                 "train": dataset.describe(), "weight_sha256": pinned_weight_hashes(vrpo["model"], Path(str(settings["hash_cache_dir"]))),
                  "metadata_sha256": checkpoint_metadata_hashes(Path(str(vrpo["model"]["path"]))),
                  "source_sha256": json_sha256(source_sha256())}
     fingerprint = json_sha256(effective)
@@ -138,20 +121,7 @@ def preferences(settings: Mapping[str, Any]) -> None:
         })
     finally:
         del backend
-        _release()
-
-
-def _active_parameters(model: Any) -> tuple[int, int]:
-    """Total parameters and those active per token (routed experts count by their share)."""
-
-    config = getattr(model, "config", None)
-    experts, active_experts = int(getattr(config, "num_experts", 0) or 0), int(getattr(config, "num_experts_per_tok", 0) or 0)
-    share = active_experts / experts if 0 < active_experts <= experts else 1.0
-    total, active = 0, 0.0
-    for name, parameter in model.named_parameters():
-        total += parameter.numel()
-        active += parameter.numel() * (share if ".experts." in name else 1.0)
-    return total, int(round(active))
+        release_accelerator_memory()
 
 
 def train(settings: Mapping[str, Any]) -> None:
@@ -230,7 +200,7 @@ def train(settings: Mapping[str, Any]) -> None:
     order = list(range(len(encoded)))
     random.Random(int(options["seed"])).shuffle(order)
     seeds = SeedStream(int(options["seed"]))
-    total_parameters, active_parameters = _active_parameters(model)
+    total_parameters, active_parameters = active_parameter_counts(model)
     optimizer.zero_grad(set_to_none=True)
     if device.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
@@ -284,7 +254,7 @@ def train(settings: Mapping[str, Any]) -> None:
         })
     finally:
         del optimizer, reference, model, base
-        _release()
+        release_accelerator_memory()
 
 
 __all__ = ["preferences", "train"]

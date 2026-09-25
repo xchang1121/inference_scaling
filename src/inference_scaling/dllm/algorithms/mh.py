@@ -57,18 +57,11 @@ def _evaluate_mh_rewards(
 @dataclass(frozen=True, slots=True)
 class DiffusionMHStep:
     update: int
-    proposal: DiffusionSample
-    proposal_reward: float
-    previous_reward: float
-    acceptance_probability: float
     accepted: bool
 
 
 @dataclass(frozen=True, slots=True)
 class DiffusionMHResult:
-    prompt: TokenSequence
-    initial: DiffusionSample
-    initial_reward: float
     steps: tuple[DiffusionMHStep, ...]
     final: DiffusionSample
     final_reward: float
@@ -110,8 +103,6 @@ def run_diffusion_reward_mh(
 
     current = samples[0]
     current_reward = reward_values[0]
-    initial = current
-    initial_reward = current_reward
     steps: list[DiffusionMHStep] = []
     for update, (proposal, proposal_reward) in enumerate(
         zip(samples[1:], reward_values[1:], strict=True), start=1
@@ -122,30 +113,11 @@ def run_diffusion_reward_mh(
             proposed_target_log_density=proposal_reward / config.reward_temperature,
             uniform=uniform,
         )
-        acceptance_probability = decision.acceptance_probability
-        accepted = decision.accepted
-        previous_reward = current_reward
-        if accepted:
+        if decision.accepted:
             current = proposal
             current_reward = proposal_reward
-        steps.append(
-            DiffusionMHStep(
-                update=update,
-                proposal=proposal,
-                proposal_reward=proposal_reward,
-                previous_reward=previous_reward,
-                acceptance_probability=acceptance_probability,
-                accepted=accepted,
-            )
-        )
-    return DiffusionMHResult(
-        prompt=prompt,
-        initial=initial,
-        initial_reward=initial_reward,
-        steps=tuple(steps),
-        final=current,
-        final_reward=current_reward,
-    )
+        steps.append(DiffusionMHStep(update, decision.accepted))
+    return DiffusionMHResult(tuple(steps), current, current_reward)
 
 
 __all__ = ["DiffusionMHResult", "DiffusionMHStep", "run_diffusion_reward_mh"]

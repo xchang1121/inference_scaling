@@ -10,7 +10,6 @@ its output.
 
 from __future__ import annotations
 
-import gc
 import random
 from dataclasses import replace
 from pathlib import Path
@@ -23,7 +22,7 @@ from inference_scaling.app.records import (
     checkpoint_metadata_hashes,
     importance_trace,
 )
-from inference_scaling.app.rewards import Reward, text_reward
+from inference_scaling.app.rewards import Reward, best_index, text_reward
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
@@ -38,9 +37,23 @@ from inference_scaling.dllm.algorithms.search import run_diffusion_block_beam, r
 from inference_scaling.dllm.backends.loader import load_llada_backend
 from inference_scaling.dllm.config import DiffusionSamplingConfig, sampling_from_settings
 from inference_scaling.dllm.types import DiffusionGenerationRequest
-from inference_scaling.shared.rewards.vote import vote_index
+from inference_scaling.shared.model.loading import release_accelerator_memory, synchronize_accelerator
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
+
+
+def pinned_weight_hashes(model: Mapping[str, Any], cache_dir: Path) -> dict[str, str]:
+    """Check every pinned weight file of a ``dllm.model`` section by size and SHA-256."""
+
+    directory = Path(str(model["path"]))
+    names, sizes, hashes = model["weight_files"], model["weight_bytes"], model["weight_sha256"]
+    if not len(names) == len(sizes) == len(hashes):
+        raise ValueError("weight_files, weight_bytes and weight_sha256 differ in length")
+    for name, size in zip(names, sizes, strict=True):
+        if not (directory / name).is_file() or (directory / name).stat().st_size != size:
+            raise FileNotFoundError(f"{directory / name} is absent or has the wrong size")
+    return {name: cached_file_sha256(directory / name, cache_dir=cache_dir, expected=str(digest))
+            for name, digest in zip(names, hashes, strict=True)}
 
 
 class DLLMFamily:
@@ -71,16 +84,9 @@ class DLLMFamily:
 
         model = self.dllm["model"]
         directory = Path(str(model["path"]))
-        names, sizes, hashes = model["weight_files"], model["weight_bytes"], model["weight_sha256"]
-        if not len(names) == len(sizes) == len(hashes):
-            raise ValueError("dllm.model weight_files, weight_bytes and weight_sha256 differ in length")
-        for name, size in zip(names, sizes, strict=True):
-            if not (directory / name).is_file() or (directory / name).stat().st_size != size:
-                raise FileNotFoundError(f"{directory / name} is absent or has the wrong size")
         identity: dict[str, Any] = {
             "path": str(directory),
-            "weight_sha256": {name: cached_file_sha256(directory / name, cache_dir=self.cache_dir, expected=digest)
-                              for name, digest in zip(names, hashes, strict=True)},
+            "weight_sha256": pinned_weight_hashes(model, self.cache_dir),
             "metadata_sha256": checkpoint_metadata_hashes(directory),
         }
         if model["adapter"] is not None:
@@ -92,22 +98,11 @@ class DLLMFamily:
         self.backend = load_llada_backend(self.dllm["model"], self.dllm["engine"])
 
     def synchronize(self) -> None:
-        if str(self.dllm["engine"]["device"]).startswith("cuda"):
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+        synchronize_accelerator(self.dllm["engine"]["device"])
 
     def close(self) -> None:
         self.backend = None
-        gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        release_accelerator_memory()
 
     # One problem ----------------------------------------------------------------------
 
@@ -192,13 +187,10 @@ class DLLMFamily:
         texts = [self.answer_text(prompt, tokens) for tokens in sequences]
         rng = random.Random(seeds.derive("best_of_n", problem.id, "tie-break"))
         values: list[float] | None = None
-        if reward is None:
-            chosen = vote_index(self.dataset, texts, rng)
-        else:
+        if reward is not None:
             values = [float(value) for value in reward.batch(prompt, sequences)] if reward.batch is not None else [
                 reward.point(prompt, tokens) for tokens in sequences]
-            top = max(values)
-            chosen = rng.choice([index for index, value in enumerate(values) if value == top])
+        chosen = best_index(self.dataset, texts, values, rng)
         grades = [self.dataset.grade(text, problem) for text in texts]
         return sequences[chosen], {
             "selected_index": chosen,

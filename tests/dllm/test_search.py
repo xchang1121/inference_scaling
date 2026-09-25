@@ -142,9 +142,7 @@ def test_block_beam_retains_width_and_accumulates_stage_probabilities():
     assert [stage.proposals for stage in result.stages] == [4, 8, 8]
     assert len(result.beams) == 4
     assert len(result.best.token_ids) == 3
-    assert result.best.trajectory_logprob == sum(
-        float(sample.trajectory_logprob) for sample in result.best.samples
-    )
+    assert result.best.trajectory_logprob == pytest.approx(sum(log((0.8, 0.2)[token]) for token in result.best.token_ids))
 
 
 def test_search_algorithms_reject_intractable_remasking_policy():

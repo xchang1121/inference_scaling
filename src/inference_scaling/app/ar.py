@@ -8,7 +8,6 @@ thinking segment. Per-problem costs are backend counter deltas by phase:
 
 from __future__ import annotations
 
-import gc
 import random
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -23,7 +22,7 @@ from inference_scaling.app.records import (
     importance_trace,
     json_sha256,
 )
-from inference_scaling.app.rewards import Reward, text_reward
+from inference_scaling.app.rewards import Reward, best_index, text_reward
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
@@ -42,9 +41,13 @@ from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.model.generation import generation_budget
-from inference_scaling.shared.model.loading import checkpoint_weight_files, resolve_checkpoint_path
+from inference_scaling.shared.model.loading import (
+    checkpoint_weight_files,
+    release_accelerator_memory,
+    resolve_checkpoint_path,
+    synchronize_accelerator,
+)
 from inference_scaling.shared.model.prompting import render_prompt
-from inference_scaling.shared.rewards.vote import vote_index
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
@@ -140,25 +143,14 @@ class ARFamily:
         self.thinking_format = thinking_format_from_backend(self.raw, output_settings_from_config(self.ar))
 
     def synchronize(self) -> None:
-        if str(self.ar["engine"]["device"]).startswith("cuda"):
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+        synchronize_accelerator(self.ar["engine"]["device"])
 
     def close(self) -> None:
         if self.backend is not None and self.backend is not self.raw:
             self.backend.close()
         close_backend(self.raw)
         self.raw = self.backend = None
-        gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        release_accelerator_memory()
 
     # One problem ----------------------------------------------------------------------
 
@@ -304,9 +296,7 @@ class ARFamily:
         texts = [self.answer_text(task.prompt, tokens) for tokens in sequences]
         rng = random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break"))
         values: list[float] | None = None
-        if reward is None:
-            chosen = vote_index(self.dataset, texts, rng)
-        else:
+        if reward is not None:
             model = reward.model
             if (isinstance(model, SequenceLogProbabilityReward) and model.sampling is not None
                     and model.sampling.policy_id == task.sampling.policy_id):
@@ -316,8 +306,7 @@ class ARFamily:
                 values = [float(value) for value in reward.batch(task.prompt, sequences)]
             else:
                 values = [reward.point(task.prompt, tokens) for tokens in sequences]
-            top = max(values)
-            chosen = rng.choice([index for index, value in enumerate(values) if value == top])
+        chosen = best_index(self.dataset, texts, values, rng)
         grades = [self.dataset.grade(text, task.problem) for text in texts]
         return sequences[chosen], {
             "selected_index": chosen,

@@ -29,12 +29,6 @@ class DiffusionPowerMHStep:
     stage_length: int
     update: int
     cut: int
-    previous_base_trajectory_logprob: float
-    proposed_base_trajectory_logprob: float
-    previous_proposal_trajectory_logprob: float
-    proposed_proposal_trajectory_logprob: float
-    log_acceptance: float
-    acceptance_probability: float
     accepted: bool
 
 
@@ -58,20 +52,9 @@ class DiffusionPowerMHState:
     def token_ids(self) -> TokenSequence:
         return tuple(token for block in self.blocks for token in block.token_ids)
 
-    @property
-    def base_trajectory_logprob(self) -> float:
-        return sum(block.base_trajectory_logprob for block in self.blocks)
-
-    @property
-    def proposal_trajectory_logprob(self) -> float:
-        return sum(block.proposal_trajectory_logprob for block in self.blocks)
-
 
 @dataclass(frozen=True, slots=True)
 class DiffusionPowerMHResult:
-    prompt: TokenSequence
-    alpha: float
-    initial: DiffusionPowerMHState
     steps: tuple[DiffusionPowerMHStep, ...]
     final: DiffusionPowerMHState
 
@@ -163,7 +146,6 @@ def run_diffusion_trajectory_power_mh(
     )
     seeds = SeedStream(seed)
     current = DiffusionPowerMHState(prompt, ())
-    initial: DiffusionPowerMHState | None = None
     steps: list[DiffusionPowerMHStep] = []
     stage_length = 0
     global_update = 0
@@ -180,8 +162,6 @@ def run_diffusion_trajectory_power_mh(
         )
         current = DiffusionPowerMHState(prompt, current.blocks + extension_blocks)
         stage_length += extension_length
-        if initial is None:
-            initial = current
         for stage_update in range(config.updates_per_stage):
             global_update += 1
             cut_block = int(
@@ -219,47 +199,21 @@ def run_diffusion_trajectory_power_mh(
                 reverse_proposal_log_probability=old_q,
                 uniform=uniform,
             )
-            log_acceptance = decision.log_acceptance
-            acceptance_probability = decision.acceptance_probability
-            accepted = decision.accepted
-            if accepted:
+            if decision.accepted:
                 current = DiffusionPowerMHState(prompt, kept_blocks + proposed_blocks)
-            steps.append(
-                DiffusionPowerMHStep(
-                    stage_length=stage_length,
-                    update=global_update,
-                    cut=cut,
-                    previous_base_trajectory_logprob=old_p,
-                    proposed_base_trajectory_logprob=new_p,
-                    previous_proposal_trajectory_logprob=old_q,
-                    proposed_proposal_trajectory_logprob=new_q,
-                    log_acceptance=log_acceptance,
-                    acceptance_probability=acceptance_probability,
-                    accepted=accepted,
-                )
-            )
-    assert initial is not None
-    return DiffusionPowerMHResult(
-        prompt=prompt,
-        alpha=config.alpha,
-        initial=initial,
-        steps=tuple(steps),
-        final=current,
-    )
+            steps.append(DiffusionPowerMHStep(stage_length, global_update, cut, decision.accepted))
+    return DiffusionPowerMHResult(tuple(steps), current)
 
 
 @dataclass(frozen=True, slots=True)
 class DiffusionBeamHypothesis:
     token_ids: TokenSequence
     trajectory_logprob: float
-    samples: tuple[DiffusionSample, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class DiffusionBlockBeamStage:
-    generated_length_before: int
     proposals: int
-    retained: tuple[DiffusionBeamHypothesis, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,14 +245,13 @@ def run_diffusion_block_beam(
     if not sampling.has_exact_trajectory_density:
         raise ValueError("block beam search requires an exact diffusion policy")
     seeds = SeedStream(seed)
-    beams = (DiffusionBeamHypothesis((), 0.0, ()),)
+    beams = (DiffusionBeamHypothesis((), 0.0),)
     stages: list[DiffusionBlockBeamStage] = []
     stage_lengths = diffusion_decision_stage_lengths(
         total_length=config.total_length,
         decision_block_size=config.decision_block_size,
         sampling=sampling,
     )
-    generated_length = 0
     for stage_index, stage_length in enumerate(stage_lengths):
         requests: list[DiffusionGenerationRequest] = []
         owners: list[int] = []
@@ -329,7 +282,6 @@ def run_diffusion_block_beam(
                 trajectory_logprob=(
                     beams[owner].trajectory_logprob + _exact_logprob(sample)
                 ),
-                samples=beams[owner].samples + (sample,),
             )
             for owner, sample in zip(owners, sampled, strict=True)
         ]
@@ -338,14 +290,7 @@ def run_diffusion_block_beam(
             reverse=True,
         )
         beams = tuple(expanded[: config.width])
-        stages.append(
-            DiffusionBlockBeamStage(
-                generated_length_before=generated_length,
-                proposals=len(expanded),
-                retained=beams,
-            )
-        )
-        generated_length += stage_length
+        stages.append(DiffusionBlockBeamStage(len(expanded)))
     return DiffusionBlockBeamResult(prompt=prompt, stages=tuple(stages), beams=beams)
 
 

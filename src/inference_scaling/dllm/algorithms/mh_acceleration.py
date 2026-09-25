@@ -43,16 +43,13 @@ class ReplayMixtureDiffusionMHStep:
     update: int
     proposal_source: str
     accepted: bool
-    log_acceptance: float
 
 
 @dataclass(frozen=True, slots=True)
 class ReplayMixtureDiffusionMHResult:
-    prompt: TokenSequence
     final: DiffusionSample
     final_reward: float
     steps: tuple[ReplayMixtureDiffusionMHStep, ...]
-    base_draws: int
     history_draws: int
 
     @property
@@ -169,24 +166,10 @@ def run_diffusion_replay_mixture_mh(
             current = proposal
             current_reward = proposed_reward
             current_q = proposed_q
-        steps.append(
-            ReplayMixtureDiffusionMHStep(
-                update=update,
-                proposal_source="history" if cached else "base",
-                accepted=decision.accepted,
-                log_acceptance=decision.log_acceptance,
-            )
-        )
+        steps.append(ReplayMixtureDiffusionMHStep(update, "history" if cached else "base", decision.accepted))
     if not isfinite(current_reward):
         raise ValueError("reward must be finite")
-    return ReplayMixtureDiffusionMHResult(
-        prompt=prompt,
-        final=current,
-        final_reward=current_reward,
-        steps=tuple(steps),
-        base_draws=len(base_positions),
-        history_draws=history_draws,
-    )
+    return ReplayMixtureDiffusionMHResult(current, current_reward, tuple(steps), history_draws)
 
 
 __all__ = [
