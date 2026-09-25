@@ -15,8 +15,11 @@ from inference_scaling.dllm.algorithms.config import DiffusionISConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.importance import logmeanexp
-from inference_scaling.shared.sampling.stepwise import categorical_index_from_uniform, normalize_log_weights
+from inference_scaling.shared.sampling.importance import (
+    categorical_index_from_uniform,
+    logmeanexp,
+    normalize_log_weights,
+)
 from inference_scaling.shared.types import TokenBatchReward, TokenReward, TokenSequence
 
 

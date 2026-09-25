@@ -25,15 +25,11 @@ from math import isfinite
 from inference_scaling.arllm.algorithms.candidates import sample_candidates, validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.shared.sampling.importance import logmeanexp
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.stepwise import (
-    StepwiseCandidate,
-    StepwiseSelection,
+from inference_scaling.shared.sampling.importance import (
     categorical_index_from_uniform,
+    logmeanexp,
     normalize_log_weights,
-    run_stepwise_generation,
-    stepwise_generation_step,
 )
 from inference_scaling.shared.types import TokenBatchReward, TokenReward
 from inference_scaling.arllm.types import (
@@ -243,7 +239,7 @@ class RetainedCandidate:
 
 
 class ConditionalISAdapter:
-    """Expose conditional IS steps through the common stepwise protocol."""
+    """One conditional IS move: propose candidates, weight them, keep one completion."""
 
     def __init__(
         self,
@@ -318,7 +314,7 @@ class ConditionalISAdapter:
         proposals: Sequence[SequenceSample],
         step_index: int,
         seeds: SeedStream,
-    ) -> Sequence[StepwiseCandidate[RetainedCandidate]]:
+    ) -> tuple[RetainedCandidate, ...]:
         length = self._block_length(state)
         retained = None
         if state.token_ids:
@@ -344,7 +340,7 @@ class ConditionalISAdapter:
             reward_batch=self.reward_batch,
             retained=retained,
         )
-        kept: list[StepwiseCandidate[RetainedCandidate]] = []
+        kept: list[RetainedCandidate] = []
         for index, candidate in enumerate(evaluated):
             # Drawn for every candidate so the kept completion is independent
             # of which candidate the step selects.
@@ -354,14 +350,7 @@ class ConditionalISAdapter:
             uniform = float(
                 seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()
             )
-            kept.append(
-                StepwiseCandidate(
-                    RetainedCandidate(
-                        candidate, categorical_index_from_uniform(probabilities, uniform)
-                    ),
-                    candidate.log_weight,
-                )
-            )
+            kept.append(RetainedCandidate(candidate, categorical_index_from_uniform(probabilities, uniform)))
         return tuple(kept)
 
     def advance(
@@ -388,22 +377,27 @@ class ConditionalISAdapter:
             state.fixed + len(candidate.token_ids),
         )
 
+    def step(
+        self, state: RetainedSequence, step_index: int, seeds: SeedStream,
+    ) -> tuple[ConditionalISStep, RetainedSequence]:
+        """Select a candidate in proportion to its weight and advance the kept sequence."""
 
-def _step_record(
-    selection: StepwiseSelection[RetainedSequence, RetainedCandidate],
-) -> ConditionalISStep:
-    candidates = tuple(item.value.candidate for item in selection.candidates)
-    carried = bool(selection.state_before.token_ids)
-    return ConditionalISStep(
-        generated_length_before=selection.state_before.fixed,
-        candidates=candidates,
-        selected_index=selection.selected_index,
-        completion_index=selection.selected.value.completion_index,
-        retained_candidate=carried,
-        rollout_evaluations_performed=(
-            sum(len(candidate.rollouts) for candidate in candidates) - int(carried)
-        ),
-    )
+        if self.is_terminal(state):
+            raise ValueError("cannot advance a terminal generation state")
+        kept = self.evaluate(state, self.propose(state, step_index, seeds), step_index, seeds)
+        probabilities = normalize_log_weights([item.candidate.log_weight for item in kept])
+        selected = categorical_index_from_uniform(
+            probabilities, float(seeds.generator("conditional_is", step_index, "select").random()),
+        )
+        candidates = tuple(item.candidate for item in kept)
+        carried = bool(state.token_ids)
+        record = ConditionalISStep(
+            generated_length_before=state.fixed, candidates=candidates, selected_index=selected,
+            completion_index=kept[selected].completion_index, retained_candidate=carried,
+            # The carried completion was evaluated in an earlier step.
+            rollout_evaluations_performed=sum(len(candidate.rollouts) for candidate in candidates) - int(carried),
+        )
+        return record, self.advance(state, kept[selected], step_index)
 
 
 def conditional_is_step(
@@ -428,14 +422,7 @@ def conditional_is_step(
         reward=reward,
         reward_batch=reward_batch,
     )
-    selection = stepwise_generation_step(
-        adapter,
-        state,
-        step_index,
-        seeds,
-        selection_namespace=("conditional_is",),
-    )
-    return _step_record(selection), adapter.advance(state, selection.selected.value, step_index)
+    return adapter.step(state, step_index, seeds)
 
 
 def run_conditional_is(
@@ -452,20 +439,17 @@ def run_conditional_is(
 
     sampling = sampling or SamplingConfig()
     validate_base_sampling(sampling)
-    generic = run_stepwise_generation(
-        ConditionalISAdapter(
-            backend=backend,
-            prompt=prompt,
-            config=config,
-            sampling=sampling,
-            reward=reward,
-            reward_batch=reward_batch,
-        ),
-        seeds,
-        selection_namespace=("conditional_is",),
-    )
-    return ConditionalISResult(
+    adapter = ConditionalISAdapter(
+        backend=backend,
         prompt=prompt,
-        token_ids=generic.final_state.token_ids,
-        steps=tuple(_step_record(step) for step in generic.steps),
+        config=config,
+        sampling=sampling,
+        reward=reward,
+        reward_batch=reward_batch,
     )
+    state = adapter.initial_state
+    steps: list[ConditionalISStep] = []
+    while not adapter.is_terminal(state):
+        record, state = adapter.step(state, len(steps), seeds)
+        steps.append(record)
+    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps))

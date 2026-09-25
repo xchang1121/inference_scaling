@@ -16,7 +16,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.stepwise import stepwise_generation_step
+from inference_scaling.shared.sampling.importance import normalize_log_weights
 
 
 def _backend() -> TabularAutoregressiveBackend:
@@ -239,10 +239,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
             seeds = SeedStream(trial)
             step_index = 0
             while not adapter.is_terminal(state):
-                selection = stepwise_generation_step(
-                    adapter, state, step_index, seeds, selection_namespace=("conditional_is",)
-                )
-                state = adapter.advance(state, selection.selected.value, step_index)
+                _, state = adapter.step(state, step_index, seeds)
                 step_index += 1
             counts[label][state.token_ids] += 1
     empirical = {
@@ -251,3 +248,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
     }
     assert total_variation(empirical["target"], target) < 0.03
     assert total_variation(empirical["empty"], target) > 0.2
+
+
+def test_log_weight_normalization_matches_softmax() -> None:
+    assert normalize_log_weights((0.0, float(np.log(3.0)))) == pytest.approx((0.25, 0.75))

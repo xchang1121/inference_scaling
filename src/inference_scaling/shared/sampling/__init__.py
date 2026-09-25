@@ -3,7 +3,6 @@
 The kernels contain only target, weight and selection arithmetic. Model
 families supply proposals, rollouts and probability scores through adapters.
 
-- ``importance``: rollout importance weights
+- ``importance``: log-mean-exp weights, their normalization and categorical selection
 - ``mh``: Metropolis--Hastings acceptance kernel
-- ``stepwise``: finite-candidate SIR driver used by conditional IS
 """
