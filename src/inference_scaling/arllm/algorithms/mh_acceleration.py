@@ -1,14 +1,13 @@
 """The frozen-history suffix proposal for reward Metropolis--Hastings.
 
 The proposal is a frozen defensive mixture of base-model suffixes and suffixes
-of previously observed sequences. Its forward and reverse probabilities are
+of previously generated sequences. Its forward and reverse probabilities are
 evaluated exactly, so the Hastings ratio is never clipped.
 """
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite, log
 
@@ -19,8 +18,6 @@ from inference_scaling.arllm.algorithms.mh import (
     _draw_suffix,
     _is_base_proposal,
     _sample_suffix,
-    _score_one,
-    _token_changes,
     _validate_proposal,
 )
 from inference_scaling.arllm.config import SamplingConfig
@@ -34,31 +31,17 @@ from inference_scaling.shared.types import TokenReward
 class ReplayProposalMHStep:
     step: int
     cut: int
-    proposed_suffix_length: int
-    current_reward: float
-    proposed_reward: float
-    old_proposal_logprob: float
-    new_proposal_logprob: float
-    log_acceptance: float
     accepted: bool
     proposal_source: str
-    suffix_schedule: str
-    suffix_probability: float
-    proposed_token_changes: int
-    accepted_token_changes: int
 
 
 @dataclass(frozen=True, slots=True)
 class ReplayProposalMHResult:
-    prompt: TokenSequence
     token_ids: TokenSequence
     reward: float
-    base_token_logprobs: tuple[float, ...]
     trace: tuple[ReplayProposalMHStep, ...]
-    chain_id: int
-    proposal_logprob: float
     # Cuts past the end of a stopped output: no proposal, state unchanged.
-    skipped: int = 0
+    skipped: int
 
     @property
     def attempts(self) -> int:
@@ -81,129 +64,77 @@ class ReplayProposalDraw:
     source: str
 
 
-def _finite_reward(
-    reward: TokenReward, prompt: TokenSequence, sequence: TokenSequence
-) -> float:
-    value = float(reward(prompt, sequence))
-    if not isfinite(value):
-        raise ValueError("reward must be finite")
-    return value
-
-
 class FrozenReplaySuffixProposal:
-    """A frozen defensive mixture of base suffixes and empirical replay suffixes.
+    """A frozen defensive mixture of base suffixes and history suffixes.
 
-    Observed suffixes are keyed by the prefix they follow. The observed
-    sequences must be complete outputs under the chain's length limit and stop
-    rule, as the base draws are.
+    After a kept prefix, the history component proposes the rest of a uniformly
+    chosen history sequence that starts with that prefix. A history sequence
+    carries the base log-probabilities of its tokens from generation; after a
+    shared prefix they are also the log-probabilities of its suffix, so a replay
+    needs no scoring pass. History sequences must be complete outputs under the
+    chain's length limit and stop rule, as the base draws are.
     """
 
     def __init__(
         self,
         backend: AutoregressiveBackend,
+        prompt: TokenSequence,
+        history: Sequence[tuple[TokenSequence, Sequence[float]]],
         *,
-        history_mixture: float = 0.25,
-        sampling: SamplingConfig | None = None,
+        history_mixture: float,
+        sampling: SamplingConfig,
     ) -> None:
         if not 0 <= history_mixture < 1:
             raise ValueError("history_mixture must lie in [0, 1)")
-        self.backend = backend
-        self.sampling = sampling or SamplingConfig()
-        _validate_proposal(self.sampling)
-        if not _is_base_proposal(self.sampling):
+        _validate_proposal(sampling)
+        if not _is_base_proposal(sampling):
             raise ValueError("defensive replay proposal currently requires base sampling")
+        if any(not tokens or len(tokens) != len(logprobs) for tokens, logprobs in history):
+            raise ValueError("each history sequence needs one log-probability per token")
+        self.backend = backend
+        self.prompt = tuple(prompt)
+        self.history = [(tuple(tokens), tuple(logprobs)) for tokens, logprobs in history]
         self.history_mixture = float(history_mixture)
-        self._suffixes: dict[TokenSequence, Counter[TokenSequence]] = defaultdict(Counter)
-        self._frozen = False
+        self.sampling = sampling
 
-    def observe_suffix(self, prefix: TokenSequence, suffix: TokenSequence) -> None:
-        if self._frozen:
-            raise RuntimeError("replay proposal is frozen")
-        if not suffix:
-            raise ValueError("replay proposal suffix cannot be empty")
-        self._suffixes[tuple(prefix)][tuple(suffix)] += 1
+    def _matches(self, kept: TokenSequence) -> list[tuple[TokenSequence, tuple[float, ...]]]:
+        """Suffixes, with their base log-probabilities, of the history sequences that continue ``kept``."""
 
-    def observe_sequence(self, prompt: TokenSequence, sequence: TokenSequence) -> None:
-        values = tuple(sequence)
-        for cut in range(len(values)):
-            self.observe_suffix(tuple(prompt) + values[:cut], values[cut:])
-
-    def observe_sequences(
-        self, prompt: TokenSequence, sequences: Iterable[TokenSequence]
-    ) -> None:
-        for sequence in sequences:
-            self.observe_sequence(prompt, sequence)
-
-    def freeze(self) -> None:
-        self._frozen = True
-
-    @staticmethod
-    def _history_probability(
-        counts: Counter[TokenSequence] | None, suffix: TokenSequence
-    ) -> float:
-        if not counts:
-            return 0.0
-        return counts.get(tuple(suffix), 0) / sum(counts.values())
+        cut = len(kept)
+        return [(tokens[cut:], logprobs[cut:]) for tokens, logprobs in self.history
+                if len(tokens) > cut and tokens[:cut] == kept]
 
     def _mixture_logprob(
-        self,
-        base_logprob: float,
-        counts: Counter[TokenSequence] | None,
-        suffix: TokenSequence,
+        self, base_logprob: float, matches: Sequence[tuple[TokenSequence, tuple[float, ...]]], suffix: TokenSequence,
     ) -> float:
-        if not counts or self.history_mixture == 0:
+        if not matches or self.history_mixture == 0:
             return float(base_logprob)
-        history_probability = self._history_probability(counts, suffix)
+        count = sum(tokens == suffix for tokens, _ in matches)
         terms = [log(1.0 - self.history_mixture) + float(base_logprob)]
-        if history_probability > 0:
-            terms.append(log(self.history_mixture) + log(history_probability))
+        if count:
+            terms.append(log(self.history_mixture) + log(count / len(matches)))
         return float(np.logaddexp.reduce(np.asarray(terms, dtype=np.float64)))
 
-    def draw(
-        self,
-        prefix: TokenSequence,
-        length: int,
-        *,
-        seed: int,
-        request_id: str,
-    ) -> ReplayProposalDraw:
-        if not self._frozen:
-            raise RuntimeError("replay proposal must be frozen before sampling")
-        if length <= 0:
-            raise ValueError("replay proposal length must be positive")
-        counts = self._suffixes.get(tuple(prefix))
-        component_rng = SeedStream(seed).generator("replay-proposal-component")
-        if counts and float(component_rng.random()) < self.history_mixture:
-            support = tuple(sorted(counts))
-            masses = np.asarray([counts[value] for value in support], dtype=np.float64)
-            masses /= masses.sum()
-            suffix = support[int(SeedStream(seed).generator("replay-proposal-history").choice(len(support), p=masses))]
-            base_token_logprobs = _score_one(self.backend, prefix, suffix, self.sampling)
+    def draw(self, kept: TokenSequence, length: int, *, seed: int, request_id: str) -> ReplayProposalDraw:
+        matches = self._matches(kept)
+        seeds = SeedStream(seed)
+        if matches and float(seeds.generator("replay-proposal-component").random()) < self.history_mixture:
+            suffix, logprobs = matches[int(seeds.generator("replay-proposal-history").integers(len(matches)))]
             source = "history"
         else:
             sample = _sample_suffix(
-                self.backend, prefix=prefix, length=length, sampling=self.sampling,
-                seed=SeedStream(seed).derive("replay-proposal-base"), request_id=request_id,
+                self.backend, prefix=self.prompt + kept, length=length, sampling=self.sampling,
+                seed=seeds.derive("replay-proposal-base"), request_id=request_id,
             )
-            suffix, base_token_logprobs, source = sample.token_ids, sample.base_logprobs, "base"
-        return ReplayProposalDraw(
-            token_ids=tuple(suffix),
-            base_token_logprobs=tuple(base_token_logprobs),
-            proposal_logprob=self._mixture_logprob(float(sum(base_token_logprobs)), counts, tuple(suffix)),
-            source=source,
-        )
+            suffix, logprobs, source = sample.token_ids, sample.base_logprobs, "base"
+        return ReplayProposalDraw(suffix, logprobs, self._mixture_logprob(sum(logprobs), matches, suffix), source)
 
-    def logprob(self, prefix: TokenSequence, suffix: TokenSequence, *, base_logprob: float) -> float:
-        if not self._frozen:
-            raise RuntimeError("replay proposal must be frozen before scoring")
-        if not suffix:
-            raise ValueError("replay proposal suffix cannot be empty")
-        return self._mixture_logprob(float(base_logprob), self._suffixes.get(tuple(prefix)), tuple(suffix))
+    def logprob(self, kept: TokenSequence, suffix: TokenSequence, *, base_logprob: float) -> float:
+        return self._mixture_logprob(base_logprob, self._matches(kept), tuple(suffix))
 
 
 def run_reward_mh_chain_replay_proposal(
     proposal: FrozenReplaySuffixProposal,
-    prompt: TokenSequence,
     config: RewardMHConfig,
     reward: TokenReward,
     seeds: SeedStream,
@@ -212,97 +143,46 @@ def run_reward_mh_chain_replay_proposal(
 ) -> ReplayProposalMHResult:
     """Run reward MH with exact forward/reverse defensive replay probabilities."""
 
-    proposal.freeze()
-    initial = proposal.draw(
-        prompt,
-        config.total_length,
-        seed=seeds.derive("reward_mh", chain_id, "initialize"),
-        request_id=f"reward-mh-replay:{chain_id}:initialize",
-    )
-    tokens = initial.token_ids
-    base_logs = initial.base_token_logprobs
-    current_reward = _finite_reward(reward, prompt, tokens)
+    prompt = proposal.prompt
+
+    def score(sequence: TokenSequence) -> float:
+        value = float(reward(prompt, sequence))
+        if not isfinite(value):
+            raise ValueError("reward must be finite")
+        return value
+
+    initial = proposal.draw((), config.total_length, seed=seeds.derive("reward_mh", chain_id, "initialize"),
+                            request_id=f"reward-mh-replay:{chain_id}:initialize")
+    tokens, base_logs = initial.token_ids, initial.base_token_logprobs
+    current_reward = score(tokens)
     trace: list[ReplayProposalMHStep] = []
     skipped = 0
-
     for step_index in range(config.updates):
-        cut, _, suffix_probability = _draw_suffix(
-            stage_length=config.total_length,
-            schedule=config.suffix_schedule,
+        cut, _, _ = _draw_suffix(
+            stage_length=config.total_length, schedule=config.suffix_schedule,
             rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
         )
         if cut >= len(tokens):
             skipped += 1
             continue
-        retained = tokens[:cut]
-        prefix = prompt + retained
-        old_suffix = tokens[cut:]
+        kept = tokens[:cut]
         old_p = float(sum(base_logs[cut:]))
-        old_q = proposal.logprob(prefix, old_suffix, base_logprob=old_p)
-        draw = proposal.draw(
-            prefix,
-            config.total_length - cut,
-            seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
-            request_id=f"reward-mh-replay:{chain_id}:step:{step_index}",
-        )
-        proposed_sequence = retained + draw.token_ids
-        proposed_reward = _finite_reward(reward, prompt, proposed_sequence)
-        new_p = float(sum(draw.base_token_logprobs))
+        draw = proposal.draw(kept, config.total_length - cut,
+                             seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
+                             request_id=f"reward-mh-replay:{chain_id}:step:{step_index}")
+        proposed_reward = score(kept + draw.token_ids)
         decision = decide_metropolis_hastings(
-            current_target_log_density=(
-                old_p + current_reward / config.reward_temperature
-            ),
-            proposed_target_log_density=(
-                new_p + proposed_reward / config.reward_temperature
-            ),
+            current_target_log_density=old_p + current_reward / config.reward_temperature,
+            proposed_target_log_density=float(sum(draw.base_token_logprobs)) + proposed_reward / config.reward_temperature,
             forward_proposal_log_probability=draw.proposal_logprob,
-            reverse_proposal_log_probability=old_q,
-            uniform=float(
-                seeds.generator("reward_mh", chain_id, step_index, "accept").random()
-            ),
+            reverse_proposal_log_probability=proposal.logprob(kept, tokens[cut:], base_logprob=old_p),
+            uniform=float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
         )
-        log_acceptance = decision.log_acceptance
-        accepted = decision.accepted
-        previous_reward = current_reward
-        proposed_token_changes = _token_changes(old_suffix, draw.token_ids)
-        if accepted:
-            tokens = proposed_sequence
-            base_logs = base_logs[:cut] + draw.base_token_logprobs
+        if decision.accepted:
+            tokens, base_logs = kept + draw.token_ids, base_logs[:cut] + draw.base_token_logprobs
             current_reward = proposed_reward
-        trace.append(
-            ReplayProposalMHStep(
-                step=step_index,
-                cut=cut,
-                proposed_suffix_length=len(draw.token_ids),
-                current_reward=previous_reward,
-                proposed_reward=proposed_reward,
-                old_proposal_logprob=old_q,
-                new_proposal_logprob=draw.proposal_logprob,
-                log_acceptance=log_acceptance,
-                accepted=accepted,
-                proposal_source=draw.source,
-                suffix_schedule=config.suffix_schedule,
-                suffix_probability=suffix_probability,
-                proposed_token_changes=proposed_token_changes,
-                accepted_token_changes=(proposed_token_changes if accepted else 0),
-            )
-        )
-
-    final_q = proposal.logprob(
-        prompt,
-        tokens,
-        base_logprob=float(sum(base_logs)),
-    )
-    return ReplayProposalMHResult(
-        prompt=prompt,
-        token_ids=tokens,
-        reward=current_reward,
-        base_token_logprobs=base_logs,
-        trace=tuple(trace),
-        chain_id=chain_id,
-        proposal_logprob=final_q,
-        skipped=skipped,
-    )
+        trace.append(ReplayProposalMHStep(step_index, cut, decision.accepted, draw.source))
+    return ReplayProposalMHResult(tokens, current_reward, tuple(trace), skipped)
 
 
 __all__ = [

@@ -595,13 +595,13 @@ q_c(v\mid x,y_{1:c})=(1-\lambda)p(v\mid x,y_{1:c})
 
 其中 $`\lambda`$ 为 `frozen_history.mixture`。对切点 $`c`$，经验分量只包含前 $`c`$ 个 token 与当前序列一致的历史后缀；
 历史序列与链使用同一长度上限和停止规则，因此这些后缀都是合法的完整后缀。没有这样的历史后缀时，proposal
-就是基础模型。抽到历史分量时直接读取现成后缀，
-并通过一次并行评分获得 $`p(v)`$；无论来源如何，式 (6) 都使用旧后缀与新后缀在式 (9) 的混合分布下的精确概率。
+就是基础模型。抽到历史分量时直接读取现成后缀；历史序列带有生成时的逐 token 基础对数概率，共享前缀之后
+它们就是 $`p(v)`$，无需评分。无论来源如何，式 (6) 都使用旧后缀与新后缀在式 (9) 的混合分布下的精确概率。
 基础分量保证完整支持集，经验库在链开始前冻结，因而该 proposal 仍定义普通 MH 转移核。
 
 ```python
-old_q = replay_proposal.logprob(prefix, old_suffix, base_logprob=old_p)
-draw = replay_proposal.draw(prefix, total_length - cut, seed=seed)
+old_q = replay_proposal.logprob(kept, old_suffix, base_logprob=old_p)
+draw = replay_proposal.draw(kept, total_length - cut, seed=seed)
 log_acceptance = min(
     0.0,
     new_p - old_p + reward_delta / tau + old_q - draw.proposal_logprob,
@@ -619,7 +619,7 @@ K_{\rho}^{\mathrm{replay}}
 ```
 
 实现对实际抽到的切点计算新旧后缀在完整混合分布下的概率。切点选择概率在正向和反向提议中相同，仍在
-Hastings 比中抵消。历史命中时，自回归生成被替换为给定已有序列的批量概率评分，主要降低墙钟；历史样本的
+Hastings 比中抵消。历史命中时不调用模型；历史样本的
 生成计入搜索阶段的成本，记录中的 `trace.proposal_sources` 给出基础分量与历史分量的抽样次数。
 
 dLLM 的对应实现是回放混合 MH（`dllm.algorithms.mh.proposal = "frozen_history"`）：整段独立 proposal 为基础

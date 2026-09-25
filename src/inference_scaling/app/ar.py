@@ -353,16 +353,17 @@ class ARFamily:
         base = SamplingConfig(eos_token_id=self.eos)
         if config["proposal"] == "frozen_history":
             history = config["frozen_history"]
-            proposal = FrozenReplaySuffixProposal(reference, history_mixture=float(history["mixture"]), sampling=base)
             samples = reference.sample_batch([
                 GenerationRequest(task.prompt, task.maximum, base,
                                   task.seeds.derive("reward_mh", task.problem.id, "history", index),
                                   f"reward-mh-history:{task.problem.id}:{index}")
                 for index in range(int(history["samples"]))
             ])
-            proposal.observe_sequences(task.prompt, [sample.token_ids for sample in samples])
-            result: Any = run_reward_mh_chain_replay_proposal(proposal, task.prompt, settings, reward.point,
-                                                              SeedStream(task.seed))
+            proposal = FrozenReplaySuffixProposal(
+                reference, task.prompt, [(sample.token_ids, sample.token_logprobs) for sample in samples],
+                history_mixture=float(history["mixture"]), sampling=base,
+            )
+            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.point, SeedStream(task.seed))
             trace["proposal_sources"] = dict(Counter(step.proposal_source for step in result.trace))
         else:
             result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.point, SeedStream(task.seed))
