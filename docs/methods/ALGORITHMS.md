@@ -68,7 +68,6 @@ AR-LLM 与 dLLM 的生成状态不同：前者追加 token 后缀，后者更新
 | 共享对象 | 算法层操作 | AR-LLM 适配 | dLLM 适配 |
 | --- | --- | --- | --- |
 | `StepwiseGenerationBackend` | 生成候选、估计条件奖励权重、归一化、重采样、提交候选 | 保留完整序列的 token 块与自回归补全 | 掩码块与扩散补全 |
-| `MonteCarloRolloutWeightProvider` | 汇总 on-policy、off-policy 或不校正的 rollout 权重 | 不经过该对象：补全均来自基础模型，对数权重即 $`r/\tau`$ | early-exit 轨迹的条件概率比 |
 | `decide_metropolis_hastings` | 根据未归一化目标概率与正反 proposal 概率执行接受或拒绝 | 随机后缀 proposal | 分块轨迹或整段 proposal |
 | `choose_joint_budget` 与两种规划器 | 按初始样本矩和成本估计选择候选数、补全数与块长 | 联合预算 IS | 未接入 |
 
@@ -99,7 +98,7 @@ $`\log q(y\mid y')`$。共享核计算
 | `best_of_n` | 式 (3) 或答案投票 | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励或投票选择 | 同左 |
 | `mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
 | `mh_power` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
-| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：$`K,M\to\infty`$ 时趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 分块条件 IS（第 7 节），rollout 来自基础模型或 early-exit proposal |
+| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：$`K,M\to\infty`$ 时趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），候选与补全都来自基础模型 |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
 `--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`vote`、`logprob`、`consilience`（第 9 节），
@@ -241,7 +240,6 @@ flowchart LR
 | — | `rewards.vote.pool_size` | `vote` 奖励的冻结样本池大小 | 一致比例更稳定，奖励阶段生成成本增加 |
 | — | `ar.algorithms.mh_power.proposal_temperature` | 幂目标 MH 的 proposal 温度 | 改变接受率与多样性 |
 | — | `ar.sampling.temperature` | 基础分布的温度 | 改变多样性、接受率和目标本身 |
-| — | `dllm.algorithms.is.importance_log_ratio_clip` | 对数概率比截断阈值 | 减弱截断；精确目标诊断应设为 `null` |
 | — | `ar.engine.continuous_batching.max_batch_size` / `max_batch_tokens`、`ar.engine.transformers.max_score_batch_size` | 生成与评分批量 | 提高 GPU 利用率，也可能增加填充与峰值显存 |
 
 后缀长度分布与冻结历史样本数分别见第 4 节和第 8 节；运行目录的 `manifest.json` 保存本次运行的完整设置。
@@ -257,7 +255,6 @@ flowchart LR
 | Metropolis--Hastings | [Hastings (1970)](https://doi.org/10.1093/biomet/57.1.97) | 用于幂分布和显式奖励目标的后缀转移 |
 | 重要性采样与全支持混合分布 | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件奖励权重和覆盖完整支持集的冻结历史 proposal |
 | 迭代 SIR（iterated SIR） | [Samsonov et al. (2022)](https://papers.neurips.cc/paper_files/paper/2022/file/21c86d5b10cdc28664ccdadf0a29065a-Paper-Conference.pdf) | 条件 IS 每步保持目标不变的有限池论证 |
-| off-policy 修正 | [Precup, Sutton, and Singh (2000)](https://web.eecs.umich.edu/~baveja/Papers/OffPolicy.pdf) | 用 early-exit proposal 的轨迹概率修正 dLLM rollout |
 | 可枚举候选 logit adjustment | [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510) | 原文在有限动作集合上加入估计优势；第 6.1 节将其改写为序列奖励下的条件权重接口 |
 | GRPO | [Shao et al. (2024)](https://arxiv.org/abs/2402.03300) | 使用同一基础模型训练的参数更新基线 |
 | 连续批处理与 KV 分块 | [Orca，Yu et al. (2022)](https://www.usenix.org/conference/osdi22/presentation/yu)、[PagedAttention，Kwon et al. (2023)](https://doi.org/10.1145/3600006.3613165) | 跨题调度、共同前缀预填充和 vLLM APC |
@@ -524,7 +521,7 @@ p(z\mid x,g)=\mathrm{softmax}
 
 <p align="right">式 (8-L1)</p>
 
-对每个候选用式 (8) 或第 7 节的式 (10) 得到同一个条件权重估计 $`\widehat h(z)`$，再调整 logits：
+对每个候选用式 (8) 得到条件权重估计 $`\widehat h(z)`$，再调整 logits：
 
 ```math
 \ell_{\mathrm{adj}}(z)
@@ -548,12 +545,12 @@ p(z\mid x,g)=\mathrm{softmax}
 
 JitRL 原文从相似历史轨迹估计每个有限动作的相对回报，将其乘更新强度后直接加到基础 logits。本节保留
 “基础 logits 加一个候选评分”的实现结构，但面向完整序列奖励，把该评分写成 $`\log\widehat h(z)`$。奖励
-只能在补全结束后获得时，$`\widehat h`$ 由式 (8) 或 (10) 计算。这里的 rollout 与 off-policy 连接是针对本仓库
+只能在补全结束后获得时，$`\widehat h`$ 由式 (8) 计算。这里的 rollout 连接是针对本仓库
 序列目标的适配；JitRL 原文使用的是历史轨迹检索与回报估计。
 
 式 (8-L2) 是候选可全部枚举时的对数空间实现。若 $`\widehat h=h`$，式 (8-L3) 给出式 (7) 的精确下一候选
 条件分布。使用 $`K`$ 条独立的新补全时，在条件权重方差有限且归一化分母不趋近于零的情况下，
-$`\widehat h`$ 的典型波动按 $`K^{-1/2}`$ 缩小，输出概率随之稳定；off-policy 补全把式 (10) 产生的估计放入同一位置。
+$`\widehat h`$ 的典型波动按 $`K^{-1/2}`$ 缩小，输出概率随之稳定。
 
 有限候选算法为：
 
@@ -565,93 +562,17 @@ $`\widehat h`$ 的典型波动按 $`K^{-1/2}`$ 缩小，输出概率随之稳定
 完整枚举省去有限 $`M`$ 候选池的覆盖误差，但需要为每个候选估计条件权重。若 $`\mathcal Z`$ 只是从完整
 合法集合中截取的 top-k 或检索子集，式 (8-L3) 表示目标在该子集上的条件分布，额外存在集合截断误差。当
 $`|\mathcal Z|`$ 很大时，rollout 数约为 $`|\mathcal Z|K`$，可能远高于抽样候选 IS。该方法当前属于理论
-参考：CLI、实现和实验结果均未包含这一项。本节只说明它与现有条件权重和 off-policy 公式的关系。原始有限动作
+参考：CLI、实现和实验结果均未包含这一项。本节只说明它与现有条件权重的关系。原始有限动作
 logit 更新见 [Just-In-Time Reinforcement Learning，Li et al. (2026)](https://arxiv.org/abs/2601.18510)。
 
-<a id="alg-offpolicy-is"></a>
-## 7. dLLM 条件 IS 与 early-exit rollout
+<a id="alg-dllm-is"></a>
+## 7. dLLM 逐块 IS
 
 dLLM 的 `is` 对式 (7) 执行逐块 SIR。每一步从基础模型按 `dllm.sampling` 生成 $`M`$ 个决策块候选，块长
-`dllm.algorithms.is.decision_block_size` 须为原生扩散块长 `dllm.sampling.block_length` 的整数倍；每个候选生成
-$`K`$ 条完整 rollout，用式 (8) 或下面的式 (10) 估计 $`h`$，按 $`\widehat h_m/\sum_j\widehat h_j`$ 选择候选后只提交该块并
-丢弃 rollout。与 AR 不同，它不保留完整序列；有限 $`M,K`$ 下是逐块 SIR 近似，$`K,M\to\infty`$ 时趋近目标。
-
-rollout 使用 `dllm.exact_sampling`（随机重掩码，逐步转移概率可精确计算）。`dllm.algorithms.is.rollout_model = "base"`
-时由基础模型生成；取 `"proposal"` 时由只运行前 `dllm.model.proposal_layers` 层的早退（early-exit）模型生成。该模型与
-基础模型共享驻留权重，单次前向计算更少，但分布不同。若补全由 proposal $`q(u\mid x,g,z)`$ 生成，则式 (7) 改写为
-
-```math
-h(g,z)=\mathbb E_{u\sim q}
-\left[
-e^{r(g,z,u)/\tau}
-\frac{p(u\mid x,g,z)}{q(u\mid x,g,z)}
-\right].
-
-```
-
-<p align="right">式 (9)</p>
-
-对应普通 IS 估计量为
-
-```math
-\widehat h_m=\frac1K\sum_{k=1}^K
-\exp\left\{
-\frac{r_{mk}}{\tau}
-+\log p(u_{mk}\mid x,g,z_m)
--\log q(u_{mk}\mid x,g,z_m)
-\right\}.
-
-```
-
-<p align="right">式 (10)</p>
-
-式 (10) 未截断时对 $`h(g,z_m)`$ 无偏。扩散模型中的 $`p`$ 与 $`q`$ 是同一条随机重掩码轨迹在基础模型与 early-exit
-模型转移核下的概率：生成时已记录 $`\log q`$，基础模型再对该轨迹批量评分得到 $`\log p`$，不重新生成补全。
-候选始终来自基础模型。
-
-| `rollout_model` | `importance_correction` | 补全来源 | 权重中的概率修正 | 基础模型轨迹评分 | 对应目标 |
-| --- | --- | --- | --- | --- | --- |
-| `base` | 不适用 | 基础模型 | $`p/q=1`$ | 不需要 | 式 (7) |
-| `proposal` | `true` | early-exit 模型 | $`p/q`$，可截断 | 需要 | 未截断时为式 (7) |
-| `proposal` | `false` | early-exit 模型 | 删除 | 不需要 | 式 (12) |
-
-```python
-raw_log_ratio = base_logprob - proposal_logprob
-applied_log_ratio = raw_log_ratio
-if importance_log_ratio_clip is not None:
-    applied_log_ratio = clip(raw_log_ratio, -clip_value, clip_value)
-log_weight = reward / reward_temperature + applied_log_ratio
-```
-
-`dllm.algorithms.is.importance_log_ratio_clip` 取 $`c`$ 时，截断 $`\mathrm{clip}(\log p/q,-c,c)`$ 将式 (9) 改为有偏
-估计；取 `null` 时不截断。记录给出做过修正的 rollout 数（`trace.corrected_rollouts`）、实际发生截断的 rollout 数
-（`trace.clipped_rollouts`）和候选内 rollout 权重的平均有效样本量（`trace.mean_rollout_ess`）。
-
-<a id="alg-uncorrected-rollout"></a>
-### 7.1 未校正 rollout 加权
-
-`rollout_model = "proposal"` 且 `importance_correction = false` 时，权重仅为 $`e^{r/\tau}`$：
-
-```math
-\widehat h^{(q)}(g,z)=\frac1K\sum_{k=1}^K e^{r(g,z,u_k)/\tau},
-\qquad u_k\sim q(\cdot\mid x,g,z).
-
-```
-
-<p align="right">式 (11)</p>
-
-此时逐块目标为
-
-```math
-p(z\mid x,g)\,
-\mathbb E_{u\sim q(\cdot\mid x,g,z)}[e^{r(g,z,u)/\tau}],
-
-```
-
-<p align="right">式 (12)</p>
-
-式 (12) 使用基础模型候选、proposal 补全和奖励权重，基础模型轨迹评分成本为 0。比较时分别记录两种模型角色的
-计算量（`cost.phases` 中的 `base` 与 `proposal`），并明确两种路径对应的目标分布。
+`dllm.algorithms.is.decision_block_size` 须为原生扩散块长 `dllm.sampling.block_length` 的整数倍；每个候选用同一策略
+生成 $`K`$ 条完整补全，用式 (8) 估计 $`h`$，按 $`\widehat h_m/\sum_j\widehat h_j`$ 选择候选后只提交该块并丢弃补全。
+候选与补全来自同一基础策略，对数权重即 $`r/\tau`$，不需要轨迹概率。与 AR 不同，它不保留完整序列；有限
+$`M,K`$ 下是逐块 SIR 近似，$`K,M\to\infty`$ 时趋近目标。最后一块的候选已是完整输出，只有一条空补全。
 
 <a id="alg-replay-mh"></a>
 ## 8. 冻结历史混合 proposal 的 MH
@@ -667,12 +588,12 @@ q_c(v\mid x,y_{1:c})=(1-\lambda)p(v\mid x,y_{1:c})
 
 ```
 
-<p align="right">式 (13)</p>
+<p align="right">式 (9)</p>
 
 其中 $`\lambda`$ 为 `frozen_history.mixture`。对切点 $`c`$，经验分量只包含前 $`c`$ 个 token 与当前序列一致的历史后缀；
 历史序列与链使用同一长度上限和停止规则，因此这些后缀都是合法的完整后缀。没有这样的历史后缀时，proposal
 就是基础模型。抽到历史分量时直接读取现成后缀，
-并通过一次并行评分获得 $`p(v)`$；无论来源如何，式 (6) 都使用旧后缀与新后缀在式 (13) 的混合分布下的精确概率。
+并通过一次并行评分获得 $`p(v)`$；无论来源如何，式 (6) 都使用旧后缀与新后缀在式 (9) 的混合分布下的精确概率。
 基础分量保证完整支持集，经验库在链开始前冻结，因而该 proposal 仍定义普通 MH 转移核。
 
 ```python
@@ -684,7 +605,7 @@ log_acceptance = min(
 )
 ```
 
-冻结历史 proposal 可与式 (4) 的多尺度后缀分布组合。对每个长度 $`\ell`$，式 (13) 定义保持目标分布不变的
+冻结历史 proposal 可与式 (4) 的多尺度后缀分布组合。对每个长度 $`\ell`$，式 (9) 定义保持目标分布不变的
 Hastings 核 $`K_\ell^{\mathrm{replay}}`$；长度分布 $`\rho(\ell)`$ 在链开始前固定且与当前序列无关，因此
 
 ```math
@@ -895,9 +816,6 @@ top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。若复
 | 多尺度后缀或冻结历史 proposal | 目标固定；正反 proposal 概率完整进入 Hastings 比 | 后缀长度、各分量抽样次数、接受率 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、前向 token 位置数 |
 | 联合预算规划 | 初始样本只用于调度，最终权重只使用独立的正式样本 | 每步 $`M,K,B`$、计划与实际前向 token |
-| early-exit 补全 + 未截断 $`p/q`$ | 式 (7) 的条件奖励权重无偏 | 两侧对数概率、ESS、支持集 |
-| 截断对数重要性概率比 | 有偏稳定化估计 | 修正与截断的 rollout 数 |
-| 未校正 rollout 加权 | 目标为式 (12) | 无基础模型轨迹评分、分角色计算量 |
 | 可枚举候选 + logit adjustment | 精确 $`h`$ 时得到式 (7)；估计 $`h`$ 时只保留条件权重误差 | 候选集合完整性、每候选 rollout、调整前后 logits |
 | 连续批处理 | 统计量固定，执行顺序变化 | 请求随机种子、token 与计算量 |
 
@@ -956,8 +874,7 @@ dLLM 适配层把“一个反向扩散块”实现为公共算法层的一次状
 | --- | --- | --- |
 | 分块批处理 | 同一步的候选与 rollout 合并为批量模型调用，每批不超过 `dllm.engine.max_batch_size` | 每个请求的随机种子、轨迹和对数概率 |
 | 已提交块续跑 | 已确定 token 进入前缀，从该状态继续生成剩余块 | 与原请求相同的条件反向过程 |
-| 轨迹记录 | 每一步提交的位置、token 与对数概率随样本返回，可在另一模型或策略下重新评分 | early-exit 修正与 MH 所需的完整正反 proposal 概率 |
-| early-exit proposal | 只运行前 `dllm.model.proposal_layers` 层，与基础模型共享驻留权重 | 按各自激活参数量分别计量 |
+| 轨迹记录 | 每一步提交的位置、token 与对数概率随样本返回，可在另一策略下重新评分 | MH 所需的完整正反 proposal 概率 |
 | 独立 proposal 批量生成 | 奖励 MH 的 proposal 与当前状态无关，全部 proposal 一次批量生成 | 公共 Hastings 接受核 |
 
 LLaDA 批量后端位于
@@ -1121,10 +1038,10 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | 数学或执行步骤 | 主要函数 | 关键设置 | 必须核对的诊断 |
 | --- | --- | --- | --- |
 | 式 (4)、(6) 的后缀 MH | `run_power_mh_chain`、`run_reward_mh_chain`、`decide_metropolis_hastings` | `ar.algorithms.mh_power.*`、`ar.algorithms.mh.*`、`rewards.<name>.temperature` | 生效的后缀分布、更新数、接受率、提议/接受后改变的 token 数 |
-| 式 (13) 的冻结历史 proposal | `FrozenReplaySuffixProposal`、`run_reward_mh_chain_replay_proposal` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
+| 式 (9) 的冻结历史 proposal | `FrozenReplaySuffixProposal`、`run_reward_mh_chain_replay_proposal` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
 | 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.planning = "fixed"`、`ar.algorithms.is.fixed.*` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 联合预算 | `run_joint_budget_is`、`choose_joint_budget` | `ar.algorithms.is.joint.*`、`ar.algorithms.is.chunk_adaptive.*` | `trace.steps[].plan`、计划与实际前向 token（见 [BUDGET.md](BUDGET.md#budget-usage)） |
-| 式 (10) 的 dLLM early-exit 补全 | `run_conditional_diffusion_is`、`MonteCarloRolloutWeightProvider` | `dllm.algorithms.is.{rollout_model,importance_correction,importance_log_ratio_clip}`、`dllm.model.proposal_layers` | `trace.corrected_rollouts`、`trace.clipped_rollouts`、分角色 FLOPs |
+| 第 7 节的 dLLM 逐块 IS | `run_conditional_diffusion_is` | `dllm.algorithms.is.{candidate_count,rollout_count,decision_block_size}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess` |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
 
 logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录

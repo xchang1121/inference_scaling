@@ -1,8 +1,9 @@
 """The diffusion family: one LLaDA model and the seven algorithms.
 
-``sampling`` is the decoding policy of plain samples and IS candidates;
-``exact_sampling`` (random remasking) has tractable trajectory probabilities
-and drives block beam search, trajectory power MH and IS rollouts. Rewards are
+``sampling`` is the decoding policy of plain samples and of IS candidates and
+completions; ``exact_sampling`` (random remasking) has tractable trajectory
+probabilities and drives block beam search, trajectory power MH and the frozen
+history of reward MH. Rewards are
 text rewards only: a diffusion model has no autoregressive log-probability of
 its output.
 """
@@ -65,7 +66,6 @@ class DLLMFamily:
         if self.length <= 0:
             raise ValueError("max_new_tokens is shorter than one diffusion block")
         self.backend: Any = None
-        self.proposal: Any = None
 
     def artifacts(self) -> dict[str, Any]:
         """Pinned weight files, checked by size and SHA-256."""
@@ -91,9 +91,6 @@ class DLLMFamily:
 
     def load(self) -> None:
         self.backend = load_llada_backend(self.dllm["model"], self.dllm["engine"])
-        if self.choices.algorithm == "is" and self.config["rollout_model"] == "proposal":
-            # Early exit after the first layers: shares the resident weights.
-            self.proposal = self.backend.with_prefix_layers(int(self.dllm["model"]["proposal_layers"]))
 
     def synchronize(self) -> None:
         if str(self.dllm["engine"]["device"]).startswith("cuda"):
@@ -103,7 +100,7 @@ class DLLMFamily:
                 torch.cuda.synchronize()
 
     def close(self) -> None:
-        self.backend = self.proposal = None
+        self.backend = None
         gc.collect()
         try:
             import torch
@@ -143,7 +140,7 @@ class DLLMFamily:
         prompt_text = self.dataset.prompt(problem)
         prompt = self.backend.encode_chat(prompt_text, system_text=self.dllm["prompt"]["system"])
         seed = seeds.derive(algorithm, problem.id)
-        meter = Meter({"base": self.backend, "proposal": self.proposal})
+        meter = Meter({"base": self.backend})
         with meter.phase("reward"):
             reward = self._reward(problem, prompt_text, prompt, seeds)
         with meter.phase("search"):
@@ -153,8 +150,7 @@ class DLLMFamily:
         ended = eos is not None and eos in tokens
         if reward is not None:
             trace["reward"] = dict(reward.description)
-        active = {role: backend.snapshot().active_parameters
-                  for role, backend in (("base", self.backend), ("proposal", self.proposal)) if backend is not None}
+        active = self.backend.snapshot().active_parameters
         return {
             "prompt_tokens": len(prompt),
             "output": {"text": text, "thinking": None, "content": text, "thinking_status": None,
@@ -164,7 +160,7 @@ class DLLMFamily:
             "reward": value,
             "trace": {"generation_length": self.length, **trace},
             "cost": meter.cost(lambda delta: delta["model_token_slots"],
-                               lambda role, delta: 2 * active[role] * delta["model_token_slots"]),
+                               lambda _role, delta: 2 * active * delta["model_token_slots"]),
             "fallbacks": [],
         }
 
@@ -252,24 +248,17 @@ class DLLMFamily:
     def _is(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         assert reward is not None
         config = self.config
-        # Only rollouts from the early-exit proposal need (and can clip) a trajectory correction.
-        correct = config["rollout_model"] == "proposal" and bool(config["importance_correction"])
-        clip = config["importance_log_ratio_clip"] if correct else None
         result = run_conditional_diffusion_is(
-            base_backend=self.backend, prompt=prompt,
+            backend=self.backend, prompt=prompt,
             config=DiffusionISConfig(candidate_count=int(config["candidate_count"]),
                                      rollout_count=int(config["rollout_count"]),
                                      block_size=min(int(config["decision_block_size"]), self.length),
-                                     total_length=self.length, reward_temperature=reward.temperature,
-                                     importance_log_ratio_clip=None if clip is None else float(clip)),
-            base_sampling=self.sampling,
-            rollout_backend=self.proposal or self.backend, rollout_sampling=self.exact,
-            target_rollout_backend=self.backend, target_rollout_sampling=self.exact,
-            apply_importance_correction=correct,
-            reward=None if reward.batch is not None else reward.point, reward_batch=reward.batch, seed=seed,
+                                     total_length=self.length, reward_temperature=reward.temperature),
+            sampling=self.sampling, seed=seed,
+            reward=None if reward.batch is not None else reward.point, reward_batch=reward.batch,
         )
-        return result.token_ids, {**importance_trace(result.steps), "importance_correction": correct}, float(
-            reward.point(prompt, result.token_ids))
+        # The last block completes the sequence, so its single empty completion carries the output's reward.
+        return result.token_ids, importance_trace(result.steps), result.steps[-1].selected.rollouts[0].reward
 
 
 __all__ = ["DLLMFamily"]

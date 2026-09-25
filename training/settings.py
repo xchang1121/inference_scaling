@@ -60,7 +60,7 @@ SCHEMA: dict[str, Any] = {
     },
     "vrpo": {
         "model": {key: value for key, value in INFERENCE_SCHEMA["dllm"]["model"].items()
-                  if key not in {"revision", "adapter", "proposal_layers"}},
+                  if key not in {"revision", "adapter"}},
         "engine": INFERENCE_SCHEMA["dllm"]["engine"],
         "prompt": INFERENCE_SCHEMA["dllm"]["prompt"],
         "sampling": INFERENCE_SCHEMA["dllm"]["sampling"],

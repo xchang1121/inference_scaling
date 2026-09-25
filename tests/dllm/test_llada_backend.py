@@ -154,30 +154,9 @@ def test_target_temperature_changes_the_same_trajectory_score():
     assert target_score != pytest.approx(sample.trajectory_logprob)
 
 
-def test_shared_prefix_layer_proposal_reuses_weights_and_counts_active_moe_parameters():
-    model = TinyLayeredModel()
-    base = LLaDATransformersBackend(model, TinyTokenizer())
-    proposal = base.with_prefix_layers(2)
-    sampling = DiffusionSamplingConfig(
-        block_length=1,
-        steps_per_block=1,
-        temperature=1.0,
-        remasking="random",
-    )
-
-    proposal.sample_batch(
-        [DiffusionGenerationRequest((0,), 1, sampling, 7, "early-exit")]
-    )
-
-    assert model.executed_layer_counts == [2]
-    assert len(model.layers) == 4
-    base_snapshot = base.snapshot()
-    proposal_snapshot = proposal.snapshot()
-    assert base_snapshot.total_parameters == 16
-    assert base_snapshot.active_parameters == 12
-    assert proposal_snapshot.total_parameters == 10
-    assert proposal_snapshot.active_parameters == 8
-    assert proposal_snapshot.resident_parameters == base_snapshot.resident_parameters == 16
+def test_active_parameters_count_the_routed_share_of_moe_experts():
+    snapshot = LLaDATransformersBackend(TinyLayeredModel(), TinyTokenizer()).snapshot()
+    assert (snapshot.total_parameters, snapshot.active_parameters, snapshot.resident_parameters) == (16, 12, 16)
 
 
 def test_batch_limit_chunks_sampling_and_scoring_without_changing_results():

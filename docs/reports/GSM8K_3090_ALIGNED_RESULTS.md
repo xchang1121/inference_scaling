@@ -80,7 +80,7 @@ GRPO 点只计训练后的推理成本，训练成本单列于[执行成本报�
 
 <a id="15b-rescoring-ablation"></a>
 “截断修正”按配置将 rollout 对数重要性概率比截断到 ±10；“无截断修正”保留完整比值；
-“仅按奖励加权”省略该比值，采用[0.5B 补全下的条件奖励目标](../methods/ALGORITHMS.md#alg-uncorrected-rollout)。
+“仅按奖励加权”省略该比值，采用[0.5B 补全下的条件奖励目标](https://github.com/xchang1121/inference_scaling/blob/pre-unified-cli/docs/methods/ALGORITHMS.md#alg-uncorrected-rollout)。
 省略修正相对截断版本的 pass@1 差为 -1.17 个百分点，区间为 [-3.91, 1.17]；
 相对 1.5B 补全 IS 则低 12.89 个百分点，区间为 [-20.31, -6.25]。
 分模型生成与重评分成本见[评分成本对照](RTX3090_ROLLOUT_INFRA.md#infra-report-rescoring)。

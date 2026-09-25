@@ -17,7 +17,6 @@ class DiffusionISConfig:
     block_size: int = 32
     total_length: int = 128
     reward_temperature: float = 1.0
-    importance_log_ratio_clip: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -25,8 +24,6 @@ class DiffusionISConfig:
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
-        if self.importance_log_ratio_clip is not None:
-            require_positive("importance_log_ratio_clip", self.importance_log_ratio_clip)
 
 
 @dataclass(frozen=True, slots=True)

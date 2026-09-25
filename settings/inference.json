@@ -183,8 +183,7 @@
       ],
       "mask_token_id": 156895,
       "trust_remote_code": true,
-      "adapter": null,
-      "proposal_layers": 8
+      "adapter": null
     },
     "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8},
     "prompt": {"system": "You are a helpful AI assistant."},
@@ -218,10 +217,7 @@
       "is": {
         "candidate_count": 8,
         "rollout_count": 3,
-        "decision_block_size": 48,
-        "rollout_model": "base",
-        "importance_correction": true,
-        "importance_log_ratio_clip": 10.0
+        "decision_block_size": 48
       }
     }
   }

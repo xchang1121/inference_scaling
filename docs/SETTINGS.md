@@ -156,19 +156,16 @@
 | `model.weight_files` / `weight_bytes` / `weight_sha256` | 数组 | 逐分片的文件名、字节数与 SHA-256，全部强制校验 |
 | `model.mask_token_id` / `trust_remote_code` | 整数 / 布尔 | 掩码 token 与自定义代码加载 |
 | `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
-| `model.proposal_layers` | 整数 | 早退 proposal 使用的前若干层（与主模型共享权重） |
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
-| `sampling` | 对象 | 普通采样与 IS 候选的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`）、`confidence_threshold` |
-| `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与 IS 补全 |
+| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`）、`confidence_threshold` |
+| `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
 | `algorithms.best_of_n.samples` | 整数 | 候选数 |
 | `algorithms.mh_power.alpha` / `decision_block_size` / `updates_per_stage` | 数 / 整数 / 整数 | 轨迹幂 MH |
 | `algorithms.mh.updates` | 整数 | 独立 MH 的更新数 |
 | `algorithms.mh.proposal` / `frozen_history.samples` / `frozen_history.mixture` | — | 同 AR；`frozen_history` 使用 `exact_sampling` 的冻结轨迹 |
-| `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 条件扩散 IS 的 M、K 与决策块长 |
-| `algorithms.is.rollout_model` | `base` \| `proposal` | 补全来自主模型或早退 proposal |
-| `algorithms.is.importance_correction` / `importance_log_ratio_clip` | 布尔 / 数或 `null` | 早退补全是否乘同一轨迹的目标/proposal 概率比，以及对数比截断；`base` 时不适用 |
+| `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 逐块扩散 IS 的 M、K 与决策块长 |
 
 ## `settings/training.json`
 
@@ -186,7 +183,7 @@
 | `grpo.trainer` | 对象 | 原样传给 `trl.GRPOConfig`（步数、批大小、生成数、学习率、KL 系数 `beta`、精度与检查点等） |
 | `grpo.verifier` | 对象 | 字段同 `rewards.verifier`（无温度）；`dataset` 来源按每行参考答案评分 |
 | `grpo.power_sample_seconds` | 数 | `nvidia-smi` 功率采样间隔 |
-| `vrpo.model` / `engine` / `prompt` / `sampling` | 对象 | 字段同 `dllm` 的对应部分（模型不含适配器与早退层数） |
+| `vrpo.model` / `engine` / `prompt` / `sampling` | 对象 | 字段同 `dllm` 的对应部分（模型不含适配器） |
 | `vrpo.max_new_tokens` | 整数 | 候选生成长度与训练补全的截断长度 |
 | `vrpo.preferences.data` / `manifest` | 字符串 | 偏好对 JSONL 与清单 |
 | `vrpo.preferences.selection.count` / `seed` | 整数 | 从训练集抽取的候选题数 |

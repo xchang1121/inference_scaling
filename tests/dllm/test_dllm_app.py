@@ -37,10 +37,7 @@ class TinyTokenizer:
 def _tiny_backend():
     from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 
-    backend = LLaDATransformersBackend(TinyMaskedModel((0.0, 0.5, 1.0, -2.0)), TinyTokenizer(), mask_token_id=3)
-    proposal = LLaDATransformersBackend(TinyMaskedModel((1.0, 0.0, 0.5, -2.0)), TinyTokenizer(), mask_token_id=3)
-    backend.with_prefix_layers = lambda layers: proposal
-    return backend
+    return LLaDATransformersBackend(TinyMaskedModel((0.0, 0.5, 1.0, -2.0)), TinyTokenizer(), mask_token_id=3)
 
 
 @pytest.fixture
@@ -70,7 +67,7 @@ DLLM_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}), ("mh_power", None, {}),
     ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}),
     ("mh", "verifier", {}), ("mh", "vote", {"proposal": "frozen_history"}),
-    ("is", "vote", {}), ("is", "verifier", {"rollout_model": "proposal"}),
+    ("is", "vote", {}), ("is", "verifier", {}),
 ]
 
 
@@ -79,8 +76,6 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
     algorithms = dllm_settings["dllm"]["algorithms"]
     if "proposal" in options:
         algorithms["mh"]["proposal"] = options["proposal"]
-    if "rollout_model" in options:
-        algorithms["is"]["rollout_model"] = options["rollout_model"]
     summary = run(Choices(algorithm, "dllm", reward, "gsm8k"), dllm_settings, tmp_path / "results")
     records = [json.loads(line) for line in
                (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -88,9 +83,6 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
     for record in records:
         assert record["output"]["tokens"] == 4 and record["parseable"]
         assert record["cost"]["forward_token_slots"] > 0
-    if options.get("rollout_model") == "proposal":
-        assert records[0]["cost"]["phases"]["search"]["proposal"]["model_token_slots"] > 0
-        assert records[0]["trace"]["corrected_rollouts"] > 0
 
 
 @pytest.mark.parametrize("reward", ["logprob", "consilience"])

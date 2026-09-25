@@ -209,10 +209,6 @@ def importance_trace(steps: Sequence[Any]) -> dict[str, Any]:
 
     rollouts = [rollout for step in steps for candidate in step.candidates for rollout in candidate.rollouts]
     rewards = [float(rollout.reward) for rollout in rollouts]
-    # Only rollouts from another policy (the diffusion early exit) carry a trajectory correction.
-    corrected = [rollout for rollout in rollouts if getattr(rollout, "raw_log_importance_ratio", None) is not None]
-    raw = [rollout.raw_log_importance_ratio for rollout in corrected]
-    applied = [rollout.applied_log_importance_ratio for rollout in corrected]
     optional = ("completion_index", "retained_candidate", "rollout_evaluations_performed")
     return {
         "steps": [{
@@ -227,8 +223,6 @@ def importance_trace(steps: Sequence[Any]) -> dict[str, Any]:
             for step in steps for candidate in step.candidates
         ) if steps else 0.0,
         "rollout_reward": _statistics(rewards),
-        "corrected_rollouts": len(raw),
-        "clipped_rollouts": sum(left != right for left, right in zip(raw, applied, strict=True)),
     }
 
 

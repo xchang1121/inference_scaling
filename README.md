@@ -60,7 +60,7 @@ GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；`vote` 时取得票最多的答案 | 同左 |
 | `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 条件扩散 IS；补全来自主模型或早退 proposal（可做轨迹概率校正与截断） |
+| `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 逐块扩散 IS；候选与补全都来自基础模型 |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。

@@ -4,7 +4,6 @@ from math import log
 
 import pytest
 
-from inference_scaling.shared.sampling.importance import MonteCarloRolloutWeightProvider, RolloutObservation
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.stepwise import (
     StepwiseCandidate,
@@ -53,26 +52,3 @@ def test_common_stepwise_driver_is_state_and_model_agnostic():
 def test_log_weight_normalization_matches_softmax():
     probabilities = normalize_log_weights((0.0, log(3.0)))
     assert probabilities == pytest.approx((0.25, 0.75))
-
-
-def test_rollout_provider_covers_identity_importance_and_uncorrected_modes():
-    observation = RolloutObservation(
-        reward=2.0,
-        target_logprob=log(0.8),
-        proposal_logprob=log(0.4),
-    )
-    corrected = MonteCarloRolloutWeightProvider(
-        reward_temperature=2.0, correction="importance"
-    ).weight(observation)
-    identity = MonteCarloRolloutWeightProvider(
-        reward_temperature=2.0, correction="identity"
-    ).weight(RolloutObservation(reward=2.0))
-    uncorrected = MonteCarloRolloutWeightProvider(
-        reward_temperature=2.0, correction="none"
-    ).weight(observation)
-
-    assert corrected.log_weight == pytest.approx(1.0 + log(2.0))
-    assert identity.raw_log_importance_ratio == 0.0
-    assert identity.log_weight == pytest.approx(1.0)
-    assert uncorrected.raw_log_importance_ratio is None
-    assert uncorrected.log_weight == pytest.approx(1.0)

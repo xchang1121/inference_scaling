@@ -1,41 +1,30 @@
-"""Reward reweighting and conditional importance sampling for masked dLLMs."""
+"""Blockwise reward-weighted importance sampling for masked dLLMs.
+
+Each step draws ``candidate_count`` next blocks from the base policy, completes
+every candidate ``rollout_count`` times with the same policy and keeps one
+candidate in proportion to the mean ``exp(reward / temperature)`` of its
+completions; the completions are then discarded. With finite counts this is a
+blockwise SIR approximation of ``p(y) exp(r(y) / temperature)``.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
-from inference_scaling.dllm.types import (
-    DiffusionBackend,
-    DiffusionGenerationRequest,
-    DiffusionSample,
-    DiffusionTrajectoryScoreRequest,
-)
-from inference_scaling.shared.sampling.importance import (
-    MonteCarloRolloutWeightProvider,
-    RolloutObservation,
-)
+from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.stepwise import StepwiseCandidate, run_stepwise_generation
+from inference_scaling.shared.sampling.importance import logmeanexp
+from inference_scaling.shared.sampling.stepwise import categorical_index_from_uniform, normalize_log_weights
 from inference_scaling.shared.types import TokenBatchReward, TokenReward, TokenSequence
-
-DiffusionRewardFunction = TokenReward
-DiffusionRewardBatchFunction = TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)
 class DiffusionRolloutEvaluation:
     token_ids: TokenSequence
     reward: float
-    proposal_trajectory_logprob: float | None
-    target_trajectory_logprob: float | None
-    raw_log_importance_ratio: float | None
-    applied_log_importance_ratio: float | None
     log_weight: float
-    proposal_model_id: str
-    proposal_policy_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,371 +53,83 @@ class DiffusionConditionalISResult:
     steps: tuple[DiffusionConditionalISStep, ...]
 
 
-def _evaluate_rewards(
-    *,
-    prompt: TokenSequence,
-    continuations: Sequence[TokenSequence],
-    reward: DiffusionRewardFunction | None,
-    reward_batch: DiffusionRewardBatchFunction | None,
-) -> list[float]:
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one of reward or reward_batch")
-    if reward_batch is not None:
-        values = list(reward_batch(prompt, continuations))
-    else:
-        assert reward is not None
-        values = [reward(prompt, continuation) for continuation in continuations]
-    if len(values) != len(continuations):
-        raise RuntimeError("reward evaluator returned an invalid number of values")
-    return [float(value) for value in values]
-
-
-def _needs_trajectory_correction(
-    *,
-    rollout_backend: DiffusionBackend,
-    rollout_sampling: DiffusionSamplingConfig,
-    target_backend: DiffusionBackend | None,
-    target_sampling: DiffusionSamplingConfig | None,
-    apply_importance_correction: bool,
-) -> bool:
-    if not apply_importance_correction:
-        return False
-    if target_backend is None or target_sampling is None:
-        return False
-    return not (
-        rollout_backend.model_id == target_backend.model_id
-        and rollout_sampling.policy_id == target_sampling.policy_id
-    )
-
-
-class DiffusionStepwiseAdapter:
-    """Expose conditional diffusion generation through the common stepwise protocol."""
-
-    def __init__(
-        self,
-        *,
-        base_backend: DiffusionBackend,
-        prompt: TokenSequence,
-        config: DiffusionISConfig,
-        base_sampling: DiffusionSamplingConfig,
-        reward: DiffusionRewardFunction | None,
-        rollout_backend: DiffusionBackend,
-        rollout_sampling: DiffusionSamplingConfig,
-        target_rollout_backend: DiffusionBackend,
-        target_rollout_sampling: DiffusionSamplingConfig,
-        apply_importance_correction: bool,
-        reward_batch: DiffusionRewardBatchFunction | None,
-    ) -> None:
-        self.base_backend = base_backend
-        self.prompt = prompt
-        self.config = config
-        self.base_sampling = base_sampling
-        self.reward = reward
-        self.rollout_backend = rollout_backend
-        self.rollout_sampling = rollout_sampling
-        self.target_rollout_backend = target_rollout_backend
-        self.target_rollout_sampling = target_rollout_sampling
-        self.apply_importance_correction = apply_importance_correction
-        self.reward_batch = reward_batch
-        self.stage_lengths = diffusion_decision_stage_lengths(
-            prompt_length=len(prompt),
-            total_length=config.total_length,
-            decision_block_size=config.block_size,
-            sampling=base_sampling,
-        )
-        self.same_rollout_policy = (
-            rollout_backend.model_id == target_rollout_backend.model_id
-            and rollout_sampling.policy_id == target_rollout_sampling.policy_id
-        )
-        self.needs_correction = _needs_trajectory_correction(
-            rollout_backend=rollout_backend,
-            rollout_sampling=rollout_sampling,
-            target_backend=target_rollout_backend,
-            target_sampling=target_rollout_sampling,
-            apply_importance_correction=apply_importance_correction,
-        )
-        if self.needs_correction:
-            if not rollout_sampling.has_exact_trajectory_density:
-                raise ValueError(
-                    "off-policy dLLM IS requires random remasking and positive temperature"
-                )
-            if not target_rollout_sampling.has_exact_trajectory_density:
-                raise ValueError(
-                    "the target dLLM policy must define an exact trajectory density"
-                )
-            if (
-                rollout_sampling.block_length
-                != target_rollout_sampling.block_length
-                or rollout_sampling.steps_per_block
-                != target_rollout_sampling.steps_per_block
-            ):
-                raise ValueError("proposal and target trajectory schedules must match")
-
-    @property
-    def initial_state(self) -> TokenSequence:
-        return ()
-
-    def is_terminal(self, state: TokenSequence) -> bool:
-        return len(state) >= self.config.total_length
-
-    def propose(
-        self,
-        state: TokenSequence,
-        step_index: int,
-        seeds: SeedStream,
-    ) -> Sequence[DiffusionSample]:
-        candidate_length = self.stage_lengths[step_index]
-        requests = [
-            DiffusionGenerationRequest(
-                prefix=self.prompt + state,
-                generation_length=candidate_length,
-                sampling=self.base_sampling,
-                seed=seeds.derive(
-                    "dllm-is", step_index, "candidate", candidate_index
-                ),
-                request_id=f"dllm-is:step:{step_index}:candidate:{candidate_index}",
-            )
-            for candidate_index in range(self.config.candidate_count)
-        ]
-        samples = self.base_backend.sample_batch(requests)
-        if len(samples) != self.config.candidate_count:
-            raise RuntimeError("backend returned an invalid number of dLLM candidates")
-        return samples
-
-    def _weight_provider(self) -> MonteCarloRolloutWeightProvider[tuple[TokenSequence, str, str]]:
-        if self.needs_correction:
-            correction = "importance"
-        elif self.same_rollout_policy:
-            correction = "identity"
-        else:
-            correction = "none"
-        return MonteCarloRolloutWeightProvider(
-            reward_temperature=self.config.reward_temperature,
-            correction=correction,
-            log_ratio_clip=(
-                self.config.importance_log_ratio_clip
-                if correction == "importance"
-                else None
-            ),
-        )
-
-    def evaluate(
-        self,
-        state: TokenSequence,
-        proposals: Sequence[DiffusionSample],
-        step_index: int,
-        seeds: SeedStream,
-    ) -> Sequence[StepwiseCandidate[DiffusionConditionalCandidate]]:
-        candidate_length = self.stage_lengths[step_index]
-        remaining = self.config.total_length - len(state) - candidate_length
-        observations: list[
-            list[RolloutObservation[tuple[TokenSequence, str, str]]]
-        ] = [[] for _ in proposals]
-
-        if remaining == 0:
-            continuations = [state + sample.token_ids for sample in proposals]
-            rewards = _evaluate_rewards(
-                prompt=self.prompt,
-                continuations=continuations,
-                reward=self.reward,
-                reward_batch=self.reward_batch,
-            )
-            terminal_weights = MonteCarloRolloutWeightProvider[
-                tuple[TokenSequence, str, str]
-            ](
-                reward_temperature=self.config.reward_temperature,
-                correction="identity",
-            )
-            for candidate_index, reward_value in enumerate(rewards):
-                observation = RolloutObservation(
-                    reward=reward_value,
-                    target_logprob=0.0,
-                    proposal_logprob=0.0,
-                    payload=(
-                        (),
-                        self.base_backend.model_id,
-                        self.base_sampling.policy_id,
-                    ),
-                )
-                observations[candidate_index].append(observation)
-            provider = terminal_weights
-        else:
-            requests: list[DiffusionGenerationRequest] = []
-            owners: list[int] = []
-            for candidate_index, candidate in enumerate(proposals):
-                rollout_prefix = self.prompt + state + candidate.token_ids
-                for rollout_index in range(self.config.rollout_count):
-                    requests.append(
-                        DiffusionGenerationRequest(
-                            prefix=rollout_prefix,
-                            generation_length=remaining,
-                            sampling=self.rollout_sampling,
-                            seed=seeds.derive(
-                                "dllm-is",
-                                step_index,
-                                "rollout",
-                                candidate_index,
-                                rollout_index,
-                            ),
-                            request_id=(
-                                f"dllm-is:step:{step_index}:candidate:{candidate_index}:"
-                                f"rollout:{rollout_index}"
-                            ),
-                        )
-                    )
-                    owners.append(candidate_index)
-            samples = self.rollout_backend.sample_batch(requests)
-            if len(samples) != len(requests):
-                raise RuntimeError("backend returned an invalid number of dLLM rollouts")
-            target_scores: list[float] | None = None
-            if self.needs_correction:
-                target_scores = self.target_rollout_backend.score_trajectories(
-                    [
-                        DiffusionTrajectoryScoreRequest(
-                            sample, self.target_rollout_sampling
-                        )
-                        for sample in samples
-                    ]
-                )
-                if len(target_scores) != len(samples):
-                    raise RuntimeError(
-                        "backend returned an invalid number of trajectory scores"
-                    )
-            continuations = [
-                state + proposals[owner].token_ids + sample.token_ids
-                for owner, sample in zip(owners, samples, strict=True)
-            ]
-            rewards = _evaluate_rewards(
-                prompt=self.prompt,
-                continuations=continuations,
-                reward=self.reward,
-                reward_batch=self.reward_batch,
-            )
-            for rollout_index, (owner, sample, reward_value) in enumerate(
-                zip(owners, samples, rewards, strict=True)
-            ):
-                if self.needs_correction and sample.trajectory_logprob is None:
-                    raise RuntimeError("proposal omitted an exact trajectory score")
-                observations[owner].append(
-                    RolloutObservation(
-                        reward=reward_value,
-                        target_logprob=(
-                            float(target_scores[rollout_index])
-                            if target_scores is not None
-                            else None
-                        ),
-                        proposal_logprob=sample.trajectory_logprob,
-                        payload=(sample.token_ids, sample.model_id, sample.policy_id),
-                    )
-                )
-            provider = self._weight_provider()
-
-        evaluated: list[StepwiseCandidate[DiffusionConditionalCandidate]] = []
-        for proposal, candidate_observations in zip(
-            proposals, observations, strict=True
-        ):
-            estimate = provider.estimate(candidate_observations)
-            rollouts = tuple(
-                DiffusionRolloutEvaluation(
-                    token_ids=weighted.observation.payload[0],
-                    reward=weighted.observation.reward,
-                    proposal_trajectory_logprob=weighted.observation.proposal_logprob,
-                    target_trajectory_logprob=weighted.observation.target_logprob,
-                    raw_log_importance_ratio=weighted.raw_log_importance_ratio,
-                    applied_log_importance_ratio=weighted.applied_log_importance_ratio,
-                    log_weight=weighted.log_weight,
-                    proposal_model_id=weighted.observation.payload[1],
-                    proposal_policy_id=weighted.observation.payload[2],
-                )
-                for weighted in estimate.rollouts
-            )
-            candidate = DiffusionConditionalCandidate(
-                token_ids=proposal.token_ids,
-                rollouts=rollouts,
-                log_weight=estimate.log_weight,
-            )
-            evaluated.append(StepwiseCandidate(candidate, estimate.log_weight))
-        return tuple(evaluated)
-
-    def advance(
-        self,
-        state: TokenSequence,
-        selected: DiffusionConditionalCandidate,
-        step_index: int,
-    ) -> TokenSequence:
-        del step_index
-        return state + selected.token_ids
-
-
 def run_conditional_diffusion_is(
     *,
-    base_backend: DiffusionBackend,
+    backend: DiffusionBackend,
     prompt: TokenSequence,
     config: DiffusionISConfig,
-    base_sampling: DiffusionSamplingConfig,
-    reward: DiffusionRewardFunction | None = None,
-    seed: int = 0,
-    rollout_backend: DiffusionBackend | None = None,
-    rollout_sampling: DiffusionSamplingConfig | None = None,
-    target_rollout_backend: DiffusionBackend | None = None,
-    target_rollout_sampling: DiffusionSamplingConfig | None = None,
-    apply_importance_correction: bool = True,
-    reward_batch: DiffusionRewardBatchFunction | None = None,
+    sampling: DiffusionSamplingConfig,
+    seed: int,
+    reward: TokenReward | None = None,
+    reward_batch: TokenBatchReward | None = None,
 ) -> DiffusionConditionalISResult:
-    """Blockwise conditional IS using complete dLLM rollouts.
+    """Blockwise IS; the last block's candidates are complete and have one empty completion."""
 
-    Base candidates always come from ``base_backend``.  When rollout generation
-    uses another model or transition policy, the optional correction is the
-    likelihood ratio of the *same random-remasking trajectory* under the target
-    and proposal kernels.
-    """
-
-    rollout_backend = rollout_backend or base_backend
-    rollout_sampling = rollout_sampling or base_sampling
-    target_rollout_backend = target_rollout_backend or base_backend
-    target_rollout_sampling = target_rollout_sampling or base_sampling
+    if (reward is None) == (reward_batch is None):
+        raise ValueError("provide exactly one of reward or reward_batch")
     seeds = SeedStream(seed)
-    adapter = DiffusionStepwiseAdapter(
-        base_backend=base_backend,
-        prompt=prompt,
-        config=config,
-        base_sampling=base_sampling,
-        reward=reward,
-        rollout_backend=rollout_backend,
-        rollout_sampling=rollout_sampling,
-        target_rollout_backend=target_rollout_backend,
-        target_rollout_sampling=target_rollout_sampling,
-        apply_importance_correction=apply_importance_correction,
-        reward_batch=reward_batch,
+    stages = diffusion_decision_stage_lengths(
+        prompt_length=len(prompt), total_length=config.total_length,
+        decision_block_size=config.block_size, sampling=sampling,
     )
-    generic = run_stepwise_generation(
-        adapter,
-        seeds,
-        selection_namespace=("dllm-is",),
-    )
-    steps = tuple(
-        DiffusionConditionalISStep(
-            generated_length_before=len(step.state_before),
-            candidates=tuple(candidate.value for candidate in step.candidates),
-            probabilities=step.probabilities,
-            selected_index=step.selected_index,
+    state: TokenSequence = ()
+    steps: list[DiffusionConditionalISStep] = []
+    for step_index, length in enumerate(stages):
+        candidates = backend.sample_batch([
+            DiffusionGenerationRequest(
+                prefix=prompt + state, generation_length=length, sampling=sampling,
+                seed=seeds.derive("dllm-is", step_index, "candidate", index),
+                request_id=f"dllm-is:step:{step_index}:candidate:{index}",
+            )
+            for index in range(config.candidate_count)
+        ])
+        if len(candidates) != config.candidate_count:
+            raise RuntimeError("backend returned an invalid number of dLLM candidates")
+        remaining = config.total_length - len(state) - length
+        owners = list(range(len(candidates)))
+        completions: list[TokenSequence] = [() for _ in candidates]
+        if remaining:
+            requests = [
+                DiffusionGenerationRequest(
+                    prefix=prompt + state + candidate.token_ids, generation_length=remaining, sampling=sampling,
+                    seed=seeds.derive("dllm-is", step_index, "rollout", owner, rollout),
+                    request_id=f"dllm-is:step:{step_index}:candidate:{owner}:rollout:{rollout}",
+                )
+                for owner, candidate in enumerate(candidates) for rollout in range(config.rollout_count)
+            ]
+            samples = backend.sample_batch(requests)
+            if len(samples) != len(requests):
+                raise RuntimeError("backend returned an invalid number of dLLM rollouts")
+            owners = [owner for owner in range(len(candidates)) for _ in range(config.rollout_count)]
+            completions = [sample.token_ids for sample in samples]
+        sequences = [state + candidates[owner].token_ids + tokens for owner, tokens in zip(owners, completions, strict=True)]
+        if reward_batch is not None:
+            rewards = [float(value) for value in reward_batch(prompt, sequences)]
+        else:
+            assert reward is not None
+            rewards = [float(reward(prompt, sequence)) for sequence in sequences]
+        if len(rewards) != len(sequences):
+            raise RuntimeError("reward evaluator returned an invalid number of values")
+        grouped: list[list[DiffusionRolloutEvaluation]] = [[] for _ in candidates]
+        for owner, tokens, value in zip(owners, completions, rewards, strict=True):
+            grouped[owner].append(DiffusionRolloutEvaluation(tokens, value, value / config.reward_temperature))
+        evaluated = tuple(
+            DiffusionConditionalCandidate(candidate.token_ids, tuple(group), logmeanexp([item.log_weight for item in group]))
+            for candidate, group in zip(candidates, grouped, strict=True)
         )
-        for step in generic.steps
-    )
-    return DiffusionConditionalISResult(
-        prompt=prompt,
-        token_ids=generic.final_state,
-        steps=steps,
-    )
+        probabilities = normalize_log_weights([candidate.log_weight for candidate in evaluated])
+        selected = categorical_index_from_uniform(
+            probabilities, float(seeds.generator("dllm-is", step_index, "select").random()),
+        )
+        steps.append(DiffusionConditionalISStep(len(state), evaluated, probabilities, selected))
+        state += evaluated[selected].token_ids
+    return DiffusionConditionalISResult(prompt, state, tuple(steps))
 
 
 __all__ = [
     "DiffusionConditionalCandidate",
     "DiffusionConditionalISResult",
     "DiffusionConditionalISStep",
-    "DiffusionRewardBatchFunction",
-    "DiffusionRewardFunction",
     "DiffusionRolloutEvaluation",
-    "DiffusionStepwiseAdapter",
     "run_conditional_diffusion_is",
 ]
