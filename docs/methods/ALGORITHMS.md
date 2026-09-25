@@ -857,8 +857,9 @@ ScoreRequest(prefix, continuations, sampling)
 | --- | --- | --- |
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers` 个题目并发；兼容的 `sample_batch` / `score_batch` 在 `batch_wait_seconds` 窗口内合并，受 `max_batch_size`、`max_batch_tokens` 限制 | 提高 GPU 利用率；可能增加填充 |
 | rollout 请求合并 | 不同候选的异构请求组成同一次模型调用，结果按索引还原 | 省去每个候选完成后单独等待 |
-| 重复前缀 KV | 唯一前缀只执行一次预填充，再复制 KV 和末位置 logits | 增加 KV 复制；减少重复预填充 |
-| 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与基础模型概率 | on-policy IS 和 MH 省去重复评分 |
+| 重复前缀 KV | 唯一前缀只执行一次预填充，再把 KV 和末位置 logits 复制到重复它的各行（重复次数可以不同） | 增加 KV 复制；减少重复预填充 |
+| 结束行移出 | 生成到 EOS、停止序列或长度上限的行立即移出批次；采样结果留在设备上，每步只同步一次 | 解码只计算仍在生成的行 |
+| 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与参考策略（请求给定的参考温度）的概率 | on-policy IS 和 MH 省去重复评分 |
 | 评分小批量 | `ar.engine.transformers.max_score_batch_size` 与 `logits_to_keep` | 限制长序列全词表 logits 的显存峰值 |
 
 若第 $`i`$ 个唯一前缀长 $`L_i`$、重复 $`K_i`$ 次，省去的未计填充的预填充 token 位置数为：

@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import threading
 import warnings
-from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -322,137 +321,61 @@ class TransformersBackend:
         return input_ids, attention_mask
 
     @staticmethod
-    def _repeat_cache(cache, repeats: int):
-        if cache is None:
-            return None
-        repeat_method = getattr(cache, "batch_repeat_interleave", None)
-        if callable(repeat_method):
-            repeat_method(repeats)
-            return cache
-        return None
+    def _select_rows(cache, rows):
+        """Keep, reorder or repeat batch rows of a KV cache."""
 
-    def _sequence_sample(
-        self,
-        request: GenerationRequest,
-        tokens: Sequence[int],
-        token_logprobs: Sequence[float],
-        reference_logprobs: Sequence[float],
-        finish_reason: str,
-    ) -> SequenceSample:
-        reference_sampling = SamplingConfig(eos_token_id=request.sampling.eos_token_id)
-        return SequenceSample(
-            prefix=request.prefix,
-            token_ids=tuple(int(token) for token in tokens),
-            token_logprobs=tuple(float(value) for value in token_logprobs),
-            policy_id=request.sampling.policy_id,
-            model_id=self.model_id,
-            request_id=request.request_id,
-            finish_reason=finish_reason,
-            reference_token_logprobs=tuple(
-                float(value) for value in reference_logprobs
-            ),
-            reference_policy_id=reference_sampling.policy_id,
-        )
+        select = getattr(cache, "batch_select_indices", None)
+        if callable(select):
+            select(rows)
+            return cache
+        return tuple(tuple(tensor.index_select(0, rows) for tensor in layer) for layer in cache)
 
     def _sample_same_policy(
-        self, indexed_requests: Sequence[tuple[int, GenerationRequest]]
-    ) -> list[tuple[int, SequenceSample]]:
-        torch_module = _require_torch()
-        requests = [request for _, request in indexed_requests]
-        sampling = requests[0].sampling
-        prefixes = [self._model_prefix(request.prefix) for request in requests]
-        prefix_positions: OrderedDict[TokenSequence, list[int]] = OrderedDict()
-        for position, prefix in enumerate(prefixes):
-            prefix_positions.setdefault(prefix, []).append(position)
-        repeat_counts = {len(positions) for positions in prefix_positions.values()}
-        reusable_prefixes: list[TokenSequence] | None = None
-        prefix_repeat_count = 1
-        if len(prefix_positions) < len(prefixes) and len(repeat_counts) == 1:
-            prefix_repeat_count = repeat_counts.pop()
-            if prefix_repeat_count > 1:
-                row_order = [
-                    position
-                    for positions in prefix_positions.values()
-                    for position in positions
-                ]
-                indexed_requests = [
-                    indexed_requests[position] for position in row_order
-                ]
-                requests = [request for _, request in indexed_requests]
-                prefixes = [self._model_prefix(request.prefix) for request in requests]
-                reusable_prefixes = list(prefix_positions)
-        # Request-local uniforms keep each sample independent of the batch it runs in.
-        uniforms = [np.random.default_rng(request.seed).random(request.max_new_tokens) for request in requests]
-        token_lists: list[list[int]] = [[] for _ in requests]
-        logprob_lists: list[list[float]] = [[] for _ in requests]
-        reference_logprob_lists: list[list[float]] = [[] for _ in requests]
-        reference_sampling = SamplingConfig(eos_token_id=sampling.eos_token_id)
-        active = torch_module.ones(
-            len(requests), dtype=torch_module.bool, device=self.device
-        )
-        finish_reasons = ["length"] * len(requests)
-        maximum_new_tokens = max(request.max_new_tokens for request in requests)
-        prefill_tokens = sum(len(prefix) for prefix in prefixes)
-        shared_prefill_tokens_saved = 0
-        generation_forward_token_slots = len(requests) * max(
-            len(prefix) for prefix in prefixes
-        )
+        self, requests: Sequence[GenerationRequest]
+    ) -> list[SequenceSample]:
+        """Decode requests that share their policy, reference policy and stop sequences.
 
+        Each distinct prefix is prefilled once and its KV state copied to every
+        row that repeats it; a row leaves the batch as soon as it ends. Tokens are
+        drawn by inverse CDF from request-local uniforms, so a sample does not
+        depend on the batch it runs in. Sampled values stay on the device until
+        the batch is done.
+        """
+
+        torch_module = _require_torch()
+        first = requests[0]
+        sampling, reference_sampling = first.sampling, first.reference_policy
+        prefixes = [self._model_prefix(request.prefix) for request in requests]
+        positions = {prefix: index for index, prefix in enumerate(dict.fromkeys(prefixes))}
+        unique = list(positions)
+        steps = max(request.max_new_tokens for request in requests)
+        uniforms = np.zeros((len(requests), steps))
+        for row, request in enumerate(requests):
+            uniforms[row, : request.max_new_tokens] = np.random.default_rng(request.seed).random(request.max_new_tokens)
+        device_uniforms = torch_module.from_numpy(uniforms).to(self.device)
+        limits = torch_module.tensor([request.max_new_tokens for request in requests], device=self.device)
+        stops = [torch_module.tensor(stop, device=self.device) for stop in first.stop_sequences]
+        tokens = torch_module.zeros((len(requests), steps), dtype=torch_module.long, device=self.device)
+        logprobs = torch_module.zeros((len(requests), steps), dtype=torch_module.float32, device=self.device)
+        references = torch_module.zeros_like(logprobs)
+        lengths = torch_module.zeros(len(requests), dtype=torch_module.long, device=self.device)
+        # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence.
+        reasons = torch_module.zeros_like(lengths)
         with self._model_lock, torch_module.inference_mode():
-            cache = None
-            if reusable_prefixes is not None:
-                unique_input_ids, unique_attention_mask = self._padded_inputs(
-                    reusable_prefixes
-                )
-                unique_outputs = self._prefill_model(
-                    unique_input_ids, unique_attention_mask
-                )
-                cache = self._repeat_cache(
-                    getattr(unique_outputs, "past_key_values", None),
-                    prefix_repeat_count,
-                )
-                if cache is not None:
-                    attention_mask = unique_attention_mask.repeat_interleave(
-                        prefix_repeat_count, dim=0
-                    )
-                    logits = unique_outputs.logits[:, -1, :].repeat_interleave(
-                        prefix_repeat_count, dim=0
-                    )
-                    prefill_tokens = sum(len(prefix) for prefix in reusable_prefixes)
-                    shared_prefill_tokens_saved = sum(
-                        (prefix_repeat_count - 1) * len(prefix)
-                        for prefix in reusable_prefixes
-                    )
-                    generation_forward_token_slots = int(unique_input_ids.numel())
-            if cache is None:
-                input_ids, attention_mask = self._padded_inputs(prefixes)
-                outputs = self._prefill_model(input_ids, attention_mask)
-                logits = outputs.logits[:, -1, :]
-                cache = getattr(outputs, "past_key_values", None)
-            for step in range(maximum_new_tokens):
-                permitted = torch_module.tensor(
-                    [step < request.max_new_tokens for request in requests],
-                    dtype=torch_module.bool,
-                    device=self.device,
-                )
-                step_active = active & permitted
-                if not bool(step_active.any()):
-                    break
+            input_ids, attention_mask = self._padded_inputs(unique)
+            outputs = self._prefill_model(input_ids, attention_mask)
+            slots = int(input_ids.numel())
+            fan_out = torch_module.tensor([positions[prefix] for prefix in prefixes], device=self.device)
+            logits = outputs.logits[:, -1, :].index_select(0, fan_out)
+            attention_mask = attention_mask.index_select(0, fan_out)
+            cache = getattr(outputs, "past_key_values", None)
+            if len(unique) < len(requests):
+                cache = self._select_rows(cache, fan_out)
+            alive = torch_module.arange(len(requests), device=self.device)
+            for step in range(steps):
                 log_probs = self._policy_log_probs(logits, sampling)
-                reference_log_probs = (
-                    log_probs
-                    if sampling == reference_sampling
-                    else self._policy_log_probs(logits, reference_sampling)
-                )
-                probabilities = log_probs.exp()
-                random_values = torch_module.tensor(
-                    [
-                        uniforms[index][step] if step < len(uniforms[index]) else 0.0
-                        for index in range(len(requests))
-                    ],
-                    dtype=torch_module.float64,
-                    device=self.device,
-                )
+                reference_log_probs = (log_probs if sampling == reference_sampling
+                                       else self._policy_log_probs(logits, reference_sampling))
                 # Inverse-CDF sampling is especially sensitive to accumulated
                 # roundoff over a language model's large vocabulary.  A
                 # float32 CDF can move a fixed request-local uniform across a
@@ -460,70 +383,33 @@ class TransformersBackend:
                 # decoded in different batch shapes.  Accumulating the same
                 # policy probabilities in float64 preserves the categorical
                 # policy while making request-local seeds robust to scheduling.
-                probabilities_64 = probabilities.to(dtype=torch_module.float64)
-                cumulative = probabilities_64.cumsum(dim=-1)
+                cumulative = log_probs.exp().to(dtype=torch_module.float64).cumsum(dim=-1)
                 cumulative[:, -1] = 1.0
-                sampled_tokens = (cumulative < random_values[:, None]).sum(dim=-1)
-                sampled_tokens = sampled_tokens.clamp_max(probabilities.shape[-1] - 1)
-                sampled_logprobs = log_probs.gather(
-                    -1, sampled_tokens[:, None]
-                ).squeeze(-1)
-                sampled_reference_logprobs = reference_log_probs.gather(
-                    -1, sampled_tokens[:, None]
-                ).squeeze(-1)
-
-                sampled_cpu = sampled_tokens.detach().cpu().tolist()
-                logprobs_cpu = sampled_logprobs.detach().cpu().tolist()
-                reference_logprobs_cpu = (
-                    sampled_reference_logprobs.detach().cpu().tolist()
-                )
-                for index, is_active in enumerate(step_active.detach().cpu().tolist()):
-                    if not is_active:
-                        continue
-                    token = int(sampled_cpu[index])
-                    token_lists[index].append(token)
-                    logprob_lists[index].append(float(logprobs_cpu[index]))
-                    reference_logprob_lists[index].append(
-                        float(reference_logprobs_cpu[index])
-                    )
-                    if (
-                        sampling.eos_token_id is not None
-                        and token == sampling.eos_token_id
-                    ):
-                        finish_reasons[index] = "eos"
-
-                eos_finished = torch_module.tensor(
-                    [
-                        sampling.eos_token_id is not None
-                        and int(sampled_cpu[index]) == sampling.eos_token_id
-                        for index in range(len(requests))
-                    ],
-                    dtype=torch_module.bool,
-                    device=self.device,
-                )
-                active_after = step_active & ~eos_finished
-                active_after &= torch_module.tensor(
-                    [step + 1 < request.max_new_tokens for request in requests],
-                    dtype=torch_module.bool,
-                    device=self.device,
-                )
-                if not bool(active_after.any()):
+                sampled = (cumulative < device_uniforms[alive, step, None]).sum(dim=-1).clamp_max(log_probs.shape[-1] - 1)
+                tokens[alive, step] = sampled
+                logprobs[alive, step] = log_probs.gather(-1, sampled[:, None]).squeeze(-1)
+                references[alive, step] = reference_log_probs.gather(-1, sampled[:, None]).squeeze(-1)
+                lengths[alive] = step + 1
+                reason = torch_module.zeros_like(sampled)
+                for stop in stops:
+                    if step + 1 >= len(stop):
+                        reason = reason.masked_fill((tokens[alive, step + 1 - len(stop) : step + 1] == stop).all(dim=-1), 2)
+                if sampling.eos_token_id is not None:
+                    reason = reason.masked_fill(sampled == sampling.eos_token_id, 1)
+                reasons[alive] = reason
+                keep = (reason == 0) & (step + 1 < limits[alive])
+                remaining = int(keep.sum())
+                if not remaining:
                     break
-                next_tokens = torch_module.where(
-                    step_active,
-                    sampled_tokens,
-                    torch_module.full_like(sampled_tokens, self.pad_token_id),
-                )
+                if remaining < len(alive):
+                    # Finished rows leave the batch.
+                    kept = keep.nonzero().squeeze(-1)
+                    alive, sampled, attention_mask = alive[kept], sampled[kept], attention_mask[kept]
+                    cache = self._select_rows(cache, kept)
                 next_positions = attention_mask.sum(dim=-1, dtype=torch_module.long)
-                attention_mask = torch_module.cat(
-                    [
-                        attention_mask,
-                        step_active.to(dtype=attention_mask.dtype)[:, None],
-                    ],
-                    dim=-1,
-                )
+                attention_mask = torch_module.cat([attention_mask, attention_mask.new_ones((len(alive), 1))], dim=-1)
                 outputs = self.model(
-                    input_ids=next_tokens[:, None],
+                    input_ids=sampled[:, None],
                     attention_mask=attention_mask,
                     position_ids=next_positions[:, None],
                     past_key_values=cache,
@@ -531,62 +417,41 @@ class TransformersBackend:
                     return_dict=True,
                     **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
                 )
-                generation_forward_token_slots += len(requests)
+                slots += len(alive)
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
-                active = active_after
-
-        results: list[tuple[int, SequenceSample]] = []
-        for (
-            (original_index, request),
-            tokens,
-            token_logprobs,
-            reference_token_logprobs,
-            finish_reason,
-        ) in zip(
-            indexed_requests,
-            token_lists,
-            logprob_lists,
-            reference_logprob_lists,
-            finish_reasons,
-            strict=True,
-        ):
-            results.append(
-                (
-                    original_index,
-                    self._sequence_sample(
-                        request,
-                        tokens,
-                        token_logprobs,
-                        reference_token_logprobs,
-                        finish_reason,
-                    ),
-                )
+        rows = zip(requests, lengths.tolist(), reasons.tolist(), tokens.cpu().numpy(), logprobs.cpu().numpy(),
+                   references.cpu().numpy(), strict=True)
+        samples = [
+            SequenceSample(
+                prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
+                token_logprobs=tuple(row_logprobs[:length].tolist()), policy_id=request.sampling.policy_id,
+                model_id=self.model_id, request_id=request.request_id, finish_reason=("length", "eos", "stop")[reason],
+                reference_token_logprobs=tuple(row_references[:length].tolist()),
+                reference_policy_id=reference_sampling.policy_id,
             )
+            for request, length, reason, row_tokens, row_logprobs, row_references in rows
+        ]
+        prefill_tokens = sum(map(len, unique))
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
-            self._shared_prefill_tokens_saved += shared_prefill_tokens_saved
-            self._generation_forward_token_slots += generation_forward_token_slots
-            self._estimated_dense_forward_flops += self._dense_forward_flops(
-                generation_forward_token_slots
-            )
-        return results
+            self._shared_prefill_tokens_saved += sum(map(len, prefixes)) - prefill_tokens
+            self._generation_forward_token_slots += slots
+            self._estimated_dense_forward_flops += self._dense_forward_flops(slots)
+        return samples
 
     def sample_batch(
         self, requests: Sequence[GenerationRequest]
     ) -> list[SequenceSample]:
         if not requests:
             return []
-        grouped: OrderedDict[SamplingConfig, list[tuple[int, GenerationRequest]]] = (
-            OrderedDict()
-        )
+        grouped: dict[tuple[SamplingConfig, tuple[TokenSequence, ...], float], list[int]] = {}
         for index, request in enumerate(requests):
-            grouped.setdefault(request.sampling, []).append((index, request))
-        indexed_outputs: list[tuple[int, SequenceSample]] = []
-        for group in grouped.values():
-            indexed_outputs.extend(self._sample_same_policy(group))
-        indexed_outputs.sort(key=lambda item: item[0])
-        outputs = [sample for _, sample in indexed_outputs]
+            grouped.setdefault((request.sampling, request.stop_sequences, request.reference_temperature), []).append(index)
+        results: dict[int, SequenceSample] = {}
+        for indices in grouped.values():
+            results.update(zip(indices, self._sample_same_policy([requests[index] for index in indices]), strict=True))
+        outputs = [results[index] for index in range(len(requests))]
         with self._statistics_lock:
             self._sample_calls += 1
             self._sampled_sequences += len(outputs)

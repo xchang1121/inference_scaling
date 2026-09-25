@@ -22,12 +22,24 @@ class GenerationRequest:
     sampling: SamplingConfig
     seed: int
     request_id: str
+    # Generation also ends right after any of these token sequences; a backend may ignore them.
+    stop_sequences: tuple[TokenSequence, ...] = ()
+    # Temperature of the full-support reference policy whose log-probabilities are also reported.
+    reference_temperature: float = 1.0
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be positive")
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
+        if not all(self.stop_sequences):
+            raise ValueError("stop sequences must be nonempty")
+        if not (isfinite(self.reference_temperature) and self.reference_temperature > 0):
+            raise ValueError("reference_temperature must be finite and positive")
+
+    @property
+    def reference_policy(self) -> SamplingConfig:
+        return SamplingConfig(temperature=self.reference_temperature, eos_token_id=self.sampling.eos_token_id)
 
 
 @dataclass(frozen=True, slots=True)

@@ -26,6 +26,7 @@ class ConstantLogitModel(torch.nn.Module):
         )
         self.forward_calls = 0
         self.logits_to_keep_calls = []
+        self.batch_sizes = []
 
     @property
     def device(self):
@@ -34,6 +35,7 @@ class ConstantLogitModel(torch.nn.Module):
     def forward(self, input_ids, logits_to_keep=0, **_kwargs):
         self.forward_calls += 1
         batch, length = input_ids.shape
+        self.batch_sizes.append(batch)
         logits = self.constant_logits.expand(batch, length, -1).clone()
         logits_to_keep = int(logits_to_keep)
         self.logits_to_keep_calls.append(logits_to_keep)
@@ -43,7 +45,7 @@ class ConstantLogitModel(torch.nn.Module):
 
 
 class RepeatableCache:
-    def batch_repeat_interleave(self, _repeats):
+    def batch_select_indices(self, _indices):
         return None
 
 
@@ -168,10 +170,11 @@ def test_identical_prefix_prefill_is_computed_once_then_forked() -> None:
     assert snapshot.estimated_dense_forward_flops == 18
 
 
-def test_each_repeated_prefix_group_is_prefilled_once_then_forked() -> None:
+def test_each_repeated_prefix_is_prefilled_once_then_forked() -> None:
     model = ConstantLogitModel([0.5, 0.3, 0.2])
     backend = _backend(model)
-    prefixes = ((0, 1), (1, 0), (0, 1), (1, 0), (0, 1), (1, 0))
+    # Prefixes may repeat unequally often.
+    prefixes = ((0, 1), (1, 0), (0, 1), (1, 0), (0, 1))
     outputs = backend.sample_batch(
         [
             GenerationRequest(prefix, 1, SamplingConfig(), index, str(index))
@@ -179,13 +182,39 @@ def test_each_repeated_prefix_group_is_prefilled_once_then_forked() -> None:
         ]
     )
 
-    assert [sample.request_id for sample in outputs] == [str(i) for i in range(6)]
+    assert [sample.request_id for sample in outputs] == [str(i) for i in range(5)]
     snapshot = backend.snapshot()
-    assert model.forward_calls == 1
+    assert model.batch_sizes == [2]
     assert snapshot.prefill_tokens == 4
-    assert snapshot.shared_prefill_tokens_saved == 8
+    assert snapshot.shared_prefill_tokens_saved == 6
     assert snapshot.generation_forward_token_slots == 4
     assert snapshot.estimated_dense_forward_flops == 24
+
+
+def test_finished_rows_leave_the_batch() -> None:
+    model = ConstantLogitModel([0.3, 0.3, 0.4])
+    backend = _backend(model)
+    samples = backend.sample_batch(
+        [GenerationRequest((0,), 8, SamplingConfig(eos_token_id=2), seed, str(seed)) for seed in range(6)]
+    )
+    lengths = [len(sample.token_ids) for sample in samples]
+    # After the shared prefill, each decode step runs only the rows still generating.
+    assert model.batch_sizes == [1] + [sum(length > step for length in lengths) for step in range(1, max(lengths))]
+    assert model.batch_sizes[-1] < len(samples)
+    assert backend.snapshot().generation_forward_token_slots == sum(model.batch_sizes)
+
+
+def test_stop_sequences_end_generation_and_reference_uses_its_temperature() -> None:
+    model = ConstantLogitModel([0.2, 0.7, 0.1])
+    backend = _backend(model)
+    request = GenerationRequest((0,), 12, SamplingConfig(temperature=0.5), 3, "stop", stop_sequences=((1, 1),),
+                                reference_temperature=2.0)
+    sample = backend.sample_batch([request])[0]
+    pairs = list(zip(sample.token_ids, sample.token_ids[1:]))
+    assert sample.finish_reason == "stop" and pairs.index((1, 1)) == len(pairs) - 1
+    reference = backend.score_batch([ScoreRequest((0,), (sample.token_ids,), request.reference_policy)])[0]
+    assert sample.reference_token_logprobs == pytest.approx(reference)
+    assert sample.reference_policy_id == request.reference_policy.policy_id
 
 
 def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:

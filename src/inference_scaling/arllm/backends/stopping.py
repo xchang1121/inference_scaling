@@ -80,7 +80,6 @@ class StoppedSequenceBackend:
         for request in requests:
             if self._stop_end(self._generated(request.prefix)) is not None:
                 raise ValueError("the prefix already ended at a stop boundary")
-        expected_reference = SamplingConfig(eos_token_id=self.eos_token_id).policy_id
         while True:
             pending: list[GenerationRequest] = []
             indices: list[int] = []
@@ -94,6 +93,7 @@ class StoppedSequenceBackend:
                     prefix=request.prefix + tuple(tokens[index]), max_new_tokens=chunk,
                     sampling=self._inner_policy(request.sampling), seed=seed,
                     request_id=f"{request.request_id}:stop-chunk:{offset}",
+                    reference_temperature=request.reference_temperature,
                 ))
                 indices.append(index)
             if not pending:
@@ -114,7 +114,7 @@ class StoppedSequenceBackend:
                 keep = len(sample.token_ids) if end is None else end - len(generated)
                 tokens[index].extend(sample.token_ids[:keep])
                 logs[index].extend(sample.token_logprobs[:keep])
-                if sample.reference_policy_id != expected_reference:
+                if sample.reference_policy_id != inner_request.reference_policy.policy_id:
                     references[index] = None
                 else:
                     reference = references[index]
@@ -131,9 +131,7 @@ class StoppedSequenceBackend:
                 model_id=self.model_id, policy_id=request.sampling.policy_id, request_id=request.request_id,
                 finish_reason="stop" if done[index] else "length",
                 reference_token_logprobs=None if references[index] is None else tuple(references[index] or ()),
-                reference_policy_id=None if references[index] is None else SamplingConfig(
-                    eos_token_id=request.sampling.eos_token_id
-                ).policy_id,
+                reference_policy_id=None if references[index] is None else request.reference_policy.policy_id,
             )
             for index, request in enumerate(requests)
         ]
