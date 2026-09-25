@@ -302,10 +302,6 @@ class VLLMBackend:
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
         self._mh_fused_logprobs = bool(mh_fused_logprobs)
-        pad = getattr(tokenizer, "pad_token_id", None)
-        eos = getattr(tokenizer, "eos_token_id", None)
-        if pad is None and eos is not None:
-            tokenizer.pad_token_id = eos
         self.bos_token_id = (
             None
             if getattr(tokenizer, "bos_token_id", None) is None
@@ -340,58 +336,47 @@ class VLLMBackend:
         cls,
         model_name_or_path: str,
         *,
-        adapter_name_or_path: str | None = None,
-        dtype: str = "bfloat16",
-        tensor_parallel_size: int = 1,
-        data_parallel_size: int = 1,
-        gpu_memory_utilization: float = 0.9,
-        max_model_len: int | None = None,
-        max_num_seqs: int | None = None,
-        max_num_batched_tokens: int | None = None,
-        quantization: str | None = None,
-        enforce_eager: bool = False,
-        trust_remote_code: bool = False,
-        revision: str | None = None,
-        tokenizer_name_or_path: str | None = None,
-        tokenizer_revision: str | None = None,
-        adapter_revision: str | None = None,
-        tokenizer_kwargs: dict[str, Any] | None = None,
-        local_files_only: bool | None = None,
-        download_dir: str | None = None,
-        seed: int = 0,
-        parameter_count: int | None = None,
-        scoring_backend: AutoregressiveBackend | None = None,
-        enable_prefix_caching: bool = True,
-        max_lora_rank: int = 16,
+        adapter_name_or_path: str | None,
+        adapter_revision: str | None,
+        revision: str | None,
+        tokenizer_name_or_path: str | None,
+        tokenizer_revision: str | None,
+        tokenizer_kwargs: dict[str, Any] | None,
+        local_files_only: bool | None,
+        trust_remote_code: bool,
+        download_dir: str | None,
+        dtype: str,
+        tensor_parallel_size: int,
+        data_parallel_size: int,
+        gpu_memory_utilization: float,
+        max_model_len: int | None,
+        max_num_seqs: int | None,
+        max_num_batched_tokens: int | None,
+        quantization: str | None,
+        enforce_eager: bool,
+        enable_prefix_caching: bool,
+        max_lora_rank: int,
+        parameter_count: int | None,
+        seed: int,
+        scoring_backend: AutoregressiveBackend | None,
+        engine_kwargs: dict[str, Any] | None,
         enable_mh_fused_logprobs: bool = False,
-        engine_kwargs: dict[str, Any] | None = None,
     ) -> "VLLMBackend":
+        """Load the tokenizer and engine; :meth:`_create` picks the vLLM frontend."""
+
         try:
             from transformers import AutoTokenizer
-            from vllm import LLM
 
-            SamplingParams, TokensPrompt, BeamSearchParams = (
-                _load_vllm_sampling_api()
-            )
+            SamplingParams, TokensPrompt, BeamSearchParams = _load_vllm_sampling_api()
         except ImportError as error:  # pragma: no cover - optional GPU installation
-            raise ModuleNotFoundError(
-                "VLLMBackend.from_pretrained requires the project's vllm extra"
-            ) from error
+            raise ModuleNotFoundError(f"{cls.__name__}.from_pretrained requires the project's vllm extra") from error
 
-        base_model = model_name_or_path
         tokenizer = _load_tokenizer(
-            AutoTokenizer, base_model, tokenizer_name_or_path, tokenizer_revision,
+            AutoTokenizer, model_name_or_path, tokenizer_name_or_path, tokenizer_revision,
             revision, download_dir, local_files_only, trust_remote_code, tokenizer_kwargs,
         )
-        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-            tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.padding_side = "left"
-
-        if enable_mh_fused_logprobs:
-            _validate_mh_fused_vllm_version()
-
         kwargs: dict[str, Any] = {
-            "model": base_model,
+            "model": model_name_or_path,
             "dtype": dtype,
             "tensor_parallel_size": int(tensor_parallel_size),
             "data_parallel_size": int(data_parallel_size),
@@ -410,78 +395,59 @@ class VLLMBackend:
             "enable_lora": adapter_name_or_path is not None,
             "max_lora_rank": int(max_lora_rank),
         }
-        if enable_mh_fused_logprobs:
-            # The adapter targets vLLM's stable V1 runner in 0.26.  Sampling
-            # remains synchronous inside the engine so the selected raw
-            # probability is associated with the same request step.
-            kwargs["worker_cls"] = _MH_FUSED_WORKER
-            kwargs["async_scheduling"] = False
-        optional = {
-            "max_model_len": max_model_len,
-            "max_num_seqs": max_num_seqs,
-            "max_num_batched_tokens": max_num_batched_tokens,
-        }
-        kwargs.update(
-            {name: value for name, value in optional.items() if value is not None}
-        )
+        optional = {"max_model_len": max_model_len, "max_num_seqs": max_num_seqs,
+                    "max_num_batched_tokens": max_num_batched_tokens}
+        kwargs.update({name: value for name, value in optional.items() if value is not None})
         if engine_kwargs:
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
                 raise ValueError(
-                    "engine_kwargs cannot override correctness-critical settings: "
-                    + ", ".join(sorted(overlap))
+                    "engine_kwargs cannot override correctness-critical settings: " + ", ".join(sorted(overlap))
                 )
             kwargs.update(engine_kwargs)
-        counted = parameter_count or _checkpoint_parameter_count(base_model)
+        counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
         if counted is None:
             raise ValueError(
-                "parameter_count could not be read from a local safetensors checkpoint; "
-                "pass parameter_count explicitly"
+                "parameter_count could not be read from a local safetensors checkpoint; pass parameter_count explicitly"
             )
-        previous_v2_runner = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
-        if enable_mh_fused_logprobs:
-            if previous_v2_runner is not None and previous_v2_runner.strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }:
-                raise ValueError(
-                    "MH fused log-probabilities conflict with "
-                    "VLLM_USE_V2_MODEL_RUNNER=1"
-                )
-            os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "0"
-        try:
-            engine = LLM(**kwargs)
-        finally:
-            if enable_mh_fused_logprobs:
-                if previous_v2_runner is None:
-                    os.environ.pop("VLLM_USE_V2_MODEL_RUNNER", None)
-                else:
-                    os.environ["VLLM_USE_V2_MODEL_RUNNER"] = previous_v2_runner
-
         lora_request = None
         if adapter_name_or_path is not None:
             from vllm.lora.request import LoRARequest
 
             lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
-        model_id = model_identity(
-            base_model, adapter_name_or_path, revision=revision,
-            adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
-            tokenizer_revision=tokenizer_revision,
+        return cls._create(
+            kwargs, tokenizer, enable_mh_fused_logprobs,
+            model_id=model_identity(
+                model_name_or_path, adapter_name_or_path, revision=revision, adapter_revision=adapter_revision,
+                tokenizer=tokenizer_name_or_path, tokenizer_revision=tokenizer_revision,
+            ),
+            parameter_count=counted, sampling_params_factory=SamplingParams, tokens_prompt_factory=TokensPrompt,
+            beam_search_params_factory=BeamSearchParams, scoring_backend=scoring_backend, lora_request=lora_request,
         )
-        return cls(
-            engine,
-            tokenizer,
-            model_id=model_id,
-            parameter_count=counted,
-            sampling_params_factory=SamplingParams,
-            tokens_prompt_factory=TokensPrompt,
-            beam_search_params_factory=BeamSearchParams,
-            scoring_backend=scoring_backend,
-            lora_request=lora_request,
-            mh_fused_logprobs=enable_mh_fused_logprobs,
-        )
+
+    @classmethod
+    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, mh_fused_logprobs: bool,
+                **options: Any) -> "VLLMBackend":
+        from vllm import LLM
+
+        if not mh_fused_logprobs:
+            return cls(LLM(**engine_arguments), tokenizer, **options)
+        # The adapter targets vLLM's stable V1 runner in 0.26. Sampling stays
+        # synchronous inside the engine so the selected raw probability is
+        # associated with the same request step.
+        _validate_mh_fused_vllm_version()
+        previous = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
+        if previous is not None and previous.strip().lower() in {"1", "true", "yes", "on"}:
+            raise ValueError("MH fused log-probabilities conflict with VLLM_USE_V2_MODEL_RUNNER=1")
+        os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "0"
+        try:
+            engine = LLM(**engine_arguments, worker_cls=_MH_FUSED_WORKER, async_scheduling=False)
+        finally:
+            if previous is None:
+                os.environ.pop("VLLM_USE_V2_MODEL_RUNNER", None)
+            else:
+                os.environ["VLLM_USE_V2_MODEL_RUNNER"] = previous
+        return cls(engine, tokenizer, mh_fused_logprobs=True, **options)
 
     @property
     def model_id(self) -> str:
@@ -543,22 +509,24 @@ class VLLMBackend:
             spaces_between_special_tokens=False,
         )
 
-    def _generate(self, prompts: Sequence[Any], params: Any) -> list[Any]:
+    def _generate(self, prompts: Sequence[Any], params: Any,
+                  drain: Callable[[list[Any]], None] | None = None) -> list[Any]:
+        """One engine call; ``drain`` reads the fused MH side channel under the same lock."""
+
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
-        kwargs = {
-            "sampling_params": params,
-            "use_tqdm": False,
-        }
+        kwargs = {"sampling_params": params, "use_tqdm": False}
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
         self._engine_requests_started(len(prompts))
         try:
             with self._engine_lock:
-                outputs = self._engine.generate(list(prompts), **kwargs)
+                outputs = list(self._engine.generate(list(prompts), **kwargs))
+                if drain is not None:
+                    drain(outputs)
         finally:
             self._engine_requests_finished(len(prompts))
-        return list(outputs)
+        return outputs
 
     def _collect_mh_reference_logprobs(
         self, outputs: Sequence[Any]
@@ -626,30 +594,6 @@ class VLLMBackend:
             )
         return merged
 
-    def _generate_with_mh_reference(
-        self, prompts: Sequence[Any], params: Any
-    ) -> tuple[list[Any], dict[str, tuple[float, ...]]]:
-        """Generate and drain the worker side channel under one engine lock."""
-
-        if not self._mh_fused_logprobs:
-            return self._generate(prompts, params), {}
-        if self._closed:
-            raise RuntimeError("vLLM backend is closed")
-        kwargs = {
-            "sampling_params": params,
-            "use_tqdm": False,
-        }
-        if self._lora_request is not None:
-            kwargs["lora_request"] = self._lora_request
-        self._engine_requests_started(len(prompts))
-        try:
-            with self._engine_lock:
-                outputs = list(self._engine.generate(list(prompts), **kwargs))
-                references = self._collect_mh_reference_logprobs(outputs)
-        finally:
-            self._engine_requests_finished(len(prompts))
-        return outputs, references
-
     def _engine_requests_started(self, count: int) -> None:
         with self._statistics_lock:
             self._active_engine_requests += int(count)
@@ -688,28 +632,9 @@ class VLLMBackend:
             _logprob_value(position, token)
             for position, token in zip(positions, tokens, strict=True)
         )
-        reference_values: tuple[float, ...] | None = None
-        if reference_token_logprobs is not None:
-            reference_values = tuple(float(value) for value in reference_token_logprobs)
-        else:
-            raw_positions = getattr(completion, "reference_logprobs", None)
-            if raw_positions is None:
-                # Accept the earlier fused-worker payload name as well.
-                raw_positions = getattr(completion, "power_logprobs", None)
-            if raw_positions is not None:
-                if len(raw_positions) != len(tokens):
-                    raise RuntimeError(
-                        "vLLM returned an invalid reference log-probability shape"
-                    )
-                parsed_reference: list[float] = []
-                for position, token in zip(raw_positions, tokens, strict=True):
-                    if isinstance(position, Mapping):
-                        parsed_reference.append(_logprob_value(position, token))
-                    else:
-                        parsed_reference.append(
-                            float(getattr(position, "logprob", position))
-                        )
-                reference_values = tuple(parsed_reference)
+        reference_values = None if reference_token_logprobs is None else tuple(
+            float(value) for value in reference_token_logprobs
+        )
 
         reference_sampling = SamplingConfig(
             eos_token_id=request.sampling.eos_token_id
@@ -756,9 +681,12 @@ class VLLMBackend:
     ) -> list[SequenceSample]:
         if not requests:
             return []
-        outputs, references = self._generate_with_mh_reference(
+        references: dict[str, tuple[float, ...]] = {}
+        outputs = self._generate(
             [self._prompt(request.prefix) for request in requests],
             [self._sampling_params(request) for request in requests],
+            (lambda done: references.update(self._collect_mh_reference_logprobs(done)))
+            if self._mh_fused_logprobs else None,
         )
         if len(outputs) != len(requests):
             raise RuntimeError("vLLM returned an invalid number of request outputs")
@@ -840,47 +768,24 @@ class VLLMBackend:
             cached_tokens += cached
         return len(items), forward_slots, cached_tokens
 
-    def _delegated_compute_delta(
-        self,
-        before: Any | None,
-        after: Any | None,
-        requests: Sequence[ScoreRequest],
-    ) -> tuple[int, int]:
-        if before is not None and after is not None:
-            slots = int(after.score_forward_token_slots) - int(
-                before.score_forward_token_slots
-            )
-            flops = int(after.estimated_dense_forward_flops) - int(
-                before.estimated_dense_forward_flops
-            )
-            return slots, flops
-        slots = sum(
-            len(self._model_prefix(request.prefix)) + len(continuation)
-            for request in requests
-            for continuation in request.continuations
-        )
-        return slots, dense_forward_flops(self.parameter_count, slots)
+    def _run_delegated_score(self, requests: Sequence[ScoreRequest], method: str, **kwargs: Any):
+        """Run ``method`` on the exact backend and return its outputs, forward slots and FLOPs."""
 
-    def _run_delegated_score(
-        self,
-        requests: Sequence[ScoreRequest],
-        method: str,
-        **kwargs: Any,
-    ):
         if self._scoring_backend is None:
             raise RuntimeError("an exact scoring backend is not configured")
         callback = getattr(self._scoring_backend, method, None)
         if callback is None:
-            raise ValueError(
-                f"the configured exact scoring backend does not implement {method}"
-            )
-        snapshot = getattr(self._scoring_backend, "snapshot", None)
+            raise ValueError(f"the configured exact scoring backend does not implement {method}")
+        snapshot = getattr(self._scoring_backend, "snapshot")
         with self._delegated_score_lock:
-            before = snapshot() if snapshot is not None else None
+            before = snapshot()
             outputs = callback(requests, **kwargs)
-            after = snapshot() if snapshot is not None else None
-        slots, flops = self._delegated_compute_delta(before, after, requests)
-        return outputs, slots, flops
+            after = snapshot()
+        return (
+            outputs,
+            int(after.score_forward_token_slots) - int(before.score_forward_token_slots),
+            int(after.estimated_dense_forward_flops) - int(before.estimated_dense_forward_flops),
+        )
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         flattened = [
@@ -1063,33 +968,16 @@ class VLLMBackend:
                 raise RuntimeError("vLLM returned an invalid greedy output count")
             return tuple(int(token) for token in self._completion(outputs[0]).token_ids)
 
-        beam_search = getattr(self._engine, "beam_search", None)
-        if beam_search is None or self._beam_search_params_factory is None:
-            delegated = getattr(self._scoring_backend, "direct_generate", None)
-            if delegated is not None:
-                return tuple(
-                    delegated(
-                        prefix,
-                        max_new_tokens=max_new_tokens,
-                        num_beams=num_beams,
-                    )
-                )
-            raise ValueError(
-                "beam search requires ar.engine.vllm.asynchronous = false or "
-                'ar.engine.vllm.exact_scoring = "transformers"'
-            )
         kwargs: dict[str, Any] = {
             "prompts": [prompt],
             "params": self._beam_search_params_factory(
-                beam_width=int(num_beams),
-                max_tokens=int(max_new_tokens),
-                ignore_eos=False,
+                beam_width=int(num_beams), max_tokens=int(max_new_tokens), ignore_eos=False,
             ),
             "use_tqdm": False,
         }
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
-        outputs = list(beam_search(**kwargs))
+        outputs = list(self._engine.beam_search(**kwargs))
         if len(outputs) != 1 or not getattr(outputs[0], "sequences", None):
             raise RuntimeError("vLLM returned an invalid beam-search output")
         full_tokens = tuple(int(token) for token in outputs[0].sequences[0].tokens)
@@ -1126,158 +1014,25 @@ class AsyncVLLMBackend(VLLMBackend):
     supports_native_continuous_batching = True
 
     def __init__(
-        self,
-        engine: Any | None,
-        tokenizer: Any,
-        *,
-        model_id: str,
-        parameter_count: int,
-        sampling_params_factory: Callable[..., Any],
-        tokens_prompt_factory: Callable[..., Any] | None = None,
-        beam_search_params_factory: Callable[..., Any] | None = None,
-        scoring_backend: AutoregressiveBackend | None = None,
-        lora_request: Any | None = None,
-        engine_factory: Callable[[], Any] | None = None,
+        self, engine: Any | None, tokenizer: Any, *, engine_factory: Callable[[], Any] | None = None, **options: Any,
     ) -> None:
         if (engine is None) == (engine_factory is None):
             raise ValueError("provide exactly one of engine or engine_factory")
-        self._runner = _AsyncLoopRunner(
-            engine_factory if engine_factory is not None else lambda: engine
-        )
+        self._runner = _AsyncLoopRunner(engine_factory if engine_factory is not None else lambda: engine)
         self._request_counter = itertools.count()
         self._request_counter_lock = threading.Lock()
-        super().__init__(
-            self._runner.engine,
-            tokenizer,
-            model_id=model_id,
-            parameter_count=parameter_count,
-            sampling_params_factory=sampling_params_factory,
-            tokens_prompt_factory=tokens_prompt_factory,
-            beam_search_params_factory=beam_search_params_factory,
-            scoring_backend=scoring_backend,
-            lora_request=lora_request,
-        )
+        super().__init__(self._runner.engine, tokenizer, **options)
 
     @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        *,
-        adapter_name_or_path: str | None = None,
-        dtype: str = "bfloat16",
-        tensor_parallel_size: int = 1,
-        data_parallel_size: int = 1,
-        gpu_memory_utilization: float = 0.9,
-        max_model_len: int | None = None,
-        max_num_seqs: int | None = None,
-        max_num_batched_tokens: int | None = None,
-        quantization: str | None = None,
-        enforce_eager: bool = False,
-        trust_remote_code: bool = False,
-        revision: str | None = None,
-        tokenizer_name_or_path: str | None = None,
-        tokenizer_revision: str | None = None,
-        adapter_revision: str | None = None,
-        tokenizer_kwargs: dict[str, Any] | None = None,
-        local_files_only: bool | None = None,
-        download_dir: str | None = None,
-        seed: int = 0,
-        parameter_count: int | None = None,
-        scoring_backend: AutoregressiveBackend | None = None,
-        enable_prefix_caching: bool = True,
-        max_lora_rank: int = 16,
-        engine_kwargs: dict[str, Any] | None = None,
-    ) -> "AsyncVLLMBackend":
-        try:
-            from transformers import AutoTokenizer
-            from vllm.engine.arg_utils import AsyncEngineArgs
-            from vllm.v1.engine.async_llm import AsyncLLM
+    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, mh_fused_logprobs: bool,
+                **options: Any) -> "AsyncVLLMBackend":
+        if mh_fused_logprobs:
+            raise ValueError("MH fused log-probabilities need the synchronous vLLM engine")
+        from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.v1.engine.async_llm import AsyncLLM
 
-            SamplingParams, TokensPrompt, BeamSearchParams = (
-                _load_vllm_sampling_api()
-            )
-        except ImportError as error:  # pragma: no cover - optional GPU installation
-            raise ModuleNotFoundError(
-                "AsyncVLLMBackend.from_pretrained requires the project's vllm extra"
-            ) from error
-
-        tokenizer = _load_tokenizer(
-            AutoTokenizer, model_name_or_path, tokenizer_name_or_path, tokenizer_revision,
-            revision, download_dir, local_files_only, trust_remote_code, tokenizer_kwargs,
-        )
-        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-            tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.padding_side = "left"
-
-        kwargs: dict[str, Any] = {
-            "model": model_name_or_path,
-            "dtype": dtype,
-            "tensor_parallel_size": int(tensor_parallel_size),
-            "data_parallel_size": int(data_parallel_size),
-            "gpu_memory_utilization": float(gpu_memory_utilization),
-            "quantization": quantization,
-            "enforce_eager": bool(enforce_eager),
-            "trust_remote_code": bool(trust_remote_code),
-            "revision": revision,
-            "tokenizer": tokenizer_name_or_path or model_name_or_path,
-            "tokenizer_revision": tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
-            "download_dir": download_dir,
-            "seed": int(seed),
-            "enable_prefix_caching": bool(enable_prefix_caching),
-            "generation_config": "vllm",
-            "logprobs_mode": "processed_logprobs",
-            "enable_lora": adapter_name_or_path is not None,
-            "max_lora_rank": int(max_lora_rank),
-        }
-        optional = {
-            "max_model_len": max_model_len,
-            "max_num_seqs": max_num_seqs,
-            "max_num_batched_tokens": max_num_batched_tokens,
-        }
-        kwargs.update(
-            {name: value for name, value in optional.items() if value is not None}
-        )
-        if engine_kwargs:
-            overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
-            if overlap:
-                raise ValueError(
-                    "engine_kwargs cannot override correctness-critical settings: "
-                    + ", ".join(sorted(overlap))
-                )
-            kwargs.update(engine_kwargs)
-
-        lora_request = None
-        if adapter_name_or_path is not None:
-            from vllm.lora.request import LoRARequest
-
-            lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
-        model_id = model_identity(
-            model_name_or_path, adapter_name_or_path, revision=revision,
-            adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
-            tokenizer_revision=tokenizer_revision,
-        )
-        counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
-        if counted is None:
-            raise ValueError(
-                "parameter_count could not be read from a local safetensors checkpoint; "
-                "pass parameter_count explicitly"
-            )
-
-        def create_engine():
-            return AsyncLLM.from_engine_args(AsyncEngineArgs(**kwargs))
-
-        return cls(
-            None,
-            tokenizer,
-            model_id=model_id,
-            parameter_count=counted,
-            sampling_params_factory=SamplingParams,
-            tokens_prompt_factory=TokensPrompt,
-            beam_search_params_factory=BeamSearchParams,
-            scoring_backend=scoring_backend,
-            lora_request=lora_request,
-            engine_factory=create_engine,
-        )
+        return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_arguments)),
+                   **options)
 
     def _next_request_id(self) -> str:
         with self._request_counter_lock:
@@ -1318,7 +1073,9 @@ class AsyncVLLMBackend(VLLMBackend):
             )
         )
 
-    def _generate(self, prompts: Sequence[Any], params: Any) -> list[Any]:
+    def _generate(self, prompts: Sequence[Any], params: Any,
+                  drain: Callable[[list[Any]], None] | None = None) -> list[Any]:
+        # Fused MH log-probabilities need the synchronous engine, so there is nothing to drain.
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
         return self._runner.run(self._generate_many(tuple(prompts), params))

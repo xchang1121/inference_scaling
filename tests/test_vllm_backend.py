@@ -4,6 +4,7 @@ import asyncio
 import sys
 import threading
 import types
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -27,7 +28,6 @@ class _Completion:
     token_ids: list[int]
     logprobs: list[dict[int, _Logprob]]
     finish_reason: str = "length"
-    power_logprobs: list[dict[int, _Logprob]] | None = None
 
 
 @dataclass
@@ -166,13 +166,24 @@ class _FusedEngine(_Engine):
 class _Fallback:
     model_id = "fake"
 
+    def __init__(self):
+        self.slots = 0
+
+    def _count(self, requests):
+        self.slots += sum(len(request.prefix) + len(item) for request in requests for item in request.continuations)
+
+    def snapshot(self):
+        return SimpleNamespace(score_forward_token_slots=self.slots, estimated_dense_forward_flops=200 * self.slots)
+
     def sample_batch(self, requests):
         raise AssertionError("fallback generation must not be used")
 
     def score_batch(self, requests):
+        self._count(requests)
         return [tuple(-0.5 for _ in continuation) for request in requests for continuation in request.continuations]
 
     def score_statistics_batch(self, requests, **_kwargs):
+        self._count(requests)
         return [
             {"tokens": continuation}
             for request in requests
@@ -217,38 +228,6 @@ def test_vllm_sampling_preserves_per_request_seed_policy_and_order() -> None:
     assert snapshot.generated_tokens == 4
     assert snapshot.shared_prefill_tokens_saved == 4
     assert snapshot.prefill_tokens == 0
-
-
-def test_vllm_accepts_upstream_power_logprobs_without_rescoring() -> None:
-    engine = _Engine()
-    backend = VLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-    )
-    original_generate = engine.generate
-
-    def generate(*args, **kwargs):
-        outputs = original_generate(*args, **kwargs)
-        for output in outputs:
-            completion = output.outputs[0]
-            completion.power_logprobs = [
-                {token: _Logprob(-0.4)} for token in completion.token_ids
-            ]
-        return outputs
-
-    engine.generate = generate
-    request = GenerationRequest(
-        (1,), 2, SamplingConfig(temperature=0.5), 4, "power"
-    )
-
-    sample = backend.sample_batch([request])[0]
-
-    assert sample.reference_token_logprobs == (-0.4, -0.4)
-    assert sample.reference_policy_id == SamplingConfig().policy_id
-    assert backend.snapshot().fused_reference_tokens == 2
 
 
 def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
