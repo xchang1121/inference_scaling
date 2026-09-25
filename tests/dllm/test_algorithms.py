@@ -13,6 +13,7 @@ from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample
+from inference_scaling.shared.types import pointwise
 
 
 class TinyMaskedModel(torch.nn.Module):
@@ -53,7 +54,7 @@ def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
             reward_temperature=1.0,
         ),
         sampling=sampling,
-        reward=lambda _prompt, continuation: float(sum(continuation)),
+        reward=pointwise(lambda _prompt, continuation: float(sum(continuation))),
         seed=17,
     )
 
@@ -71,7 +72,7 @@ def test_conditional_is_ends_when_it_selects_a_block_of_eos():
         # EOS (1) and 2 are equally likely, so a candidate block is all EOS with probability 1/4.
         result = run_conditional_diffusion_is(
             backend=_backend((-9.0, 0.0, 0.0, -2.0), "eos", eos=1), prompt=(0,), config=config, sampling=sampling,
-            reward=lambda _prompt, continuation: float(sum(continuation)), seed=seed,
+            reward=pointwise(lambda _prompt, continuation: float(sum(continuation))), seed=seed,
         )
         for step in result.steps:
             final = step.generated_length_before + 2 == config.total_length
@@ -106,7 +107,7 @@ def test_conditional_is_rejects_decision_block_that_splits_native_block():
                 reward_temperature=1.0,
             ),
             sampling=sampling,
-            reward=lambda _prompt, continuation: float(sum(continuation)),
+            reward=pointwise(lambda _prompt, continuation: float(sum(continuation))),
             seed=17,
         )
 
@@ -146,7 +147,7 @@ def test_independence_mh_approaches_base_times_reward_target_without_scores():
                 steps_per_block=1,
                 temperature=0.0, top_k=0, top_p=1.0, cfg_scale=0.0, remasking="low_confidence",
             ),
-            reward=lambda _prompt, continuation: float(continuation[0]),
+            reward=pointwise(lambda _prompt, continuation: float(continuation[0])),
             seed=seed,
         )
         ones += result.final.token_ids[0]

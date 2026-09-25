@@ -8,6 +8,7 @@ from inference_scaling.arllm.algorithms.joint_budget_is import run_joint_budget_
 from inference_scaling.shared.budget.costs import block_costs, completion_reserve
 from inference_scaling.shared.budget.joint import BlockBudgetEstimate, WeightMoments
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 from test_joint_budget_is import RecordingBackend, joint_config
 
 
@@ -193,7 +194,7 @@ def test_real_driver_130k_cap_uses_initial_chunk_not_full_remaining():
         initial_block_size=100, pilot_fraction=0.15,
     )
     result = run_joint_budget_is(
-        backend, (1,) * 2457, config, lambda _prompt, _tokens: 0.0, SeedStream(42),
+        backend, (1,) * 2457, config, pointwise(lambda _prompt, _tokens: 0.0), SeedStream(42),
         sampling=SamplingConfig(eos_token_id=0),
     )
     assert parameters(result.steps[0].plan) == (100, 4, 2)
@@ -224,7 +225,7 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
         forward_token_budget=750 * (1 + reward_passes), pilot_fraction=0,
         reward_forward_passes=reward_passes,
     )
-    result = run_joint_budget_is(backend, (1, 1), config, lambda _prompt, _tokens: 0.0, SeedStream(4))
+    result = run_joint_budget_is(backend, (1, 1), config, pointwise(lambda _prompt, _tokens: 0.0), SeedStream(4))
     assert len(result.token_ids) == config.total_length
     assert len(result.steps) > 1
     assert parameters(result.steps[0].plan) == (4, 4, 2)
@@ -255,7 +256,7 @@ def test_real_driver_multichunk_and_completion_accounting(reward_passes):
 def test_pilots_and_parameters_reset_for_each_run():
     config = settings(total_length=12, block_sizes=(2,), initial_block_size=2)
     results = [run_joint_budget_is(
-        RecordingBackend(), (), config, lambda _prompt, tokens: float(sum(tokens)), SeedStream(0),
+        RecordingBackend(), (), config, pointwise(lambda _prompt, tokens: float(sum(tokens))), SeedStream(0),
     ) for _ in range(2)]
     assert results[0] == results[1]
     assert all(parameters(result.steps[0].plan) == (2, 4, 2) for result in results)
@@ -273,7 +274,7 @@ def test_real_pilots_are_charged_but_never_reused_as_production_samples():
         scored.append(tokens)
         return 0.0
 
-    result = run_joint_budget_is(backend, (1, 1), config, reward, SeedStream(8))
+    result = run_joint_budget_is(backend, (1, 1), config, pointwise(reward), SeedStream(8))
     actual = sum(len(request.prefix) + request.max_new_tokens for request in backend.requests)
     actual += len(scored) * (2 + config.total_length)
     assert result.actual_forward_tokens == actual

@@ -11,10 +11,7 @@ from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest, DiffusionSample
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import TokenBatchReward, TokenReward, TokenSequence
-
-DiffusionRewardFunction = TokenReward
-DiffusionRewardBatchFunction = TokenBatchReward
+from inference_scaling.shared.types import TokenBatchReward, TokenSequence
 
 
 def _mh_requests(
@@ -37,17 +34,9 @@ def _mh_requests(
 
 
 def _evaluate_mh_rewards(
-    prompt: TokenSequence,
-    samples: Sequence[DiffusionSample],
-    reward: DiffusionRewardFunction | None,
-    reward_batch: DiffusionRewardBatchFunction | None,
+    prompt: TokenSequence, samples: Sequence[DiffusionSample], reward: TokenBatchReward,
 ) -> list[float]:
-    continuations = [sample.token_ids for sample in samples]
-    if reward_batch is not None:
-        values = [float(value) for value in reward_batch(prompt, continuations)]
-    else:
-        assert reward is not None
-        values = [float(reward(prompt, continuation)) for continuation in continuations]
+    values = [float(value) for value in reward(prompt, [sample.token_ids for sample in samples])]
     if len(values) != len(samples):
         raise RuntimeError("reward evaluator returned an invalid number of values")
     if any(not isfinite(value) for value in values):
@@ -80,9 +69,8 @@ def run_diffusion_reward_mh(
     prompt: TokenSequence,
     config: DiffusionMHConfig,
     sampling: DiffusionSamplingConfig,
-    reward: DiffusionRewardFunction | None = None,
-    seed: int = 0,
-    reward_batch: DiffusionRewardBatchFunction | None = None,
+    reward: TokenBatchReward,
+    seed: int,
 ) -> DiffusionMHResult:
     """Run independence MH with proposals drawn from the base dLLM sampler.
 
@@ -91,8 +79,6 @@ def run_diffusion_reward_mh(
     acceptance probability therefore needs rewards but no dLLM likelihood.
     """
 
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one of reward or reward_batch")
     sampling.validate_generation_length(config.total_length)
     seeds = SeedStream(seed)
     # Proposals do not depend on the chain state, so all of them are drawn in one batch.
@@ -100,7 +86,7 @@ def run_diffusion_reward_mh(
     samples = backend.sample_batch(requests)
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of MH proposals")
-    reward_values = _evaluate_mh_rewards(prompt, samples, reward, reward_batch)
+    reward_values = _evaluate_mh_rewards(prompt, samples, reward)
 
     current = samples[0]
     current_reward = reward_values[0]

@@ -23,7 +23,7 @@ from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHCon
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import TokenReward
+from inference_scaling.shared.types import GeneratedBatchReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
@@ -358,7 +358,7 @@ def run_reward_mh_chain(
     prompt: TokenSequence,
     config: RewardMHConfig,
     proposal: SamplingConfig,
-    reward: TokenReward,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     *,
     chain_id: int = 0,
@@ -372,14 +372,19 @@ def run_reward_mh_chain(
     """
 
     _validate_proposal(proposal)
+
+    def score(sequence: TokenSequence, logprobs: tuple[float, ...]) -> float:
+        value = float(reward(prompt, [sequence], [logprobs])[0])
+        if not isfinite(value):
+            raise ValueError("reward must be finite")
+        return value
+
     initial = _sample_suffix(
         backend, prefix=prompt, length=config.total_length, sampling=proposal,
         seed=seeds.derive("reward_mh", chain_id, "initialize"), request_id=f"reward-mh:{chain_id}:initialize",
     )
     tokens, base_logs, proposal_logs = initial.token_ids, initial.base_logprobs, initial.proposal_logprobs
-    current_reward = float(reward(prompt, tokens))
-    if not isfinite(current_reward):
-        raise ValueError("reward must be finite")
+    current_reward = score(tokens, base_logs)
     trace: list[RewardMHStep] = []
     skipped = 0
     for step_index in range(config.updates):
@@ -396,9 +401,7 @@ def run_reward_mh_chain(
             seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
             request_id=f"reward-mh:{chain_id}:step:{step_index}",
         )
-        proposed_reward = float(reward(prompt, tokens[:cut] + suffix.token_ids))
-        if not isfinite(proposed_reward):
-            raise ValueError("reward must be finite")
+        proposed_reward = score(tokens[:cut] + suffix.token_ids, base_logs[:cut] + suffix.base_logprobs)
         decision = decide_metropolis_hastings(
             current_target_log_density=float(sum(base_logs[cut:])) + current_reward / config.reward_temperature,
             proposed_target_log_density=(

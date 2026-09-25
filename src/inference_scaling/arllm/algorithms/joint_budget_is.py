@@ -26,7 +26,6 @@ from inference_scaling.arllm.algorithms.conditional_is import (
     ConditionalCandidate,
     ConditionalISStep,
     RetainedSequence,
-    RewardFunction,
     conditional_is_step,
     estimate_conditional_weights,
 )
@@ -48,6 +47,7 @@ from inference_scaling.shared.budget.planners import (
     PlanningState,
 )
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import GeneratedBatchReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +173,7 @@ def run_joint_budget_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: JointBudgetISConfig,
-    reward: RewardFunction,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
@@ -265,6 +265,7 @@ def run_joint_budget_is(
             backend=backend,
             prompt=prompt,
             generated_prefix=prefix,
+            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
             candidates=sample_candidates(
                 backend, prompt + prefix, config.pilot_candidates, block, sampling, pilot_seeds, len(steps),
             ),

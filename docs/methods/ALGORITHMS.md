@@ -214,8 +214,8 @@ flowchart LR
 | 第一步 | $`M`$ | $`MK`$ | $`MK`$ |
 | 后续每步 | $`M-1`$ | $`MK-1`$ | $`MK-1`$ |
 
-补全在生成时已返回基础模型概率，不需要重评分。`verifier` 与 `vote` 只读取答案文本，`logprob` 与 `consilience`
-对每条完整序列各需一次评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
+补全在生成时已返回基础模型概率，不需要重评分。`verifier` 与 `vote` 只读取答案文本；`logprob` 的评分策略与采样
+策略相同时直接取这些概率，否则与 `consilience` 一样对每条完整序列需一次评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
@@ -632,8 +632,8 @@ proposal 与当前状态无关，全部 proposal 在一次批量调用中生成�
 ## 9. 奖励信号
 
 `--reward` 选择四种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
-$`\tau`$。算法层的统一签名为 `reward(prompt_tokens, completion_tokens) -> float`；批量接口必须对每个序列计算同一个
-函数，且按输入顺序返回结果。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
+$`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`，AR 算法另传入各序列在生成策略下的逐 token
+对数概率；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
 奖励，MH 的接受率只含奖励差。`verifier` 与 `vote` 读取答案文本，由
 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 为两个模型族构造；`logprob` 与 `consilience` 读取模型
 自身的 token 概率，只用于 AR，由 [`app/ar.py`](../../src/inference_scaling/app/ar.py) 构造。
@@ -642,7 +642,7 @@ $`\tau`$。算法层的统一签名为 `reward(prompt_tokens, completion_tokens)
 | --- | --- | --- | --- |
 | `verifier` | 外部来源：数据集评分器对照参考答案、Python 工厂 $`r=f(x,y)`$ 或常数 | `rewards.verifier.source` 及同名子表 | AR 与 dLLM；按文本计算，不计模型前向 |
 | `vote` | `best_of_n`：候选按答案投票；`is`、`mh`：与冻结样本池答案一致的比例 | `rewards.vote.pool_size` | AR 与 dLLM；样本池在奖励阶段生成并单独计量 |
-| `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；每条序列一次评分前向 |
+| `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；评分策略与采样策略相同时复用生成概率，否则每条序列一次评分前向 |
 | `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；每条序列一次评分前向，需要逐 token 的 top-$`K`$ 概率 |
 
 ### verifier
@@ -695,7 +695,8 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 
 这里 $`L`$ 是实际生成的 token 数，包含 EOS 或完整停止标记；空 completion
 的奖励为 0。不同长度但平均 token logprob 相同的序列得到相同奖励，不做候选组内归一化。评分策略的温度为
-`rewards.logprob.score_temperature`。Best-of-$`N`$ 在评分策略与采样策略相同时直接取生成时保存的逐 token 对数概率；
+`rewards.logprob.score_temperature`。评分策略与采样策略相同时，Best-of-$`N`$、MH 与 IS 直接取生成时保存的逐 token
+对数概率，联合预算 IS 因而不计奖励前向；
 其余情况通过 `SequenceLogProbabilityReward.batch` 调用 `score_batch`。vLLM 只在能够精确评分所选策略时直接评分，
 否则交给精确评分后端（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
 

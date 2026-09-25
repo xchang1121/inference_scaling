@@ -13,6 +13,7 @@ from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHCon
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 from inference_scaling.arllm.types import SequenceSample
 
 
@@ -46,7 +47,7 @@ def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
     assert left == right
     assert left.attempts == 3
     assert {step.stage_length for step in left.trace} == {7}
-    reward = lambda prompt, completion: float(sum(completion))
+    reward = pointwise(lambda prompt, completion: float(sum(completion)))
     left = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=2, iterations=3, steps_per_block=10, reward_temperature=0.1, suffix_schedule="uniform"), sampling, reward, SeedStream(2))
     right = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=7, steps_per_block=3, reward_temperature=0.1, suffix_schedule="uniform", iterations=None), sampling, reward, SeedStream(2))
     assert left == right
@@ -176,7 +177,7 @@ def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
 
     config = RewardMHConfig(total_length=2, block_size=1, steps_per_block=25, reward_temperature=temperature, suffix_schedule="uniform", iterations=None)
     outputs = [
-        run_reward_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), reward, SeedStream(91),
+        run_reward_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), pointwise(reward), SeedStream(91),
                             chain_id=chain)
         for chain in range(3000)
     ]
@@ -202,7 +203,7 @@ def test_variable_length_chains_target_complete_outputs(chain) -> None:
     else:
         settings = RewardMHConfig(total_length=3, block_size=3, steps_per_block=12, reward_temperature=0.8, suffix_schedule="uniform", iterations=None)
         results = [
-            run_reward_mh_chain(backend, (), settings, proposal, lambda _, tokens: float(len(tokens)), SeedStream(5),
+            run_reward_mh_chain(backend, (), settings, proposal, pointwise(lambda _, tokens: float(len(tokens))), SeedStream(5),
                                 chain_id=index)
             for index in range(2000)
         ]

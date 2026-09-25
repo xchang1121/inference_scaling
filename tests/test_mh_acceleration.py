@@ -10,6 +10,7 @@ from inference_scaling.arllm.algorithms.config import RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 
 
 class GenerationOnlyBackend(TabularAutoregressiveBackend):
@@ -37,7 +38,7 @@ def test_replay_mixture_at_zero_reward_and_zero_history_weight_accepts_all() -> 
         steps_per_block=8,
         reward_temperature=1.0, suffix_schedule="uniform", iterations=None,
     )
-    result = run_reward_mh_chain_replay_proposal(proposal, config, lambda _prompt, _sequence: 0.0, SeedStream(4))
+    result = run_reward_mh_chain_replay_proposal(proposal, config, pointwise(lambda _prompt, _sequence: 0.0), SeedStream(4))
     assert result.accepted == result.attempts
 
 
@@ -54,7 +55,7 @@ def test_frozen_replay_proposal_approaches_the_exact_reward_target() -> None:
 
     config = RewardMHConfig(total_length=2, block_size=1, steps_per_block=20, reward_temperature=temperature, suffix_schedule="uniform", iterations=None)
     outputs = [
-        run_reward_mh_chain_replay_proposal(proposal, config, reward, SeedStream(117), chain_id=chain)
+        run_reward_mh_chain_replay_proposal(proposal, config, pointwise(reward), SeedStream(117), chain_id=chain)
         for chain in range(2500)
     ]
     empirical = empirical_distribution(result.token_ids for result in outputs)

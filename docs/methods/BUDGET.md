@@ -186,7 +186,7 @@ n(B)M[c_z(B)+Kc_u(B)]\leq C_{\rm remaining},
 ### 计划成本与实际记账
 
 补全和完成都生成到 EOS，成本取决于剩余输出的实际长度。设提示长度为 $`P`$，当前已生成长度为 $`L`$，
-输出上限为 $`T`$，一次奖励需要 $`s`$ 次完整序列评分。规划使用期望剩余长度
+输出上限为 $`T`$，一次奖励需要 $`s`$ 次完整序列评分（复用生成概率的 `logprob` 奖励 $`s=0`$）。规划使用期望剩余长度
 
 ```math
 \hat\ell=\min\{\hat\ell_{\rm obs},\,T-L\},
@@ -344,7 +344,8 @@ result = run_joint_budget_is(
 )
 ```
 
-`reward(prompt_tokens, complete_sequence_tokens)` 必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
+`reward(prompt_tokens, sequences, token_logprobs)` 批量返回完整序列的奖励，`token_logprobs` 是各序列在生成策略下的
+逐 token 对数概率；它必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
 直接在当前候选池内重新统计多数标签会改变候选权重之间的依赖关系，不适用第 2 节证明。
 
 | 职责 | 代码 / 测试 |

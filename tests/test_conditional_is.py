@@ -17,6 +17,7 @@ from inference_scaling.arllm.types import ScoreRequest
 from inference_scaling.shared.metrics import total_variation
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import normalize_log_weights
+from inference_scaling.shared.types import pointwise
 
 
 def _backend() -> TabularAutoregressiveBackend:
@@ -56,7 +57,7 @@ def _step(backend, config, *, state=RetainedSequence(), reward=_reward, sampling
         state=state,
         config=config,
         sampling=sampling,
-        reward=reward,
+        reward=pointwise(reward),
         seeds=SeedStream(seed),
         step_index=0,
     )
@@ -125,7 +126,7 @@ def test_conditional_is_returns_a_complete_sequence_within_total_length() -> Non
         ConditionalISConfig(
             candidate_count=2, rollout_count=2, block_size=2, total_length=5, reward_temperature=1.0
         ),
-        lambda _prompt, generated: float(sum(generated)),
+        pointwise(lambda _prompt, generated: float(sum(generated))),
         SeedStream(17),
     )
     assert len(result.token_ids) == 5
@@ -142,18 +143,21 @@ def test_conditional_is_rejects_policies_that_break_the_weight_formula(sampling)
             ConditionalISConfig(
                 candidate_count=2, rollout_count=2, block_size=1, total_length=2, reward_temperature=1.0
             ),
-            _reward,
+            pointwise(_reward),
             SeedStream(1),
             sampling=sampling,
         )
 
 
-def test_conditional_is_accepts_one_joint_batch_reward() -> None:
+def test_conditional_is_scores_one_batch_with_generation_logprobs() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
     seen: list[tuple[tuple[int, ...], ...]] = []
 
-    def reward_batch(_prompt, generated):
+    def reward_batch(_prompt, generated, logprobs):
         seen.append(tuple(generated))
+        # Every generated token, candidate and completion alike, comes with its log-probability.
+        assert all(tuple(values) == pytest.approx((np.log(0.5),) * len(tokens))
+                   for values, tokens in zip(logprobs, generated, strict=True))
         return tuple(float(tokens[-1] == 1) for tokens in generated)
 
     result = run_conditional_is(
@@ -166,9 +170,8 @@ def test_conditional_is_accepts_one_joint_batch_reward() -> None:
             total_length=2,
             reward_temperature=1.0,
         ),
-        None,
+        reward_batch,
         SeedStream(91),
-        reward_batch=reward_batch,
     )
 
     assert len(result.token_ids) == 2
@@ -183,7 +186,7 @@ def test_kept_completion_is_reused_without_rescoring() -> None:
         return float(sum(generated))
 
     config = ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0)
-    result = run_conditional_is(_backend(), (), config, reward, SeedStream(7))
+    result = run_conditional_is(_backend(), (), config, pointwise(reward), SeedStream(7))
     sequence: tuple[int, ...] | None = None
     kept_reward = 0.0
     for step in result.steps:
@@ -226,7 +229,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
         prompt=(),
         config=ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0),
         sampling=sampling,
-        reward=reward,
+        reward=pointwise(reward),
     )
     starts = np.random.default_rng(0).choice(8, size=3000, p=list(target.values()))
     counts: dict[str, Counter[tuple[int, ...]]] = {"target": Counter(), "empty": Counter()}

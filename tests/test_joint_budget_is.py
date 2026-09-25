@@ -14,6 +14,7 @@ from inference_scaling.arllm.algorithms.joint_budget_is import (
 )
 from inference_scaling.shared.budget.costs import block_costs
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 
 
 def joint_config(**overrides):
@@ -54,7 +55,7 @@ def test_budget_includes_pilots_and_independent_production_samples():
             pilot_fraction=0.4,
             reward_forward_passes=0,
         ),
-        lambda _p, y: float(sum(y)),
+        pointwise(lambda _p, y: float(sum(y))),
         SeedStream(42),
     )
     assert len(result.token_ids) == 4
@@ -100,7 +101,7 @@ def test_multistep_plan_recomputes_budget_and_preserves_fixed_horizon(monkeypatc
             pilot_fraction=0.8,
             reward_forward_passes=0,
         ),
-        lambda _p, _y: 0.0,
+        pointwise(lambda _p, _y: 0.0),
         SeedStream(3),
     )
     assert len(result.steps) > 1
@@ -120,7 +121,7 @@ def test_initial_insufficient_budget_has_no_side_effects():
             backend,
             (),
             joint_config(forward_token_budget=7, total_length=4, expected_output_tokens=4),
-            lambda _p, _y: pytest.fail("reward called"),
+            pointwise(lambda _p, _y: pytest.fail("reward called")),
             SeedStream(1),
         )
     assert not backend.requests
@@ -133,7 +134,7 @@ def test_length_probe_is_the_only_call_before_an_insufficient_budget_error():
             backend,
             (),
             joint_config(forward_token_budget=7, total_length=4),
-            lambda _p, _y: pytest.fail("reward called"),
+            pointwise(lambda _p, _y: pytest.fail("reward called")),
             SeedStream(1),
         )
     assert [request.request_id for request in backend.requests] == ["joint-budget-is:length-probe"]
@@ -142,7 +143,7 @@ def test_length_probe_is_the_only_call_before_an_insufficient_budget_error():
 def test_terminal_fallback_and_early_eos():
     config = joint_config(forward_token_budget=16, total_length=4, expected_output_tokens=4)
     result = run_joint_budget_is(
-        RecordingBackend(), (), config, lambda _p, _y: 0.0, SeedStream(8)
+        RecordingBackend(), (), config, pointwise(lambda _p, _y: 0.0), SeedStream(8)
     )
     assert len(result.steps) == 1
     assert result.steps[0].plan.block_size == 4
@@ -153,7 +154,7 @@ def test_terminal_fallback_and_early_eos():
         RecordingBackend((0, 1)),
         (),
         replace(config, forward_token_budget=300),
-        lambda _p, _y: 0.0,
+        pointwise(lambda _p, _y: 0.0),
         SeedStream(8),
         sampling=SamplingConfig(eos_token_id=1),
     )
@@ -173,7 +174,7 @@ def test_constant_reward_preserves_base_and_repeated_seed_is_identical():
     backend = RecordingBackend()
     outputs = [
         run_joint_budget_is(
-            backend, (), config, lambda _p, _y: 0.0, SeedStream(i)
+            backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(i)
         ).token_ids
         for i in range(500)
     ]
@@ -182,7 +183,7 @@ def test_constant_reward_preserves_base_and_repeated_seed_is_identical():
     assert (
         outputs[0]
         == run_joint_budget_is(
-            backend, (), config, lambda _p, _y: 0.0, SeedStream(0)
+            backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(0)
         ).token_ids
     )
 
@@ -201,7 +202,7 @@ def test_full_sequence_sir_approaches_reward_target():
             RecordingBackend((0.5, 0.5)),
             (),
             config,
-            lambda _p, y: np.log(3) * y[0],
+            pointwise(lambda _p, y: np.log(3) * y[0]),
             SeedStream(i),
         ).token_ids[0]
         for i in range(500)
@@ -229,7 +230,7 @@ def test_reward_cost_and_support_checks():
             backend,
             (),
             joint_config(forward_token_budget=100, total_length=2),
-            lambda _p, _y: 0.0,
+            pointwise(lambda _p, _y: 0.0),
             SeedStream(0),
             sampling=SamplingConfig(top_p=0.9),
         )
@@ -292,7 +293,7 @@ def test_plans_do_not_depend_on_an_output_limit_that_is_never_reached(options):
         return run_joint_budget_is(
             BoundedLengthBackend(), (5,) * 10,
             joint_config(forward_token_budget=12_000, total_length=total_length, **options),
-            lambda _p, y: float(np.mean(y[:20])) / 4, SeedStream(6),
+            pointwise(lambda _p, y: float(np.mean(y[:20])) / 4), SeedStream(6),
             sampling=SamplingConfig(eos_token_id=0),
         )
 

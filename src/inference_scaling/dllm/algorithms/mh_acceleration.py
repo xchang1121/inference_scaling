@@ -9,18 +9,13 @@ from typing import Hashable, Sequence
 
 import numpy as np
 
-from inference_scaling.dllm.algorithms.mh import (
-    DiffusionRewardBatchFunction,
-    DiffusionRewardFunction,
-    _evaluate_mh_rewards,
-    _mh_requests,
-)
+from inference_scaling.dllm.algorithms.mh import _evaluate_mh_rewards, _mh_requests
 from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionBackend, DiffusionSample
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import TokenSequence
+from inference_scaling.shared.types import TokenBatchReward, TokenSequence
 
 
 def _trajectory_key(sample: DiffusionSample) -> Hashable:
@@ -69,14 +64,11 @@ def run_diffusion_replay_mixture_mh(
     sampling: DiffusionSamplingConfig,
     history: Sequence[DiffusionSample],
     history_probability: float,
-    reward: DiffusionRewardFunction | None = None,
-    reward_batch: DiffusionRewardBatchFunction | None = None,
-    seed: int = 0,
+    reward: TokenBatchReward,
+    seed: int,
 ) -> ReplayMixtureDiffusionMHResult:
     """Use a frozen empirical trajectory cache inside an exact independence proposal."""
 
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one reward callback")
     if not 0 <= history_probability < 1:
         raise ValueError("history_probability must lie in [0, 1)")
     if history_probability > 0 and not history:
@@ -118,7 +110,7 @@ def run_diffusion_replay_mixture_mh(
     resolved = tuple(sample for sample in samples if sample is not None)
     if len(resolved) != config.updates + 1:
         raise RuntimeError("replay-mixture proposal routing omitted a sample")
-    rewards = _evaluate_mh_rewards(prompt, resolved, reward, reward_batch)
+    rewards = _evaluate_mh_rewards(prompt, resolved, reward)
     history_counts = Counter(_trajectory_key(sample) for sample in history)
 
     def proposal_logprob(sample: DiffusionSample) -> float:

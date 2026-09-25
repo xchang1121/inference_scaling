@@ -9,6 +9,7 @@ import pytest
 from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
 from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
 from inference_scaling.dllm.algorithms.mh_acceleration import run_diffusion_replay_mixture_mh
+from inference_scaling.shared.types import pointwise
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionGenerationRequest, DiffusionSample, DiffusionTraceStep
 
@@ -75,7 +76,7 @@ def _zero_reward(_prompt, continuations):
 def test_independence_mh_draws_every_proposal_in_one_batch():
     backend = CountingCoinBackend()
     result = run_diffusion_reward_mh(
-        backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT, reward=_reward, seed=4,
+        backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT, reward=pointwise(_reward), seed=4,
     )
     assert len(result.steps) == CONFIG.updates
     assert backend.batch_calls == 1
@@ -91,7 +92,7 @@ def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():
         sampling=EXACT,
         history=(history,),
         history_probability=0.0,
-        reward_batch=_zero_reward,
+        reward=_zero_reward,
         seed=5,
     )
 
@@ -111,6 +112,6 @@ def test_replay_mixture_rejects_a_cache_from_another_model():
             sampling=EXACT,
             history=(replace(history, model_id="another-model"),),
             history_probability=0.5,
-            reward_batch=_zero_reward,
+            reward=_zero_reward,
             seed=5,
         )

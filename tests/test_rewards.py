@@ -9,6 +9,7 @@ from inference_scaling.arllm.rewards.intrinsic import (
     ConsilienceReward,
     SequenceLogProbabilityReward,
 )
+from inference_scaling.app.rewards import Reward, memoized
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.output import thinking_format_from_backend
 from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
@@ -74,6 +75,21 @@ def test_log_probability_reward_is_length_and_batch_order_invariant() -> None:
 def test_log_probability_reward_counts_genuine_zero_logprobs() -> None:
     assert SequenceLogProbabilityReward.from_token_logprobs((-2.0, 0.0)) == -1.0
     assert SequenceLogProbabilityReward.from_token_logprobs(()) == 0.0
+
+
+def test_problem_reward_scores_each_sequence_once_or_reads_generation_logprobs() -> None:
+    batches = []
+
+    def batch(_prompt, sequences):
+        batches.append(list(sequences))
+        return [float(sum(tokens)) for tokens in sequences]
+
+    reward = Reward(1.0, memoized(batch), 1, {})
+    assert reward.batch((), [(1, 2), (3,), (1, 2)]) == [3.0, 3.0, 3.0]
+    assert reward.generated((), [(3,), (4,)], [(-1.0,), (-2.0,)]) == [3.0, 4.0]
+    assert batches == [[(1, 2), (3,)], [(4,)]]
+    reused = Reward(1.0, memoized(batch), 0, {}, from_logprobs=SequenceLogProbabilityReward.from_token_logprobs)
+    assert reused.generated((), [(5, 6)], [(-1.0, -3.0)]) == [-2.0] and len(batches) == 2
 
 
 class _ConsilienceBackend:

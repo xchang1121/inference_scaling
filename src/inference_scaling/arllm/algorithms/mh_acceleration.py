@@ -24,7 +24,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
-from inference_scaling.shared.types import TokenReward
+from inference_scaling.shared.types import GeneratedBatchReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +136,7 @@ class FrozenReplaySuffixProposal:
 def run_reward_mh_chain_replay_proposal(
     proposal: FrozenReplaySuffixProposal,
     config: RewardMHConfig,
-    reward: TokenReward,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     *,
     chain_id: int = 0,
@@ -145,8 +145,8 @@ def run_reward_mh_chain_replay_proposal(
 
     prompt = proposal.prompt
 
-    def score(sequence: TokenSequence) -> float:
-        value = float(reward(prompt, sequence))
+    def score(sequence: TokenSequence, logprobs: tuple[float, ...]) -> float:
+        value = float(reward(prompt, [sequence], [logprobs])[0])
         if not isfinite(value):
             raise ValueError("reward must be finite")
         return value
@@ -154,7 +154,7 @@ def run_reward_mh_chain_replay_proposal(
     initial = proposal.draw((), config.total_length, seed=seeds.derive("reward_mh", chain_id, "initialize"),
                             request_id=f"reward-mh-replay:{chain_id}:initialize")
     tokens, base_logs = initial.token_ids, initial.base_token_logprobs
-    current_reward = score(tokens)
+    current_reward = score(tokens, base_logs)
     trace: list[ReplayProposalMHStep] = []
     skipped = 0
     for step_index in range(config.updates):
@@ -170,7 +170,7 @@ def run_reward_mh_chain_replay_proposal(
         draw = proposal.draw(kept, config.total_length - cut,
                              seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
                              request_id=f"reward-mh-replay:{chain_id}:step:{step_index}")
-        proposed_reward = score(kept + draw.token_ids)
+        proposed_reward = score(kept + draw.token_ids, base_logs[:cut] + draw.base_token_logprobs)
         decision = decide_metropolis_hastings(
             current_target_log_density=old_p + current_reward / config.reward_temperature,
             proposed_target_log_density=float(sum(draw.base_token_logprobs)) + proposed_reward / config.reward_temperature,

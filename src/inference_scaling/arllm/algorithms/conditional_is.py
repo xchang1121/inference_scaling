@@ -31,16 +31,13 @@ from inference_scaling.shared.sampling.importance import (
     logmeanexp,
     normalize_log_weights,
 )
-from inference_scaling.shared.types import TokenBatchReward, TokenReward
+from inference_scaling.shared.types import GeneratedBatchReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     GenerationRequest,
     SequenceSample,
     TokenSequence,
 )
-
-RewardFunction = TokenReward
-RewardBatchFunction = TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,15 +88,15 @@ def estimate_conditional_weights(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     generated_prefix: TokenSequence,
+    generated_prefix_logprobs: Sequence[float],
     candidates: Sequence[SequenceSample],
     rollout_length: int,
     rollout_count: int,
     sampling: SamplingConfig,
     reward_temperature: float,
-    reward: RewardFunction | None,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     step_index: int,
-    reward_batch: RewardBatchFunction | None = None,
     retained: RolloutEvaluation | None = None,
 ) -> tuple[ConditionalCandidate, ...]:
     """Estimate each candidate's conditional weight with base-policy completions.
@@ -113,8 +110,6 @@ def estimate_conditional_weights(
         raise ValueError("rollout_count must be positive")
     if reward_temperature <= 0:
         raise ValueError("reward_temperature must be positive")
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one of reward or reward_batch")
 
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
@@ -157,33 +152,28 @@ def estimate_conditional_weights(
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
 
-    # (completion tokens, their log-probabilities, the generated sequence the reward scores)
-    pending_by_candidate: list[list[tuple[TokenSequence, tuple[float, ...], TokenSequence]]] = [
+    # (completion tokens, their log-probabilities, the generated sequence the reward scores, its log-probabilities)
+    pending_by_candidate: list[list[tuple[TokenSequence, tuple[float, ...], TokenSequence, tuple[float, ...]]]] = [
         [] for _ in candidates
     ]
+    prefix_logprobs = tuple(generated_prefix_logprobs)
     for candidate_index in terminal_candidates:
+        candidate = candidates[candidate_index]
         pending_by_candidate[candidate_index].append(
-            ((), (), generated_prefix + candidates[candidate_index].token_ids)
+            ((), (), generated_prefix + candidate.token_ids, prefix_logprobs + candidate.token_logprobs)
         )
     for candidate_index, sample in zip(request_candidates, samples, strict=True):
-        generated = generated_prefix + candidates[candidate_index].token_ids + sample.token_ids
-        pending_by_candidate[candidate_index].append((sample.token_ids, sample.token_logprobs, generated))
+        candidate = candidates[candidate_index]
+        pending_by_candidate[candidate_index].append((
+            sample.token_ids, sample.token_logprobs, generated_prefix + candidate.token_ids + sample.token_ids,
+            prefix_logprobs + candidate.token_logprobs + sample.token_logprobs,
+        ))
 
     pending = [item for group in pending_by_candidate for item in group]
-    generated_sequences = [item[-1] for item in pending]
-    if not pending:
-        rewards: tuple[float, ...] = ()
-    elif reward_batch is not None:
-        rewards = tuple(
-            float(value) for value in reward_batch(prompt, generated_sequences)
-        )
-        if len(rewards) != len(pending):
-            raise ValueError("reward_batch returned an invalid number of rewards")
-    else:
-        assert reward is not None
-        rewards = tuple(
-            float(reward(prompt, generated)) for generated in generated_sequences
-        )
+    rewards = tuple(float(value) for value in reward(prompt, [item[2] for item in pending],
+                                                        [item[3] for item in pending])) if pending else ()
+    if len(rewards) != len(pending):
+        raise ValueError("reward returned an invalid number of values")
     if any(not isfinite(value) for value in rewards):
         raise ValueError("reward must be finite")
 
@@ -192,7 +182,7 @@ def estimate_conditional_weights(
         by_candidate[0].append(retained)
     reward_values = iter(rewards)
     for candidate_index, group in enumerate(pending_by_candidate):
-        for token_ids, token_logprobs, _ in group:
+        for token_ids, token_logprobs, _, _ in group:
             reward_value = next(reward_values)
             by_candidate[candidate_index].append(
                 RolloutEvaluation(token_ids, reward_value, reward_value / reward_temperature, token_logprobs)
@@ -248,15 +238,13 @@ class ConditionalISAdapter:
         prompt: TokenSequence,
         config: ConditionalISConfig,
         sampling: SamplingConfig,
-        reward: RewardFunction | None,
-        reward_batch: RewardBatchFunction | None = None,
+        reward: GeneratedBatchReward,
     ) -> None:
         self.backend = backend
         self.prompt = prompt
         self.config = config
         self.sampling = sampling
         self.reward = reward
-        self.reward_batch = reward_batch
 
     @property
     def initial_state(self) -> RetainedSequence:
@@ -329,6 +317,7 @@ class ConditionalISAdapter:
             backend=self.backend,
             prompt=self.prompt,
             generated_prefix=state.token_ids[: state.fixed],
+            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
             candidates=proposals,
             rollout_length=self.config.total_length - state.fixed - length,
             rollout_count=self.config.rollout_count,
@@ -337,7 +326,6 @@ class ConditionalISAdapter:
             reward=self.reward,
             seeds=seeds,
             step_index=step_index,
-            reward_batch=self.reward_batch,
             retained=retained,
         )
         kept: list[RetainedCandidate] = []
@@ -407,21 +395,13 @@ def conditional_is_step(
     state: RetainedSequence,
     config: ConditionalISConfig,
     sampling: SamplingConfig,
-    reward: RewardFunction | None,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     step_index: int,
-    reward_batch: RewardBatchFunction | None = None,
 ) -> tuple[ConditionalISStep, RetainedSequence]:
     """Run one step from ``state`` and return its record and the kept sequence."""
 
-    adapter = ConditionalISAdapter(
-        backend=backend,
-        prompt=prompt,
-        config=config,
-        sampling=sampling,
-        reward=reward,
-        reward_batch=reward_batch,
-    )
+    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=sampling, reward=reward)
     return adapter.step(state, step_index, seeds)
 
 
@@ -429,24 +409,16 @@ def run_conditional_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: ConditionalISConfig,
-    reward: RewardFunction | None,
+    reward: GeneratedBatchReward,
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
-    reward_batch: RewardBatchFunction | None = None,
 ) -> ConditionalISResult:
     """Generate a complete sequence by conditional SIR moves at successive block boundaries."""
 
     sampling = sampling or SamplingConfig()
     validate_base_sampling(sampling)
-    adapter = ConditionalISAdapter(
-        backend=backend,
-        prompt=prompt,
-        config=config,
-        sampling=sampling,
-        reward=reward,
-        reward_batch=reward_batch,
-    )
+    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=sampling, reward=reward)
     state = adapter.initial_state
     steps: list[ConditionalISStep] = []
     while not adapter.is_terminal(state):

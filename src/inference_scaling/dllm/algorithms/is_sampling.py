@@ -21,7 +21,7 @@ from inference_scaling.shared.sampling.importance import (
     logmeanexp,
     normalize_log_weights,
 )
-from inference_scaling.shared.types import TokenBatchReward, TokenReward, TokenSequence
+from inference_scaling.shared.types import TokenBatchReward, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +64,10 @@ def run_conditional_diffusion_is(
     config: DiffusionISConfig,
     sampling: DiffusionSamplingConfig,
     seed: int,
-    reward: TokenReward | None = None,
-    reward_batch: TokenBatchReward | None = None,
+    reward: TokenBatchReward,
 ) -> DiffusionConditionalISResult:
     """Blockwise IS; the last block's candidates are complete and have one empty completion."""
 
-    if (reward is None) == (reward_batch is None):
-        raise ValueError("provide exactly one of reward or reward_batch")
     seeds = SeedStream(seed)
     stages = diffusion_decision_stage_lengths(
         total_length=config.total_length,
@@ -111,11 +108,7 @@ def run_conditional_diffusion_is(
         owners = [owner for owner, _ in slots]
         completions: list[TokenSequence] = [() if index is None else samples[index].token_ids for _, index in slots]
         sequences = [state + candidates[owner].token_ids + tokens for owner, tokens in zip(owners, completions, strict=True)]
-        if reward_batch is not None:
-            rewards = [float(value) for value in reward_batch(prompt, sequences)]
-        else:
-            assert reward is not None
-            rewards = [float(reward(prompt, sequence)) for sequence in sequences]
+        rewards = [float(value) for value in reward(prompt, sequences)]
         if len(rewards) != len(sequences):
             raise RuntimeError("reward evaluator returned an invalid number of values")
         grouped: list[list[DiffusionRolloutEvaluation]] = [[] for _ in candidates]

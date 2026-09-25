@@ -187,10 +187,7 @@ class DLLMFamily:
         sequences = [sample.token_ids for sample in samples]
         texts = [self.answer_text(prompt, tokens) for tokens in sequences]
         rng = random.Random(seeds.derive("best_of_n", problem.id, "tie-break"))
-        values: list[float] | None = None
-        if reward is not None:
-            values = [float(value) for value in reward.batch(prompt, sequences)] if reward.batch is not None else [
-                reward.point(prompt, tokens) for tokens in sequences]
+        values = None if reward is None else [float(value) for value in reward.batch(prompt, sequences)]
         chosen = best_index(self.dataset, texts, values, rng)
         grades = [self.dataset.grade(text, problem) for text in texts]
         return sequences[chosen], {
@@ -227,12 +224,12 @@ class DLLMFamily:
                 history=self._samples(prompt, self.exact, [
                     seeds.derive("reward_mh", problem.id, "history", index) for index in range(int(history["samples"]))
                 ], f"reward-mh-history:{problem.id}"),
-                history_probability=float(history["mixture"]), reward=reward.point, seed=seed,
+                history_probability=float(history["mixture"]), reward=reward.batch, seed=seed,
             )
             trace["history_draws"] = result.history_draws
         else:
             result = run_diffusion_reward_mh(backend=self.backend, prompt=prompt, config=settings,
-                                             sampling=self.sampling, reward=reward.point, seed=seed)
+                                             sampling=self.sampling, reward=reward.batch, seed=seed)
         trace.update(updates=len(result.steps), accepted=sum(step.accepted for step in result.steps),
                      acceptance_rate=result.acceptance_rate)
         return result.final.token_ids, trace, float(result.final_reward)
@@ -246,8 +243,7 @@ class DLLMFamily:
                                      rollout_count=int(config["rollout_count"]),
                                      block_size=min(int(config["decision_block_size"]), self.length),
                                      total_length=self.length, reward_temperature=reward.temperature),
-            sampling=self.sampling, seed=seed,
-            reward=None if reward.batch is not None else reward.point, reward_batch=reward.batch,
+            sampling=self.sampling, seed=seed, reward=reward.batch,
         )
         # The last block completes the sequence, so its single empty completion carries the output's reward.
         return result.token_ids, importance_trace(result.steps), result.steps[-1].selected.rollouts[0].reward

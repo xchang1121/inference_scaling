@@ -22,7 +22,7 @@ from inference_scaling.app.records import (
     importance_trace,
     json_sha256,
 )
-from inference_scaling.app.rewards import Reward, best_index, text_reward
+from inference_scaling.app.rewards import Reward, best_index, memoized, text_reward
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
@@ -182,9 +182,12 @@ class ARFamily:
         # Model rewards score through the scoped backend.
         model: Any
         if kind == "logprob":
-            model = SequenceLogProbabilityReward(
-                task.backend, SamplingConfig(temperature=float(settings["score_temperature"]), eos_token_id=self.eos))
-            return Reward(float(settings["temperature"]), model, model.batch, 1, model.describe(), model)
+            scoring = SamplingConfig(temperature=float(settings["score_temperature"]), eos_token_id=self.eos)
+            model = SequenceLogProbabilityReward(task.backend, scoring)
+            # Under the generation policy, generation has already scored every token.
+            reused = scoring.policy_id == task.sampling.policy_id
+            return Reward(float(settings["temperature"]), memoized(model.batch), 0 if reused else 1, model.describe(),
+                          model, model.from_token_logprobs if reused else None)
         if kind == "consilience":
             model = ConsilienceReward(
                 task.backend, SamplingConfig(temperature=float(settings["score_temperature"])),
@@ -194,7 +197,7 @@ class ARFamily:
                 thinking_format=self.thinking_format if settings["scope"] == "thinking" else None,
                 scope=settings["scope"],
             )
-            return Reward(float(settings["temperature"]), model, model.batch, 1, model.describe(), model)
+            return Reward(float(settings["temperature"]), memoized(model.batch), 1, model.describe(), model)
         pool: list[str] = []
         if kind == "vote":
             # Pool seeds do not depend on the algorithm, so algorithms share one pool per draw.
@@ -295,17 +298,8 @@ class ARFamily:
         sequences = [sample.token_ids for sample in samples]
         texts = [self.answer_text(task.prompt, tokens) for tokens in sequences]
         rng = random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break"))
-        values: list[float] | None = None
-        if reward is not None:
-            model = reward.model
-            if (isinstance(model, SequenceLogProbabilityReward) and model.sampling is not None
-                    and model.sampling.policy_id == task.sampling.policy_id):
-                # Generation already scored every token under the same policy.
-                values = [model.from_token_logprobs(sample.token_logprobs) for sample in samples]
-            elif reward.batch is not None:
-                values = [float(value) for value in reward.batch(task.prompt, sequences)]
-            else:
-                values = [reward.point(task.prompt, tokens) for tokens in sequences]
+        values = None if reward is None else reward.generated(
+            task.prompt, sequences, [sample.token_logprobs for sample in samples])
         chosen = best_index(self.dataset, texts, values, rng)
         grades = [self.dataset.grade(text, task.problem) for text in texts]
         return sequences[chosen], {
@@ -363,10 +357,12 @@ class ARFamily:
                 reference, task.prompt, [(sample.token_ids, sample.token_logprobs) for sample in samples],
                 history_mixture=float(history["mixture"]), sampling=base,
             )
-            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.point, SeedStream(task.seed))
+            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.generated,
+                                                              SeedStream(task.seed))
             trace["proposal_sources"] = dict(Counter(step.proposal_source for step in result.trace))
         else:
-            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.point, SeedStream(task.seed))
+            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.generated,
+                                         SeedStream(task.seed))
         trace.update(updates=result.attempts, skipped_updates=result.skipped, accepted=result.accepted,
                      acceptance_rate=result.acceptance_rate)
         return result.token_ids, trace, float(result.reward)
@@ -382,8 +378,7 @@ class ARFamily:
                                     rollout_count=int(fixed["rollout_count"]),
                                     block_size=min(int(fixed["block_size"]), task.maximum),
                                     total_length=task.maximum, reward_temperature=reward.temperature),
-                None if reward.batch is not None else reward.point, SeedStream(task.seed),
-                sampling=task.sampling, reward_batch=reward.batch,
+                reward.generated, SeedStream(task.seed), sampling=task.sampling,
             )
             return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
         joint = config["joint"]
@@ -398,8 +393,8 @@ class ARFamily:
             expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
             **adaptive,
         )
-        joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.point, SeedStream(task.seed),
-                                           sampling=task.sampling)
+        joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.generated,
+                                           SeedStream(task.seed), sampling=task.sampling)
         trace = importance_trace([step.evaluation for step in joint_result.steps])
         for summary, step in zip(trace["steps"], joint_result.steps, strict=True):
             summary.update(plan=asdict(step.plan), pilot_forward_tokens=step.pilot_actual_cost,
