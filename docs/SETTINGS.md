@@ -98,7 +98,7 @@
 | `device` / `dtype` | 字符串 | Transformers 设备与精度；vLLM 使用 `dtype`，精确评分后端同时使用两者 |
 | `context_window` | 整数或 `null` | 额外的上下文上限；实际生成上限取它、模型上下文与 `max_new_tokens` 的最小值 |
 | `transformers.attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
-| `transformers.max_score_batch_size` | 整数 | 一次评分的最大序列数 |
+| `transformers.max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
 | `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |

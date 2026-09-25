@@ -861,7 +861,8 @@ ScoreRequest(prefix, continuations, sampling)
 | 重复前缀 KV | 唯一前缀只执行一次预填充，再把 KV 和末位置 logits 复制到重复它的各行（重复次数可以不同） | 增加 KV 复制；减少重复预填充 |
 | 结束行移出 | 生成到 EOS、停止序列或长度上限的行立即移出批次；采样结果留在设备上，每步只同步一次 | 解码只计算仍在生成的行 |
 | 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与参考策略（请求给定的参考温度）的概率 | on-policy IS 和 MH 省去重复评分 |
-| 评分小批量 | `ar.engine.transformers.max_score_batch_size` 与 `logits_to_keep` | 限制长序列全词表 logits 的显存峰值 |
+| 评分小批量 | 长度相近的续写成批，每批至多 `ar.engine.transformers.max_score_batch_size` 行、同样多个分块的填充位置；配合 `logits_to_keep` | 限制全词表 logits 与 KV 的显存峰值 |
+| 跨调用 KV | 单请求生成保留其 KV，下一条单请求（如 MH 的后缀 proposal）只预填充与之不同的前缀部分 | 省去 MH 反复预填充共同前缀 |
 
 若第 $`i`$ 个唯一前缀长 $`L_i`$、重复 $`K_i`$ 次，省去的未计填充的预填充 token 位置数为：
 
@@ -1014,7 +1015,7 @@ Transformers 的注意力实现、设备映射与模型加载附加参数位于 
 长序列使用 `causal_scoring.py` 分块预填充与评分。设分块长度为 $`C`$，每块通过 KV 缓存读取全部先前上下文，
 只保留当前块所需的词表 logits。单条长序列的 logits 存储从 $`O(T|\mathcal V|)`$ 降至
 $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `ar.engine.transformers.score_chunk_size` 设定，
-当前为 256。短序列继续采用批量评分。分块用于控制峰值内存，额外的调用开销由墙钟统计体现。
+当前为 256。评分把长度相近的续写成批逐块推进，每批的行数与填充位置数受上表限制，很长的序列因而单独成批。
 评分 token、前缀预填充和 FLOPs 继续按实际前向计算计数。
 
 数值测试将两种微型因果模型的分块结果与整段结果对比，覆盖逐 token 对数概率、置信度统计、带填充的批量生成，

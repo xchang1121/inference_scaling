@@ -14,7 +14,7 @@ import numpy as np
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
-from inference_scaling.arllm.backends.causal_scoring import iter_causal_logits, prefill_causal_model
+from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
 from inference_scaling.arllm.types import (
     GenerationRequest,
     ScoreRequest,
@@ -104,6 +104,8 @@ class TransformersBackend:
         forward_parameters = inspect.signature(inspected_model.forward).parameters
         self._supports_logits_to_keep = "logits_to_keep" in forward_parameters
         self._model_lock = threading.RLock()
+        # The tokens and KV state of the last single-request generation, which the next one may resume.
+        self._retained: tuple[TokenSequence, Any] | None = None
         self._statistics_lock = threading.Lock()
         self._sample_calls = 0
         self._score_calls = 0
@@ -244,7 +246,7 @@ class TransformersBackend:
     def close(self) -> None:
         """Release the model reference after all dispatchers have stopped."""
         with self._model_lock:
-            self.model = None
+            self.model = self._retained = None
 
     @property
     def parameter_count(self) -> int:
@@ -321,6 +323,16 @@ class TransformersBackend:
         return input_ids, attention_mask
 
     @staticmethod
+    def _crop(cache, length: int):
+        """The first ``length`` positions of a KV cache."""
+
+        crop = getattr(cache, "crop", None)
+        if callable(crop):
+            crop(length)
+            return cache
+        return tuple(tuple(tensor[..., :length, :] for tensor in layer) for layer in cache)
+
+    @staticmethod
     def _select_rows(cache, rows):
         """Keep, reorder or repeat batch rows of a KV cache."""
 
@@ -336,10 +348,11 @@ class TransformersBackend:
         """Decode requests that share their policy, reference policy and stop sequences.
 
         Each distinct prefix is prefilled once and its KV state copied to every
-        row that repeats it; a row leaves the batch as soon as it ends. Tokens are
-        drawn by inverse CDF from request-local uniforms, so a sample does not
-        depend on the batch it runs in. Sampled values stay on the device until
-        the batch is done.
+        row that repeats it; a single request resumes the KV state of the
+        previous one over their common prefix. A row leaves the batch as soon as
+        it ends. Tokens are drawn by inverse CDF from request-local uniforms, so a
+        sample does not depend on the batch it runs in. Sampled values stay on the
+        device until the batch is done.
         """
 
         torch_module = _require_torch()
@@ -362,13 +375,32 @@ class TransformersBackend:
         # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence.
         reasons = torch_module.zeros_like(lengths)
         with self._model_lock, torch_module.inference_mode():
-            input_ids, attention_mask = self._padded_inputs(unique)
-            outputs = self._prefill_model(input_ids, attention_mask)
+            retained, self._retained = self._retained, None
+            reused, cache = 0, None
+            if retained is not None and len(requests) == 1:
+                cached_tokens, cached = retained
+                common = next((index for index, (left, right) in enumerate(zip(cached_tokens, unique[0]))
+                               if left != right), min(len(cached_tokens), len(unique[0])))
+                # The last prefix position is fed again for its logits.
+                reused = min(common, len(unique[0]) - 1)
+                if reused:
+                    cache = self._crop(cached, reused)
+            if reused:
+                input_ids = torch_module.tensor([unique[0][reused:]], dtype=torch_module.long, device=self.device)
+                attention_mask = torch_module.ones((1, len(unique[0])), dtype=torch_module.long, device=self.device)
+            else:
+                input_ids, attention_mask = self._padded_inputs(unique)
+            last: list[Any] = []
+            cache = run_causal_chunks(
+                self.model, input_ids, attention_mask, self._position_ids(attention_mask)[:, reused:],
+                chunk_size=self.score_chunk_size, first_needed=input_ids.shape[1] - 1,
+                supports_logits_to_keep=self._supports_logits_to_keep, cache=cache,
+                on_logits=lambda _position, logits: last.append(logits[:, -1, :]),
+            )
             slots = int(input_ids.numel())
             fan_out = torch_module.tensor([positions[prefix] for prefix in prefixes], device=self.device)
-            logits = outputs.logits[:, -1, :].index_select(0, fan_out)
+            logits = last[-1].index_select(0, fan_out)
             attention_mask = attention_mask.index_select(0, fan_out)
-            cache = getattr(outputs, "past_key_values", None)
             if len(unique) < len(requests):
                 cache = self._select_rows(cache, fan_out)
             alive = torch_module.arange(len(requests), device=self.device)
@@ -432,7 +464,10 @@ class TransformersBackend:
             )
             for request, length, reason, row_tokens, row_logprobs, row_references in rows
         ]
-        prefill_tokens = sum(map(len, unique))
+        if len(requests) == 1:
+            # The KV state covers the prefix and every generated token but the last.
+            self._retained = (prefixes[0] + samples[0].token_ids[:-1], cache)
+        prefill_tokens = sum(map(len, unique)) - reused
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
             self._shared_prefill_tokens_saved += sum(map(len, prefixes)) - prefill_tokens
@@ -458,13 +493,6 @@ class TransformersBackend:
             self._generated_tokens += sum(len(output.token_ids) for output in outputs)
         return outputs
 
-    def _prefill_model(self, input_ids, attention_mask):
-        return prefill_causal_model(
-            self.model, input_ids, attention_mask, self._position_ids(attention_mask),
-            chunk_size=self.score_chunk_size, logits_to_keep=1,
-            supports_logits_to_keep=self._supports_logits_to_keep,
-        )
-
     def _token_scores(self, logits, sampling, continuation: TokenSequence, confidence_top_k: int | None):
         """Log-probabilities of ``continuation`` and, when asked, its top-K confidences."""
 
@@ -478,76 +506,65 @@ class TransformersBackend:
             confidences = (-top.mean(dim=-1)).cpu().tolist()
         return [float(value) for value in selected.cpu().tolist()], [float(value) for value in confidences]
 
-    def _stream_score(self, request: ScoreRequest, continuation: TokenSequence, confidence_top_k: int | None):
-        torch_module = _require_torch()
-        logs: list[float] = []
-        confidences: list[float] = []
-        forwarded = 0
+    def _score_batch(self, batch, confidence_top_k: int | None) -> tuple[list[tuple[list[float], list[float]]], int]:
+        """Teacher-force one batch of (request, continuation, inputs) rows in chunks; returns scores and slots."""
 
-        def count(amount: int) -> None:
-            nonlocal forwarded
-            forwarded += amount
+        torch_module = _require_torch()
+        input_ids, attention_mask = self._padded_inputs([inputs for _, _, inputs in batch])
+        width = input_ids.shape[1]
+        scores: list[tuple[list[float], list[float]]] = [([], []) for _ in batch]
+
+        def consume(position: int, logits: Any) -> None:
+            # Rows are left-padded: a continuation of n tokens is predicted by the last n positions.
+            for row, (request, continuation, _) in enumerate(batch):
+                first = width - len(continuation)
+                low = max(position, first)
+                if low < position + logits.shape[1]:
+                    logs, confidences = self._token_scores(
+                        logits[row, low - position :], request.sampling,
+                        continuation[low - first : position + logits.shape[1] - first], confidence_top_k,
+                    )
+                    scores[row][0].extend(logs)
+                    scores[row][1].extend(confidences)
 
         with self._model_lock, torch_module.inference_mode():
-            chunks = iter_causal_logits(
-                self.model, self._model_prefix(request.prefix), continuation,
-                device=self.device, chunk_size=self.score_chunk_size,
-                supports_logits_to_keep=self._supports_logits_to_keep, on_forward=count,
+            run_causal_chunks(
+                self.model, input_ids, attention_mask, self._position_ids(attention_mask),
+                chunk_size=self.score_chunk_size, first_needed=width - max(len(item[1]) for item in batch),
+                supports_logits_to_keep=self._supports_logits_to_keep, on_logits=consume,
             )
-            try:
-                for offset, logits in chunks:
-                    chunk_logs, chunk_confidences = self._token_scores(
-                        logits, request.sampling, continuation[offset:offset + logits.shape[0]], confidence_top_k,
-                    )
-                    logs.extend(chunk_logs)
-                    confidences.extend(chunk_confidences)
-                    del logits
-            finally:
-                chunks.close()
-        if len(logs) != len(continuation):
-            raise RuntimeError("incomplete chunked sequence score")
-        return (tuple(logs), tuple(confidences)), forwarded
+        return scores, int(input_ids.numel())
 
     def _score_rows(
         self, requests: Sequence[ScoreRequest], confidence_top_k: int | None,
     ) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
-        """Token log-probabilities and (optionally) top-K confidences of every continuation."""
+        """Token log-probabilities and (optionally) top-K confidences of every continuation.
 
-        torch_module = _require_torch()
+        Continuations are teacher-forced in batches of similar length and in
+        chunks of ``score_chunk_size`` positions over a KV cache, so a long
+        sequence keeps its complete context. A batch holds at most
+        ``max_score_batch_size`` rows and as many padded positions as that many
+        chunks, which bounds its logits and KV state.
+        """
+
+        self._retained = None
         flattened = [(request, continuation) for request in requests for continuation in request.continuations]
         results: list[tuple[tuple[float, ...], tuple[float, ...]]] = [((), ())] * len(flattened)
-        short: list[tuple[int, ScoreRequest, TokenSequence, TokenSequence]] = []
-        forwarded = 0
-        for index, (request, continuation) in enumerate(flattened):
-            prefix = self._model_prefix(request.prefix)
-            if not continuation:
-                continue
-            if len(prefix) + len(continuation) > self.score_chunk_size:
-                results[index], used = self._stream_score(request, continuation, confidence_top_k)
-                forwarded += used
-            else:
-                short.append((index, request, continuation, prefix))
-        for start in range(0, len(short), self.max_score_batch_size):
-            chunk = short[start : start + self.max_score_batch_size]
-            input_ids, attention_mask = self._padded_inputs([prefix + continuation for _, _, continuation, prefix in chunk])
-            forwarded += int(input_ids.numel())
-            logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
-            with self._model_lock, torch_module.inference_mode():
-                outputs = self.model(
-                    input_ids=input_ids, attention_mask=attention_mask,
-                    position_ids=self._position_ids(attention_mask), use_cache=False, return_dict=True,
-                    **({"logits_to_keep": logits_to_keep} if self._supports_logits_to_keep else {}),
-                )
-                # Rows are left-padded: the predictors of a continuation are the positions before its tokens.
-                end = outputs.logits.shape[1] - 1
-                for row, (index, request, continuation, _) in enumerate(chunk):
-                    if end - len(continuation) < 0:
-                        raise RuntimeError("logits_to_keep omitted a required score position")
-                    logs, confidences = self._token_scores(
-                        outputs.logits[row, end - len(continuation) : end], request.sampling, continuation,
-                        confidence_top_k,
-                    )
-                    results[index] = (tuple(logs), tuple(confidences))
+        items = sorted(
+            ((index, request, continuation, self._model_prefix(request.prefix) + tuple(continuation[:-1]))
+             for index, (request, continuation) in enumerate(flattened) if continuation),
+            key=lambda item: len(item[3]),
+        )
+        forwarded, capacity = 0, self.max_score_batch_size * self.score_chunk_size
+        while items:
+            size = 1
+            while size < min(len(items), self.max_score_batch_size) and (size + 1) * len(items[size][3]) <= capacity:
+                size += 1
+            batch, items = items[:size], items[size:]
+            scores, slots = self._score_batch([item[1:] for item in batch], confidence_top_k)
+            forwarded += slots
+            for (index, *_), (logs, confidences) in zip(batch, scores, strict=True):
+                results[index] = (tuple(logs), tuple(confidences))
         with self._statistics_lock:
             self._score_calls += 1
             self._scored_tokens += sum(len(continuation) for _, continuation in flattened)

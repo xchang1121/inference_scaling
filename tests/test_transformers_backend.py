@@ -48,6 +48,9 @@ class RepeatableCache:
     def batch_select_indices(self, _indices):
         return None
 
+    def crop(self, _length):
+        return None
+
 
 def _backend(model):
     return TransformersBackend(model, TinyTokenizer(), device="cpu", max_score_batch_size=8, score_chunk_size=256)
@@ -223,10 +226,11 @@ def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:
     backend.score_batch([ScoreRequest((0,), ((0,), (1,), (0, 1)), SamplingConfig())])
 
     snapshot = backend.snapshot()
+    # The inputs are the prefix and every target but the last: (0,), (0,) and (0, 0).
     assert snapshot.scored_tokens == 4
-    assert snapshot.score_forward_token_slots == 9
-    assert snapshot.estimated_dense_forward_flops == 54
-    assert model.logits_to_keep_calls == [3]
+    assert snapshot.score_forward_token_slots == 6
+    assert snapshot.estimated_dense_forward_flops == 36
+    assert model.logits_to_keep_calls == [2]
 
 
 def test_scoring_keeps_only_required_tail_logits() -> None:
@@ -237,7 +241,7 @@ def test_scoring_keeps_only_required_tail_logits() -> None:
     )
 
     assert [len(score) for score in scores] == [1, 1, 2]
-    assert model.logits_to_keep_calls == [3]
+    assert model.logits_to_keep_calls == [2]
 
 
 def test_confidence_statistics_match_reference_policy_definitions() -> None:
@@ -255,7 +259,7 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
     )
     snapshot = backend.snapshot()
     assert snapshot.scored_tokens == 2
-    assert snapshot.score_forward_token_slots == 3
+    assert snapshot.score_forward_token_slots == 2
 
 
 def test_confidence_statistics_reject_truncated_support() -> None:

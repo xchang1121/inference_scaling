@@ -35,14 +35,25 @@ def test_chunked_scoring_matches_complete_causal_context(family):
         assert right.token_topk_confidences == pytest.approx(left.token_topk_confidences, abs=2e-6)
     for left, right in zip(complete.score_batch(requests), chunked.score_batch(requests), strict=True):
         assert right == pytest.approx(left, abs=2e-6)
-    # Long inputs are processed once, including prefix; the last target has no forward.
-    assert chunked.snapshot().score_forward_token_slots == 2 * (12 + 7 + 2)
+    # A batch holds at most 8 * 4 padded positions: the two shorter inputs share one padded to 7 and
+    # the 12-token input runs alone; the last target has no forward.
+    assert chunked.snapshot().score_forward_token_slots == 2 * (2 * 7 + 12)
     requests = [GenerationRequest(tuple(range(1, length + 1)), 4, SamplingConfig(), 8, str(length)) for length in (11, 5)]
     left, right = complete.sample_batch(requests), chunked.sample_batch(requests)
     for expected, actual in zip(left, right, strict=True):
         assert expected.token_ids == actual.token_ids
         assert expected.token_logprobs == pytest.approx(actual.token_logprobs, abs=2e-6)
-    del model, complete, chunked
+    # A single request resumes the previous one's KV state over their common prefix.
+    first = chunked.sample_batch([GenerationRequest((1, 2, 3, 4, 5), 6, SamplingConfig(), 3, "first")])[0]
+    request = GenerationRequest((1, 2, 3, 4, 5) + first.token_ids[:4], 3, SamplingConfig(), 4, "resumed")
+    before = chunked.snapshot().prefill_tokens
+    resumed = chunked.sample_batch([request])[0]
+    fresh = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=4)
+    assert chunked.snapshot().prefill_tokens - before == 1
+    expected = fresh.sample_batch([request])[0]
+    assert resumed.token_ids == expected.token_ids
+    assert resumed.token_logprobs == pytest.approx(expected.token_logprobs, abs=2e-6)
+    del model, complete, chunked, fresh
 
 
 def test_context_budget_caps_the_requested_length():
