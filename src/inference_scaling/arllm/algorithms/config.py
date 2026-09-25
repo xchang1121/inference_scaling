@@ -17,7 +17,7 @@ from inference_scaling.shared.model.generation import DEFAULT_MAX_NEW_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
-class MHConfig:
+class PowerMHConfig:
     alpha: float = 4.0
     total_length: int = DEFAULT_MAX_NEW_TOKENS
     block_size: int = 32
@@ -102,4 +102,4 @@ class ConditionalISConfig:
             raise ValueError("block_size cannot exceed total_length")
 
 
-__all__ = ["ConditionalISConfig", "MHConfig", "RewardMHConfig"]
+__all__ = ["ConditionalISConfig", "PowerMHConfig", "RewardMHConfig"]

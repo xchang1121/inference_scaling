@@ -1,6 +1,6 @@
 import pytest
 
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 
@@ -22,8 +22,8 @@ def test_policy_id_preserves_distinct_float_values() -> None:
     [
         lambda: SamplingConfig(temperature=0),
         lambda: SamplingConfig(top_p=1.1),
-        lambda: MHConfig(total_length=4, block_size=8),
-        lambda: MHConfig(suffix_schedule="unknown"),
+        lambda: PowerMHConfig(total_length=4, block_size=8),
+        lambda: PowerMHConfig(suffix_schedule="unknown"),
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
         lambda: ConditionalISConfig(reward_temperature=float("inf")),

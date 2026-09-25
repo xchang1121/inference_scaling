@@ -15,10 +15,10 @@ from inference_scaling.app.run import Choices, run
 from inference_scaling.app.settings import load_settings
 from inference_scaling.datasets import DATASETS
 
-ALGORITHMS = ("sample", "greedy", "beam", "best_of_n", "mh", "reward_mh", "is")
+ALGORITHMS = ("sample", "greedy", "beam", "best_of_n", "mh", "mh_power", "is")
 MODELS = ("ar", "dllm")
 # Algorithms whose target reweights the base model by exp(reward / temperature) or selects by reward.
-REWARD_ALGORITHMS = frozenset({"best_of_n", "reward_mh", "is"})
+REWARD_ALGORITHMS = frozenset({"best_of_n", "mh", "is"})
 DEFAULT_REWARD = "vote"
 
 

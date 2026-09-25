@@ -142,20 +142,20 @@ SCHEMA: dict[str, Any] = {
             "beam": {"num_beams": int},
             "best_of_n": {"samples": int},
             "mh": {
-                "alpha": float,
-                "proposal_temperature": float,
-                "block_size": int,
-                "steps_per_block": int,
-                "iterations": _NULLABLE_INT,
-                "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
-            },
-            "reward_mh": {
                 "block_size": int,
                 "steps_per_block": int,
                 "iterations": _NULLABLE_INT,
                 "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
                 "proposal": _Choices({"base", "frozen_history"}),
                 "frozen_history": {"samples": int, "mixture": float},
+            },
+            "mh_power": {
+                "alpha": float,
+                "proposal_temperature": float,
+                "block_size": int,
+                "steps_per_block": int,
+                "iterations": _NULLABLE_INT,
+                "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
             },
             "is": {
                 "planning": _Choices({"fixed", "full_horizon", "chunk_adaptive"}),
@@ -201,12 +201,12 @@ SCHEMA: dict[str, Any] = {
             "greedy": {},
             "beam": {"decision_block_size": int, "width": int, "branching_factor": int},
             "best_of_n": {"samples": int},
-            "mh": {"alpha": float, "decision_block_size": int, "updates_per_stage": int},
-            "reward_mh": {
+            "mh": {
                 "updates": int,
                 "proposal": _Choices({"base", "frozen_history"}),
                 "frozen_history": {"samples": int, "mixture": float},
             },
+            "mh_power": {"alpha": float, "decision_block_size": int, "updates_per_stage": int},
             "is": {
                 "candidate_count": int,
                 "rollout_count": int,

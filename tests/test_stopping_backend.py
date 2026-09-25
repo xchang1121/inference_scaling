@@ -4,8 +4,8 @@ from math import exp, log
 import pytest
 
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
-from inference_scaling.arllm.algorithms.mh import run_mh_chain
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
+from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -72,8 +72,8 @@ def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
         lambda prompt, sequence: float(sequence[0] == 0), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
-    mh = run_mh_chain(
-        backend, (3,), MHConfig(total_length=4, block_size=2, steps_per_block=2),
+    mh = run_power_mh_chain(
+        backend, (3,), PowerMHConfig(total_length=4, block_size=2, steps_per_block=2),
         SamplingConfig(temperature=0.5, eos_token_id=2), SeedStream(8),
     )
     for tokens in (result.token_ids, mh.token_ids):

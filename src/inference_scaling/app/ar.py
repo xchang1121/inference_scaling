@@ -25,9 +25,9 @@ from inference_scaling.app.records import (
 )
 from inference_scaling.app.rewards import Reward, text_reward
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig, RewardMHConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
-from inference_scaling.arllm.algorithms.mh import run_mh_chain, run_reward_mh_chain
+from inference_scaling.arllm.algorithms.mh import run_power_mh_chain, run_reward_mh_chain
 from inference_scaling.arllm.algorithms.mh_acceleration import (
     FrozenReplaySuffixProposal,
     run_reward_mh_chain_replay_proposal,
@@ -50,9 +50,9 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
 # Algorithms that sample inside the thinking scope when it is configured.
-SCOPED = frozenset({"mh", "reward_mh", "is"})
+SCOPED = frozenset({"mh", "mh_power", "is"})
 # Algorithms whose target reweights the full-support base policy.
-FULL_SUPPORT = frozenset({"mh", "reward_mh", "is"})
+FULL_SUPPORT = frozenset({"mh", "mh_power", "is"})
 
 
 @dataclass(frozen=True)
@@ -177,7 +177,7 @@ class ARFamily:
         algorithm, reward = self.choices.algorithm, self.choices.reward
         scope = SamplingScope.from_config(self.raw, self.ar, active=algorithm in SCOPED).for_prompt(prompt)
         # Text rewards and full-scope Consilience read the whole sequence.
-        if scope.scope == "thinking" and algorithm != "mh" and (
+        if scope.scope == "thinking" and (
             reward in {"vote", "verifier"} or (reward == "consilience" and self.reward_settings["scope"] == "full")
         ):
             scope = scope.full_fallback("reward_uses_full_sequence")
@@ -334,11 +334,11 @@ class ARFamily:
             backend = ReferencePolicyBackend(backend, temperature=task.sampling.temperature)
         return backend
 
-    def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
+    def _mh_power(self, task: _Task, reward: Reward | None, meter: Meter):
         config = self.config
-        result = run_mh_chain(
+        result = run_power_mh_chain(
             self._reference(task), task.prompt,
-            MHConfig(alpha=float(config["alpha"]), total_length=task.maximum,
+            PowerMHConfig(alpha=float(config["alpha"]), total_length=task.maximum,
                      block_size=min(int(config["block_size"]), task.maximum),
                      steps_per_block=int(config["steps_per_block"]), iterations=config["iterations"],
                      suffix_schedule=str(config["suffix_schedule"])),
@@ -352,7 +352,7 @@ class ARFamily:
             "mean_accepted_token_changes": result.mean_accepted_token_changes,
         }, None
 
-    def _reward_mh(self, task: _Task, reward: Reward | None, meter: Meter):
+    def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
         config = self.config
         reference = self._reference(task)

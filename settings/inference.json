@@ -131,20 +131,20 @@
       "beam": {"num_beams": 8},
       "best_of_n": {"samples": 8},
       "mh": {
-        "alpha": 4.0,
-        "proposal_temperature": 0.25,
-        "block_size": 12,
-        "steps_per_block": 3,
-        "iterations": null,
-        "suffix_schedule": "uniform"
-      },
-      "reward_mh": {
         "block_size": 12,
         "steps_per_block": 3,
         "iterations": null,
         "suffix_schedule": "uniform",
         "proposal": "base",
         "frozen_history": {"samples": 8, "mixture": 0.25}
+      },
+      "mh_power": {
+        "alpha": 4.0,
+        "proposal_temperature": 0.25,
+        "block_size": 12,
+        "steps_per_block": 3,
+        "iterations": null,
+        "suffix_schedule": "uniform"
       },
       "is": {
         "planning": "full_horizon",
@@ -216,8 +216,8 @@
       "greedy": {},
       "beam": {"decision_block_size": 48, "width": 8, "branching_factor": 2},
       "best_of_n": {"samples": 8},
-      "mh": {"alpha": 4.0, "decision_block_size": 48, "updates_per_stage": 12},
-      "reward_mh": {"updates": 48, "proposal": "base", "frozen_history": {"samples": 8, "mixture": 0.25}},
+      "mh": {"updates": 48, "proposal": "base", "frozen_history": {"samples": 8, "mixture": 0.25}},
+      "mh_power": {"alpha": 4.0, "decision_block_size": 48, "updates_per_stage": 12},
       "is": {
         "candidate_count": 8,
         "rollout_count": 3,

@@ -57,9 +57,9 @@ def dllm_settings(base_settings, tmp_path, monkeypatch):
     algorithms = settings["dllm"]["algorithms"]
     algorithms["beam"].update(decision_block_size=2, width=2, branching_factor=2)
     algorithms["best_of_n"]["samples"] = 3
-    algorithms["mh"].update(decision_block_size=2, updates_per_stage=2)
-    algorithms["reward_mh"].update(updates=3)
-    algorithms["reward_mh"]["frozen_history"]["samples"] = 2
+    algorithms["mh_power"].update(decision_block_size=2, updates_per_stage=2)
+    algorithms["mh"].update(updates=3)
+    algorithms["mh"]["frozen_history"]["samples"] = 2
     algorithms["is"].update(candidate_count=2, rollout_count=2, decision_block_size=2)
     settings["rewards"]["vote"]["pool_size"] = 2
     monkeypatch.setattr("inference_scaling.app.dllm.load_llada_backend", lambda model, engine: _tiny_backend())
@@ -67,9 +67,9 @@ def dllm_settings(base_settings, tmp_path, monkeypatch):
 
 
 DLLM_RUNS = [
-    ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}), ("mh", None, {}),
+    ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}), ("mh_power", None, {}),
     ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}),
-    ("reward_mh", "verifier", {}), ("reward_mh", "vote", {"proposal": "frozen_history"}),
+    ("mh", "verifier", {}), ("mh", "vote", {"proposal": "frozen_history"}),
     ("is", "vote", {}), ("is", "verifier", {"rollout_model": "proposal"}),
 ]
 
@@ -78,7 +78,7 @@ DLLM_RUNS = [
 def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, algorithm, reward, options):
     algorithms = dllm_settings["dllm"]["algorithms"]
     if "proposal" in options:
-        algorithms["reward_mh"]["proposal"] = options["proposal"]
+        algorithms["mh"]["proposal"] = options["proposal"]
     if "rollout_model" in options:
         algorithms["is"]["rollout_model"] = options["rollout_model"]
     summary = run(Choices(algorithm, "dllm", reward, "gsm8k"), dllm_settings, tmp_path / "results")

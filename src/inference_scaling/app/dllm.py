@@ -212,7 +212,7 @@ class DLLMFamily:
                            for index, grade in enumerate(grades)],
         }, None if values is None else values[chosen]
 
-    def _mh(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
+    def _mh_power(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         config = self.config
         result = run_diffusion_trajectory_power_mh(
             backend=self.backend, prompt=prompt,
@@ -225,7 +225,7 @@ class DLLMFamily:
                                         "accepted": sum(step.accepted for step in result.steps),
                                         "acceptance_rate": result.acceptance_rate}, None
 
-    def _reward_mh(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
+    def _mh(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         assert reward is not None
         config = self.config
         settings = DiffusionMHConfig(total_length=self.length, updates=int(config["updates"]),

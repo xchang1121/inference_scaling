@@ -19,7 +19,7 @@ from math import isfinite
 
 import numpy as np
 
-from inference_scaling.arllm.algorithms.config import MHConfig, RewardMHConfig
+from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
@@ -33,7 +33,7 @@ from inference_scaling.arllm.types import (
 
 
 @dataclass(frozen=True, slots=True)
-class MHStep:
+class PowerMHStep:
     stage_length: int
     step: int
     cut: int
@@ -47,12 +47,12 @@ class MHStep:
 
 
 @dataclass(frozen=True, slots=True)
-class MHChainResult:
+class PowerMHChainResult:
     prompt: TokenSequence
     token_ids: TokenSequence
     base_token_logprobs: tuple[float, ...]
     proposal_token_logprobs: tuple[float, ...]
-    trace: tuple[MHStep, ...]
+    trace: tuple[PowerMHStep, ...]
     chain_id: int
     # Cuts past the end of a stopped output: no proposal, state unchanged.
     skipped: int = 0
@@ -283,15 +283,15 @@ def _token_changes(old: TokenSequence, new: TokenSequence) -> int:
     return sum(left != right for left, right in zip(old, new)) + abs(len(old) - len(new))
 
 
-def run_mh_chain(
+def run_power_mh_chain(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
-    config: MHConfig,
+    config: PowerMHConfig,
     proposal: SamplingConfig,
     seeds: SeedStream,
     *,
     chain_id: int = 0,
-) -> MHChainResult:
+) -> PowerMHChainResult:
     """Run the staged power-target MH for one chain.
 
     Stage ``k`` targets ``p(y)**alpha`` over outputs of at most ``T_k`` tokens;
@@ -303,7 +303,7 @@ def run_mh_chain(
     base_logs: tuple[float, ...] = ()
     proposal_logs: tuple[float, ...] = ()
     stopped = False
-    trace: list[MHStep] = []
+    trace: list[PowerMHStep] = []
     skipped = 0
     for stage_index, stage_length in enumerate(config.stages):
         if not stopped and len(tokens) < stage_length:
@@ -343,14 +343,14 @@ def run_mh_chain(
                 base_logs = base_logs[:cut] + suffix.base_logprobs
                 proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
                 stopped = suffix.stopped
-            trace.append(MHStep(
+            trace.append(PowerMHStep(
                 stage_length=stage_length, step=step_index, cut=cut,
                 proposed_suffix_length=len(suffix.token_ids), log_acceptance=decision.log_acceptance,
                 accepted=decision.accepted, suffix_schedule=config.suffix_schedule,
                 suffix_probability=suffix_probability, proposed_token_changes=changes,
                 accepted_token_changes=changes if decision.accepted else 0,
             ))
-    return MHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
+    return PowerMHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 
 
 def run_reward_mh_chain(

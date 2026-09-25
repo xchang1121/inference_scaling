@@ -71,7 +71,7 @@
 | `verifier.python.requires_reference` | 布尔 | 为真时 `context.reference` 才包含参考答案 |
 | `verifier.constant.value` | 数 | 常数奖励（对照与测试） |
 | `vote.temperature` | 数 | 投票奖励的温度 |
-| `vote.pool_size` | 整数 | `is`/`reward_mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选互相投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
+| `vote.pool_size` | 整数 | `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选互相投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
 | `logprob.temperature` / `logprob.score_temperature` | 数 | 奖励温度；评分策略的温度（1 为模型原始分布）。奖励为有效输出 token 的平均对数概率 |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
@@ -103,7 +103,7 @@
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
-| `vllm.mh_fused_logprobs` | 布尔 | 幂目标 MH 在同一次解码中取得 proposal 与基础模型概率；需要 `asynchronous = false`，只影响 `mh` |
+| `vllm.mh_fused_logprobs` | 布尔 | 幂目标 MH 在同一次解码中取得 proposal 与基础模型概率；需要 `asynchronous = false`，只影响 `mh_power` |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（Consilience 与精确对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从权重读取 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding |
@@ -121,9 +121,9 @@
 | `output.thinking_format` | `auto` \| `tags` \| `json` \| `xml` | 思考段与最终内容的解析格式 |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.thinking_path` / `content_path` | 字符串或 `null` | JSON/XML 中思考与内容字段的路径 |
-| `output.sampling_scope` | `full` \| `thinking` | `mh`、`reward_mh`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
+| `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
 | `output.generation_chunk_size` | 整数 | 思考段采样时检查结束标记的分块长度 |
-| `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`reward_mh`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
+| `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`mh_power`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
 
 ### `ar.algorithms`
 
@@ -132,13 +132,13 @@
 | `sample`、`greedy` | 无参数：单次采样；贪心解码 |
 | `beam.num_beams` | beam 宽度 |
 | `best_of_n.samples` | 候选数 |
-| `mh.alpha` | 幂目标 $`p^\alpha`$ 的指数 |
-| `mh.proposal_temperature` | 后缀 proposal 相对基础策略的温度（常用 $`1/\alpha`$） |
-| `mh.block_size` / `steps_per_block` / `iterations` | 分段延长的块长与每段更新数；`iterations` 非空时在完整长度上做固定次数更新 |
-| `mh.suffix_schedule` | `uniform` \| `inverse_length` \| `multiscale`（后缀长度分布） |
-| `reward_mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
-| `reward_mh.proposal` | `base`（基础策略后缀）或 `frozen_history`（冻结历史混合 proposal） |
-| `reward_mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
+| `mh_power.alpha` | 幂目标 $`p^\alpha`$ 的指数 |
+| `mh_power.proposal_temperature` | 后缀 proposal 相对基础策略的温度（常用 $`1/\alpha`$） |
+| `mh_power.block_size` / `steps_per_block` / `iterations` | 分段延长的块长与每段更新数；`iterations` 非空时在完整长度上做固定次数更新 |
+| `mh_power.suffix_schedule` | `uniform` \| `inverse_length` \| `multiscale`（后缀长度分布） |
+| `mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
+| `mh.proposal` | `base`（基础策略后缀）或 `frozen_history`（冻结历史混合 proposal） |
+| `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `is.planning` | `fixed`：固定候选数、补全数与块长；`full_horizon` / `chunk_adaptive`：在前向 token 预算内逐块重新规划 |
 | `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |
 | `is.joint.forward_token_budget` | 每题的前向 token 位置预算 |
@@ -165,9 +165,9 @@
 | `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与 IS 补全 |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
 | `algorithms.best_of_n.samples` | 整数 | 候选数 |
-| `algorithms.mh.alpha` / `decision_block_size` / `updates_per_stage` | 数 / 整数 / 整数 | 轨迹幂 MH |
-| `algorithms.reward_mh.updates` | 整数 | 独立 MH 的更新数 |
-| `algorithms.reward_mh.proposal` / `frozen_history.samples` / `frozen_history.mixture` | — | 同 AR；`frozen_history` 使用 `exact_sampling` 的冻结轨迹 |
+| `algorithms.mh_power.alpha` / `decision_block_size` / `updates_per_stage` | 数 / 整数 / 整数 | 轨迹幂 MH |
+| `algorithms.mh.updates` | 整数 | 独立 MH 的更新数 |
+| `algorithms.mh.proposal` / `frozen_history.samples` / `frozen_history.mixture` | — | 同 AR；`frozen_history` 使用 `exact_sampling` 的冻结轨迹 |
 | `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 条件扩散 IS 的 M、K 与决策块长 |
 | `algorithms.is.rollout_model` | `base` \| `proposal` | 补全来自主模型或早退 proposal |
 | `algorithms.is.importance_correction` / `importance_log_ratio_clip` | 布尔 / 数或 `null` | 早退补全是否乘同一轨迹的目标/proposal 概率比，以及对数比截断；`base` 时不适用 |

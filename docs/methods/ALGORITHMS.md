@@ -57,7 +57,7 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 例如 `ar.algorithms.is.planning` 表示 `settings/inference.json` 中 `ar` → `algorithms` → `is` → `planning` 字段。
 
 重要性修正要求 $`p(y)\gt 0\Rightarrow q(y)\gt 0`$。把部分概率直接截为零的 top-k/top-p 可能破坏该条件，统一入口
-因此要求 `mh`、`reward_mh` 与 `is` 使用 `ar.sampling.top_p = 1` 和 `ar.sampling.top_k = null`；权重截断以偏差换取
+因此要求 `mh`、`mh_power` 与 `is` 使用 `ar.sampling.top_p = 1` 和 `ar.sampling.top_k = null`；权重截断以偏差换取
 有限权重范围。
 
 ### 1.1 模型无关算法层与生成适配层
@@ -97,12 +97,12 @@ $`\log q(y\mid y')`$。共享核计算
 | `greedy` | 逐位置最大概率项 | 确定性基线 | 原生贪心解码 | 温度 0 的分块解码 |
 | `beam` | 累计对数概率最高的前缀 | 确定性搜索 | token 级 beam search | 按轨迹概率保留的分块 beam |
 | `best_of_n` | 式 (3) 或答案投票 | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励或投票选择 | 同左 |
-| `mh` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
-| `reward_mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
+| `mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
+| `mh_power` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
 | `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：$`K,M\to\infty`$ 时趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 分块条件 IS（第 7 节），rollout 来自基础模型或 early-exit proposal |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
-`--reward` 只作用于 `best_of_n`、`reward_mh` 和 `is`，可选 `verifier`、`vote`、`logprob`、`consilience`（第 9 节），
+`--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`vote`、`logprob`、`consilience`（第 9 节），
 dLLM 只支持前两种。默认运行 `--algorithm is --model ar --reward vote --dataset gsm8k`；AR 的 `is` 默认采用联合预算
 规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
@@ -120,10 +120,10 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
 1. **提示与长度**：数据集按 `datasets.<name>.selection` 固定抽题，并用 `prompt_template` 生成提示；AR 再套用
    chat template（`ar.prompt`）。生成上限取 `datasets.<name>.max_new_tokens` 与模型剩余上下文（含可选的
    `ar.engine.context_window`）的较小值；dLLM 取不超过该上限的 `dllm.sampling.block_length` 最大整数倍。
-2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`reward_mh` 与 `is` 只对思考段采样，
-   最终内容随后由基础模型生成。`vote`、`verifier` 与全序列 Consilience 需要完整输出，`reward_mh` 与 `is` 因而回退到
+2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`mh_power` 与 `is` 只对思考段采样，
+   最终内容随后由基础模型生成。`vote`、`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
    `full` 并记录原因 `reward_uses_full_sequence`。
-3. **奖励阶段**：按 `--reward` 构造逐序列奖励。`vote` 用于 `is` 或 `reward_mh` 时，先从基础模型独立生成
+3. **奖励阶段**：按 `--reward` 构造逐序列奖励。`vote` 用于 `is` 或 `mh` 时，先从基础模型独立生成
    `rewards.vote.pool_size` 条样本并冻结为投票池；池的随机种子与算法无关，同一重复下各算法共用同一池。
 4. **搜索阶段**：运行所选算法，得到一条完整输出。
 5. **收尾与评测**：思考范围下补生成最终内容。数据集评分器只评测答案文本（完整思考段之后的内容；
@@ -139,9 +139,9 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
 <a id="alg-qwen-default-mh"></a>
 #### 2.1.1 后缀 MH
 
-同一执行流程支持幂目标式 (2)（`mh`）和奖励目标式 (1)（`reward_mh`）。幂目标使用
+同一执行流程支持幂目标式 (2)（`mh_power`）和奖励目标式 (1)（`mh`）。幂目标使用
 $`\log\widetilde\pi(y)=\alpha\log p(y\mid x)`$；奖励目标使用
-$`\log\widetilde\pi(y)=\log p(y\mid x)+r(y)/\tau`$。后缀长度分布由 `suffix_schedule` 指定；`reward_mh` 可用
+$`\log\widetilde\pi(y)=\log p(y\mid x)+r(y)/\tau`$。后缀长度分布由 `suffix_schedule` 指定；`mh` 可用
 `proposal = "frozen_history"` 改用冻结历史混合 proposal。
 
 ```mermaid
@@ -161,7 +161,7 @@ flowchart LR
 
 1. 从与当前序列无关、对 $`1,\ldots,T`$ 全支持的 $`\rho(\ell)`$ 抽取后缀长度 $`\ell`$，令切点
    $`c=T-\ell`$；输出已在切点之前停止时，重生成的后缀为空，这次更新不改变状态，直接跳过，不生成也不调用奖励；
-2. `mh` 从温度 proposal 抽取新后缀；`reward_mh` 从基础模型抽取，选择冻结历史 proposal 时改从基础模型与冻结
+2. `mh_power` 从温度 proposal 抽取新后缀；`mh` 从基础模型抽取，选择冻结历史 proposal 时改从基础模型与冻结
    历史后缀组成的固定混合分布抽取（第 8 节）；新后缀在停止处或总长度达到 $`T`$ 时结束；
 3. 对旧后缀和新后缀计算同一个 proposal 的概率。历史分量命中时仍需计算完整混合分布概率；单独使用
    历史记录的频率不满足 MH 接受率的要求；
@@ -182,7 +182,7 @@ Hastings 比中使用完整正反概率，因此两项可以组合。直观上�
 全局移动；增加更新轮次会继续减小有限链误差，但实际速度取决于 proposal 与目标的重叠程度。
 
 主要入口为
-[`run_mh_chain`](../../src/inference_scaling/arllm/algorithms/mh.py)、
+[`run_power_mh_chain`](../../src/inference_scaling/arllm/algorithms/mh.py)、
 [`run_reward_mh_chain`](../../src/inference_scaling/arllm/algorithms/mh.py)和
 [`run_reward_mh_chain_replay_proposal`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py)，
 统一入口的调用位于 [`app/ar.py`](../../src/inference_scaling/app/ar.py)。
@@ -230,16 +230,16 @@ flowchart LR
 | 符号 | 设置键 | 作用 | 增大后的主要影响 |
 | --- | --- | --- | --- |
 | $`L`$ | `datasets.<name>.max_new_tokens` | 最大生成长度，受模型上下文限制 | 增加生成、评分和 KV 成本 |
-| $`B`$ | `ar.algorithms.mh.block_size`、`ar.algorithms.reward_mh.block_size`、`ar.algorithms.is.fixed.block_size`；dLLM `beam`、`mh`、`is` 的 `decision_block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
-| $`n`$ | `ar.algorithms.mh.steps_per_block` / `iterations`（`reward_mh` 同名）；`dllm.algorithms.mh.updates_per_stage`、`dllm.algorithms.reward_mh.updates` | MH 更新数 | 减小有限链误差，增加 proposal 与奖励调用 |
-| $`\alpha`$ | `ar.algorithms.mh.alpha`、`dllm.algorithms.mh.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低接受率 |
+| $`B`$ | `ar.algorithms.mh_power.block_size`、`ar.algorithms.mh.block_size`、`ar.algorithms.is.fixed.block_size`；dLLM `beam`、`mh_power`、`is` 的 `decision_block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
+| $`n`$ | `ar.algorithms.mh_power.steps_per_block` / `iterations`（`mh` 同名）；`dllm.algorithms.mh_power.updates_per_stage`、`dllm.algorithms.mh.updates` | MH 更新数 | 减小有限链误差，增加 proposal 与奖励调用 |
+| $`\alpha`$ | `ar.algorithms.mh_power.alpha`、`dllm.algorithms.mh_power.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低接受率 |
 | $`\tau`$ | `rewards.<name>.temperature` | 奖励相对基础概率的尺度 | 减弱奖励差异对权重和接受率的影响 |
 | $`M`$ | `ar.algorithms.is.fixed.candidate_count`、`dllm.algorithms.is.candidate_count`；联合预算网格 `ar.algorithms.is.joint.candidate_counts` | 每步基础模型候选数 | 改善候选覆盖，增加候选和 rollout 成本 |
 | $`K`$ | `ar.algorithms.is.fixed.rollout_count`、`dllm.algorithms.is.rollout_count`；联合预算网格 `ar.algorithms.is.joint.rollout_counts` | 每个候选的 rollout 数 | 减少条件权重噪声，增加补全成本 |
 | $`N`$ | `ar.algorithms.best_of_n.samples`、`dllm.algorithms.best_of_n.samples` | Best-of-$`N`$ 的独立样本数 | 更接近奖励最大化，生成成本线性增加 |
-| $`\lambda`$ | `ar.algorithms.reward_mh.frozen_history.mixture`、`dllm.algorithms.reward_mh.frozen_history.mixture` | 冻结历史分量的比例 | 提高历史命中率，仍需完整混合概率 |
+| $`\lambda`$ | `ar.algorithms.mh.frozen_history.mixture`、`dllm.algorithms.mh.frozen_history.mixture` | 冻结历史分量的比例 | 提高历史命中率，仍需完整混合概率 |
 | — | `rewards.vote.pool_size` | `vote` 奖励的冻结样本池大小 | 一致比例更稳定，奖励阶段生成成本增加 |
-| — | `ar.algorithms.mh.proposal_temperature` | 幂目标 MH 的 proposal 温度 | 改变接受率与多样性 |
+| — | `ar.algorithms.mh_power.proposal_temperature` | 幂目标 MH 的 proposal 温度 | 改变接受率与多样性 |
 | — | `ar.sampling.temperature` | 基础分布的温度 | 改变多样性、接受率和目标本身 |
 | — | `dllm.algorithms.is.importance_log_ratio_clip` | 对数概率比截断阈值 | 减弱截断；精确目标诊断应设为 `null` |
 | — | `ar.engine.continuous_batching.max_batch_size` / `max_batch_tokens`、`ar.engine.transformers.max_score_batch_size` | 生成与评分批量 | 提高 GPU 利用率，也可能增加填充与峰值显存 |
@@ -333,18 +333,18 @@ K_\rho=\sum_{\ell=1}^{L}\rho(\ell)K_\ell,
 ```
 
 所以任何与当前序列无关的固定 $`\rho`$ 都保持同一目标分布。实现要求每个 $`\rho(\ell)\gt 0`$，从而既能
-执行局部更新，也保留整段重生成。温度 proposal 的逐前缀归一化常数进入 $`q_c`$ 的正反概率。`mh` 的 proposal
-温度为 `ar.algorithms.mh.proposal_temperature` 乘以 `ar.sampling.temperature`，目标中的 $`p`$ 是
+执行局部更新，也保留整段重生成。温度 proposal 的逐前缀归一化常数进入 $`q_c`$ 的正反概率。`mh_power` 的 proposal
+温度为 `ar.algorithms.mh_power.proposal_temperature` 乘以 `ar.sampling.temperature`，目标中的 $`p`$ 是
 `ar.sampling.temperature` 下的基础分布。
 
 实现提供三种分布：`uniform` 对所有长度等概率；`inverse_length` 取
 $`\rho(\ell)\propto 1/\ell`$；`multiscale` 将 10% 概率均匀分给全部长度，其余 90% 均匀分给
 $`1,2,4,\ldots,L`$ 中的不同长度。后两者减少平均 proposal token 数；`multiscale` 同时提高 2 的幂长度和
-完整后缀的采样频率。分布由 `ar.algorithms.mh.suffix_schedule`（奖励目标为 `ar.algorithms.reward_mh.suffix_schedule`）
+完整后缀的采样频率。分布由 `ar.algorithms.mh_power.suffix_schedule`（奖励目标为 `ar.algorithms.mh.suffix_schedule`）
 选择，`settings/inference.json` 中两者当前都取 `uniform`。
 
 实现按 `block_size` 逐步扩展到 $`L`$，并在每个长度执行 `steps_per_block` 次后缀更新。设置
-`ar.algorithms.mh.iterations` 时，先生成完整长度的初始序列，再在该长度上执行给定次数的后缀更新；两种初始化和
+`ar.algorithms.mh_power.iterations` 时，先生成完整长度的初始序列，再在该长度上执行给定次数的后缀更新；两种初始化和
 预算安排在有限计算量下可产生不同结果，应分别记录。最终长度上的有限更新结果仍含 MCMC 误差。由于切点
 $`c=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、长度不超过 $`L`$ 的完整输出上处处为正，转移矩阵任意两行
 都有正重叠。写
@@ -384,9 +384,9 @@ accepted = decision.accepted
 proposal 与目标使用同一 EOS，思考段范围内再加上思考段结束标记；停止 token 的概率计入 $`p`$ 与 $`q_c`$。
 切点、proposal 与接受判定的随机数都按链与更新序号派生，跳过一次更新不改变其余更新的随机数。
 
-dLLM 的 `mh` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
+dLLM 的 `mh_power` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
 而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点限定在完整决策块边界
-（`dllm.algorithms.mh.decision_block_size`），正反后缀 proposal 概率因此都可精确计算；每个阶段执行
+（`dllm.algorithms.mh_power.decision_block_size`），正反后缀 proposal 概率因此都可精确计算；每个阶段执行
 `updates_per_stage` 次更新。实现位于 [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)。
 
 <a id="alg-reward-mh"></a>
@@ -407,12 +407,12 @@ A_r(y\to y')=\min\left\{1,
 <p align="right">式 (6)</p>
 
 当 $`q_c=p(\cdot\mid x,y_{1:c})`$ 时，基础模型与 proposal 项抵消，只剩
-$`\min\{1,e^{(r(y')-r(y))/\tau}\}`$。`reward_mh` 默认使用这一基础模型 proposal；代码仍保留展开后的四项，因而同样
+$`\min\{1,e^{(r(y')-r(y))/\tau}\}`$。`mh` 默认使用这一基础模型 proposal；代码仍保留展开后的四项，因而同样
 支持任意可精确评分、具有完整支持集的 proposal，例如第 8 节的冻结历史混合分布。在固定最大长度、有限词表、
 有限奖励、全支持 proposal 且 $`\rho(L)\gt 0`$ 时，整段重生成使任意两个出发状态具有共同可达的下一状态，因而得到
 与式 (5) 相同的几何收敛直观解释。
 
-dLLM 的整段奖励 MH 从基础模型独立生成 `dllm.algorithms.reward_mh.updates` 个完整 proposal。基础轨迹概率在目标与
+dLLM 的整段奖励 MH 从基础模型独立生成 `dllm.algorithms.mh.updates` 个完整 proposal。基础轨迹概率在目标与
 proposal 中抵消，因此共享核只接收 $`r(y)/\tau`$ 与 $`r(y')/\tau`$，无需额外计算轨迹 likelihood；proposal 与当前
 状态无关，初始样本和后续 proposal 可在一次批处理中生成。dLLM 的幂目标轨迹 MH 不发生该抵消，适配层将旧、新
 轨迹的基础概率及 proposal 概率交给同一接受核。
@@ -656,7 +656,7 @@ p(z\mid x,g)\,
 <a id="alg-replay-mh"></a>
 ## 8. 冻结历史混合 proposal 的 MH
 
-`ar.algorithms.reward_mh.proposal = "frozen_history"` 时，链开始前先从基础模型独立生成
+`ar.algorithms.mh.proposal = "frozen_history"` 时，链开始前先从基础模型独立生成
 `frozen_history.samples` 条完整序列，把它们在各切点处的后缀经验分布 $`h_{\mathrm{emp}}`$ 冻结，并与基础模型组成
 混合 proposal
 
@@ -698,7 +698,7 @@ K_{\rho}^{\mathrm{replay}}
 Hastings 比中抵消。历史命中时，自回归生成被替换为给定已有序列的批量概率评分，主要降低墙钟；历史样本的
 生成计入搜索阶段的成本，记录中的 `trace.proposal_sources` 给出基础分量与历史分量的抽样次数。
 
-dLLM 的对应实现是回放混合 MH（`dllm.algorithms.reward_mh.proposal = "frozen_history"`）：整段独立 proposal 为基础
+dLLM 的对应实现是回放混合 MH（`dllm.algorithms.mh.proposal = "frozen_history"`）：整段独立 proposal 为基础
 轨迹分布与 `frozen_history.samples` 条冻结轨迹经验分布的混合，混合比例为 `frozen_history.mixture`。正反混合概率
 需要精确的轨迹概率，因此历史轨迹与基础分量都使用 `dllm.exact_sampling`，目标中的基础分布也随之取该策略；
 proposal 与当前状态无关，全部 proposal 在一次批量调用中生成。实现位于
@@ -707,7 +707,7 @@ proposal 与当前状态无关，全部 proposal 在一次批量调用中生成�
 <a id="alg-rewards"></a>
 ## 9. 奖励信号
 
-`--reward` 选择四种奖励之一，只作用于 `best_of_n`、`reward_mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
+`--reward` 选择四种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
 $`\tau`$。算法层的统一签名为 `reward(prompt_tokens, completion_tokens) -> float`；批量接口必须对每个序列计算同一个
 函数，且按输入顺序返回结果。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
 奖励，MH 的接受率只含奖励差。`verifier` 与 `vote` 读取答案文本，由
@@ -717,7 +717,7 @@ $`\tau`$。算法层的统一签名为 `reward(prompt_tokens, completion_tokens)
 | 奖励 | 定义 | 设置 | 模型族与成本 |
 | --- | --- | --- | --- |
 | `verifier` | 外部来源：数据集评分器对照参考答案、Python 工厂 $`r=f(x,y)`$ 或常数 | `rewards.verifier.source` 及同名子表 | AR 与 dLLM；按文本计算，不计模型前向 |
-| `vote` | `best_of_n`：候选按答案投票；`is`、`reward_mh`：与冻结样本池答案一致的比例 | `rewards.vote.pool_size` | AR 与 dLLM；样本池在奖励阶段生成并单独计量 |
+| `vote` | `best_of_n`：候选按答案投票；`is`、`mh`：与冻结样本池答案一致的比例 | `rewards.vote.pool_size` | AR 与 dLLM；样本池在奖励阶段生成并单独计量 |
 | `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；每条序列一次评分前向 |
 | `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；每条序列一次评分前向，需要逐 token 的 top-$`K`$ 概率 |
 
@@ -741,7 +741,7 @@ MH、IS 和 dLLM 算法只接收构造后的统一奖励回调。训练沿用同
 
 ### vote
 
-`best_of_n` 直接对候选投票（第 3.1 节）。用于 `is` 与 `reward_mh` 时，奖励是与冻结样本池的一致比例：
+`best_of_n` 直接对候选投票（第 3.1 节）。用于 `is` 与 `mh` 时，奖励是与冻结样本池的一致比例：
 
 ```math
 r_{\mathrm{vote}}(x,y)=\frac1P\sum_{j=1}^{P}
@@ -776,7 +776,7 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 否则交给精确评分后端（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
 
 变长序列的目标指数依赖 $`L`$，不等价于固定 $`p^\alpha`$；需要固定幂次目标时使用式 (2) 和
-`ar.algorithms.mh.alpha`。只归一化 reward，重要性采样的 $`p/q`$、MH 概率项和 `SequenceSample.logprob` 均保留
+`ar.algorithms.mh_power.alpha`。只归一化 reward，重要性采样的 $`p/q`$、MH 概率项和 `SequenceSample.logprob` 均保留
 真实序列 logprob 的求和语义。
 
 <a id="alg-consilience"></a>
@@ -867,7 +867,7 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 
 `thinking_mode` 取 `auto`、`enabled` 或 `disabled`。自动模式结合 `ar.prompt.chat_template_kwargs.enable_thinking`、
 提示末尾的空思考块和实际输出判断；模板预填的空思考块视为关闭思考。缺少已知格式时保留“格式未识别”状态，
-使用全序列模式。模型名称不参与判断。`sampling_scope` 取 `full` 或 `thinking`，控制 `mh`、`reward_mh` 与 `is`
+使用全序列模式。模型名称不参与判断。`sampling_scope` 取 `full` 或 `thinking`，控制 `mh`、`mh_power` 与 `is`
 的采样范围。
 
 JSON 的思考字段默认匹配 `thinking`、`reasoning`、`analysis` 或 `think`，最终内容匹配 `answer`、`content`
@@ -1075,7 +1075,7 @@ vLLM `0.26.x`、V1 model runner、无 speculative decoding。约束不满足时�
 同步幂目标 MH 的融合概率只需再设 `"asynchronous": false` 与 `"mh_fused_logprobs": true`，然后运行：
 
 ```bash
-python -m inference_scaling --algorithm mh --model ar --dataset gsm8k
+python -m inference_scaling --algorithm mh_power --model ar --dataset gsm8k
 ```
 
 Consilience 的 top-$`K`$ 统计、非单位温度采样分布和把部分概率截为零的 top-k/top-p 所需精确评分交给
@@ -1148,8 +1148,8 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 
 | 数学或执行步骤 | 主要函数 | 关键设置 | 必须核对的诊断 |
 | --- | --- | --- | --- |
-| 式 (4)、(6) 的后缀 MH | `run_mh_chain`、`run_reward_mh_chain`、`decide_metropolis_hastings` | `ar.algorithms.mh.*`、`ar.algorithms.reward_mh.*`、`rewards.<name>.temperature` | 生效的后缀分布、更新数、接受率、提议/接受后改变的 token 数 |
-| 式 (13) 的冻结历史 proposal | `FrozenReplaySuffixProposal`、`run_reward_mh_chain_replay_proposal` | `ar.algorithms.reward_mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
+| 式 (4)、(6) 的后缀 MH | `run_power_mh_chain`、`run_reward_mh_chain`、`decide_metropolis_hastings` | `ar.algorithms.mh_power.*`、`ar.algorithms.mh.*`、`rewards.<name>.temperature` | 生效的后缀分布、更新数、接受率、提议/接受后改变的 token 数 |
+| 式 (13) 的冻结历史 proposal | `FrozenReplaySuffixProposal`、`run_reward_mh_chain_replay_proposal` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
 | 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.planning = "fixed"`、`ar.algorithms.is.fixed.*` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 联合预算 | `run_joint_budget_is`、`choose_joint_budget` | `ar.algorithms.is.joint.*`、`ar.algorithms.is.chunk_adaptive.*` | `trace.steps[].plan`、计划与实际前向 token（见 [BUDGET.md](BUDGET.md#budget-usage)） |
 | 式 (10) 的 dLLM early-exit 补全 | `run_conditional_diffusion_is`、`MonteCarloRolloutWeightProvider` | `dllm.algorithms.is.{rollout_model,importance_correction,importance_log_ratio_clip}`、`dllm.model.proposal_layers` | `trace.corrected_rollouts`、`trace.clipped_rollouts`、分角色 FLOPs |
@@ -1165,7 +1165,7 @@ logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、C
 | 数据集 | [`datasets/`](../../src/inference_scaling/datasets/) | — | — | `test_datasets.py` |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、[`candidates.py`](../../src/inference_scaling/arllm/algorithms/candidates.py) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_conditional_is.py`、`dllm/test_algorithms.py` |
 | 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py`、`test_joint_budget_cost_policy.py` |
-| MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
+| MH | [`mh_power.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh_power.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh_power.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
 | 奖励 | verifier、投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
 | 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`test_score_cache.py`、`dllm/test_llada_backend.py` |
 | 输出与范围 | 分段、提示与生成上限位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | [`output.py`](../../src/inference_scaling/arllm/output.py)、[`scope.py`](../../src/inference_scaling/arllm/scope.py) | — | `test_output_segments.py`、`test_sampling_scope.py`、`test_long_scoring.py` |

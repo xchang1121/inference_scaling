@@ -111,9 +111,9 @@ AR_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}),
     ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}), ("best_of_n", "logprob", {}),
     ("best_of_n", "consilience", {}),
-    ("mh", None, {}), ("mh", None, {"sampling_scope": "thinking"}),
-    ("reward_mh", "vote", {}), ("reward_mh", "verifier", {"proposal": "frozen_history"}),
-    ("reward_mh", "logprob", {"sampling_scope": "thinking"}), ("reward_mh", "consilience", {}),
+    ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "thinking"}),
+    ("mh", "vote", {}), ("mh", "verifier", {"proposal": "frozen_history"}),
+    ("mh", "logprob", {"sampling_scope": "thinking"}), ("mh", "consilience", {}),
     ("is", "vote", {}), ("is", "verifier", {"planning": "fixed"}), ("is", "logprob", {"planning": "chunk_adaptive"}),
     ("is", "consilience", {"planning": "fixed", "sampling_scope": "thinking"}),
 ]
@@ -125,7 +125,7 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
     if "sampling_scope" in options:
         ar["output"]["sampling_scope"] = options["sampling_scope"]
     if "proposal" in options:
-        ar["algorithms"]["reward_mh"]["proposal"] = options["proposal"]
+        ar["algorithms"]["mh"]["proposal"] = options["proposal"]
     if "planning" in options:
         ar["algorithms"]["is"]["planning"] = options["planning"]
     choices = Choices(algorithm, "ar", reward, "gsm8k")

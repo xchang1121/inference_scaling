@@ -26,7 +26,7 @@ KL 正则化目标：
        {\sum_{y'}p(y'\mid x)\exp\{r(x,y')/\tau\}}.
 ```
 
-`is` 与 `reward_mh` 直接对这一分布采样；`mh` 采样幂分布 $`p(y\mid x)^\alpha`$；其余算法是生成与选择基线。
+`is` 与 `mh` 直接对这一分布采样；`mh_power` 采样幂分布 $`p(y\mid x)^\alpha`$；其余算法是生成与选择基线。
 奖励只用于打分，不回传给模型。
 
 ## 快速开始
@@ -34,15 +34,15 @@ KL 正则化目标：
 ```bash
 python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward vote --dataset gsm8k
 python -m inference_scaling --algorithm best_of_n --reward verifier
-python -m inference_scaling --algorithm mh --dataset math500
+python -m inference_scaling --algorithm mh_power --dataset math500
 python -m inference_scaling --algorithm is --model dllm --reward verifier --output results
 ```
 
 | 参数 | 取值 | 默认 |
 | --- | --- | --- |
-| `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`reward_mh`、`is` | `is` |
+| `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
 | `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
-| `--reward` | `verifier`、`vote`、`logprob`、`consilience`；只用于 `best_of_n`、`reward_mh`、`is` | `vote` |
+| `--reward` | `verifier`、`vote`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `vote` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
@@ -58,8 +58,8 @@ GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 | `greedy` | 贪心解码 | 温度 0 的分块解码 |
 | `beam` | token 级 beam search | 按轨迹概率保留的分块 beam |
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；`vote` 时取得票最多的答案 | 同左 |
-| `mh` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `reward_mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
+| `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
+| `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
 | `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 条件扩散 IS；补全来自主模型或早退 proposal（可做轨迹概率校正与截断） |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
@@ -70,7 +70,7 @@ GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 | 奖励 | 定义 | 实现 |
 | --- | --- | --- |
 | `verifier` | 外部奖励来源，即只有模型自身时拿不到的信息：数据集判定器对照参考答案（正确/错误/无答案三个取值）、Python 工厂 $`r=f(x,y)`$（如外部评分模型）或常数 | [`shared/rewards/verifier.py`](src/inference_scaling/shared/rewards/verifier.py) |
-| `vote` | `best_of_n`：候选互相投票，平票在最高票中按种子随机选；`is`/`reward_mh`：与冻结的 `pool_size` 个独立样本答案一致的比例 | [`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
+| `vote` | `best_of_n`：候选互相投票，平票在最高票中按种子随机选；`is`/`mh`：与冻结的 `pool_size` 个独立样本答案一致的比例 | [`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
 | `logprob` | 有效输出 token 的平均对数概率（AR） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
 | `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
@@ -103,8 +103,8 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
 | vLLM 引擎、前缀缓存、同步引擎上 MH 的融合概率 | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.mh_fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
-| 多尺度 MH 后缀 | `ar.algorithms.mh.suffix_schedule = "multiscale"` |
-| 冻结历史 MH proposal | `ar.algorithms.reward_mh.proposal = "frozen_history"`（dLLM 同名字段） |
+| 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
+| 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
 互相冲突的组合（如异步引擎上的融合概率）在加载模型前报错；与所选算法无关的优化不生效。
 

@@ -4,12 +4,12 @@ from math import exp, prod
 import pytest
 
 from inference_scaling.arllm.algorithms.mh import (
-    run_mh_chain,
+    run_power_mh_chain,
     run_reward_mh_chain,
     suffix_length_probabilities,
 )
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
-from inference_scaling.arllm.algorithms.config import MHConfig, RewardMHConfig
+from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.metrics import empirical_distribution, total_variation
 from inference_scaling.shared.rng import SeedStream
@@ -39,10 +39,10 @@ def _complete_target(probabilities, eos, length, weight):
 def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
     sampling = SamplingConfig(temperature=0.8)
-    explicit = MHConfig(alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3)
-    full_stage = MHConfig(alpha=2, total_length=7, block_size=7, steps_per_block=3)
-    left = run_mh_chain(backend, (), explicit, sampling, SeedStream(2))
-    right = run_mh_chain(backend, (), full_stage, sampling, SeedStream(2))
+    explicit = PowerMHConfig(alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3)
+    full_stage = PowerMHConfig(alpha=2, total_length=7, block_size=7, steps_per_block=3)
+    left = run_power_mh_chain(backend, (), explicit, sampling, SeedStream(2))
+    right = run_power_mh_chain(backend, (), full_stage, sampling, SeedStream(2))
     assert left == right
     assert left.attempts == 3
     assert {step.stage_length for step in left.trace} == {7}
@@ -55,10 +55,10 @@ def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
 
 def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
-    result = run_mh_chain(
+    result = run_power_mh_chain(
         backend,
         (),
-        MHConfig(alpha=2, total_length=5, block_size=2, steps_per_block=40),
+        PowerMHConfig(alpha=2, total_length=5, block_size=2, steps_per_block=40),
         SamplingConfig(temperature=0.8),
         SeedStream(11),
     )
@@ -99,7 +99,7 @@ def test_mh_empirical_output_approaches_enumerated_power_target(
 ) -> None:
     probabilities = (0.65, 0.35)
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    config = MHConfig(
+    config = PowerMHConfig(
         alpha=2,
         total_length=2,
         block_size=2,
@@ -107,7 +107,7 @@ def test_mh_empirical_output_approaches_enumerated_power_target(
         suffix_schedule=schedule,
     )
     outputs = [
-        run_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), SeedStream(2026), chain_id=chain)
+        run_power_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), SeedStream(2026), chain_id=chain)
         for chain in range(2500)
     ]
     empirical = empirical_distribution(result.token_ids for result in outputs)
@@ -117,10 +117,10 @@ def test_mh_empirical_output_approaches_enumerated_power_target(
 
 def test_base_proposal_at_alpha_one_accepts_every_move() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
-    result = run_mh_chain(
+    result = run_power_mh_chain(
         backend,
         (),
-        MHConfig(alpha=1, total_length=4, block_size=4, steps_per_block=20),
+        PowerMHConfig(alpha=1, total_length=4, block_size=4, steps_per_block=20),
         SamplingConfig(),
         SeedStream(3),
     )
@@ -155,10 +155,10 @@ def test_mh_reuses_reference_scores_emitted_during_proposal_generation() -> None
             raise AssertionError("cached reference scores should avoid rescoring")
 
     backend = DualScoreBackend()
-    result = run_mh_chain(
+    result = run_power_mh_chain(
         backend,
         (),
-        MHConfig(alpha=2, total_length=4, block_size=2, steps_per_block=3),
+        PowerMHConfig(alpha=2, total_length=4, block_size=2, steps_per_block=3),
         SamplingConfig(temperature=0.5),
         SeedStream(7),
     )
@@ -196,8 +196,8 @@ def test_variable_length_chains_target_complete_outputs(chain) -> None:
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
     proposal = SamplingConfig(temperature=0.7, eos_token_id=1)
     if chain == "power":
-        config = MHConfig(alpha=2, total_length=3, block_size=3, steps_per_block=12)
-        results = [run_mh_chain(backend, (), config, proposal, SeedStream(5), chain_id=index) for index in range(2000)]
+        config = PowerMHConfig(alpha=2, total_length=3, block_size=3, steps_per_block=12)
+        results = [run_power_mh_chain(backend, (), config, proposal, SeedStream(5), chain_id=index) for index in range(2000)]
         target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability**2)
     else:
         settings = RewardMHConfig(total_length=3, block_size=3, steps_per_block=12, reward_temperature=0.8)
@@ -217,10 +217,10 @@ def test_variable_length_chains_target_complete_outputs(chain) -> None:
 def test_mh_rejects_truncated_proposals(sampling) -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
     with pytest.raises(ValueError):
-        run_mh_chain(
+        run_power_mh_chain(
             backend,
             (),
-            MHConfig(total_length=2, block_size=2, steps_per_block=1),
+            PowerMHConfig(total_length=2, block_size=2, steps_per_block=1),
             sampling,
             SeedStream(0),
         )

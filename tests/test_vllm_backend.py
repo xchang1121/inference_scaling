@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.arllm.algorithms.mh import run_mh_chain
+from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
-from inference_scaling.arllm.algorithms.config import MHConfig
+from inference_scaling.arllm.algorithms.config import PowerMHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.rng import SeedStream
@@ -262,10 +262,10 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
         mh_fused_logprobs=True,
     )
 
-    result = run_mh_chain(
+    result = run_power_mh_chain(
         backend,
         (1,),
-        MHConfig(alpha=2.0, total_length=2, block_size=2, steps_per_block=1),
+        PowerMHConfig(alpha=2.0, total_length=2, block_size=2, steps_per_block=1),
         SamplingConfig(temperature=0.5),
         SeedStream(7),
     )
