@@ -54,12 +54,9 @@ def test_concurrent_sampling_is_coalesced_and_seed_stable() -> None:
 
         with ThreadPoolExecutor(max_workers=len(requests)) as executor:
             actual = list(executor.map(run, requests))
-        snapshot = batched.snapshot()
 
     assert actual == expected
     assert max(recording.sample_batch_sizes) > 1
-    assert snapshot.sample_requests == len(requests)
-    assert snapshot.maximum_sample_batch > 1
 
 
 def test_caller_sample_groups_are_not_split_to_fill_an_unrelated_batch() -> None:
@@ -164,11 +161,9 @@ def test_score_requests_are_flattened_and_split_without_reordering() -> None:
         batch_wait_seconds=0.01,
     ) as batched:
         actual = batched.score_batch(requests)
-        snapshot = batched.snapshot()
 
     assert actual == expected
-    assert snapshot.score_sequences == 12
-    assert snapshot.maximum_score_batch == 12
+    assert recording.score_batch_sizes == [12]
 
 
 def test_closed_batching_backend_rejects_new_work() -> None:
@@ -179,20 +174,3 @@ def test_closed_batching_backend_rejects_new_work() -> None:
             [GenerationRequest((), 1, SamplingConfig(), 1, "after-close")]
         )
 
-
-def test_native_continuous_backend_is_not_serialized_by_dispatcher() -> None:
-    class NativeBackend(RecordingBackend):
-        supports_native_continuous_batching = True
-
-    raw = NativeBackend()
-    batched = ContinuousBatchingBackend(raw)
-    requests = [
-        GenerationRequest((), 1, SamplingConfig(), seed, f"request-{seed}")
-        for seed in (1, 2)
-    ]
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        outputs = list(executor.map(lambda item: batched.sample_batch([item]), requests))
-    assert [group[0].request_id for group in outputs] == ["request-1", "request-2"]
-    assert raw.sample_batch_sizes == [1, 1]
-    assert batched.snapshot().sample_batches == 2
-    batched.close()

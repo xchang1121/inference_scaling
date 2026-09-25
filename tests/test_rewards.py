@@ -88,14 +88,7 @@ class _ConsilienceBackend:
         self.requests.extend(requests)
         self.confidence_top_k = confidence_top_k
         return [
-            SequenceScoreStatistics(
-                token_logprobs=tuple(-1.0 for _ in continuation),
-                mean_logprob=-1.0,
-                mean_negative_entropy=-1.0,
-                mean_self_certainty=1.0,
-                token_topk_confidences=self.trajectories[tuple(continuation)],
-                confidence_top_k=confidence_top_k,
-            )
+            SequenceScoreStatistics(self.trajectories[tuple(continuation)])
             for request in requests
             for continuation in request.continuations
         ]

@@ -313,7 +313,7 @@ def test_vllm_delegates_full_vocabulary_confidence_statistics() -> None:
     backend, _ = _backend(fallback=_Fallback())
     request = ScoreRequest((1,), ((2, 3),), SamplingConfig())
 
-    assert backend.score_statistics_batch([request]) == [{"tokens": (2, 3)}]
+    assert backend.score_statistics_batch([request], confidence_top_k=5) == [{"tokens": (2, 3)}]
     snapshot = backend.snapshot()
     assert snapshot.delegated_score_sequences == 1
     assert snapshot.score_forward_token_slots == 3

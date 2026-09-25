@@ -217,18 +217,9 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
         confidence_top_k=2,
     )[0]
 
-    assert result.token_logprobs == pytest.approx(np.log([0.5, 0.3]))
-    assert result.mean_logprob == pytest.approx(np.log([0.5, 0.3]).mean())
-    assert result.mean_negative_entropy == pytest.approx(
-        np.sum(probabilities * np.log(probabilities))
-    )
-    assert result.mean_self_certainty == pytest.approx(
-        -np.mean(np.log(len(probabilities)) + np.log(probabilities))
-    )
     assert result.token_topk_confidences == pytest.approx(
         [-np.mean(np.log([0.5, 0.3]))] * 2
     )
-    assert result.confidence_top_k == 2
     snapshot = backend.snapshot()
     assert snapshot.scored_tokens == 2
     assert snapshot.score_forward_token_slots == 3
@@ -240,7 +231,7 @@ def test_confidence_statistics_reject_truncated_support() -> None:
 
     with pytest.raises(ValueError, match="full-support"):
         backend.score_statistics_batch(
-            [ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))]
+            [ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))], confidence_top_k=2
         )
 
 

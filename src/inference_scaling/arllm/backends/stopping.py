@@ -46,7 +46,7 @@ class StoppedSequenceBackend:
     def tokenizer(self):
         return getattr(self.backend, "tokenizer")
 
-    def score_statistics_batch(self, requests, *, confidence_top_k=None):
+    def score_statistics_batch(self, requests, *, confidence_top_k):
         # Statistic spans are chosen explicitly by the reward; these remain original model statistics.
         return getattr(self.backend, "score_statistics_batch")(requests, confidence_top_k=confidence_top_k)
 

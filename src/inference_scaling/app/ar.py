@@ -33,7 +33,6 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
     run_reward_mh_chain_replay_proposal,
 )
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
-from inference_scaling.arllm.backends.cache import ScoreCachingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -128,7 +127,8 @@ class ARFamily:
         logprobs = 2 * int(self.config["num_beams"]) if self.choices.algorithm == "beam" else 0
         self.raw = load_backend(self.ar["model"], engine, seed=self.seed, logprobs=logprobs)
         self.backend = self.raw
-        if self.workers > 1:
+        # AsyncLLM schedules concurrent requests itself.
+        if self.workers > 1 and not getattr(self.raw, "supports_native_continuous_batching", False):
             batching = engine["continuous_batching"]
             self.backend = ContinuousBatchingBackend(
                 self.raw, max_batch_size=int(batching["max_batch_size"]),
@@ -329,10 +329,9 @@ class ARFamily:
     def _reference(self, task: _Task) -> Any:
         """The base policy for MH: temperature 1 denotes the task's sampling temperature."""
 
-        backend: Any = ScoreCachingBackend(task.backend)
-        if task.sampling.temperature != 1.0:
-            backend = ReferencePolicyBackend(backend, temperature=task.sampling.temperature)
-        return backend
+        if task.sampling.temperature == 1.0:
+            return task.backend
+        return ReferencePolicyBackend(task.backend, temperature=task.sampling.temperature)
 
     def _mh_power(self, task: _Task, reward: Reward | None, meter: Meter):
         config = self.config
@@ -388,7 +387,7 @@ class ARFamily:
         if config["planning"] == "fixed":
             fixed = config["fixed"]
             result: ConditionalISResult = run_conditional_is(
-                ScoreCachingBackend(task.backend), task.prompt,
+                task.backend, task.prompt,
                 ConditionalISConfig(candidate_count=int(fixed["candidate_count"]),
                                     rollout_count=int(fixed["rollout_count"]),
                                     block_size=min(int(fixed["block_size"]), task.maximum),

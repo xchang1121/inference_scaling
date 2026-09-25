@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import math
 import threading
 import warnings
 from collections import OrderedDict
@@ -55,14 +54,9 @@ class TransformersBackendSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class SequenceScoreStatistics:
-    """Reference-policy statistics for one scored continuation."""
+    """Per-token top-K confidence of one scored continuation (the Consilience statistic)."""
 
-    token_logprobs: tuple[float, ...]
-    mean_logprob: float
-    mean_negative_entropy: float
-    mean_self_certainty: float
-    token_topk_confidences: tuple[float, ...] = ()
-    confidence_top_k: int | None = None
+    token_topk_confidences: tuple[float, ...]
 
 
 class TransformersBackend:
@@ -606,17 +600,24 @@ class TransformersBackend:
             supports_logits_to_keep=self._supports_logits_to_keep,
         )
 
-    def _stream_score(
-        self, request: ScoreRequest, continuation: TokenSequence, *,
-        statistics: bool = False, confidence_top_k: int | None = None,
-    ) -> tuple[SequenceScoreStatistics, int]:
+    def _token_scores(self, logits, sampling, continuation: TokenSequence, confidence_top_k: int | None):
+        """Log-probabilities of ``continuation`` and, when asked, its top-K confidences."""
+
+        torch_module = _require_torch()
+        log_probs = self._policy_log_probs(logits, sampling)
+        targets = torch_module.tensor(continuation, dtype=torch_module.long, device=log_probs.device)
+        selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
+        confidences: list[float] = []
+        if confidence_top_k is not None:
+            top = log_probs.topk(min(confidence_top_k, log_probs.shape[-1]), dim=-1).values
+            confidences = (-top.mean(dim=-1)).cpu().tolist()
+        return [float(value) for value in selected.cpu().tolist()], [float(value) for value in confidences]
+
+    def _stream_score(self, request: ScoreRequest, continuation: TokenSequence, confidence_top_k: int | None):
         torch_module = _require_torch()
         logs: list[float] = []
-        confidence: list[float] = []
-        entropies: list[float] = []
-        certainties: list[float] = []
+        confidences: list[float] = []
         forwarded = 0
-        effective_top_k = None
 
         def count(amount: int) -> None:
             nonlocal forwarded
@@ -630,252 +631,87 @@ class TransformersBackend:
             )
             try:
                 for offset, logits in chunks:
-                    log_probs = self._policy_log_probs(logits, request.sampling)
-                    targets = torch_module.tensor(
-                        continuation[offset:offset + logits.shape[0]],
-                        dtype=torch_module.long, device=log_probs.device,
+                    chunk_logs, chunk_confidences = self._token_scores(
+                        logits, request.sampling, continuation[offset:offset + logits.shape[0]], confidence_top_k,
                     )
-                    selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
-                    logs.extend(float(v) for v in selected.cpu().tolist())
-                    if statistics:
-                        entropy = torch_module.special.xlogy(log_probs.exp(), log_probs.exp()).sum(-1)
-                        certainty = -(math.log(log_probs.shape[-1]) + log_probs).mean(-1)
-                        entropies.extend(float(v) for v in entropy.cpu().tolist())
-                        certainties.extend(float(v) for v in certainty.cpu().tolist())
-                        if confidence_top_k is not None:
-                            effective_top_k = min(confidence_top_k, log_probs.shape[-1])
-                            values = -log_probs.topk(effective_top_k, dim=-1).values.mean(-1)
-                            confidence.extend(float(v) for v in values.cpu().tolist())
-                            del values
-                        del entropy, certainty
-                    del logits, log_probs, selected, targets
+                    logs.extend(chunk_logs)
+                    confidences.extend(chunk_confidences)
+                    del logits
             finally:
                 chunks.close()
         if len(logs) != len(continuation):
             raise RuntimeError("incomplete chunked sequence score")
-        return SequenceScoreStatistics(
-            token_logprobs=tuple(logs), mean_logprob=sum(logs) / len(logs),
-            mean_negative_entropy=math.fsum(entropies) / len(logs) if statistics else 0.0,
-            mean_self_certainty=math.fsum(certainties) / len(logs) if statistics else 0.0,
-            token_topk_confidences=tuple(confidence), confidence_top_k=effective_top_k,
-        ), forwarded
+        return (tuple(logs), tuple(confidences)), forwarded
 
-    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
+    def _score_rows(
+        self, requests: Sequence[ScoreRequest], confidence_top_k: int | None,
+    ) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
+        """Token log-probabilities and (optionally) top-K confidences of every continuation."""
+
         torch_module = _require_torch()
-        flattened: list[tuple[ScoreRequest, TokenSequence]] = [
-            (request, continuation)
-            for request in requests
-            for continuation in request.continuations
-        ]
-        results: list[tuple[float, ...]] = [()] * len(flattened)
-        nonempty: list[tuple[int, ScoreRequest, TokenSequence, TokenSequence]] = []
-        score_forward_token_slots = 0
+        flattened = [(request, continuation) for request in requests for continuation in request.continuations]
+        results: list[tuple[tuple[float, ...], tuple[float, ...]]] = [((), ())] * len(flattened)
+        short: list[tuple[int, ScoreRequest, TokenSequence, TokenSequence]] = []
+        forwarded = 0
         for index, (request, continuation) in enumerate(flattened):
-            if continuation and len(self._model_prefix(request.prefix)) + len(continuation) > self.score_chunk_size:
-                scored, forwarded = self._stream_score(request, continuation)
-                results[index] = scored.token_logprobs
-                score_forward_token_slots += forwarded
-            elif continuation:
-                nonempty.append(
-                    (index, request, continuation, self._model_prefix(request.prefix))
-                )
-        if nonempty:
-            for start in range(0, len(nonempty), self.max_score_batch_size):
-                chunk = nonempty[start : start + self.max_score_batch_size]
-                sequences = [
-                    prefix + continuation for _, _, continuation, prefix in chunk
-                ]
-                input_ids, attention_mask = self._padded_inputs(sequences)
-                score_forward_token_slots += int(input_ids.numel())
-                logits_to_keep = (
-                    max(len(continuation) for _, _, continuation, _ in chunk) + 1
-                )
-                with self._model_lock, torch_module.inference_mode():
-                    outputs = self.model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        position_ids=self._position_ids(attention_mask),
-                        use_cache=False,
-                        return_dict=True,
-                        **(
-                            {"logits_to_keep": logits_to_keep}
-                            if self._supports_logits_to_keep
-                            else {}
-                        ),
-                    )
-                padded_length = input_ids.shape[1]
-                logits_start = padded_length - outputs.logits.shape[1]
-                for row, (flat_index, request, continuation, prefix) in enumerate(
-                    chunk
-                ):
-                    padding = padded_length - len(prefix) - len(continuation)
-                    predictor_positions = (
-                        torch_module.arange(
-                            padding + len(prefix) - 1,
-                            padding + len(prefix) + len(continuation) - 1,
-                            device=outputs.logits.device,
-                        )
-                        - logits_start
-                    )
-                    if int(predictor_positions.min()) < 0:
-                        raise RuntimeError(
-                            "logits_to_keep omitted a required score position"
-                        )
-                    token_logits = outputs.logits[row].index_select(
-                        0, predictor_positions
-                    )
-                    log_probs = self._policy_log_probs(token_logits, request.sampling)
-                    targets = torch_module.tensor(
-                        continuation, dtype=torch_module.long, device=log_probs.device
-                    )
-                    selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
-                    results[flat_index] = tuple(
-                        float(value) for value in selected.cpu().tolist()
-                    )
-        with self._statistics_lock:
-            self._score_calls += 1
-            self._scored_tokens += sum(
-                len(continuation) for _, continuation in flattened
-            )
-            self._score_forward_token_slots += score_forward_token_slots
-            self._estimated_dense_forward_flops += self._dense_forward_flops(
-                score_forward_token_slots
-            )
-        return results
-
-    def score_statistics_batch(
-        self,
-        requests: Sequence[ScoreRequest],
-        *,
-        confidence_top_k: int | None = None,
-    ) -> list[SequenceScoreStatistics]:
-        """Score continuations and return model-distribution statistics.
-
-        Entropy and self-certainty require a finite log-probability for every
-        vocabulary item, so this diagnostic deliberately accepts only a
-        full-support temperature policy.  The forward passes are included in
-        the same token-slot and FLOP counters as ordinary sequence scoring.
-        """
-
-        torch_module = _require_torch()
-        if confidence_top_k is not None and confidence_top_k <= 0:
-            raise ValueError("confidence_top_k must be positive")
-        flattened: list[tuple[ScoreRequest, TokenSequence]] = [
-            (request, continuation)
-            for request in requests
-            for continuation in request.continuations
-        ]
-        if any(not continuation for _, continuation in flattened):
-            raise ValueError("confidence rewards require nonempty continuations")
-        for request, _ in flattened:
-            policy = request.sampling or SamplingConfig()
-            if policy.top_p < 1 or policy.top_k is not None:
-                raise ValueError(
-                    "entropy and self-certainty require a full-support policy"
-                )
-
-        results: list[SequenceScoreStatistics | None] = [None] * len(flattened)
-        score_forward_token_slots = 0
-        indexed = [
-            (index, request, continuation, self._model_prefix(request.prefix))
-            for index, (request, continuation) in enumerate(flattened)
-        ]
-        short_indexed = []
-        for item in indexed:
-            index, request, continuation, prefix = item
+            prefix = self._model_prefix(request.prefix)
+            if not continuation:
+                continue
             if len(prefix) + len(continuation) > self.score_chunk_size:
-                results[index], forwarded = self._stream_score(
-                    request, continuation, statistics=True, confidence_top_k=confidence_top_k,
-                )
-                score_forward_token_slots += forwarded
+                results[index], used = self._stream_score(request, continuation, confidence_top_k)
+                forwarded += used
             else:
-                short_indexed.append(item)
-        indexed = short_indexed
-        for start in range(0, len(indexed), self.max_score_batch_size):
-            chunk = indexed[start : start + self.max_score_batch_size]
-            sequences = [prefix + continuation for _, _, continuation, prefix in chunk]
-            input_ids, attention_mask = self._padded_inputs(sequences)
-            score_forward_token_slots += int(input_ids.numel())
-            logits_to_keep = (
-                max(len(continuation) for _, _, continuation, _ in chunk) + 1
-            )
+                short.append((index, request, continuation, prefix))
+        for start in range(0, len(short), self.max_score_batch_size):
+            chunk = short[start : start + self.max_score_batch_size]
+            input_ids, attention_mask = self._padded_inputs([prefix + continuation for _, _, continuation, prefix in chunk])
+            forwarded += int(input_ids.numel())
+            logits_to_keep = max(len(continuation) for _, _, continuation, _ in chunk) + 1
             with self._model_lock, torch_module.inference_mode():
                 outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=self._position_ids(attention_mask),
-                    use_cache=False,
-                    return_dict=True,
-                    **(
-                        {"logits_to_keep": logits_to_keep}
-                        if self._supports_logits_to_keep
-                        else {}
-                    ),
+                    input_ids=input_ids, attention_mask=attention_mask,
+                    position_ids=self._position_ids(attention_mask), use_cache=False, return_dict=True,
+                    **({"logits_to_keep": logits_to_keep} if self._supports_logits_to_keep else {}),
                 )
-            padded_length = input_ids.shape[1]
-            logits_start = padded_length - outputs.logits.shape[1]
-            for row, (flat_index, request, continuation, prefix) in enumerate(chunk):
-                padding = padded_length - len(prefix) - len(continuation)
-                predictor_positions = (
-                    torch_module.arange(
-                        padding + len(prefix) - 1,
-                        padding + len(prefix) + len(continuation) - 1,
-                        device=outputs.logits.device,
+                # Rows are left-padded: the predictors of a continuation are the positions before its tokens.
+                end = outputs.logits.shape[1] - 1
+                for row, (index, request, continuation, _) in enumerate(chunk):
+                    if end - len(continuation) < 0:
+                        raise RuntimeError("logits_to_keep omitted a required score position")
+                    logs, confidences = self._token_scores(
+                        outputs.logits[row, end - len(continuation) : end], request.sampling, continuation,
+                        confidence_top_k,
                     )
-                    - logits_start
-                )
-                if int(predictor_positions.min()) < 0:
-                    raise RuntimeError(
-                        "logits_to_keep omitted a required score position"
-                    )
-                token_logits = outputs.logits[row].index_select(0, predictor_positions)
-                log_probs = self._policy_log_probs(token_logits, request.sampling)
-                probabilities = log_probs.exp()
-                targets = torch_module.tensor(
-                    continuation, dtype=torch_module.long, device=log_probs.device
-                )
-                selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
-                negative_entropy = (probabilities * log_probs).sum(dim=-1)
-                vocabulary_size = log_probs.shape[-1]
-                self_certainty = -(math.log(vocabulary_size) + log_probs).mean(dim=-1)
-                if confidence_top_k is None:
-                    token_topk_confidences: tuple[float, ...] = ()
-                    effective_top_k = None
-                else:
-                    effective_top_k = min(confidence_top_k, vocabulary_size)
-                    top_logprobs = torch_module.topk(
-                        log_probs,
-                        effective_top_k,
-                        dim=-1,
-                    ).values
-                    topk_confidence = -top_logprobs.mean(dim=-1)
-                    token_topk_confidences = tuple(
-                        float(value) for value in topk_confidence.cpu().tolist()
-                    )
-                token_logprobs = tuple(
-                    float(value) for value in selected.cpu().tolist()
-                )
-                results[flat_index] = SequenceScoreStatistics(
-                    token_logprobs=token_logprobs,
-                    mean_logprob=float(selected.mean().cpu()),
-                    mean_negative_entropy=float(negative_entropy.mean().cpu()),
-                    mean_self_certainty=float(self_certainty.mean().cpu()),
-                    token_topk_confidences=token_topk_confidences,
-                    confidence_top_k=effective_top_k,
-                )
-
+                    results[index] = (tuple(logs), tuple(confidences))
         with self._statistics_lock:
             self._score_calls += 1
-            self._scored_tokens += sum(
-                len(continuation) for _, continuation in flattened
-            )
-            self._score_forward_token_slots += score_forward_token_slots
-            self._estimated_dense_forward_flops += self._dense_forward_flops(
-                score_forward_token_slots
-            )
-        if any(result is None for result in results):
-            raise RuntimeError("backend returned an incomplete confidence-score batch")
-        return [result for result in results if result is not None]
+            self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
+            self._score_forward_token_slots += forwarded
+            self._estimated_dense_forward_flops += self._dense_forward_flops(forwarded)
+        return results
+
+    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
+        return [logs for logs, _ in self._score_rows(requests, None)]
+
+    def score_statistics_batch(
+        self, requests: Sequence[ScoreRequest], *, confidence_top_k: int,
+    ) -> list[SequenceScoreStatistics]:
+        """Top-K confidence trajectories of the continuations.
+
+        A truncated policy gives some of the top-K candidates probability zero,
+        so only a full-support policy is accepted. The forward passes count as
+        ordinary scoring.
+        """
+
+        if confidence_top_k <= 0:
+            raise ValueError("confidence_top_k must be positive")
+        for request in requests:
+            policy = request.sampling or SamplingConfig()
+            if policy.top_p < 1 or policy.top_k is not None:
+                raise ValueError("top-K confidence requires a full-support policy")
+            if not all(request.continuations):
+                raise ValueError("confidence rewards require nonempty continuations")
+        return [SequenceScoreStatistics(confidences) for _, confidences in self._score_rows(requests, confidence_top_k)]
 
     def snapshot(self) -> TransformersBackendSnapshot:
         with self._statistics_lock:

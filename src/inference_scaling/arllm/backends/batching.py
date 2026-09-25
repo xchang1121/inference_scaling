@@ -32,16 +32,6 @@ class _QueuedRequestGroup:
     batch_key: tuple[object, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class BatchingSnapshot:
-    sample_batches: int
-    score_batches: int
-    sample_requests: int
-    score_sequences: int
-    maximum_sample_batch: int
-    maximum_score_batch: int
-
-
 class ContinuousBatchingBackend:
     """Merge requests from concurrent prompts without changing their random streams.
 
@@ -66,30 +56,14 @@ class ContinuousBatchingBackend:
         if batch_wait_seconds < 0:
             raise ValueError("batch_wait_seconds must be non-negative")
         self._backend = backend
-        self._native_passthrough = bool(
-            getattr(backend, "supports_native_continuous_batching", False)
-        )
         self._max_batch_size = int(max_batch_size)
         self._max_batch_tokens = int(max_batch_tokens)
         self._batch_wait_seconds = float(batch_wait_seconds)
         self._queue: queue.Queue[_QueuedRequestGroup | object] = queue.Queue()
         self._state_lock = threading.Lock()
-        self._statistics_lock = threading.Lock()
         self._closed = False
-        self._sample_batches = 0
-        self._score_batches = 0
-        self._sample_requests = 0
-        self._score_sequences = 0
-        self._maximum_sample_batch = 0
-        self._maximum_score_batch = 0
-        self._worker: threading.Thread | None = None
-        if not self._native_passthrough:
-            self._worker = threading.Thread(
-                target=self._run,
-                name=f"batching-backend:{backend.model_id}",
-                daemon=True,
-            )
-            self._worker.start()
+        self._worker = threading.Thread(target=self._run, name=f"batching-backend:{backend.model_id}", daemon=True)
+        self._worker.start()
 
     @property
     def model_id(self) -> str:
@@ -123,12 +97,6 @@ class ContinuousBatchingBackend:
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         if not requests:
             return []
-        if self._native_passthrough:
-            with self._state_lock:
-                if self._closed:
-                    raise RuntimeError("continuous batching backend is closed")
-            self._record_batch("sample", len(requests))
-            return self._backend.sample_batch(requests)
         futures = [
             self._submit(
                 _QueuedRequestGroup(
@@ -150,13 +118,6 @@ class ContinuousBatchingBackend:
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         if not requests:
             return []
-        if self._native_passthrough:
-            with self._state_lock:
-                if self._closed:
-                    raise RuntimeError("continuous batching backend is closed")
-            sequence_count = sum(len(request.continuations) for request in requests)
-            self._record_batch("score", sequence_count)
-            return self._backend.score_batch(requests)
         groups = self._score_request_groups(requests)
         futures = [
             self._submit(
@@ -332,23 +293,9 @@ class ContinuousBatchingBackend:
             and token_cost + candidate.token_cost <= self._max_batch_tokens
         )
 
-    def _record_batch(self, kind: _Kind, sequence_count: int) -> None:
-        with self._statistics_lock:
-            if kind == "sample":
-                self._sample_batches += 1
-                self._sample_requests += sequence_count
-                self._maximum_sample_batch = max(
-                    self._maximum_sample_batch, sequence_count
-                )
-            else:
-                self._score_batches += 1
-                self._score_sequences += sequence_count
-                self._maximum_score_batch = max(self._maximum_score_batch, sequence_count)
-
     def _dispatch(self, batch: list[_QueuedRequestGroup]) -> None:
         kind = batch[0].kind
         sequence_count = sum(item.sequence_count for item in batch)
-        self._record_batch(kind, sequence_count)
         try:
             if kind == "sample":
                 requests = [
@@ -450,26 +397,12 @@ class ContinuousBatchingBackend:
             if stopping and not pending:
                 break
 
-    def snapshot(self) -> BatchingSnapshot:
-        with self._statistics_lock:
-            return BatchingSnapshot(
-                sample_batches=self._sample_batches,
-                score_batches=self._score_batches,
-                sample_requests=self._sample_requests,
-                score_sequences=self._score_sequences,
-                maximum_sample_batch=self._maximum_sample_batch,
-                maximum_score_batch=self._maximum_score_batch,
-            )
-
     def close(self) -> None:
         with self._state_lock:
             if self._closed:
                 return
             self._closed = True
-            if self._native_passthrough:
-                return
             self._queue.put(_STOP)
-        assert self._worker is not None
         self._worker.join()
 
     def __enter__(self) -> "ContinuousBatchingBackend":

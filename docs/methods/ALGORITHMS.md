@@ -790,8 +790,7 @@ c_t(x,y)=-\frac{1}{K}\sum_{j=1}^{K}
 \log p\!\left(v_{t,j}\mid x,y_{\lt t}\right).
 ```
 
-这里对 top-$`K`$ 项取等权平均，保留公式中的负号；采样到的单个 token 的 logprob、负熵和全词表
-自确定度分别是其他统计量。计算该分数的模型和概率策略固定（评分温度为 `rewards.consilience.score_temperature`），
+这里对 top-$`K`$ 项取等权平均，保留公式中的负号。计算该分数的模型和概率策略固定（评分温度为 `rewards.consilience.score_temperature`），
 使同一条轨迹的奖励与其来源 proposal 无关。
 
 若用于评分的思考序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
@@ -961,7 +960,6 @@ ScoreRequest(prefix, continuations, sampling)
 | rollout 请求合并 | 不同候选的异构请求组成同一次模型调用，结果按索引还原 | 省去每个候选完成后单独等待 |
 | 重复前缀 KV | 唯一前缀只执行一次预填充，再复制 KV 和末位置 logits | 增加 KV 复制；减少重复预填充 |
 | 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与基础模型概率 | on-policy IS 和 MH 省去重复评分 |
-| 评分缓存 | 以 `(policy, prefix, continuation)` 为键的定长最近最少使用（LRU）缓存 | 将确定性重复评分变为查表 |
 | 评分小批量 | `ar.engine.transformers.max_score_batch_size` 与 `logits_to_keep` | 限制长序列全词表 logits 的显存峰值 |
 
 若第 $`i`$ 个唯一前缀长 $`L_i`$、重复 $`K_i`$ 次，省去的未计填充的预填充 token 位置数为：
@@ -971,8 +969,7 @@ S_{\mathrm{saved}}=\sum_i(K_i-1)L_i.
 ```
 
 关键实现位于
-[`batching.py`](../../src/inference_scaling/arllm/backends/batching.py)、
-[`cache.py`](../../src/inference_scaling/arllm/backends/cache.py)和
+[`batching.py`](../../src/inference_scaling/arllm/backends/batching.py)和
 [`transformers_backend.py`](../../src/inference_scaling/arllm/backends/transformers_backend.py)。
 
 ### 11.3 dLLM 的分块执行
@@ -1154,7 +1151,6 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | 联合预算 | `run_joint_budget_is`、`choose_joint_budget` | `ar.algorithms.is.joint.*`、`ar.algorithms.is.chunk_adaptive.*` | `trace.steps[].plan`、计划与实际前向 token（见 [BUDGET.md](BUDGET.md#budget-usage)） |
 | 式 (10) 的 dLLM early-exit 补全 | `run_conditional_diffusion_is`、`MonteCarloRolloutWeightProvider` | `dllm.algorithms.is.{rollout_model,importance_correction,importance_log_ratio_clip}`、`dllm.model.proposal_layers` | `trace.corrected_rollouts`、`trace.clipped_rollouts`、分角色 FLOPs |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
-| 确定性重复评分缓存 | `ScoreCachingBackend` | 缓存容量、策略/前缀/补全键 | 命中数、未命中数、因容量限制删除的条目数 |
 
 logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录
 候选集合构造、$`|\mathcal Z|`$、每候选 rollout 数、调整前后 logits、归一化概率和总补全成本。
@@ -1165,9 +1161,9 @@ logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、C
 | 数据集 | [`datasets/`](../../src/inference_scaling/datasets/) | — | — | `test_datasets.py` |
 | 逐步候选与 IS 权重 | [`stepwise.py`](../../src/inference_scaling/shared/sampling/stepwise.py)、[`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、[`candidates.py`](../../src/inference_scaling/arllm/algorithms/candidates.py) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_stepwise.py`、`test_conditional_is.py`、`dllm/test_algorithms.py` |
 | 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py`、`test_joint_budget_cost_policy.py` |
-| MH | [`mh_power.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh_power.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh_power.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
+| MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
 | 奖励 | verifier、投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
-| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`test_score_cache.py`、`dllm/test_llada_backend.py` |
+| 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`dllm/test_llada_backend.py` |
 | 输出与范围 | 分段、提示与生成上限位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | [`output.py`](../../src/inference_scaling/arllm/output.py)、[`scope.py`](../../src/inference_scaling/arllm/scope.py) | — | `test_output_segments.py`、`test_sampling_scope.py`、`test_long_scoring.py` |
 | 训练对照 | 设置与校验位于 [`training/settings.py`](../../training/settings.py) | [`training/grpo.py`](../../training/grpo.py) | [`training/vrpo.py`](../../training/vrpo.py)、[`dllm/training/`](../../src/inference_scaling/dllm/training/) | `test_training.py`、`dllm/test_vrpo.py`、`dllm/test_preferences.py` |
 | 设置 | [`settings/inference.json`](../../settings/inference.json) 由 [`app/settings.py`](../../src/inference_scaling/app/settings.py) 严格校验；数值校验工具位于 [`config.py`](../../src/inference_scaling/shared/config.py) | 采样策略 [`arllm/config.py`](../../src/inference_scaling/arllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/arllm/algorithms/config.py) | 采样策略 [`dllm/config.py`](../../src/inference_scaling/dllm/config.py)；算法配置 [`algorithms/config.py`](../../src/inference_scaling/dllm/algorithms/config.py) | `test_app.py`、`test_config.py`、`dllm/test_dllm_config.py` |

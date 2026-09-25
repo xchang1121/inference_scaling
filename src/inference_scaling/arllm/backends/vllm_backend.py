@@ -274,8 +274,6 @@ class VLLMBackend:
     both settings and explicitly enables automatic prefix caching.
     """
 
-    supports_native_continuous_batching = False
-
     def __init__(
         self,
         engine: Any,
@@ -963,14 +961,12 @@ class VLLMBackend:
         self,
         requests: Sequence[ScoreRequest],
         *,
-        confidence_top_k: int | None = None,
+        confidence_top_k: int,
     ) -> list[Any]:
-        """Delegate full-vocabulary confidence statistics to the exact backend.
+        """Delegate top-K confidence statistics to the exact backend.
 
         Selected-token prompt log-probabilities are enough for IS and MH at the
-        base policy, but entropy and self-certainty require the whole vocabulary.
-        Keeping that operation explicit prevents a vLLM speed setting from
-        silently changing a confidence reward.
+        base policy, but top-K confidences need the whole next-token distribution.
         """
 
         flattened = [

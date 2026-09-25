@@ -32,9 +32,9 @@ def test_chunked_scoring_matches_complete_causal_context(family):
     expected = complete.score_statistics_batch(requests, confidence_top_k=5)
     actual = chunked.score_statistics_batch(requests, confidence_top_k=5)
     for left, right in zip(expected, actual, strict=True):
-        for name in ("token_logprobs", "mean_logprob", "mean_negative_entropy", "mean_self_certainty", "token_topk_confidences"):
-            assert getattr(right, name) == pytest.approx(getattr(left, name), abs=2e-6)
-    assert chunked.score_batch(requests) == pytest.approx([item.token_logprobs for item in actual])
+        assert right.token_topk_confidences == pytest.approx(left.token_topk_confidences, abs=2e-6)
+    for left, right in zip(complete.score_batch(requests), chunked.score_batch(requests), strict=True):
+        assert right == pytest.approx(left, abs=2e-6)
     # Long inputs are processed once, including prefix; the last target has no forward.
     assert chunked.snapshot().score_forward_token_slots == 2 * (12 + 7 + 2)
     requests = [GenerationRequest(tuple(range(1, length + 1)), 4, SamplingConfig(), 8, str(length)) for length in (11, 5)]
