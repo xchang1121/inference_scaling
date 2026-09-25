@@ -118,7 +118,8 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
 
 1. **提示与长度**：数据集按 `datasets.<name>.selection` 固定抽题，并用 `prompt_template` 生成提示；AR 再套用
    chat template（`ar.prompt`）。生成上限取 `datasets.<name>.max_new_tokens` 与模型剩余上下文（含可选的
-   `ar.engine.context_window`）的较小值；dLLM 取不超过该上限的 `dllm.sampling.block_length` 最大整数倍。
+   `ar.engine.context_window`）的较小值；dLLM 先与 `dllm.max_new_tokens` 取较小值，再取不超过它的
+   `dllm.sampling.block_length` 最大整数倍。
 2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`mh_power` 与 `is` 只对思考段采样，
    最终内容随后由基础模型生成。`vote`、`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
    `full` 并记录原因 `reward_uses_full_sequence`。
@@ -573,7 +574,8 @@ dLLM 的 `is` 对式 (7) 执行逐块 SIR。每一步从基础模型按 `dllm.sa
 `dllm.algorithms.is.decision_block_size` 须为原生扩散块长 `dllm.sampling.block_length` 的整数倍；每个候选用同一策略
 生成 $`K`$ 条完整补全，用式 (8) 估计 $`h`$，按 $`\widehat h_m/\sum_j\widehat h_j`$ 选择候选后只提交该块并丢弃补全。
 候选与补全来自同一基础策略，对数权重即 $`r/\tau`$，不需要轨迹概率。与 AR 不同，它不保留完整序列；有限
-$`M,K`$ 下是逐块 SIR 近似，$`K,M\to\infty`$ 时趋近目标。最后一块的候选已是完整输出，只有一条空补全。
+$`M,K`$ 下是逐块 SIR 近似，$`K,M\to\infty`$ 时趋近目标。生成在整块 EOS 后停止；最后一块的候选与以整块 EOS
+结束的候选已是完整输出，只有一条空补全，选中它即结束。
 
 <a id="alg-replay-mh"></a>
 ## 8. 冻结历史混合 proposal 的 MH
@@ -873,7 +875,8 @@ dLLM 适配层把“一个反向扩散块”实现为公共算法层的一次状
 
 | 机制 | dLLM 实现 | 保持的统计对象 |
 | --- | --- | --- |
-| 分块批处理 | 同一步的候选与 rollout 合并为批量模型调用，每批不超过 `dllm.engine.max_batch_size` | 每个请求的随机种子、轨迹和对数概率 |
+| 分块批处理 | 同一步的候选与 rollout 合并为批量模型调用，每批不超过 `dllm.engine.max_batch_size`；模型读取整个画布，只对当前块取 logits 并批量选位 | 每个请求的随机种子、轨迹和对数概率 |
+| 整块 EOS 停止 | 除 `beam` 与 `mh_power` 外，一行生成出整块 EOS 即结束并移出批次 | 已提交的块不再改变，停止前的输出分布不变 |
 | 已提交块续跑 | 已确定 token 进入前缀，从该状态继续生成剩余块 | 与原请求相同的条件反向过程 |
 | 轨迹记录 | 每一步提交的位置、token 与对数概率随样本返回；请求可同时要求基础温度下同一轨迹的对数概率 | MH 所需的完整正反 proposal 概率 |
 | 独立 proposal 批量生成 | 奖励 MH 的 proposal 与当前状态无关，全部 proposal 一次批量生成 | 公共 Hastings 接受核 |

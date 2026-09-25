@@ -97,9 +97,9 @@ def diffusion_decision_stage_lengths(
 class VRPOSamplingConfig:
     """Monte Carlo layout for the masked-diffusion ELBO estimator."""
 
-    timestep_samples: int = 8
-    masks_per_timestep: int = 1
-    antithetic: bool = True
+    timestep_samples: int
+    masks_per_timestep: int
+    antithetic: bool
 
     def __post_init__(self) -> None:
         require_positive("timestep_samples", self.timestep_samples)

@@ -37,7 +37,7 @@
 | `selection.count` | 整数或 `null` | 在推理前按种子抽取的题数（保持数据集顺序）；`null` 为全部 |
 | `selection.seed` | 整数 | 抽题种子 |
 | `prompt_template` | 字符串 | 用户消息模板，`{question}` 恰好出现一次；其余字符（包括 LaTeX 花括号）原样保留 |
-| `max_new_tokens` | 整数 | 每条输出的生成上限（AR 还受上下文长度约束；dLLM 取不超过它的块长整数倍） |
+| `max_new_tokens` | 整数 | 每条输出的生成上限（AR 还受上下文长度约束；dLLM 还受 `dllm.max_new_tokens` 约束并取块长整数倍） |
 
 评测取最终答案文本中的数值（`####`、`\boxed{}`、“answer is”，否则最后一个数），与参考值按分数比较。
 
@@ -158,6 +158,7 @@
 | `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
+| `max_new_tokens` | 整数 | dLLM 输出上限，与数据集的 `max_new_tokens` 取较小值 |
 | `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`） |
 | `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |

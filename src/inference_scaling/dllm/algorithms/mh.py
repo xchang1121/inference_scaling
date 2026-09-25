@@ -30,6 +30,7 @@ def _mh_requests(
             sampling=sampling,
             seed=seeds.derive("dllm-mh", draw),
             request_id=f"dllm-mh:draw:{draw}",
+            stop_at_eos=True,
         )
         for draw in range(config.updates + 1)
     ]

@@ -36,12 +36,12 @@ def test_optimal_vrpo_layout_spends_one_mask_per_timestep():
 
     assert len(plan.samples) == 8
     assert [sample.timestep_index for sample in plan.samples] == list(range(8))
-    assert all(1 <= sample.mask_count <= 7 for sample in plan.samples)
+    assert all(1 <= len(sample.positions) <= 7 for sample in plan.samples)
 
 
 def test_uniform_model_elbo_is_independent_of_mask_count():
     model = UniformMaskedModel()
-    config = VRPOSamplingConfig(timestep_samples=7, masks_per_timestep=1)
+    config = VRPOSamplingConfig(timestep_samples=7, masks_per_timestep=1, antithetic=True)
     plan = sample_vrpo_mask_plan(3, config, np.random.default_rng(8))
 
     estimate = estimate_masked_elbo(
@@ -55,42 +55,28 @@ def test_uniform_model_elbo_is_independent_of_mask_count():
     assert float(estimate.item()) == pytest.approx(-3 * np.log(4), abs=1e-6)
 
 
+class PositionMaskedModel(UniformMaskedModel):
+    """Logits depend on the position, so an ELBO estimate depends on its masks."""
+
+    def forward(self, token_ids):
+        batch, length = token_ids.shape
+        logits = torch.arange(length, dtype=torch.float32).view(1, -1, 1) * torch.tensor((0.3, -0.2, 0.5, 0.0))
+        return SimpleNamespace(logits=(logits + self.bias).expand(batch, -1, -1))
+
+
 def test_vrpo_antithetic_means_shared_current_reference_masks():
-    current = UniformMaskedModel()
-    reference = UniformMaskedModel()
-    estimate = estimate_vrpo_preference_loss(
-        current,
-        reference,
-        prompt=(0,),
-        chosen=(1, 1, 2),
-        rejected=(2, 0),
-        mask_token_id=3,
-        config=VRPOSamplingConfig(timestep_samples=3, masks_per_timestep=1, antithetic=True),
-        seed=9,
-    )
+    def estimate(antithetic):
+        return estimate_vrpo_preference_loss(
+            PositionMaskedModel(), PositionMaskedModel(), prompt=(0,), chosen=(1, 1, 2, 0), rejected=(2, 0, 1, 2),
+            mask_token_id=3, config=VRPOSamplingConfig(timestep_samples=4, masks_per_timestep=1, antithetic=antithetic),
+            beta=0.2, seed=3,
+        )
 
-    assert estimate.current_chosen_plan is estimate.reference_chosen_plan
-    assert estimate.current_rejected_plan is estimate.reference_rejected_plan
-    assert float(estimate.preference_score.item()) == pytest.approx(0.0, abs=1e-7)
-    assert float(estimate.loss.item()) == pytest.approx(np.log(2), abs=1e-7)
-
-
-def test_non_antithetic_vrpo_draws_independent_reference_masks():
-    current = UniformMaskedModel()
-    reference = UniformMaskedModel()
-    estimate = estimate_vrpo_preference_loss(
-        current,
-        reference,
-        prompt=(0,),
-        chosen=(1, 1, 2, 0),
-        rejected=(2, 0, 1, 2),
-        mask_token_id=3,
-        config=VRPOSamplingConfig(timestep_samples=4, masks_per_timestep=1, antithetic=False),
-        seed=3,
-    )
-
-    assert estimate.current_chosen_plan is not estimate.reference_chosen_plan
-    assert estimate.current_rejected_plan is not estimate.reference_rejected_plan
+    # Identical current and reference models differ only through their masks.
+    shared = estimate(True)
+    assert shared.preference_score.item() == 0.0
+    assert shared.loss.item() == pytest.approx(np.log(2), abs=1e-7)
+    assert estimate(False).preference_score.item() != pytest.approx(0.0)
 
 
 class TinyAdapterMaskedModel(UniformMaskedModel):
@@ -127,8 +113,8 @@ def test_shared_resident_reference_supports_vrpo_backward_and_update():
         chosen=(1, 1, 2),
         rejected=(2, 0, 0),
         mask_token_id=3,
-        config=VRPOSamplingConfig(timestep_samples=3, masks_per_timestep=1),
-        seed=19,
+        config=VRPOSamplingConfig(timestep_samples=3, masks_per_timestep=1, antithetic=True),
+        beta=0.2, seed=19,
     )
     before = current.adapter.detach().clone()
     estimate.loss.backward()
@@ -146,7 +132,7 @@ def test_vrpo_token_slot_accounting_separates_current_and_reference():
         prompt_length=5,
         chosen_length=3,
         rejected_length=2,
-        config=VRPOSamplingConfig(timestep_samples=4, masks_per_timestep=1),
+        config=VRPOSamplingConfig(timestep_samples=4, masks_per_timestep=1, antithetic=True),
     )
 
     assert slots == {"current_policy": 60, "reference_policy": 60, "total": 120}

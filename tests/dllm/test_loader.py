@@ -62,7 +62,7 @@ def test_the_adapter_wraps_the_base_model_and_keeps_the_batch_cap(monkeypatch, t
     class FakePeftModel:
         @staticmethod
         def from_pretrained(model, adapter):
-            return SimpleNamespace(eval=lambda: "aligned-model")
+            return SimpleNamespace(merge_and_unload=lambda: SimpleNamespace(eval=lambda: "aligned-model"))
 
     monkeypatch.setattr("inference_scaling.dllm.backends.loader.LLaDATransformersBackend", FakeBackend)
     monkeypatch.setitem(sys.modules, "peft", SimpleNamespace(PeftModel=FakePeftModel))

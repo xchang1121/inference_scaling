@@ -81,7 +81,10 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
                (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(records) == 2
     for record in records:
-        assert record["output"]["tokens"] == 4 and record["parseable"]
+        # Only block beam and trajectory power MH generate past a block of EOS.
+        output = record["output"]
+        assert output["tokens"] == 4 or (algorithm not in {"beam", "mh_power"} and output["ended_by_eos"])
+        assert record["parseable"]
         assert record["cost"]["forward_token_slots"] > 0
 
 

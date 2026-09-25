@@ -28,12 +28,9 @@ class TinyMaskedModel(torch.nn.Module):
         )
 
 
-class TinyTokenizer:
-    mask_token_id = 3
-
-
-def _backend(bias, name):
-    return LLaDATransformersBackend(TinyMaskedModel(bias, name), TinyTokenizer(), mask_token_id=3, max_batch_size=64)
+def _backend(bias, name, eos=None):
+    return LLaDATransformersBackend(TinyMaskedModel(bias, name), SimpleNamespace(eos_token_id=eos), mask_token_id=3,
+                                    max_batch_size=64)
 
 
 def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
@@ -63,6 +60,29 @@ def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
     assert len(result.steps) == 2
     assert all(len(candidate.token_ids) == 4 for step in result.steps for candidate in step.candidates)
     assert len(result.token_ids) == 8
+
+
+def test_conditional_is_ends_when_it_selects_a_block_of_eos():
+    sampling = DiffusionSamplingConfig(block_length=2, steps_per_block=2, temperature=1.0, remasking="random",
+                                       top_k=0, top_p=1.0, cfg_scale=0.0)
+    config = DiffusionISConfig(candidate_count=6, rollout_count=2, block_size=2, total_length=8, reward_temperature=1.0)
+    mixed = False
+    for seed in range(8):
+        # EOS (1) and 2 are equally likely, so a candidate block is all EOS with probability 1/4.
+        result = run_conditional_diffusion_is(
+            backend=_backend((-9.0, 0.0, 0.0, -2.0), "eos", eos=1), prompt=(0,), config=config, sampling=sampling,
+            reward=lambda _prompt, continuation: float(sum(continuation)), seed=seed,
+        )
+        for step in result.steps:
+            final = step.generated_length_before + 2 == config.total_length
+            for candidate in step.candidates:
+                # A finished candidate has one empty completion; the others have K non-empty ones.
+                terminal = final or candidate.token_ids == (1, 1)
+                assert [bool(item.token_ids) for item in candidate.rollouts] == ([False] if terminal else [True, True])
+            mixed |= len({len(candidate.rollouts) for candidate in step.candidates}) > 1
+        assert all(step.selected.token_ids != (1, 1) for step in result.steps[:-1])
+        assert result.steps[-1].selected.rollouts[0].reward == sum(result.token_ids)
+    assert mixed
 
 
 def test_conditional_is_rejects_decision_block_that_splits_native_block():

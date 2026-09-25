@@ -4,7 +4,8 @@ Each step draws ``candidate_count`` next blocks from the base policy, completes
 every candidate ``rollout_count`` times with the same policy and keeps one
 candidate in proportion to the mean ``exp(reward / temperature)`` of its
 completions; the completions are then discarded. With finite counts this is a
-blockwise SIR approximation of ``p(y) exp(r(y) / temperature)``.
+blockwise SIR approximation of ``p(y) exp(r(y) / temperature)``. Generation stops
+after a block of EOS; a candidate that ends there completes the sequence.
 """
 
 from __future__ import annotations
@@ -82,29 +83,33 @@ def run_conditional_diffusion_is(
             DiffusionGenerationRequest(
                 prefix=prompt + state, generation_length=length, sampling=sampling,
                 seed=seeds.derive("dllm-is", step_index, "candidate", index),
-                request_id=f"dllm-is:step:{step_index}:candidate:{index}",
+                request_id=f"dllm-is:step:{step_index}:candidate:{index}", stop_at_eos=True,
             )
             for index in range(config.candidate_count)
         ])
         if len(candidates) != config.candidate_count:
             raise RuntimeError("backend returned an invalid number of dLLM candidates")
         remaining = config.total_length - len(state) - length
-        owners = list(range(len(candidates)))
-        completions: list[TokenSequence] = [() for _ in candidates]
-        if remaining:
-            requests = [
-                DiffusionGenerationRequest(
+        terminal = [not remaining or candidate.finish_reason == "eos" for candidate in candidates]
+        # (owner, index of its rollout request); a terminal candidate has one empty completion.
+        slots: list[tuple[int, int | None]] = []
+        requests: list[DiffusionGenerationRequest] = []
+        for owner, candidate in enumerate(candidates):
+            if terminal[owner]:
+                slots.append((owner, None))
+                continue
+            for rollout in range(config.rollout_count):
+                slots.append((owner, len(requests)))
+                requests.append(DiffusionGenerationRequest(
                     prefix=prompt + state + candidate.token_ids, generation_length=remaining, sampling=sampling,
                     seed=seeds.derive("dllm-is", step_index, "rollout", owner, rollout),
-                    request_id=f"dllm-is:step:{step_index}:candidate:{owner}:rollout:{rollout}",
-                )
-                for owner, candidate in enumerate(candidates) for rollout in range(config.rollout_count)
-            ]
-            samples = backend.sample_batch(requests)
-            if len(samples) != len(requests):
-                raise RuntimeError("backend returned an invalid number of dLLM rollouts")
-            owners = [owner for owner in range(len(candidates)) for _ in range(config.rollout_count)]
-            completions = [sample.token_ids for sample in samples]
+                    request_id=f"dllm-is:step:{step_index}:candidate:{owner}:rollout:{rollout}", stop_at_eos=True,
+                ))
+        samples = backend.sample_batch(requests) if requests else []
+        if len(samples) != len(requests):
+            raise RuntimeError("backend returned an invalid number of dLLM rollouts")
+        owners = [owner for owner, _ in slots]
+        completions: list[TokenSequence] = [() if index is None else samples[index].token_ids for _, index in slots]
         sequences = [state + candidates[owner].token_ids + tokens for owner, tokens in zip(owners, completions, strict=True)]
         if reward_batch is not None:
             rewards = [float(value) for value in reward_batch(prompt, sequences)]
@@ -126,6 +131,8 @@ def run_conditional_diffusion_is(
         )
         steps.append(DiffusionConditionalISStep(len(state), evaluated, probabilities, selected))
         state += evaluated[selected].token_ids
+        if terminal[selected]:
+            break
     return DiffusionConditionalISResult(prompt, state, tuple(steps))
 
 

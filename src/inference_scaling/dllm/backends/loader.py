@@ -28,8 +28,9 @@ def load_llada_backend(model: Mapping[str, Any], engine: Mapping[str, Any]) -> L
         raise FileNotFoundError(f"the LLaDA adapter {adapter} is absent; train it first")
     from peft import PeftModel
 
+    # Merging once removes the adapter's side branches from every forward.
     return LLaDATransformersBackend(
-        PeftModel.from_pretrained(base.model, adapter).eval(),
+        PeftModel.from_pretrained(base.model, adapter).merge_and_unload().eval(),
         base.tokenizer,
         model_id=str(adapter),
         mask_token_id=base.mask_token_id,

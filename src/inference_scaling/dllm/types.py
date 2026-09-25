@@ -19,6 +19,8 @@ class DiffusionGenerationRequest:
     request_id: str
     # Also report the trajectory's log-probability at this base temperature, from the same logits.
     reference_temperature: float | None = None
+    # Stop after the first block that is entirely EOS (the rest would be padding).
+    stop_at_eos: bool = False
 
     def __post_init__(self) -> None:
         self.sampling.validate_generation_length(self.generation_length)

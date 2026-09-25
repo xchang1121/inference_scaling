@@ -150,6 +150,38 @@ def test_batch_limit_chunks_sampling_without_changing_results():
     assert limited.snapshot().forward_calls == 3
 
 
+class PromptModel(torch.nn.Module):
+    """Every position prefers EOS (1) after prompt 0 and token 2 after any other prompt."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def forward(self, token_ids):
+        self.batch_sizes.append(token_ids.shape[0])
+        preferred = (2 - (token_ids[:, :1] == 0).long()).expand_as(token_ids)
+        return SimpleNamespace(logits=torch.nn.functional.one_hot(preferred, 4).float())
+
+
+def test_stop_at_eos_ends_a_row_after_its_first_block_of_eos():
+    model = PromptModel()
+    backend = LLaDATransformersBackend(model, SimpleNamespace(eos_token_id=1), mask_token_id=3, max_batch_size=64)
+    sampling = DiffusionSamplingConfig(block_length=2, steps_per_block=1, temperature=0.0, remasking="low_confidence",
+                                       top_k=0, top_p=1.0, cfg_scale=0.0)
+    ended, running, fixed = backend.sample_batch([
+        DiffusionGenerationRequest((0,), 4, sampling, 0, "ended", stop_at_eos=True),
+        DiffusionGenerationRequest((2,), 4, sampling, 0, "running", stop_at_eos=True),
+        DiffusionGenerationRequest((0,), 4, sampling, 0, "fixed"),
+    ])
+
+    assert (ended.token_ids, ended.finish_reason) == ((1, 1), "eos")
+    assert (running.token_ids, running.finish_reason) == ((2, 2, 2, 2), "length")
+    assert (fixed.token_ids, fixed.finish_reason) == ((1, 1, 1, 1), "length")
+    # The ended row leaves the batch before the second block.
+    assert model.batch_sizes == [2, 1, 1, 1]
+    assert backend.snapshot().generated_tokens == 10
+
+
 def test_batch_limit_must_be_positive():
     with pytest.raises(ValueError, match="max_batch_size"):
         _backend(max_batch_size=0)

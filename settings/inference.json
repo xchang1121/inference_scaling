@@ -187,6 +187,7 @@
     },
     "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8},
     "prompt": {"system": "You are a helpful AI assistant."},
+    "max_new_tokens": 512,
     "sampling": {
       "block_length": 48,
       "steps_per_block": 12,

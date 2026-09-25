@@ -82,7 +82,7 @@ def preferences(settings: Mapping[str, Any]) -> None:
                 samples = backend.sample_batch([
                     DiffusionGenerationRequest(prefix=prompt, generation_length=length, sampling=sampling,
                                                seed=seeds.derive("vrpo-preference", problem.id, draw),
-                                               request_id=f"vrpo-preference:{problem.id}:{draw}")
+                                               request_id=f"vrpo-preference:{problem.id}:{draw}", stop_at_eos=True)
                     for draw in range(int(options["num_generations"]))
                 ])
                 texts = [backend.decode(sample.token_ids) for sample in samples]

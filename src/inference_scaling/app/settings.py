@@ -189,6 +189,7 @@ SCHEMA: dict[str, Any] = {
         },
         "engine": {"device": str, "dtype": str, "attn_implementation": _NULLABLE_STR, "max_batch_size": int},
         "prompt": {"system": _NULLABLE_STR},
+        "max_new_tokens": int,
         "sampling": _DLLM_SAMPLING,
         "exact_sampling": _DLLM_SAMPLING,
         "algorithms": {
