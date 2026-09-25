@@ -382,9 +382,10 @@ proposal 与目标使用同一 EOS，思考段范围内再加上思考段结束�
 切点、proposal 与接受判定的随机数都按链与更新序号派生，跳过一次更新不改变其余更新的随机数。
 
 dLLM 的 `mh_power` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
-而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点限定在完整决策块边界
-（`dllm.algorithms.mh_power.decision_block_size`），正反后缀 proposal 概率因此都可精确计算；每个阶段执行
-`updates_per_stage` 次更新。实现位于 [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)。
+而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点落在原生扩散块边界，阶段按
+`dllm.algorithms.mh_power.decision_block_size` 延长；每个阶段执行 `updates_per_stage` 次更新。proposal 逐个原生块
+生成，每块的画布只到该块为止，基础概率与 proposal 概率取自同一次前向的 logits（温度分别为基础温度与其 $`1/lpha`$），
+因此不需要再次评分，且某块记录的正反概率在以后任何切点下都仍然有效。实现位于 [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)。
 
 <a id="alg-reward-mh"></a>
 ## 5. 奖励目标后缀 MH
@@ -874,7 +875,7 @@ dLLM 适配层把“一个反向扩散块”实现为公共算法层的一次状
 | --- | --- | --- |
 | 分块批处理 | 同一步的候选与 rollout 合并为批量模型调用，每批不超过 `dllm.engine.max_batch_size` | 每个请求的随机种子、轨迹和对数概率 |
 | 已提交块续跑 | 已确定 token 进入前缀，从该状态继续生成剩余块 | 与原请求相同的条件反向过程 |
-| 轨迹记录 | 每一步提交的位置、token 与对数概率随样本返回，可在另一策略下重新评分 | MH 所需的完整正反 proposal 概率 |
+| 轨迹记录 | 每一步提交的位置、token 与对数概率随样本返回；请求可同时要求基础温度下同一轨迹的对数概率 | MH 所需的完整正反 proposal 概率 |
 | 独立 proposal 批量生成 | 奖励 MH 的 proposal 与当前状态无关，全部 proposal 一次批量生成 | 公共 Hastings 接受核 |
 
 LLaDA 批量后端位于

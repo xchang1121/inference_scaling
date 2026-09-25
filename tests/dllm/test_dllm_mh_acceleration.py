@@ -54,12 +54,6 @@ class CountingCoinBackend:
             )
         return outputs
 
-    def score_trajectories(self, requests):
-        return [
-            sum(self._logprob(token) for token in request.sample.token_ids)
-            for request in requests
-        ]
-
 
 EXACT = DiffusionSamplingConfig(
     block_length=1,

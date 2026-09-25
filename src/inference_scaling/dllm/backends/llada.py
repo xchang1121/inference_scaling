@@ -8,21 +8,19 @@ from dataclasses import dataclass
 from math import lgamma
 from threading import Lock
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import (
     DiffusionGenerationRequest,
     DiffusionSample,
     DiffusionTraceStep,
-    DiffusionTrajectoryScoreRequest,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class LLaDABackendSnapshot:
     sample_requests: int
-    score_requests: int
     forward_calls: int
     model_sequences: int
     model_token_slots: int
@@ -31,18 +29,6 @@ class LLaDABackendSnapshot:
     total_parameters: int
     active_parameters: int
     resident_parameters: int
-    sample_forward_calls: int
-    score_forward_calls: int
-    sample_model_sequences: int
-    score_model_sequences: int
-    sample_model_token_slots: int
-    score_model_token_slots: int
-    sample_elapsed_seconds: float
-    score_elapsed_seconds: float
-
-    @property
-    def estimated_active_flops(self) -> float:
-        return 2.0 * self.active_parameters * self.model_token_slots
 
 
 class LLaDATransformersBackend:
@@ -93,20 +79,11 @@ class LLaDATransformersBackend:
             raise ValueError("active_parameters must lie in (0, total_parameters]")
         self._lock = Lock()
         self._sample_requests = 0
-        self._score_requests = 0
         self._forward_calls = 0
         self._model_sequences = 0
         self._model_token_slots = 0
         self._generated_tokens = 0
         self._elapsed_seconds = 0.0
-        self._sample_forward_calls = 0
-        self._score_forward_calls = 0
-        self._sample_model_sequences = 0
-        self._score_model_sequences = 0
-        self._sample_model_token_slots = 0
-        self._score_model_token_slots = 0
-        self._sample_elapsed_seconds = 0.0
-        self._score_elapsed_seconds = 0.0
 
     @classmethod
     def from_pretrained(
@@ -189,7 +166,6 @@ class LLaDATransformersBackend:
         with self._lock:
             return LLaDABackendSnapshot(
                 sample_requests=self._sample_requests,
-                score_requests=self._score_requests,
                 forward_calls=self._forward_calls,
                 model_sequences=self._model_sequences,
                 model_token_slots=self._model_token_slots,
@@ -198,14 +174,6 @@ class LLaDATransformersBackend:
                 total_parameters=self._total_parameters,
                 active_parameters=self._active_parameters,
                 resident_parameters=self._resident_parameters,
-                sample_forward_calls=self._sample_forward_calls,
-                score_forward_calls=self._score_forward_calls,
-                sample_model_sequences=self._sample_model_sequences,
-                score_model_sequences=self._score_model_sequences,
-                sample_model_token_slots=self._sample_model_token_slots,
-                score_model_token_slots=self._score_model_token_slots,
-                sample_elapsed_seconds=self._sample_elapsed_seconds,
-                score_elapsed_seconds=self._score_elapsed_seconds,
             )
 
     def sample_batch(
@@ -215,12 +183,11 @@ class LLaDATransformersBackend:
             return []
         started = perf_counter()
         groups: dict[
-            tuple[int, int, DiffusionSamplingConfig], list[tuple[int, DiffusionGenerationRequest]]
+            tuple[int, int, DiffusionSamplingConfig, float | None], list[tuple[int, DiffusionGenerationRequest]]
         ] = defaultdict(list)
         for index, request in enumerate(requests):
-            groups[(len(request.prefix), request.generation_length, request.sampling)].append(
-                (index, request)
-            )
+            key = (len(request.prefix), request.generation_length, request.sampling, request.reference_temperature)
+            groups[key].append((index, request))
         outputs: list[DiffusionSample | None] = [None] * len(requests)
         with self._torch.inference_mode():
             for group in groups.values():
@@ -234,42 +201,9 @@ class LLaDATransformersBackend:
             self._sample_requests += len(requests)
             self._generated_tokens += sum(request.generation_length for request in requests)
             self._elapsed_seconds += elapsed
-            self._sample_elapsed_seconds += elapsed
         if any(output is None for output in outputs):
             raise RuntimeError("internal dLLM batch reordering failure")
         return [output for output in outputs if output is not None]
-
-    def score_trajectories(
-        self, requests: Sequence[DiffusionTrajectoryScoreRequest]
-    ) -> list[float]:
-        if not requests:
-            return []
-        started = perf_counter()
-        groups: dict[
-            tuple[int, int, DiffusionSamplingConfig],
-            list[tuple[int, DiffusionTrajectoryScoreRequest]],
-        ] = defaultdict(list)
-        for index, request in enumerate(requests):
-            sample = request.sample
-            groups[(len(sample.prefix), len(sample.token_ids), request.sampling)].append(
-                (index, request)
-            )
-        outputs: list[float | None] = [None] * len(requests)
-        with self._torch.inference_mode():
-            for group in groups.values():
-                for chunk in self._request_chunks(group):
-                    indices = [item[0] for item in chunk]
-                    scores = self._score_group([item[1] for item in chunk])
-                    for index, score in zip(indices, scores, strict=True):
-                        outputs[index] = score
-        elapsed = perf_counter() - started
-        with self._lock:
-            self._score_requests += len(requests)
-            self._elapsed_seconds += elapsed
-            self._score_elapsed_seconds += elapsed
-        if any(output is None for output in outputs):
-            raise RuntimeError("internal dLLM score reordering failure")
-        return [float(output) for output in outputs if output is not None]
 
     def _infer_device(self) -> Any:
         try:
@@ -314,26 +248,11 @@ class LLaDATransformersBackend:
     def _resolve_mask_token_id(self, sampling: DiffusionSamplingConfig) -> int:
         return sampling.mask_token_id if sampling.mask_token_id is not None else self._mask_token_id
 
-    def _record_forward(
-        self,
-        batch_size: int,
-        sequence_length: int,
-        *,
-        phase: Literal["sample", "score"],
-    ) -> None:
-        token_slots = batch_size * sequence_length
+    def _record_forward(self, batch_size: int, sequence_length: int) -> None:
         with self._lock:
             self._forward_calls += 1
             self._model_sequences += batch_size
-            self._model_token_slots += token_slots
-            if phase == "sample":
-                self._sample_forward_calls += 1
-                self._sample_model_sequences += batch_size
-                self._sample_model_token_slots += token_slots
-            else:
-                self._score_forward_calls += 1
-                self._score_model_sequences += batch_size
-                self._score_model_token_slots += token_slots
+            self._model_token_slots += batch_size * sequence_length
 
     def _model_logits(
         self,
@@ -342,19 +261,18 @@ class LLaDATransformersBackend:
         prompt_length: int,
         sampling: DiffusionSamplingConfig,
         mask_token_id: int,
-        phase: Literal["sample", "score"],
     ) -> Any:
         if sampling.cfg_scale > 0:
             unconditional = tokens.clone()
             unconditional[:, :prompt_length] = mask_token_id
             model_input = self._torch.cat((tokens, unconditional), dim=0)
             output = self.model(model_input)
-            self._record_forward(model_input.shape[0], model_input.shape[1], phase=phase)
+            self._record_forward(model_input.shape[0], model_input.shape[1])
             logits, unconditional_logits = self._torch.chunk(output.logits, 2, dim=0)
             logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (logits - unconditional_logits)
         else:
             output = self.model(tokens)
-            self._record_forward(tokens.shape[0], tokens.shape[1], phase=phase)
+            self._record_forward(tokens.shape[0], tokens.shape[1])
             logits = output.logits
         # A committed mask would leave the state unchanged and violate the fixed
         # transfer schedule.  The reverse policy is therefore normalized over
@@ -446,6 +364,10 @@ class LLaDATransformersBackend:
         traces: list[list[DiffusionTraceStep]] = [[] for _ in requests]
         trajectory_logprobs = [0.0 for _ in requests]
         exact = sampling.has_exact_trajectory_density
+        reference_temperature = first.reference_temperature
+        if reference_temperature is not None and not exact:
+            raise ValueError("a reference trajectory probability requires an exact diffusion policy")
+        reference_logprobs = [0.0 for _ in requests]
         schedule = self._transfer_schedule(sampling.block_length, sampling.steps_per_block)
         block_count = generation_length // sampling.block_length
 
@@ -460,11 +382,15 @@ class LLaDATransformersBackend:
                     prompt_length=prompt_length,
                     sampling=sampling,
                     mask_token_id=mask_token_id,
-                    phase="sample",
                 )
                 sampled_tokens, sampled_logprobs = self._draw_tokens(
                     logits, temperature=sampling.temperature, generators=generators
                 )
+                reference = None
+                if reference_temperature is not None:
+                    reference = self._torch.log_softmax(logits.float() / reference_temperature, dim=-1).gather(
+                        -1, sampled_tokens.unsqueeze(-1)
+                    ).squeeze(-1)
                 if sampling.remasking in {"low_confidence", "low_confidence_static"}:
                     chosen_logits = self._torch.gather(
                         logits.float(), dim=-1, index=sampled_tokens.unsqueeze(-1)
@@ -517,6 +443,10 @@ class LLaDATransformersBackend:
                             sampled_logprobs[row, selected_absolute].sum().item()
                         )
                         trajectory_logprobs[row] += step_logprob
+                        if reference is not None:
+                            reference_logprobs[row] += subset_logprob + float(
+                                reference[row, selected_absolute].sum().item()
+                            )
                     traces[row].append(
                         DiffusionTraceStep(
                             block_index=block_index,
@@ -539,102 +469,9 @@ class LLaDATransformersBackend:
                     policy_id=sampling.policy_id,
                     model_id=self.model_id,
                     request_id=request.request_id,
+                    reference_trajectory_logprob=None if reference_temperature is None else reference_logprobs[row],
                 )
             )
         return samples
-
-    def _score_group(
-        self, requests: Sequence[DiffusionTrajectoryScoreRequest]
-    ) -> list[float]:
-        first = requests[0]
-        prompt_length = len(first.sample.prefix)
-        generation_length = len(first.sample.token_ids)
-        sampling = first.sampling
-        if not sampling.has_exact_trajectory_density:
-            raise ValueError(
-                "trajectory scoring requires random or sequential remasking and positive temperature"
-            )
-        sampling.validate_generation_length(
-            generation_length,
-            prefix_length=prompt_length,
-        )
-        mask_token_id = self._resolve_mask_token_id(sampling)
-        expected_steps = sampling.total_steps(generation_length)
-        for request in requests:
-            if len(request.sample.trace) != expected_steps:
-                raise ValueError("sample trace does not match the target transition schedule")
-
-        tokens = self._torch.full(
-            (len(requests), prompt_length + generation_length),
-            mask_token_id,
-            dtype=self._torch.long,
-            device=self._device,
-        )
-        for row, request in enumerate(requests):
-            tokens[row, :prompt_length] = self._torch.tensor(
-                request.sample.prefix, dtype=self._torch.long, device=self._device
-            )
-        totals = [0.0 for _ in requests]
-
-        for trace_index in range(expected_steps):
-            logits = self._model_logits(
-                tokens,
-                prompt_length=prompt_length,
-                sampling=sampling,
-                mask_token_id=mask_token_id,
-                phase="score",
-            ).float()
-            scaled = logits / sampling.temperature
-            log_normalizers = self._torch.logsumexp(scaled, dim=-1)
-            for row, request in enumerate(requests):
-                step = request.sample.trace[trace_index]
-                expected_block = trace_index // sampling.steps_per_block
-                expected_step = trace_index % sampling.steps_per_block
-                if step.block_index != expected_block or step.step_index != expected_step:
-                    raise ValueError("sample trace steps are out of schedule order")
-                relative_start = expected_block * sampling.block_length
-                relative_end = relative_start + sampling.block_length
-                absolute_start = prompt_length + relative_start
-                absolute_end = prompt_length + relative_end
-                available = int(
-                    (tokens[row, absolute_start:absolute_end] == mask_token_id).sum().item()
-                )
-                expected_transfer = self._transfer_schedule(
-                    sampling.block_length, sampling.steps_per_block
-                )[expected_step]
-                if len(step.positions) != expected_transfer:
-                    raise ValueError("sample trace committed the wrong number of positions")
-                if any(not relative_start <= position < relative_end for position in step.positions):
-                    raise ValueError("sample trace committed a position outside its block")
-                absolute_positions = self._torch.tensor(
-                    [prompt_length + position for position in step.positions],
-                    dtype=self._torch.long,
-                    device=self._device,
-                )
-                if not bool(
-                    self._torch.all(tokens[row, absolute_positions] == mask_token_id).item()
-                ):
-                    raise ValueError("sample trace commits an already visible position")
-                selected_tokens = self._torch.tensor(
-                    step.token_ids, dtype=self._torch.long, device=self._device
-                )
-                selected_logits = scaled[row, absolute_positions, selected_tokens]
-                selected_logprobs = selected_logits - log_normalizers[
-                    row, absolute_positions
-                ]
-                subset_logprob = (
-                    self._subset_logprob(available, len(step.positions))
-                    if sampling.remasking == "random"
-                    else 0.0
-                )
-                totals[row] += subset_logprob + float(selected_logprobs.sum().item())
-                tokens[row, absolute_positions] = selected_tokens
-
-        for row, request in enumerate(requests):
-            final = tuple(int(value) for value in tokens[row, prompt_length:].tolist())
-            if final != request.sample.token_ids:
-                raise ValueError("sample trace does not reconstruct its final continuation")
-        return totals
-
 
 __all__ = ["LLaDABackendSnapshot", "LLaDATransformersBackend"]

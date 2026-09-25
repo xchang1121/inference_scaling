@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -8,10 +9,7 @@ torch = pytest.importorskip("torch")
 
 from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
-from inference_scaling.dllm.types import (
-    DiffusionGenerationRequest,
-    DiffusionTrajectoryScoreRequest,
-)
+from inference_scaling.dllm.types import DiffusionGenerationRequest
 
 
 class TinyMaskedModel(torch.nn.Module):
@@ -73,7 +71,7 @@ class TinyLayeredModel(torch.nn.Module):
         return SimpleNamespace(logits=logits)
 
 
-def test_random_remasking_trace_rescores_to_its_recorded_probability():
+def test_reference_temperature_reports_the_same_trajectory_at_the_base_temperature():
     backend = _backend()
     sampling = DiffusionSamplingConfig(
         block_length=2,
@@ -82,33 +80,25 @@ def test_random_remasking_trace_rescores_to_its_recorded_probability():
         remasking="random",
     )
     requests = [
-        DiffusionGenerationRequest((0,), 4, sampling, seed, f"sample-{seed}")
+        DiffusionGenerationRequest((0,), 4, sampling, seed, f"sample-{seed}", reference_temperature=0.8)
         for seed in (7, 11, 19)
     ]
 
     samples = backend.sample_batch(requests)
-    rescored = backend.score_trajectories(
-        [DiffusionTrajectoryScoreRequest(sample, sampling) for sample in samples]
-    )
 
-    assert [score for score in rescored] == pytest.approx(
+    assert [sample.reference_trajectory_logprob for sample in samples] == pytest.approx(
         [sample.trajectory_logprob for sample in samples], abs=1e-6
     )
     assert all(len(sample.trace) == 4 for sample in samples)
     assert all(sorted(position for step in sample.trace for position in step.positions) == [0, 1, 2, 3] for sample in samples)
     snapshot = backend.snapshot()
     assert snapshot.sample_requests == 3
-    assert snapshot.score_requests == 3
     assert snapshot.generated_tokens == 12
     assert snapshot.model_token_slots > 0
-    assert snapshot.sample_model_token_slots > 0
-    assert snapshot.score_model_token_slots > 0
-    assert snapshot.model_token_slots == (
-        snapshot.sample_model_token_slots + snapshot.score_model_token_slots
-    )
-    assert snapshot.forward_calls == (
-        snapshot.sample_forward_calls + snapshot.score_forward_calls
-    )
+    other = backend.sample_batch([
+        DiffusionGenerationRequest((0,), 2, replace(sampling, temperature=1.5), 31, "proposal", reference_temperature=0.5)
+    ])[0]
+    assert other.reference_trajectory_logprob != pytest.approx(other.trajectory_logprob)
 
 
 def test_low_confidence_generation_is_not_mislabeled_as_exact_density():
@@ -125,33 +115,8 @@ def test_low_confidence_generation_is_not_mislabeled_as_exact_density():
 
     assert sample.token_ids == (2, 2)
     assert sample.trajectory_logprob is None
-    with pytest.raises(ValueError, match="random or sequential remasking"):
-        backend.score_trajectories([DiffusionTrajectoryScoreRequest(sample, sampling)])
-
-
-def test_target_temperature_changes_the_same_trajectory_score():
-    backend = _backend()
-    proposal = DiffusionSamplingConfig(
-        block_length=2,
-        steps_per_block=2,
-        temperature=1.5,
-        remasking="random",
-    )
-    target = DiffusionSamplingConfig(
-        block_length=2,
-        steps_per_block=2,
-        temperature=0.5,
-        remasking="random",
-    )
-    sample = backend.sample_batch(
-        [DiffusionGenerationRequest((0,), 2, proposal, 31, "proposal")]
-    )[0]
-
-    target_score = backend.score_trajectories(
-        [DiffusionTrajectoryScoreRequest(sample, target)]
-    )[0]
-
-    assert target_score != pytest.approx(sample.trajectory_logprob)
+    with pytest.raises(ValueError, match="exact diffusion policy"):
+        backend.sample_batch([DiffusionGenerationRequest((0,), 2, sampling, 3, "greedy", reference_temperature=1.0)])
 
 
 def test_active_parameters_count_the_routed_share_of_moe_experts():
@@ -159,7 +124,7 @@ def test_active_parameters_count_the_routed_share_of_moe_experts():
     assert (snapshot.total_parameters, snapshot.active_parameters, snapshot.resident_parameters) == (16, 12, 16)
 
 
-def test_batch_limit_chunks_sampling_and_scoring_without_changing_results():
+def test_batch_limit_chunks_sampling_without_changing_results():
     sampling = DiffusionSamplingConfig(
         block_length=2,
         steps_per_block=1,
@@ -181,16 +146,8 @@ def test_batch_limit_chunks_sampling_and_scoring_without_changing_results():
     assert [sample.trajectory_logprob for sample in limited_samples] == pytest.approx(
         [sample.trajectory_logprob for sample in unlimited_samples]
     )
-
-    limited_scores = limited.score_trajectories(
-        [DiffusionTrajectoryScoreRequest(sample, sampling) for sample in limited_samples]
-    )
-    unlimited_scores = unlimited.score_trajectories(
-        [DiffusionTrajectoryScoreRequest(sample, sampling) for sample in unlimited_samples]
-    )
-    assert limited_scores == pytest.approx(unlimited_scores)
-    assert limited.model.batch_sizes == [2, 2, 1, 2, 2, 1]
-    assert limited.snapshot().forward_calls == 6
+    assert limited.model.batch_sizes == [2, 2, 1]
+    assert limited.snapshot().forward_calls == 3
 
 
 def test_batch_limit_must_be_positive():

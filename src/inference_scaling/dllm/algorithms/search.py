@@ -12,8 +12,6 @@ from inference_scaling.dllm.types import (
     DiffusionBackend,
     DiffusionGenerationRequest,
     DiffusionSample,
-    DiffusionTraceStep,
-    DiffusionTrajectoryScoreRequest,
 )
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
@@ -31,7 +29,6 @@ class DiffusionPowerMHStep:
     stage_length: int
     update: int
     cut: int
-    proposal: DiffusionSample
     previous_base_trajectory_logprob: float
     proposed_base_trajectory_logprob: float
     previous_proposal_trajectory_logprob: float
@@ -83,51 +80,6 @@ class DiffusionPowerMHResult:
         return sum(step.accepted for step in self.steps) / len(self.steps)
 
 
-def _split_diffusion_sample_into_blocks(
-    sample: DiffusionSample,
-    sampling: DiffusionSamplingConfig,
-) -> tuple[DiffusionSample, ...]:
-    """Turn one exact suffix sample into independently scoreable model blocks."""
-
-    _exact_logprob(sample)
-    offset = 0
-    blocks: list[DiffusionSample] = []
-    while offset < len(sample.token_ids):
-        length = sampling.block_length
-        length = min(length, len(sample.token_ids) - offset)
-        block_index = len(blocks)
-        trace = tuple(
-            DiffusionTraceStep(
-                block_index=0,
-                step_index=step.step_index,
-                positions=tuple(position - offset for position in step.positions),
-                token_ids=step.token_ids,
-                logprob=step.logprob,
-            )
-            for step in sample.trace
-            if step.block_index == block_index
-        )
-        if not trace:
-            raise RuntimeError("an exact trajectory omitted a generated diffusion block")
-        proposal_logprob = sum(float(step.logprob) for step in trace if step.logprob is not None)
-        blocks.append(
-            DiffusionSample(
-                prefix=sample.prefix + sample.token_ids[:offset],
-                token_ids=sample.token_ids[offset : offset + length],
-                trace=trace,
-                trajectory_logprob=proposal_logprob,
-                policy_id=sample.policy_id,
-                model_id=sample.model_id,
-                request_id=f"{sample.request_id}:block:{block_index}",
-                finish_reason=sample.finish_reason,
-            )
-        )
-        offset += length
-    if sum(len(block.token_ids) for block in blocks) != len(sample.token_ids):
-        raise RuntimeError("failed to partition a diffusion trajectory into blocks")
-    return tuple(blocks)
-
-
 def _sample_power_suffix(
     *,
     backend: DiffusionBackend,
@@ -135,43 +87,30 @@ def _sample_power_suffix(
     length: int,
     base_sampling: DiffusionSamplingConfig,
     proposal_sampling: DiffusionSamplingConfig,
-    seed: int,
+    seeds: SeedStream,
+    key: tuple[object, ...],
     request_id: str,
-) -> tuple[DiffusionSample, tuple[DiffusionPowerMHBlock, ...]]:
-    sampled = backend.sample_batch(
-        [
-            DiffusionGenerationRequest(
-                prefix=prefix,
-                generation_length=length,
-                sampling=proposal_sampling,
-                seed=seed,
-                request_id=request_id,
-            )
-        ]
-    )
-    if len(sampled) != 1:
-        raise RuntimeError("backend returned an invalid number of power-MH suffixes")
-    suffix = sampled[0]
-    proposal_blocks = _split_diffusion_sample_into_blocks(suffix, proposal_sampling)
-    if base_sampling.policy_id == proposal_sampling.policy_id:
-        base_scores = [float(block.trajectory_logprob) for block in proposal_blocks]
-    else:
-        base_scores = backend.score_trajectories(
-            [
-                DiffusionTrajectoryScoreRequest(block, base_sampling)
-                for block in proposal_blocks
-            ]
-        )
-    if len(base_scores) != len(proposal_blocks):
-        raise RuntimeError("backend returned an invalid number of power-MH block scores")
-    return suffix, tuple(
-        DiffusionPowerMHBlock(
-            sample=block,
-            base_trajectory_logprob=float(base_score),
-            proposal_trajectory_logprob=_exact_logprob(block),
-        )
-        for block, base_score in zip(proposal_blocks, base_scores, strict=True)
-    )
+) -> tuple[DiffusionPowerMHBlock, ...]:
+    """Draw a suffix one native block at a time.
+
+    Each block's canvas ends at the block, so its base and proposal
+    probabilities come from the same logits and stay valid when a later cut
+    regenerates the blocks after it.
+    """
+
+    blocks: list[DiffusionPowerMHBlock] = []
+    tokens: TokenSequence = ()
+    for index in range(length // proposal_sampling.block_length):
+        sample = backend.sample_batch([DiffusionGenerationRequest(
+            prefix=prefix + tokens, generation_length=proposal_sampling.block_length, sampling=proposal_sampling,
+            seed=seeds.derive(*key, index), request_id=f"{request_id}:block:{index}",
+            reference_temperature=base_sampling.temperature,
+        )])[0]
+        if sample.reference_trajectory_logprob is None:
+            raise RuntimeError("the backend omitted the base trajectory probability")
+        blocks.append(DiffusionPowerMHBlock(sample, float(sample.reference_trajectory_logprob), _exact_logprob(sample)))
+        tokens += sample.token_ids
+    return tuple(blocks)
 
 
 def run_diffusion_trajectory_power_mh(
@@ -232,13 +171,14 @@ def run_diffusion_trajectory_power_mh(
     stage_length = 0
     global_update = 0
     for stage_index, extension_length in enumerate(stage_lengths):
-        _, extension_blocks = _sample_power_suffix(
+        extension_blocks = _sample_power_suffix(
             backend=backend,
             prefix=prompt + current.token_ids,
             length=extension_length,
             base_sampling=sampling,
             proposal_sampling=proposal_sampling,
-            seed=seeds.derive("dllm-power-mh", stage_index, "extend"),
+            seeds=seeds,
+            key=("dllm-power-mh", stage_index, "extend"),
             request_id=f"dllm-power-mh:stage:{stage_index}:extend",
         )
         current = DiffusionPowerMHState(prompt, current.blocks + extension_blocks)
@@ -256,18 +196,15 @@ def run_diffusion_trajectory_power_mh(
             old_blocks = current.blocks[cut_block:]
             cut = sum(len(block.token_ids) for block in kept_blocks)
             suffix_length = stage_length - cut
-            proposal, proposed_blocks = _sample_power_suffix(
+            proposed_blocks = _sample_power_suffix(
                 backend=backend,
                 prefix=prompt + current.token_ids[:cut],
                 length=suffix_length,
                 base_sampling=sampling,
                 proposal_sampling=proposal_sampling,
-                seed=seeds.derive(
-                    "dllm-power-mh", stage_index, stage_update, "proposal"
-                ),
-                request_id=(
-                    f"dllm-power-mh:stage:{stage_index}:update:{stage_update}"
-                ),
+                seeds=seeds,
+                key=("dllm-power-mh", stage_index, stage_update, "proposal"),
+                request_id=f"dllm-power-mh:stage:{stage_index}:update:{stage_update}",
             )
             old_p = sum(block.base_trajectory_logprob for block in old_blocks)
             old_q = sum(block.proposal_trajectory_logprob for block in old_blocks)
@@ -295,7 +232,6 @@ def run_diffusion_trajectory_power_mh(
                     stage_length=stage_length,
                     update=global_update,
                     cut=cut,
-                    proposal=proposal,
                     previous_base_trajectory_logprob=old_p,
                     proposed_base_trajectory_logprob=new_p,
                     previous_proposal_trajectory_logprob=old_q,

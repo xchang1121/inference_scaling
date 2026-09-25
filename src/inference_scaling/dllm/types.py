@@ -17,6 +17,8 @@ class DiffusionGenerationRequest:
     sampling: DiffusionSamplingConfig
     seed: int
     request_id: str
+    # Also report the trajectory's log-probability at this base temperature, from the same logits.
+    reference_temperature: float | None = None
 
     def __post_init__(self) -> None:
         self.sampling.validate_generation_length(
@@ -25,6 +27,10 @@ class DiffusionGenerationRequest:
         )
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
+        if self.reference_temperature is not None and not (
+            isfinite(self.reference_temperature) and self.reference_temperature > 0
+        ):
+            raise ValueError("reference_temperature must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,8 +71,11 @@ class DiffusionSample:
     model_id: str
     request_id: str
     finish_reason: str = "length"
+    reference_trajectory_logprob: float | None = None
 
     def __post_init__(self) -> None:
+        if self.reference_trajectory_logprob is not None and not isfinite(self.reference_trajectory_logprob):
+            raise ValueError("reference_trajectory_logprob must be finite")
         seen: set[int] = set()
         for step in self.trace:
             for position, token_id in zip(step.positions, step.token_ids, strict=True):
@@ -91,16 +100,6 @@ class DiffusionSample:
             if not isclose(total, self.trajectory_logprob, rel_tol=1e-9, abs_tol=1e-9):
                 raise ValueError("trajectory_logprob must equal the sum of step log-probabilities")
 
-    @property
-    def full_sequence(self) -> TokenSequence:
-        return self.prefix + self.token_ids
-
-
-@dataclass(frozen=True, slots=True)
-class DiffusionTrajectoryScoreRequest:
-    sample: DiffusionSample
-    sampling: DiffusionSamplingConfig
-
 
 @runtime_checkable
 class DiffusionBackend(Protocol):
@@ -111,15 +110,10 @@ class DiffusionBackend(Protocol):
         self, requests: Sequence[DiffusionGenerationRequest]
     ) -> list[DiffusionSample]: ...
 
-    def score_trajectories(
-        self, requests: Sequence[DiffusionTrajectoryScoreRequest]
-    ) -> list[float]: ...
-
 
 __all__ = [
     "DiffusionBackend",
     "DiffusionGenerationRequest",
     "DiffusionSample",
     "DiffusionTraceStep",
-    "DiffusionTrajectoryScoreRequest",
 ]

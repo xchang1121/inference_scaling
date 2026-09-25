@@ -112,9 +112,6 @@ class CoinBackend:
             for request in requests
         ]
 
-    def score_trajectories(self, requests):
-        raise AssertionError("reward-only MH must not score dLLM likelihoods")
-
 
 def test_independence_mh_approaches_base_times_reward_target_without_scores():
     ones = 0

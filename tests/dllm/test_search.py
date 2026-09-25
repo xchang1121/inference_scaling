@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from math import log
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+
+torch = pytest.importorskip("torch")
 
 from inference_scaling.dllm.algorithms.search import (
     run_diffusion_block_beam,
@@ -13,6 +17,7 @@ from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
     DiffusionPowerMHConfig,
 )
+from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
 
@@ -45,12 +50,13 @@ class BinaryTrajectoryBackend:
                     policy_id=request.sampling.policy_id,
                     model_id=self.model_id,
                     request_id=request.request_id,
+                    # The binary law ignores temperature, so the base probability equals the proposal's.
+                    reference_trajectory_logprob=(
+                        None if request.reference_temperature is None else logprob * request.generation_length
+                    ),
                 )
             )
         return samples
-
-    def score_trajectories(self, requests):
-        return [float(request.sample.trajectory_logprob) for request in requests]
 
 
 EXACT = DiffusionSamplingConfig(
@@ -81,6 +87,42 @@ def test_trajectory_power_mh_sharpens_the_exact_trajectory_distribution():
 
     expected = 0.8**2 / (0.8**2 + 0.2**2)
     assert zeroes / runs == pytest.approx(expected, abs=0.025)
+
+
+class ContextModel(torch.nn.Module):
+    """Logits depend on the previous token and on how many masks the canvas holds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.table = torch.nn.Parameter(torch.tensor(
+            [[0.0, 0.6, -0.4, 0.0], [0.5, -0.3, 0.2, 0.0], [-0.2, 0.4, 0.3, 0.0], [0.1, 0.1, 0.1, 0.0]]
+        ))
+        self.config = SimpleNamespace(_name_or_path="context", mask_token_id=3)
+
+    def forward(self, token_ids):
+        previous = torch.cat([token_ids[:, :1], token_ids[:, :-1]], dim=1)
+        masks = (token_ids == 3).sum(dim=1, keepdim=True).float()
+        return SimpleNamespace(logits=self.table[previous] + 0.7 * masks[..., None] * torch.tensor([1.0, -1.0, 0.0, 0.0]))
+
+
+def test_trajectory_power_mh_targets_the_blockwise_power_of_a_context_dependent_model():
+    backend = LLaDATransformersBackend(ContextModel(), SimpleNamespace(mask_token_id=3))
+    config = DiffusionPowerMHConfig(total_length=2, decision_block_size=1, updates_per_stage=6, alpha=2.0)
+    finals = Counter(
+        run_diffusion_trajectory_power_mh(backend=backend, prompt=(0,), config=config, sampling=EXACT, seed=seed)
+        .final.token_ids
+        for seed in range(600)
+    )
+    # Each block is drawn with the canvas ending at the block, so p is a product of per-block softmaxes.
+    with torch.no_grad():
+        logits = ContextModel().table + 0.7 * torch.tensor([1.0, -1.0, 0.0, 0.0])
+        logits[:, 3] = -torch.inf
+        block = torch.log_softmax(logits, dim=-1)
+    weights = {(a, b): float(torch.exp(2.0 * (block[0, a] + block[a, b]))) for a in range(3) for b in range(3)}
+    total = sum(weights.values())
+    target = {key: value / total for key, value in weights.items()}
+    empirical = {key: finals[key] / 600 for key in target}
+    assert sum(abs(empirical[key] - target[key]) for key in target) / 2 < 0.07
 
 
 def test_block_beam_retains_width_and_accumulates_stage_probabilities():
