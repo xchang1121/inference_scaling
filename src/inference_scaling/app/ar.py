@@ -32,7 +32,6 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
     FrozenReplaySuffixProposal,
     run_reward_mh_chain_replay_proposal,
 )
-from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.cache import ScoreCachingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
@@ -54,11 +53,6 @@ from inference_scaling.shared.types import TokenSequence
 SCOPED = frozenset({"mh", "reward_mh", "is"})
 # Algorithms whose target reweights the full-support base policy.
 FULL_SUPPORT = frozenset({"mh", "reward_mh", "is"})
-
-
-def trim_eos(tokens: TokenSequence, eos: int | None) -> TokenSequence:
-    tokens = tuple(tokens)
-    return tokens[: tokens.index(eos) + 1] if eos is not None and eos in tokens else tokens
 
 
 @dataclass(frozen=True)
@@ -96,9 +90,6 @@ class ARFamily:
         sampling = self.ar["sampling"]
         if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
-        if (choices.algorithm == "is" and self.config["planning"] != "fixed"
-                and self.ar["output"]["sampling_scope"] == "thinking"):
-            raise ValueError("budgeted IS plans complete sequences; use sampling_scope = full or is.planning = fixed")
         self.raw: Any = None
         self.backend: Any = None
 
@@ -196,7 +187,7 @@ class ARFamily:
         kind, settings = self.choices.reward, self.reward_settings
         if kind is None or (kind == "vote" and self.choices.algorithm == "best_of_n"):
             return None
-        # Model rewards score through the scoped backend, which excludes stop padding.
+        # Model rewards score through the scoped backend.
         model: Any
         if kind == "logprob":
             model = SequenceLogProbabilityReward(
@@ -288,8 +279,9 @@ class ARFamily:
         return sample.token_ids, {}, None
 
     def _direct(self, task: _Task, meter: Meter, beams: int):
-        tokens = trim_eos(task.backend.direct_generate(task.prompt, max_new_tokens=task.maximum, num_beams=beams),
-                          self.eos)
+        tokens = tuple(task.backend.direct_generate(task.prompt, max_new_tokens=task.maximum, num_beams=beams))
+        # Native generate() may pad finished beams after EOS.
+        tokens = tokens[: tokens.index(self.eos) + 1] if self.eos in tokens else tokens
         # Native generate() bypasses the backend counters: charge every beam every step.
         slots = beams * (len(task.prompt) + max(0, len(tokens) - 1))
         meter.add({"generation_forward_token_slots": slots,
@@ -319,8 +311,7 @@ class ARFamily:
             if (isinstance(model, SequenceLogProbabilityReward) and model.sampling is not None
                     and model.sampling.policy_id == task.sampling.policy_id):
                 # Generation already scored every token under the same policy.
-                values = [model.from_token_logprobs(task.prompt, sample.token_ids, sample.token_logprobs)
-                          for sample in samples]
+                values = [model.from_token_logprobs(sample.token_logprobs) for sample in samples]
             elif reward.batch is not None:
                 values = [float(value) for value in reward.batch(task.prompt, sequences)]
             else:
@@ -336,12 +327,12 @@ class ARFamily:
         }, None if values is None else values[chosen]
 
     def _reference(self, task: _Task) -> Any:
-        """The base policy with absorbing EOS: MH chains keep a fixed length."""
+        """The base policy for MH: temperature 1 denotes the task's sampling temperature."""
 
         backend: Any = ScoreCachingBackend(task.backend)
         if task.sampling.temperature != 1.0:
             backend = ReferencePolicyBackend(backend, temperature=task.sampling.temperature)
-        return AbsorbingEOSBackend(backend, self.eos, absorbing_after=len(task.prompt))
+        return backend
 
     def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
         config = self.config
@@ -351,11 +342,12 @@ class ARFamily:
                      block_size=min(int(config["block_size"]), task.maximum),
                      steps_per_block=int(config["steps_per_block"]), iterations=config["iterations"],
                      suffix_schedule=str(config["suffix_schedule"])),
-            SamplingConfig(temperature=float(config["proposal_temperature"])),
+            SamplingConfig(temperature=float(config["proposal_temperature"]), eos_token_id=self.eos),
             SeedStream(task.seed),
         )
-        return trim_eos(result.token_ids, self.eos), {
-            "updates": result.attempts, "accepted": result.accepted, "acceptance_rate": result.acceptance_rate,
+        return result.token_ids, {
+            "updates": result.attempts, "skipped_updates": result.skipped, "accepted": result.accepted,
+            "acceptance_rate": result.acceptance_rate,
             "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
             "mean_accepted_token_changes": result.mean_accepted_token_changes,
         }, None
@@ -370,11 +362,12 @@ class ARFamily:
             suffix_schedule=str(config["suffix_schedule"]), iterations=config["iterations"],
         )
         trace: dict[str, Any] = {}
+        base = SamplingConfig(eos_token_id=self.eos)
         if config["proposal"] == "frozen_history":
             history = config["frozen_history"]
-            proposal = FrozenReplaySuffixProposal(reference, history_mixture=float(history["mixture"]))
+            proposal = FrozenReplaySuffixProposal(reference, history_mixture=float(history["mixture"]), sampling=base)
             samples = reference.sample_batch([
-                GenerationRequest(task.prompt, task.maximum, SamplingConfig(),
+                GenerationRequest(task.prompt, task.maximum, base,
                                   task.seeds.derive("reward_mh", task.problem.id, "history", index),
                                   f"reward-mh-history:{task.problem.id}:{index}")
                 for index in range(int(history["samples"]))
@@ -384,10 +377,10 @@ class ARFamily:
                                                               SeedStream(task.seed))
             trace["proposal_sources"] = dict(Counter(step.proposal_source for step in result.trace))
         else:
-            result = run_reward_mh_chain(reference, task.prompt, settings, SamplingConfig(), reward.point,
-                                         SeedStream(task.seed))
-        trace.update(updates=result.attempts, accepted=result.accepted, acceptance_rate=result.acceptance_rate)
-        return trim_eos(result.token_ids, self.eos), trace, float(result.reward)
+            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.point, SeedStream(task.seed))
+        trace.update(updates=result.attempts, skipped_updates=result.skipped, accepted=result.accepted,
+                     acceptance_rate=result.acceptance_rate)
+        return result.token_ids, trace, float(result.reward)
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
@@ -427,8 +420,7 @@ class ARFamily:
                      reserved_forward_tokens=joint_result.reserved_forward_tokens,
                      planned_forward_tokens_used=joint_result.actual_forward_tokens,
                      length_probe_forward_tokens=joint_result.length_probe_forward_tokens)
-        return (trim_eos(joint_result.token_ids, self.eos), trace,
-                _kept_reward(joint_result.steps[-1].evaluation))
+        return joint_result.token_ids, trace, _kept_reward(joint_result.steps[-1].evaluation)
 
 
-__all__ = ["ARFamily", "trim_eos"]
+__all__ = ["ARFamily"]

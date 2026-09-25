@@ -1,16 +1,10 @@
 from math import exp, log
-from types import SimpleNamespace
 
 import pytest
 
-from inference_scaling.arllm.backends.absorbing import AbsorbingEOSBackend
-from inference_scaling.arllm.backends.cache import ScoreCachingBackend
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.backends.transformers_backend import SequenceScoreStatistics
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
-from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
-from inference_scaling.arllm.types import ScoreRequest
 from inference_scaling.arllm.rewards.intrinsic import (
     ConsilienceReward,
     SequenceLogProbabilityReward,
@@ -42,7 +36,7 @@ def test_log_probability_reward_exposes_normalization_parameters() -> None:
         "source": "model_sequence_log_probability",
         "model_id": "tabular",
         "policy_id": sampling.policy_id,
-        "normalization": "mean_per_effective_token",
+        "normalization": "mean_per_token",
     }
 
 
@@ -77,53 +71,9 @@ def test_log_probability_reward_is_length_and_batch_order_invariant() -> None:
     assert reward.batch((), ()) == ()
 
 
-@pytest.mark.parametrize("eos_source", ["sampling", "tokenizer"])
-def test_log_probability_reward_counts_eos_but_not_padding(eos_source) -> None:
-    backend = TabularAutoregressiveBackend({}, fallback=(0.75, 0.25))
-    sampling = SamplingConfig(eos_token_id=1) if eos_source == "sampling" else None
-    if eos_source == "tokenizer":
-        backend.tokenizer = SimpleNamespace(eos_token_id=1)
-    reward = SequenceLogProbabilityReward(backend, sampling)
-    expected = (log(0.75) + log(0.25)) / 2
-    assert reward.batch((), ((0, 1), (0, 1, 1, 1))) == pytest.approx((expected, expected))
-
-
-def test_log_probability_reward_excludes_padding_after_multitoken_stop() -> None:
-    backend = StoppedSequenceBackend(
-        TabularAutoregressiveBackend({}, fallback=(0.5, 0.25, 0.25)),
-        stop_token_sequences=((0, 1),), eos_token_id=2, protected_prefix_length=1,
-    )
-    reward = SequenceLogProbabilityReward(backend)
-    expected = (log(0.5) + log(0.25)) / 2
-    assert reward.batch((2,), ((0, 1), (0, 1, 2, 2))) == pytest.approx((expected, expected))
-    assert reward((2, 0), (1, 2, 2)) == pytest.approx(log(0.25))
-    assert reward((2, 0, 1), (2, 2)) == 0.0
-    assert backend.score_batch([ScoreRequest((2,), ((0, 1, 2, 2),))]) == [
-        (log(0.5), log(0.25), 0.0, 0.0)
-    ]
-
-
 def test_log_probability_reward_counts_genuine_zero_logprobs() -> None:
-    reward = SequenceLogProbabilityReward(TabularAutoregressiveBackend({}, fallback=(0.5, 0.5)))
-    assert reward.from_token_logprobs((), (0, 1), (-2.0, 0.0)) == -1.0
-    with pytest.raises(RuntimeError, match="token score shape"):
-        reward.from_token_logprobs((), (0, 1), (-2.0,))
-
-
-@pytest.mark.parametrize("nested_absorbing", [False, True])
-def test_log_probability_reward_preserves_stop_length_through_wrappers(nested_absorbing) -> None:
-    stopped = StoppedSequenceBackend(
-        TabularAutoregressiveBackend({}, fallback=(0.5, 0.25, 0.25)),
-        stop_token_sequences=((0, 1),), eos_token_id=2, protected_prefix_length=1,
-    )
-    backend = ScoreCachingBackend(stopped)
-    if nested_absorbing:
-        backend = AbsorbingEOSBackend(
-            ReferencePolicyBackend(backend, temperature=1.0), 2, absorbing_after=1,
-        )
-    reward = SequenceLogProbabilityReward(backend)
-    expected = (log(0.5) + log(0.25)) / 2
-    assert reward.batch((2,), ((0, 1), (0, 1, 2, 2))) == pytest.approx((expected, expected))
+    assert SequenceLogProbabilityReward.from_token_logprobs((-2.0, 0.0)) == -1.0
+    assert SequenceLogProbabilityReward.from_token_logprobs(()) == 0.0
 
 
 class _ConsilienceBackend:

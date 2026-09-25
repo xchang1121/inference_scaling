@@ -5,7 +5,8 @@ sequence.  Each step cuts the kept sequence at the next block boundary.
 Candidate 0 is the kept sequence's next block, and the rest of the kept
 sequence counts as one of that candidate's completions; the other candidates,
 and the other completions of candidate 0, are fresh base-policy samples.  Every
-completion runs to EOS or the length limit and is scored as a complete sequence.
+completion runs until it stops (at EOS or a scope boundary) or reaches the
+length limit, and is scored as a complete sequence.
 A candidate is selected with probability proportional to the mean
 ``exp(r / tau)`` of its completions, and one of its completions is kept with
 probability proportional to its own weight, so a step selects a whole suffix in
@@ -122,21 +123,14 @@ def estimate_conditional_weights(
     requests: list[GenerationRequest] = []
     request_candidates: list[int] = []
     terminal_candidates: set[int] = set()
-    eos = sampling.eos_token_id
     retained_tokens = None if retained is None else retained.token_ids
 
     for candidate_index, candidate in enumerate(candidates):
-        terminal = rollout_length == 0 or (
-            eos is not None and candidate.token_ids[-1] == eos
-        )
         kept = retained_tokens is not None and candidate_index == 0
-        if kept and retained_tokens and terminal:
-            raise ValueError("a retained completion cannot follow a terminal block")
         if kept and not retained_tokens:
-            # The kept sequence ends with this block: at EOS, the length limit
-            # or a stop sequence of a scoped backend.
+            # The kept sequence ends with this block.
             continue
-        if terminal:
+        if rollout_length == 0 or candidate.finish_reason != "length":
             terminal_candidates.add(candidate_index)
             continue
         rollout_prefix = prompt + generated_prefix + candidate.token_ids
@@ -290,17 +284,16 @@ class ConditionalISAdapter:
         proposals: list[SequenceSample] = []
         if state.token_ids:
             end = state.fixed + length
-            block = state.token_ids[state.fixed : end]
-            eos = self.sampling.eos_token_id
             proposals.append(
                 SequenceSample(
                     prefix=prefix,
-                    token_ids=block,
+                    token_ids=state.token_ids[state.fixed : end],
                     token_logprobs=state.token_logprobs[state.fixed : end],
                     policy_id=self.sampling.policy_id,
                     model_id=self.backend.model_id,
                     request_id=f"conditional-is:step:{step_index}:retained",
-                    finish_reason="eos" if eos is not None and block[-1] == eos else "length",
+                    # The kept sequence either continues after the block or ends with it.
+                    finish_reason="length" if end < len(state.token_ids) else "stop",
                 )
             )
         fresh = self.config.candidate_count - len(proposals)
@@ -388,11 +381,6 @@ class ConditionalISAdapter:
         )
         if len(token_logprobs) != len(token_ids):
             raise RuntimeError("kept sequence lost token log-probabilities")
-        eos = self.sampling.eos_token_id
-        if eos is not None and eos in token_ids:
-            # Absorbing backends pad after EOS; the kept sequence ends at EOS.
-            end = token_ids.index(eos) + 1
-            token_ids, token_logprobs = token_ids[:end], token_logprobs[:end]
         return RetainedSequence(
             token_ids,
             token_logprobs,

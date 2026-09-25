@@ -165,10 +165,13 @@ def test_concurrent_problems_share_a_batching_backend_without_per_problem_cost(a
     assert all(json.loads(line)["cost"] is None for line in records)
 
 
-def test_budgeted_is_rejects_the_thinking_scope(ar_settings, tmp_path):
+def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):
     ar_settings["ar"]["output"]["sampling_scope"] = "thinking"
-    with pytest.raises(ValueError, match="budgeted IS plans complete sequences"):
-        run(Choices("is", "ar", "vote", "gsm8k"), ar_settings, tmp_path / "results")
+    summary = run(Choices("is", "ar", "logprob", "gsm8k"), ar_settings, tmp_path / "results")
+    record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert record["output"]["sampling_scope"] == "thinking" and record["correct"]
+    # The kept thought ends at its closing boundary, not at EOS or the length limit.
+    assert record["trace"]["stopping_reason"] == "stop"
 
 
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):

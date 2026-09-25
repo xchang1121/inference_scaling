@@ -71,11 +71,10 @@ class SamplingScope:
         assert self.thinking_format is not None
         eos = getattr(backend.tokenizer, "eos_token_id", None)
         if eos is None:
-            raise ValueError("thinking sampling requires an EOS padding token")
+            raise ValueError("thinking sampling requires an EOS token")
         return StoppedSequenceBackend(
-            backend, stop_token_sequences=(), thinking_parser=self.thinking_format, thinking_prompt=prompt,
-            eos_token_id=eos, protected_prefix_length=len(prompt),
-            generation_chunk_size=self.generation_chunk_size,
+            backend, thinking_parser=self.thinking_format, thinking_prompt=prompt,
+            eos_token_id=eos, generation_chunk_size=self.generation_chunk_size,
         )
 
     def finish(

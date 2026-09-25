@@ -1,12 +1,15 @@
-"""Suffix-resampling Metropolis--Hastings for sequence power targets.
+"""Suffix-resampling Metropolis--Hastings over complete outputs.
 
-For a fixed generated length ``L``, the target is proportional to
-``p_base(x | prompt) ** alpha``.  A move draws a suffix length from a configured
-full-support schedule, retains the corresponding prefix, regenerates the suffix
-from an autoregressive proposal, and uses the full forward/reverse proposal
-correction.  The implementation caches per-token
-base and proposal log-probabilities for the current state; this is an
-algorithmic reproduction, not the later paged-KV runtime optimization.
+A state is one complete output: generation stops at EOS (or at a scope
+boundary) or at the stage's length limit ``T``. A move draws a cut position
+from a full-support distribution over the ``T`` positions of the stage, keeps
+the prefix before it, regenerates the suffix from an autoregressive proposal
+until it stops or reaches ``T``, and applies the full forward/reverse proposal
+correction. The cut distribution does not depend on the state, so it cancels
+in the Hastings ratio. A cut at or after the end of a stopped output would
+regenerate an empty suffix; that move leaves the state unchanged and is
+skipped without a model call. Per-token base and proposal log-probabilities of
+the current state are cached.
 """
 
 from __future__ import annotations
@@ -51,6 +54,8 @@ class MHChainResult:
     proposal_token_logprobs: tuple[float, ...]
     trace: tuple[MHStep, ...]
     chain_id: int
+    # Cuts past the end of a stopped output: no proposal, state unchanged.
+    skipped: int = 0
 
     @property
     def attempts(self) -> int:
@@ -113,6 +118,8 @@ class RewardMHChainResult:
     proposal_token_logprobs: tuple[float, ...]
     trace: tuple[RewardMHStep, ...]
     chain_id: int
+    # Cuts past the end of a stopped output: no proposal, state unchanged.
+    skipped: int = 0
 
     @property
     def attempts(self) -> int:
@@ -205,8 +212,6 @@ def _draw_suffix(
 
 
 def _validate_proposal(sampling: SamplingConfig) -> None:
-    if sampling.eos_token_id is not None:
-        raise ValueError("fixed-length MH treats every position as a token; eos_token_id must be None")
     if sampling.top_k is not None or sampling.top_p < 1:
         raise ValueError(
             "hard top-k/top-p truncation normally violates MH's equal-support condition; "
@@ -230,7 +235,16 @@ def _score_one(
     return scored[0]
 
 
-def _sample_exact_length(
+@dataclass(frozen=True, slots=True)
+class _Suffix:
+    token_ids: TokenSequence
+    proposal_logprobs: tuple[float, ...]
+    base_logprobs: tuple[float, ...]
+    # Ended at EOS or a scope boundary rather than at the length limit.
+    stopped: bool
+
+
+def _sample_suffix(
     backend: AutoregressiveBackend,
     *,
     prefix: TokenSequence,
@@ -238,23 +252,35 @@ def _sample_exact_length(
     sampling: SamplingConfig,
     seed: int,
     request_id: str,
-) -> tuple[TokenSequence, tuple[float, ...], tuple[float, ...] | None]:
-    sample = backend.sample_batch(
-        [GenerationRequest(prefix, length, sampling, seed, request_id)]
-    )[0]
-    if len(sample.token_ids) != length:
+) -> _Suffix:
+    """Generate up to ``length`` tokens with their proposal and base log-probabilities."""
+
+    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id)])[0]
+    stopped = sample.finish_reason != "length"
+    if not 0 < len(sample.token_ids) <= length or (len(sample.token_ids) < length and not stopped):
         raise RuntimeError(
-            f"MH requires a fixed-length suffix of {length} tokens, "
-            f"but backend returned {len(sample.token_ids)}"
+            f"backend returned a suffix of {len(sample.token_ids)} tokens for a limit of {length}"
         )
     if sample.policy_id != sampling.policy_id:
         raise RuntimeError("backend did not score tokens under the requested proposal policy")
     if any(not isfinite(value) for value in sample.token_logprobs):
         raise RuntimeError("a sampled proposal token must have finite proposal log-probability")
-    cached_base = None
-    if sample.reference_policy_id == SamplingConfig().policy_id:
-        cached_base = sample.reference_token_logprobs
-    return sample.token_ids, sample.token_logprobs, cached_base
+    base = SamplingConfig(eos_token_id=sampling.eos_token_id)
+    if _is_base_proposal(sampling):
+        base_logs = sample.token_logprobs
+    elif sample.reference_policy_id == base.policy_id and sample.reference_token_logprobs is not None:
+        base_logs = sample.reference_token_logprobs
+    else:
+        base_logs = _score_one(backend, prefix, sample.token_ids, base)
+    if any(not isfinite(value) for value in base_logs):
+        raise ValueError("proposal generated a sequence outside the base model support")
+    return _Suffix(sample.token_ids, sample.token_logprobs, tuple(base_logs), stopped)
+
+
+def _token_changes(old: TokenSequence, new: TokenSequence) -> int:
+    """Positions where two suffixes differ, counting the longer one's extra tokens."""
+
+    return sum(left != right for left, right in zip(old, new)) + abs(len(old) - len(new))
 
 
 def run_mh_chain(
@@ -266,106 +292,65 @@ def run_mh_chain(
     *,
     chain_id: int = 0,
 ) -> MHChainResult:
-    """Run the staged MH algorithm from the article for one independent chain."""
+    """Run the staged power-target MH for one chain.
+
+    Stage ``k`` targets ``p(y)**alpha`` over outputs of at most ``T_k`` tokens;
+    an output that stopped earlier is complete and later stages do not extend it.
+    """
 
     _validate_proposal(proposal)
-    tokens: list[int] = []
-    base_logs: list[float] = []
-    proposal_logs: list[float] = []
+    tokens: TokenSequence = ()
+    base_logs: tuple[float, ...] = ()
+    proposal_logs: tuple[float, ...] = ()
+    stopped = False
     trace: list[MHStep] = []
-
-    for stage_index, stage_length in enumerate(
-        config.stages
-    ):
-        extension_length = stage_length - len(tokens)
-        if extension_length > 0:
-            extension_prefix = prompt + tuple(tokens)
-            extension, extension_q, extension_cached_p = _sample_exact_length(
-                backend,
-                prefix=extension_prefix,
-                length=extension_length,
-                sampling=proposal,
+    skipped = 0
+    for stage_index, stage_length in enumerate(config.stages):
+        if not stopped and len(tokens) < stage_length:
+            extension = _sample_suffix(
+                backend, prefix=prompt + tokens, length=stage_length - len(tokens), sampling=proposal,
                 seed=seeds.derive("mh", chain_id, stage_index, "extend"),
                 request_id=f"mh:{chain_id}:stage:{stage_index}:extend",
             )
-            extension_p = extension_cached_p or _score_one(
-                backend, extension_prefix, extension, None
-            )
-            if any(not isfinite(value) for value in extension_p):
-                raise ValueError("proposal generated a sequence outside the base model support")
-            tokens.extend(extension)
-            base_logs.extend(extension_p)
-            proposal_logs.extend(extension_q)
-
+            tokens += extension.token_ids
+            base_logs += extension.base_logprobs
+            proposal_logs += extension.proposal_logprobs
+            stopped = extension.stopped
         for step_index in range(config.stage_updates):
-            cut_rng = seeds.generator("mh", chain_id, stage_index, step_index, "cut")
-            cut, suffix_length, suffix_probability = _draw_suffix(
+            cut, _, suffix_probability = _draw_suffix(
                 stage_length=stage_length,
                 schedule=config.suffix_schedule,
-                rng=cut_rng,
+                rng=seeds.generator("mh", chain_id, stage_index, step_index, "cut"),
             )
-            shared_prefix = prompt + tuple(tokens[:cut])
-            proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
-                backend,
-                prefix=shared_prefix,
-                length=suffix_length,
-                sampling=proposal,
+            if cut >= len(tokens):
+                skipped += 1
+                continue
+            suffix = _sample_suffix(
+                backend, prefix=prompt + tokens[:cut], length=stage_length - cut, sampling=proposal,
                 seed=seeds.derive("mh", chain_id, stage_index, step_index, "proposal"),
                 request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}",
             )
-            proposed_p = proposed_cached_p or _score_one(
-                backend, shared_prefix, proposed_tokens, None
-            )
-            if any(not isfinite(value) for value in proposed_p):
-                raise ValueError("proposal generated a sequence outside the base model support")
-
-            old_p = float(sum(base_logs[cut:stage_length]))
-            old_q = float(sum(proposal_logs[cut:stage_length]))
-            new_p = float(sum(proposed_p))
-            new_q = float(sum(proposed_q))
-            accept_rng = seeds.generator("mh", chain_id, stage_index, step_index, "accept")
             decision = decide_metropolis_hastings(
-                current_target_log_density=config.alpha * old_p,
-                proposed_target_log_density=config.alpha * new_p,
-                forward_proposal_log_probability=new_q,
-                reverse_proposal_log_probability=old_q,
-                uniform=float(accept_rng.random()),
+                current_target_log_density=config.alpha * float(sum(base_logs[cut:])),
+                proposed_target_log_density=config.alpha * float(sum(suffix.base_logprobs)),
+                forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
+                reverse_proposal_log_probability=float(sum(proposal_logs[cut:])),
+                uniform=float(seeds.generator("mh", chain_id, stage_index, step_index, "accept").random()),
             )
-            log_acceptance = decision.log_acceptance
-            accepted = decision.accepted
-            proposed_token_changes = sum(
-                old != new
-                for old, new in zip(
-                    tokens[cut:stage_length], proposed_tokens, strict=True
-                )
-            )
-            if accepted:
-                tokens[cut:stage_length] = proposed_tokens
-                base_logs[cut:stage_length] = proposed_p
-                proposal_logs[cut:stage_length] = proposed_q
-            trace.append(
-                MHStep(
-                    stage_length=stage_length,
-                    step=step_index,
-                    cut=cut,
-                    proposed_suffix_length=suffix_length,
-                    log_acceptance=log_acceptance,
-                    accepted=accepted,
-                    suffix_schedule=config.suffix_schedule,
-                    suffix_probability=suffix_probability,
-                    proposed_token_changes=proposed_token_changes,
-                    accepted_token_changes=(proposed_token_changes if accepted else 0),
-                )
-            )
-
-    return MHChainResult(
-        prompt=prompt,
-        token_ids=tuple(tokens),
-        base_token_logprobs=tuple(base_logs),
-        proposal_token_logprobs=tuple(proposal_logs),
-        trace=tuple(trace),
-        chain_id=chain_id,
-    )
+            changes = _token_changes(tokens[cut:], suffix.token_ids)
+            if decision.accepted:
+                tokens = tokens[:cut] + suffix.token_ids
+                base_logs = base_logs[:cut] + suffix.base_logprobs
+                proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
+                stopped = suffix.stopped
+            trace.append(MHStep(
+                stage_length=stage_length, step=step_index, cut=cut,
+                proposed_suffix_length=len(suffix.token_ids), log_acceptance=decision.log_acceptance,
+                accepted=decision.accepted, suffix_schedule=config.suffix_schedule,
+                suffix_probability=suffix_probability, proposed_token_changes=changes,
+                accepted_token_changes=changes if decision.accepted else 0,
+            ))
+    return MHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 
 
 def run_reward_mh_chain(
@@ -380,107 +365,62 @@ def run_reward_mh_chain(
 ) -> RewardMHChainResult:
     """Sample ``p_base(x) exp(reward(x) / temperature)`` with suffix MH.
 
-    The chain is initialized at full length and every update draws one of all
-    suffix starts uniformly.  For a base-model proposal the likelihood terms
-    cancel, leaving only the reward difference; the expanded ratio below also
-    remains correct for any full-support temperature proposal.
+    The chain starts from one complete output and every update draws a cut over
+    all ``total_length`` positions. For a base-model proposal the likelihood
+    terms cancel, leaving only the reward difference; the expanded ratio below
+    also remains correct for any full-support temperature proposal.
     """
 
     _validate_proposal(proposal)
-    tokens, proposal_logs, cached_base_logs = _sample_exact_length(
-        backend,
-        prefix=prompt,
-        length=config.total_length,
-        sampling=proposal,
-        seed=seeds.derive("reward_mh", chain_id, "initialize"),
-        request_id=f"reward-mh:{chain_id}:initialize",
+    initial = _sample_suffix(
+        backend, prefix=prompt, length=config.total_length, sampling=proposal,
+        seed=seeds.derive("reward_mh", chain_id, "initialize"), request_id=f"reward-mh:{chain_id}:initialize",
     )
-    base_logs = (
-        proposal_logs
-        if _is_base_proposal(proposal)
-        else cached_base_logs or _score_one(backend, prompt, tokens, None)
-    )
-    if any(not isfinite(value) for value in base_logs):
-        raise ValueError("proposal generated a sequence outside the base model support")
+    tokens, base_logs, proposal_logs = initial.token_ids, initial.base_logprobs, initial.proposal_logprobs
     current_reward = float(reward(prompt, tokens))
     if not isfinite(current_reward):
         raise ValueError("reward must be finite")
-    mutable_tokens = list(tokens)
-    mutable_base_logs = list(base_logs)
-    mutable_proposal_logs = list(proposal_logs)
     trace: list[RewardMHStep] = []
-
+    skipped = 0
     for step_index in range(config.updates):
-        cut, suffix_length, suffix_probability = _draw_suffix(
+        cut, _, suffix_probability = _draw_suffix(
             stage_length=config.total_length,
             schedule=config.suffix_schedule,
             rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
         )
-        shared_prefix = prompt + tuple(mutable_tokens[:cut])
-        proposed_tokens, proposed_q, proposed_cached_p = _sample_exact_length(
-            backend,
-            prefix=shared_prefix,
-            length=suffix_length,
-            sampling=proposal,
+        if cut >= len(tokens):
+            skipped += 1
+            continue
+        suffix = _sample_suffix(
+            backend, prefix=prompt + tokens[:cut], length=config.total_length - cut, sampling=proposal,
             seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
             request_id=f"reward-mh:{chain_id}:step:{step_index}",
         )
-        proposed_p = (
-            proposed_q
-            if _is_base_proposal(proposal)
-            else proposed_cached_p
-            or _score_one(backend, shared_prefix, proposed_tokens, None)
-        )
-        if any(not isfinite(value) for value in proposed_p):
-            raise ValueError("proposal generated a sequence outside the base model support")
-        proposed_sequence = tuple(mutable_tokens[:cut]) + proposed_tokens
-        proposed_reward = float(reward(prompt, proposed_sequence))
+        proposed_reward = float(reward(prompt, tokens[:cut] + suffix.token_ids))
         if not isfinite(proposed_reward):
             raise ValueError("reward must be finite")
-
-        old_p = float(sum(mutable_base_logs[cut:]))
-        old_q = float(sum(mutable_proposal_logs[cut:]))
-        new_p = float(sum(proposed_p))
-        new_q = float(sum(proposed_q))
         decision = decide_metropolis_hastings(
-            current_target_log_density=(
-                old_p + current_reward / config.reward_temperature
-            ),
+            current_target_log_density=float(sum(base_logs[cut:])) + current_reward / config.reward_temperature,
             proposed_target_log_density=(
-                new_p + proposed_reward / config.reward_temperature
+                float(sum(suffix.base_logprobs)) + proposed_reward / config.reward_temperature
             ),
-            forward_proposal_log_probability=new_q,
-            reverse_proposal_log_probability=old_q,
-            uniform=float(
-                seeds.generator("reward_mh", chain_id, step_index, "accept").random()
-            ),
+            forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
+            reverse_proposal_log_probability=float(sum(proposal_logs[cut:])),
+            uniform=float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
         )
-        log_acceptance = decision.log_acceptance
-        accepted = decision.accepted
-        proposed_token_changes = sum(
-            old != new
-            for old, new in zip(mutable_tokens[cut:], proposed_tokens, strict=True)
-        )
+        changes = _token_changes(tokens[cut:], suffix.token_ids)
         previous_reward = current_reward
-        if accepted:
-            mutable_tokens[cut:] = proposed_tokens
-            mutable_base_logs[cut:] = proposed_p
-            mutable_proposal_logs[cut:] = proposed_q
+        if decision.accepted:
+            tokens = tokens[:cut] + suffix.token_ids
+            base_logs = base_logs[:cut] + suffix.base_logprobs
+            proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
             current_reward = proposed_reward
-        trace.append(
-            RewardMHStep(
-                step=step_index,
-                cut=cut,
-                proposed_suffix_length=suffix_length,
-                current_reward=previous_reward,
-                proposed_reward=proposed_reward,
-                log_acceptance=log_acceptance,
-                accepted=accepted,
-                suffix_schedule=config.suffix_schedule,
-                suffix_probability=suffix_probability,
-                proposed_token_changes=proposed_token_changes,
-                accepted_token_changes=(proposed_token_changes if accepted else 0),
-            )
-        )
-    return RewardMHChainResult(prompt, tuple(mutable_tokens), current_reward,
-                               tuple(mutable_base_logs), tuple(mutable_proposal_logs), tuple(trace), chain_id)
+        trace.append(RewardMHStep(
+            step=step_index, cut=cut, proposed_suffix_length=len(suffix.token_ids),
+            current_reward=previous_reward, proposed_reward=proposed_reward,
+            log_acceptance=decision.log_acceptance, accepted=decision.accepted,
+            suffix_schedule=config.suffix_schedule, suffix_probability=suffix_probability,
+            proposed_token_changes=changes, accepted_token_changes=changes if decision.accepted else 0,
+        ))
+    return RewardMHChainResult(prompt, tokens, current_reward, base_logs, proposal_logs, tuple(trace), chain_id,
+                               skipped)

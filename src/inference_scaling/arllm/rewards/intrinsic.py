@@ -16,13 +16,13 @@ from inference_scaling.shared.model.output import OutputParser
 
 @dataclass(frozen=True, slots=True)
 class SequenceLogProbabilityReward:
-    """Return the mean token log-probability over the effective completion.
+    """Return the mean token log-probability of the completion.
 
     This is a model-derived reward, not an external verifier.  The backend must
     support exact scoring under ``sampling``.  With reward temperature ``tau``,
     reward reweighting targets ``p(completion | prompt) ** (1 + 1 / (tau * length))``
-    for nonempty completions. Stop tokens count toward length, but absorbing
-    padding does not. Empty completions have neutral reward zero.
+    for nonempty completions. Stop tokens count toward length. Empty completions
+    have neutral reward zero.
     """
 
     backend: AutoregressiveBackend
@@ -41,46 +41,23 @@ class SequenceLogProbabilityReward:
         scored = self.backend.score_batch(
             [ScoreRequest(prompt, tuple(map(tuple, completions)), self.sampling)]
         )
-        if len(scored) != len(completions):
+        if len(scored) != len(completions) or any(
+            len(scores) != len(completion) for scores, completion in zip(scored, completions)
+        ):
             raise RuntimeError("backend returned an invalid log-probability score batch")
-        return tuple(
-            self.from_token_logprobs(prompt, completion, token_scores)
-            for completion, token_scores in zip(completions, scored, strict=True)
-        )
+        return tuple(self.from_token_logprobs(scores) for scores in scored)
 
-    def from_token_logprobs(
-        self,
-        prompt: TokenSequence,
-        completion: TokenSequence,
-        token_scores: Sequence[float],
-    ) -> float:
-        """Reuse exact policy scores with the same normalization as batch scoring."""
-        if len(token_scores) != len(completion):
-            raise RuntimeError("backend returned an invalid token score shape")
-        length = len(completion)
-        eos = self.sampling.eos_token_id if self.sampling is not None else None
-        backend: Any = self.backend
-        seen: set[int] = set()
-        while backend is not None and id(backend) not in seen:
-            seen.add(id(backend))
-            effective_length = getattr(backend, "effective_completion_length", None)
-            if effective_length is not None:
-                length = min(length, effective_length(prompt, completion))
-            if eos is None:
-                eos = getattr(backend, "eos_token_id", None)
-            if eos is None:
-                eos = getattr(getattr(backend, "tokenizer", None), "eos_token_id", None)
-            backend = getattr(backend, "backend", getattr(backend, "_backend", None))
-        if eos is not None and eos in completion:
-            length = min(length, completion.index(eos) + 1)
-        return float(sum(token_scores[:length])) / length if length else 0.0
+    @staticmethod
+    def from_token_logprobs(token_scores: Sequence[float]) -> float:
+        """The mean of exact policy token scores, reusable from generation."""
+        return float(sum(token_scores)) / len(token_scores) if token_scores else 0.0
 
     def describe(self) -> dict[str, object]:
         return {
             "source": "model_sequence_log_probability",
             "model_id": self.backend.model_id,
             "policy_id": self.sampling.policy_id if self.sampling is not None else None,
-            "normalization": "mean_per_effective_token",
+            "normalization": "mean_per_token",
         }
 
 
@@ -125,8 +102,6 @@ class ConsilienceReward:
     def _score_input(self, prompt: TokenSequence, completion: TokenSequence):
         prefix, tokens = tuple(prompt), tuple(completion)
         eos = getattr(getattr(self.backend, "tokenizer", None), "eos_token_id", None)
-        if eos is not None and eos in tokens:
-            tokens = tokens[:tokens.index(eos) + 1]
         used, reason = "full", None
         if self.scope == "thinking":
             assert self.thinking_format is not None
@@ -175,8 +150,7 @@ class ConsilienceReward:
     ) -> tuple[float, ...]:
         if not completions:
             return ()
-        # The empty full sequence has neutral score; generated EOS is retained
-        # as one genuine token, while absorbing padding after it is excluded.
+        # The empty full sequence has neutral score.
         rewards = [0.0] * len(completions)
         grouped: dict[TokenSequence, list[tuple[int, TokenSequence]]] = {}
         modes = []

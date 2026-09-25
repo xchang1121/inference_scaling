@@ -121,7 +121,7 @@
 | `output.thinking_format` | `auto` \| `tags` \| `json` \| `xml` | 思考段与最终内容的解析格式 |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.thinking_path` / `content_path` | 字符串或 `null` | JSON/XML 中思考与内容字段的路径 |
-| `output.sampling_scope` | `full` \| `thinking` | `mh`、`reward_mh`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因；按预算规划的 `is` 只支持 `full` |
+| `output.sampling_scope` | `full` \| `thinking` | `mh`、`reward_mh`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
 | `output.generation_chunk_size` | 整数 | 思考段采样时检查结束标记的分块长度 |
 | `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`reward_mh`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
 

@@ -106,7 +106,7 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 | 多尺度 MH 后缀 | `ar.algorithms.mh.suffix_schedule = "multiscale"` |
 | 冻结历史 MH proposal | `ar.algorithms.reward_mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
-互相冲突的组合（如异步引擎上的融合概率、预算规划的 IS 配思考段采样）在加载模型前报错；与所选算法无关的优化不生效。
+互相冲突的组合（如异步引擎上的融合概率）在加载模型前报错；与所选算法无关的优化不生效。
 
 ## 训练
 

@@ -122,7 +122,7 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
    `ar.engine.context_window`）的较小值；dLLM 取不超过该上限的 `dllm.sampling.block_length` 最大整数倍。
 2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`reward_mh` 与 `is` 只对思考段采样，
    最终内容随后由基础模型生成。`vote`、`verifier` 与全序列 Consilience 需要完整输出，`reward_mh` 与 `is` 因而回退到
-   `full` 并记录原因 `reward_uses_full_sequence`；联合预算 IS 只接受 `full`。
+   `full` 并记录原因 `reward_uses_full_sequence`。
 3. **奖励阶段**：按 `--reward` 构造逐序列奖励。`vote` 用于 `is` 或 `reward_mh` 时，先从基础模型独立生成
    `rewards.vote.pool_size` 条样本并冻结为投票池；池的随机种子与算法无关，同一重复下各算法共用同一池。
 4. **搜索阶段**：运行所选算法，得到一条完整输出。
@@ -157,27 +157,27 @@ flowchart LR
     H --> I[进入下一更新轮次]
 ```
 
-固定当前阶段长度 $`T`$ 后，一次更新执行：
+固定当前阶段的长度上限 $`T`$ 后，一次更新执行：
 
 1. 从与当前序列无关、对 $`1,\ldots,T`$ 全支持的 $`\rho(\ell)`$ 抽取后缀长度 $`\ell`$，令切点
-   $`c=T-\ell`$；
+   $`c=T-\ell`$；输出已在切点之前停止时，重生成的后缀为空，这次更新不改变状态，直接跳过，不生成也不调用奖励；
 2. `mh` 从温度 proposal 抽取新后缀；`reward_mh` 从基础模型抽取，选择冻结历史 proposal 时改从基础模型与冻结
-   历史后缀组成的固定混合分布抽取（第 8 节）；
+   历史后缀组成的固定混合分布抽取（第 8 节）；新后缀在停止处或总长度达到 $`T`$ 时结束；
 3. 对旧后缀和新后缀计算同一个 proposal 的概率。历史分量命中时仍需计算完整混合分布概率；单独使用
    历史记录的频率不满足 MH 接受率的要求；
 4. 计算幂目标或奖励目标的未归一化对数概率差，调用共享 MH 核；
 5. 用请求局部的均匀随机数接受或拒绝，随后进入下一次更新；
-6. 当前阶段完成 `steps_per_block` 次更新后扩展到下一阶段，直到长度 $`L`$；设置 `iterations` 时改为先生成完整
-   长度的序列，再在该长度上执行给定次数的更新。
+6. 当前阶段完成 `steps_per_block` 次更新后扩展到下一阶段：未停止的输出续写到新的上限，已停止的输出保持不变，
+   直到上限 $`L`$；设置 `iterations` 时改为先生成一条完整输出，再在上限 $`L`$ 上执行给定次数的更新。
 
 单链单次更新的逻辑工作量如下。
 
 | proposal 路径 | 新后缀生成 | 概率计算 | 奖励调用 |
 | --- | --- | --- | --- |
-| 基础模型或温度 proposal | 1 条长度 $`\ell`$ 的后缀 | 生成时保存新后缀概率；旧状态概率缓存 | 奖励目标对新完整序列调用一次；幂目标无需奖励 |
+| 基础模型或温度 proposal | 1 条至多 $`\ell`$ 个 token 的后缀 | 生成时保存新后缀概率；旧状态概率缓存 | 奖励目标对新完整序列调用一次；幂目标无需奖励 |
 | 冻结历史命中 | 0 条新后缀生成 | 对给定的历史后缀做并行概率评分，随后计算新旧完整混合概率 | 奖励目标对新完整序列调用一次 |
 
-`multiscale` 只改变各个后缀长度的固定混合比例；冻结历史只改变给定长度下的 proposal。每个分量都在
+`multiscale` 只改变各个后缀长度的固定混合比例；冻结历史只改变给定前缀下的 proposal。每个分量都在
 Hastings 比中使用完整正反概率，因此两项可以组合。直观上，短后缀降低生成成本，完整后缀的正概率提供
 全局移动；增加更新轮次会继续减小有限链误差，但实际速度取决于 proposal 与目标的重叠程度。
 
@@ -302,25 +302,27 @@ FLOPs 与训练后采样 FLOPs 分别统计；单次推理成本指训练完成�
 <a id="alg-power-mh"></a>
 ## 4. 幂分布后缀 MH
 
-固定生成长度为 $`L`$。当前状态为 $`y=(y_1,\ldots,y_L)`$。一次更新先按固定分布
-$`\rho(\ell)`$ 选择后缀长度 $`\ell\in\{1,\ldots,L\}`$，令切点 $`c=L-\ell`$，保留
-$`y_{1:c}`$，再从 proposal $`q_c(\cdot\mid x,y_{1:c})`$ 生成长度为 $`\ell`$ 的新后缀 $`v`$。
-约定 $`c=0`$ 时保留前缀为空。接受概率为
+生成长度上限为 $`L`$。当前状态是一条完整输出 $`y=(y_1,\ldots,y_n)`$：在 EOS 处停止时 $`n\le L`$ 且末 token
+为 EOS，否则 $`n=L`$。一次更新先按固定分布 $`\rho(\ell)`$ 选择 $`\ell\in\{1,\ldots,L\}`$，令切点
+$`c=L-\ell`$。若 $`c\ge n`$，切点之后没有 token，这次更新是恒等转移，实现直接跳过。否则保留 $`y_{1:c}`$，
+再从 proposal $`q_c(\cdot\mid x,y_{1:c})`$ 生成新后缀 $`v`$，直到停止或总长度达到 $`L`$。约定 $`c=0`$ 时
+保留前缀为空。接受概率为
 
 ```math
 A(y\to y')=
 \min\left\{1,
 \exp\left[
-\alpha\bigl(\log p(v\mid x,y_{1:c})-\log p(y_{c+1:L}\mid x,y_{1:c})\bigr)
-+\log q_c(y_{c+1:L}\mid x,y_{1:c})-\log q_c(v\mid x,y_{1:c})
+\alpha\bigl(\log p(v\mid x,y_{1:c})-\log p(y_{c+1:n}\mid x,y_{1:c})\bigr)
++\log q_c(y_{c+1:n}\mid x,y_{1:c})-\log q_c(v\mid x,y_{1:c})
 \right]\right\}.
 
 ```
 
 <p align="right">式 (4)</p>
 
-对固定 $`\ell`$，候选前缀相同，正向和反向转移都含同一因子 $`\rho(\ell)`$，该因子在 Hastings
-比中抵消，因此式 (4) 是该后缀长度对应的完整接受率。记其转移核为 $`K_\ell`$，则
+对固定 $`\ell`$，候选前缀相同；新后缀非空，$`y'`$ 在同一切点也能移回 $`y`$，正向和反向转移都含同一因子
+$`\rho(\ell)`$，该因子在 Hastings 比中抵消，因此式 (4) 是该切点对应的完整接受率；长度不超过 $`c`$ 的状态在该
+切点下不动。记其转移核为 $`K_\ell`$，则
 
 ```math
 K_\rho=\sum_{\ell=1}^{L}\rho(\ell)K_\ell,
@@ -344,7 +346,7 @@ $`1,2,4,\ldots,L`$ 中的不同长度。后两者减少平均 proposal token 数
 实现按 `block_size` 逐步扩展到 $`L`$，并在每个长度执行 `steps_per_block` 次后缀更新。设置
 `ar.algorithms.mh.iterations` 时，先生成完整长度的初始序列，再在该长度上执行给定次数的后缀更新；两种初始化和
 预算安排在有限计算量下可产生不同结果，应分别记录。最终长度上的有限更新结果仍含 MCMC 误差。由于切点
-$`c=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、固定长度空间上处处为正，转移矩阵任意两行
+$`c=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限词表、长度不超过 $`L`$ 的完整输出上处处为正，转移矩阵任意两行
 都有正重叠。写
 
 ```math
@@ -364,7 +366,7 @@ $`c=0`$ 能以正概率重生成整段，且未截断 softmax proposal 在有限
 式 (5) 的直观含义是：两条从不同序列出发的链，每轮都有一部分共同的下一状态概率；整段 proposal 保证
 这部分重叠不为零。每增加一次更新，尚未消除的最坏情形差异至多再乘一个 $`\delta(K)`$。真实 LLM 状态空间
 过大，$`\delta(K)`$ 无法在当前实验中直接计算；要得到式 (5) 中的具体几何收敛系数，需要显式转移矩阵 $`K`$。
-运行记录给出更新轮次（`trace.updates`）、接受率、平均 proposal 长度和接受后实际改变的 token 数。
+运行记录给出实际执行的更新轮次（`trace.updates`）、跳过的恒等更新数（`trace.skipped_updates`）、接受率、平均 proposal 长度和接受后实际改变的 token 数。
 
 代码中的接受率由模型无关的共享核计算；AR 适配层只提供式 (4) 的四个概率项：
 
@@ -379,8 +381,8 @@ decision = decide_metropolis_hastings(
 accepted = decision.accepted
 ```
 
-EOS 由 [`AbsorbingEOSBackend`](../../src/inference_scaling/arllm/backends/absorbing.py) 转换为固定长度吸收状态；
-终止判断作用于生成区间，EOS 后占位 token 的条件概率为 1。
+proposal 与目标使用同一 EOS，思考段范围内再加上思考段结束标记；停止 token 的概率计入 $`p`$ 与 $`q_c`$。
+切点、proposal 与接受判定的随机数都按链与更新序号派生，跳过一次更新不改变其余更新的随机数。
 
 dLLM 的 `mh` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
 而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点限定在完整决策块边界
@@ -395,9 +397,9 @@ dLLM 的 `mh` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha
 ```math
 A_r(y\to y')=\min\left\{1,
 \exp\left[
-\log\frac{p(y'_{c+1:L}\mid x,y_{1:c})}{p(y_{c+1:L}\mid x,y_{1:c})}
+\log\frac{p(y'_{c+1:n'}\mid x,y_{1:c})}{p(y_{c+1:n}\mid x,y_{1:c})}
 +\frac{r(y')-r(y)}{\tau}
-+\log\frac{q_c(y_{c+1:L}\mid x,y_{1:c})}{q_c(y'_{c+1:L}\mid x,y_{1:c})}
++\log\frac{q_c(y_{c+1:n}\mid x,y_{1:c})}{q_c(y'_{c+1:n'}\mid x,y_{1:c})}
 \right]\right\}.
 
 ```
@@ -667,14 +669,15 @@ q_c(v\mid x,y_{1:c})=(1-\lambda)p(v\mid x,y_{1:c})
 
 <p align="right">式 (13)</p>
 
-其中 $`\lambda`$ 为 `frozen_history.mixture`。对切点 $`c`$，经验分量只包含前 $`c`$ 个 token 与当前序列一致、长度等于
-所需后缀长度的历史后缀；没有这样的历史后缀时，proposal 就是基础模型。抽到历史分量时直接读取现成后缀，
+其中 $`\lambda`$ 为 `frozen_history.mixture`。对切点 $`c`$，经验分量只包含前 $`c`$ 个 token 与当前序列一致的历史后缀；
+历史序列与链使用同一长度上限和停止规则，因此这些后缀都是合法的完整后缀。没有这样的历史后缀时，proposal
+就是基础模型。抽到历史分量时直接读取现成后缀，
 并通过一次并行评分获得 $`p(v)`$；无论来源如何，式 (6) 都使用旧后缀与新后缀在式 (13) 的混合分布下的精确概率。
 基础分量保证完整支持集，经验库在链开始前冻结，因而该 proposal 仍定义普通 MH 转移核。
 
 ```python
 old_q = replay_proposal.logprob(prefix, old_suffix, base_logprob=old_p)
-draw = replay_proposal.draw(prefix, suffix_length, seed=seed)
+draw = replay_proposal.draw(prefix, total_length - cut, seed=seed)
 log_acceptance = min(
     0.0,
     new_p - old_p + reward_delta / tau + old_q - draw.proposal_logprob,
@@ -691,7 +694,7 @@ K_{\rho}^{\mathrm{replay}}
 \pi K_{\rho}^{\mathrm{replay}}=\pi.
 ```
 
-实现对实际抽到的长度计算新旧后缀在完整混合分布下的概率。长度选择概率在正向和反向提议中相同，仍在
+实现对实际抽到的切点计算新旧后缀在完整混合分布下的概率。切点选择概率在正向和反向提议中相同，仍在
 Hastings 比中抵消。历史命中时，自回归生成被替换为给定已有序列的批量概率评分，主要降低墙钟；历史样本的
 生成计入搜索阶段的成本，记录中的 `trace.proposal_sources` 给出基础分量与历史分量的抽样次数。
 
@@ -766,7 +769,7 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 =p(y\mid x)^{1+1/(\tau L)}.
 ```
 
-这里 $`L`$ 包含实际生成的 EOS 或完整停止标记，但不包含停止后的吸收态 padding；空 completion
+这里 $`L`$ 是实际生成的 token 数，包含 EOS 或完整停止标记；空 completion
 的奖励为 0。不同长度但平均 token logprob 相同的序列得到相同奖励，不做候选组内归一化。评分策略的温度为
 `rewards.logprob.score_temperature`。Best-of-$`N`$ 在评分策略与采样策略相同时直接取生成时保存的逐 token 对数概率；
 其余情况通过 `SequenceLogProbabilityReward.batch` 调用 `score_batch`。vLLM 只在能够精确评分所选策略时直接评分，
@@ -806,7 +809,7 @@ r_{\mathrm{Cns}}(x,y)=
 
 [`ConsilienceReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py) 默认（`scope = "thinking"`）优先对完整、非空的
 思考段评分。关闭思考、缺少边界、思考未结束、思考段为空或结构解析失败时，同一统计公式应用于全序列。
-零 token 的空序列取分数 0；真实 EOS 保留一次，之后的确定性填充不参与评分。`rewards.consilience.scope = "full"`
+零 token 的空序列取分数 0。`rewards.consilience.scope = "full"`
 直接选择全序列模式。该回退规则在 rollout 评分时确定，作为逐序列奖励定义的一部分；最终输出的回退原因记入记录的
 `fallbacks`（前缀 `consilience:`）。
 
@@ -841,8 +844,8 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 
 回退分支使用实际生成的全序列和相应奖励。停止规则选取第一个完整、非空的思考块，之后的标记归入最终内容，
 使后续生成保持已有分段决定。若直到 EOS 或长度上限仍未找到该边界，采样与评分保留全序列。
-[`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 在停止后使用概率为 1 的 EOS
-填充，按 `ar.output.generation_chunk_size` 分段生成并检查停止标记，统一 IS 与固定长度 MH 的生成和评分。成功分段
+[`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 按 `ar.output.generation_chunk_size`
+分段生成并检查停止标记，在第一个停止处结束；越过停止处的续写概率为 0。IS 与 MH 共用这一生成和评分约定。成功分段
 分支可对最终内容的概率求和；回退分支按完整序列计算。因此，固定的分段与回退规则共同定义目标，选择完成后
 保持原奖励和概率不变。
 

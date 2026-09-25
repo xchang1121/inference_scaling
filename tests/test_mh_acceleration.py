@@ -68,10 +68,7 @@ def test_frozen_replay_proposal_approaches_the_exact_reward_target() -> None:
         reward=reward,
     )
     assert total_variation(empirical, target) < 0.04
-    snapshot = proposal.snapshot()
-    assert snapshot.base_draws > 0
-    assert snapshot.history_draws > 0
-    assert snapshot.logprob_queries > 0
+    assert {step.proposal_source for result in outputs for step in result.trace} == {"base", "history"}
 
 
 def test_replay_history_is_frozen_before_the_chain_starts() -> None:

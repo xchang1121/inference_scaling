@@ -63,7 +63,7 @@ def test_scope_finishes_content_from_original_backend_with_remaining_budget():
     scope = SamplingScope("thinking", ThinkingFormat((1,), (3,)), generation_chunk_size=1)
     stopped = scope.wrap(backend, (3,))
     thinking = stopped.sample_batch([GenerationRequest((3,), 6, SamplingConfig(), 0, "thinking")])[0]
-    assert thinking.token_ids == (0, 1, 2, 2, 2, 2)
+    assert (thinking.token_ids, thinking.finish_reason) == ((0, 1), "stop")
     tokens, info = scope.finish(
         backend, (3,), thinking.token_ids, max_new_tokens=6,
         sampling=SamplingConfig(eos_token_id=2), seed=1,

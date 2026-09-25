@@ -8,7 +8,7 @@ and planned costs from :mod:`inference_scaling.shared.budget.costs`.
 
 Budget units are forward-token slots, including an explicit reward
 forward-pass allowance; they are not measured GPU FLOPs or elapsed time.
-Rollouts and completions run until EOS, so their cost is planned from the
+Rollouts and completions run until they stop, so their cost is planned from the
 expected remaining length observed in earlier completions, and the ledger
 charges the tokens each step actually used. The output limit ``total_length``
 only caps generation: chunk sizes and counts do not depend on it unless
@@ -281,10 +281,9 @@ def run_joint_budget_is(
         weights = [[rollout.log_weight for rollout in candidate.rollouts] for candidate in pilot]
         if any(not isfinite(value) for group in weights for value in group):
             return None
+        # A candidate that ends the sequence has one empty completion and a known weight.
         return estimate_weight_moments(weights, deterministic=[
-            estimate.rollout_cost == 0 or (
-                sampling.eos_token_id is not None and candidate.token_ids[-1] == sampling.eos_token_id
-            ) for candidate in pilot
+            not candidate.rollouts[0].token_ids for candidate in pilot
         ])
 
     while not state.token_ids or state.fixed < len(state.token_ids):
@@ -347,9 +346,8 @@ def run_joint_budget_is(
         tuple(steps),
         pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
         pilot_reserved,
-        "eos"
-        if sampling.eos_token_id is not None and sampling.eos_token_id in state.token_ids
-        else "length",
+        "eos" if sampling.eos_token_id is not None and state.token_ids[-1] == sampling.eos_token_id
+        else "length" if len(state.token_ids) >= config.total_length else "stop",
         actual_forward_tokens=probe_cost + pilot_actual_total + sum(step.actual_cost for step in steps),
         pilot_actual_forward_tokens=pilot_actual_total,
         length_probe_forward_tokens=probe_cost,

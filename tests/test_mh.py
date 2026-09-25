@@ -1,4 +1,5 @@
 from itertools import product
+from math import exp, prod
 
 import pytest
 
@@ -17,11 +18,22 @@ from inference_scaling.arllm.types import SequenceSample
 
 def _power_target(probabilities: tuple[float, ...], length: int, alpha: float):
     weights = {
-        sequence: float(__import__("math").prod(probabilities[token] for token in sequence) ** alpha)
+        sequence: float(prod(probabilities[token] for token in sequence) ** alpha)
         for sequence in product(range(len(probabilities)), repeat=length)
     }
     normalizer = sum(weights.values())
     return {sequence: weight / normalizer for sequence, weight in weights.items()}
+
+
+def _complete_target(probabilities, eos, length, weight):
+    """Normalized weights over outputs that end at their first EOS or at the length limit."""
+    outputs = [
+        tokens for size in range(1, length + 1) for tokens in product(range(len(probabilities)), repeat=size)
+        if (eos in tokens and tokens.index(eos) == size - 1) or (eos not in tokens and size == length)
+    ]
+    weights = {tokens: weight(tokens, prod(probabilities[token] for token in tokens)) for tokens in outputs}
+    normalizer = sum(weights.values())
+    return {tokens: value / normalizer for tokens, value in weights.items()}
 
 
 def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
@@ -169,10 +181,7 @@ def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
         for chain in range(3000)
     ]
     weights = {
-        sequence: float(
-            __import__("math").prod(probabilities[token] for token in sequence)
-            * __import__("math").exp(reward((), sequence) / temperature)
-        )
+        sequence: float(prod(probabilities[token] for token in sequence) * exp(reward((), sequence) / temperature))
         for sequence in product(range(2), repeat=2)
     }
     normalizer = sum(weights.values())
@@ -181,11 +190,31 @@ def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
     assert total_variation(empirical, target) < 0.04
 
 
-@pytest.mark.parametrize(
-    "sampling",
-    [SamplingConfig(top_k=1), SamplingConfig(top_p=0.9), SamplingConfig(eos_token_id=1)],
-)
-def test_mh_rejects_proposals_that_break_fixed_support_contract(sampling) -> None:
+@pytest.mark.parametrize("chain", ["power", "reward"])
+def test_variable_length_chains_target_complete_outputs(chain) -> None:
+    probabilities = (0.6, 0.4)  # token 1 is EOS
+    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
+    proposal = SamplingConfig(temperature=0.7, eos_token_id=1)
+    if chain == "power":
+        config = MHConfig(alpha=2, total_length=3, block_size=3, steps_per_block=12)
+        results = [run_mh_chain(backend, (), config, proposal, SeedStream(5), chain_id=index) for index in range(2000)]
+        target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability**2)
+    else:
+        settings = RewardMHConfig(total_length=3, block_size=3, steps_per_block=12, reward_temperature=0.8)
+        results = [
+            run_reward_mh_chain(backend, (), settings, proposal, lambda _, tokens: float(len(tokens)), SeedStream(5),
+                                chain_id=index)
+            for index in range(2000)
+        ]
+        target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability * exp(len(tokens) / 0.8))
+    assert total_variation(empirical_distribution(result.token_ids for result in results), target) < 0.03
+    # A cut past the end of a stopped output is skipped without a proposal.
+    assert all(result.attempts + result.skipped == 12 for result in results)
+    assert sum(result.skipped for result in results) > 0
+
+
+@pytest.mark.parametrize("sampling", [SamplingConfig(top_k=1), SamplingConfig(top_p=0.9)])
+def test_mh_rejects_truncated_proposals(sampling) -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.8, 0.2])
     with pytest.raises(ValueError):
         run_mh_chain(
