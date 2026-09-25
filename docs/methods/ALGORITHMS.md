@@ -770,8 +770,9 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 
 回退分支使用实际生成的全序列和相应奖励。停止规则选取第一个完整、非空的思考块，之后的标记归入最终内容，
 使后续生成保持已有分段决定。若直到 EOS 或长度上限仍未找到该边界，采样与评分保留全序列。
-[`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 按 `ar.output.generation_chunk_size`
-分段生成并检查停止标记，在第一个停止处结束；越过停止处的续写概率为 0。IS 与 MH 共用这一生成和评分约定。成功分段
+[`StoppedSequenceBackend`](../../src/inference_scaling/arllm/backends/stopping.py) 把结束标记作为停止序列交给后端，
+后端在解码中遇到标记即停（不支持停止序列的后端生成后截断）；停在不构成边界的标记（如空思考块）后继续生成，
+在第一个停止处结束；越过停止处的续写概率为 0。IS 与 MH 共用这一生成和评分约定。成功分段
 分支可对最终内容的概率求和；回退分支按完整序列计算。因此，固定的分段与回退规则共同定义目标，选择完成后
 保持原奖励和概率不变。
 

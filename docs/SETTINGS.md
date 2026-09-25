@@ -120,7 +120,6 @@
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
-| `output.generation_chunk_size` | 整数 | 思考段采样时检查结束标记的分块长度 |
 | `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`mh_power`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
 
 ### `ar.algorithms`

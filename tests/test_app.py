@@ -97,7 +97,6 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     model.mkdir()
     (model / "model.safetensors").write_bytes(b"weights")
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
-    settings["ar"]["output"]["generation_chunk_size"] = 1
     settings["rewards"]["vote"]["pool_size"] = 3
     joint = settings["ar"]["algorithms"]["is"]["joint"]
     joint.update(block_sizes=[2, 4], candidate_counts=[2, 4], rollout_counts=[1, 2])

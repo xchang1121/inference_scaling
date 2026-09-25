@@ -129,7 +129,6 @@ SCHEMA: dict[str, Any] = {
             "thinking_end_text": _NULLABLE_STR,
             "starts_in_thinking": (bool, None),
             "sampling_scope": _Choices({"full", "thinking"}),
-            "generation_chunk_size": int,
         },
         "sampling": {"temperature": float, "top_p": float, "top_k": _NULLABLE_INT},
         "algorithms": {

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from itertools import product
 from math import exp, log
 
@@ -19,15 +20,27 @@ PARSER = ThinkingParser((ThinkingFormat((1,), (3,)),))
 RAW = TabularAutoregressiveBackend({}, fallback=(0.5, 0.3, 0.2))
 
 
-def _backend(*, chunk=2, parser=PARSER, raw=RAW):
-    return StoppedSequenceBackend(
-        raw, thinking_parser=parser, thinking_prompt=(3,), eos_token_id=2, generation_chunk_size=chunk,
-    )
+def _backend(*, parser=PARSER, raw=RAW):
+    return StoppedSequenceBackend(raw, thinking_parser=parser, thinking_prompt=(3,), eos_token_id=2)
+
+
+class StoppingTabular(TabularAutoregressiveBackend):
+    """A tabular model whose generation ends right after a stop sequence, as the real backends do."""
+
+    def sample_batch(self, requests):
+        samples = []
+        for request, sample in zip(requests, super().sample_batch(requests), strict=True):
+            ends = [end for end in range(1, len(sample.token_ids) + 1) for stop in request.stop_sequences
+                    if sample.token_ids[:end][-len(stop):] == stop]
+            samples.append(sample if not ends else replace(
+                sample, token_ids=sample.token_ids[:min(ends)], token_logprobs=sample.token_logprobs[:min(ends)],
+                finish_reason="stop"))
+        return samples
 
 
 def _path(*steps):
     """A model that follows ``steps`` deterministically: each (context, token) forces one transition."""
-    return TabularAutoregressiveBackend(
+    return StoppingTabular(
         {context: tuple(float(index == token) for index in range(3)) for context, token in steps},
         fallback=(0.5, 0.3, 0.2),
     )
@@ -51,11 +64,11 @@ def test_stopped_outputs_form_a_normalized_measure():
     assert past == pytest.approx((log(0.5), log(0.3), float("-inf")))
 
 
-def test_generation_stops_across_chunks_and_scores_identically():
+def test_generation_stops_at_a_marker_and_scores_identically():
     raw = _path(((3,), 1), ((3, 1), 0), ((3, 1, 0), 1))
-    backend = _backend(chunk=1, parser=ThinkingParser((ThinkingFormat((0, 1), (3,)),)), raw=raw)
+    backend = _backend(parser=ThinkingParser((ThinkingFormat((0, 1), (3,)),)), raw=raw)
     policy = SamplingConfig()
-    # The two-token end marker completes across chunks.
+    # The two-token end marker ends the generation.
     sample = backend.sample_batch([GenerationRequest((3,), 5, policy, 4, "test")])[0]
     assert (sample.token_ids, sample.finish_reason) == ((1, 0, 1), "stop")
     assert backend.score_batch([ScoreRequest((3,), (sample.token_ids,), policy)])[0] == sample.token_logprobs
@@ -115,5 +128,6 @@ def test_thinking_scope_projects_the_full_reward_target():
 
 def test_empty_thinking_block_continues_to_full_sequence():
     raw = _path(((3,), 1), ((3, 1), 0), ((3, 1, 0), 2))
-    result = _backend(chunk=1, raw=raw).sample_batch([GenerationRequest((3,), 3, SamplingConfig(), 0, "empty")])[0]
+    # The wrapped backend stops at the empty block's marker; the scope resumes to EOS.
+    result = _backend(raw=raw).sample_batch([GenerationRequest((3,), 3, SamplingConfig(), 0, "empty")])[0]
     assert (result.token_ids, result.finish_reason) == ((1, 0, 2), "stop")

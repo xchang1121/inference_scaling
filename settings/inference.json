@@ -118,8 +118,7 @@
       "thinking_start_text": null,
       "thinking_end_text": null,
       "starts_in_thinking": null,
-      "sampling_scope": "full",
-      "generation_chunk_size": 256
+      "sampling_scope": "full"
     },
     "sampling": {"temperature": 1.0, "top_p": 1.0, "top_k": null},
     "algorithms": {

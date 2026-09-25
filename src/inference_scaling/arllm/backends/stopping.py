@@ -4,7 +4,9 @@ The thinking scope samples only the thinking segment: generation ends at the
 segment's closing boundary or at EOS, whichever comes first, and the sample is
 returned as it stopped. The boundary tokens keep their model probability and
 nothing follows them, so under ``score_batch`` a continuation that runs past a
-boundary has probability zero.
+boundary has probability zero. The end markers go to the wrapped backend as
+stop sequences; a marker that closes no boundary (an empty block) resumes the
+generation, and a backend without stop sequences is cut at the boundary.
 """
 
 from __future__ import annotations
@@ -27,20 +29,17 @@ class StoppedSequenceBackend:
         thinking_parser: OutputParser,
         thinking_prompt: TokenSequence,
         eos_token_id: int,
-        generation_chunk_size: int,
     ) -> None:
-        if eos_token_id < 0 or generation_chunk_size <= 0:
-            raise ValueError("invalid EOS or generation chunk size")
         self.backend = backend
         self.thinking_parser = thinking_parser
         # The prompt is never searched for boundaries.
         self.thinking_prompt = tuple(thinking_prompt)
         self.eos_token_id = eos_token_id
-        self.generation_chunk_size = generation_chunk_size
-        self.model_id = (
-            f"{backend.model_id}|thinking={thinking_parser.describe()};eos={eos_token_id};"
-            f"chunk={generation_chunk_size}"
-        )
+        formats = getattr(thinking_parser, "formats", (thinking_parser,))
+        self.stop_sequences = tuple(dict.fromkeys(
+            tuple(marker) for format_ in formats if (marker := getattr(format_, "end_token_ids", None))
+        ))
+        self.model_id = f"{backend.model_id}|thinking={thinking_parser.describe()};eos={eos_token_id}"
 
     @property
     def tokenizer(self):
@@ -81,18 +80,16 @@ class StoppedSequenceBackend:
             if self._stop_end(self._generated(request.prefix)) is not None:
                 raise ValueError("the prefix already ended at a stop boundary")
         while True:
-            pending: list[GenerationRequest] = []
-            indices: list[int] = []
+            pending, indices = list[GenerationRequest](), list[int]()
             for index, request in enumerate(requests):
                 offset = len(tokens[index])
                 if done[index] or offset >= request.max_new_tokens:
                     continue
-                chunk = min(request.max_new_tokens - offset, self.generation_chunk_size)
-                seed = request.seed if offset == 0 else SeedStream(request.seed).derive("stop-chunk", offset)
+                seed = request.seed if offset == 0 else SeedStream(request.seed).derive("stop-resume", offset)
                 pending.append(GenerationRequest(
-                    prefix=request.prefix + tuple(tokens[index]), max_new_tokens=chunk,
+                    prefix=request.prefix + tuple(tokens[index]), max_new_tokens=request.max_new_tokens - offset,
                     sampling=self._inner_policy(request.sampling), seed=seed,
-                    request_id=f"{request.request_id}:stop-chunk:{offset}",
+                    request_id=f"{request.request_id}:stop:{offset}", stop_sequences=self.stop_sequences,
                     reference_temperature=request.reference_temperature,
                 ))
                 indices.append(index)
@@ -102,28 +99,23 @@ class StoppedSequenceBackend:
             if len(sampled) != len(pending):
                 raise RuntimeError("wrapped backend returned an invalid sample count")
             for index, inner_request, sample in zip(indices, pending, sampled, strict=True):
-                if (
-                    sample.prefix != inner_request.prefix
-                    or sample.policy_id != inner_request.sampling.policy_id
-                    or sample.model_id != self.backend.model_id
-                    or not 0 < len(sample.token_ids) <= inner_request.max_new_tokens
-                ):
+                if (sample.prefix != inner_request.prefix or sample.policy_id != inner_request.sampling.policy_id
+                        or sample.model_id != self.backend.model_id
+                        or not 0 < len(sample.token_ids) <= inner_request.max_new_tokens):
                     raise RuntimeError("wrapped backend violated the generation contract")
                 generated = self._generated(inner_request.prefix)
                 end = self._stop_end(generated + sample.token_ids)
                 keep = len(sample.token_ids) if end is None else end - len(generated)
                 tokens[index].extend(sample.token_ids[:keep])
                 logs[index].extend(sample.token_logprobs[:keep])
-                if sample.reference_policy_id != inner_request.reference_policy.policy_id:
-                    references[index] = None
+                reference = references[index]
+                if reference is not None and sample.reference_policy_id == inner_request.reference_policy.policy_id:
+                    reference.extend((sample.reference_token_logprobs or ())[:keep])
                 else:
-                    reference = references[index]
-                    if reference is not None:
-                        assert sample.reference_token_logprobs is not None
-                        reference.extend(sample.reference_token_logprobs[:keep])
+                    references[index] = None
                 if end is not None:
                     done[index] = True
-                elif len(sample.token_ids) != inner_request.max_new_tokens:
+                elif sample.finish_reason != "stop" and len(sample.token_ids) != inner_request.max_new_tokens:
                     raise RuntimeError("generation ended without EOS or a thinking boundary")
         return [
             SequenceSample(

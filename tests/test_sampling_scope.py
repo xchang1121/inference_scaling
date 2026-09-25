@@ -60,7 +60,7 @@ def test_reference_policy_matches_direct_temperature_scoring():
 
 def test_scope_finishes_content_from_original_backend_with_remaining_budget():
     backend = _Backend()
-    scope = SamplingScope("thinking", ThinkingFormat((1,), (3,)), generation_chunk_size=1)
+    scope = SamplingScope("thinking", ThinkingFormat((1,), (3,)))
     stopped = scope.wrap(backend, (3,))
     thinking = stopped.sample_batch([GenerationRequest((3,), 6, SamplingConfig(), 0, "thinking")])[0]
     assert (thinking.token_ids, thinking.finish_reason) == ((0, 1), "stop")

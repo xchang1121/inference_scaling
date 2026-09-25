@@ -18,7 +18,6 @@ from inference_scaling.shared.types import TokenSequence
 class SamplingScope:
     scope: Literal["full", "thinking"] = "full"
     thinking_format: OutputParser | None = None
-    generation_chunk_size: int = 256
     requested_scope: Literal["full", "thinking"] | None = None
     fallback_reason: str | None = None
 
@@ -37,8 +36,6 @@ class SamplingScope:
             if reason is not None:
                 object.__setattr__(self, "scope", "full")
                 object.__setattr__(self, "fallback_reason", reason)
-        if self.generation_chunk_size <= 0:
-            raise ValueError("generation_chunk_size must be positive")
 
     @classmethod
     def from_config(cls, backend: Any, config: Mapping[str, Any], *, active: bool = True):
@@ -49,7 +46,6 @@ class SamplingScope:
         return cls(
             scope="thinking" if scope == "thinking" else "full",
             thinking_format=thinking_format_from_backend(backend, options),
-            generation_chunk_size=int(options["generation_chunk_size"]),
         )
 
     def full_fallback(self, reason: str):
@@ -71,7 +67,7 @@ class SamplingScope:
             raise ValueError("thinking sampling requires an EOS token")
         return StoppedSequenceBackend(
             backend, thinking_parser=self.thinking_format, thinking_prompt=prompt,
-            eos_token_id=eos, generation_chunk_size=self.generation_chunk_size,
+            eos_token_id=eos,
         )
 
     def finish(
