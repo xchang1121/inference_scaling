@@ -37,7 +37,7 @@ class TinyTokenizer:
 def _tiny_backend():
     from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 
-    return LLaDATransformersBackend(TinyMaskedModel((0.0, 0.5, 1.0, -2.0)), TinyTokenizer(), mask_token_id=3)
+    return LLaDATransformersBackend(TinyMaskedModel((0.0, 0.5, 1.0, -2.0)), TinyTokenizer(), mask_token_id=3, max_batch_size=64)
 
 
 @pytest.fixture

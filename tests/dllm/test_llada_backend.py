@@ -34,11 +34,11 @@ class TinyTokenizer:
         return " ".join(str(token_id) for token_id in token_ids)
 
 
-def _backend(bias=(0.0, 0.5, 1.0, -2.0), name="tiny", max_batch_size=None):
+def _backend(bias=(0.0, 0.5, 1.0, -2.0), name="tiny", max_batch_size=64):
     return LLaDATransformersBackend(
         TinyMaskedModel(bias, name),
         TinyTokenizer(),
-        max_batch_size=max_batch_size,
+        max_batch_size=max_batch_size, mask_token_id=3,
     )
 
 
@@ -77,7 +77,7 @@ def test_reference_temperature_reports_the_same_trajectory_at_the_base_temperatu
         block_length=2,
         steps_per_block=2,
         temperature=0.8,
-        remasking="random",
+        remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
     requests = [
         DiffusionGenerationRequest((0,), 4, sampling, seed, f"sample-{seed}", reference_temperature=0.8)
@@ -107,7 +107,7 @@ def test_low_confidence_generation_is_not_mislabeled_as_exact_density():
         block_length=2,
         steps_per_block=1,
         temperature=0.0,
-        remasking="low_confidence",
+        remasking="low_confidence", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
     sample = backend.sample_batch(
         [DiffusionGenerationRequest((0,), 2, sampling, 3, "greedy")]
@@ -120,7 +120,7 @@ def test_low_confidence_generation_is_not_mislabeled_as_exact_density():
 
 
 def test_active_parameters_count_the_routed_share_of_moe_experts():
-    snapshot = LLaDATransformersBackend(TinyLayeredModel(), TinyTokenizer()).snapshot()
+    snapshot = LLaDATransformersBackend(TinyLayeredModel(), TinyTokenizer(), mask_token_id=3, max_batch_size=64).snapshot()
     assert (snapshot.total_parameters, snapshot.active_parameters, snapshot.resident_parameters) == (16, 12, 16)
 
 
@@ -129,7 +129,7 @@ def test_batch_limit_chunks_sampling_without_changing_results():
         block_length=2,
         steps_per_block=1,
         temperature=0.8,
-        remasking="random",
+        remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
     requests = [
         DiffusionGenerationRequest((0,), 2, sampling, seed, f"sample-{seed}")

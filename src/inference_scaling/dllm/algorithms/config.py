@@ -12,11 +12,11 @@ from inference_scaling.shared.config import require_positive
 
 @dataclass(frozen=True, slots=True)
 class DiffusionISConfig:
-    candidate_count: int = 4
-    rollout_count: int = 4
-    block_size: int = 32
-    total_length: int = 128
-    reward_temperature: float = 1.0
+    candidate_count: int
+    rollout_count: int
+    block_size: int
+    total_length: int
+    reward_temperature: float
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -28,9 +28,9 @@ class DiffusionISConfig:
 
 @dataclass(frozen=True, slots=True)
 class DiffusionMHConfig:
-    total_length: int = 128
-    updates: int = 8
-    reward_temperature: float = 1.0
+    total_length: int
+    updates: int
+    reward_temperature: float
 
     def __post_init__(self) -> None:
         require_positive("total_length", self.total_length)
@@ -42,10 +42,10 @@ class DiffusionMHConfig:
 class DiffusionPowerMHConfig:
     """Finite-step sharpening of an exact reverse-trajectory policy."""
 
-    total_length: int = 128
-    decision_block_size: int = 32
-    updates_per_stage: int = 2
-    alpha: float = 2.0
+    total_length: int
+    decision_block_size: int
+    updates_per_stage: int
+    alpha: float
 
     def __post_init__(self) -> None:
         for name in ("total_length", "decision_block_size", "updates_per_stage"):
@@ -59,10 +59,10 @@ class DiffusionPowerMHConfig:
 class DiffusionBlockBeamConfig:
     """Sampled diffusion-block search used as the counterpart of token beam search."""
 
-    total_length: int = 128
-    decision_block_size: int = 32
-    width: int = 8
-    branching_factor: int = 2
+    total_length: int
+    decision_block_size: int
+    width: int
+    branching_factor: int
 
     def __post_init__(self) -> None:
         for name in ("total_length", "decision_block_size", "width", "branching_factor"):

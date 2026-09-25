@@ -15,13 +15,7 @@ from inference_scaling.shared.config import (
     require_probability,
 )
 
-RemaskingStrategy = Literal[
-    "low_confidence",
-    "low_confidence_static",
-    "low_confidence_dynamic",
-    "random",
-    "sequential",
-]
+RemaskingStrategy = Literal["low_confidence", "random"]
 
 @dataclass(frozen=True, slots=True)
 class DiffusionSamplingConfig:
@@ -32,15 +26,13 @@ class DiffusionSamplingConfig:
     per-block transition kernel.
     """
 
-    block_length: int = 32
-    steps_per_block: int = 32
-    temperature: float = 0.0
-    top_k: int = 0
-    top_p: float = 1.0
-    cfg_scale: float = 0.0
-    remasking: RemaskingStrategy = "low_confidence"
-    confidence_threshold: float = 0.85
-    mask_token_id: int | None = None
+    block_length: int
+    steps_per_block: int
+    temperature: float
+    top_k: int
+    top_p: float
+    cfg_scale: float
+    remasking: RemaskingStrategy
 
     def __post_init__(self) -> None:
         require_positive("block_length", self.block_length)
@@ -51,21 +43,8 @@ class DiffusionSamplingConfig:
         require_nonnegative("top_k", self.top_k)
         require_probability("top_p", self.top_p, include_zero=False)
         require_nonnegative("cfg_scale", self.cfg_scale)
-        if self.remasking not in (
-            "low_confidence",
-            "low_confidence_static",
-            "low_confidence_dynamic",
-            "random",
-            "sequential",
-        ):
+        if self.remasking not in ("low_confidence", "random"):
             raise ValueError(f"unsupported remasking strategy {self.remasking!r}")
-        require_probability(
-            "confidence_threshold",
-            self.confidence_threshold,
-            include_zero=False,
-        )
-        if self.mask_token_id is not None and self.mask_token_id < 0:
-            raise ValueError("mask_token_id must be non-negative")
 
     @property
     def policy_id(self) -> str:
@@ -73,88 +52,44 @@ class DiffusionSamplingConfig:
             f"block={self.block_length};steps={self.steps_per_block};"
             f"temperature={canonical_float(self.temperature)};top_k={self.top_k};"
             f"top_p={canonical_float(self.top_p)};"
-            f"cfg={canonical_float(self.cfg_scale)};remasking={self.remasking};"
-            f"threshold={canonical_float(self.confidence_threshold)};"
-            f"mask={self.mask_token_id}"
+            f"cfg={canonical_float(self.cfg_scale)};remasking={self.remasking}"
         )
 
     @property
     def has_exact_trajectory_density(self) -> bool:
         """Whether committed transitions have a tractable normalized density."""
 
-        return self.temperature > 0 and self.remasking in {"random", "sequential"}
+        return self.temperature > 0 and self.remasking == "random"
 
-    def validate_generation_length(
-        self,
-        generation_length: int,
-        *,
-        prefix_length: int | None = None,
-    ) -> None:
+    def validate_generation_length(self, generation_length: int) -> None:
         require_positive("generation_length", generation_length)
-        if prefix_length is not None and prefix_length < 0:
-            raise ValueError("prefix_length must be non-negative")
         if generation_length % self.block_length:
             raise ValueError("generation_length must be divisible by block_length")
 
-    def total_steps(
-        self,
-        generation_length: int,
-        *,
-        prefix_length: int = 0,
-    ) -> int:
-        self.validate_generation_length(
-            generation_length, prefix_length=prefix_length
-        )
-        return generation_length // self.block_length * self.steps_per_block
 
-
-def sampling_from_settings(section: Mapping[str, Any], mask_token_id: int) -> DiffusionSamplingConfig:
+def sampling_from_settings(section: Mapping[str, Any]) -> DiffusionSamplingConfig:
     """A sampling policy from a ``sampling`` / ``exact_sampling`` settings section."""
 
     return DiffusionSamplingConfig(
         block_length=int(section["block_length"]), steps_per_block=int(section["steps_per_block"]),
         temperature=float(section["temperature"]), top_k=int(section["top_k"]), top_p=float(section["top_p"]),
         cfg_scale=float(section["cfg_scale"]), remasking=section["remasking"],
-        confidence_threshold=float(section["confidence_threshold"]), mask_token_id=mask_token_id,
     )
 
 
 def diffusion_decision_stage_lengths(
-    *,
-    prompt_length: int,
-    total_length: int,
-    decision_block_size: int,
-    sampling: DiffusionSamplingConfig,
+    *, total_length: int, decision_block_size: int, sampling: DiffusionSamplingConfig,
 ) -> tuple[int, ...]:
-    """Partition a continuation without splitting a diffusion block."""
+    """Partition a continuation into decision blocks without splitting a diffusion block."""
 
-    for name, value in (
-        ("total_length", total_length),
-        ("decision_block_size", decision_block_size),
-    ):
-        require_positive(name, value)
+    require_positive("decision_block_size", decision_block_size)
     if decision_block_size > total_length:
         raise ValueError("decision_block_size cannot exceed total_length")
-    sampling.validate_generation_length(total_length, prefix_length=prompt_length)
-    if prompt_length < 0:
-        raise ValueError("prompt_length must be non-negative")
+    sampling.validate_generation_length(total_length)
     sampling.validate_generation_length(decision_block_size)
-    first = decision_block_size
-    lengths: list[int] = []
-    remaining = total_length
-    next_length = first
-    while remaining:
-        length = min(next_length, remaining)
-        lengths.append(length)
-        remaining -= length
-        next_length = decision_block_size
-    offset = 0
-    for length in lengths:
-        sampling.validate_generation_length(
-            length,
-            prefix_length=prompt_length + offset,
-        )
-        offset += length
+    lengths = [decision_block_size] * (total_length // decision_block_size)
+    if total_length % decision_block_size:
+        lengths.append(total_length % decision_block_size)
     return tuple(lengths)
 
 

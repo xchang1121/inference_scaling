@@ -158,7 +158,7 @@
 | `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
-| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`）、`confidence_threshold` |
+| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`） |
 | `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
 | `algorithms.best_of_n.samples` | 整数 | 候选数 |

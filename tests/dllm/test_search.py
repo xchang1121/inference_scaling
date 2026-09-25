@@ -63,7 +63,7 @@ EXACT = DiffusionSamplingConfig(
     block_length=1,
     steps_per_block=1,
     temperature=1.0,
-    remasking="random",
+    remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
 )
 
 
@@ -106,7 +106,7 @@ class ContextModel(torch.nn.Module):
 
 
 def test_trajectory_power_mh_targets_the_blockwise_power_of_a_context_dependent_model():
-    backend = LLaDATransformersBackend(ContextModel(), SimpleNamespace(mask_token_id=3))
+    backend = LLaDATransformersBackend(ContextModel(), SimpleNamespace(), mask_token_id=3, max_batch_size=64)
     config = DiffusionPowerMHConfig(total_length=2, decision_block_size=1, updates_per_stage=6, alpha=2.0)
     finals = Counter(
         run_diffusion_trajectory_power_mh(backend=backend, prompt=(0,), config=config, sampling=EXACT, seed=seed)
@@ -152,7 +152,7 @@ def test_search_algorithms_reject_intractable_remasking_policy():
         block_length=1,
         steps_per_block=1,
         temperature=0.0,
-        remasking="low_confidence",
+        remasking="low_confidence", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
     with pytest.raises(ValueError, match="exact diffusion policy"):
         run_diffusion_trajectory_power_mh(

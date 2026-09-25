@@ -59,7 +59,7 @@ EXACT = DiffusionSamplingConfig(
     block_length=1,
     steps_per_block=1,
     temperature=1.0,
-    remasking="random",
+    remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
 )
 CONFIG = DiffusionMHConfig(total_length=2, updates=6, reward_temperature=1.0)
 
@@ -72,31 +72,13 @@ def _zero_reward(_prompt, continuations):
     return [0.0 for _ in continuations]
 
 
-def test_independence_mh_batch_prefetch_preserves_the_exact_chain():
-    sequential_backend = CountingCoinBackend()
-    batched_backend = CountingCoinBackend()
-    sequential = run_diffusion_reward_mh(
-        backend=sequential_backend,
-        prompt=(9,),
-        config=CONFIG,
-        sampling=EXACT,
-        reward=_reward,
-        proposal_batch_size=1,
-        seed=4,
+def test_independence_mh_draws_every_proposal_in_one_batch():
+    backend = CountingCoinBackend()
+    result = run_diffusion_reward_mh(
+        backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT, reward=_reward, seed=4,
     )
-    batched = run_diffusion_reward_mh(
-        backend=batched_backend,
-        prompt=(9,),
-        config=CONFIG,
-        sampling=EXACT,
-        reward=_reward,
-        proposal_batch_size=None,
-        seed=4,
-    )
-
-    assert sequential == batched
-    assert sequential_backend.batch_calls == CONFIG.updates + 1
-    assert batched_backend.batch_calls == 1
+    assert len(result.steps) == CONFIG.updates
+    assert backend.batch_calls == 1
 
 
 def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():

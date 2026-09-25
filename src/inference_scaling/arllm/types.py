@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, Sequence
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.types import TokenSequence
@@ -66,10 +66,6 @@ class SequenceSample:
     def logprob(self) -> float:
         return float(sum(self.token_logprobs))
 
-    @property
-    def full_sequence(self) -> TokenSequence:
-        return self.prefix + self.token_ids
-
 
 @dataclass(frozen=True, slots=True)
 class ScoreRequest:
@@ -78,7 +74,6 @@ class ScoreRequest:
     sampling: SamplingConfig | None = None
 
 
-@runtime_checkable
 class AutoregressiveBackend(Protocol):
     """Minimal interface required by MH, conditional IS, and replay correction."""
 

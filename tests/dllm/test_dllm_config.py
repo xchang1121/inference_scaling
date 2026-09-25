@@ -20,24 +20,22 @@ def test_decision_stages_preserve_complete_llada_blocks():
         block_length=4,
         steps_per_block=2,
         temperature=1.0,
-        remasking="random",
+        remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
 
     lengths = diffusion_decision_stage_lengths(
-        prompt_length=5,
         total_length=96,
         decision_block_size=48,
         sampling=sampling,
     )
 
     assert lengths == (48, 48)
-    assert sampling.total_steps(96, prefix_length=5) == 48
 
 
 def test_generation_length_must_contain_complete_llada_blocks():
     sampling = DiffusionSamplingConfig(
         block_length=4,
-        steps_per_block=4,
+        steps_per_block=4, temperature=0.0, top_k=0, top_p=1.0, cfg_scale=0.0, remasking="low_confidence",
     )
 
     DiffusionGenerationRequest((1, 2, 3, 4, 5), 8, sampling, 0, "aligned")
@@ -46,17 +44,18 @@ def test_generation_length_must_contain_complete_llada_blocks():
 
 
 def test_diffusion_policy_id_and_float_validation_are_exact() -> None:
-    assert DiffusionSamplingConfig(temperature=1.0000001).policy_id != (
-        DiffusionSamplingConfig(temperature=1.0000002).policy_id
+    assert DiffusionSamplingConfig(temperature=1.0000001, block_length=32, steps_per_block=32, top_k=0, top_p=1.0, cfg_scale=0.0, remasking="low_confidence").policy_id != (
+        DiffusionSamplingConfig(temperature=1.0000002, block_length=32, steps_per_block=32, top_k=0, top_p=1.0, cfg_scale=0.0, remasking="low_confidence").policy_id
     )
+    valid = {"block_length": 4, "steps_per_block": 4, "temperature": 1.0, "top_k": 0, "top_p": 1.0, "cfg_scale": 0.0,
+             "remasking": "random"}
     for kwargs in (
         {"temperature": float("nan")},
         {"top_p": float("inf")},
         {"cfg_scale": float("nan")},
-        {"confidence_threshold": float("nan")},
     ):
         with pytest.raises(ValueError):
-            DiffusionSamplingConfig(**kwargs)
+            DiffusionSamplingConfig(**(valid | kwargs))
 
 
 def test_exact_diffusion_trajectory_requires_a_complete_finite_trace() -> None:

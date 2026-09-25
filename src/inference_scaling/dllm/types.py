@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isclose, isfinite
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, Sequence
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.shared.types import TokenSequence
@@ -21,10 +21,7 @@ class DiffusionGenerationRequest:
     reference_temperature: float | None = None
 
     def __post_init__(self) -> None:
-        self.sampling.validate_generation_length(
-            self.generation_length,
-            prefix_length=len(self.prefix),
-        )
+        self.sampling.validate_generation_length(self.generation_length)
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
         if self.reference_temperature is not None and not (
@@ -101,7 +98,6 @@ class DiffusionSample:
                 raise ValueError("trajectory_logprob must equal the sum of step log-probabilities")
 
 
-@runtime_checkable
 class DiffusionBackend(Protocol):
     @property
     def model_id(self) -> str: ...

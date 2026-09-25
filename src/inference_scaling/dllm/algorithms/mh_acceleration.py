@@ -14,7 +14,6 @@ from inference_scaling.dllm.algorithms.mh import (
     DiffusionRewardFunction,
     _evaluate_mh_rewards,
     _mh_requests,
-    _sample_mh_requests,
 )
 from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
@@ -105,7 +104,9 @@ def run_diffusion_replay_mixture_mh(
     base_positions = [index for index, cached in enumerate(use_history) if not cached]
     requests = _mh_requests(prompt, config, sampling, seeds)
     base_requests = [requests[index] for index in base_positions]
-    base_samples = _sample_mh_requests(backend, base_requests, None)
+    base_samples = backend.sample_batch(base_requests)
+    if len(base_samples) != len(base_requests):
+        raise RuntimeError("backend returned an invalid number of MH proposals")
     for index, sample in zip(base_positions, base_samples, strict=True):
         samples[index] = sample
     history_draws = 0

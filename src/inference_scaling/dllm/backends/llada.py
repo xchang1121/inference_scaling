@@ -37,9 +37,8 @@ class LLaDATransformersBackend:
     The implementation follows the public LLaDA sampler: all masked positions
     are predicted in parallel and each reverse step commits a fixed number of
     positions.  ``low_confidence`` commits the most confident predictions.
-    ``random`` commits a uniform subset independent of sampled token values;
-    ``sequential`` commits the leftmost still-masked positions.  The latter two
-    policies have tractable trajectory probabilities and support off-policy IS.
+    ``random`` commits a uniform subset independent of sampled token values, so
+    its trajectories have tractable probabilities.
     """
 
     def __init__(
@@ -47,10 +46,9 @@ class LLaDATransformersBackend:
         model: Any,
         tokenizer: Any,
         *,
+        mask_token_id: int,
+        max_batch_size: int,
         model_id: str | None = None,
-        mask_token_id: int | None = None,
-        active_parameters: int | None = None,
-        max_batch_size: int | None = None,
     ) -> None:
         try:
             import torch
@@ -62,21 +60,15 @@ class LLaDATransformersBackend:
         self._torch = torch
         configured_name = getattr(getattr(model, "config", None), "_name_or_path", None)
         self._model_id = model_id or configured_name or model.__class__.__name__
-        self._mask_token_id = self._infer_mask_token_id(mask_token_id)
+        if mask_token_id < 0 or max_batch_size <= 0:
+            raise ValueError("mask_token_id must be non-negative and max_batch_size positive")
+        self._mask_token_id = mask_token_id
         self._device = self._infer_device()
-        if max_batch_size is not None and max_batch_size <= 0:
-            raise ValueError("max_batch_size must be positive when provided")
         self._max_batch_size = max_batch_size
         self._resident_parameters = int(
             sum(parameter.numel() for parameter in model.parameters())
         )
-        inferred_total, inferred_active = self._effective_parameter_counts()
-        self._total_parameters = inferred_total
-        self._active_parameters = int(
-            active_parameters if active_parameters is not None else inferred_active
-        )
-        if self._active_parameters <= 0 or self._active_parameters > self._total_parameters:
-            raise ValueError("active_parameters must lie in (0, total_parameters]")
+        self._total_parameters, self._active_parameters = self._effective_parameter_counts()
         self._lock = Lock()
         self._sample_requests = 0
         self._forward_calls = 0
@@ -90,12 +82,11 @@ class LLaDATransformersBackend:
         cls,
         model_name_or_path: str,
         *,
-        device: str = "cuda",
-        dtype: str = "bfloat16",
-        trust_remote_code: bool = True,
-        mask_token_id: int | None = None,
-        active_parameters: int | None = None,
-        max_batch_size: int | None = None,
+        device: str,
+        dtype: str,
+        trust_remote_code: bool,
+        mask_token_id: int,
+        max_batch_size: int,
         **model_kwargs: Any,
     ) -> "LLaDATransformersBackend":
         try:
@@ -126,7 +117,6 @@ class LLaDATransformersBackend:
             tokenizer,
             model_id=model_name_or_path,
             mask_token_id=mask_token_id,
-            active_parameters=active_parameters,
             max_batch_size=max_batch_size,
         )
 
@@ -139,22 +129,13 @@ class LLaDATransformersBackend:
         return self._mask_token_id
 
     def _request_chunks(self, group: Sequence[Any]) -> Sequence[Sequence[Any]]:
-        chunk_size = self._max_batch_size or len(group)
-        return tuple(
-            group[start : start + chunk_size]
-            for start in range(0, len(group), chunk_size)
-        )
+        return tuple(group[start : start + self._max_batch_size] for start in range(0, len(group), self._max_batch_size))
 
     def encode_chat(self, user_text: str, *, system_text: str | None) -> tuple[int, ...]:
         messages = ([{"role": "system", "content": system_text}] if system_text is not None else []) + [
             {"role": "user", "content": user_text},
         ]
-        if hasattr(self.tokenizer, "apply_chat_template"):
-            encoded = self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=True
-            )
-        else:
-            encoded = self.tokenizer(user_text, add_special_tokens=True)["input_ids"]
+        encoded = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
         return tuple(int(token_id) for token_id in encoded)
 
     def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool = True) -> str:
@@ -211,23 +192,6 @@ class LLaDATransformersBackend:
         except StopIteration:
             return self._torch.device("cpu")
 
-    def _infer_mask_token_id(self, explicit: int | None) -> int:
-        candidates = (
-            explicit,
-            getattr(self.tokenizer, "mask_token_id", None),
-            getattr(self.tokenizer, "gmask_token_id", None),
-            getattr(getattr(self.model, "config", None), "mask_token_id", None),
-        )
-        for candidate in candidates:
-            if isinstance(candidate, int) and candidate >= 0:
-                return candidate
-        converter = getattr(self.tokenizer, "convert_tokens_to_ids", None)
-        if callable(converter):
-            candidate = converter("[MASK]")
-            if isinstance(candidate, int) and candidate >= 0:
-                return candidate
-        raise ValueError("mask_token_id is absent from the model and tokenizer; provide it explicitly")
-
     def _effective_parameter_counts(self) -> tuple[int, int]:
         config = getattr(self.model, "config", None)
         expert_count = int(getattr(config, "num_experts", 0) or 0)
@@ -244,9 +208,6 @@ class LLaDATransformersBackend:
             total += count
             active += count * expert_fraction if ".experts." in name else count
         return total, int(round(active))
-
-    def _resolve_mask_token_id(self, sampling: DiffusionSamplingConfig) -> int:
-        return sampling.mask_token_id if sampling.mask_token_id is not None else self._mask_token_id
 
     def _record_forward(self, batch_size: int, sequence_length: int) -> None:
         with self._lock:
@@ -343,9 +304,7 @@ class LLaDATransformersBackend:
         prompt_length = len(first.prefix)
         generation_length = first.generation_length
         sampling = first.sampling
-        if sampling.remasking == "low_confidence_dynamic":
-            raise ValueError("LLaDA backend does not implement dynamic-threshold remasking")
-        mask_token_id = self._resolve_mask_token_id(sampling)
+        mask_token_id = self._mask_token_id
         batch_size = len(requests)
         tokens = self._torch.full(
             (batch_size, prompt_length + generation_length),
@@ -391,7 +350,7 @@ class LLaDATransformersBackend:
                     reference = self._torch.log_softmax(logits.float() / reference_temperature, dim=-1).gather(
                         -1, sampled_tokens.unsqueeze(-1)
                     ).squeeze(-1)
-                if sampling.remasking in {"low_confidence", "low_confidence_static"}:
+                if sampling.remasking == "low_confidence":
                     chosen_logits = self._torch.gather(
                         logits.float(), dim=-1, index=sampled_tokens.unsqueeze(-1)
                     ).squeeze(-1)
@@ -412,10 +371,6 @@ class LLaDATransformersBackend:
                     if sampling.remasking == "random":
                         priorities = self._torch.rand(
                             available, device=self._device, generator=generator
-                        )
-                    elif sampling.remasking == "sequential":
-                        priorities = -self._torch.arange(
-                            available, device=self._device, dtype=self._torch.float32
                         )
                     else:
                         assert confidence is not None

@@ -33,7 +33,7 @@ class TinyTokenizer:
 
 
 def _backend(bias, name):
-    return LLaDATransformersBackend(TinyMaskedModel(bias, name), TinyTokenizer())
+    return LLaDATransformersBackend(TinyMaskedModel(bias, name), TinyTokenizer(), mask_token_id=3, max_batch_size=64)
 
 
 def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
@@ -42,7 +42,7 @@ def test_conditional_is_decision_block_can_span_native_diffusion_blocks():
         block_length=2,
         steps_per_block=2,
         temperature=1.0,
-        remasking="random",
+        remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
 
     result = run_conditional_diffusion_is(
@@ -71,7 +71,7 @@ def test_conditional_is_rejects_decision_block_that_splits_native_block():
         block_length=4,
         steps_per_block=4,
         temperature=1.0,
-        remasking="random",
+        remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
     )
 
     with pytest.raises(ValueError, match="divisible by block_length"):
@@ -124,7 +124,7 @@ def test_independence_mh_approaches_base_times_reward_target_without_scores():
             sampling=DiffusionSamplingConfig(
                 block_length=1,
                 steps_per_block=1,
-                temperature=0.0,
+                temperature=0.0, top_k=0, top_p=1.0, cfg_scale=0.0, remasking="low_confidence",
             ),
             reward=lambda _prompt, continuation: float(continuation[0]),
             seed=seed,

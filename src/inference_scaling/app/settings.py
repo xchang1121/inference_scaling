@@ -29,7 +29,6 @@ _DLLM_SAMPLING = {
     "top_p": float,
     "cfg_scale": float,
     "remasking": _Choices({"low_confidence", "random"}),
-    "confidence_threshold": float,
 }
 
 SCHEMA: dict[str, Any] = {

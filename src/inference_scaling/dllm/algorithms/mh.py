@@ -35,22 +35,6 @@ def _mh_requests(
     ]
 
 
-def _sample_mh_requests(
-    backend: DiffusionBackend,
-    requests: Sequence[DiffusionGenerationRequest],
-    proposal_batch_size: int | None,
-) -> list[DiffusionSample]:
-    if proposal_batch_size is not None and proposal_batch_size <= 0:
-        raise ValueError("proposal_batch_size must be positive when provided")
-    batch_size = proposal_batch_size or len(requests)
-    samples: list[DiffusionSample] = []
-    for offset in range(0, len(requests), batch_size):
-        samples.extend(backend.sample_batch(requests[offset : offset + batch_size]))
-    if len(samples) != len(requests):
-        raise RuntimeError("backend returned an invalid number of MH proposals")
-    return samples
-
-
 def _evaluate_mh_rewards(
     prompt: TokenSequence,
     samples: Sequence[DiffusionSample],
@@ -105,7 +89,6 @@ def run_diffusion_reward_mh(
     reward: DiffusionRewardFunction | None = None,
     seed: int = 0,
     reward_batch: DiffusionRewardBatchFunction | None = None,
-    proposal_batch_size: int | None = None,
 ) -> DiffusionMHResult:
     """Run independence MH with proposals drawn from the base dLLM sampler.
 
@@ -116,13 +99,13 @@ def run_diffusion_reward_mh(
 
     if (reward is None) == (reward_batch is None):
         raise ValueError("provide exactly one of reward or reward_batch")
-    sampling.validate_generation_length(
-        config.total_length,
-        prefix_length=len(prompt),
-    )
+    sampling.validate_generation_length(config.total_length)
     seeds = SeedStream(seed)
+    # Proposals do not depend on the chain state, so all of them are drawn in one batch.
     requests = _mh_requests(prompt, config, sampling, seeds)
-    samples = _sample_mh_requests(backend, requests, proposal_batch_size)
+    samples = backend.sample_batch(requests)
+    if len(samples) != len(requests):
+        raise RuntimeError("backend returned an invalid number of MH proposals")
     reward_values = _evaluate_mh_rewards(prompt, samples, reward, reward_batch)
 
     current = samples[0]

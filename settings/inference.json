@@ -194,8 +194,7 @@
       "top_k": 0,
       "top_p": 1.0,
       "cfg_scale": 0.0,
-      "remasking": "low_confidence",
-      "confidence_threshold": 0.85
+      "remasking": "low_confidence"
     },
     "exact_sampling": {
       "block_length": 48,
@@ -204,8 +203,7 @@
       "top_k": 0,
       "top_p": 1.0,
       "cfg_scale": 0.0,
-      "remasking": "random",
-      "confidence_threshold": 0.85
+      "remasking": "random"
     },
     "algorithms": {
       "sample": {},

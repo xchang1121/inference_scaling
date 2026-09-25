@@ -57,9 +57,8 @@ class DLLMFamily:
         self.cache_dir = Path(str(settings["run"]["hash_cache_dir"]))
         self.reward_settings: Any = None if choices.reward is None else settings["rewards"][choices.reward]
         self.config = self.dllm["algorithms"][choices.algorithm]
-        mask = int(self.dllm["model"]["mask_token_id"])
-        self.sampling = sampling_from_settings(self.dllm["sampling"], mask)
-        self.exact = sampling_from_settings(self.dllm["exact_sampling"], mask)
+        self.sampling = sampling_from_settings(self.dllm["sampling"])
+        self.exact = sampling_from_settings(self.dllm["exact_sampling"])
         maximum = int(dataset.settings["max_new_tokens"])
         # Diffusion decodes whole blocks: the output length is the largest multiple that fits.
         self.length = maximum - maximum % self.sampling.block_length

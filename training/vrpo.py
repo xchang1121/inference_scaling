@@ -80,7 +80,7 @@ def preferences(settings: Mapping[str, Any]) -> None:
     done = {record["problem_id"] for record in records}
     pairs, wanted = sum(record["status"] == "pair" for record in records), int(options["pairs"])
     backend = load_llada_backend({**vrpo["model"], "adapter": None}, vrpo["engine"])
-    sampling = sampling_from_settings(vrpo["sampling"], int(vrpo["model"]["mask_token_id"]))
+    sampling = sampling_from_settings(vrpo["sampling"])
     maximum = int(vrpo["max_new_tokens"])
     length = maximum - maximum % sampling.block_length
     seeds = SeedStream(int(options["seed"]))

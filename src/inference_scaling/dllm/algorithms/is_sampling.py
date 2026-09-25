@@ -72,7 +72,7 @@ def run_conditional_diffusion_is(
         raise ValueError("provide exactly one of reward or reward_batch")
     seeds = SeedStream(seed)
     stages = diffusion_decision_stage_lengths(
-        prompt_length=len(prompt), total_length=config.total_length,
+        total_length=config.total_length,
         decision_block_size=config.block_size, sampling=sampling,
     )
     state: TokenSequence = ()

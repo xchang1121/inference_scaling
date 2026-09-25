@@ -148,18 +148,15 @@ def run_diffusion_trajectory_power_mh(
         sampling.block_length,
         sampling.steps_per_block,
         sampling.remasking,
-        sampling.mask_token_id,
     )
     proposal_schedule = (
         proposal_sampling.block_length,
         proposal_sampling.steps_per_block,
         proposal_sampling.remasking,
-        proposal_sampling.mask_token_id,
     )
     if schedule != proposal_schedule:
         raise ValueError("base and proposal trajectory schedules must match")
     stage_lengths = diffusion_decision_stage_lengths(
-        prompt_length=len(prompt),
         total_length=config.total_length,
         decision_block_size=config.decision_block_size,
         sampling=sampling,
@@ -297,7 +294,6 @@ def run_diffusion_block_beam(
     beams = (DiffusionBeamHypothesis((), 0.0, ()),)
     stages: list[DiffusionBlockBeamStage] = []
     stage_lengths = diffusion_decision_stage_lengths(
-        prompt_length=len(prompt),
         total_length=config.total_length,
         decision_block_size=config.decision_block_size,
         sampling=sampling,
