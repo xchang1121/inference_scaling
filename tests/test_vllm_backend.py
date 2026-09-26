@@ -47,9 +47,7 @@ class _BeamParams(_SamplingParams):
     pass
 
 
-def test_vllm_sampling_api_uses_025_and_026_public_import_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_vllm_sampling_api_uses_025_and_026_public_import_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     vllm = types.ModuleType("vllm")
     sampling_params = types.ModuleType("vllm.sampling_params")
     setattr(vllm, "SamplingParams", _SamplingParams)
@@ -85,37 +83,20 @@ class _Engine:
 
     def generate(self, prompts, *, sampling_params, use_tqdm, **kwargs):
         self.calls.append((prompts, sampling_params, use_tqdm, kwargs))
-        params = (
-            sampling_params
-            if isinstance(sampling_params, list)
-            else [sampling_params] * len(prompts)
-        )
+        params = sampling_params if isinstance(sampling_params, list) else [sampling_params] * len(prompts)
         outputs = []
         for prompt, policy in zip(prompts, params, strict=True):
             prompt_ids = self._ids(prompt)
             if hasattr(policy, "prompt_logprobs"):
-                prompt_scores = [None] + [
-                    {token: _Logprob(-float(index) / 10)}
-                    for index, token in enumerate(prompt_ids[1:], 1)
-                ]
-                outputs.append(
-                    _Output(
-                        [_Completion([7], [{7: _Logprob(-0.7)}])],
-                        prompt_logprobs=prompt_scores,
-                        num_cached_tokens=min(1, len(prompt_ids)),
-                    )
-                )
+                prompt_scores = [None] + [{token: _Logprob(-float(index) / 10)} for index, token in enumerate(prompt_ids[1:], 1)]
+                outputs.append(_Output([_Completion([7], [{7: _Logprob(-0.7)}])], prompt_logprobs=prompt_scores,
+                                       num_cached_tokens=min(1, len(prompt_ids))))
                 continue
-            count = min(2, policy.max_tokens)
-            tokens = [int(policy.seed % 5) + 3] * count
+            tokens = [int(policy.seed % 5) + 3] * min(2, policy.max_tokens)
             if policy.stop_token_ids and policy.seed == 12:
                 tokens[-1] = policy.stop_token_ids[0]
-            outputs.append(
-                _Output(
-                    [_Completion(tokens, [{token: _Logprob(-0.25)} for token in tokens])],
-                    num_cached_tokens=min(2, len(prompt_ids)),
-                )
-            )
+            outputs.append(_Output([_Completion(tokens, [{token: _Logprob(-0.25)} for token in tokens])],
+                                   num_cached_tokens=min(2, len(prompt_ids))))
         return outputs
 
     def shutdown(self):
@@ -137,12 +118,7 @@ class _FusedEngine(_Engine):
         self.rpc_calls = []
 
     def generate(self, prompts, *, sampling_params, use_tqdm, **kwargs):
-        outputs = super().generate(
-            prompts,
-            sampling_params=sampling_params,
-            use_tqdm=use_tqdm,
-            **kwargs,
-        )
+        outputs = super().generate(prompts, sampling_params=sampling_params, use_tqdm=use_tqdm, **kwargs)
         call = len(self.calls)
         for index, output in enumerate(outputs):
             request_id = f"engine:{call}:{index}"
@@ -153,14 +129,7 @@ class _FusedEngine(_Engine):
 
     def collective_rpc(self, method, *, args):
         self.rpc_calls.append((method, args))
-        request_ids = args[0]
-        return [
-            {
-                request_id: self.references.pop(request_id)
-                for request_id in request_ids
-                if request_id in self.references
-            }
-        ]
+        return [{request_id: self.references.pop(request_id) for request_id in args[0] if request_id in self.references}]
 
 
 class _Fallback:
@@ -184,36 +153,19 @@ class _Fallback:
 
     def score_statistics_batch(self, requests, **_kwargs):
         self._count(requests)
-        return [
-            {"tokens": continuation}
-            for request in requests
-            for continuation in request.continuations
-        ]
+        return [{"tokens": continuation} for request in requests for continuation in request.continuations]
 
 
 def _backend(*, fallback=None):
     engine = _Engine()
-    backend = VLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-        scoring_backend=fallback,
-    )
-    return backend, engine
+    return VLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100, sampling_params_factory=_SamplingParams,
+                       scoring_backend=fallback), engine
 
 
 def test_vllm_sampling_preserves_per_request_seed_policy_and_order() -> None:
     backend, engine = _backend()
     sampling = SamplingConfig(temperature=0.7, top_p=0.9, top_k=4, eos_token_id=2)
-    requests = [
-        GenerationRequest((1, 2), 2, sampling, seed, f"r{seed}")
-        for seed in (11, 12)
-    ]
-
-    samples = backend.sample_batch(requests)
-
+    samples = backend.sample_batch([GenerationRequest((1, 2), 2, sampling, seed, f"r{seed}") for seed in (11, 12)])
     assert [sample.request_id for sample in samples] == ["r11", "r12"]
     assert samples[0].token_logprobs == (-0.25, -0.25)
     assert samples[1].token_ids[-1] == 2
@@ -224,10 +176,8 @@ def test_vllm_sampling_preserves_per_request_seed_policy_and_order() -> None:
     assert all(item.top_p == 0.9 and item.top_k == 4 for item in params)
     assert all(item.stop_token_ids == [2] and item.ignore_eos for item in params)
     snapshot = backend.snapshot()
-    assert snapshot.sampled_sequences == 2
-    assert snapshot.generated_tokens == 4
-    assert snapshot.shared_prefill_tokens_saved == 4
-    assert snapshot.prefill_tokens == 0
+    assert (snapshot.sampled_sequences, snapshot.generated_tokens, snapshot.shared_prefill_tokens_saved,
+            snapshot.prefill_tokens) == (2, 4, 4, 0)
 
 
 def test_vllm_stops_at_single_token_markers_and_labels_the_reference_policy() -> None:
@@ -243,23 +193,11 @@ def test_vllm_stops_at_single_token_markers_and_labels_the_reference_policy() ->
 
 def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     engine = _FusedEngine()
-    backend = VLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-        mh_fused_logprobs=True,
-    )
-
-    result = run_power_mh_chain(
-        backend,
-        (1,),
-        PowerMHConfig(early_rejection=False, suffix_replay=False, alpha=2.0, total_length=2, block_size=2, steps_per_block=1, suffix_schedule="uniform", iterations=None),
-        SamplingConfig(temperature=0.5),
-        SeedStream(7),
-    )
-
+    backend = VLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100,
+                          sampling_params_factory=_SamplingParams, mh_fused_logprobs=True)
+    result = run_power_mh_chain(backend, (1,), PowerMHConfig(
+        early_rejection=False, suffix_replay=False, alpha=2.0, total_length=2, block_size=2, steps_per_block=1,
+        suffix_schedule="uniform", iterations=None), SamplingConfig(temperature=0.5), SeedStream(7))
     assert len(result.token_ids) == 2
     assert result.base_token_logprobs == (-0.4, -0.4)
     snapshot = backend.snapshot()
@@ -273,16 +211,10 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
 def test_vllm_native_score_extracts_continuation_prompt_logprobs() -> None:
     backend, _ = _backend()
 
-    scores = backend.score_batch(
-        [ScoreRequest((8, 6), ((4, 5), (), (3,)), SamplingConfig())]
-    )
-
-    assert scores == [(-0.2, -0.3), (), (-0.2,)]
+    assert backend.score_batch([ScoreRequest((8, 6), ((4, 5), (), (3,)), SamplingConfig())]) == [(-0.2, -0.3), (), (-0.2,)]
     snapshot = backend.snapshot()
-    assert snapshot.native_score_sequences == 2
-    assert snapshot.scored_tokens == 3
-    assert snapshot.score_forward_token_slots == 5
-    assert snapshot.shared_prefill_tokens_saved == 2
+    assert (snapshot.native_score_sequences, snapshot.scored_tokens, snapshot.score_forward_token_slots,
+            snapshot.shared_prefill_tokens_saved) == (2, 3, 5, 2)
 
 
 def test_vllm_nonunit_score_requires_or_uses_exact_fallback() -> None:
@@ -335,15 +267,8 @@ def test_vllm_counts_the_engine_preemptions_since_the_backend_started() -> None:
 
 def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
     engine = _BeamEngine()
-    backend = VLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-        beam_search_params_factory=_BeamParams,
-    )
-
+    backend = VLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100,
+                          sampling_params_factory=_SamplingParams, beam_search_params_factory=_BeamParams)
     assert backend.direct_generate((1,), max_new_tokens=2) == (3, 3)
     assert backend.direct_generate((1,), max_new_tokens=5, num_beams=4) == (4, 2)
     beam_call = engine.calls[-1]
@@ -410,21 +335,13 @@ class _AsyncEngine(_Engine):
 
 def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
     engine = _AsyncEngine()
-    backend = AsyncVLLMBackend(
-        engine,
-        _Tokenizer(),
-        model_id="fake",
-        parameter_count=100,
-        sampling_params_factory=_SamplingParams,
-    )
-    sampling = SamplingConfig()
+    backend = AsyncVLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100,
+                               sampling_params_factory=_SamplingParams)
     start = threading.Barrier(2)
 
     def generate(seed):
         start.wait()
-        return backend.sample_batch(
-            [GenerationRequest((1,), 1, sampling, seed, f"r{seed}")]
-        )[0]
+        return backend.sample_batch([GenerationRequest((1,), 1, SamplingConfig(), seed, f"r{seed}")])[0]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         samples = list(executor.map(generate, (1, 2)))

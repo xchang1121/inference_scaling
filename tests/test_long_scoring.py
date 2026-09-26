@@ -3,11 +3,15 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
+from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import ScoreRequest
-from inference_scaling.arllm.types import GenerationRequest
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
 from inference_scaling.shared.model.generation import generation_budget
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.types import pointwise
 
 
 def _tiny_model(family):
@@ -116,3 +120,27 @@ def test_growing_cache_matches_the_dynamic_cache_through_crops_and_row_selection
             cache.update(states[0], states[1], 0)
         for left, right in zip(cache_layers(growing), cache_layers(dynamic), strict=True):
             assert torch.equal(left[0], right[0]) and torch.equal(left[1], right[1])
+
+
+def test_every_speedup_at_once_leaves_is_and_power_mh_unchanged():
+    model, options = _tiny_model("qwen2"), {"device": "cpu", "max_score_batch_size": 8, "score_chunk_size": 4}
+    with torch.no_grad():
+        # Sharper distributions, so that the chain replays suffix tokens and rejects proposals early.
+        model.lm_head.weight.mul_(8)
+    runs = []
+    for on in (False, True):
+        backend = TransformersBackend(model, TOKENIZER, **options, prefix_cache_bytes=2**24 * on, in_place_kv=on,
+                                      cuda_graphs=on)
+        runs.append((backend, run_conditional_is(
+            backend, (1, 4, 3), ConditionalISConfig(block_first=on, total_length=8, block_size=2, candidate_count=3,
+                                                    rollout_count=2, reward_temperature=0.5),
+            pointwise(lambda _prompt, tokens: float(sum(tokens) % 5)), SeedStream(5), sampling=SamplingConfig(eos_token_id=2)),
+            run_power_mh_chain(backend, (1, 4, 3), PowerMHConfig(
+                early_rejection=on, suffix_replay=on, alpha=4.0, total_length=8, block_size=4, steps_per_block=3,
+                suffix_schedule="uniform", iterations=None), SamplingConfig(temperature=0.25, eos_token_id=2), SeedStream(8))))
+    (_, is_plain, mh_plain), (fast, is_fast, mh_fast) = runs
+    assert mh_fast.early_rejected and fast.snapshot().replayed_tokens
+    assert is_fast.token_ids == is_plain.token_ids
+    assert [step.selected_index for step in is_fast.steps] == [step.selected_index for step in is_plain.steps]
+    assert mh_fast.token_ids == mh_plain.token_ids
+    assert [(step.cut, step.accepted) for step in mh_fast.trace] == [(step.cut, step.accepted) for step in mh_plain.trace]
