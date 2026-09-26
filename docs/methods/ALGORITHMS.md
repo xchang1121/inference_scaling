@@ -412,6 +412,24 @@ $`u_t`$ 逐位检查：$`u_t`$ 落在草稿 token 的区间内，恰是逆累积
 数记在 `trace.replayed_tokens`，后端计数器 `replayed_tokens` 汇总免去的生成 token。重放需要请求级均匀数流，
 只有 Transformers 后端支持；冻结历史 proposal 只对基础分量重放。
 
+<a id="mh-early-rejection"></a>
+### 4.2 精确提前拒绝
+
+记 proposal 温度为 $`1/\beta`$。当 $`1\le\beta\le\alpha`$（即 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内）时，每个
+proposal token 对式 (4) 对数接受比的贡献
+
+```math
+w_t=\alpha\log p(v_t)-\log q(v_t)=(\alpha-\beta)\log p(v_t)+\log\sum_u p(u)^\beta\le 0,
+```
+
+$`\beta=\alpha`$ 时它等于 $`\log\sum_u p(u)^\alpha`$，与所取 token 无关。于是 $`\log A=\min\{0,\sum_{v}w_t-\sum_{y_{c+1:n}}w_t\}`$，
+新后缀的部分和只降不升。在这一温度范围内，实现总用截到 0 的 $`\min(0,w_t)`$ 计算接受比，截断只去掉舍入误差。
+`early_rejection` 打开时先抽接受用的 $`U`$，把当前后缀的权重和与 $`\log U`$ 随请求交给后端；后端按生成顺序累加，
+部分和减去当前后缀的和一旦小于 $`\log U`$ 就停止并返回 `rejected`。部分和单调不增、累加顺序与判定时相同，所以被停下
+的 proposal 生成完也会被拒绝，链与关闭时逐步相同，只是不再生成停止点之后的 token。与后缀重放叠加时，重放阶段的部分和
+不低于当前后缀的和，提前拒绝只在第一次偏离之后起作用。`trace.early_rejected` 记录提前停止的次数，这些步的 proposal
+长度与 `log_acceptance` 取停止时的值。
+
 dLLM 的 `mh_power` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
 而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点落在原生扩散块边界，阶段按
 `dllm.algorithms.mh_power.decision_block_size` 延长；每个阶段执行 `updates_per_stage` 次更新。proposal 逐个原生块

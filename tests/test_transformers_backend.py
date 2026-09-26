@@ -6,7 +6,7 @@ import torch
 
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import Draft, GenerationRequest, ScoreRequest
+from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest
 from inference_scaling.shared.rng import uniform_stream
 
 
@@ -292,3 +292,15 @@ def test_draft_replay_keeps_the_output_and_generates_only_after_the_first_miss()
     # The identical request is replayed whole; the other one is generated from its first miss.
     assert after.replayed_tokens - before.replayed_tokens == 6 + shared
     assert after.generated_tokens - before.generated_tokens == 6 - shared
+
+
+def test_log_weight_stop_rejects_rows_at_the_first_crossing_and_leaves_others() -> None:
+    backend = _backend(ConstantLogitModel([0.6, 0.3, 0.1]))
+    # At temperature 1/2 every token adds log(sum p^2) = log(0.46) to a weight with scale 2.
+    step = float(np.log(0.46))
+    stop = LogWeightStop(2.0, 0.0, 3.5 * step)
+    samples = backend.sample_batch([GenerationRequest((0,), 6, SamplingConfig(temperature=0.5), seed, str(seed),
+                                                      log_weight_stop=stop if seed else None) for seed in range(3)])
+    assert [(len(sample.token_ids), sample.finish_reason) for sample in samples] == [(6, "length"), (4, "rejected"),
+                                                                                     (4, "rejected")]
+    assert stop.weight(samples[1].reference_token_logprobs, samples[1].token_logprobs) == pytest.approx(4 * step)

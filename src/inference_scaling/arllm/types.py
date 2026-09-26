@@ -45,6 +45,35 @@ class Draft:
 
 
 @dataclass(frozen=True, slots=True)
+class LogWeightStop:
+    """End a proposal as soon as it can no longer be accepted (exact early rejection).
+
+    Token ``t`` adds ``min(0, scale * reference_logprob_t - logprob_t)`` to a running log-weight that
+    starts at ``start``; generation ends once ``running - current < threshold``. The increments are never
+    positive, so the complete proposal would fail the same test.
+    """
+
+    scale: float
+    current: float
+    threshold: float
+    start: float = 0.0
+
+    def advance(self, running: float, reference_logprob: float, logprob: float) -> float:
+        return running + min(0.0, self.scale * reference_logprob - logprob)
+
+    def rejects(self, running: float) -> bool:
+        return running - self.current < self.threshold
+
+    def weight(self, reference_logprobs: Sequence[float], logprobs: Sequence[float]) -> float:
+        """The running log-weight after ``logprobs``, summed in the order generation sums it."""
+
+        running = self.start
+        for reference, logprob in zip(reference_logprobs, logprobs, strict=True):
+            running = self.advance(running, reference, logprob)
+        return running
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationRequest:
     prefix: TokenSequence
     max_new_tokens: int
@@ -60,6 +89,8 @@ class GenerationRequest:
     uniform_offset: int = 0
     # Tokens to replay before generating; the output is the same with or without them.
     draft: Draft | None = None
+    # End with finish_reason "rejected" once the output can no longer be accepted.
+    log_weight_stop: LogWeightStop | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:

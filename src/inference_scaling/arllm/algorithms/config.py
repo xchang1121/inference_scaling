@@ -25,6 +25,8 @@ class PowerMHConfig:
     iterations: int | None
     # Replay the current suffix as a draft of each proposal (same proposals, fewer model calls).
     suffix_replay: bool
+    # Stop generating a proposal once it can no longer be accepted (same chain, fewer tokens).
+    early_rejection: bool
 
     def __post_init__(self) -> None:
         require_finite("alpha", self.alpha)

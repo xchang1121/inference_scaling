@@ -23,12 +23,7 @@ from dataclasses import dataclass, replace
 from math import ceil
 from typing import Protocol
 
-from inference_scaling.shared.budget.joint import (
-    BlockBudgetEstimate,
-    JointBudgetPlan,
-    WeightMoments,
-    choose_joint_budget,
-)
+from inference_scaling.shared.budget.joint import BlockBudgetEstimate, JointBudgetPlan, WeightMoments, choose_joint_budget
 
 EstimateBlock = Callable[[int], BlockBudgetEstimate]
 MeasureBlocks = Callable[[Sequence[BlockBudgetEstimate]], Sequence[WeightMoments | None]]
@@ -90,9 +85,7 @@ def pilot_cost(settings: JointPlannerSettings, estimate: BlockBudgetEstimate) ->
     """A pilot's planned cost beyond the shared pool: the extra completions of its cut candidates."""
     if estimate.rollout_cost == 0:
         return 0.0
-    return settings.pilot_candidates * (
-        estimate.branch_cost + (settings.pilot_rollouts - 1) * estimate.rollout_cost
-    )
+    return settings.pilot_candidates * (estimate.branch_cost + (settings.pilot_rollouts - 1) * estimate.rollout_cost)
 
 
 def pool_cost(settings: JointPlannerSettings, completion: BlockBudgetEstimate) -> float:
@@ -110,12 +103,7 @@ class FullHorizonPlanner:
     def __init__(self, settings: JointPlannerSettings):
         self.settings = settings
 
-    def select(
-        self,
-        state: PlanningState,
-        estimate_block: EstimateBlock,
-        measure: MeasureBlocks,
-    ) -> PlanSelection:
+    def select(self, state: PlanningState, estimate_block: EstimateBlock, measure: MeasureBlocks) -> PlanSelection:
         settings = self.settings
         remaining, budget = state.remaining, state.budget
         blocks = sorted({min(value, remaining) for value in settings.block_sizes} | {remaining})
@@ -135,13 +123,9 @@ class FullHorizonPlanner:
                 raise ValueError("pilot log-weights must be finite")
             estimates[index] = replace(estimates[index], moments=moments)
         plan = choose_joint_budget(
-            estimates,
-            remaining_length=remaining,
-            remaining_budget=budget - spent,
-            candidate_counts=settings.candidate_counts,
-            rollout_counts=settings.rollout_counts,
-            finish_reserve=state.finish_reserve,
-            relative_variance_floor=settings.relative_variance_floor,
+            estimates, remaining_length=remaining, remaining_budget=budget - spent,
+            candidate_counts=settings.candidate_counts, rollout_counts=settings.rollout_counts,
+            finish_reserve=state.finish_reserve, relative_variance_floor=settings.relative_variance_floor,
             forecast_length=state.expected_remaining,
         )
         if plan is None:
@@ -153,11 +137,8 @@ class AdaptiveBudgetController:
     """Evidence-gated next-chunk planning with an independent completion fallback."""
 
     def __init__(self, settings: JointPlannerSettings):
-        block, candidates, rollouts = (
-            settings.initial_block_size,
-            settings.initial_candidate_count,
-            settings.initial_rollout_count,
-        )
+        block, candidates, rollouts = (settings.initial_block_size, settings.initial_candidate_count,
+                                       settings.initial_rollout_count)
         if block is None or candidates is None or rollouts is None:
             raise ValueError("adaptive planning requires initial block, candidate and rollout counts")
         self.config = settings
@@ -165,12 +146,7 @@ class AdaptiveBudgetController:
         self.started = False
         self.neighbor_cursor = 0
 
-    def select(
-        self,
-        state: PlanningState,
-        estimate_block: EstimateBlock,
-        measure: MeasureBlocks,
-    ) -> PlanSelection:
+    def select(self, state: PlanningState, estimate_block: EstimateBlock, measure: MeasureBlocks) -> PlanSelection:
         config = self.config
         remaining, budget, finish_reserve = state.remaining, state.budget, state.finish_reserve
         spent = 0
@@ -178,9 +154,7 @@ class AdaptiveBudgetController:
         pool = int(pool_cost(config, estimate_block(remaining)))
         decision: dict[str, object] = {"previous_parameters": self.parameters}
 
-        def choose(
-            estimate: BlockBudgetEstimate, parameters: tuple[int, int, int] | None = None
-        ) -> JointBudgetPlan | None:
+        def choose(estimate: BlockBudgetEstimate, parameters: tuple[int, int, int] | None = None) -> JointBudgetPlan | None:
             return choose_joint_budget(
                 [estimate], remaining_length=remaining, remaining_budget=budget,
                 candidate_counts=(parameters[1],) if parameters else config.candidate_counts,
@@ -190,9 +164,7 @@ class AdaptiveBudgetController:
                 forecast_full_horizon=False,
             )
 
-        def result(
-            plan: JointBudgetPlan | None, estimates: list[BlockBudgetEstimate], status: str
-        ) -> PlanSelection:
+        def result(plan: JointBudgetPlan | None, estimates: list[BlockBudgetEstimate], status: str) -> PlanSelection:
             if plan is None:
                 raise RuntimeError("adaptive completion reservation invariant violated")
             decision["status"] = status
@@ -215,9 +187,7 @@ class AdaptiveBudgetController:
         estimate = estimate_block(block)
         incumbent = choose(estimate, self.parameters) if block < remaining else None
         if incumbent is None:
-            decision["finish_reason"] = (
-                "remaining_within_chunk" if block == remaining else "insufficient_incumbent_budget"
-            )
+            decision["finish_reason"] = "remaining_within_chunk" if block == remaining else "insufficient_incumbent_budget"
             completion = estimate_block(remaining)
             plan = choose(completion, (remaining, min(config.candidate_counts), 0))
             return result(plan, [completion], "finish")
@@ -270,49 +240,32 @@ class AdaptiveBudgetController:
         def score(plan: JointBudgetPlan) -> float:
             return ceil(horizon / plan.block_size) * plan.local_error_estimate
 
-        options = [
-            choose(item, (item.block_size, candidate_count, rollout_count))
-            for item in estimates
-            for candidate_count in sorted(set(config.candidate_counts))
-            for rollout_count in sorted(set(config.rollout_counts))
-        ]
+        options = [choose(item, (item.block_size, candidate_count, rollout_count)) for item in estimates
+                   for candidate_count in sorted(set(config.candidate_counts))
+                   for rollout_count in sorted(set(config.rollout_counts))]
         candidates = [plan for plan in options if plan is not None]
         best = min(candidates, key=lambda plan: (score(plan), plan.reserved_cost))
         threshold = score(incumbent) * (1 - config.adjustment_min_improvement)
         eligible = [plan for plan in candidates if score(plan) < threshold]
         if eligible:
-            best = min(eligible, key=lambda plan: (
-                plan.reserved_cost, score(plan), -plan.block_size,
-                plan.candidate_count, plan.rollout_count,
-            ))
+            best = min(eligible, key=lambda plan: (plan.reserved_cost, score(plan), -plan.block_size,
+                                                   plan.candidate_count, plan.rollout_count))
         decision.update(
             comparison_horizon=horizon, incumbent_score=score(incumbent), best_score=score(best),
-            incumbent_reserved_cost=incumbent.reserved_cost,
-            eligible_count=len(eligible),
+            incumbent_reserved_cost=incumbent.reserved_cost, eligible_count=len(eligible),
             required_relative_improvement=config.adjustment_min_improvement,
-            comparisons=[{"parameters": _parameters(plan), "score": score(plan),
-                          "reserved_cost": plan.reserved_cost,
+            comparisons=[{"parameters": _parameters(plan), "score": score(plan), "reserved_cost": plan.reserved_cost,
                           "eligible": score(plan) < threshold} for plan in candidates],
         )
         if _parameters(best) != self.parameters and score(best) < threshold:
-            decision.update(
-                selection_reason="cheapest_sufficient_improvement",
-                selected_relative_improvement=1 - score(best) / score(incumbent),
-                selected_reserved_cost=best.reserved_cost,
-            )
+            decision.update(selection_reason="cheapest_sufficient_improvement",
+                            selected_relative_improvement=1 - score(best) / score(incumbent),
+                            selected_reserved_cost=best.reserved_cost)
             return result(best, estimates, "adjusted")
-        decision.update(selection_reason="no_sufficient_improvement",
-                        selected_relative_improvement=0.0,
+        decision.update(selection_reason="no_sufficient_improvement", selected_relative_improvement=0.0,
                         selected_reserved_cost=incumbent.reserved_cost)
         return result(incumbent, estimates, "kept_no_improvement")
 
 
-__all__ = [
-    "AdaptiveBudgetController",
-    "FullHorizonPlanner",
-    "JointPlannerSettings",
-    "PlanSelection",
-    "PlanningState",
-    "pilot_cost",
-    "pool_cost",
-]
+__all__ = ["AdaptiveBudgetController", "FullHorizonPlanner", "JointPlannerSettings", "PlanSelection", "PlanningState",
+           "pilot_cost", "pool_cost"]

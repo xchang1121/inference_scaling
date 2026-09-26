@@ -33,11 +33,8 @@ class WeightMoments:
         positive_integer("candidate_count", self.candidate_count, minimum=0)
 
 
-def estimate_weight_moments(
-    log_weights: Sequence[Sequence[float]],
-    *,
-    deterministic: Sequence[bool] | None = None,
-) -> WeightMoments:
+def estimate_weight_moments(log_weights: Sequence[Sequence[float]], *,
+                            deterministic: Sequence[bool] | None = None) -> WeightMoments:
     """Subtract within-group MC noise from the variance of candidate means.
 
     Use one common log shift, never a separate normalization per candidate.
@@ -45,11 +42,7 @@ def estimate_weight_moments(
     """
     if len(log_weights) < 2:
         raise ValueError("at least two independent pilot candidates are required")
-    terminal = (
-        tuple(deterministic)
-        if deterministic is not None
-        else (False,) * len(log_weights)
-    )
+    terminal = tuple(deterministic) if deterministic is not None else (False,) * len(log_weights)
     if len(terminal) != len(log_weights):
         raise ValueError("deterministic flags must match candidate groups")
     groups = [np.asarray(group, dtype=np.float64) for group in log_weights]
@@ -63,20 +56,9 @@ def estimate_weight_moments(
     shift = max(float(group.max()) for group in groups)
     weights = [np.exp(group - shift) for group in groups]
     means = np.asarray([float(group.mean()) for group in weights])
-    variances = np.asarray(
-        [
-            0.0 if exact else float(group.var(ddof=1))
-            for group, exact in zip(weights, terminal, strict=True)
-        ]
-    )
-    noise = float(
-        np.mean(
-            [
-                variance / len(group)
-                for variance, group in zip(variances, weights, strict=True)
-            ]
-        )
-    )
+    variances = np.asarray([0.0 if exact else float(group.var(ddof=1))
+                            for group, exact in zip(weights, terminal, strict=True)])
+    noise = float(np.mean([variance / len(group) for variance, group in zip(variances, weights, strict=True)]))
     mean_squared = float(means.mean()) ** 2
     return WeightMoments(
         relative_between=max(0.0, float(means.var(ddof=1)) - noise) / mean_squared,
@@ -152,11 +134,8 @@ def choose_joint_budget(
     positive_integer("remaining_length", remaining_length)
     horizon = remaining_length if forecast_length is None else forecast_length
     positive_integer("forecast_length", horizon)
-    for name, value in (
-        ("remaining_budget", remaining_budget),
-        ("finish_reserve", finish_reserve),
-        ("relative_variance_floor", relative_variance_floor),
-    ):
+    for name, value in (("remaining_budget", remaining_budget), ("finish_reserve", finish_reserve),
+                        ("relative_variance_floor", relative_variance_floor)):
         if not isfinite(value) or value < 0:
             raise ValueError(f"{name} must be finite and non-negative")
     if not candidate_counts or not rollout_counts:
@@ -181,54 +160,18 @@ def choose_joint_budget(
         for candidates in sorted(set(candidate_counts)):
             for rollouts in (0,) if terminal else sorted(set(rollout_counts)):
                 cost = estimate.cost(candidates, rollouts)
-                if (
-                    max(stages * cost, cost + (0 if terminal else finish_reserve))
-                    > remaining_budget
-                ):
+                if max(stages * cost, cost + (0 if terminal else finish_reserve)) > remaining_budget:
                     continue
-                variance = max(
-                    estimate.moments.relative_between, relative_variance_floor
-                )
+                variance = max(estimate.moments.relative_between, relative_variance_floor)
                 if not terminal:
-                    variance += (
-                        max(estimate.moments.relative_within, relative_variance_floor)
-                        / rollouts
-                    )
+                    variance += max(estimate.moments.relative_within, relative_variance_floor) / rollouts
                 error = sqrt(variance / candidates)
-                plans.append(
-                    JointBudgetPlan(
-                        block,
-                        candidates,
-                        rollouts,
-                        cost,
-                        stages,
-                        error,
-                        stages * error,
-                        estimate.moments.candidate_count > 0,
-                    )
-                )
+                plans.append(JointBudgetPlan(block, candidates, rollouts, cost, stages, error, stages * error,
+                                             estimate.moments.candidate_count > 0))
     # Leave the forecast unclipped: clipping to 1 destroys the ranking of noisy plans.
-    return (
-        min(
-            plans,
-            key=lambda plan: (
-                plan.forecast_error_score,
-                plan.reserved_cost,
-                -plan.block_size,
-                plan.candidate_count,
-                plan.rollout_count,
-            ),
-        )
-        if plans
-        else None
-    )
+    return min(plans, key=lambda plan: (plan.forecast_error_score, plan.reserved_cost, -plan.block_size,
+                                        plan.candidate_count, plan.rollout_count)) if plans else None
 
 
-__all__ = [
-    "BlockBudgetEstimate",
-    "JointBudgetPlan",
-    "WeightMoments",
-    "choose_joint_budget",
-    "estimate_weight_moments",
-    "positive_integer",
-]
+__all__ = ["BlockBudgetEstimate", "JointBudgetPlan", "WeightMoments", "choose_joint_budget", "estimate_weight_moments",
+           "positive_integer"]

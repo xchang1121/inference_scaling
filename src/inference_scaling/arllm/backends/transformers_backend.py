@@ -324,14 +324,19 @@ class TransformersBackend:
                                                                      request.max_new_tokens)
         device_uniforms = torch_module.from_numpy(uniforms).to(self.device)
         limits = torch_module.tensor([request.max_new_tokens for request in requests], device=self.device)
-        stops = [torch_module.tensor(stop, device=self.device) for stop in first.stop_sequences]
+        markers = [torch_module.tensor(stop, device=self.device) for stop in first.stop_sequences]
         tokens = torch_module.zeros((len(requests), steps), dtype=torch_module.long, device=self.device)
         logprobs = torch_module.zeros((len(requests), steps), dtype=torch_module.float32, device=self.device)
         references = torch_module.zeros_like(logprobs)
         bounds = torch_module.zeros((len(requests), steps, 2), dtype=torch_module.float64, device=self.device)
         lengths = torch_module.zeros(len(requests), dtype=torch_module.long, device=self.device)
-        # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence.
+        # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence, 3 rejected by its log-weight.
         reasons = torch_module.zeros_like(lengths)
+        stops = [request.log_weight_stop for request in requests]
+        # Scale, current weight, threshold and running log-weight of each row; -inf never rejects.
+        weights = torch_module.tensor([(stop.scale, stop.current, stop.threshold, stop.start) if stop else
+                                       (0.0, 0.0, float("-inf"), 0.0) for stop in stops],
+                                      dtype=torch_module.float64, device=self.device)
         with self._model_lock, torch_module.inference_mode():
             retained, self._retained = self._retained, None
             reused, cache = 0, None
@@ -384,11 +389,17 @@ class TransformersBackend:
                 references[alive, step] = reference_log_probs.gather(-1, sampled[:, None]).squeeze(-1)
                 lengths[alive] = step + 1
                 reason = torch_module.zeros_like(sampled)
-                for stop in stops:
-                    if step + 1 >= len(stop):
-                        reason = reason.masked_fill((tokens[alive, step + 1 - len(stop) : step + 1] == stop).all(dim=-1), 2)
+                for marker in markers:
+                    if step + 1 >= len(marker):
+                        reason = reason.masked_fill(
+                            (tokens[alive, step + 1 - len(marker) : step + 1] == marker).all(dim=-1), 2)
                 if sampling.eos_token_id is not None:
                     reason = reason.masked_fill(sampled == sampling.eos_token_id, 1)
+                if any(stops):
+                    row = weights[alive]
+                    row[:, 3] += (row[:, 0] * references[alive, step].double() - logprobs[alive, step].double()).clamp(max=0.0)
+                    weights[alive] = row
+                    reason = reason.masked_fill((reason == 0) & (row[:, 3] - row[:, 1] < row[:, 2]), 3)
                 reasons[alive] = reason
                 keep = (reason == 0) & (step + 1 < limits[alive])
                 remaining = int(keep.sum())
@@ -419,7 +430,8 @@ class TransformersBackend:
             SequenceSample(
                 prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
                 token_logprobs=tuple(row_logprobs[:length].tolist()), policy_id=request.sampling.policy_id,
-                model_id=self.model_id, request_id=request.request_id, finish_reason=("length", "eos", "stop")[reason],
+                model_id=self.model_id, request_id=request.request_id,
+                finish_reason=("length", "eos", "stop", "rejected")[reason],
                 reference_token_logprobs=tuple(row_references[:length].tolist()),
                 reference_policy_id=reference_sampling.policy_id,
                 token_cdf_bounds=tuple(map(tuple, row_bounds[:length].tolist())),

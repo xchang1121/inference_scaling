@@ -14,7 +14,7 @@ from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
 from inference_scaling.arllm.algorithms.config import PowerMHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import Draft, GenerationRequest, ScoreRequest
+from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -255,7 +255,7 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     result = run_power_mh_chain(
         backend,
         (1,),
-        PowerMHConfig(suffix_replay=False, alpha=2.0, total_length=2, block_size=2, steps_per_block=1, suffix_schedule="uniform", iterations=None),
+        PowerMHConfig(early_rejection=False, suffix_replay=False, alpha=2.0, total_length=2, block_size=2, steps_per_block=1, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.5),
         SeedStream(7),
     )
@@ -363,11 +363,14 @@ def test_vllm_continuing_request_draws_independent_randomness() -> None:
     assert [params.seed for params in engine.calls[0][1]] == [11, SeedStream(11).derive("uniform-offset", 3)]
 
 
-def test_vllm_rejects_drafts_it_cannot_replay() -> None:
+def test_vllm_rejects_drafts_and_log_weight_stops() -> None:
     backend, _ = _backend()
     draft = Draft((3,), (-0.1,), (-0.1,), ((0.0, 0.5),))
     with pytest.raises(ValueError, match="replay"):
         backend.sample_batch([GenerationRequest((1,), 2, SamplingConfig(), 1, "r", draft=draft)])
+    with pytest.raises(ValueError, match="reference log-probabilities"):
+        backend.sample_batch([GenerationRequest((1,), 2, SamplingConfig(), 1, "r",
+                                                log_weight_stop=LogWeightStop(2.0, 0.0, -1.0))])
 
 
 class _AsyncEngine(_Engine):

@@ -146,7 +146,8 @@
         "steps_per_block": 3,
         "iterations": null,
         "suffix_schedule": "uniform",
-        "suffix_replay": true
+        "suffix_replay": true,
+        "early_rejection": true
       },
       "is": {
         "planning": "full_horizon",

@@ -33,26 +33,11 @@ from inference_scaling.arllm.algorithms.conditional_is import (
 )
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import (
-    AutoregressiveBackend,
-    GenerationRequest,
-    ScoreRequest,
-    SequenceSample,
-    TokenSequence,
-)
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 from inference_scaling.shared.budget.costs import block_costs, completion_reserve
-from inference_scaling.shared.budget.joint import (
-    BlockBudgetEstimate,
-    JointBudgetPlan,
-    WeightMoments,
-    estimate_weight_moments,
-    positive_integer,
-)
-from inference_scaling.shared.budget.planners import (
-    AdaptiveBudgetController,
-    FullHorizonPlanner,
-    PlanningState,
-)
+from inference_scaling.shared.budget.joint import (BlockBudgetEstimate, JointBudgetPlan, WeightMoments,
+                                                   estimate_weight_moments, positive_integer)
+from inference_scaling.shared.budget.planners import AdaptiveBudgetController, FullHorizonPlanner, PlanningState
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import GeneratedBatchReward
 
@@ -85,30 +70,21 @@ class JointBudgetISConfig:
         for name in ("forward_token_budget", "total_length"):
             positive_integer(name, getattr(self, name))
         for name in ("block_sizes", "candidate_counts", "rollout_counts"):
-            values = getattr(self, name)
-            if not values:
+            if not getattr(self, name):
                 raise ValueError(f"{name} cannot be empty")
-            for value in values:
-                positive_integer(
-                    name, value, minimum=2 if name == "candidate_counts" else 1
-                )
+            for value in getattr(self, name):
+                positive_integer(name, value, minimum=2 if name == "candidate_counts" else 1)
         positive_integer("pilot_candidates", self.pilot_candidates, minimum=2)
         positive_integer("pilot_rollouts", self.pilot_rollouts, minimum=2)
         positive_integer("reward_forward_passes", self.reward_forward_passes, minimum=0)
         if not isfinite(self.pilot_fraction) or not 0 <= self.pilot_fraction < 1:
             raise ValueError("pilot_fraction must be in [0, 1)")
-        if not isfinite(self.reward_temperature) or self.reward_temperature <= 0:
-            raise ValueError("reward_temperature must be finite and positive")
-        if (
-            not isfinite(self.relative_variance_floor)
-            or self.relative_variance_floor <= 0
-        ):
-            raise ValueError("relative_variance_floor must be finite and positive")
-        for name, grid, minimum in (
-            ("initial_block_size", self.block_sizes, 1),
-            ("initial_candidate_count", self.candidate_counts, 2),
-            ("initial_rollout_count", self.rollout_counts, 1),
-        ):
+        for name in ("reward_temperature", "relative_variance_floor"):
+            if not isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        for name, grid, minimum in (("initial_block_size", self.block_sizes, 1),
+                                    ("initial_candidate_count", self.candidate_counts, 2),
+                                    ("initial_rollout_count", self.rollout_counts, 1)):
             value = getattr(self, name)
             if self.planning_mode == "chunk_adaptive":
                 positive_integer(name, value, minimum=minimum)
@@ -211,14 +187,10 @@ def run_joint_budget_is(
     ledger = _Ledger(backend, reward, config.reward_forward_passes)
 
     def reserve(generated_length: int, expected: int) -> int:
-        return completion_reserve(
-            prompt_length=prompt_length,
-            generated_length=generated_length,
-            total_length=config.total_length,
-            expected_remaining=expected,
-            candidates=min(config.candidate_counts),
-            reward_forward_passes=config.reward_forward_passes,
-        )
+        return completion_reserve(prompt_length=prompt_length, generated_length=generated_length,
+                                  total_length=config.total_length, expected_remaining=expected,
+                                  candidates=min(config.candidate_counts),
+                                  reward_forward_passes=config.reward_forward_passes)
 
     def require_budget(spent: int, expected: int) -> None:
         needed = spent + reserve(0, expected)
@@ -231,15 +203,9 @@ def run_joint_budget_is(
     else:
         # Reject budgets that cannot finish even one token per candidate before probing.
         require_budget(0, 1)
-        probe = ledger.sample_batch([
-            GenerationRequest(
-                prompt,
-                config.total_length,
-                sampling,
-                seeds.derive("joint_budget_is", "length_probe"),
-                "joint-budget-is:length-probe",
-            )
-        ])[0]
+        probe = ledger.sample_batch([GenerationRequest(prompt, config.total_length, sampling,
+                                                       seeds.derive("joint_budget_is", "length_probe"),
+                                                       "joint-budget-is:length-probe")])[0]
         expected = max(1, len(probe.token_ids))
         require_budget(ledger.slots, expected)
     probe_cost = ledger.slots
@@ -248,11 +214,7 @@ def run_joint_budget_is(
     remaining_budget = config.forward_token_budget - probe_cost
     # The pilots' shared complete outputs at the current cut.
     pool: list[SequenceSample] = []
-    planner = (
-        AdaptiveBudgetController(config)
-        if config.planning_mode == "chunk_adaptive"
-        else FullHorizonPlanner(config)
-    )
+    planner = AdaptiveBudgetController(config) if config.planning_mode == "chunk_adaptive" else FullHorizonPlanner(config)
 
     def block_key(block: int) -> int | str:
         # A block reaching the output limit completes the sequence; its seed key
@@ -260,12 +222,9 @@ def run_joint_budget_is(
         return block if state.fixed + block < config.total_length else "rest"
 
     def estimate_block(block: int) -> BlockBudgetEstimate:
-        costs = block_costs(
-            prompt_length=prompt_length, generated_length=state.fixed,
-            total_length=config.total_length, block_size=block,
-            reward_forward_passes=config.reward_forward_passes,
-            expected_remaining=expected,
-        )
+        costs = block_costs(prompt_length=prompt_length, generated_length=state.fixed, total_length=config.total_length,
+                            block_size=block, reward_forward_passes=config.reward_forward_passes,
+                            expected_remaining=expected)
         return BlockBudgetEstimate(block, WeightMoments(1.0, 0.0 if costs[2] == 0 else 1.0), *costs)
 
     def measure(estimates: Sequence[BlockBudgetEstimate]) -> list[WeightMoments | None]:
@@ -303,60 +262,38 @@ def run_joint_budget_is(
         finish_reserve = reserve(state.fixed, expected)
         # Earlier overruns never block the completion: the planner always sees
         # at least the completion reserve.
-        planning = PlanningState(
-            remaining=remaining,
-            budget=max(remaining_budget, finish_reserve),
-            finish_reserve=finish_reserve,
-            expected_remaining=min(expected, remaining),
-        )
+        planning = PlanningState(remaining=remaining, budget=max(remaining_budget, finish_reserve),
+                                 finish_reserve=finish_reserve, expected_remaining=min(expected, remaining))
         before = ledger.slots
         selection = planner.select(planning, estimate_block, measure)
         plan = selection.plan
         pilot_actual = ledger.slots - before
         evaluation, kept = conditional_is_step(
-            backend=ledger,
-            prompt=prompt,
-            state=state,
-            config=ConditionalISConfig(
-                candidate_count=plan.candidate_count,
-                rollout_count=max(1, plan.rollout_count),
-                block_size=plan.block_size,
-                total_length=config.total_length,
-                reward_temperature=config.reward_temperature,
-            ),
-            sampling=sampling,
-            reward=ledger.reward,
+            backend=ledger, prompt=prompt, state=state,
+            config=ConditionalISConfig(candidate_count=plan.candidate_count, rollout_count=max(1, plan.rollout_count),
+                                       block_size=plan.block_size, total_length=config.total_length,
+                                       reward_temperature=config.reward_temperature),
+            sampling=sampling, reward=ledger.reward,
             seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), "evaluation", block_key(plan.block_size))),
             step_index=len(steps),
         )
         actual = ledger.slots - before - pilot_actual
         remaining_budget -= pilot_actual + actual
-        steps.append(
-            JointBudgetStep(
-                plan, selection.estimates, selection.pilot_reserved_cost, evaluation,
-                remaining_budget, selection.adjustment, pilot_actual, actual,
-                planning.expected_remaining,
-            )
-        )
-        rollout_lengths = [
-            len(rollout.token_ids)
-            for index, candidate in enumerate(evaluation.candidates)
-            for rollout in candidate.rollouts[int(evaluation.retained_candidate and index == 0):]
-            if rollout.token_ids
-        ]
+        steps.append(JointBudgetStep(plan, selection.estimates, selection.pilot_reserved_cost, evaluation,
+                                     remaining_budget, selection.adjustment, pilot_actual, actual,
+                                     planning.expected_remaining))
+        rollout_lengths = [len(rollout.token_ids) for index, candidate in enumerate(evaluation.candidates)
+                           for rollout in candidate.rollouts[int(evaluation.retained_candidate and index == 0):]
+                           if rollout.token_ids]
         if rollout_lengths:
             expected = max(1, ceil(sum(rollout_lengths) / len(rollout_lengths)))
         state = kept
     pilot_reserved = sum(step.pilot_reserved_cost for step in steps)
     return JointBudgetISResult(
-        prompt,
-        state.token_ids,
-        tuple(steps),
-        pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
+        prompt, state.token_ids, tuple(steps), pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
         pilot_reserved,
         "eos" if sampling.eos_token_id is not None and state.token_ids[-1] == sampling.eos_token_id
         else "length" if len(state.token_ids) >= config.total_length else "stop",
-        actual_forward_tokens=ledger.slots,
-        pilot_actual_forward_tokens=sum(step.pilot_actual_cost for step in steps),
+        actual_forward_tokens=ledger.slots, pilot_actual_forward_tokens=sum(step.pilot_actual_cost for step in steps),
         length_probe_forward_tokens=probe_cost,
     )

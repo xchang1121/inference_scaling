@@ -154,6 +154,7 @@ SCHEMA: dict[str, Any] = {
                 "iterations": _NULLABLE_INT,
                 "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
                 "suffix_replay": bool,
+                "early_rejection": bool,
             },
             "is": {
                 "planning": _Choices({"fixed", "full_horizon", "chunk_adaptive"}),

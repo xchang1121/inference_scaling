@@ -430,6 +430,8 @@ class VLLMBackend:
     def _sampling_params(self, request: GenerationRequest) -> Any:
         if request.draft is not None:
             raise ValueError("vLLM does not sample from a request's uniform stream, so it cannot replay drafts")
+        if request.log_weight_stop is not None:
+            raise ValueError("vLLM does not report the reference log-probabilities a log-weight stop needs")
         policy = request.sampling
         # vLLM cannot continue a uniform stream, so a continuing request draws independent randomness.
         seed = request.seed if not request.uniform_offset else SeedStream(request.seed).derive(

@@ -92,9 +92,10 @@ class ARFamily:
         sampling = self.ar["sampling"]
         if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
-        if self.ar["engine"]["backend"] == "vllm" and self.config.get("suffix_replay"):
-            raise ValueError(f"ar.algorithms.{choices.algorithm}.suffix_replay needs a backend that samples from "
-                             "request uniform streams (ar.engine.backend = transformers)")
+        for option in ("suffix_replay", "early_rejection"):
+            if self.ar["engine"]["backend"] == "vllm" and self.config.get(option):
+                raise ValueError(f"ar.algorithms.{choices.algorithm}.{option} needs the transformers engine, which "
+                                 "samples from request uniform streams and reports reference log-probabilities")
         self.raw: Any = None
         self.backend: Any = None
 
@@ -326,7 +327,8 @@ class ARFamily:
             PowerMHConfig(alpha=float(config["alpha"]), total_length=task.maximum,
                      block_size=min(int(config["block_size"]), task.maximum),
                      steps_per_block=int(config["steps_per_block"]), iterations=config["iterations"],
-                     suffix_schedule=str(config["suffix_schedule"]), suffix_replay=bool(config["suffix_replay"])),
+                     suffix_schedule=str(config["suffix_schedule"]), suffix_replay=bool(config["suffix_replay"]),
+                     early_rejection=bool(config["early_rejection"])),
             SamplingConfig(temperature=float(config["proposal_temperature"]), eos_token_id=self.eos),
             SeedStream(task.seed),
         )
@@ -335,6 +337,7 @@ class ARFamily:
             "acceptance_rate": result.acceptance_rate,
             "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
             "mean_accepted_token_changes": result.mean_accepted_token_changes, "replayed_tokens": result.replayed_tokens,
+            "early_rejected": result.early_rejected,
         }, None
 
     def _mh(self, task: _Task, reward: Reward | None, meter: Meter):

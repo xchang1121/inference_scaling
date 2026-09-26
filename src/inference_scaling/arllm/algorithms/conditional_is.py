@@ -23,27 +23,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import (
-    Completion,
-    cut_block,
-    sample_outputs,
-    validate_base_sampling,
-)
+from inference_scaling.arllm.algorithms.candidates import Completion, cut_block, sample_outputs, validate_base_sampling
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.importance import (
-    categorical_index_from_uniform,
-    logmeanexp,
-    normalize_log_weights,
-)
+from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
 from inference_scaling.shared.types import GeneratedBatchReward
-from inference_scaling.arllm.types import (
-    AutoregressiveBackend,
-    GenerationRequest,
-    SequenceSample,
-    TokenSequence,
-)
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, SequenceSample, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +141,7 @@ def estimate_conditional_weights(
     prefix_logprobs = tuple(generated_prefix_logprobs)
     pending = [(index, completion) for index, group in enumerate(unscored) for completion in group]
     rewards = tuple(float(value) for value in reward(
-        prompt,
-        [generated_prefix + candidates[index].token_ids + tokens for index, (tokens, _) in pending],
+        prompt, [generated_prefix + candidates[index].token_ids + tokens for index, (tokens, _) in pending],
         [prefix_logprobs + candidates[index].token_logprobs + logprobs for index, (_, logprobs) in pending],
     )) if pending else ()
     if len(rewards) != len(pending):
@@ -210,12 +195,8 @@ class ConditionalISAdapter:
     def _block_length(self, state: RetainedSequence) -> int:
         return min(self.config.block_size, self.config.total_length - state.fixed)
 
-    def propose(
-        self,
-        state: RetainedSequence,
-        step_index: int,
-        seeds: SeedStream,
-    ) -> list[tuple[SequenceSample, Completion | None]]:
+    def propose(self, state: RetainedSequence, step_index: int,
+                seeds: SeedStream) -> list[tuple[SequenceSample, Completion | None]]:
         """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs."""
 
         validate_base_sampling(self.sampling)
@@ -263,17 +244,12 @@ class ConditionalISAdapter:
             step_index=step_index, retained=retained,
         )
         # Drawn for every candidate so the kept completion is independent of which candidate the step selects.
-        completions = [
-            categorical_index_from_uniform(
-                normalize_log_weights([rollout.log_weight for rollout in candidate.rollouts]),
-                float(seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()),
-            )
-            for index, candidate in enumerate(candidates)
-        ]
-        selected = categorical_index_from_uniform(
-            normalize_log_weights([candidate.log_weight for candidate in candidates]),
-            float(seeds.generator("conditional_is", step_index, "select").random()),
-        )
+        completions = [categorical_index_from_uniform(
+            normalize_log_weights([rollout.log_weight for rollout in candidate.rollouts]),
+            float(seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()),
+        ) for index, candidate in enumerate(candidates)]
+        selected = categorical_index_from_uniform(normalize_log_weights([candidate.log_weight for candidate in candidates]),
+                                                  float(seeds.generator("conditional_is", step_index, "select").random()))
         candidate = candidates[selected]
         completion = candidate.rollouts[completions[selected]]
         carried = bool(state.token_ids)
@@ -286,9 +262,7 @@ class ConditionalISAdapter:
         return record, RetainedSequence(
             state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
             state.token_logprobs[: state.fixed] + candidate.base_token_logprobs + completion.token_logprobs,
-            completion.reward,
-            state.fixed + len(candidate.token_ids),
-        )
+            completion.reward, state.fixed + len(candidate.token_ids))
 
 
 def conditional_is_step(

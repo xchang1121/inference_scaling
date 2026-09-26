@@ -94,6 +94,7 @@ class TabularAutoregressiveBackend:
             references: list[float] = []
             bounds: list[tuple[float, float]] = []
             finish_reason = "length"
+            stop, running = request.log_weight_stop, 0.0 if request.log_weight_stop is None else request.log_weight_stop.start
             for uniform in uniform_stream(request.seed, request.uniform_offset, request.max_new_tokens):
                 probs = self.probabilities(tuple(context), request.sampling)
                 cdf = np.cumsum(probs)
@@ -106,6 +107,9 @@ class TabularAutoregressiveBackend:
                 context.append(token)
                 if request.sampling.eos_token_id == token:
                     finish_reason = "eos"
+                    break
+                if stop is not None and stop.rejects(running := stop.advance(running, references[-1], logprobs[-1])):
+                    finish_reason = "rejected"
                     break
             outputs.append(SequenceSample(
                 prefix=request.prefix, token_ids=tuple(tokens), token_logprobs=tuple(logprobs),

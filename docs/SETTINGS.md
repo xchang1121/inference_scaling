@@ -137,6 +137,7 @@
 | `mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
 | `mh.proposal` | `base`（基础策略后缀）或 `frozen_history`（冻结历史混合 proposal） |
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
+| `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.planning` | `fixed`：固定候选数、补全数与块长；`full_horizon` / `chunk_adaptive`：在前向 token 预算内逐块重新规划 |
 | `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |

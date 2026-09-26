@@ -3,7 +3,8 @@
 A draft token is kept exactly when the request's own uniform falls in the token's
 CDF interval, which is when plain generation would draw it; the first token that
 fails is left to the backend, which continues the same uniform stream. The output
-is therefore the plain output, and the kept tokens cost no model call.
+is therefore the plain output, and the kept tokens cost no model call. A request's
+log-weight stop applies to the kept tokens as it would during generation.
 """
 
 from __future__ import annotations
@@ -16,13 +17,15 @@ from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.shared.types import TokenSequence
 
 
-def _end(request: GenerationRequest, generated: TokenSequence, honors_stops: bool) -> str | None:
-    """Why plain generation ends right after ``generated``: EOS, then a stop sequence, then the length limit."""
+def _end(request: GenerationRequest, generated: TokenSequence, honors_stops: bool, rejected: bool) -> str | None:
+    """Why plain generation ends right after ``generated``: EOS, a stop sequence, a rejection, the length limit."""
 
     if generated[-1] == request.sampling.eos_token_id:
         return "eos"
     if honors_stops and any(generated[-len(stop):] == stop for stop in request.stop_sequences if len(generated) >= len(stop)):
         return "stop"
+    if rejected:
+        return "rejected"
     return "length" if len(generated) == request.max_new_tokens else None
 
 
@@ -39,7 +42,8 @@ def sample_with_drafts(
     ends: list[str | None] = []
     tails: list[GenerationRequest] = []
     for request in requests:
-        draft, count, end = request.draft, 0, None
+        draft, stop, count, end = request.draft, request.log_weight_stop, 0, None
+        running = None if stop is None else stop.start
         if draft is not None:
             limit = min(len(draft.token_ids), request.max_new_tokens)
             uniforms = uniform_stream(request.seed, request.uniform_offset, limit)
@@ -47,14 +51,19 @@ def sample_with_drafts(
                 if not below < uniform <= through:
                     break
                 count += 1
-                if (end := _end(request, draft.token_ids[:count], honors_stops)) is not None:
+                if stop is not None and running is not None:
+                    running = stop.advance(running, draft.reference_token_logprobs[count - 1],
+                                           draft.token_logprobs[count - 1])
+                rejected = stop is not None and running is not None and stop.rejects(running)
+                if (end := _end(request, draft.token_ids[:count], honors_stops, rejected)) is not None:
                     break
         kept.append(count)
         ends.append(end)
         if end is None:
             tails.append(replace(request, prefix=request.prefix + (draft.token_ids[:count] if draft else ()),
                                  max_new_tokens=request.max_new_tokens - count,
-                                 uniform_offset=request.uniform_offset + count, draft=None))
+                                 uniform_offset=request.uniform_offset + count, draft=None,
+                                 log_weight_stop=None if stop is None else replace(stop, start=running)))
     generated = iter(generate(tails) if tails else ())
     outputs: list[SequenceSample] = []
     for request, count, end in zip(requests, kept, ends, strict=True):

@@ -7,7 +7,10 @@ the prefix before it, regenerates the suffix from an autoregressive proposal
 until it stops or reaches ``T``, and applies the full forward/reverse proposal
 correction. With ``suffix_replay`` the current suffix goes to the backend as a
 draft: the proposal is unchanged, and its tokens that repeat the current ones
-cost no model call. The cut distribution does not depend on the state, so it cancels
+cost no model call. For the power target with a proposal temperature between
+``1/alpha`` and 1 each token's log-weight ``alpha log p - log q`` is at most
+zero, so with ``early_rejection`` the accept uniform is drawn first and the
+proposal stops as soon as it can no longer be accepted. The cut distribution does not depend on the state, so it cancels
 in the Hastings ratio. A cut at or after the end of a stopped output would
 regenerate an empty suffix; that move leaves the state unchanged and is
 skipped without a model call. Per-token base and proposal log-probabilities of
@@ -17,7 +20,8 @@ the current state are cached.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, log
+from sys import float_info
 
 import numpy as np
 
@@ -30,6 +34,7 @@ from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     Draft,
     GenerationRequest,
+    LogWeightStop,
     ScoreRequest,
     TokenSequence,
 )
@@ -78,6 +83,8 @@ class PowerMHStep:
     stage_length: int
     step: int
     cut: int
+    # Generated proposal tokens; a proposal stopped by early rejection counts the tokens before the stop,
+    # and its log_acceptance is the bound at the stop.
     proposed_suffix_length: int
     log_acceptance: float
     accepted: bool
@@ -87,6 +94,7 @@ class PowerMHStep:
     accepted_token_changes: int
     # Leading proposal tokens replayed from the current suffix.
     replayed_tokens: int
+    early_rejected: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +107,10 @@ class PowerMHChainResult(_ChainStatistics):
     chain_id: int
     # Cuts past the end of a stopped output: no proposal, state unchanged.
     skipped: int = 0
+
+    @property
+    def early_rejected(self) -> int:
+        return sum(step.early_rejected for step in self.trace)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,10 +225,12 @@ class _Suffix:
     token_ids: TokenSequence
     proposal_logprobs: tuple[float, ...]
     base_logprobs: tuple[float, ...]
-    # Ended at EOS or a scope boundary rather than at the length limit.
+    # Ended at EOS, a scope boundary or a rejection rather than at the length limit.
     stopped: bool
     # The proposal's CDF interval of each token when the backend reports them.
     bounds: tuple[tuple[float, float], ...] | None
+    # Stopped by its log-weight stop: an incomplete proposal that cannot be accepted.
+    rejected: bool
 
 
 def _draft(tokens: TokenSequence, proposal_logs: tuple[float, ...], base_logs: tuple[float, ...],
@@ -242,10 +256,12 @@ def _sample_suffix(
     seed: int,
     request_id: str,
     draft: Draft | None = None,
+    log_weight_stop: LogWeightStop | None = None,
 ) -> _Suffix:
     """Generate up to ``length`` tokens with their proposal and base log-probabilities."""
 
-    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id, draft=draft)])[0]
+    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id, draft=draft,
+                                                     log_weight_stop=log_weight_stop)])[0]
     stopped = sample.finish_reason != "length"
     if not 0 < len(sample.token_ids) <= length or (len(sample.token_ids) < length and not stopped):
         raise RuntimeError(
@@ -264,7 +280,8 @@ def _sample_suffix(
         base_logs = _score_one(backend, prefix, sample.token_ids, base)
     if any(not isfinite(value) for value in base_logs):
         raise ValueError("proposal generated a sequence outside the base model support")
-    return _Suffix(sample.token_ids, sample.token_logprobs, tuple(base_logs), stopped, sample.token_cdf_bounds)
+    return _Suffix(sample.token_ids, sample.token_logprobs, tuple(base_logs), stopped, sample.token_cdf_bounds,
+                   sample.finish_reason == "rejected")
 
 
 def _token_changes(old: TokenSequence, new: TokenSequence) -> int:
@@ -286,9 +303,16 @@ def run_power_mh_chain(
 
     Stage ``k`` targets ``p(y)**alpha`` over outputs of at most ``T_k`` tokens;
     an output that stopped earlier is complete and later stages do not extend it.
+    With a proposal temperature between ``1/alpha`` and 1 the decision compares the
+    clamped log-weights ``sum min(0, alpha log p - log q)`` of the two suffixes.
     """
 
     _validate_proposal(proposal)
+    # Each token's log-weight is then at most zero; clamping removes only rounding.
+    monotone = 1 / config.alpha <= proposal.temperature <= 1
+    if config.early_rejection and not monotone:
+        raise ValueError("early rejection needs a proposal temperature between 1/alpha and 1")
+    weight = LogWeightStop(config.alpha, 0.0, 0.0)
     tokens: TokenSequence = ()
     base_logs: tuple[float, ...] = ()
     proposal_logs: tuple[float, ...] = ()
@@ -318,18 +342,29 @@ def run_power_mh_chain(
                 skipped += 1
                 continue
             draft = _draft(tokens, proposal_logs, base_logs, bounds, cut) if config.suffix_replay else None
+            uniform = float(seeds.generator("mh", chain_id, stage_index, step_index, "accept").random())
+            current = weight.weight(base_logs[cut:], proposal_logs[cut:])
             suffix = _sample_suffix(
                 backend, prefix=prompt + tokens[:cut], length=stage_length - cut, sampling=proposal,
                 seed=seeds.derive("mh", chain_id, stage_index, step_index, "proposal"),
                 request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}", draft=draft,
+                log_weight_stop=LogWeightStop(config.alpha, current, log(max(uniform, float_info.min)))
+                if config.early_rejection else None,
             )
-            decision = decide_metropolis_hastings(
-                current_target_log_density=config.alpha * float(sum(base_logs[cut:])),
-                proposed_target_log_density=config.alpha * float(sum(suffix.base_logprobs)),
-                forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
-                reverse_proposal_log_probability=float(sum(proposal_logs[cut:])),
-                uniform=float(seeds.generator("mh", chain_id, stage_index, step_index, "accept").random()),
-            )
+            if monotone:
+                decision = decide_metropolis_hastings(
+                    current_target_log_density=current, uniform=uniform,
+                    proposed_target_log_density=weight.weight(suffix.base_logprobs, suffix.proposal_logprobs),
+                )
+            else:
+                decision = decide_metropolis_hastings(
+                    current_target_log_density=config.alpha * float(sum(base_logs[cut:])),
+                    proposed_target_log_density=config.alpha * float(sum(suffix.base_logprobs)),
+                    forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
+                    reverse_proposal_log_probability=float(sum(proposal_logs[cut:])), uniform=uniform,
+                )
+            if suffix.rejected and decision.accepted:
+                raise RuntimeError("an early-rejected proposal passed the acceptance test")
             changes = _token_changes(tokens[cut:], suffix.token_ids)
             replayed = 0 if draft is None else _replayed(tokens[cut:], suffix.token_ids)
             if decision.accepted:
@@ -344,6 +379,7 @@ def run_power_mh_chain(
                 accepted=decision.accepted, suffix_schedule=config.suffix_schedule,
                 suffix_probability=suffix_probability, proposed_token_changes=changes,
                 accepted_token_changes=changes if decision.accepted else 0, replayed_tokens=replayed,
+                early_rejected=suffix.rejected,
             ))
     return PowerMHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 

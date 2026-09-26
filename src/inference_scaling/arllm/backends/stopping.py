@@ -76,7 +76,9 @@ class StoppedSequenceBackend:
         logs: list[list[float]] = [[] for _ in requests]
         references: list[list[float] | None] = [[] for _ in requests]
         bounds: list[list[tuple[float, float]] | None] = [[] for _ in requests]
-        done = [False] * len(requests)
+        # Why each request ended: None while it continues, else "stop" or "rejected".
+        done: list[str | None] = [None] * len(requests)
+        weights = [None if request.log_weight_stop is None else request.log_weight_stop.start for request in requests]
         for request in requests:
             if self._stop_end(self._generated(request.prefix)) is not None:
                 raise ValueError("the prefix already ended at a stop boundary")
@@ -86,13 +88,14 @@ class StoppedSequenceBackend:
                 offset = len(tokens[index])
                 if done[index] or offset >= request.max_new_tokens:
                     continue
-                draft = request.draft
+                draft, stop = request.draft, request.log_weight_stop
                 pending.append(replace(
                     request, prefix=request.prefix + tuple(tokens[index]), max_new_tokens=request.max_new_tokens - offset,
                     sampling=self._inner_policy(request.sampling), request_id=f"{request.request_id}:stop:{offset}",
                     stop_sequences=self.stop_sequences, uniform_offset=request.uniform_offset + offset,
                     # The draft goes on only while the output has followed it.
                     draft=draft.after(offset) if draft and tuple(tokens[index]) == draft.token_ids[:offset] else None,
+                    log_weight_stop=None if stop is None else replace(stop, start=weights[index]),
                 ))
                 indices.append(index)
             if not pending:
@@ -120,15 +123,21 @@ class StoppedSequenceBackend:
                     bound.extend(sample.token_cdf_bounds[:keep])
                 else:
                     bounds[index] = None
+                stop = inner_request.log_weight_stop
+                if stop is not None:
+                    weights[index] = replace(stop, start=weights[index]).weight(
+                        (sample.reference_token_logprobs or ())[:keep], sample.token_logprobs[:keep])
                 if end is not None:
-                    done[index] = True
+                    done[index] = "stop"
+                elif sample.finish_reason == "rejected":
+                    done[index] = "rejected"
                 elif sample.finish_reason != "stop" and len(sample.token_ids) != inner_request.max_new_tokens:
                     raise RuntimeError("generation ended without EOS or a thinking boundary")
         return [
             SequenceSample(
                 prefix=request.prefix, token_ids=tuple(tokens[index]), token_logprobs=tuple(logs[index]),
                 model_id=self.model_id, policy_id=request.sampling.policy_id, request_id=request.request_id,
-                finish_reason="stop" if done[index] else "length",
+                finish_reason=done[index] or "length",
                 reference_token_logprobs=None if references[index] is None else tuple(references[index] or ()),
                 reference_policy_id=None if references[index] is None else request.reference_policy.policy_id,
                 token_cdf_bounds=None if bounds[index] is None else tuple(bounds[index] or ()),
