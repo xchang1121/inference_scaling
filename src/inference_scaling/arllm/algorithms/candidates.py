@@ -64,9 +64,10 @@ def cut_block(output: SequenceSample, length: int) -> tuple[SequenceSample, Comp
 
     if len(output.token_ids) <= length:
         return output, None
-    reference = output.reference_token_logprobs
+    reference, bounds = output.reference_token_logprobs, output.token_cdf_bounds
     block = replace(output, token_ids=output.token_ids[:length], token_logprobs=output.token_logprobs[:length],
-                    reference_token_logprobs=None if reference is None else reference[:length], finish_reason="length")
+                    reference_token_logprobs=None if reference is None else reference[:length],
+                    token_cdf_bounds=None if bounds is None else bounds[:length], finish_reason="length")
     return block, (output.token_ids[length:], output.token_logprobs[length:])
 
 

@@ -32,6 +32,40 @@ from inference_scaling.arllm.types import (
 )
 
 
+class _ChainStatistics:
+    """Acceptance and proposal statistics of a chain's ``trace``."""
+
+    __slots__ = ()
+    trace: tuple
+
+    @property
+    def attempts(self) -> int:
+        return len(self.trace)
+
+    @property
+    def accepted(self) -> int:
+        return sum(step.accepted for step in self.trace)
+
+    @property
+    def acceptance_rate(self) -> float:
+        return self.accepted / self.attempts if self.attempts else 0.0
+
+    def _mean(self, name: str) -> float:
+        return sum(getattr(step, name) for step in self.trace) / self.attempts if self.attempts else 0.0
+
+    @property
+    def mean_proposed_suffix_length(self) -> float:
+        return self._mean("proposed_suffix_length")
+
+    @property
+    def mean_proposed_token_changes(self) -> float:
+        return self._mean("proposed_token_changes")
+
+    @property
+    def mean_accepted_token_changes(self) -> float:
+        return self._mean("accepted_token_changes")
+
+
 @dataclass(frozen=True, slots=True)
 class PowerMHStep:
     stage_length: int
@@ -47,7 +81,7 @@ class PowerMHStep:
 
 
 @dataclass(frozen=True, slots=True)
-class PowerMHChainResult:
+class PowerMHChainResult(_ChainStatistics):
     prompt: TokenSequence
     token_ids: TokenSequence
     base_token_logprobs: tuple[float, ...]
@@ -56,42 +90,6 @@ class PowerMHChainResult:
     chain_id: int
     # Cuts past the end of a stopped output: no proposal, state unchanged.
     skipped: int = 0
-
-    @property
-    def attempts(self) -> int:
-        return len(self.trace)
-
-    @property
-    def accepted(self) -> int:
-        return sum(step.accepted for step in self.trace)
-
-    @property
-    def acceptance_rate(self) -> float:
-        return self.accepted / self.attempts if self.attempts else 0.0
-
-    @property
-    def mean_proposed_suffix_length(self) -> float:
-        return (
-            sum(step.proposed_suffix_length for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
-
-    @property
-    def mean_proposed_token_changes(self) -> float:
-        return (
-            sum(step.proposed_token_changes for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
-
-    @property
-    def mean_accepted_token_changes(self) -> float:
-        return (
-            sum(step.accepted_token_changes for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +108,7 @@ class RewardMHStep:
 
 
 @dataclass(frozen=True, slots=True)
-class RewardMHChainResult:
+class RewardMHChainResult(_ChainStatistics):
     prompt: TokenSequence
     token_ids: TokenSequence
     reward: float
@@ -120,42 +118,6 @@ class RewardMHChainResult:
     chain_id: int
     # Cuts past the end of a stopped output: no proposal, state unchanged.
     skipped: int = 0
-
-    @property
-    def attempts(self) -> int:
-        return len(self.trace)
-
-    @property
-    def accepted(self) -> int:
-        return sum(step.accepted for step in self.trace)
-
-    @property
-    def acceptance_rate(self) -> float:
-        return self.accepted / self.attempts if self.attempts else 0.0
-
-    @property
-    def mean_proposed_suffix_length(self) -> float:
-        return (
-            sum(step.proposed_suffix_length for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
-
-    @property
-    def mean_proposed_token_changes(self) -> float:
-        return (
-            sum(step.proposed_token_changes for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
-
-    @property
-    def mean_accepted_token_changes(self) -> float:
-        return (
-            sum(step.accepted_token_changes for step in self.trace) / self.attempts
-            if self.attempts
-            else 0.0
-        )
 
 
 def suffix_length_probabilities(

@@ -7,6 +7,7 @@ import torch
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
+from inference_scaling.shared.rng import uniform_stream
 
 
 class TinyTokenizer:
@@ -315,3 +316,14 @@ def test_token_penalty_words_take_their_single_token_forms() -> None:
     assert TokenPenalty.from_words(Tokenizer(), ["wait", "hmm"], 2) == TokenPenalty((5, 6, 7, 8), 2.0)
     with pytest.raises(ValueError, match="single token"):
         TokenPenalty.from_words(Tokenizer(), ["perhaps"], 1.0)
+
+
+def test_a_split_request_continues_the_uniform_stream_and_reports_its_cdf_bounds() -> None:
+    backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]))
+    whole = backend.sample_batch([GenerationRequest((0,), 6, SamplingConfig(), 7, "whole")])[0]
+    head = backend.sample_batch([GenerationRequest((0,), 2, SamplingConfig(), 7, "head")])[0]
+    tail = backend.sample_batch([GenerationRequest((0,) + head.token_ids, 4, SamplingConfig(), 7, "tail",
+                                                   uniform_offset=2)])[0]
+    assert head.token_ids + tail.token_ids == whole.token_ids
+    assert all(below < uniform <= through
+               for (below, through), uniform in zip(whole.token_cdf_bounds, uniform_stream(7, 0, 6), strict=True))

@@ -34,6 +34,7 @@ from typing import Any
 from packaging.version import Version
 
 from inference_scaling.shared.compute import dense_forward_flops
+from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
@@ -443,6 +444,9 @@ class VLLMBackend:
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
         policy = request.sampling
+        # vLLM cannot continue a uniform stream, so a continuing request draws independent randomness.
+        seed = request.seed if not request.uniform_offset else SeedStream(request.seed).derive(
+            "uniform-offset", request.uniform_offset)
         # Single-token stop sequences end generation in the engine; the caller cuts longer ones.
         stops = [stop[0] for stop in request.stop_sequences if len(stop) == 1]
         return self._sampling_params_factory(
@@ -450,7 +454,7 @@ class VLLMBackend:
             temperature=float(policy.temperature),
             top_p=float(policy.top_p),
             top_k=0 if policy.top_k is None else int(policy.top_k),
-            seed=int(request.seed),
+            seed=int(seed),
             logprobs=0,
             flat_logprobs=False,
             logit_bias=self._logit_bias(),

@@ -356,6 +356,13 @@ def test_vllm_token_penalty_biases_every_request_and_is_scored_exactly_elsewhere
         VLLMBackend(_Engine(), _Tokenizer(), **options).score_batch([ScoreRequest((1,), ((2,),), SamplingConfig())])
 
 
+def test_vllm_continuing_request_draws_independent_randomness() -> None:
+    backend, engine = _backend()
+    backend.sample_batch([GenerationRequest((1,), 2, SamplingConfig(), 11, "a"),
+                          GenerationRequest((1,), 2, SamplingConfig(), 11, "b", uniform_offset=3)])
+    assert [params.seed for params in engine.calls[0][1]] == [11, SeedStream(11).derive("uniform-offset", 3)]
+
+
 class _AsyncEngine(_Engine):
     def __init__(self):
         super().__init__()

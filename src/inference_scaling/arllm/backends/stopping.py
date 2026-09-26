@@ -6,7 +6,8 @@ returned as it stopped. The boundary tokens keep their model probability and
 nothing follows them, so under ``score_batch`` a continuation that runs past a
 boundary has probability zero. The end markers go to the wrapped backend as
 stop sequences; a marker that closes no boundary (an empty block) resumes the
-generation, and a backend without stop sequences is cut at the boundary.
+generation where it stopped in the same uniform stream, and a backend without
+stop sequences is cut at the boundary.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from dataclasses import replace
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample
 from inference_scaling.shared.model.output import OutputParser
-from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
 
@@ -75,6 +75,7 @@ class StoppedSequenceBackend:
         tokens: list[list[int]] = [[] for _ in requests]
         logs: list[list[float]] = [[] for _ in requests]
         references: list[list[float] | None] = [[] for _ in requests]
+        bounds: list[list[tuple[float, float]] | None] = [[] for _ in requests]
         done = [False] * len(requests)
         for request in requests:
             if self._stop_end(self._generated(request.prefix)) is not None:
@@ -85,12 +86,10 @@ class StoppedSequenceBackend:
                 offset = len(tokens[index])
                 if done[index] or offset >= request.max_new_tokens:
                     continue
-                seed = request.seed if offset == 0 else SeedStream(request.seed).derive("stop-resume", offset)
-                pending.append(GenerationRequest(
-                    prefix=request.prefix + tuple(tokens[index]), max_new_tokens=request.max_new_tokens - offset,
-                    sampling=self._inner_policy(request.sampling), seed=seed,
-                    request_id=f"{request.request_id}:stop:{offset}", stop_sequences=self.stop_sequences,
-                    reference_temperature=request.reference_temperature,
+                pending.append(replace(
+                    request, prefix=request.prefix + tuple(tokens[index]), max_new_tokens=request.max_new_tokens - offset,
+                    sampling=self._inner_policy(request.sampling), request_id=f"{request.request_id}:stop:{offset}",
+                    stop_sequences=self.stop_sequences, uniform_offset=request.uniform_offset + offset,
                 ))
                 indices.append(index)
             if not pending:
@@ -113,6 +112,11 @@ class StoppedSequenceBackend:
                     reference.extend((sample.reference_token_logprobs or ())[:keep])
                 else:
                     references[index] = None
+                bound = bounds[index]
+                if bound is not None and sample.token_cdf_bounds is not None:
+                    bound.extend(sample.token_cdf_bounds[:keep])
+                else:
+                    bounds[index] = None
                 if end is not None:
                     done[index] = True
                 elif sample.finish_reason != "stop" and len(sample.token_ids) != inner_request.max_new_tokens:
@@ -124,6 +128,7 @@ class StoppedSequenceBackend:
                 finish_reason="stop" if done[index] else "length",
                 reference_token_logprobs=None if references[index] is None else tuple(references[index] or ()),
                 reference_policy_id=None if references[index] is None else request.reference_policy.policy_id,
+                token_cdf_bounds=None if bounds[index] is None else tuple(bounds[index] or ()),
             )
             for index, request in enumerate(requests)
         ]

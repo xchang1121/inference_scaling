@@ -55,3 +55,13 @@ class SeedStream:
 
     def generator(self, *path: object) -> np.random.Generator:
         return np.random.default_rng(self.derive(*path))
+
+
+def uniform_stream(seed: int, offset: int, count: int) -> np.ndarray:
+    """Uniforms ``offset`` to ``offset + count`` of the stream of ``seed``.
+
+    Token ``j`` of a generation request uses element ``offset + j``, so a request
+    split at any position continues the same stream and reproduces the unsplit one.
+    """
+
+    return np.random.default_rng(seed).random(offset + count)[offset:]

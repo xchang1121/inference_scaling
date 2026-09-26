@@ -32,9 +32,11 @@ class StoppingTabular(TabularAutoregressiveBackend):
         for request, sample in zip(requests, super().sample_batch(requests), strict=True):
             ends = [end for end in range(1, len(sample.token_ids) + 1) for stop in request.stop_sequences
                     if sample.token_ids[:end][-len(stop):] == stop]
-            samples.append(sample if not ends else replace(
-                sample, token_ids=sample.token_ids[:min(ends)], token_logprobs=sample.token_logprobs[:min(ends)],
-                finish_reason="stop"))
+            end = min(ends, default=None)
+            samples.append(sample if end is None else replace(
+                sample, token_ids=sample.token_ids[:end], token_logprobs=sample.token_logprobs[:end],
+                reference_token_logprobs=sample.reference_token_logprobs[:end],
+                token_cdf_bounds=sample.token_cdf_bounds[:end], finish_reason="stop"))
         return samples
 
 

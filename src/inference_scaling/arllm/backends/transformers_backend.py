@@ -14,6 +14,7 @@ import numpy as np
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
+from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
 from inference_scaling.arllm.types import (
     GenerationRequest,
@@ -303,18 +304,12 @@ class TransformersBackend:
     def _padded_inputs(self, prefixes: Sequence[TokenSequence]):
         torch_module = _require_torch()
         maximum = max(len(prefix) for prefix in prefixes)
-        input_ids = torch_module.full(
-            (len(prefixes), maximum),
-            self.pad_token_id,
-            dtype=torch_module.long,
-            device=self.device,
-        )
+        input_ids = torch_module.full((len(prefixes), maximum), self.pad_token_id, dtype=torch_module.long,
+                                      device=self.device)
         attention_mask = torch_module.zeros_like(input_ids)
         for index, prefix in enumerate(prefixes):
-            values = torch_module.tensor(
-                prefix, dtype=torch_module.long, device=self.device
-            )
-            input_ids[index, maximum - len(prefix) :] = values
+            input_ids[index, maximum - len(prefix) :] = torch_module.tensor(prefix, dtype=torch_module.long,
+                                                                            device=self.device)
             attention_mask[index, maximum - len(prefix) :] = 1
         return input_ids, attention_mask
 
@@ -360,13 +355,15 @@ class TransformersBackend:
         steps = max(request.max_new_tokens for request in requests)
         uniforms = np.zeros((len(requests), steps))
         for row, request in enumerate(requests):
-            uniforms[row, : request.max_new_tokens] = np.random.default_rng(request.seed).random(request.max_new_tokens)
+            uniforms[row, : request.max_new_tokens] = uniform_stream(request.seed, request.uniform_offset,
+                                                                     request.max_new_tokens)
         device_uniforms = torch_module.from_numpy(uniforms).to(self.device)
         limits = torch_module.tensor([request.max_new_tokens for request in requests], device=self.device)
         stops = [torch_module.tensor(stop, device=self.device) for stop in first.stop_sequences]
         tokens = torch_module.zeros((len(requests), steps), dtype=torch_module.long, device=self.device)
         logprobs = torch_module.zeros((len(requests), steps), dtype=torch_module.float32, device=self.device)
         references = torch_module.zeros_like(logprobs)
+        bounds = torch_module.zeros((len(requests), steps, 2), dtype=torch_module.float64, device=self.device)
         lengths = torch_module.zeros(len(requests), dtype=torch_module.long, device=self.device)
         # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence.
         reasons = torch_module.zeros_like(lengths)
@@ -415,6 +412,9 @@ class TransformersBackend:
                 cumulative[:, -1] = 1.0
                 sampled = (cumulative < device_uniforms[alive, step, None]).sum(dim=-1).clamp_max(log_probs.shape[-1] - 1)
                 tokens[alive, step] = sampled
+                below = cumulative.gather(-1, (sampled - 1).clamp_min(0)[:, None]).squeeze(-1)
+                bounds[alive, step] = torch_module.stack(
+                    (below.masked_fill(sampled == 0, -1.0), cumulative.gather(-1, sampled[:, None]).squeeze(-1)), dim=-1)
                 logprobs[alive, step] = log_probs.gather(-1, sampled[:, None]).squeeze(-1)
                 references[alive, step] = reference_log_probs.gather(-1, sampled[:, None]).squeeze(-1)
                 lengths[alive] = step + 1
@@ -449,7 +449,7 @@ class TransformersBackend:
                 logits = outputs.logits[:, -1, :]
                 cache = getattr(outputs, "past_key_values", None)
         rows = zip(requests, lengths.tolist(), reasons.tolist(), tokens.cpu().numpy(), logprobs.cpu().numpy(),
-                   references.cpu().numpy(), strict=True)
+                   references.cpu().numpy(), bounds.cpu().numpy(), strict=True)
         samples = [
             SequenceSample(
                 prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
@@ -457,8 +457,9 @@ class TransformersBackend:
                 model_id=self.model_id, request_id=request.request_id, finish_reason=("length", "eos", "stop")[reason],
                 reference_token_logprobs=tuple(row_references[:length].tolist()),
                 reference_policy_id=reference_sampling.policy_id,
+                token_cdf_bounds=tuple(map(tuple, row_bounds[:length].tolist())),
             )
-            for request, length, reason, row_tokens, row_logprobs, row_references in rows
+            for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds in rows
         ]
         if len(requests) == 1:
             # The KV state covers the prefix and every generated token but the last.
@@ -607,33 +608,18 @@ class TransformersBackend:
             )
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
-        return tuple(
-            int(token)
-            for token in self.tokenizer.encode(
-                text, add_special_tokens=add_special_tokens
-            )
-        )
+        return tuple(int(token) for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens))
 
     def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True) -> str:
-        return str(
-            self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
-        )
+        return str(self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens))
 
-    def direct_generate(
-        self,
-        prefix: TokenSequence,
-        *,
-        max_new_tokens: int,
-        num_beams: int = 1,
-    ) -> TokenSequence:
+    def direct_generate(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int = 1) -> TokenSequence:
         """Greedy/beam baseline using Transformers' native generation path."""
 
         if max_new_tokens <= 0 or num_beams <= 0:
             raise ValueError("generation length and beam count must be positive")
         torch_module = _require_torch()
-        input_ids = torch_module.tensor(
-            [prefix], dtype=torch_module.long, device=self.device
-        )
+        input_ids = torch_module.tensor([prefix], dtype=torch_module.long, device=self.device)
         attention_mask = torch_module.ones_like(input_ids)
         # Beam search adds up the processed scores, so they are the penalized model's normalized log-probabilities.
         penalized = None if self._penalty is None else [lambda _ids, scores: self._policy_log_probs(scores, None)]
