@@ -98,6 +98,8 @@ class ConditionalISConfig:
     block_size: int
     total_length: int
     reward_temperature: float
+    # Draw fresh candidates as blocks and their first completions with the other completions.
+    block_first: bool
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):

@@ -39,7 +39,7 @@ def _step(backend, config, *, state=RetainedSequence(), reward=_reward, sampling
 
 
 def test_first_block_approaches_the_exact_conditional_target() -> None:
-    config = ConditionalISConfig(candidate_count=12, rollout_count=8, block_size=1, total_length=2, reward_temperature=1.0)
+    config = ConditionalISConfig(block_first=False, candidate_count=12, rollout_count=8, block_size=1, total_length=2, reward_temperature=1.0)
     counts: Counter[int] = Counter()
     trials = 500
     for trial in range(trials):
@@ -52,7 +52,7 @@ def test_first_block_approaches_the_exact_conditional_target() -> None:
 def test_completions_run_from_the_end_of_the_block() -> None:
     step, kept = _step(
         TabularAutoregressiveBackend({}, fallback=[0.5, 0.5]),
-        ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=2, total_length=5, reward_temperature=1.0),
+        ConditionalISConfig(block_first=False, candidate_count=3, rollout_count=2, block_size=2, total_length=5, reward_temperature=1.0),
         reward=lambda _prompt, generated: float(sum(generated)),
         seed=4,
     )
@@ -67,7 +67,7 @@ def test_early_eos_candidate_does_not_lengthen_other_completions(total_length) -
     # while the others fill the whole block. With total_length == block_size the
     # block is terminal: length-capped candidates must be scored without rollouts.
     backend = TabularAutoregressiveBackend({(): [0.25, 0.25, 0.5]}, fallback=[0.49, 0.49, 0.02])
-    config = ConditionalISConfig(candidate_count=4, rollout_count=1, block_size=3, total_length=total_length,
+    config = ConditionalISConfig(block_first=False, candidate_count=4, rollout_count=1, block_size=3, total_length=total_length,
                                  reward_temperature=1.0)
     step, _ = _step(backend, config, reward=lambda _prompt, generated: float(len(generated)),
                     sampling=SamplingConfig(eos_token_id=2))
@@ -82,7 +82,7 @@ def test_early_eos_candidate_does_not_lengthen_other_completions(total_length) -
 def test_conditional_is_returns_a_complete_sequence_within_total_length() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
     result = run_conditional_is(
-        backend, (), ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=2, total_length=5,
+        backend, (), ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=2, total_length=5,
                                          reward_temperature=1.0),
         pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(17))
     assert len(result.token_ids) == 5
@@ -93,7 +93,7 @@ def test_conditional_is_returns_a_complete_sequence_within_total_length() -> Non
 @pytest.mark.parametrize("sampling", [SamplingConfig(top_p=0.9), SamplingConfig(top_k=1)])
 def test_conditional_is_rejects_policies_that_break_the_weight_formula(sampling) -> None:
     with pytest.raises(ValueError):
-        run_conditional_is(_backend(), (), ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1,
+        run_conditional_is(_backend(), (), ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=1,
                                                                total_length=2, reward_temperature=1.0),
                            pointwise(_reward), SeedStream(1), sampling=sampling)
 
@@ -109,7 +109,7 @@ def test_conditional_is_scores_one_batch_with_generation_logprobs() -> None:
                    for values, tokens in zip(logprobs, generated, strict=True))
         return tuple(float(tokens[-1] == 1) for tokens in generated)
 
-    result = run_conditional_is(backend, (), ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1,
+    result = run_conditional_is(backend, (), ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=1,
                                                                  total_length=2, reward_temperature=1.0),
                                 reward_batch, SeedStream(91))
     assert len(result.token_ids) == 2
@@ -123,7 +123,7 @@ def test_kept_completion_is_reused_without_rescoring() -> None:
         scored.append(tuple(generated))
         return float(sum(generated))
 
-    config = ConditionalISConfig(candidate_count=3, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0)
+    config = ConditionalISConfig(block_first=False, candidate_count=3, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0)
     result = run_conditional_is(_backend(), (), config, pointwise(reward), SeedStream(7))
     sequence: tuple[int, ...] | None = None
     kept_reward = 0.0
@@ -159,7 +159,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
     target = {sequence: weight / sum(weights) for sequence, weight in zip(sequences, weights)}
     adapter = ConditionalISAdapter(
         backend=backend, prompt=(), sampling=sampling, reward=pointwise(reward),
-        config=ConditionalISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0))
+        config=ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=1, total_length=3, reward_temperature=1.0))
     starts = np.random.default_rng(0).choice(8, size=3000, p=list(target.values()))
     counts: dict[str, Counter[tuple[int, ...]]] = {"target": Counter(), "empty": Counter()}
     for trial, index in enumerate(starts):
@@ -179,3 +179,12 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
 
 def test_log_weight_normalization_matches_softmax() -> None:
     assert normalize_log_weights((0.0, float(np.log(3.0)))) == pytest.approx((0.25, 0.75))
+
+
+def test_block_first_candidates_leave_every_step_unchanged() -> None:
+    backend = TabularAutoregressiveBackend({(): [0.3, 0.3, 0.4], (0,): [0.5, 0.2, 0.3]}, fallback=[0.4, 0.4, 0.2])
+    runs = [run_conditional_is(backend, (), ConditionalISConfig(
+        block_first=block_first, candidate_count=3, rollout_count=2, block_size=2, total_length=7, reward_temperature=0.5),
+        pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(5), sampling=SamplingConfig(eos_token_id=2))
+        for block_first in (False, True)]
+    assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps

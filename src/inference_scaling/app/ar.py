@@ -385,7 +385,8 @@ class ARFamily:
                 ConditionalISConfig(candidate_count=int(fixed["candidate_count"]),
                                     rollout_count=int(fixed["rollout_count"]),
                                     block_size=min(int(fixed["block_size"]), task.maximum),
-                                    total_length=task.maximum, reward_temperature=reward.temperature),
+                                    total_length=task.maximum, reward_temperature=reward.temperature,
+                                    block_first=bool(config["block_first"])),
                 reward.generated, SeedStream(task.seed), sampling=task.sampling,
             )
             return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
@@ -399,7 +400,7 @@ class ARFamily:
             reward_temperature=reward.temperature, reward_forward_passes=reward.forward_passes,
             relative_variance_floor=float(joint["relative_variance_floor"]),
             expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
-            **adaptive,
+            block_first=bool(config["block_first"]), **adaptive,
         )
         joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.generated,
                                            SeedStream(task.seed), sampling=task.sampling)

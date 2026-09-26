@@ -142,6 +142,7 @@
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.planning` | `fixed`：固定候选数、补全数与块长；`full_horizon` / `chunk_adaptive`：在前向 token 预算内逐块重新规划 |
+| `is.block_first` | 新候选先只生成一块，第一条补全作为续写请求与其余补全同批生成（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）；Transformers 上结果不变，缩短每步的关键路径 |
 | `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |
 | `is.joint.forward_token_budget` | 每题的前向 token 位置预算 |
 | `is.joint.block_sizes` / `candidate_counts` / `rollout_counts` | B、M、K 的候选网格 |

@@ -153,6 +153,7 @@
       },
       "is": {
         "planning": "full_horizon",
+        "block_first": true,
         "fixed": {"candidate_count": 8, "rollout_count": 3, "block_size": 48},
         "joint": {
           "forward_token_budget": 98304,

@@ -92,7 +92,7 @@ def test_a_stopped_prefix_has_no_continuation():
 def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
     backend = _backend()
     result = run_conditional_is(
-        backend, (3,), ConditionalISConfig(total_length=4, block_size=2, candidate_count=2, rollout_count=2, reward_temperature=1.0),
+        backend, (3,), ConditionalISConfig(block_first=False, total_length=4, block_size=2, candidate_count=2, rollout_count=2, reward_temperature=1.0),
         pointwise(lambda prompt, sequence: float(sequence[0] == 0)), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
@@ -152,3 +152,12 @@ def test_early_rejection_through_the_thinking_scope_leaves_the_chain_unchanged()
         for rejection in (False, True)]
     assert runs[0].token_ids == runs[1].token_ids
     assert [(step.cut, step.accepted) for step in runs[0].trace] == [(step.cut, step.accepted) for step in runs[1].trace]
+
+
+def test_block_first_through_the_thinking_scope_leaves_conditional_is_unchanged():
+    raw = StoppingTabular({(3,): (0.3, 0.4, 0.3), (3, 1): (0.5, 0.2, 0.3)}, fallback=(0.4, 0.3, 0.3))
+    runs = [run_conditional_is(_backend(raw=raw), (3,), ConditionalISConfig(
+        block_first=block_first, total_length=6, block_size=2, candidate_count=3, rollout_count=2, reward_temperature=1.0),
+        pointwise(lambda prompt, sequence: float(sequence.count(0))), SeedStream(7), sampling=SamplingConfig(eos_token_id=2))
+        for block_first in (False, True)]
+    assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps

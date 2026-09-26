@@ -26,8 +26,8 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: PowerMHConfig(early_rejection=False, suffix_replay=False, suffix_schedule="unknown", alpha=4.0, total_length=32768, block_size=32, steps_per_block=10, iterations=None),
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
-        lambda: ConditionalISConfig(reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),
-        lambda: ConditionalISConfig(block_size=8, total_length=4, candidate_count=4, rollout_count=4, reward_temperature=1.0),
+        lambda: ConditionalISConfig(block_first=False, reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),
+        lambda: ConditionalISConfig(block_first=False, block_size=8, total_length=4, candidate_count=4, rollout_count=4, reward_temperature=1.0),
     ],
 )
 def test_invalid_configs_fail_early(factory) -> None:

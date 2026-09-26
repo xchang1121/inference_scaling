@@ -3,7 +3,8 @@
 A fresh candidate is drawn as a complete output and cut at the block boundary:
 the block is the candidate and the rest is its first completion, a draw from
 the base policy given the block. Fixed and budgeted conditional IS use the
-same seeds and request ids.
+same seeds and request ids. Drawn block-first, the candidate is the block alone
+and its first completion continues the same request stream later.
 """
 
 from __future__ import annotations
@@ -16,6 +17,18 @@ from inference_scaling.shared.rng import SeedStream
 
 # A generated completion: its tokens and their base-policy log-probabilities.
 Completion = tuple[TokenSequence, tuple[float, ...]]
+
+
+class OwnStream:
+    """Marks a block-first candidate: its first completion continues the candidate's own request.
+
+    The completion is requested with the candidate's seed and ``uniform_offset`` at
+    the block's length, so a backend with position-indexed uniform streams returns
+    exactly the rest of the complete output the candidate would have been cut from.
+    """
+
+
+OWN_STREAM = OwnStream()
 
 
 def validate_base_sampling(sampling: SamplingConfig) -> None:
@@ -71,4 +84,4 @@ def cut_block(output: SequenceSample, length: int) -> tuple[SequenceSample, Comp
     return block, (output.token_ids[length:], output.token_logprobs[length:])
 
 
-__all__ = ["Completion", "cut_block", "sample_outputs", "validate_base_sampling"]
+__all__ = ["Completion", "OWN_STREAM", "OwnStream", "cut_block", "sample_outputs", "validate_base_sampling"]

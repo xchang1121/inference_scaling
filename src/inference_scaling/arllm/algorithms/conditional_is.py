@@ -23,7 +23,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import Completion, cut_block, sample_outputs, validate_base_sampling
+from inference_scaling.arllm.algorithms.candidates import (OWN_STREAM, Completion, OwnStream, cut_block, sample_outputs,
+                                                           validate_base_sampling)
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
@@ -82,7 +83,7 @@ def estimate_conditional_weights(
     generated_prefix: TokenSequence,
     generated_prefix_logprobs: Sequence[float],
     candidates: Sequence[SequenceSample],
-    first_completions: Sequence[Completion | None],
+    first_completions: Sequence[Completion | OwnStream | None],
     total_length: int,
     rollout_count: int,
     sampling: SamplingConfig,
@@ -97,8 +98,10 @@ def estimate_conditional_weights(
     A candidate that ends the sequence has one empty completion. The first
     completion of any other candidate is given: ``retained``, an already
     evaluated completion of candidate 0 that is neither regenerated nor
-    re-scored, or the rest of the output the candidate was cut from. The others
-    are generated here, all in one batch, and scored in one reward batch.
+    re-scored, the rest of the output the candidate was cut from, or
+    ``OWN_STREAM`` for a block-first candidate, whose first completion continues
+    its own request here. The others are generated here, all in one batch, and
+    scored in one reward batch.
     """
 
     if rollout_count <= 0:
@@ -109,9 +112,17 @@ def estimate_conditional_weights(
         raise ValueError("each candidate needs its first completion or None")
 
     requests: list[GenerationRequest] = []
-    request_candidates: list[int] = []
+    # The candidate and completion position that each request fills.
+    slots: list[tuple[int, int]] = []
     # Completions of each candidate still to be scored.
-    unscored: list[list[Completion]] = [[] for _ in candidates]
+    unscored: list[list[Completion | None]] = [[] for _ in candidates]
+
+    def request(index: int, candidate: SequenceSample, length: int, seed: int, request_id: str, offset: int) -> None:
+        slots.append((index, len(unscored[index])))
+        unscored[index].append(None)
+        requests.append(GenerationRequest(prefix=prompt + generated_prefix + candidate.token_ids, max_new_tokens=length,
+                                          sampling=sampling, seed=seed, request_id=request_id, uniform_offset=offset))
+
     for index, candidate in enumerate(candidates):
         kept = retained is not None and index == 0
         rollout_length = total_length - len(generated_prefix) - len(candidate.token_ids)
@@ -123,20 +134,20 @@ def estimate_conditional_weights(
         if not kept:
             if first is None:
                 raise ValueError("a continuing candidate needs its first completion")
-            unscored[index].append(first)
+            if isinstance(first, OwnStream):
+                request(index, candidate, rollout_length, seeds.derive("conditional_is", step_index, "candidate", index),
+                        f"conditional-is:step:{step_index}:candidate:{index}:continuation", len(candidate.token_ids))
+            else:
+                unscored[index].append(first)
         for rollout_index in range(1, rollout_count):
-            requests.append(GenerationRequest(
-                prefix=prompt + generated_prefix + candidate.token_ids, max_new_tokens=rollout_length,
-                sampling=sampling,
-                seed=seeds.derive("conditional_is", step_index, "candidate", index, "rollout", rollout_index),
-                request_id=f"conditional-is:step:{step_index}:candidate:{index}:rollout:{rollout_index}",
-            ))
-            request_candidates.append(index)
+            request(index, candidate, rollout_length,
+                    seeds.derive("conditional_is", step_index, "candidate", index, "rollout", rollout_index),
+                    f"conditional-is:step:{step_index}:candidate:{index}:rollout:{rollout_index}", 0)
     samples = backend.sample_batch(requests) if requests else []
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
-    for index, sample in zip(request_candidates, samples, strict=True):
-        unscored[index].append((sample.token_ids, sample.token_logprobs))
+    for (index, position), sample in zip(slots, samples, strict=True):
+        unscored[index][position] = (sample.token_ids, sample.token_logprobs)
 
     prefix_logprobs = tuple(generated_prefix_logprobs)
     pending = [(index, completion) for index, group in enumerate(unscored) for completion in group]
@@ -196,13 +207,13 @@ class ConditionalISAdapter:
         return min(self.config.block_size, self.config.total_length - state.fixed)
 
     def propose(self, state: RetainedSequence, step_index: int,
-                seeds: SeedStream) -> list[tuple[SequenceSample, Completion | None]]:
-        """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs."""
+                seeds: SeedStream) -> list[tuple[SequenceSample, Completion | OwnStream | None]]:
+        """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs or drawn block-first."""
 
         validate_base_sampling(self.sampling)
         prefix = self.prompt + state.token_ids[: state.fixed]
         length = self._block_length(state)
-        proposals: list[tuple[SequenceSample, Completion | None]] = []
+        proposals: list[tuple[SequenceSample, Completion | OwnStream | None]] = []
         if state.token_ids:
             end = state.fixed + length
             proposals.append((SequenceSample(
@@ -217,9 +228,10 @@ class ConditionalISAdapter:
             ), None))
         fresh = self.config.candidate_count - len(proposals)
         if fresh:
-            outputs = sample_outputs(self.backend, prefix, fresh, self.config.total_length - state.fixed,
+            block_first = self.config.block_first
+            outputs = sample_outputs(self.backend, prefix, fresh, length if block_first else self.config.total_length - state.fixed,
                                      self.sampling, seeds, step_index, first_index=len(proposals))
-            proposals.extend(cut_block(output, length) for output in outputs)
+            proposals.extend((output, OWN_STREAM) if block_first else cut_block(output, length) for output in outputs)
         return proposals
 
     def step(

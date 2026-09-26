@@ -8,10 +8,7 @@ import pytest
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import SequenceSample
-from inference_scaling.arllm.algorithms.joint_budget_is import (
-    JointBudgetISConfig,
-    run_joint_budget_is,
-)
+from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
 from inference_scaling.shared.budget.costs import block_costs
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import pointwise
@@ -24,7 +21,7 @@ def joint_config(**overrides):
         "total_length": 32768, "block_sizes": (64, 128, 256), "candidate_counts": (2, 4, 8, 16),
         "rollout_counts": (1, 2, 4, 8), "pilot_candidates": 2, "pilot_rollouts": 2, "pilot_fraction": 0.15,
         "reward_temperature": 1.0, "reward_forward_passes": 1, "relative_variance_floor": 1e-4,
-        "expected_output_tokens": None, "planning_mode": "full_horizon",
+        "expected_output_tokens": None, "planning_mode": "full_horizon", "block_first": False,
     } | overrides
     if values["planning_mode"] == "chunk_adaptive":
         values.setdefault("adjustment_min_improvement", 0.1)
@@ -47,42 +44,26 @@ class RecordingBackend(TabularAutoregressiveBackend):
 def charged(backend, scored, prompt_length, passes):
     """The ledger: each batch's distinct prefixes once, every generated token, each distinct scored sequence."""
 
-    generated = sum(sum(map(len, {request.prefix for request in requests})) + sum(len(sample.token_ids) for sample in samples)
-                    for requests, samples in backend.batches)
+    generated = sum(sum(map(len, {request.prefix for request in requests if not request.uniform_offset}))
+                    + sum(len(sample.token_ids) for sample in samples) for requests, samples in backend.batches)
     return generated + passes * sum(prompt_length + len(sequence) for sequence in set(scored))
 
 
 def test_budget_includes_pilots_and_independent_production_samples():
     backend = RecordingBackend()
     result = run_joint_budget_is(
-        backend,
-        (),
-        joint_config(
-            forward_token_budget=400,
-            total_length=4,
-            block_sizes=(1, 2),
-            candidate_counts=(2, 4),
-            rollout_counts=(1, 2),
-            pilot_fraction=0.4,
-            reward_forward_passes=0,
-        ),
-        pointwise(lambda _p, y: float(sum(y))),
-        SeedStream(42),
-    )
+        backend, (), joint_config(forward_token_budget=400, total_length=4, block_sizes=(1, 2), candidate_counts=(2, 4),
+                                  rollout_counts=(1, 2), pilot_fraction=0.4, reward_forward_passes=0),
+        pointwise(lambda _p, y: float(sum(y))), SeedStream(42))
     assert len(result.token_ids) == 4
     assert result.pilot_reserved_forward_tokens > 0
     assert result.reserved_forward_tokens <= 400
-    assert result.reserved_forward_tokens == sum(
-        step.pilot_reserved_cost + step.plan.reserved_cost for step in result.steps
-    )
+    assert result.reserved_forward_tokens == sum(step.pilot_reserved_cost + step.plan.reserved_cost for step in result.steps)
     assert len({request.seed for request in backend.requests}) == len(backend.requests)
     # Stored statistical observations are production-only, including terminal scoring.
     for step in result.steps:
         assert len(step.evaluation.candidates) == step.plan.candidate_count
-        assert all(
-            len(candidate.rollouts) == max(1, step.plan.rollout_count)
-            for candidate in step.evaluation.candidates
-        )
+        assert all(len(candidate.rollouts) == max(1, step.plan.rollout_count) for candidate in step.evaluation.candidates)
     # Without EOS every request decodes its limit, so the realized cost is the
     # planned cost plus the length probe that measured the output length.
     actual_generation = sum(len(r.prefix) + r.max_new_tokens for r in backend.requests)
@@ -101,20 +82,10 @@ def test_multistep_plan_recomputes_budget_and_preserves_fixed_horizon(monkeypatc
 
     monkeypatch.setattr(planners, "choose_joint_budget", short_blocks)
     result = run_joint_budget_is(
-        RecordingBackend(),
-        (),
-        joint_config(
-            forward_token_budget=1000,
-            total_length=8,
-            block_sizes=(1, 2),
-            candidate_counts=(2, 4),
-            rollout_counts=(1, 2),
-            pilot_fraction=0.8,
-            reward_forward_passes=0,
-        ),
-        pointwise(lambda _p, _y: 0.0),
-        SeedStream(3),
-    )
+        RecordingBackend(), (), joint_config(forward_token_budget=1000, total_length=8, block_sizes=(1, 2),
+                                             candidate_counts=(2, 4), rollout_counts=(1, 2), pilot_fraction=0.8,
+                                             reward_forward_passes=0),
+        pointwise(lambda _p, _y: 0.0), SeedStream(3))
     assert len(result.steps) > 1
     before = 1000 - result.length_probe_forward_tokens
     length = 0
@@ -128,105 +99,55 @@ def test_multistep_plan_recomputes_budget_and_preserves_fixed_horizon(monkeypatc
 def test_initial_insufficient_budget_has_no_side_effects():
     backend = RecordingBackend()
     with pytest.raises(ValueError, match="at least"):
-        run_joint_budget_is(
-            backend,
-            (),
-            joint_config(forward_token_budget=7, total_length=4, expected_output_tokens=4),
-            pointwise(lambda _p, _y: pytest.fail("reward called")),
-            SeedStream(1),
-        )
+        run_joint_budget_is(backend, (), joint_config(forward_token_budget=7, total_length=4, expected_output_tokens=4),
+                            pointwise(lambda _p, _y: pytest.fail("reward called")), SeedStream(1))
     assert not backend.requests
 
 
 def test_length_probe_is_the_only_call_before_an_insufficient_budget_error():
     backend = RecordingBackend()
     with pytest.raises(ValueError, match="at least"):
-        run_joint_budget_is(
-            backend,
-            (),
-            joint_config(forward_token_budget=7, total_length=4),
-            pointwise(lambda _p, _y: pytest.fail("reward called")),
-            SeedStream(1),
-        )
+        run_joint_budget_is(backend, (), joint_config(forward_token_budget=7, total_length=4),
+                            pointwise(lambda _p, _y: pytest.fail("reward called")), SeedStream(1))
     assert [request.request_id for request in backend.requests] == ["joint-budget-is:length-probe"]
 
 
 def test_terminal_fallback_and_early_eos():
     config = joint_config(forward_token_budget=16, total_length=4, expected_output_tokens=4)
-    result = run_joint_budget_is(
-        RecordingBackend(), (), config, pointwise(lambda _p, _y: 0.0), SeedStream(8)
-    )
+    result = run_joint_budget_is(RecordingBackend(), (), config, pointwise(lambda _p, _y: 0.0), SeedStream(8))
     assert len(result.steps) == 1
     assert result.steps[0].plan.block_size == 4
     assert result.steps[0].plan.rollout_count == 0
     assert result.pilot_reserved_forward_tokens == 0
     assert not result.steps[0].plan.used_pilot
-    eos = run_joint_budget_is(
-        RecordingBackend((0, 1)),
-        (),
-        replace(config, forward_token_budget=300),
-        pointwise(lambda _p, _y: 0.0),
-        SeedStream(8),
-        sampling=SamplingConfig(eos_token_id=1),
-    )
+    eos = run_joint_budget_is(RecordingBackend((0, 1)), (), replace(config, forward_token_budget=300),
+                              pointwise(lambda _p, _y: 0.0), SeedStream(8), sampling=SamplingConfig(eos_token_id=1))
     assert eos.token_ids == (1,) and eos.stopping_reason == "eos"
 
 
 def test_constant_reward_preserves_base_and_repeated_seed_is_identical():
-    config = joint_config(
-        forward_token_budget=100,
-        total_length=2,
-        block_sizes=(1,),
-        candidate_counts=(2, 4),
-        rollout_counts=(1, 2),
-        pilot_fraction=0.5,
-        reward_forward_passes=0,
-    )
+    config = joint_config(forward_token_budget=100, total_length=2, block_sizes=(1,), candidate_counts=(2, 4),
+                          rollout_counts=(1, 2), pilot_fraction=0.5, reward_forward_passes=0)
     backend = RecordingBackend()
-    outputs = [
-        run_joint_budget_is(
-            backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(i)
-        ).token_ids
-        for i in range(500)
-    ]
+    outputs = [run_joint_budget_is(backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(i)).token_ids
+               for i in range(500)]
     assert np.mean([y[0] for y in outputs]) == pytest.approx(0.35, abs=0.07)
     assert np.mean([y[1] for y in outputs]) == pytest.approx(0.35, abs=0.07)
-    assert (
-        outputs[0]
-        == run_joint_budget_is(
-            backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(0)
-        ).token_ids
-    )
+    assert outputs[0] == run_joint_budget_is(backend, (), config, pointwise(lambda _p, _y: 0.0), SeedStream(0)).token_ids
 
 
 def test_full_sequence_sir_approaches_reward_target():
-    config = joint_config(
-        forward_token_budget=64,
-        total_length=1,
-        candidate_counts=(64,),
-        pilot_fraction=0,
-        reward_forward_passes=0,
-        expected_output_tokens=1,
-    )
-    outputs = [
-        run_joint_budget_is(
-            RecordingBackend((0.5, 0.5)),
-            (),
-            config,
-            pointwise(lambda _p, y: np.log(3) * y[0]),
-            SeedStream(i),
-        ).token_ids[0]
-        for i in range(500)
-    ]
+    config = joint_config(forward_token_budget=64, total_length=1, candidate_counts=(64,), pilot_fraction=0,
+                          reward_forward_passes=0, expected_output_tokens=1)
+    outputs = [run_joint_budget_is(RecordingBackend((0.5, 0.5)), (), config, pointwise(lambda _p, y: np.log(3) * y[0]),
+                                   SeedStream(i)).token_ids[0] for i in range(500)]
     assert np.mean(outputs) == pytest.approx(0.75, abs=0.06)
 
 
 def test_reward_cost_and_support_checks():
     def costs(block, *, total_length=8, expected=6):
-        return block_costs(
-            prompt_length=3, generated_length=2, total_length=total_length,
-            block_size=block, reward_forward_passes=1, expected_remaining=expected,
-        )
+        return block_costs(prompt_length=3, generated_length=2, total_length=total_length, block_size=block,
+                           reward_forward_passes=1, expected_remaining=expected)
 
     # (shared prefix, candidate block, completion, branch prefix); an expected
     # completion reaching the output limit prices every completion at it.
@@ -238,36 +159,17 @@ def test_reward_cost_and_support_checks():
     assert costs(4, expected=3) == (5, 4, 11, 9)
     backend = RecordingBackend()
     with pytest.raises(ValueError, match="full-support"):
-        run_joint_budget_is(
-            backend,
-            (),
-            joint_config(forward_token_budget=100, total_length=2),
-            pointwise(lambda _p, _y: 0.0),
-            SeedStream(0),
-            sampling=SamplingConfig(top_p=0.9),
-        )
+        run_joint_budget_is(backend, (), joint_config(forward_token_budget=100, total_length=2),
+                            pointwise(lambda _p, _y: 0.0), SeedStream(0), sampling=SamplingConfig(top_p=0.9))
     assert not backend.requests
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"pilot_fraction": float("nan")},
-        {"pilot_fraction": 1},
-        {"pilot_candidates": 1},
-        {"pilot_rollouts": 1},
-        {"reward_temperature": 0},
-        {"reward_forward_passes": -1},
-        {"block_sizes": ()},
-        {"candidate_counts": (1,)},
-        {"rollout_counts": (0,)},
-        {"relative_variance_floor": 0},
-        {"total_length": 2.5},
-        {"forward_token_budget": True},
-        {"expected_output_tokens": 0},
-        {"expected_output_tokens": True},
-    ],
-)
+@pytest.mark.parametrize("kwargs", [
+    {"pilot_fraction": float("nan")}, {"pilot_fraction": 1}, {"pilot_candidates": 1}, {"pilot_rollouts": 1},
+    {"reward_temperature": 0}, {"reward_forward_passes": -1}, {"block_sizes": ()}, {"candidate_counts": (1,)},
+    {"rollout_counts": (0,)}, {"relative_variance_floor": 0}, {"total_length": 2.5}, {"forward_token_budget": True},
+    {"expected_output_tokens": 0}, {"expected_output_tokens": True},
+])
 def test_invalid_config(kwargs):
     with pytest.raises(ValueError):
         joint_config(**({"forward_token_budget": 100} | kwargs))
@@ -311,14 +213,31 @@ def test_plans_do_not_depend_on_an_output_limit_that_is_never_reached(options):
 
     def trace(result):
         # A completion step has no chunk length: it runs to EOS under the limit.
-        return [
-            (step.plan.block_size if step.plan.rollout_count else "to_eos",
-             step.plan.candidate_count, step.plan.rollout_count, step.adjustment,
-             step.expected_remaining, step.pilot_actual_cost, step.actual_cost)
-            for step in result.steps
-        ], result.token_ids, result.actual_forward_tokens
+        return [(step.plan.block_size if step.plan.rollout_count else "to_eos", step.plan.candidate_count,
+                 step.plan.rollout_count, step.adjustment, step.expected_remaining, step.pilot_actual_cost,
+                 step.actual_cost) for step in result.steps], result.token_ids, result.actual_forward_tokens
 
     traces = [trace(run(total_length)) for total_length in (2_048, 16_384, 1_048_576)]
     assert traces[0] == traces[1] == traces[2]
     if options.get("planning_mode") == "chunk_adaptive":
         assert any(isinstance(block, int) for block, *_ in traces[0][0])
+
+
+@pytest.mark.parametrize("planning_mode", ["full_horizon", "chunk_adaptive"])
+def test_block_first_candidates_leave_the_run_and_its_ledger_unchanged(planning_mode):
+    adaptive = {"initial_block_size": 4, "initial_candidate_count": 2, "initial_rollout_count": 1} \
+        if planning_mode == "chunk_adaptive" else {}
+    runs = []
+    for block_first in (False, True):
+        backend = RecordingBackend((0.55, 0.4, 0.05))
+        runs.append((backend, run_joint_budget_is(
+            backend, (1,), joint_config(forward_token_budget=20000, total_length=24, block_sizes=(2, 4),
+                                        candidate_counts=(2, 3), rollout_counts=(1, 2), planning_mode=planning_mode,
+                                        block_first=block_first, **adaptive),
+            pointwise(lambda _prompt, sequence: float(sum(sequence) % 3)), SeedStream(21),
+            sampling=SamplingConfig(eos_token_id=2))))
+    (_, plain), (backend, blocked) = runs
+    assert blocked.token_ids == plain.token_ids and blocked.steps == plain.steps
+    assert blocked.actual_forward_tokens == plain.actual_forward_tokens
+    # The adaptive plan starts from a block that does not end the sequence, so candidates continue.
+    assert planning_mode == "full_horizon" or any(request.uniform_offset for request in backend.requests)

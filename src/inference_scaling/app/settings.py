@@ -160,6 +160,7 @@ SCHEMA: dict[str, Any] = {
             },
             "is": {
                 "planning": _Choices({"fixed", "full_horizon", "chunk_adaptive"}),
+                "block_first": bool,
                 "fixed": {"candidate_count": int, "rollout_count": int, "block_size": int},
                 "joint": {
                     "forward_token_budget": int,

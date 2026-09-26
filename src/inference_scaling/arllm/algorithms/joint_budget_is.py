@@ -58,6 +58,8 @@ class JointBudgetISConfig:
     # Initial expected output length; None measures one plain completion.
     expected_output_tokens: int | None
     planning_mode: str
+    # Production candidates are drawn block-first (see ``ConditionalISConfig``).
+    block_first: bool
     # chunk_adaptive only.
     initial_block_size: int | None = None
     initial_candidate_count: int | None = None
@@ -132,8 +134,9 @@ class _Ledger:
     """The backend and reward of one run, charging their calls under the cost model.
 
     A batch prefills each distinct prefix once and decodes every generated
-    token. Rewards are fixed per sequence, so each distinct sequence is scored
-    ``reward_forward_passes`` times once per run.
+    token; a request that continues another one's output (``uniform_offset``)
+    resumes that sequence and prefills nothing. Rewards are fixed per sequence,
+    so each distinct sequence is scored ``reward_forward_passes`` times once per run.
     """
 
     def __init__(self, backend: AutoregressiveBackend, reward: GeneratedBatchReward, passes: int) -> None:
@@ -144,7 +147,7 @@ class _Ledger:
 
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         samples = self.backend.sample_batch(requests)
-        self.slots += sum(map(len, {request.prefix for request in requests}))
+        self.slots += sum(map(len, {request.prefix for request in requests if not request.uniform_offset}))
         self.slots += sum(len(sample.token_ids) for sample in samples)
         return samples
 
@@ -272,7 +275,7 @@ def run_joint_budget_is(
             backend=ledger, prompt=prompt, state=state,
             config=ConditionalISConfig(candidate_count=plan.candidate_count, rollout_count=max(1, plan.rollout_count),
                                        block_size=plan.block_size, total_length=config.total_length,
-                                       reward_temperature=config.reward_temperature),
+                                       reward_temperature=config.reward_temperature, block_first=config.block_first),
             sampling=sampling, reward=ledger.reward,
             seeds=SeedStream(seeds.derive("joint_budget_is", len(steps), "evaluation", block_key(plan.block_size))),
             step_index=len(steps),
