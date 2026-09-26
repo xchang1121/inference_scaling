@@ -145,7 +145,8 @@ class DLLMFamily:
         ended = eos is not None and eos in tokens
         if reward is not None:
             trace["reward"] = dict(reward.description)
-        active = self.backend.snapshot().active_parameters
+        snapshot = self.backend.snapshot()
+        body, head = snapshot.active_parameters - snapshot.head_parameters, snapshot.head_parameters
         return {
             "prompt_tokens": len(prompt),
             "output": {"text": text, "thinking": None, "content": text, "thinking_status": None,
@@ -154,8 +155,8 @@ class DLLMFamily:
             "answer_text": text,
             "reward": value,
             "trace": {"generation_length": self.length, **trace},
-            "cost": meter.cost(lambda delta: delta["model_token_slots"],
-                               lambda _role, delta: 2 * active * delta["model_token_slots"]),
+            "cost": meter.cost(lambda delta: delta["model_token_slots"], lambda _role, delta: (
+                2 * body * delta["model_token_slots"] + 2 * head * delta["head_token_slots"])),
             "fallbacks": [],
         }
 

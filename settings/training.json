@@ -132,7 +132,8 @@
       "mask_token_id": 156895,
       "trust_remote_code": true
     },
-    "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8},
+    "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8,
+               "block_logits_only": true},
     "prompt": {"system": "You are a helpful AI assistant."},
     "sampling": {
       "block_length": 48,

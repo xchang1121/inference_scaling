@@ -11,11 +11,7 @@ from time import perf_counter
 from typing import Any
 
 from inference_scaling.dllm.config import DiffusionSamplingConfig
-from inference_scaling.dllm.types import (
-    DiffusionGenerationRequest,
-    DiffusionSample,
-    DiffusionTraceStep,
-)
+from inference_scaling.dllm.types import DiffusionGenerationRequest, DiffusionSample, DiffusionTraceStep
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +25,9 @@ class LLaDABackendSnapshot:
     total_parameters: int
     active_parameters: int
     resident_parameters: int
+    # Positions the output projection computed, and its parameters (counted in the active ones).
+    head_token_slots: int
+    head_parameters: int
 
 
 def active_parameter_counts(model: Any) -> tuple[int, int]:
@@ -52,18 +51,12 @@ class LLaDATransformersBackend:
     are predicted in parallel and each reverse step commits a fixed number of
     positions.  ``low_confidence`` commits the most confident predictions.
     ``random`` commits a uniform subset independent of sampled token values, so
-    its trajectories have tractable probabilities.
+    its trajectories have tractable probabilities.  With ``block_logits_only`` the
+    output projection computes only the current block's positions.
     """
 
-    def __init__(
-        self,
-        model: Any,
-        tokenizer: Any,
-        *,
-        mask_token_id: int,
-        max_batch_size: int,
-        model_id: str | None = None,
-    ) -> None:
+    def __init__(self, model: Any, tokenizer: Any, *, mask_token_id: int, max_batch_size: int,
+                 model_id: str | None = None, block_logits_only: bool = False) -> None:
         try:
             import torch
         except ImportError as exc:  # pragma: no cover - exercised without GPU extras
@@ -78,26 +71,24 @@ class LLaDATransformersBackend:
             raise ValueError("mask_token_id must be non-negative and max_batch_size positive")
         self._mask_token_id = mask_token_id
         self._eos_token_id = getattr(tokenizer, "eos_token_id", None)
-        self._device = self._infer_device()
+        self._device = next(model.parameters(), torch.empty(0)).device
         self._max_batch_size = max_batch_size
         self._resident_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
         self._total_parameters, self._active_parameters = active_parameter_counts(model)
+        head = model.get_output_embeddings() if callable(getattr(model, "get_output_embeddings", None)) else None
+        self._head_parameters = 0 if head is None else int(sum(parameter.numel() for parameter in head.parameters()))
+        # A linear projection called on the hidden states can be given only the block's positions.
+        if block_logits_only and not isinstance(head, torch.nn.Linear):
+            raise ValueError("dllm.engine.block_logits_only needs a model whose output projection is a linear layer")
+        self._block_head = head if block_logits_only else None
         self._lock = Lock()
         self._sample_requests = self._forward_calls = self._model_sequences = self._model_token_slots = 0
-        self._generated_tokens, self._elapsed_seconds = 0, 0.0
+        self._head_token_slots, self._generated_tokens, self._elapsed_seconds = 0, 0, 0.0
 
     @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        *,
-        device: str,
-        dtype: str,
-        trust_remote_code: bool,
-        mask_token_id: int,
-        max_batch_size: int,
-        **model_kwargs: Any,
-    ) -> "LLaDATransformersBackend":
+    def from_pretrained(cls, model_name_or_path: str, *, device: str, dtype: str, trust_remote_code: bool,
+                        mask_token_id: int, max_batch_size: int, block_logits_only: bool,
+                        **model_kwargs: Any) -> "LLaDATransformersBackend":
         try:
             import torch
             from transformers import AutoModel, AutoTokenizer
@@ -111,7 +102,7 @@ class LLaDATransformersBackend:
         model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code,
                                           torch_dtype=dtype_map[dtype], low_cpu_mem_usage=True, **model_kwargs).to(device)
         return cls(model, tokenizer, model_id=model_name_or_path, mask_token_id=mask_token_id,
-                   max_batch_size=max_batch_size)
+                   max_batch_size=max_batch_size, block_logits_only=block_logits_only)
 
     @property
     def model_id(self) -> str:
@@ -125,9 +116,8 @@ class LLaDATransformersBackend:
         return tuple(group[start : start + self._max_batch_size] for start in range(0, len(group), self._max_batch_size))
 
     def encode_chat(self, user_text: str, *, system_text: str | None) -> tuple[int, ...]:
-        messages = ([{"role": "system", "content": system_text}] if system_text is not None else []) + [
-            {"role": "user", "content": user_text},
-        ]
+        messages = [{"role": "system", "content": system_text}] if system_text is not None else []
+        messages.append({"role": "user", "content": user_text})
         encoded = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
         return tuple(int(token_id) for token_id in encoded)
 
@@ -139,26 +129,19 @@ class LLaDATransformersBackend:
             return LLaDABackendSnapshot(**{name: getattr(self, "_" + name)
                                            for name in LLaDABackendSnapshot.__dataclass_fields__})
 
-    def sample_batch(
-        self, requests: Sequence[DiffusionGenerationRequest]
-    ) -> list[DiffusionSample]:
+    def sample_batch(self, requests: Sequence[DiffusionGenerationRequest]) -> list[DiffusionSample]:
         if not requests:
             return []
         started = perf_counter()
-        groups: dict[
-            tuple[int, int, DiffusionSamplingConfig, float | None, bool], list[tuple[int, DiffusionGenerationRequest]]
-        ] = defaultdict(list)
+        groups: dict[tuple[Any, ...], list[tuple[int, DiffusionGenerationRequest]]] = defaultdict(list)
         for index, request in enumerate(requests):
-            key = (len(request.prefix), request.generation_length, request.sampling, request.reference_temperature,
-                   request.stop_at_eos)
-            groups[key].append((index, request))
+            groups[(len(request.prefix), request.generation_length, request.sampling, request.reference_temperature,
+                    request.stop_at_eos)].append((index, request))
         outputs: list[DiffusionSample | None] = [None] * len(requests)
         with self._torch.inference_mode():
             for group in groups.values():
                 for chunk in self._request_chunks(group):
-                    indices = [item[0] for item in chunk]
-                    samples = self._sample_group([item[1] for item in chunk])
-                    for index, sample in zip(indices, samples, strict=True):
+                    for (index, _), sample in zip(chunk, self._sample_group([item[1] for item in chunk]), strict=True):
                         outputs[index] = sample
         elapsed = perf_counter() - started
         if any(output is None for output in outputs):
@@ -170,33 +153,39 @@ class LLaDATransformersBackend:
             self._elapsed_seconds += elapsed
         return samples
 
-    def _infer_device(self) -> Any:
-        try:
-            return next(self.model.parameters()).device
-        except StopIteration:
-            return self._torch.device("cpu")
+    def _logits(self, inputs: Any, start: int, end: int) -> Any:
+        """The model's logits at positions ``start:end`` of ``inputs``; the model reads the whole canvas."""
 
-    def _record_forward(self, batch_size: int, sequence_length: int) -> None:
+        head = self._block_head
+        if head is None:
+            logits = self.model(inputs).logits[:, start:end]
+        else:
+            handle = head.register_forward_pre_hook(lambda _module, args: (args[0][:, start:end], *args[1:]))
+            try:
+                logits = self.model(inputs).logits
+            finally:
+                handle.remove()
+            if logits.shape[1] != end - start:
+                raise RuntimeError("the model's output projection did not receive the hidden states of every position")
         with self._lock:
             self._forward_calls += 1
-            self._model_sequences += batch_size
-            self._model_token_slots += batch_size * sequence_length
+            self._model_sequences += inputs.shape[0]
+            self._model_token_slots += inputs.shape[0] * inputs.shape[1]
+            self._head_token_slots += inputs.shape[0] * (inputs.shape[1] if head is None else end - start)
+        return logits
 
-    def _block_logits(self, tokens: Any, *, prompt_length: int, sampling: DiffusionSamplingConfig,
-                      start: int, end: int) -> Any:
+    def _block_logits(self, tokens: Any, start: int, end: int, *, prompt_length: int,
+                      sampling: DiffusionSamplingConfig) -> Any:
         """Policy logits of positions ``start:end``; the model still reads the whole canvas."""
 
         if sampling.cfg_scale > 0:
             unconditional = tokens.clone()
             unconditional[:, :prompt_length] = self._mask_token_id
-            model_input = self._torch.cat((tokens, unconditional), dim=0)
-            both = self.model(model_input).logits[:, start:end].float()
-            self._record_forward(model_input.shape[0], model_input.shape[1])
+            both = self._logits(self._torch.cat((tokens, unconditional), dim=0), start, end).float()
             logits, unconditional_logits = self._torch.chunk(both, 2, dim=0)
             logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (logits - unconditional_logits)
         else:
-            logits = self.model(tokens).logits[:, start:end].to(self._torch.float32, copy=True)
-            self._record_forward(tokens.shape[0], tokens.shape[1])
+            logits = self._logits(tokens, start, end).to(self._torch.float32, copy=True)
         # A committed mask would leave the state unchanged and violate the fixed
         # transfer schedule.  The reverse policy is therefore normalized over
         # ordinary vocabulary tokens only.
@@ -267,8 +256,7 @@ class LLaDATransformersBackend:
             start = prompt_length + block_index * sampling.block_length
             end, available = start + sampling.block_length, sampling.block_length
             for step_index, count in enumerate(schedule):
-                logits = self._block_logits(tokens, prompt_length=prompt_length, sampling=sampling, start=start,
-                                            end=end)
+                logits = self._block_logits(tokens, start, end, prompt_length=prompt_length, sampling=sampling)
                 sampled, token_logprobs = self._draw_tokens(logits, temperature=sampling.temperature,
                                                             generators=generators)
                 if sampling.remasking == "random":
@@ -312,15 +300,12 @@ class LLaDATransformersBackend:
                         break
         for original, values in zip(rows, tokens[:, prompt_length:].tolist(), strict=True):
             outputs[original] = tuple(values)
-        return [
-            DiffusionSample(
-                prefix=request.prefix, token_ids=outputs[index], trace=tuple(traces[index]),
-                trajectory_logprob=logprobs[index] if exact else None, policy_id=sampling.policy_id,
-                model_id=self.model_id, request_id=request.request_id, finish_reason=finish[index],
-                reference_trajectory_logprob=None if reference_temperature is None else references[index],
-            )
-            for index, request in enumerate(requests)
-        ]
+        return [DiffusionSample(
+            prefix=request.prefix, token_ids=outputs[index], trace=tuple(traces[index]),
+            trajectory_logprob=logprobs[index] if exact else None, policy_id=sampling.policy_id,
+            model_id=self.model_id, request_id=request.request_id, finish_reason=finish[index],
+            reference_trajectory_logprob=None if reference_temperature is None else references[index],
+        ) for index, request in enumerate(requests)]
 
 
 __all__ = ["LLaDABackendSnapshot", "LLaDATransformersBackend", "active_parameter_counts"]

@@ -162,6 +162,7 @@
 | `model.mask_token_id` / `trust_remote_code` | 整数 / 布尔 | 掩码 token 与自定义代码加载 |
 | `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
+| `engine.block_logits_only` | 布尔 | 输出投影只计算当前块的位置（模型仍读取整张画布）；logits 与轨迹不变，省去其余位置的 LM head 计算，计算量按实际投影的位置统计 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
 | `max_new_tokens` | 整数 | dLLM 输出上限，与数据集的 `max_new_tokens` 取较小值 |
 | `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`） |

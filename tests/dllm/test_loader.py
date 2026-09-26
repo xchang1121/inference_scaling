@@ -29,7 +29,7 @@ def test_base_model_receives_the_engine_options(monkeypatch, tmp_path):
     assert load_llada_backend(model, engine) == "base"
     assert calls == [(str(tmp_path / "base"), {
         "device": "cpu", "dtype": "float32", "mask_token_id": model["mask_token_id"], "max_batch_size": 3,
-        "trust_remote_code": True, "attn_implementation": "sdpa",
+        "trust_remote_code": True, "block_logits_only": engine["block_logits_only"], "attn_implementation": "sdpa",
     })]
 
 
@@ -70,4 +70,5 @@ def test_the_adapter_wraps_the_base_model_and_keeps_the_batch_cap(monkeypatch, t
     load_llada_backend(model, engine)
     assert constructed == [("aligned-model", base.tokenizer, {
         "model_id": model["adapter"]["path"], "mask_token_id": 17, "max_batch_size": 3,
+        "block_logits_only": engine["block_logits_only"],
     })]
