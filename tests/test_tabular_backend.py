@@ -2,7 +2,7 @@ import numpy as np
 
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.types import Draft, GenerationRequest, ScoreRequest
 from inference_scaling.shared.rng import uniform_stream
 
 
@@ -35,3 +35,13 @@ def test_a_split_request_continues_the_stream_and_its_bounds_hold_the_uniforms()
     assert head.token_ids + tail.token_ids == whole.token_ids
     assert all(below < uniform <= through
                for (below, through), uniform in zip(whole.token_cdf_bounds, uniform_stream(7, 0, 6), strict=True))
+
+
+def test_a_draft_replays_exactly_the_tokens_plain_generation_would_draw() -> None:
+    backend = TabularAutoregressiveBackend({(1,): (0.2, 0.7, 0.1)}, fallback=[0.5, 0.3, 0.2])
+    old = backend.sample_batch([GenerationRequest((), 6, SamplingConfig(eos_token_id=2), 3, "old")])[0]
+    draft = Draft(old.token_ids, old.token_logprobs, old.reference_token_logprobs, old.token_cdf_bounds)
+    for seed in range(8):
+        plain = backend.sample_batch([GenerationRequest((), 6, SamplingConfig(eos_token_id=2), seed, "new")])[0]
+        assert backend.sample_batch([GenerationRequest((), 6, SamplingConfig(eos_token_id=2), seed, "new",
+                                                       draft=draft)])[0] == plain

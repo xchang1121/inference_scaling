@@ -401,10 +401,21 @@ accepted = decision.accepted
 proposal 与目标使用同一 EOS，思考段范围内再加上思考段结束标记；停止 token 的概率计入 $`p`$ 与 $`q_c`$。
 切点、proposal 与接受判定的随机数都按链与更新序号派生，跳过一次更新不改变其余更新的随机数。
 
+<a id="mh-suffix-replay"></a>
+### 4.1 后缀重放
+
+从切点 $`c`$ 生成的新后缀，其首个 token 与当前状态的 $`y_{c+1}`$ 处在同一上下文。`suffix_replay` 打开时，两种 MH
+把当前后缀连同生成时记录的 proposal 概率、基础概率和累积概率区间作为草稿交给后端。后端用本请求自己的均匀数
+$`u_t`$ 逐位检查：$`u_t`$ 落在草稿 token 的区间内，恰是逆累积分布采样会抽中该 token 的情形，于是直接保留而不调用
+模型；第一次落在区间外时，从该位置起在同一均匀数流中照常生成。proposal 因此与关闭时逐 token 相同，接受判定与链
+轨迹都不变，只是与当前后缀相同的开头部分不再前向计算，完整复现当前后缀的恒等移动不调用模型。每步保留的 token
+数记在 `trace.replayed_tokens`，后端计数器 `replayed_tokens` 汇总免去的生成 token。重放需要请求级均匀数流，
+只有 Transformers 后端支持；冻结历史 proposal 只对基础分量重放。
+
 dLLM 的 `mh_power` 以反向扩散轨迹概率的幂 $`p(\mathrm{trace}\mid x)^\alpha`$ 为目标：最终 token 序列的边缘概率一般不可计算，
 而 `dllm.exact_sampling` 的随机重掩码轨迹概率可以精确计算。切点落在原生扩散块边界，阶段按
 `dllm.algorithms.mh_power.decision_block_size` 延长；每个阶段执行 `updates_per_stage` 次更新。proposal 逐个原生块
-生成，每块的画布只到该块为止，基础概率与 proposal 概率取自同一次前向的 logits（温度分别为基础温度与其 $`1/lpha`$），
+生成，每块的画布只到该块为止，基础概率与 proposal 概率取自同一次前向的 logits（温度分别为基础温度与其 $`1/\alpha`$），
 因此不需要再次评分，且某块记录的正反概率在以后任何切点下都仍然有效。实现位于 [`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)。
 
 <a id="alg-reward-mh"></a>

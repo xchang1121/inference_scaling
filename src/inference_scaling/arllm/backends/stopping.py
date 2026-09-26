@@ -86,10 +86,13 @@ class StoppedSequenceBackend:
                 offset = len(tokens[index])
                 if done[index] or offset >= request.max_new_tokens:
                     continue
+                draft = request.draft
                 pending.append(replace(
                     request, prefix=request.prefix + tuple(tokens[index]), max_new_tokens=request.max_new_tokens - offset,
                     sampling=self._inner_policy(request.sampling), request_id=f"{request.request_id}:stop:{offset}",
                     stop_sequences=self.stop_sequences, uniform_offset=request.uniform_offset + offset,
+                    # The draft goes on only while the output has followed it.
+                    draft=draft.after(offset) if draft and tuple(tokens[index]) == draft.token_ids[:offset] else None,
                 ))
                 indices.append(index)
             if not pending:

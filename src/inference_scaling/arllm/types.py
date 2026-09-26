@@ -16,6 +16,35 @@ from inference_scaling.shared.types import TokenSequence
 
 
 @dataclass(frozen=True, slots=True)
+class Draft:
+    """Tokens that followed a request's prefix under its policy, with what their sampling recorded.
+
+    A backend that samples by inverse CDF keeps a draft token exactly when the request's own uniform
+    falls in the token's CDF interval, which is when plain generation would draw it, so the output is
+    unchanged and the kept tokens need no model call.
+    """
+
+    token_ids: TokenSequence
+    token_logprobs: tuple[float, ...]
+    reference_token_logprobs: tuple[float, ...]
+    token_cdf_bounds: tuple[tuple[float, float], ...]
+
+    def __post_init__(self) -> None:
+        lengths = {len(self.token_ids), len(self.token_logprobs), len(self.reference_token_logprobs),
+                   len(self.token_cdf_bounds)}
+        if len(lengths) != 1:
+            raise ValueError("a draft needs its log-probabilities and CDF interval for every token")
+
+    def after(self, count: int) -> Draft | None:
+        """The draft past its first ``count`` tokens; ``None`` when nothing is left."""
+
+        if count >= len(self.token_ids):
+            return None
+        return Draft(self.token_ids[count:], self.token_logprobs[count:], self.reference_token_logprobs[count:],
+                     self.token_cdf_bounds[count:])
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationRequest:
     prefix: TokenSequence
     max_new_tokens: int
@@ -29,6 +58,8 @@ class GenerationRequest:
     # Position of the first generated token in the seed's random stream: a request that continues
     # another one with the same seed reproduces it where the backend indexes its stream by position.
     uniform_offset: int = 0
+    # Tokens to replay before generating; the output is the same with or without them.
+    draft: Draft | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:

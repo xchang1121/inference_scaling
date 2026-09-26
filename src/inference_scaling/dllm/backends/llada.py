@@ -80,17 +80,11 @@ class LLaDATransformersBackend:
         self._eos_token_id = getattr(tokenizer, "eos_token_id", None)
         self._device = self._infer_device()
         self._max_batch_size = max_batch_size
-        self._resident_parameters = int(
-            sum(parameter.numel() for parameter in model.parameters())
-        )
+        self._resident_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
         self._total_parameters, self._active_parameters = active_parameter_counts(model)
         self._lock = Lock()
-        self._sample_requests = 0
-        self._forward_calls = 0
-        self._model_sequences = 0
-        self._model_token_slots = 0
-        self._generated_tokens = 0
-        self._elapsed_seconds = 0.0
+        self._sample_requests = self._forward_calls = self._model_sequences = self._model_token_slots = 0
+        self._generated_tokens, self._elapsed_seconds = 0, 0.0
 
     @classmethod
     def from_pretrained(
@@ -110,30 +104,14 @@ class LLaDATransformersBackend:
         except ImportError as exc:  # pragma: no cover - depends on optional extras
             raise RuntimeError("install the dllm optional dependency set") from exc
 
-        dtype_map = {
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float32": torch.float32,
-        }
+        dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
         if dtype not in dtype_map:
             raise ValueError(f"unsupported dtype {dtype!r}")
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path, trust_remote_code=trust_remote_code
-        )
-        model = AutoModel.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=trust_remote_code,
-            torch_dtype=dtype_map[dtype],
-            low_cpu_mem_usage=True,
-            **model_kwargs,
-        ).to(device)
-        return cls(
-            model,
-            tokenizer,
-            model_id=model_name_or_path,
-            mask_token_id=mask_token_id,
-            max_batch_size=max_batch_size,
-        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+        model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code,
+                                          torch_dtype=dtype_map[dtype], low_cpu_mem_usage=True, **model_kwargs).to(device)
+        return cls(model, tokenizer, model_id=model_name_or_path, mask_token_id=mask_token_id,
+                   max_batch_size=max_batch_size)
 
     @property
     def model_id(self) -> str:
@@ -154,23 +132,12 @@ class LLaDATransformersBackend:
         return tuple(int(token_id) for token_id in encoded)
 
     def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool = True) -> str:
-        return str(
-            self.tokenizer.decode(list(token_ids), skip_special_tokens=skip_special_tokens)
-        )
+        return str(self.tokenizer.decode(list(token_ids), skip_special_tokens=skip_special_tokens))
 
     def snapshot(self) -> LLaDABackendSnapshot:
         with self._lock:
-            return LLaDABackendSnapshot(
-                sample_requests=self._sample_requests,
-                forward_calls=self._forward_calls,
-                model_sequences=self._model_sequences,
-                model_token_slots=self._model_token_slots,
-                generated_tokens=self._generated_tokens,
-                elapsed_seconds=self._elapsed_seconds,
-                total_parameters=self._total_parameters,
-                active_parameters=self._active_parameters,
-                resident_parameters=self._resident_parameters,
-            )
+            return LLaDABackendSnapshot(**{name: getattr(self, "_" + name)
+                                           for name in LLaDABackendSnapshot.__dataclass_fields__})
 
     def sample_batch(
         self, requests: Sequence[DiffusionGenerationRequest]
@@ -245,15 +212,10 @@ class LLaDATransformersBackend:
             logits = logits.masked_fill(logits < threshold, -self._torch.inf)
         if sampling.top_p < 1:
             sorted_logits, sorted_indices = self._torch.sort(logits, descending=True, dim=-1)
-            cumulative = self._torch.cumsum(
-                self._torch.softmax(sorted_logits.float(), dim=-1), dim=-1
-            )
-            sorted_remove = cumulative > sampling.top_p
+            sorted_remove = self._torch.cumsum(self._torch.softmax(sorted_logits.float(), dim=-1), dim=-1) > sampling.top_p
             sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
             sorted_remove[..., 0] = False
-            remove = self._torch.zeros_like(sorted_remove).scatter(
-                -1, sorted_indices, sorted_remove
-            )
+            remove = self._torch.zeros_like(sorted_remove).scatter(-1, sorted_indices, sorted_remove)
             logits = logits.masked_fill(remove, -self._torch.inf)
         return logits
 

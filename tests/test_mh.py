@@ -1,3 +1,4 @@
+from dataclasses import replace
 from itertools import product
 from math import exp, prod
 
@@ -40,16 +41,16 @@ def _complete_target(probabilities, eos, length, weight):
 def test_explicit_iterations_preserve_full_length_kernel_and_seed_stream():
     backend = TabularAutoregressiveBackend({}, fallback=[0.7, 0.3])
     sampling = SamplingConfig(temperature=0.8)
-    explicit = PowerMHConfig(alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3, suffix_schedule="uniform")
-    full_stage = PowerMHConfig(alpha=2, total_length=7, block_size=7, steps_per_block=3, suffix_schedule="uniform", iterations=None)
+    explicit = PowerMHConfig(suffix_replay=False, alpha=2, total_length=7, block_size=2, steps_per_block=10, iterations=3, suffix_schedule="uniform")
+    full_stage = PowerMHConfig(suffix_replay=False, alpha=2, total_length=7, block_size=7, steps_per_block=3, suffix_schedule="uniform", iterations=None)
     left = run_power_mh_chain(backend, (), explicit, sampling, SeedStream(2))
     right = run_power_mh_chain(backend, (), full_stage, sampling, SeedStream(2))
     assert left == right
     assert left.attempts == 3
     assert {step.stage_length for step in left.trace} == {7}
     reward = pointwise(lambda prompt, completion: float(sum(completion)))
-    left = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=2, iterations=3, steps_per_block=10, reward_temperature=0.1, suffix_schedule="uniform"), sampling, reward, SeedStream(2))
-    right = run_reward_mh_chain(backend, (), RewardMHConfig(total_length=7, block_size=7, steps_per_block=3, reward_temperature=0.1, suffix_schedule="uniform", iterations=None), sampling, reward, SeedStream(2))
+    left = run_reward_mh_chain(backend, (), RewardMHConfig(suffix_replay=False, total_length=7, block_size=2, iterations=3, steps_per_block=10, reward_temperature=0.1, suffix_schedule="uniform"), sampling, reward, SeedStream(2))
+    right = run_reward_mh_chain(backend, (), RewardMHConfig(suffix_replay=False, total_length=7, block_size=7, steps_per_block=3, reward_temperature=0.1, suffix_schedule="uniform", iterations=None), sampling, reward, SeedStream(2))
     assert left == right
     assert left.attempts == 3
 
@@ -59,7 +60,7 @@ def test_mh_returns_fixed_length_and_all_suffix_starts_are_reachable() -> None:
     result = run_power_mh_chain(
         backend,
         (),
-        PowerMHConfig(alpha=2, total_length=5, block_size=2, steps_per_block=40, suffix_schedule="uniform", iterations=None),
+        PowerMHConfig(suffix_replay=False, alpha=2, total_length=5, block_size=2, steps_per_block=40, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.8),
         SeedStream(11),
     )
@@ -101,7 +102,7 @@ def test_mh_empirical_output_approaches_enumerated_power_target(
     probabilities = (0.65, 0.35)
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
     config = PowerMHConfig(
-        alpha=2,
+        suffix_replay=False, alpha=2,
         total_length=2,
         block_size=2,
         steps_per_block=20,
@@ -121,7 +122,7 @@ def test_base_proposal_at_alpha_one_accepts_every_move() -> None:
     result = run_power_mh_chain(
         backend,
         (),
-        PowerMHConfig(alpha=1, total_length=4, block_size=4, steps_per_block=20, suffix_schedule="uniform", iterations=None),
+        PowerMHConfig(suffix_replay=False, alpha=1, total_length=4, block_size=4, steps_per_block=20, suffix_schedule="uniform", iterations=None),
         SamplingConfig(),
         SeedStream(3),
     )
@@ -159,7 +160,7 @@ def test_mh_reuses_reference_scores_emitted_during_proposal_generation() -> None
     result = run_power_mh_chain(
         backend,
         (),
-        PowerMHConfig(alpha=2, total_length=4, block_size=2, steps_per_block=3, suffix_schedule="uniform", iterations=None),
+        PowerMHConfig(suffix_replay=False, alpha=2, total_length=4, block_size=2, steps_per_block=3, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.5),
         SeedStream(7),
     )
@@ -175,7 +176,7 @@ def test_reward_mh_approaches_enumerated_base_times_weight_target() -> None:
     def reward(_, sequence):
         return float(sequence == (1, 1))
 
-    config = RewardMHConfig(total_length=2, block_size=1, steps_per_block=25, reward_temperature=temperature, suffix_schedule="uniform", iterations=None)
+    config = RewardMHConfig(suffix_replay=False, total_length=2, block_size=1, steps_per_block=25, reward_temperature=temperature, suffix_schedule="uniform", iterations=None)
     outputs = [
         run_reward_mh_chain(backend, (), config, SamplingConfig(temperature=0.7), pointwise(reward), SeedStream(91),
                             chain_id=chain)
@@ -197,11 +198,11 @@ def test_variable_length_chains_target_complete_outputs(chain) -> None:
     backend = TabularAutoregressiveBackend({}, fallback=probabilities)
     proposal = SamplingConfig(temperature=0.7, eos_token_id=1)
     if chain == "power":
-        config = PowerMHConfig(alpha=2, total_length=3, block_size=3, steps_per_block=12, suffix_schedule="uniform", iterations=None)
+        config = PowerMHConfig(suffix_replay=False, alpha=2, total_length=3, block_size=3, steps_per_block=12, suffix_schedule="uniform", iterations=None)
         results = [run_power_mh_chain(backend, (), config, proposal, SeedStream(5), chain_id=index) for index in range(2000)]
         target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability**2)
     else:
-        settings = RewardMHConfig(total_length=3, block_size=3, steps_per_block=12, reward_temperature=0.8, suffix_schedule="uniform", iterations=None)
+        settings = RewardMHConfig(suffix_replay=False, total_length=3, block_size=3, steps_per_block=12, reward_temperature=0.8, suffix_schedule="uniform", iterations=None)
         results = [
             run_reward_mh_chain(backend, (), settings, proposal, pointwise(lambda _, tokens: float(len(tokens))), SeedStream(5),
                                 chain_id=index)
@@ -221,7 +222,23 @@ def test_mh_rejects_truncated_proposals(sampling) -> None:
         run_power_mh_chain(
             backend,
             (),
-            PowerMHConfig(total_length=2, block_size=2, steps_per_block=1, alpha=4.0, suffix_schedule="uniform", iterations=None),
+            PowerMHConfig(suffix_replay=False, total_length=2, block_size=2, steps_per_block=1, alpha=4.0, suffix_schedule="uniform", iterations=None),
             sampling,
             SeedStream(0),
         )
+
+
+def test_suffix_replay_leaves_both_chains_unchanged_and_replays_repeated_tokens() -> None:
+    backend = TabularAutoregressiveBackend({(): (0.5, 0.3, 0.2), (0,): (0.7, 0.2, 0.1)}, fallback=(0.45, 0.45, 0.1))
+    power = [run_power_mh_chain(backend, (), PowerMHConfig(
+        suffix_replay=replay, alpha=3.0, total_length=5, block_size=2, steps_per_block=4, suffix_schedule="uniform",
+        iterations=None), SamplingConfig(temperature=1 / 3, eos_token_id=2), SeedStream(5)) for replay in (False, True)]
+    reward = pointwise(lambda _prompt, sequence: float(sum(sequence)))
+    rewarded = [run_reward_mh_chain(backend, (), RewardMHConfig(
+        suffix_replay=replay, total_length=5, block_size=2, steps_per_block=4, reward_temperature=0.5,
+        suffix_schedule="uniform", iterations=None), SamplingConfig(eos_token_id=2), reward, SeedStream(6))
+        for replay in (False, True)]
+    for plain, replayed in (power, rewarded):
+        assert (plain.token_ids, plain.base_token_logprobs) == (replayed.token_ids, replayed.base_token_logprobs)
+        assert [replace(step, replayed_tokens=0) for step in replayed.trace] == list(plain.trace)
+        assert replayed.replayed_tokens > 0 == plain.replayed_tokens

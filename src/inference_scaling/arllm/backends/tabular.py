@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from inference_scaling.arllm.backends.replay import sample_with_drafts
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 from inference_scaling.shared.rng import uniform_stream
@@ -82,6 +83,9 @@ class TabularAutoregressiveBackend:
         return scaled
 
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        return sample_with_drafts(requests, self._generate, model_id=self.model_id, honors_stops=False)[0]
+
+    def _generate(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         outputs: list[SequenceSample] = []
         for request in requests:
             context = list(request.prefix)

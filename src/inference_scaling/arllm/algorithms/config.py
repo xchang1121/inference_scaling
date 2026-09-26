@@ -23,6 +23,8 @@ class PowerMHConfig:
     steps_per_block: int
     suffix_schedule: str
     iterations: int | None
+    # Replay the current suffix as a draft of each proposal (same proposals, fewer model calls).
+    suffix_replay: bool
 
     def __post_init__(self) -> None:
         require_finite("alpha", self.alpha)
@@ -59,6 +61,8 @@ class RewardMHConfig:
     reward_temperature: float
     suffix_schedule: str
     iterations: int | None
+    # Replay the current suffix as a draft of each base proposal (same proposals, fewer model calls).
+    suffix_replay: bool
 
     def __post_init__(self) -> None:
         for name in ("total_length", "block_size", "steps_per_block"):

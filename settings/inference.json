@@ -136,7 +136,8 @@
         "iterations": null,
         "suffix_schedule": "uniform",
         "proposal": "base",
-        "frozen_history": {"samples": 8, "mixture": 0.25}
+        "frozen_history": {"samples": 8, "mixture": 0.25},
+        "suffix_replay": true
       },
       "mh_power": {
         "alpha": 4.0,
@@ -144,7 +145,8 @@
         "block_size": 12,
         "steps_per_block": 3,
         "iterations": null,
-        "suffix_schedule": "uniform"
+        "suffix_schedule": "uniform",
+        "suffix_replay": true
       },
       "is": {
         "planning": "full_horizon",

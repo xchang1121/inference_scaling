@@ -144,6 +144,7 @@ SCHEMA: dict[str, Any] = {
                 "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
                 "proposal": _Choices({"base", "frozen_history"}),
                 "frozen_history": {"samples": int, "mixture": float},
+                "suffix_replay": bool,
             },
             "mh_power": {
                 "alpha": float,
@@ -152,6 +153,7 @@ SCHEMA: dict[str, Any] = {
                 "steps_per_block": int,
                 "iterations": _NULLABLE_INT,
                 "suffix_schedule": _Choices({"uniform", "inverse_length", "multiscale"}),
+                "suffix_replay": bool,
             },
             "is": {
                 "planning": _Choices({"fixed", "full_horizon", "chunk_adaptive"}),

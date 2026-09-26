@@ -269,25 +269,10 @@ class VLLMBackend:
         self._delegated_score_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
         self._closed = False
-        self._sample_calls = 0
-        self._score_calls = 0
-        self._sampled_sequences = 0
-        self._generated_tokens = 0
-        self._prefill_tokens = 0
-        self._shared_prefill_tokens_saved = 0
-        self._scored_tokens = 0
-        self._generation_forward_token_slots = 0
-        self._score_forward_token_slots = 0
-        self._estimated_dense_forward_flops = 0
-        self._engine_requests = 0
-        self._native_score_sequences = 0
-        self._delegated_score_sequences = 0
-        self._delegated_score_forward_token_slots = 0
-        self._delegated_estimated_dense_forward_flops = 0
         self._active_engine_requests = 0
-        self._maximum_in_flight_requests = 0
-        self._fused_reference_sequences = 0
-        self._fused_reference_tokens = 0
+        for name in VLLMBackendSnapshot.__dataclass_fields__:
+            if name != "mh_fused_logprobs":
+                setattr(self, "_" + name, 0)
 
     @classmethod
     def from_pretrained(
@@ -443,6 +428,8 @@ class VLLMBackend:
         return None if self._penalty is None else {token: -self._penalty.strength for token in self._penalty.token_ids}
 
     def _sampling_params(self, request: GenerationRequest) -> Any:
+        if request.draft is not None:
+            raise ValueError("vLLM does not sample from a request's uniform stream, so it cannot replay drafts")
         policy = request.sampling
         # vLLM cannot continue a uniform stream, so a continuing request draws independent randomness.
         seed = request.seed if not request.uniform_offset else SeedStream(request.seed).derive(
@@ -469,16 +456,8 @@ class VLLMBackend:
 
     def _score_params(self) -> Any:
         return self._sampling_params_factory(
-            max_tokens=1,
-            temperature=1.0,
-            top_p=1.0,
-            top_k=0,
-            seed=0,
-            prompt_logprobs=0,
-            ignore_eos=True,
-            detokenize=False,
-            skip_special_tokens=False,
-            spaces_between_special_tokens=False,
+            max_tokens=1, temperature=1.0, top_p=1.0, top_k=0, seed=0, prompt_logprobs=0, ignore_eos=True,
+            detokenize=False, skip_special_tokens=False, spaces_between_special_tokens=False,
         )
 
     def _generate(self, prompts: Sequence[Any], params: Any,
@@ -729,27 +708,7 @@ class VLLMBackend:
 
     def snapshot(self) -> VLLMBackendSnapshot:
         with self._statistics_lock:
-            return VLLMBackendSnapshot(
-                sample_calls=self._sample_calls,
-                score_calls=self._score_calls,
-                sampled_sequences=self._sampled_sequences,
-                generated_tokens=self._generated_tokens,
-                prefill_tokens=self._prefill_tokens,
-                shared_prefill_tokens_saved=self._shared_prefill_tokens_saved,
-                scored_tokens=self._scored_tokens,
-                generation_forward_token_slots=self._generation_forward_token_slots,
-                score_forward_token_slots=self._score_forward_token_slots,
-                estimated_dense_forward_flops=self._estimated_dense_forward_flops,
-                engine_requests=self._engine_requests,
-                native_score_sequences=self._native_score_sequences,
-                delegated_score_sequences=self._delegated_score_sequences,
-                delegated_score_forward_token_slots=self._delegated_score_forward_token_slots,
-                delegated_estimated_dense_forward_flops=self._delegated_estimated_dense_forward_flops,
-                maximum_in_flight_requests=self._maximum_in_flight_requests,
-                mh_fused_logprobs=self._mh_fused_logprobs,
-                fused_reference_sequences=self._fused_reference_sequences,
-                fused_reference_tokens=self._fused_reference_tokens,
-            )
+            return VLLMBackendSnapshot(**{name: getattr(self, "_" + name) for name in VLLMBackendSnapshot.__dataclass_fields__})
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
         return tuple(int(token) for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens))

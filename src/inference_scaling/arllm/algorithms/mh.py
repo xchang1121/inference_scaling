@@ -5,7 +5,9 @@ boundary) or at the stage's length limit ``T``. A move draws a cut position
 from a full-support distribution over the ``T`` positions of the stage, keeps
 the prefix before it, regenerates the suffix from an autoregressive proposal
 until it stops or reaches ``T``, and applies the full forward/reverse proposal
-correction. The cut distribution does not depend on the state, so it cancels
+correction. With ``suffix_replay`` the current suffix goes to the backend as a
+draft: the proposal is unchanged, and its tokens that repeat the current ones
+cost no model call. The cut distribution does not depend on the state, so it cancels
 in the Hastings ratio. A cut at or after the end of a stopped output would
 regenerate an empty suffix; that move leaves the state unchanged and is
 skipped without a model call. Per-token base and proposal log-probabilities of
@@ -26,6 +28,7 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import GeneratedBatchReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
+    Draft,
     GenerationRequest,
     ScoreRequest,
     TokenSequence,
@@ -65,6 +68,10 @@ class _ChainStatistics:
     def mean_accepted_token_changes(self) -> float:
         return self._mean("accepted_token_changes")
 
+    @property
+    def replayed_tokens(self) -> int:
+        return sum(step.replayed_tokens for step in self.trace)
+
 
 @dataclass(frozen=True, slots=True)
 class PowerMHStep:
@@ -78,6 +85,8 @@ class PowerMHStep:
     suffix_probability: float
     proposed_token_changes: int
     accepted_token_changes: int
+    # Leading proposal tokens replayed from the current suffix.
+    replayed_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +114,8 @@ class RewardMHStep:
     suffix_probability: float
     proposed_token_changes: int
     accepted_token_changes: int
+    # Leading proposal tokens replayed from the current suffix.
+    replayed_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +215,22 @@ class _Suffix:
     base_logprobs: tuple[float, ...]
     # Ended at EOS or a scope boundary rather than at the length limit.
     stopped: bool
+    # The proposal's CDF interval of each token when the backend reports them.
+    bounds: tuple[tuple[float, float], ...] | None
+
+
+def _draft(tokens: TokenSequence, proposal_logs: tuple[float, ...], base_logs: tuple[float, ...],
+           bounds: tuple[tuple[float, float], ...] | None, cut: int) -> Draft | None:
+    """The current suffix after ``cut`` as the draft of a proposal from the same prefix."""
+
+    return None if bounds is None else Draft(tokens[cut:], proposal_logs[cut:], base_logs[cut:], bounds[cut:])
+
+
+def _replayed(current: TokenSequence, proposed: TokenSequence) -> int:
+    """Leading tokens a proposal shares with the current suffix: the ones its draft replay kept."""
+
+    return next((index for index, (left, right) in enumerate(zip(current, proposed)) if left != right),
+                min(len(current), len(proposed)))
 
 
 def _sample_suffix(
@@ -214,10 +241,11 @@ def _sample_suffix(
     sampling: SamplingConfig,
     seed: int,
     request_id: str,
+    draft: Draft | None = None,
 ) -> _Suffix:
     """Generate up to ``length`` tokens with their proposal and base log-probabilities."""
 
-    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id)])[0]
+    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id, draft=draft)])[0]
     stopped = sample.finish_reason != "length"
     if not 0 < len(sample.token_ids) <= length or (len(sample.token_ids) < length and not stopped):
         raise RuntimeError(
@@ -236,7 +264,7 @@ def _sample_suffix(
         base_logs = _score_one(backend, prefix, sample.token_ids, base)
     if any(not isfinite(value) for value in base_logs):
         raise ValueError("proposal generated a sequence outside the base model support")
-    return _Suffix(sample.token_ids, sample.token_logprobs, tuple(base_logs), stopped)
+    return _Suffix(sample.token_ids, sample.token_logprobs, tuple(base_logs), stopped, sample.token_cdf_bounds)
 
 
 def _token_changes(old: TokenSequence, new: TokenSequence) -> int:
@@ -264,6 +292,7 @@ def run_power_mh_chain(
     tokens: TokenSequence = ()
     base_logs: tuple[float, ...] = ()
     proposal_logs: tuple[float, ...] = ()
+    bounds: tuple[tuple[float, float], ...] | None = ()
     stopped = False
     trace: list[PowerMHStep] = []
     skipped = 0
@@ -277,6 +306,7 @@ def run_power_mh_chain(
             tokens += extension.token_ids
             base_logs += extension.base_logprobs
             proposal_logs += extension.proposal_logprobs
+            bounds = None if bounds is None or extension.bounds is None else bounds + extension.bounds
             stopped = extension.stopped
         for step_index in range(config.stage_updates):
             cut, _, suffix_probability = _draw_suffix(
@@ -287,10 +317,11 @@ def run_power_mh_chain(
             if cut >= len(tokens):
                 skipped += 1
                 continue
+            draft = _draft(tokens, proposal_logs, base_logs, bounds, cut) if config.suffix_replay else None
             suffix = _sample_suffix(
                 backend, prefix=prompt + tokens[:cut], length=stage_length - cut, sampling=proposal,
                 seed=seeds.derive("mh", chain_id, stage_index, step_index, "proposal"),
-                request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}",
+                request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}", draft=draft,
             )
             decision = decide_metropolis_hastings(
                 current_target_log_density=config.alpha * float(sum(base_logs[cut:])),
@@ -300,17 +331,19 @@ def run_power_mh_chain(
                 uniform=float(seeds.generator("mh", chain_id, stage_index, step_index, "accept").random()),
             )
             changes = _token_changes(tokens[cut:], suffix.token_ids)
+            replayed = 0 if draft is None else _replayed(tokens[cut:], suffix.token_ids)
             if decision.accepted:
                 tokens = tokens[:cut] + suffix.token_ids
                 base_logs = base_logs[:cut] + suffix.base_logprobs
                 proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
+                bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
                 stopped = suffix.stopped
             trace.append(PowerMHStep(
                 stage_length=stage_length, step=step_index, cut=cut,
                 proposed_suffix_length=len(suffix.token_ids), log_acceptance=decision.log_acceptance,
                 accepted=decision.accepted, suffix_schedule=config.suffix_schedule,
                 suffix_probability=suffix_probability, proposed_token_changes=changes,
-                accepted_token_changes=changes if decision.accepted else 0,
+                accepted_token_changes=changes if decision.accepted else 0, replayed_tokens=replayed,
             ))
     return PowerMHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 
@@ -346,6 +379,7 @@ def run_reward_mh_chain(
         seed=seeds.derive("reward_mh", chain_id, "initialize"), request_id=f"reward-mh:{chain_id}:initialize",
     )
     tokens, base_logs, proposal_logs = initial.token_ids, initial.base_logprobs, initial.proposal_logprobs
+    bounds = initial.bounds
     current_reward = score(tokens, base_logs)
     trace: list[RewardMHStep] = []
     skipped = 0
@@ -358,10 +392,11 @@ def run_reward_mh_chain(
         if cut >= len(tokens):
             skipped += 1
             continue
+        draft = _draft(tokens, proposal_logs, base_logs, bounds, cut) if config.suffix_replay else None
         suffix = _sample_suffix(
             backend, prefix=prompt + tokens[:cut], length=config.total_length - cut, sampling=proposal,
             seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
-            request_id=f"reward-mh:{chain_id}:step:{step_index}",
+            request_id=f"reward-mh:{chain_id}:step:{step_index}", draft=draft,
         )
         proposed_reward = score(tokens[:cut] + suffix.token_ids, base_logs[:cut] + suffix.base_logprobs)
         decision = decide_metropolis_hastings(
@@ -374,11 +409,13 @@ def run_reward_mh_chain(
             uniform=float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
         )
         changes = _token_changes(tokens[cut:], suffix.token_ids)
+        replayed = 0 if draft is None else _replayed(tokens[cut:], suffix.token_ids)
         previous_reward = current_reward
         if decision.accepted:
             tokens = tokens[:cut] + suffix.token_ids
             base_logs = base_logs[:cut] + suffix.base_logprobs
             proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
+            bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
             current_reward = proposed_reward
         trace.append(RewardMHStep(
             step=step_index, cut=cut, proposed_suffix_length=len(suffix.token_ids),
@@ -386,6 +423,7 @@ def run_reward_mh_chain(
             log_acceptance=decision.log_acceptance, accepted=decision.accepted,
             suffix_schedule=config.suffix_schedule, suffix_probability=suffix_probability,
             proposed_token_changes=changes, accepted_token_changes=changes if decision.accepted else 0,
+            replayed_tokens=replayed,
         ))
     return RewardMHChainResult(prompt, tokens, current_reward, base_logs, proposal_logs, tuple(trace), chain_id,
                                skipped)

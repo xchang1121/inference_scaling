@@ -137,6 +137,7 @@
 | `mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
 | `mh.proposal` | `base`（基础策略后缀）或 `frozen_history`（冻结历史混合 proposal） |
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
+| `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.planning` | `fixed`：固定候选数、补全数与块长；`full_horizon` / `chunk_adaptive`：在前向 token 预算内逐块重新规划 |
 | `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |
 | `is.joint.forward_token_budget` | 每题的前向 token 位置预算 |

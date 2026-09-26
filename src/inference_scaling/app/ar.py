@@ -92,6 +92,9 @@ class ARFamily:
         sampling = self.ar["sampling"]
         if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
+        if self.ar["engine"]["backend"] == "vllm" and self.config.get("suffix_replay"):
+            raise ValueError(f"ar.algorithms.{choices.algorithm}.suffix_replay needs a backend that samples from "
+                             "request uniform streams (ar.engine.backend = transformers)")
         self.raw: Any = None
         self.backend: Any = None
 
@@ -323,7 +326,7 @@ class ARFamily:
             PowerMHConfig(alpha=float(config["alpha"]), total_length=task.maximum,
                      block_size=min(int(config["block_size"]), task.maximum),
                      steps_per_block=int(config["steps_per_block"]), iterations=config["iterations"],
-                     suffix_schedule=str(config["suffix_schedule"])),
+                     suffix_schedule=str(config["suffix_schedule"]), suffix_replay=bool(config["suffix_replay"])),
             SamplingConfig(temperature=float(config["proposal_temperature"]), eos_token_id=self.eos),
             SeedStream(task.seed),
         )
@@ -331,7 +334,7 @@ class ARFamily:
             "updates": result.attempts, "skipped_updates": result.skipped, "accepted": result.accepted,
             "acceptance_rate": result.acceptance_rate,
             "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
-            "mean_accepted_token_changes": result.mean_accepted_token_changes,
+            "mean_accepted_token_changes": result.mean_accepted_token_changes, "replayed_tokens": result.replayed_tokens,
         }, None
 
     def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
@@ -342,6 +345,7 @@ class ARFamily:
             total_length=task.maximum, block_size=min(int(config["block_size"]), task.maximum),
             steps_per_block=int(config["steps_per_block"]), reward_temperature=reward.temperature,
             suffix_schedule=str(config["suffix_schedule"]), iterations=config["iterations"],
+            suffix_replay=bool(config["suffix_replay"]),
         )
         trace: dict[str, Any] = {}
         base = SamplingConfig(eos_token_id=self.eos)
@@ -354,7 +358,8 @@ class ARFamily:
                 for index in range(int(history["samples"]))
             ])
             proposal = FrozenReplaySuffixProposal(
-                reference, task.prompt, [(sample.token_ids, sample.token_logprobs) for sample in samples],
+                reference, task.prompt,
+                [(sample.token_ids, sample.token_logprobs, sample.token_cdf_bounds) for sample in samples],
                 history_mixture=float(history["mixture"]), sampling=base,
             )
             result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.generated,
@@ -364,7 +369,7 @@ class ARFamily:
             result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.generated,
                                          SeedStream(task.seed))
         trace.update(updates=result.attempts, skipped_updates=result.skipped, accepted=result.accepted,
-                     acceptance_rate=result.acceptance_rate)
+                     acceptance_rate=result.acceptance_rate, replayed_tokens=result.replayed_tokens)
         return result.token_ids, trace, float(result.reward)
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):

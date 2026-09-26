@@ -97,7 +97,7 @@ def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
         sampling=SamplingConfig(eos_token_id=2),
     )
     mh = run_power_mh_chain(
-        backend, (3,), PowerMHConfig(total_length=4, block_size=2, steps_per_block=2, alpha=4.0, suffix_schedule="uniform", iterations=None),
+        backend, (3,), PowerMHConfig(suffix_replay=False, total_length=4, block_size=2, steps_per_block=2, alpha=4.0, suffix_schedule="uniform", iterations=None),
         SamplingConfig(temperature=0.5, eos_token_id=2), SeedStream(8),
     )
     for tokens in (result.token_ids, mh.token_ids):
@@ -133,3 +133,12 @@ def test_empty_thinking_block_continues_to_full_sequence():
     # The wrapped backend stops at the empty block's marker; the scope resumes to EOS.
     result = _backend(raw=raw).sample_batch([GenerationRequest((3,), 3, SamplingConfig(), 0, "empty")])[0]
     assert (result.token_ids, result.finish_reason) == ((1, 0, 2), "stop")
+
+
+def test_suffix_replay_through_the_thinking_scope_leaves_the_chain_unchanged():
+    raw = StoppingTabular({(3,): (0.3, 0.4, 0.3), (3, 1): (0.5, 0.2, 0.3)}, fallback=(0.4, 0.3, 0.3))
+    runs = [run_power_mh_chain(_backend(raw=raw), (3,), PowerMHConfig(
+        suffix_replay=replay, total_length=5, block_size=2, steps_per_block=4, alpha=2.0, suffix_schedule="uniform",
+        iterations=None), SamplingConfig(temperature=0.5), SeedStream(8)) for replay in (False, True)]
+    assert runs[0].token_ids == runs[1].token_ids
+    assert [replace(step, replayed_tokens=0) for step in runs[1].trace] == list(runs[0].trace)

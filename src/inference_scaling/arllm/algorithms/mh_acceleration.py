@@ -17,11 +17,12 @@ from inference_scaling.arllm.algorithms.config import RewardMHConfig
 from inference_scaling.arllm.algorithms.mh import (
     _draw_suffix,
     _is_base_proposal,
+    _replayed,
     _sample_suffix,
     _validate_proposal,
 )
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
+from inference_scaling.arllm.types import AutoregressiveBackend, Draft, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.types import GeneratedBatchReward
@@ -33,6 +34,8 @@ class ReplayProposalMHStep:
     cut: int
     accepted: bool
     proposal_source: str
+    # Leading tokens of a base proposal replayed from the current suffix.
+    replayed_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +58,14 @@ class ReplayProposalMHResult:
     def acceptance_rate(self) -> float:
         return self.accepted / self.attempts if self.attempts else 0.0
 
+    @property
+    def replayed_tokens(self) -> int:
+        return sum(step.replayed_tokens for step in self.trace)
+
+
+# A generated sequence: tokens, their base log-probabilities and, when reported, their CDF intervals.
+History = tuple[TokenSequence, tuple[float, ...], tuple[tuple[float, float], ...] | None]
+
 
 @dataclass(frozen=True, slots=True)
 class ReplayProposalDraw:
@@ -62,6 +73,7 @@ class ReplayProposalDraw:
     base_token_logprobs: tuple[float, ...]
     proposal_logprob: float
     source: str
+    bounds: tuple[tuple[float, float], ...] | None
 
 
 class FrozenReplaySuffixProposal:
@@ -79,7 +91,7 @@ class FrozenReplaySuffixProposal:
         self,
         backend: AutoregressiveBackend,
         prompt: TokenSequence,
-        history: Sequence[tuple[TokenSequence, Sequence[float]]],
+        history: Sequence[History],
         *,
         history_mixture: float,
         sampling: SamplingConfig,
@@ -89,45 +101,47 @@ class FrozenReplaySuffixProposal:
         _validate_proposal(sampling)
         if not _is_base_proposal(sampling):
             raise ValueError("defensive replay proposal currently requires base sampling")
-        if any(not tokens or len(tokens) != len(logprobs) for tokens, logprobs in history):
+        if any(not tokens or len(tokens) != len(logprobs) for tokens, logprobs, _ in history):
             raise ValueError("each history sequence needs one log-probability per token")
         self.backend = backend
         self.prompt = tuple(prompt)
-        self.history = [(tuple(tokens), tuple(logprobs)) for tokens, logprobs in history]
+        self.history = [(tuple(tokens), tuple(logprobs), bounds) for tokens, logprobs, bounds in history]
         self.history_mixture = float(history_mixture)
         self.sampling = sampling
 
-    def _matches(self, kept: TokenSequence) -> list[tuple[TokenSequence, tuple[float, ...]]]:
-        """Suffixes, with their base log-probabilities, of the history sequences that continue ``kept``."""
+    def _matches(self, kept: TokenSequence) -> list[History]:
+        """Suffixes, with their base log-probabilities and CDF intervals, of the history sequences that continue ``kept``."""
 
         cut = len(kept)
-        return [(tokens[cut:], logprobs[cut:]) for tokens, logprobs in self.history
-                if len(tokens) > cut and tokens[:cut] == kept]
+        return [(tokens[cut:], logprobs[cut:], None if bounds is None else bounds[cut:])
+                for tokens, logprobs, bounds in self.history if len(tokens) > cut and tokens[:cut] == kept]
 
-    def _mixture_logprob(
-        self, base_logprob: float, matches: Sequence[tuple[TokenSequence, tuple[float, ...]]], suffix: TokenSequence,
-    ) -> float:
+    def _mixture_logprob(self, base_logprob: float, matches: Sequence[History], suffix: TokenSequence) -> float:
         if not matches or self.history_mixture == 0:
             return float(base_logprob)
-        count = sum(tokens == suffix for tokens, _ in matches)
+        count = sum(tokens == suffix for tokens, _, _ in matches)
         terms = [log(1.0 - self.history_mixture) + float(base_logprob)]
         if count:
             terms.append(log(self.history_mixture) + log(count / len(matches)))
         return float(np.logaddexp.reduce(np.asarray(terms, dtype=np.float64)))
 
-    def draw(self, kept: TokenSequence, length: int, *, seed: int, request_id: str) -> ReplayProposalDraw:
+    def draw(self, kept: TokenSequence, length: int, *, seed: int, request_id: str,
+             draft: Draft | None) -> ReplayProposalDraw:
+        """A suffix after ``kept``; the base component replays ``draft`` without changing its draw."""
+
         matches = self._matches(kept)
         seeds = SeedStream(seed)
         if matches and float(seeds.generator("replay-proposal-component").random()) < self.history_mixture:
-            suffix, logprobs = matches[int(seeds.generator("replay-proposal-history").integers(len(matches)))]
+            suffix, logprobs, bounds = matches[int(seeds.generator("replay-proposal-history").integers(len(matches)))]
             source = "history"
         else:
             sample = _sample_suffix(
                 self.backend, prefix=self.prompt + kept, length=length, sampling=self.sampling,
-                seed=seeds.derive("replay-proposal-base"), request_id=request_id,
+                seed=seeds.derive("replay-proposal-base"), request_id=request_id, draft=draft,
             )
-            suffix, logprobs, source = sample.token_ids, sample.base_logprobs, "base"
-        return ReplayProposalDraw(suffix, logprobs, self._mixture_logprob(sum(logprobs), matches, suffix), source)
+            suffix, logprobs, bounds, source = sample.token_ids, sample.base_logprobs, sample.bounds, "base"
+        return ReplayProposalDraw(suffix, logprobs, self._mixture_logprob(sum(logprobs), matches, suffix), source,
+                                  bounds)
 
     def logprob(self, kept: TokenSequence, suffix: TokenSequence, *, base_logprob: float) -> float:
         return self._mixture_logprob(base_logprob, self._matches(kept), tuple(suffix))
@@ -152,8 +166,8 @@ def run_reward_mh_chain_replay_proposal(
         return value
 
     initial = proposal.draw((), config.total_length, seed=seeds.derive("reward_mh", chain_id, "initialize"),
-                            request_id=f"reward-mh-replay:{chain_id}:initialize")
-    tokens, base_logs = initial.token_ids, initial.base_token_logprobs
+                            request_id=f"reward-mh-replay:{chain_id}:initialize", draft=None)
+    tokens, base_logs, bounds = initial.token_ids, initial.base_token_logprobs, initial.bounds
     current_reward = score(tokens, base_logs)
     trace: list[ReplayProposalMHStep] = []
     skipped = 0
@@ -167,9 +181,12 @@ def run_reward_mh_chain_replay_proposal(
             continue
         kept = tokens[:cut]
         old_p = float(sum(base_logs[cut:]))
+        # A base proposal's policy is the reference, so its log-probabilities are the base ones.
+        draft = (Draft(tokens[cut:], base_logs[cut:], base_logs[cut:], bounds[cut:])
+                 if config.suffix_replay and bounds is not None else None)
         draw = proposal.draw(kept, config.total_length - cut,
                              seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
-                             request_id=f"reward-mh-replay:{chain_id}:step:{step_index}")
+                             request_id=f"reward-mh-replay:{chain_id}:step:{step_index}", draft=draft)
         proposed_reward = score(kept + draw.token_ids, base_logs[:cut] + draw.base_token_logprobs)
         decision = decide_metropolis_hastings(
             current_target_log_density=old_p + current_reward / config.reward_temperature,
@@ -178,10 +195,12 @@ def run_reward_mh_chain_replay_proposal(
             reverse_proposal_log_probability=proposal.logprob(kept, tokens[cut:], base_logprob=old_p),
             uniform=float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
         )
+        replayed = _replayed(tokens[cut:], draw.token_ids) if draft is not None and draw.source == "base" else 0
         if decision.accepted:
             tokens, base_logs = kept + draw.token_ids, base_logs[:cut] + draw.base_token_logprobs
+            bounds = None if bounds is None or draw.bounds is None else bounds[:cut] + draw.bounds
             current_reward = proposed_reward
-        trace.append(ReplayProposalMHStep(step_index, cut, decision.accepted, draw.source))
+        trace.append(ReplayProposalMHStep(step_index, cut, decision.accepted, draw.source, replayed))
     return ReplayProposalMHResult(tokens, current_reward, tuple(trace), skipped)
 
 

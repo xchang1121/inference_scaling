@@ -16,6 +16,7 @@ from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
+from inference_scaling.arllm.backends.replay import sample_with_drafts
 from inference_scaling.arllm.types import (
     GenerationRequest,
     ScoreRequest,
@@ -44,6 +45,8 @@ class TransformersBackendSnapshot:
     score_calls: int
     sampled_sequences: int
     generated_tokens: int
+    # Draft tokens kept without a model call.
+    replayed_tokens: int
     prefill_tokens: int
     shared_prefill_tokens_saved: int
     scored_tokens: int
@@ -107,16 +110,8 @@ class TransformersBackend:
         # The tokens and KV state of the last single-request generation, which the next one may resume.
         self._retained: tuple[TokenSequence, Any] | None = None
         self._statistics_lock = threading.Lock()
-        self._sample_calls = 0
-        self._score_calls = 0
-        self._sampled_sequences = 0
-        self._generated_tokens = 0
-        self._prefill_tokens = 0
-        self._shared_prefill_tokens_saved = 0
-        self._scored_tokens = 0
-        self._generation_forward_token_slots = 0
-        self._score_forward_token_slots = 0
-        self._estimated_dense_forward_flops = 0
+        for name in TransformersBackendSnapshot.__dataclass_fields__:
+            setattr(self, "_" + name, 0)
         count_parameters = getattr(model, "num_parameters", None)
         self._parameter_count = (
             int(count_parameters()) if callable(count_parameters)
@@ -150,9 +145,7 @@ class TransformersBackend:
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as error:  # pragma: no cover - depends on optional install
-            raise ModuleNotFoundError(
-                "TransformersBackend.from_pretrained requires transformers"
-            ) from error
+            raise ModuleNotFoundError("TransformersBackend.from_pretrained requires transformers") from error
         try:
             torch_dtype = "auto" if dtype == "auto" else getattr(torch_module, dtype)
         except AttributeError as error:
@@ -160,16 +153,9 @@ class TransformersBackend:
         if dtype not in {"auto", "float32", "float16", "bfloat16", "float64"}:
             raise ValueError(f"unsupported floating-point dtype {dtype!r}")
         if torch_dtype != torch_module.float32:
-            warnings.warn(
-                "Reduced-precision logits can depend noticeably on batch shape. "
-                "Use dtype='float32' when importance weights must match later rescoring.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        common = {
-            "cache_dir": cache_dir, "local_files_only": local_files_only,
-            "trust_remote_code": trust_remote_code,
-        }
+            warnings.warn("Reduced-precision logits can depend noticeably on batch shape. Use dtype='float32' when "
+                          "importance weights must match later rescoring.", RuntimeWarning, stacklevel=2)
+        common = {"cache_dir": cache_dir, "local_files_only": local_files_only, "trust_remote_code": trust_remote_code}
         extra_model, extra_tokenizer = dict(model_kwargs or {}), dict(tokenizer_kwargs or {})
         reserved = {"dtype", "torch_dtype", "cache_dir", "revision", "local_files_only",
                     "trust_remote_code", "device_map", "attn_implementation", "token"}
@@ -190,36 +176,20 @@ class TransformersBackend:
         if attn_implementation is not None:
             model_load_kwargs["attn_implementation"] = attn_implementation
         try:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name_or_path,
-                dtype=torch_dtype,
-                **model_load_kwargs,
-            )
+            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, dtype=torch_dtype, **model_load_kwargs)
         except TypeError as error:
             if "unexpected keyword argument 'dtype'" not in str(error):
                 raise
-            # Transformers 4.x names this argument ``torch_dtype``; 5.x uses
-            # ``dtype``.  Supporting both keeps the AR backend usable from the
-            # dLLM-compatible test environment without changing model values.
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name_or_path,
-                torch_dtype=torch_dtype,
-                **model_load_kwargs,
-            )
+            # Transformers 4.x names this argument ``torch_dtype``; 5.x uses ``dtype``.  Supporting both keeps the
+            # AR backend usable from the dLLM-compatible test environment without changing model values.
+            model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, **model_load_kwargs)
         if adapter_name_or_path is not None:
             try:
                 from peft import PeftModel
             except ImportError as error:  # pragma: no cover - optional training extra
-                raise ModuleNotFoundError(
-                    "Loading a GRPO adapter requires the project's training extra"
-                ) from error
-            model = PeftModel.from_pretrained(
-                model,
-                adapter_name_or_path,
-                local_files_only=local_files_only,
-                revision=adapter_revision,
-                cache_dir=cache_dir,
-            )
+                raise ModuleNotFoundError("Loading a GRPO adapter requires the project's training extra") from error
+            model = PeftModel.from_pretrained(model, adapter_name_or_path, local_files_only=local_files_only,
+                                              revision=adapter_revision, cache_dir=cache_dir)
         if device_map is None and not getattr(model, "is_quantized", False):
             model.to(torch_module.device(device))
         input_device = device
@@ -228,16 +198,11 @@ class TransformersBackend:
             if str(input_device) == "meta":
                 raise ValueError("input embeddings require a concrete device for manual decoding")
         return cls(
-            model,
-            tokenizer,
-            model_id=model_identity(
-                model_name_or_path, adapter_name_or_path, revision=revision,
-                adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
-                tokenizer_revision=tokenizer_revision,
-            ),
-            device=input_device,
-            max_score_batch_size=max_score_batch_size,
-            score_chunk_size=score_chunk_size,
+            model, tokenizer,
+            model_id=model_identity(model_name_or_path, adapter_name_or_path, revision=revision,
+                                    adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
+                                    tokenizer_revision=tokenizer_revision),
+            device=input_device, max_score_batch_size=max_score_batch_size, score_chunk_size=score_chunk_size,
             token_penalty=None if token_penalty is None else TokenPenalty.from_words(
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
         )
@@ -472,22 +437,24 @@ class TransformersBackend:
             self._estimated_dense_forward_flops += self._dense_forward_flops(slots)
         return samples
 
-    def sample_batch(
-        self, requests: Sequence[GenerationRequest]
-    ) -> list[SequenceSample]:
-        if not requests:
-            return []
+    def _generate(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         grouped: dict[tuple[SamplingConfig, tuple[TokenSequence, ...], float], list[int]] = {}
         for index, request in enumerate(requests):
             grouped.setdefault((request.sampling, request.stop_sequences, request.reference_temperature), []).append(index)
         results: dict[int, SequenceSample] = {}
         for indices in grouped.values():
             results.update(zip(indices, self._sample_same_policy([requests[index] for index in indices]), strict=True))
-        outputs = [results[index] for index in range(len(requests))]
+        return [results[index] for index in range(len(requests))]
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        if not requests:
+            return []
+        outputs, replayed = sample_with_drafts(requests, self._generate, model_id=self.model_id, honors_stops=True)
         with self._statistics_lock:
             self._sample_calls += 1
             self._sampled_sequences += len(outputs)
-            self._generated_tokens += sum(len(output.token_ids) for output in outputs)
+            self._generated_tokens += sum(len(output.token_ids) for output in outputs) - replayed
+            self._replayed_tokens += replayed
         return outputs
 
     def _token_scores(self, logits, sampling, continuation: TokenSequence, confidence_top_k: int | None):
@@ -594,18 +561,8 @@ class TransformersBackend:
 
     def snapshot(self) -> TransformersBackendSnapshot:
         with self._statistics_lock:
-            return TransformersBackendSnapshot(
-                sample_calls=self._sample_calls,
-                score_calls=self._score_calls,
-                sampled_sequences=self._sampled_sequences,
-                generated_tokens=self._generated_tokens,
-                prefill_tokens=self._prefill_tokens,
-                shared_prefill_tokens_saved=self._shared_prefill_tokens_saved,
-                scored_tokens=self._scored_tokens,
-                generation_forward_token_slots=self._generation_forward_token_slots,
-                score_forward_token_slots=self._score_forward_token_slots,
-                estimated_dense_forward_flops=self._estimated_dense_forward_flops,
-            )
+            return TransformersBackendSnapshot(**{name: getattr(self, "_" + name)
+                                                  for name in TransformersBackendSnapshot.__dataclass_fields__})
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
         return tuple(int(token) for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens))
