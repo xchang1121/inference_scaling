@@ -19,18 +19,8 @@ from inference_scaling.shared.types import TokenBatchReward, TokenSequence
 
 
 def _trajectory_key(sample: DiffusionSample) -> Hashable:
-    return (
-        sample.token_ids,
-        tuple(
-            (
-                step.block_index,
-                step.step_index,
-                step.positions,
-                step.token_ids,
-            )
-            for step in sample.trace
-        ),
-    )
+    return sample.token_ids, tuple((step.block_index, step.step_index, step.positions, step.token_ids)
+                                   for step in sample.trace)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,11 +39,7 @@ class ReplayMixtureDiffusionMHResult:
 
     @property
     def acceptance_rate(self) -> float:
-        return (
-            sum(step.accepted for step in self.steps) / len(self.steps)
-            if self.steps
-            else 0.0
-        )
+        return sum(step.accepted for step in self.steps) / len(self.steps) if self.steps else 0.0
 
 
 def run_diffusion_replay_mixture_mh(
@@ -76,19 +62,12 @@ def run_diffusion_replay_mixture_mh(
     if not sampling.has_exact_trajectory_density:
         raise ValueError("replay-mixture MH requires exact trajectory probabilities")
     for sample in history:
-        if (
-            sample.prefix != prompt
-            or sample.trajectory_logprob is None
-            or sample.policy_id != sampling.policy_id
-            or sample.model_id != backend.model_id
-        ):
+        if (sample.prefix != prompt or sample.trajectory_logprob is None or sample.policy_id != sampling.policy_id
+                or sample.model_id != backend.model_id):
             raise ValueError("cached trajectories must match the prompt and exact policy")
     seeds = SeedStream(seed)
-    source_rng = seeds.generator("dllm-replay-mh", "sources")
-    use_history = [False] + [
-        bool(value)
-        for value in source_rng.random(config.updates) < history_probability
-    ]
+    use_history = [False] + [bool(value) for value in
+                             seeds.generator("dllm-replay-mh", "sources").random(config.updates) < history_probability]
     samples: list[DiffusionSample | None] = [None] * (config.updates + 1)
     base_positions = [index for index, cached in enumerate(use_history) if not cached]
     requests = _mh_requests(prompt, config, sampling, seeds)
@@ -102,10 +81,7 @@ def run_diffusion_replay_mixture_mh(
     for index, cached in enumerate(use_history):
         if not cached:
             continue
-        history_index = int(
-            seeds.generator("dllm-replay-mh", "history", index).integers(len(history))
-        )
-        samples[index] = history[history_index]
+        samples[index] = history[int(seeds.generator("dllm-replay-mh", "history", index).integers(len(history)))]
         history_draws += 1
     resolved = tuple(sample for sample in samples if sample is not None)
     if len(resolved) != config.updates + 1:
@@ -119,15 +95,9 @@ def run_diffusion_replay_mixture_mh(
         if history_probability == 0:
             return float(sample.trajectory_logprob)
         empirical_count = history_counts.get(_trajectory_key(sample), 0)
-        history_logprob = (
-            log(empirical_count / len(history)) if empirical_count else float("-inf")
-        )
-        return float(
-            np.logaddexp(
-                log(1 - history_probability) + sample.trajectory_logprob,
-                log(history_probability) + history_logprob,
-            )
-        )
+        history_logprob = log(empirical_count / len(history)) if empirical_count else float("-inf")
+        return float(np.logaddexp(log(1 - history_probability) + sample.trajectory_logprob,
+                                  log(history_probability) + history_logprob))
 
     current = resolved[0]
     current_reward = rewards[0]
@@ -140,19 +110,10 @@ def run_diffusion_replay_mixture_mh(
             raise ValueError("replay-mixture MH requires exact trajectory scores")
         proposed_q = proposal_logprob(proposal)
         decision = decide_metropolis_hastings(
-            current_target_log_density=(
-                current.trajectory_logprob
-                + current_reward / config.reward_temperature
-            ),
-            proposed_target_log_density=(
-                proposal.trajectory_logprob
-                + proposed_reward / config.reward_temperature
-            ),
-            forward_proposal_log_probability=proposed_q,
-            reverse_proposal_log_probability=current_q,
-            uniform=float(
-                seeds.generator("dllm-replay-mh", "accept", update).random()
-            ),
+            current_target_log_density=current.trajectory_logprob + current_reward / config.reward_temperature,
+            proposed_target_log_density=proposal.trajectory_logprob + proposed_reward / config.reward_temperature,
+            forward_proposal_log_probability=proposed_q, reverse_proposal_log_probability=current_q,
+            uniform=float(seeds.generator("dllm-replay-mh", "accept", update).random()),
         )
         if decision.accepted:
             current = proposal
@@ -164,8 +125,4 @@ def run_diffusion_replay_mixture_mh(
     return ReplayMixtureDiffusionMHResult(current, current_reward, tuple(steps), history_draws)
 
 
-__all__ = [
-    "ReplayMixtureDiffusionMHResult",
-    "ReplayMixtureDiffusionMHStep",
-    "run_diffusion_replay_mixture_mh",
-]
+__all__ = ["ReplayMixtureDiffusionMHResult", "ReplayMixtureDiffusionMHStep", "run_diffusion_replay_mixture_mh"]

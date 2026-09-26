@@ -42,6 +42,8 @@ def _transformers(path: str, identity: Mapping[str, Any], model: Mapping[str, An
         model_kwargs=dict(options["model_kwargs"]),
         max_score_batch_size=int(options["max_score_batch_size"]),
         score_chunk_size=int(options["score_chunk_size"]),
+        prefix_cache_mib=int(options["prefix_cache_mib"]),
+        in_place_kv=bool(options["in_place_kv"]),
     )
 
 

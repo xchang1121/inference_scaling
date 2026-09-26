@@ -10,23 +10,26 @@ from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.shared.model.generation import generation_budget
 
 
-@pytest.mark.parametrize("family", ["gpt2", "qwen2"])
-def test_chunked_scoring_matches_complete_causal_context(family):
+def _tiny_model(family):
     from transformers import AutoModelForCausalLM, GPT2Config, Qwen2Config
 
-    config = (
-        GPT2Config(vocab_size=31, n_layer=1, n_head=2, n_embd=16, n_positions=128)
-        if family == "gpt2" else
-        Qwen2Config(vocab_size=31, num_hidden_layers=1, num_attention_heads=2,
-                    num_key_value_heads=2, hidden_size=16, intermediate_size=32,
-                    max_position_embeddings=128, attn_implementation="eager")
-    )
+    config = (GPT2Config(vocab_size=31, n_layer=1, n_head=2, n_embd=16, n_positions=128) if family == "gpt2" else
+              Qwen2Config(vocab_size=31, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
+                          hidden_size=16, intermediate_size=32, max_position_embeddings=128, attn_implementation="eager"))
     with torch.random.fork_rng():
         torch.manual_seed(21)
-        model = AutoModelForCausalLM.from_config(config).eval()
-    tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2, bos_token_id=1)
+        return AutoModelForCausalLM.from_config(config).eval()
+
+
+TOKENIZER = SimpleNamespace(pad_token_id=0, eos_token_id=2, bos_token_id=1)
+
+
+@pytest.mark.parametrize("family", ["gpt2", "qwen2"])
+def test_chunked_scoring_matches_complete_causal_context(family):
+    model, tokenizer = _tiny_model(family), TOKENIZER
     complete = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=128)
-    chunked = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=4)
+    chunked = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=4,
+                                  prefix_cache_bytes=2**24)
     requests = [ScoreRequest((1, 4, 3, 5, 8, 9), ((8, 4, 3, 9, 1, 6, 2), (5, 6)), SamplingConfig(temperature=0.7)),
                 ScoreRequest((), ((8,),), SamplingConfig())]
     expected = complete.score_statistics_batch(requests, confidence_top_k=5)
@@ -43,7 +46,7 @@ def test_chunked_scoring_matches_complete_causal_context(family):
     for expected, actual in zip(left, right, strict=True):
         assert expected.token_ids == actual.token_ids
         assert expected.token_logprobs == pytest.approx(actual.token_logprobs, abs=2e-6)
-    # A single request resumes the previous one's KV state over their common prefix.
+    # A request resumes a stored KV state over their common prefix.
     first = chunked.sample_batch([GenerationRequest((1, 2, 3, 4, 5), 6, SamplingConfig(), 3, "first")])[0]
     request = GenerationRequest((1, 2, 3, 4, 5) + first.token_ids[:4], 3, SamplingConfig(), 4, "resumed")
     before = chunked.snapshot().prefill_tokens
@@ -71,3 +74,46 @@ def test_every_backend_context_is_respected():
         100, 8, [SimpleNamespace(max_model_len=200), SimpleNamespace(max_model_len=24)], context_window=None,
     )
     assert budget["effective_max_new_tokens"] == 16
+
+
+@pytest.mark.parametrize("family", ["gpt2", "qwen2"])
+def test_prefix_store_and_in_place_kv_leave_samples_unchanged(family):
+    model = _tiny_model(family)
+    plain = TransformersBackend(model, TOKENIZER, device="cpu", max_score_batch_size=8, score_chunk_size=4)
+    fast = TransformersBackend(model, TOKENIZER, device="cpu", max_score_batch_size=8, score_chunk_size=4,
+                               prefix_cache_bytes=2**24, in_place_kv=True)
+    prompt = (1, 4, 3, 5, 8, 9)
+    # IS-like calls: complete outputs from the prompt, then completions after each output's first block.
+    outputs = [backend.sample_batch([GenerationRequest(prompt, 9, SamplingConfig(), seed, str(seed))
+                                     for seed in range(3)]) for backend in (plain, fast)]
+    blocks = [prompt + output.token_ids[:3] for output in outputs[0]]
+    before = fast.snapshot().prefill_tokens
+    completions = [backend.sample_batch([GenerationRequest(block, 5, SamplingConfig(), 10 + index, f"c{index}")
+                                         for index, block in enumerate(blocks) for _ in range(2)])
+                   for backend in (plain, fast)]
+    for left, right in zip(outputs[0] + completions[0], outputs[1] + completions[1], strict=True):
+        assert left.token_ids == right.token_ids
+        assert right.token_logprobs == pytest.approx(left.token_logprobs, abs=2e-6)
+    # Each continued block feeds only its last token.
+    assert fast.snapshot().prefill_tokens - before == len(set(blocks))
+
+
+def test_growing_cache_matches_the_dynamic_cache_through_crops_and_row_selection():
+    from transformers.cache_utils import DynamicCache
+
+    from inference_scaling.arllm.backends.kv_cache import GrowingCache, cache_layers
+
+    growing, dynamic = GrowingCache(), DynamicCache()
+    generator, batch = torch.Generator().manual_seed(0), 3
+    for count, edit in ((5, None), (1, None), (1, "crop"), (2, "select"), (1, None)):
+        for cache in (growing, dynamic):
+            if edit == "crop":
+                cache.crop(4)
+            if edit == "select":
+                cache.batch_select_indices(torch.tensor([2, 0]))
+        batch = 2 if edit == "select" else batch
+        states = [torch.randn((batch, 2, count, 4), generator=generator) for _ in range(2)]
+        for cache in (growing, dynamic):
+            cache.update(states[0], states[1], 0)
+        for left, right in zip(cache_layers(growing), cache_layers(dynamic), strict=True):
+            assert torch.equal(left[0], right[0]) and torch.equal(left[1], right[1])

@@ -101,6 +101,8 @@
 | `transformers.attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
 | `transformers.max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
 | `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
+| `transformers.prefix_cache_mib` | 整数 | 前缀 KV 存储的容量（MiB，`0` 关闭）：结束的生成行保存 KV，后续请求从最长的已存前缀接着预填充；结果不变 |
+| `transformers.in_place_kv` | 布尔 | 解码时把新位置写入预留缓冲区，而不是每步复制整层 KV；结果不变 |
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |

@@ -3,16 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from inference_scaling.dllm.algorithms.config import (
-    DiffusionBlockBeamConfig,
-    DiffusionPowerMHConfig,
-)
+from inference_scaling.dllm.algorithms.config import DiffusionBlockBeamConfig, DiffusionPowerMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig, diffusion_decision_stage_lengths
-from inference_scaling.dllm.types import (
-    DiffusionBackend,
-    DiffusionGenerationRequest,
-    DiffusionSample,
-)
+from inference_scaling.dllm.types import DiffusionBackend, DiffusionGenerationRequest, DiffusionSample
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
@@ -119,31 +112,16 @@ def run_diffusion_trajectory_power_mh(
         raise ValueError("trajectory-power MH requires an exact diffusion policy")
     if sampling.top_k or sampling.top_p < 1:
         raise ValueError("trajectory-power MH requires a full-support base policy")
-    proposal_sampling = proposal_sampling or replace(
-        sampling,
-        temperature=sampling.temperature / config.alpha,
-    )
+    proposal_sampling = proposal_sampling or replace(sampling, temperature=sampling.temperature / config.alpha)
     if not proposal_sampling.has_exact_trajectory_density:
         raise ValueError("trajectory-power MH requires an exact proposal policy")
     if proposal_sampling.top_k or proposal_sampling.top_p < 1:
         raise ValueError("trajectory-power MH requires a full-support proposal")
-    schedule = (
-        sampling.block_length,
-        sampling.steps_per_block,
-        sampling.remasking,
-    )
-    proposal_schedule = (
-        proposal_sampling.block_length,
-        proposal_sampling.steps_per_block,
-        proposal_sampling.remasking,
-    )
-    if schedule != proposal_schedule:
+    if (sampling.block_length, sampling.steps_per_block, sampling.remasking) != (
+            proposal_sampling.block_length, proposal_sampling.steps_per_block, proposal_sampling.remasking):
         raise ValueError("base and proposal trajectory schedules must match")
-    stage_lengths = diffusion_decision_stage_lengths(
-        total_length=config.total_length,
-        decision_block_size=config.decision_block_size,
-        sampling=sampling,
-    )
+    stage_lengths = diffusion_decision_stage_lengths(total_length=config.total_length,
+                                                     decision_block_size=config.decision_block_size, sampling=sampling)
     seeds = SeedStream(seed)
     current = DiffusionPowerMHState(prompt, ())
     steps: list[DiffusionPowerMHStep] = []
@@ -151,35 +129,22 @@ def run_diffusion_trajectory_power_mh(
     global_update = 0
     for stage_index, extension_length in enumerate(stage_lengths):
         extension_blocks = _sample_power_suffix(
-            backend=backend,
-            prefix=prompt + current.token_ids,
-            length=extension_length,
-            base_sampling=sampling,
-            proposal_sampling=proposal_sampling,
-            seeds=seeds,
-            key=("dllm-power-mh", stage_index, "extend"),
+            backend=backend, prefix=prompt + current.token_ids, length=extension_length, base_sampling=sampling,
+            proposal_sampling=proposal_sampling, seeds=seeds, key=("dllm-power-mh", stage_index, "extend"),
             request_id=f"dllm-power-mh:stage:{stage_index}:extend",
         )
         current = DiffusionPowerMHState(prompt, current.blocks + extension_blocks)
         stage_length += extension_length
         for stage_update in range(config.updates_per_stage):
             global_update += 1
-            cut_block = int(
-                seeds.generator(
-                    "dllm-power-mh", stage_index, stage_update, "cut"
-                ).integers(0, len(current.blocks))
-            )
+            cut_block = int(seeds.generator("dllm-power-mh", stage_index, stage_update, "cut").integers(0, len(current.blocks)))
             kept_blocks = current.blocks[:cut_block]
             old_blocks = current.blocks[cut_block:]
             cut = sum(len(block.token_ids) for block in kept_blocks)
             suffix_length = stage_length - cut
             proposed_blocks = _sample_power_suffix(
-                backend=backend,
-                prefix=prompt + current.token_ids[:cut],
-                length=suffix_length,
-                base_sampling=sampling,
-                proposal_sampling=proposal_sampling,
-                seeds=seeds,
+                backend=backend, prefix=prompt + current.token_ids[:cut], length=suffix_length, base_sampling=sampling,
+                proposal_sampling=proposal_sampling, seeds=seeds,
                 key=("dllm-power-mh", stage_index, stage_update, "proposal"),
                 request_id=f"dllm-power-mh:stage:{stage_index}:update:{stage_update}",
             )
@@ -187,17 +152,10 @@ def run_diffusion_trajectory_power_mh(
             old_q = sum(block.proposal_trajectory_logprob for block in old_blocks)
             new_p = sum(block.base_trajectory_logprob for block in proposed_blocks)
             new_q = sum(block.proposal_trajectory_logprob for block in proposed_blocks)
-            uniform = float(
-                seeds.generator(
-                    "dllm-power-mh", stage_index, stage_update, "accept"
-                ).random()
-            )
             decision = decide_metropolis_hastings(
-                current_target_log_density=config.alpha * old_p,
-                proposed_target_log_density=config.alpha * new_p,
-                forward_proposal_log_probability=new_q,
-                reverse_proposal_log_probability=old_q,
-                uniform=uniform,
+                current_target_log_density=config.alpha * old_p, proposed_target_log_density=config.alpha * new_p,
+                forward_proposal_log_probability=new_q, reverse_proposal_log_probability=old_q,
+                uniform=float(seeds.generator("dllm-power-mh", stage_index, stage_update, "accept").random()),
             )
             if decision.accepted:
                 current = DiffusionPowerMHState(prompt, kept_blocks + proposed_blocks)
@@ -247,61 +205,32 @@ def run_diffusion_block_beam(
     seeds = SeedStream(seed)
     beams = (DiffusionBeamHypothesis((), 0.0),)
     stages: list[DiffusionBlockBeamStage] = []
-    stage_lengths = diffusion_decision_stage_lengths(
-        total_length=config.total_length,
-        decision_block_size=config.decision_block_size,
-        sampling=sampling,
-    )
+    stage_lengths = diffusion_decision_stage_lengths(total_length=config.total_length,
+                                                     decision_block_size=config.decision_block_size, sampling=sampling)
     for stage_index, stage_length in enumerate(stage_lengths):
         requests: list[DiffusionGenerationRequest] = []
         owners: list[int] = []
         draws_per_beam = config.width if stage_index == 0 else config.branching_factor
         for beam_index, beam in enumerate(beams):
             for draw_index in range(draws_per_beam):
-                requests.append(
-                    DiffusionGenerationRequest(
-                        prefix=prompt + beam.token_ids,
-                        generation_length=stage_length,
-                        sampling=sampling,
-                        seed=seeds.derive(
-                            "dllm-block-beam", stage_index, beam_index, draw_index
-                        ),
-                        request_id=(
-                            f"dllm-block-beam:stage:{stage_index}:beam:{beam_index}:"
-                            f"draw:{draw_index}"
-                        ),
-                    )
-                )
+                requests.append(DiffusionGenerationRequest(
+                    prefix=prompt + beam.token_ids, generation_length=stage_length, sampling=sampling,
+                    seed=seeds.derive("dllm-block-beam", stage_index, beam_index, draw_index),
+                    request_id=f"dllm-block-beam:stage:{stage_index}:beam:{beam_index}:draw:{draw_index}",
+                ))
                 owners.append(beam_index)
         sampled = backend.sample_batch(requests)
         if len(sampled) != len(requests):
             raise RuntimeError("backend returned an invalid number of beam proposals")
-        expanded = [
-            DiffusionBeamHypothesis(
-                token_ids=beams[owner].token_ids + sample.token_ids,
-                trajectory_logprob=(
-                    beams[owner].trajectory_logprob + _exact_logprob(sample)
-                ),
-            )
-            for owner, sample in zip(owners, sampled, strict=True)
-        ]
-        expanded.sort(
-            key=lambda item: (item.trajectory_logprob, item.token_ids),
-            reverse=True,
-        )
+        expanded = [DiffusionBeamHypothesis(beams[owner].token_ids + sample.token_ids,
+                                            beams[owner].trajectory_logprob + _exact_logprob(sample))
+                    for owner, sample in zip(owners, sampled, strict=True)]
+        expanded.sort(key=lambda item: (item.trajectory_logprob, item.token_ids), reverse=True)
         beams = tuple(expanded[: config.width])
         stages.append(DiffusionBlockBeamStage(len(expanded)))
     return DiffusionBlockBeamResult(prompt=prompt, stages=tuple(stages), beams=beams)
 
 
-__all__ = [
-    "DiffusionBeamHypothesis",
-    "DiffusionBlockBeamResult",
-    "DiffusionBlockBeamStage",
-    "DiffusionPowerMHBlock",
-    "DiffusionPowerMHResult",
-    "DiffusionPowerMHState",
-    "DiffusionPowerMHStep",
-    "run_diffusion_block_beam",
-    "run_diffusion_trajectory_power_mh",
-]
+__all__ = ["DiffusionBeamHypothesis", "DiffusionBlockBeamResult", "DiffusionBlockBeamStage", "DiffusionPowerMHBlock",
+           "DiffusionPowerMHResult", "DiffusionPowerMHState", "DiffusionPowerMHStep", "run_diffusion_block_beam",
+           "run_diffusion_trajectory_power_mh"]

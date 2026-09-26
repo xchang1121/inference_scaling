@@ -98,6 +98,8 @@ SCHEMA: dict[str, Any] = {
                 "model_kwargs": dict,
                 "max_score_batch_size": int,
                 "score_chunk_size": int,
+                "prefix_cache_mib": int,
+                "in_place_kv": bool,
             },
             "vllm": {
                 "asynchronous": bool,

@@ -16,6 +16,7 @@ from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
+from inference_scaling.arllm.backends.kv_cache import DynamicCache, GrowingCache, PrefixStore, cache_layers
 from inference_scaling.arllm.backends.replay import sample_with_drafts
 from inference_scaling.arllm.types import (
     GenerationRequest,
@@ -75,6 +76,8 @@ class TransformersBackend:
         max_score_batch_size: int,
         score_chunk_size: int,
         token_penalty: TokenPenalty | None = None,
+        prefix_cache_bytes: int = 0,
+        in_place_kv: bool = False,
     ) -> None:
         torch_module = _require_torch()
         self.model = model
@@ -107,8 +110,11 @@ class TransformersBackend:
         forward_parameters = inspect.signature(inspected_model.forward).parameters
         self._supports_logits_to_keep = "logits_to_keep" in forward_parameters
         self._model_lock = threading.RLock()
-        # The tokens and KV state of the last single-request generation, which the next one may resume.
-        self._retained: tuple[TokenSequence, Any] | None = None
+        if prefix_cache_bytes < 0:
+            raise ValueError("prefix_cache_bytes must be non-negative")
+        # KV states of finished rows, which later requests resume over their longest stored prefix.
+        self._store = PrefixStore(prefix_cache_bytes) if prefix_cache_bytes else None
+        self._cache_class = GrowingCache if in_place_kv else DynamicCache
         self._statistics_lock = threading.Lock()
         for name in TransformersBackendSnapshot.__dataclass_fields__:
             setattr(self, "_" + name, 0)
@@ -140,6 +146,8 @@ class TransformersBackend:
         max_score_batch_size: int,
         score_chunk_size: int,
         token_penalty: Mapping[str, Any] | None,
+        prefix_cache_mib: int,
+        in_place_kv: bool,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -205,6 +213,7 @@ class TransformersBackend:
             device=input_device, max_score_batch_size=max_score_batch_size, score_chunk_size=score_chunk_size,
             token_penalty=None if token_penalty is None else TokenPenalty.from_words(
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
+            prefix_cache_bytes=int(prefix_cache_mib) * 2**20, in_place_kv=in_place_kv,
         )
 
     @property
@@ -214,7 +223,9 @@ class TransformersBackend:
     def close(self) -> None:
         """Release the model reference after all dispatchers have stopped."""
         with self._model_lock:
-            self.model = self._retained = None
+            self.model = None
+            if self._store is not None:
+                self._store.clear()
 
     @property
     def parameter_count(self) -> int:
@@ -279,16 +290,6 @@ class TransformersBackend:
         return input_ids, attention_mask
 
     @staticmethod
-    def _crop(cache, length: int):
-        """The first ``length`` positions of a KV cache."""
-
-        crop = getattr(cache, "crop", None)
-        if callable(crop):
-            crop(length)
-            return cache
-        return tuple(tuple(tensor[..., :length, :] for tensor in layer) for layer in cache)
-
-    @staticmethod
     def _select_rows(cache, rows):
         """Keep, reorder or repeat batch rows of a KV cache."""
 
@@ -303,10 +304,10 @@ class TransformersBackend:
     ) -> list[SequenceSample]:
         """Decode requests that share their policy, reference policy and stop sequences.
 
-        Each distinct prefix is prefilled once and its KV state copied to every
-        row that repeats it; a single request resumes the KV state of the
-        previous one over their common prefix. A row leaves the batch as soon as
-        it ends. Tokens are drawn by inverse CDF from request-local uniforms, so a
+        Each distinct prefix resumes the stored KV state of its longest stored
+        prefix, is prefilled once from there and its KV state copied to every row
+        that repeats it; a row that ends leaves the batch and its KV state goes to
+        the store. Tokens are drawn by inverse CDF from request-local uniforms, so a
         sample does not depend on the batch it runs in. Sampled values stay on the
         device until the batch is done.
         """
@@ -338,26 +339,30 @@ class TransformersBackend:
                                        (0.0, 0.0, float("-inf"), 0.0) for stop in stops],
                                       dtype=torch_module.float64, device=self.device)
         with self._model_lock, torch_module.inference_mode():
-            retained, self._retained = self._retained, None
-            reused, cache = 0, None
-            if retained is not None and len(requests) == 1:
-                cached_tokens, cached = retained
-                common = next((index for index, (left, right) in enumerate(zip(cached_tokens, unique[0]))
-                               if left != right), min(len(cached_tokens), len(unique[0])))
-                # The last prefix position is fed again for its logits.
-                reused = min(common, len(unique[0]) - 1)
-                if reused:
-                    cache = self._crop(cached, reused)
-            if reused:
-                input_ids = torch_module.tensor([unique[0][reused:]], dtype=torch_module.long, device=self.device)
-                attention_mask = torch_module.ones((1, len(unique[0])), dtype=torch_module.long, device=self.device)
-            else:
-                input_ids, attention_mask = self._padded_inputs(unique)
+            matches = [self._store.match(prefix) if self._store else (0, []) for prefix in unique]
+            # The stored positions of each prefix, right-aligned; its last position is fed again for its logits.
+            cached = [min(length, len(prefix) - 1) for (length, _), prefix in zip(matches, unique, strict=True)]
+            width = max(cached)
+            layers = []
+            for layer, (key, value) in enumerate(next((entry for (_, entry), length in zip(matches, cached) if length), [])):
+                keys, values = key.new_zeros((len(unique), *key.shape[1:2], width, key.shape[-1])), value.new_zeros(
+                    (len(unique), *value.shape[1:2], width, value.shape[-1]))
+                for row, ((_, entry), length) in enumerate(zip(matches, cached, strict=True)):
+                    if length:
+                        keys[row, :, width - length :] = entry[layer][0][0, :, :length]
+                        values[row, :, width - length :] = entry[layer][1][0, :, :length]
+                layers.append((keys, values))
+            input_ids, attention_mask = self._padded_inputs([prefix[length:] for prefix, length in zip(unique, cached)])
+            stored = torch_module.zeros((len(unique), width), dtype=torch_module.long, device=self.device)
+            for row, length in enumerate(cached):
+                stored[row, width - length :] = 1
+            attention_mask = torch_module.cat([stored, attention_mask], dim=-1)
             last: list[Any] = []
             cache = run_causal_chunks(
-                self.model, input_ids, attention_mask, self._position_ids(attention_mask)[:, reused:],
+                self.model, input_ids, attention_mask, self._position_ids(attention_mask)[:, width:],
                 chunk_size=self.score_chunk_size, first_needed=input_ids.shape[1] - 1,
-                supports_logits_to_keep=self._supports_logits_to_keep, cache=cache,
+                supports_logits_to_keep=self._supports_logits_to_keep,
+                cache=self._cache_class(layers) if layers else self._cache_class(),
                 on_logits=lambda _position, logits: last.append(logits[:, -1, :]),
             )
             slots = int(input_ids.numel())
@@ -403,6 +408,14 @@ class TransformersBackend:
                 reasons[alive] = reason
                 keep = (reason == 0) & (step + 1 < limits[alive])
                 remaining = int(keep.sum())
+                if self._store is not None and remaining < len(alive):
+                    # A row that ends is stored with the tokens fed so far, all but its last.
+                    kv = cache_layers(cache)
+                    for position in (~keep).nonzero().squeeze(-1).tolist():
+                        row, valid = int(alive[position]), attention_mask[position].bool()
+                        self._store.add(prefixes[row] + tuple(tokens[row, :step].tolist()),
+                                        [(key[position : position + 1, :, valid], value[position : position + 1, :, valid])
+                                         for key, value in kv])
                 if not remaining:
                     break
                 if remaining < len(alive):
@@ -438,10 +451,7 @@ class TransformersBackend:
             )
             for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds in rows
         ]
-        if len(requests) == 1:
-            # The KV state covers the prefix and every generated token but the last.
-            self._retained = (prefixes[0] + samples[0].token_ids[:-1], cache)
-        prefill_tokens = sum(map(len, unique)) - reused
+        prefill_tokens = sum(len(prefix) - length for prefix, length in zip(unique, cached, strict=True))
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
             self._shared_prefill_tokens_saved += sum(map(len, prefixes)) - prefill_tokens
@@ -507,7 +517,7 @@ class TransformersBackend:
             run_causal_chunks(
                 self.model, input_ids, attention_mask, self._position_ids(attention_mask),
                 chunk_size=self.score_chunk_size, first_needed=width - max(len(item[1]) for item in batch),
-                supports_logits_to_keep=self._supports_logits_to_keep, on_logits=consume,
+                supports_logits_to_keep=self._supports_logits_to_keep, on_logits=consume, cache=self._cache_class(),
             )
         return scores, int(input_ids.numel())
 
@@ -523,7 +533,6 @@ class TransformersBackend:
         chunks, which bounds its logits and KV state.
         """
 
-        self._retained = None
         flattened = [(request, continuation) for request in requests for continuation in request.continuations]
         results: list[tuple[tuple[float, ...], tuple[float, ...]]] = [((), ())] * len(flattened)
         items = sorted(
