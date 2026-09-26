@@ -92,7 +92,8 @@
         "max_score_batch_size": 12,
         "score_chunk_size": 256,
         "prefix_cache_mib": 4096,
-        "in_place_kv": true
+        "in_place_kv": true,
+        "cuda_graphs": false
       },
       "vllm": {
         "asynchronous": true,

@@ -919,6 +919,7 @@ ScoreRequest(prefix, continuations, sampling)
 | 评分小批量 | 长度相近的续写成批，每批至多 `ar.engine.transformers.max_score_batch_size` 行、同样多个分块的填充位置；配合 `logits_to_keep` | 限制全词表 logits 与 KV 的显存峰值 |
 | 前缀 KV 存储 | 结束的生成行按其 token 保存 KV（`ar.engine.transformers.prefix_cache_mib` 以内，最久未用先出）；每个唯一前缀从最长的已存前缀接着预填充，例如 IS 第二阶段的 $`g+c_k`$ 直接复用第一阶段第 $`k`$ 行 | 省去共同前缀（IS 的 $`g`$、MH 的保留前缀）的重复预填充；FLOPs 只计未命中的位置 |
 | 原地 KV | `ar.engine.transformers.in_place_kv` 时每层预留缓冲区，新位置原地写入，层变为已写部分的视图 | 省去 `DynamicCache` 每步整层复制；多占至多一半的预留显存 |
+| CUDA graphs | `ar.engine.transformers.cuda_graphs` 时每步把各行的新 KV 写入常驻缓冲区的同一列；行数与位置数取整到 2 的幂，其余部分由 4D 加性掩码屏蔽；每种形状首次捕获、之后重放 | 省去每步的 kernel 启动与 Python 开销；KV 显存与注意力读取按取整后的形状计，计算量仍按有效行统计 |
 
 若第 $`i`$ 个唯一前缀长 $`L_i`$、重复 $`K_i`$ 次，省去的未计填充的预填充 token 位置数为：
 

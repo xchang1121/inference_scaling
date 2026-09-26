@@ -70,32 +70,31 @@ def test_context_budget_caps_the_requested_length():
 
 
 def test_every_backend_context_is_respected():
-    budget = generation_budget(
-        100, 8, [SimpleNamespace(max_model_len=200), SimpleNamespace(max_model_len=24)], context_window=None,
-    )
+    budget = generation_budget(100, 8, [SimpleNamespace(max_model_len=200), SimpleNamespace(max_model_len=24)],
+                               context_window=None)
     assert budget["effective_max_new_tokens"] == 16
 
 
 @pytest.mark.parametrize("family", ["gpt2", "qwen2"])
-def test_prefix_store_and_in_place_kv_leave_samples_unchanged(family):
-    model = _tiny_model(family)
-    plain = TransformersBackend(model, TOKENIZER, device="cpu", max_score_batch_size=8, score_chunk_size=4)
-    fast = TransformersBackend(model, TOKENIZER, device="cpu", max_score_batch_size=8, score_chunk_size=4,
-                               prefix_cache_bytes=2**24, in_place_kv=True)
+def test_prefix_store_in_place_kv_and_fixed_shape_decoding_leave_samples_unchanged(family):
+    model, options = _tiny_model(family), {"device": "cpu", "max_score_batch_size": 8, "score_chunk_size": 4}
+    backends = [TransformersBackend(model, TOKENIZER, **options),
+                TransformersBackend(model, TOKENIZER, **options, prefix_cache_bytes=2**24, in_place_kv=True),
+                TransformersBackend(model, TOKENIZER, **options, prefix_cache_bytes=2**24, cuda_graphs=True)]
     prompt = (1, 4, 3, 5, 8, 9)
-    # IS-like calls: complete outputs from the prompt, then completions after each output's first block.
-    outputs = [backend.sample_batch([GenerationRequest(prompt, 9, SamplingConfig(), seed, str(seed))
-                                     for seed in range(3)]) for backend in (plain, fast)]
+    # IS-like calls: outputs of three lengths from the prompt, then completions after each output's first block.
+    outputs = [backend.sample_batch([GenerationRequest(prompt, 5 + 2 * seed, SamplingConfig(), seed, str(seed))
+                                     for seed in range(3)]) for backend in backends]
     blocks = [prompt + output.token_ids[:3] for output in outputs[0]]
-    before = fast.snapshot().prefill_tokens
+    before = [backend.snapshot().prefill_tokens for backend in backends]
     completions = [backend.sample_batch([GenerationRequest(block, 5, SamplingConfig(), 10 + index, f"c{index}")
-                                         for index, block in enumerate(blocks) for _ in range(2)])
-                   for backend in (plain, fast)]
-    for left, right in zip(outputs[0] + completions[0], outputs[1] + completions[1], strict=True):
-        assert left.token_ids == right.token_ids
-        assert right.token_logprobs == pytest.approx(left.token_logprobs, abs=2e-6)
-    # Each continued block feeds only its last token.
-    assert fast.snapshot().prefill_tokens - before == len(set(blocks))
+                                         for index, block in enumerate(blocks) for _ in range(2)]) for backend in backends]
+    for runs in zip(*(output + completion for output, completion in zip(outputs, completions))):
+        assert all(run.token_ids == runs[0].token_ids for run in runs)
+        assert all(run.token_logprobs == pytest.approx(runs[0].token_logprobs, abs=2e-6) for run in runs)
+    # Each continued block feeds only its last token; rows and positions are rounded up to powers of two.
+    assert [backend.snapshot().prefill_tokens - start for backend, start in zip(backends[1:], before[1:])] == [len(set(blocks))] * 2
+    assert backends[2]._static._mask.shape == (8, 1, 1, 16)
 
 
 def test_growing_cache_matches_the_dynamic_cache_through_crops_and_row_selection():

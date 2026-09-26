@@ -100,6 +100,7 @@ SCHEMA: dict[str, Any] = {
                 "score_chunk_size": int,
                 "prefix_cache_mib": int,
                 "in_place_kv": bool,
+                "cuda_graphs": bool,
             },
             "vllm": {
                 "asynchronous": bool,

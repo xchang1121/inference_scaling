@@ -70,7 +70,7 @@ def test_local_sharded_transformer_round_trip_uses_independent_tokenizer(tmp_pat
         backend = TransformersBackend.from_pretrained(str(tmp_path / "weights"),
             tokenizer_name_or_path=str(tmp_path / "tokenizer"), device="cpu", dtype="auto",
             local_files_only=True, max_score_batch_size=8, score_chunk_size=4, device_map="cpu", token_penalty=None,
-            prefix_cache_mib=0, in_place_kv=False)
+            prefix_cache_mib=0, in_place_kv=False, cuda_graphs=False)
     assert next(backend.model.parameters()).device == torch.device("cpu")
     assert backend.tokenizer.get_vocab() == tokenizer.get_vocab()
     assert backend.tokenizer.pad_token_id == tokenizer.eos_token_id

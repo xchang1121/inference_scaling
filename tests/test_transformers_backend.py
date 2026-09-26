@@ -19,12 +19,8 @@ class TinyTokenizer:
 class ConstantLogitModel(torch.nn.Module):
     def __init__(self, probabilities):
         super().__init__()
-        self.constant_logits = torch.nn.Parameter(
-            torch.log(torch.tensor(probabilities)), requires_grad=False
-        )
-        self.config = SimpleNamespace(
-            _name_or_path="constant-logit-model", model_type="qwen2"
-        )
+        self.constant_logits = torch.nn.Parameter(torch.log(torch.tensor(probabilities)), requires_grad=False)
+        self.config = SimpleNamespace(_name_or_path="constant-logit-model", model_type="qwen2")
         self.forward_calls = 0
         self.logits_to_keep_calls = []
         self.batch_sizes = []
@@ -42,15 +38,7 @@ class ConstantLogitModel(torch.nn.Module):
         self.logits_to_keep_calls.append(logits_to_keep)
         if logits_to_keep:
             logits = logits[:, -logits_to_keep:, :]
-        return SimpleNamespace(logits=logits, past_key_values=RepeatableCache())
-
-
-class RepeatableCache:
-    def batch_select_indices(self, _indices):
-        return None
-
-    def crop(self, _length):
-        return None
+        return SimpleNamespace(logits=logits, past_key_values=SimpleNamespace(batch_select_indices=lambda _rows: None))
 
 
 def _backend(model, token_penalty=None):
@@ -67,19 +55,14 @@ def test_request_local_randomness_is_independent_of_batch_order() -> None:
 
 
 def test_inverse_cdf_accumulates_large_vocabulary_in_float64() -> None:
-    vocabulary_size = 1000
-    seed = 12434
-    model = ConstantLogitModel([1 / vocabulary_size] * vocabulary_size)
-    backend = _backend(model)
-
-    sample = backend.sample_batch([GenerationRequest((0,), 1, SamplingConfig(), seed, "large-vocabulary")])[0]
+    seed, model = 12434, ConstantLogitModel([1 / 1000] * 1000)
+    sample = _backend(model).sample_batch([GenerationRequest((0,), 1, SamplingConfig(), seed, "large-vocabulary")])[0]
     probabilities = torch.log_softmax(model.constant_logits, dim=-1).exp().double().numpy()
     uniform = np.random.default_rng(seed).random()
     expected = int((np.cumsum(probabilities, dtype=np.float64) < uniform).sum())
 
     # This seed lies on a boundary where a float32 CDF returns token 668.
-    assert expected == 669
-    assert sample.token_ids == (expected,)
+    assert sample.token_ids == (expected,) == (669,)
 
 
 def test_sampled_logprobabilities_match_exact_rescoring() -> None:
@@ -90,8 +73,7 @@ def test_sampled_logprobabilities_match_exact_rescoring() -> None:
                                     for index in range(4)])
     scores = backend.score_batch([ScoreRequest(sample.prefix, (sample.token_ids,), policy)
                                   for policy in (sampling, SamplingConfig()) for sample in samples])
-    for sample, token_scores, reference_scores in zip(samples, scores[: len(samples)], scores[len(samples) :],
-                                                      strict=True):
+    for sample, token_scores, reference_scores in zip(samples, scores[: len(samples)], scores[len(samples) :], strict=True):
         assert sample.token_logprobs == pytest.approx(token_scores)
         assert sample.reference_token_logprobs == pytest.approx(reference_scores)
         assert sample.reference_policy_id == SamplingConfig().policy_id
@@ -112,12 +94,9 @@ def test_eos_stops_generation_and_statistics_count_real_tokens() -> None:
     backend = _backend(model)
     samples = backend.sample_batch([GenerationRequest((0,), 8, SamplingConfig(eos_token_id=2), 4, "eos")])
     snapshot = backend.snapshot()
-    assert samples[0].token_ids == (2,)
-    assert samples[0].finish_reason == "eos"
-    assert snapshot.generated_tokens == 1
-    assert snapshot.prefill_tokens == 1
-    assert snapshot.generation_forward_token_slots == 1
-    assert snapshot.estimated_dense_forward_flops == 6
+    assert (samples[0].token_ids, samples[0].finish_reason) == ((2,), "eos")
+    assert (snapshot.generated_tokens, snapshot.prefill_tokens, snapshot.generation_forward_token_slots,
+            snapshot.estimated_dense_forward_flops) == (1, 1, 1, 6)
 
 
 def test_identical_prefix_prefill_is_computed_once_then_forked() -> None:
@@ -126,10 +105,8 @@ def test_identical_prefix_prefill_is_computed_once_then_forked() -> None:
     backend.sample_batch([GenerationRequest((0, 1, 0), 1, SamplingConfig(), index, str(index)) for index in range(5)])
     snapshot = backend.snapshot()
     assert model.forward_calls == 1
-    assert snapshot.prefill_tokens == 3
-    assert snapshot.shared_prefill_tokens_saved == 12
-    assert snapshot.generation_forward_token_slots == 3
-    assert snapshot.estimated_dense_forward_flops == 18
+    assert (snapshot.prefill_tokens, snapshot.shared_prefill_tokens_saved, snapshot.generation_forward_token_slots,
+            snapshot.estimated_dense_forward_flops) == (3, 12, 3, 18)
 
 
 def test_each_repeated_prefix_is_prefilled_once_then_forked() -> None:
@@ -142,18 +119,15 @@ def test_each_repeated_prefix_is_prefilled_once_then_forked() -> None:
     assert [sample.request_id for sample in outputs] == [str(i) for i in range(5)]
     snapshot = backend.snapshot()
     assert model.batch_sizes == [2]
-    assert snapshot.prefill_tokens == 4
-    assert snapshot.shared_prefill_tokens_saved == 6
-    assert snapshot.generation_forward_token_slots == 4
-    assert snapshot.estimated_dense_forward_flops == 24
+    assert (snapshot.prefill_tokens, snapshot.shared_prefill_tokens_saved, snapshot.generation_forward_token_slots,
+            snapshot.estimated_dense_forward_flops) == (4, 6, 4, 24)
 
 
 def test_finished_rows_leave_the_batch() -> None:
     model = ConstantLogitModel([0.3, 0.3, 0.4])
     backend = _backend(model)
-    samples = backend.sample_batch(
-        [GenerationRequest((0,), 8, SamplingConfig(eos_token_id=2), seed, str(seed)) for seed in range(6)]
-    )
+    samples = backend.sample_batch([GenerationRequest((0,), 8, SamplingConfig(eos_token_id=2), seed, str(seed))
+                                    for seed in range(6)])
     lengths = [len(sample.token_ids) for sample in samples]
     # After the shared prefill, each decode step runs only the rows still generating.
     assert model.batch_sizes == [1] + [sum(length > step for length in lengths) for step in range(1, max(lengths))]
@@ -178,12 +152,9 @@ def test_scoring_counts_padded_forward_slots_and_dense_flops() -> None:
     model = ConstantLogitModel([0.6, 0.3, 0.1])
     backend = _backend(model)
     backend.score_batch([ScoreRequest((0,), ((0,), (1,), (0, 1)), SamplingConfig())])
-
     snapshot = backend.snapshot()
     # The inputs are the prefix and every target but the last: (0,), (0,) and (0, 0).
-    assert snapshot.scored_tokens == 4
-    assert snapshot.score_forward_token_slots == 6
-    assert snapshot.estimated_dense_forward_flops == 36
+    assert (snapshot.scored_tokens, snapshot.score_forward_token_slots, snapshot.estimated_dense_forward_flops) == (4, 6, 36)
     assert model.logits_to_keep_calls == [2]
 
 
@@ -196,21 +167,11 @@ def test_scoring_keeps_only_required_tail_logits() -> None:
 
 
 def test_confidence_statistics_match_reference_policy_definitions() -> None:
-    probabilities = np.asarray([0.5, 0.3, 0.2])
-    model = ConstantLogitModel(probabilities)
-    backend = _backend(model)
-
-    result = backend.score_statistics_batch(
-        [ScoreRequest((0,), ((0, 1),), SamplingConfig())],
-        confidence_top_k=2,
-    )[0]
-
-    assert result.token_topk_confidences == pytest.approx(
-        [-np.mean(np.log([0.5, 0.3]))] * 2
-    )
+    backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]))
+    result = backend.score_statistics_batch([ScoreRequest((0,), ((0, 1),), SamplingConfig())], confidence_top_k=2)[0]
+    assert result.token_topk_confidences == pytest.approx([-np.mean(np.log([0.5, 0.3]))] * 2)
     snapshot = backend.snapshot()
-    assert snapshot.scored_tokens == 2
-    assert snapshot.score_forward_token_slots == 2
+    assert (snapshot.scored_tokens, snapshot.score_forward_token_slots) == (2, 2)
 
 
 def test_confidence_statistics_reject_truncated_support_and_nonpositive_top_k() -> None:
@@ -301,6 +262,5 @@ def test_log_weight_stop_rejects_rows_at_the_first_crossing_and_leaves_others() 
     stop = LogWeightStop(2.0, 0.0, 3.5 * step)
     samples = backend.sample_batch([GenerationRequest((0,), 6, SamplingConfig(temperature=0.5), seed, str(seed),
                                                       log_weight_stop=stop if seed else None) for seed in range(3)])
-    assert [(len(sample.token_ids), sample.finish_reason) for sample in samples] == [(6, "length"), (4, "rejected"),
-                                                                                     (4, "rejected")]
+    assert [(len(sample.token_ids), sample.finish_reason) for sample in samples] == [(6, "length")] + [(4, "rejected")] * 2
     assert stop.weight(samples[1].reference_token_logprobs, samples[1].token_logprobs) == pytest.approx(4 * step)

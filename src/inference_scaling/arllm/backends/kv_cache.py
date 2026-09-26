@@ -1,4 +1,4 @@
-"""KV caches of the manual decoding loop: in-place growth and a store of reusable prefixes."""
+"""KV caches of the manual decoding loop: in-place growth, fixed-shape steps and a store of reusable prefixes."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import numpy as np
 from inference_scaling.shared.types import TokenSequence
 
 try:
+    import torch
     from transformers.cache_utils import DynamicCache
 except ImportError:  # pragma: no cover - dependency-free installations
+    torch = None  # type: ignore[assignment]
     DynamicCache = object  # type: ignore[assignment,misc]
 
 
@@ -63,6 +65,109 @@ class GrowingCache(DynamicCache):  # type: ignore[misc,valid-type]
         return keys, values
 
 
+class _ColumnCache(DynamicCache):  # type: ignore[misc,valid-type]
+    """Fixed KV buffers of one decode step; each update writes position ``column`` of every row."""
+
+    def __init__(self, buffers: list[tuple[Any, Any]], column: Any) -> None:
+        super().__init__()
+        self.buffers, self.column = buffers, column
+
+    def update(self, key_states: Any, value_states: Any, layer_idx: int, *args: Any, **kwargs: Any) -> Any:
+        keys, values = self.buffers[layer_idx]
+        keys.index_copy_(2, self.column, key_states)
+        values.index_copy_(2, self.column, value_states)
+        return keys, values
+
+    def get_seq_length(self, *args: Any, **kwargs: Any) -> int:
+        # The caller passes positions and the mask, so the model derives nothing from the cache.
+        return 0
+
+
+class StaticDecoder:
+    """Decode steps at fixed shapes over kept KV buffers, replayed as CUDA graphs with ``capture``.
+
+    A step writes the KV state of every live row to the same position. Rows and attended
+    positions are rounded up to powers of two and the rest is masked, so a batch runs at
+    a few shapes and each step equals dynamic decoding up to floating-point rounding.
+    """
+
+    def __init__(self, model: Any, logits_to_keep: bool, capture: bool) -> None:
+        self.model, self._keep, self._capture = model, logits_to_keep, capture
+        self._buffers: list[tuple[Any, ...]] = []
+        self._graphs: dict[tuple[int, int], tuple[Any, Any]] = {}
+
+    @staticmethod
+    def _round(count: int) -> int:
+        return 1 << max(count - 1, 0).bit_length()
+
+    def load(self, layers: list[tuple[Any, Any]], rows: Any, attention_mask: Any, length: int) -> None:
+        """Start a batch from the prefill KV states of ``rows`` of ``layers``; it will span ``length`` positions."""
+
+        count, width, key = len(rows), attention_mask.shape[1], layers[0][0]
+        shape = (self._round(count), self._round(length))
+        if self._buffers:
+            shape = (max(shape[0], self._tokens.shape[0]), max(shape[1], self._mask.shape[-1]))
+        if not self._buffers or shape != (self._tokens.shape[0], self._mask.shape[-1]):
+            # Graphs read fixed addresses, so new buffers need new graphs.
+            self._graphs.clear()
+            self._buffers = [tuple(state.new_zeros((shape[0], state.shape[1], shape[1], state.shape[-1]))
+                                   for state in layer) for layer in layers]
+            self._tokens = torch.zeros((shape[0], 1), dtype=torch.long, device=key.device)
+            self._positions, self._column = torch.zeros_like(self._tokens), self._tokens.new_zeros(1)
+            self._mask = key.new_empty((shape[0], 1, 1, shape[1]))
+            self._pool = torch.cuda.graph_pool_handle() if self._capture else None
+        for (key_state, value_state), (key_buffer, value_buffer) in zip(layers, self._buffers):
+            key_buffer[:count, :, :width] = key_state.index_select(0, rows)
+            value_buffer[:count, :, :width] = value_state.index_select(0, rows)
+        # An additive mask: 0 where a row attends, the dtype's minimum elsewhere.
+        self._mask.fill_(torch.finfo(self._mask.dtype).min)
+        self._mask[:count, 0, 0, :width].masked_fill_(attention_mask.bool(), 0.0)
+
+    def layers(self, rows: int, width: int) -> list[tuple[Any, Any]]:
+        """The KV states of the first ``rows`` rows over their first ``width`` positions."""
+
+        return [(key[:rows, :, :width], value[:rows, :, :width]) for key, value in self._buffers]
+
+    def select(self, rows: Any, width: int) -> None:
+        """Keep ``rows`` of the batch, in order, as its first rows."""
+
+        for key, value in self._buffers:
+            key[: len(rows), :, :width] = key[rows, :, :width]
+            value[: len(rows), :, :width] = value[rows, :, :width]
+        self._mask[: len(rows), :, :, :width] = self._mask[rows, :, :, :width]
+
+    def step(self, tokens: Any, positions: Any, column: int) -> Any:
+        """Next-token logits of the live rows after feeding ``tokens`` at ``positions``, stored at ``column``."""
+
+        count = len(tokens)
+        self._tokens[:count, 0], self._positions[:count, 0] = tokens, positions
+        self._mask[:count, 0, 0, column] = 0.0
+        self._column.fill_(column)
+        shape = (self._round(count), self._round(column + 1))
+        if not self._capture:
+            return self._forward(*shape)[:count, -1]
+        if shape not in self._graphs:
+            # An ordinary call on a side stream initializes lazily built state; it writes the same values.
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                self._forward(*shape)
+            torch.cuda.current_stream().wait_stream(stream)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, pool=self._pool, capture_error_mode="thread_local"):
+                self._graphs[shape] = (graph, self._forward(*shape))
+        graph, logits = self._graphs[shape]
+        graph.replay()
+        return logits[:count, -1]
+
+    def _forward(self, rows: int, length: int) -> Any:
+        cache = _ColumnCache([(key[:rows, :, :length], value[:rows, :, :length]) for key, value in self._buffers],
+                             self._column)
+        return self.model(input_ids=self._tokens[:rows], attention_mask=self._mask[:rows, :, :, :length],
+                          position_ids=self._positions[:rows], past_key_values=cache, use_cache=True, return_dict=True,
+                          **({"logits_to_keep": 1} if self._keep else {})).logits
+
+
 class PrefixStore:
     """Per-row KV states of finished generations, reused over a new prefix's longest stored prefix.
 
@@ -107,4 +212,4 @@ class PrefixStore:
             self._entries.pop(0)
 
 
-__all__ = ["GrowingCache", "PrefixStore", "cache_layers"]
+__all__ = ["GrowingCache", "PrefixStore", "StaticDecoder", "cache_layers"]

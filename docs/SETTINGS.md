@@ -103,6 +103,7 @@
 | `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
 | `transformers.prefix_cache_mib` | 整数 | 前缀 KV 存储的容量（MiB，`0` 关闭）：结束的生成行保存 KV，后续请求从最长的已存前缀接着预填充；结果不变 |
 | `transformers.in_place_kv` | 布尔 | 解码时把新位置写入预留缓冲区，而不是每步复制整层 KV；结果不变 |
+| `transformers.cuda_graphs` | 布尔 | 解码步在固定形状上执行：KV 放入常驻缓冲区，行数与关注的位置数取整到 2 的幂，其余部分由掩码屏蔽；CUDA 上每种形状的第一步捕获为 CUDA graph，之后重放（CPU 上走同一路径但不捕获）。结果与动态解码相同，至多差浮点舍入；缓冲区保留到见过的最大批。需要模型在单一设备上、注意力为 `sdpa` 或 `eager` |
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |

@@ -16,14 +16,9 @@ from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import model_identity
 from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
-from inference_scaling.arllm.backends.kv_cache import DynamicCache, GrowingCache, PrefixStore, cache_layers
+from inference_scaling.arllm.backends.kv_cache import DynamicCache, GrowingCache, PrefixStore, StaticDecoder, cache_layers
 from inference_scaling.arllm.backends.replay import sample_with_drafts
-from inference_scaling.arllm.types import (
-    GenerationRequest,
-    ScoreRequest,
-    SequenceSample,
-    TokenSequence,
-)
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 
 try:
     import torch
@@ -33,10 +28,8 @@ except ImportError:  # pragma: no cover - exercised in dependency-free installat
 
 def _require_torch():
     if torch is None:
-        raise ModuleNotFoundError(
-            "TransformersBackend requires the optional GPU dependencies; "
-            "install the project's gpu extra first"
-        )
+        raise ModuleNotFoundError("TransformersBackend requires the optional GPU dependencies; "
+                                  "install the project's gpu extra first")
     return torch
 
 
@@ -66,26 +59,15 @@ class SequenceScoreStatistics:
 class TransformersBackend:
     """Manual batched decoding with request-local, scheduling-independent RNG."""
 
-    def __init__(
-        self,
-        model: Any,
-        tokenizer: Any,
-        *,
-        model_id: str | None = None,
-        device: str | Any | None = None,
-        max_score_batch_size: int,
-        score_chunk_size: int,
-        token_penalty: TokenPenalty | None = None,
-        prefix_cache_bytes: int = 0,
-        in_place_kv: bool = False,
-    ) -> None:
+    def __init__(self, model: Any, tokenizer: Any, *, model_id: str | None = None, device: str | Any | None = None,
+                 max_score_batch_size: int, score_chunk_size: int, token_penalty: TokenPenalty | None = None,
+                 prefix_cache_bytes: int = 0, in_place_kv: bool = False, cuda_graphs: bool = False) -> None:
         torch_module = _require_torch()
         self.model = model
         self.tokenizer = tokenizer
         self._model_id = model_id or str(getattr(getattr(model, "config", None), "_name_or_path", "transformers-model"))
-        self.device = torch_module.device(
-            device or getattr(model, "device", None) or ("cuda" if torch_module.cuda.is_available() else "cpu")
-        )
+        self.device = torch_module.device(device or getattr(model, "device", None) or (
+            "cuda" if torch_module.cuda.is_available() else "cpu"))
         # A token penalty makes the penalized model the model, so it is part of the identity.
         self._penalty = token_penalty
         if token_penalty is not None:
@@ -115,39 +97,28 @@ class TransformersBackend:
         # KV states of finished rows, which later requests resume over their longest stored prefix.
         self._store = PrefixStore(prefix_cache_bytes) if prefix_cache_bytes else None
         self._cache_class = GrowingCache if in_place_kv else DynamicCache
+        # Decode steps at fixed shapes, captured as CUDA graphs on a CUDA device.
+        if cuda_graphs and (len(set(getattr(model, "hf_device_map", {}).values())) > 1 or getattr(
+                getattr(model, "config", None), "_attn_implementation", "sdpa") not in {"sdpa", "eager"}):
+            raise ValueError("ar.engine.transformers.cuda_graphs needs the model on one device with sdpa or eager attention")
+        self._static = StaticDecoder(model, self._supports_logits_to_keep, self.device.type == "cuda") if cuda_graphs else None
         self._statistics_lock = threading.Lock()
         for name in TransformersBackendSnapshot.__dataclass_fields__:
             setattr(self, "_" + name, 0)
         count_parameters = getattr(model, "num_parameters", None)
-        self._parameter_count = (
-            int(count_parameters()) if callable(count_parameters)
-            else sum(parameter.numel() for parameter in model.parameters())
-        )
+        self._parameter_count = int(count_parameters()) if callable(count_parameters) else sum(
+            parameter.numel() for parameter in model.parameters())
 
     @classmethod
     def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        *,
-        adapter_name_or_path: str | None = None,
-        device: str,
-        dtype: str,
-        cache_dir: str | None = None,
-        revision: str | None = None,
-        tokenizer_name_or_path: str | None = None,
-        tokenizer_revision: str | None = None,
-        adapter_revision: str | None = None,
-        device_map: str | dict[str, Any] | None = None,
-        attn_implementation: str | None = None,
-        model_kwargs: Mapping[str, Any] | None = None,
-        tokenizer_kwargs: Mapping[str, Any] | None = None,
-        local_files_only: bool = False,
-        trust_remote_code: bool = False,
-        max_score_batch_size: int,
-        score_chunk_size: int,
-        token_penalty: Mapping[str, Any] | None,
-        prefix_cache_mib: int,
-        in_place_kv: bool,
+        cls, model_name_or_path: str, *, adapter_name_or_path: str | None = None, device: str, dtype: str,
+        cache_dir: str | None = None, revision: str | None = None, tokenizer_name_or_path: str | None = None,
+        tokenizer_revision: str | None = None, adapter_revision: str | None = None,
+        device_map: str | dict[str, Any] | None = None, attn_implementation: str | None = None,
+        model_kwargs: Mapping[str, Any] | None = None, tokenizer_kwargs: Mapping[str, Any] | None = None,
+        local_files_only: bool = False, trust_remote_code: bool = False, max_score_batch_size: int,
+        score_chunk_size: int, token_penalty: Mapping[str, Any] | None, prefix_cache_mib: int, in_place_kv: bool,
+        cuda_graphs: bool,
     ) -> "TransformersBackend":
         torch_module = _require_torch()
         try:
@@ -170,11 +141,9 @@ class TransformersBackend:
         collision = reserved.intersection(extra_model.keys() | extra_tokenizer.keys())
         if collision:
             raise ValueError("loading kwargs duplicate explicit options or contain credentials: " + ", ".join(sorted(collision)))
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name_or_path or model_name_or_path,
-            revision=tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
-            **common, **extra_tokenizer,
-        )
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path or model_name_or_path, revision=(
+            tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None)),
+            **common, **extra_tokenizer)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
@@ -205,16 +174,13 @@ class TransformersBackend:
             input_device = model.get_input_embeddings().weight.device
             if str(input_device) == "meta":
                 raise ValueError("input embeddings require a concrete device for manual decoding")
-        return cls(
-            model, tokenizer,
-            model_id=model_identity(model_name_or_path, adapter_name_or_path, revision=revision,
-                                    adapter_revision=adapter_revision, tokenizer=tokenizer_name_or_path,
-                                    tokenizer_revision=tokenizer_revision),
-            device=input_device, max_score_batch_size=max_score_batch_size, score_chunk_size=score_chunk_size,
+        return cls(model, tokenizer, model_id=model_identity(
+            model_name_or_path, adapter_name_or_path, revision=revision, adapter_revision=adapter_revision,
+            tokenizer=tokenizer_name_or_path, tokenizer_revision=tokenizer_revision), device=input_device,
+            max_score_batch_size=max_score_batch_size, score_chunk_size=score_chunk_size,
             token_penalty=None if token_penalty is None else TokenPenalty.from_words(
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
-            prefix_cache_bytes=int(prefix_cache_mib) * 2**20, in_place_kv=in_place_kv,
-        )
+            prefix_cache_bytes=int(prefix_cache_mib) * 2**20, in_place_kv=in_place_kv, cuda_graphs=cuda_graphs)
 
     @property
     def model_id(self) -> str:
@@ -223,7 +189,7 @@ class TransformersBackend:
     def close(self) -> None:
         """Release the model reference after all dispatchers have stopped."""
         with self._model_lock:
-            self.model = None
+            self.model = self._static = None
             if self._store is not None:
                 self._store.clear()
 
@@ -234,13 +200,7 @@ class TransformersBackend:
         return self._parameter_count
 
     def _dense_forward_flops(self, token_slots: int) -> int:
-        """Return the conventional ``2 * parameters * tokens`` estimate.
-
-        This deliberately estimates the dominant dense matrix multiplications.
-        Attention's sequence-length term, elementwise operations, sampling, and
-        host work are reported as exclusions rather than hidden in a wall-clock
-        proxy.
-        """
+        """The dominant dense matmuls, ``2 * parameters * tokens``; attention's length term and elementwise work are excluded."""
 
         return dense_forward_flops(self._parameter_count, token_slots)
 
@@ -299,9 +259,7 @@ class TransformersBackend:
             return cache
         return tuple(tuple(tensor.index_select(0, rows) for tensor in layer) for layer in cache)
 
-    def _sample_same_policy(
-        self, requests: Sequence[GenerationRequest]
-    ) -> list[SequenceSample]:
+    def _sample_same_policy(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         """Decode requests that share their policy, reference policy and stop sequences.
 
         Each distinct prefix resumes the stored KV state of its longest stored
@@ -369,7 +327,10 @@ class TransformersBackend:
             fan_out = torch_module.tensor([positions[prefix] for prefix in prefixes], device=self.device)
             logits = last[-1].index_select(0, fan_out)
             attention_mask = attention_mask.index_select(0, fan_out)
-            if len(unique) < len(requests):
+            static = self._static
+            if static is not None:
+                static.load(cache_layers(cache), fan_out, attention_mask, attention_mask.shape[1] + steps)
+            elif len(unique) < len(requests):
                 cache = self._select_rows(cache, fan_out)
             alive = torch_module.arange(len(requests), device=self.device)
             for step in range(steps):
@@ -410,7 +371,7 @@ class TransformersBackend:
                 remaining = int(keep.sum())
                 if self._store is not None and remaining < len(alive):
                     # A row that ends is stored with the tokens fed so far, all but its last.
-                    kv = cache_layers(cache)
+                    kv = cache_layers(cache) if static is None else static.layers(len(alive), attention_mask.shape[1])
                     for position in (~keep).nonzero().squeeze(-1).tolist():
                         row, valid = int(alive[position]), attention_mask[position].bool()
                         self._store.add(prefixes[row] + tuple(tokens[row, :step].tolist()),
@@ -422,35 +383,29 @@ class TransformersBackend:
                     # Finished rows leave the batch.
                     kept = keep.nonzero().squeeze(-1)
                     alive, sampled, attention_mask = alive[kept], sampled[kept], attention_mask[kept]
-                    cache = self._select_rows(cache, kept)
+                    if static is None:
+                        cache = self._select_rows(cache, kept)
+                    else:
+                        static.select(kept, attention_mask.shape[1])
                 next_positions = attention_mask.sum(dim=-1, dtype=torch_module.long)
                 attention_mask = torch_module.cat([attention_mask, attention_mask.new_ones((len(alive), 1))], dim=-1)
-                outputs = self.model(
-                    input_ids=sampled[:, None],
-                    attention_mask=attention_mask,
-                    position_ids=next_positions[:, None],
-                    past_key_values=cache,
-                    use_cache=True,
-                    return_dict=True,
-                    **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}),
-                )
                 slots += len(alive)
-                logits = outputs.logits[:, -1, :]
-                cache = getattr(outputs, "past_key_values", None)
+                if static is not None:
+                    logits = static.step(sampled, next_positions, attention_mask.shape[1] - 1)
+                    continue
+                outputs = self.model(input_ids=sampled[:, None], attention_mask=attention_mask,
+                                     position_ids=next_positions[:, None], past_key_values=cache, use_cache=True,
+                                     return_dict=True, **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}))
+                logits, cache = outputs.logits[:, -1, :], getattr(outputs, "past_key_values", None)
         rows = zip(requests, lengths.tolist(), reasons.tolist(), tokens.cpu().numpy(), logprobs.cpu().numpy(),
                    references.cpu().numpy(), bounds.cpu().numpy(), strict=True)
-        samples = [
-            SequenceSample(
-                prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
-                token_logprobs=tuple(row_logprobs[:length].tolist()), policy_id=request.sampling.policy_id,
-                model_id=self.model_id, request_id=request.request_id,
-                finish_reason=("length", "eos", "stop", "rejected")[reason],
-                reference_token_logprobs=tuple(row_references[:length].tolist()),
-                reference_policy_id=reference_sampling.policy_id,
-                token_cdf_bounds=tuple(map(tuple, row_bounds[:length].tolist())),
-            )
-            for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds in rows
-        ]
+        samples = [SequenceSample(
+            prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
+            token_logprobs=tuple(row_logprobs[:length].tolist()), policy_id=request.sampling.policy_id,
+            model_id=self.model_id, request_id=request.request_id, finish_reason=("length", "eos", "stop", "rejected")[reason],
+            reference_token_logprobs=tuple(row_references[:length].tolist()), reference_policy_id=reference_sampling.policy_id,
+            token_cdf_bounds=tuple(map(tuple, row_bounds[:length].tolist())),
+        ) for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds in rows]
         prefill_tokens = sum(len(prefix) - length for prefix, length in zip(unique, cached, strict=True))
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
@@ -521,9 +476,8 @@ class TransformersBackend:
             )
         return scores, int(input_ids.numel())
 
-    def _score_rows(
-        self, requests: Sequence[ScoreRequest], confidence_top_k: int | None,
-    ) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
+    def _score_rows(self, requests: Sequence[ScoreRequest],
+                    confidence_top_k: int | None) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
         """Token log-probabilities and (optionally) top-K confidences of every continuation.
 
         Continuations are teacher-forced in batches of similar length and in
@@ -560,9 +514,8 @@ class TransformersBackend:
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         return [logs for logs, _ in self._score_rows(requests, None)]
 
-    def score_statistics_batch(
-        self, requests: Sequence[ScoreRequest], *, confidence_top_k: int,
-    ) -> list[SequenceScoreStatistics]:
+    def score_statistics_batch(self, requests: Sequence[ScoreRequest], *,
+                               confidence_top_k: int) -> list[SequenceScoreStatistics]:
         """Top-K confidence trajectories of the continuations.
 
         A truncated policy gives some of the top-K candidates probability zero,
@@ -603,14 +556,7 @@ class TransformersBackend:
         penalized = None if self._penalty is None else [lambda _ids, scores: self._policy_log_probs(scores, None)]
         with self._model_lock, torch_module.inference_mode():
             output = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                num_beams=num_beams,
-                use_cache=True,
-                pad_token_id=self.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                logits_processor=penalized,
-            )
+                input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens, do_sample=False,
+                num_beams=num_beams, use_cache=True, pad_token_id=self.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id, logits_processor=penalized)
         return tuple(int(token) for token in output[0, input_ids.shape[1] :].tolist())

@@ -46,6 +46,7 @@ def test_transformers_loader_passes_every_configured_option(monkeypatch) -> None
         "score_chunk_size": engine["transformers"]["score_chunk_size"],
         "prefix_cache_mib": engine["transformers"]["prefix_cache_mib"],
         "in_place_kv": engine["transformers"]["in_place_kv"],
+        "cuda_graphs": engine["transformers"]["cuda_graphs"],
     }
 
 
