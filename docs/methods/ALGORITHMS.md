@@ -1039,6 +1039,11 @@ Transformers 后端，即设 `"exact_scoring": "transformers"`。精确评分后
 记录 vLLM 直接评分的序列数（`native_score_sequences`）和交给 Transformers 的序列数、前向 token 位置数与 FLOPs
 （`delegated_*`）。vLLM `0.25.x`--`0.26.x` 的 Linux/WSL2 安装见仓库 [README](../../README.md#安装)。
 
+引擎统计始终开启。记录中各阶段的 `preemptions` 是 vLLM 因 KV 缓存不足而抢占运行中请求的次数（计数器
+`vllm:num_preemptions`）。被抢占的请求释放 KV 缓存，之后重新预填充提示和已生成的 token（仍在前缀缓存中的块除外）。
+vLLM 的公开指标不含这部分重算的 token 数，所以 `preemptions > 0` 时记录的前向 token 位置数与 FLOPs 是下界。
+出现抢占时，可提高 `gpu_memory_utilization` 或降低 `max_num_seqs`。
+
 <a id="alg-model-loading"></a>
 
 ### 11.5 模型加载与长序列执行

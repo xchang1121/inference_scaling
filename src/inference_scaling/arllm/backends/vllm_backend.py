@@ -36,21 +36,15 @@ from packaging.version import Version
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import (
-    AutoregressiveBackend,
-    GenerationRequest,
-    ScoreRequest,
-    SequenceSample,
-    TokenSequence,
-)
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 
 _PROTECTED_ENGINE_KWARGS = frozenset({
     "model", "tokenizer", "tokenizer_revision", "dtype", "tensor_parallel_size", "data_parallel_size",
     "gpu_memory_utilization", "quantization", "enforce_eager", "trust_remote_code", "revision", "download_dir", "seed",
     "enable_prefix_caching", "generation_config", "logprobs_mode", "enable_lora", "max_lora_rank", "max_model_len",
     "max_num_seqs", "max_num_batched_tokens", "worker_cls", "async_scheduling",
-    # Rejected draft tokens would escape the forward-token accounting.
-    "speculative_config",
+    # Rejected draft tokens would escape the forward-token accounting; the statistics count preemptions.
+    "speculative_config", "disable_log_stats",
 })
 
 _MH_FUSED_WORKER = "inference_scaling.arllm.backends.vllm_mh_worker.MHFusedLogprobWorker"
@@ -91,6 +85,8 @@ class VLLMBackendSnapshot:
     delegated_score_forward_token_slots: int
     delegated_estimated_dense_forward_flops: int
     maximum_in_flight_requests: int
+    # Running requests the engine evicted for KV space; each one recomputes its tokens outside these counts.
+    preemptions: int
     mh_fused_logprobs: bool = False
     fused_reference_sequences: int = 0
     fused_reference_tokens: int = 0
@@ -233,21 +229,12 @@ class VLLMBackend:
     both settings and explicitly enables automatic prefix caching.
     """
 
-    def __init__(
-        self,
-        engine: Any,
-        tokenizer: Any,
-        *,
-        model_id: str,
-        parameter_count: int,
-        sampling_params_factory: Callable[..., Any],
-        tokens_prompt_factory: Callable[..., Any] | None = None,
-        beam_search_params_factory: Callable[..., Any] | None = None,
-        scoring_backend: AutoregressiveBackend | None = None,
-        lora_request: Any | None = None,
-        mh_fused_logprobs: bool = False,
-        token_penalty: TokenPenalty | None = None,
-    ) -> None:
+    def __init__(self, engine: Any, tokenizer: Any, *, model_id: str, parameter_count: int,
+                 sampling_params_factory: Callable[..., Any], tokens_prompt_factory: Callable[..., Any] | None = None,
+                 beam_search_params_factory: Callable[..., Any] | None = None,
+                 scoring_backend: AutoregressiveBackend | None = None, lora_request: Any | None = None,
+                 mh_fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
+                 metrics: Callable[[], Sequence[Any]] | None = None) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
         # A token penalty makes the penalized model the model, so it is part of the identity.
@@ -273,43 +260,27 @@ class VLLMBackend:
         for name in VLLMBackendSnapshot.__dataclass_fields__:
             if name != "mh_fused_logprobs":
                 setattr(self, "_" + name, 0)
+        # vLLM's metrics snapshot; the engine's preemption counter is read relative to this backend's start.
+        self._metrics = metrics
+        self._preemption_baseline = self._engine_preemptions()
 
     @classmethod
     def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        *,
-        adapter_name_or_path: str | None,
-        adapter_revision: str | None,
-        revision: str | None,
-        tokenizer_name_or_path: str | None,
-        tokenizer_revision: str | None,
-        tokenizer_kwargs: dict[str, Any] | None,
-        local_files_only: bool | None,
-        trust_remote_code: bool,
-        download_dir: str | None,
-        dtype: str,
-        tensor_parallel_size: int,
-        data_parallel_size: int,
-        gpu_memory_utilization: float,
-        max_model_len: int | None,
-        max_num_seqs: int | None,
-        max_num_batched_tokens: int | None,
-        quantization: str | None,
-        enforce_eager: bool,
-        enable_prefix_caching: bool,
-        max_lora_rank: int,
-        parameter_count: int | None,
-        seed: int,
-        scoring_backend: AutoregressiveBackend | None,
-        engine_kwargs: dict[str, Any] | None,
-        token_penalty: Mapping[str, Any] | None,
+        cls, model_name_or_path: str, *, adapter_name_or_path: str | None, adapter_revision: str | None,
+        revision: str | None, tokenizer_name_or_path: str | None, tokenizer_revision: str | None,
+        tokenizer_kwargs: dict[str, Any] | None, local_files_only: bool | None, trust_remote_code: bool,
+        download_dir: str | None, dtype: str, tensor_parallel_size: int, data_parallel_size: int,
+        gpu_memory_utilization: float, max_model_len: int | None, max_num_seqs: int | None,
+        max_num_batched_tokens: int | None, quantization: str | None, enforce_eager: bool, enable_prefix_caching: bool,
+        max_lora_rank: int, parameter_count: int | None, seed: int, scoring_backend: AutoregressiveBackend | None,
+        engine_kwargs: dict[str, Any] | None, token_penalty: Mapping[str, Any] | None,
         enable_mh_fused_logprobs: bool = False,
     ) -> "VLLMBackend":
         """Load the tokenizer and engine; :meth:`_create` picks the vLLM frontend."""
 
         try:
             from transformers import AutoTokenizer
+            from vllm.v1.metrics.reader import get_metrics_snapshot
 
             SamplingParams, TokensPrompt, BeamSearchParams = _load_vllm_sampling_api()
         except ImportError as error:  # pragma: no cover - optional GPU installation
@@ -320,24 +291,17 @@ class VLLMBackend:
             revision, download_dir, local_files_only, trust_remote_code, tokenizer_kwargs,
         )
         kwargs: dict[str, Any] = {
-            "model": model_name_or_path,
-            "dtype": dtype,
-            "tensor_parallel_size": int(tensor_parallel_size),
-            "data_parallel_size": int(data_parallel_size),
-            "gpu_memory_utilization": float(gpu_memory_utilization),
-            "quantization": quantization,
-            "enforce_eager": bool(enforce_eager),
-            "trust_remote_code": bool(trust_remote_code),
-            "revision": revision,
-            "tokenizer": tokenizer_name_or_path or model_name_or_path,
-            "tokenizer_revision": tokenizer_revision if tokenizer_revision is not None else (revision if tokenizer_name_or_path is None else None),
-            "download_dir": download_dir,
-            "seed": int(seed),
-            "enable_prefix_caching": bool(enable_prefix_caching),
-            "generation_config": "vllm",
-            "logprobs_mode": "processed_logprobs",
-            "enable_lora": adapter_name_or_path is not None,
-            "max_lora_rank": int(max_lora_rank),
+            "model": model_name_or_path, "dtype": dtype, "tensor_parallel_size": int(tensor_parallel_size),
+            "data_parallel_size": int(data_parallel_size), "gpu_memory_utilization": float(gpu_memory_utilization),
+            "quantization": quantization, "enforce_eager": bool(enforce_eager), "trust_remote_code": bool(trust_remote_code),
+            "revision": revision, "tokenizer": tokenizer_name_or_path or model_name_or_path,
+            "tokenizer_revision": tokenizer_revision if tokenizer_revision is not None else (
+                revision if tokenizer_name_or_path is None else None),
+            "download_dir": download_dir, "seed": int(seed), "enable_prefix_caching": bool(enable_prefix_caching),
+            "generation_config": "vllm", "logprobs_mode": "processed_logprobs",
+            "enable_lora": adapter_name_or_path is not None, "max_lora_rank": int(max_lora_rank),
+            # The offline engine keeps no statistics by default; they carry the preemption counter.
+            "disable_log_stats": False,
         }
         optional = {"max_model_len": max_model_len, "max_num_seqs": max_num_seqs,
                     "max_num_batched_tokens": max_num_batched_tokens}
@@ -345,15 +309,12 @@ class VLLMBackend:
         if engine_kwargs:
             overlap = _PROTECTED_ENGINE_KWARGS.intersection(engine_kwargs)
             if overlap:
-                raise ValueError(
-                    "engine_kwargs cannot override correctness-critical settings: " + ", ".join(sorted(overlap))
-                )
+                raise ValueError("engine_kwargs cannot override correctness-critical settings: " + ", ".join(sorted(overlap)))
             kwargs.update(engine_kwargs)
         counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
         if counted is None:
-            raise ValueError(
-                "parameter_count could not be read from a local safetensors checkpoint; pass parameter_count explicitly"
-            )
+            raise ValueError("parameter_count could not be read from a local safetensors checkpoint; "
+                             "pass parameter_count explicitly")
         lora_request = None
         if adapter_name_or_path is not None:
             from vllm.lora.request import LoRARequest
@@ -369,6 +330,7 @@ class VLLMBackend:
             beam_search_params_factory=BeamSearchParams, scoring_backend=scoring_backend, lora_request=lora_request,
             token_penalty=None if token_penalty is None else TokenPenalty.from_words(
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
+            metrics=get_metrics_snapshot,
         )
 
     @classmethod
@@ -603,11 +565,8 @@ class VLLMBackend:
         policy = sampling or SamplingConfig()
         return self._penalty is None and policy.temperature == 1 and policy.top_p == 1 and policy.top_k is None
 
-    def _score_native(
-        self,
-        items: Sequence[tuple[int, ScoreRequest, TokenSequence]],
-        results: list[tuple[float, ...]],
-    ) -> tuple[int, int, int]:
+    def _score_native(self, items: Sequence[tuple[int, ScoreRequest, TokenSequence]],
+                      results: list[tuple[float, ...]]) -> tuple[int, int, int]:
         if not items:
             return 0, 0, 0
         prompts = [self._prompt(self._model_prefix(request.prefix) + continuation) for _, request, continuation in items]
@@ -641,11 +600,8 @@ class VLLMBackend:
             before = snapshot()
             outputs = callback(requests, **kwargs)
             after = snapshot()
-        return (
-            outputs,
-            int(after.score_forward_token_slots) - int(before.score_forward_token_slots),
-            int(after.estimated_dense_forward_flops) - int(before.estimated_dense_forward_flops),
-        )
+        return (outputs, int(after.score_forward_token_slots) - int(before.score_forward_token_slots),
+                int(after.estimated_dense_forward_flops) - int(before.estimated_dense_forward_flops))
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         flattened = [(request, continuation) for request in requests for continuation in request.continuations]
@@ -708,8 +664,19 @@ class VLLMBackend:
             self._delegated_estimated_dense_forward_flops += flops
         return list(outputs)
 
+    def _engine_preemptions(self) -> int:
+        """The engine's ``vllm:num_preemptions`` counter, summed over its engine cores."""
+
+        metrics = self._metrics
+        return 0 if metrics is None else int(sum(
+            metric.value for metric in metrics() if metric.name == "vllm:num_preemptions"))
+
     def snapshot(self) -> VLLMBackendSnapshot:
+        # A closed engine has unregistered its metrics, so the count keeps its last reading.
+        preemptions = None if self._closed else self._engine_preemptions() - self._preemption_baseline
         with self._statistics_lock:
+            if preemptions is not None:
+                self._preemptions = preemptions
             return VLLMBackendSnapshot(**{name: getattr(self, "_" + name) for name in VLLMBackendSnapshot.__dataclass_fields__})
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -739,13 +706,8 @@ class VLLMBackend:
         if self._penalty is not None:
             raise ValueError("vLLM's offline beam search cannot apply ar.model.token_penalty; use the transformers "
                              "engine or the asynchronous vLLM engine")
-        kwargs: dict[str, Any] = {
-            "prompts": [prompt],
-            "params": self._beam_search_params_factory(
-                beam_width=int(num_beams), max_tokens=int(max_new_tokens), ignore_eos=False,
-            ),
-            "use_tqdm": False,
-        }
+        kwargs: dict[str, Any] = {"prompts": [prompt], "use_tqdm": False, "params": self._beam_search_params_factory(
+            beam_width=int(num_beams), max_tokens=int(max_new_tokens), ignore_eos=False)}
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
         outputs = list(self._engine.beam_search(**kwargs))
@@ -778,9 +740,8 @@ class AsyncVLLMBackend(VLLMBackend):
 
     supports_native_continuous_batching = True
 
-    def __init__(
-        self, engine: Any | None, tokenizer: Any, *, engine_factory: Callable[[], Any] | None = None, **options: Any,
-    ) -> None:
+    def __init__(self, engine: Any | None, tokenizer: Any, *, engine_factory: Callable[[], Any] | None = None,
+                 **options: Any) -> None:
         if (engine is None) == (engine_factory is None):
             raise ValueError("provide exactly one of engine or engine_factory")
         self._runner = _AsyncLoopRunner(engine_factory if engine_factory is not None else lambda: engine)

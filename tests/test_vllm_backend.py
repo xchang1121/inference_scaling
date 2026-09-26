@@ -319,6 +319,20 @@ def test_vllm_encode_decode_and_close() -> None:
     assert engine.closed
 
 
+def test_vllm_counts_the_engine_preemptions_since_the_backend_started() -> None:
+    counters = [SimpleNamespace(name="vllm:num_preemptions", value=3), SimpleNamespace(name="vllm:num_preemptions", value=1),
+                SimpleNamespace(name="vllm:prompt_tokens", value=50)]
+    backend = VLLMBackend(_Engine(), _Tokenizer(), model_id="fake", parameter_count=100,
+                          sampling_params_factory=_SamplingParams, metrics=lambda: counters)
+    assert backend.snapshot().preemptions == 0
+    counters[0].value, counters[1].value, counters[2].value = 4, 2, 90
+    assert backend.snapshot().preemptions == 2
+    backend.close()
+    # Closing the engine unregisters its metrics.
+    counters.clear()
+    assert backend.snapshot().preemptions == 2
+
+
 def test_vllm_direct_greedy_and_sync_beam_generation() -> None:
     engine = _BeamEngine()
     backend = VLLMBackend(
