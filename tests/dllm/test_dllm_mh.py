@@ -8,7 +8,6 @@ import pytest
 
 from inference_scaling.dllm.algorithms.config import DiffusionMHConfig
 from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
-from inference_scaling.dllm.algorithms.mh_acceleration import run_diffusion_replay_mixture_mh
 from inference_scaling.shared.types import pointwise
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionGenerationRequest, DiffusionSample, DiffusionTraceStep
@@ -49,18 +48,19 @@ def test_independence_mh_draws_every_proposal_in_one_batch():
     assert len(result.steps) == CONFIG.updates and backend.batch_calls == 1
 
 
-def test_zero_history_weight_replay_mixture_reduces_to_base_independence_mh():
+def test_a_history_mixture_with_zero_weight_is_the_base_independence_mh():
     backend = CountingCoinBackend()
     history = backend.sample_batch([DiffusionGenerationRequest((9,), 2, EXACT, 2, "history")])[0]
-    result = run_diffusion_replay_mixture_mh(backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT,
-                                             history=(history,), history_probability=0.0, reward=_zero_reward, seed=5)
-    assert result.history_draws == 0 and result.acceptance_rate == 1.0
+    plain, mixed = (run_diffusion_reward_mh(backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT,
+                                            history=cache, history_probability=0.0, reward=_zero_reward, seed=5)
+                    for cache in ((), (history,)))
+    assert plain == mixed and mixed.history_draws == 0 and mixed.acceptance_rate == 1.0
 
 
 def test_replay_mixture_rejects_a_cache_from_another_model():
     backend = CountingCoinBackend()
     history = backend.sample_batch([DiffusionGenerationRequest((9,), 2, EXACT, 2, "history")])[0]
     with pytest.raises(ValueError, match="match the prompt and exact policy"):
-        run_diffusion_replay_mixture_mh(backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT,
-                                        history=(replace(history, model_id="another-model"),), history_probability=0.5,
-                                        reward=_zero_reward, seed=5)
+        run_diffusion_reward_mh(backend=backend, prompt=(9,), config=CONFIG, sampling=EXACT,
+                                history=(replace(history, model_id="another-model"),), history_probability=0.5,
+                                reward=_zero_reward, seed=5)

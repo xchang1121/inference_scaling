@@ -56,7 +56,6 @@ def test_private_names_are_not_imported_across_modules():
     # Acceleration modules extend the MH kernel beside them in the same package.
     extensions = {
         ("inference_scaling.arllm.algorithms.mh_acceleration", "inference_scaling.arllm.algorithms.mh"),
-        ("inference_scaling.dllm.algorithms.mh_acceleration", "inference_scaling.dllm.algorithms.mh"),
     }
     violations = [
         (module, target, name)

@@ -32,7 +32,6 @@ from inference_scaling.dllm.algorithms.config import (
 )
 from inference_scaling.dllm.algorithms.is_sampling import run_conditional_diffusion_is
 from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
-from inference_scaling.dllm.algorithms.mh_acceleration import run_diffusion_replay_mixture_mh
 from inference_scaling.dllm.algorithms.search import run_diffusion_block_beam, run_diffusion_trajectory_power_mh
 from inference_scaling.dllm.backends.loader import load_llada_backend
 from inference_scaling.dllm.config import DiffusionSamplingConfig, sampling_from_settings
@@ -216,24 +215,21 @@ class DLLMFamily:
         config = self.config
         settings = DiffusionMHConfig(total_length=self.length, updates=int(config["updates"]),
                                      reward_temperature=reward.temperature)
-        trace: dict[str, Any] = {}
-        if config["proposal"] == "frozen_history":
-            # Frozen exact-policy trajectories mixed into the independence proposal.
-            history = config["frozen_history"]
-            result: Any = run_diffusion_replay_mixture_mh(
-                backend=self.backend, prompt=prompt, config=settings, sampling=self.exact,
-                history=self._samples(prompt, self.exact, [
-                    seeds.derive("reward_mh", problem.id, "history", index) for index in range(int(history["samples"]))
-                ], f"reward-mh-history:{problem.id}"),
-                history_probability=float(history["mixture"]), reward=reward.batch, seed=seed,
-            )
-            trace["history_draws"] = result.history_draws
-        else:
-            result = run_diffusion_reward_mh(backend=self.backend, prompt=prompt, config=settings,
-                                             sampling=self.sampling, reward=reward.batch, seed=seed)
-        trace.update(updates=len(result.steps), accepted=sum(step.accepted for step in result.steps),
-                     acceptance_rate=result.acceptance_rate)
-        return result.final.token_ids, trace, float(result.final_reward)
+        frozen = config["proposal"] == "frozen_history"
+        history = config["frozen_history"]
+        # A frozen history of exact-policy trajectories needs the exact policy for its mixture probabilities.
+        sampling = self.exact if frozen else self.sampling
+        result = run_diffusion_reward_mh(
+            backend=self.backend, prompt=prompt, config=settings, sampling=sampling, reward=reward.batch, seed=seed,
+            history=self._samples(prompt, sampling, [seeds.derive("reward_mh", problem.id, "history", index)
+                                                     for index in range(int(history["samples"]))],
+                                  f"reward-mh-history:{problem.id}") if frozen else (),
+            history_probability=float(history["mixture"]) if frozen else 0.0,
+        )
+        return result.final.token_ids, {
+            "updates": len(result.steps), "accepted": sum(step.accepted for step in result.steps),
+            "acceptance_rate": result.acceptance_rate, "history_draws": result.history_draws,
+        }, float(result.final_reward)
 
     def _is(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         assert reward is not None

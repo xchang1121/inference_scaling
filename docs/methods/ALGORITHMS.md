@@ -694,8 +694,8 @@ Hastings 比中抵消。历史命中时不调用模型；历史样本的
 dLLM 的对应实现是回放混合 MH（`dllm.algorithms.mh.proposal = "frozen_history"`）：整段独立 proposal 为基础
 轨迹分布与 `frozen_history.samples` 条冻结轨迹经验分布的混合，混合比例为 `frozen_history.mixture`。正反混合概率
 需要精确的轨迹概率，因此历史轨迹与基础分量都使用 `dllm.exact_sampling`，目标中的基础分布也随之取该策略；
-proposal 与当前状态无关，全部 proposal 在一次批量调用中生成。实现位于
-[`dllm/algorithms/mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py)。
+proposal 与当前状态无关，全部 proposal 在一次批量调用中生成。它与普通独立 MH 是同一个函数
+（[`run_diffusion_reward_mh`](../../src/inference_scaling/dllm/algorithms/mh.py)），混合比例为 0 时即只从基础模型提议。
 
 <a id="alg-rewards"></a>
 ## 9. 奖励信号
@@ -1144,7 +1144,7 @@ logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、C
 | 数据集 | [`datasets/`](../../src/inference_scaling/datasets/) | — | — | `test_datasets.py` |
 | 逐步候选与 IS 权重 | [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、[`candidates.py`](../../src/inference_scaling/arllm/algorithms/candidates.py) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_conditional_is.py`、`dllm/test_algorithms.py` |
 | 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py`、`test_joint_budget_cost_policy.py` |
-| MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
+| MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh.py` |
 | 奖励 | 投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/)，verifier 由 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 构造 | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
 | 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`dllm/test_llada_backend.py` |
 | 输出与范围 | 分段、提示与生成上限位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | [`output.py`](../../src/inference_scaling/arllm/output.py)、[`scope.py`](../../src/inference_scaling/arllm/scope.py) | — | `test_output_segments.py`、`test_sampling_scope.py`、`test_long_scoring.py` |
