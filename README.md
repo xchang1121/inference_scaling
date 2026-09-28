@@ -161,5 +161,5 @@ python -m pytest
 
 [GSM8K 算法与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、
 [Qwen3 / MATH-500 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)与
-[推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告保留统一入口之前实验得到的结论，
-并给出在当前实现上复现的命令与设置。
+[推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告保留统一入口之前实验得到的结论与图；
+已删除方法只保留说明，其余方法给出在当前实现上复现的命令与设置。
