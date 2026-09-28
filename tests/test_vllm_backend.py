@@ -10,9 +10,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
+from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
-from inference_scaling.arllm.algorithms.config import PowerMHConfig
+from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
 from inference_scaling.shared.rng import SeedStream
@@ -198,9 +198,10 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     engine = _FusedEngine()
     backend = VLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100,
                           sampling_params_factory=_SamplingParams, mh_fused_logprobs=True)
-    result = run_power_mh_chain(backend, (1,), PowerMHConfig(
-        early_rejection=False, suffix_replay=False, alpha=2.0, total_length=2, block_size=2, steps_per_block=1,
-        suffix_schedule="uniform", iterations=None), SamplingConfig(temperature=0.5), SeedStream(7))
+    result = run_mh_chain(backend, (1,), MHConfig(
+        early_rejection=False, suffix_replay=False, alpha=2.0, reward_temperature=None, total_length=2, block_size=2,
+        steps_per_block=1, suffix_schedule="uniform", iterations=None), SeedStream(7), base=SamplingConfig(),
+        proposal=SamplingConfig(temperature=0.5))
     assert len(result.token_ids) == 2
     assert result.base_token_logprobs == (-0.4, -0.4)
     snapshot = backend.snapshot()

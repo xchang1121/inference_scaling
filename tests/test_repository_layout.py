@@ -53,16 +53,12 @@ def test_lower_layers_never_import_the_layers_built_on_them():
 
 
 def test_private_names_are_not_imported_across_modules():
-    # Acceleration modules extend the MH kernel beside them in the same package.
-    extensions = {
-        ("inference_scaling.arllm.algorithms.mh_acceleration", "inference_scaling.arllm.algorithms.mh"),
-    }
     violations = [
         (module, target, name)
         for root in ("src", "training")
         for module, target, names in _module_imports(root)
         for name in names
-        if name.startswith("_") and not name.startswith("__") and (module, target) not in extensions
+        if name.startswith("_") and not name.startswith("__")
     ]
     assert violations == []
 

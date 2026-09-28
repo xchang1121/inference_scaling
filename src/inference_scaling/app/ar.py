@@ -9,8 +9,7 @@ thinking segment. Per-problem costs are backend counter deltas by phase:
 from __future__ import annotations
 
 import random
-from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -24,16 +23,11 @@ from inference_scaling.app.records import (
 )
 from inference_scaling.app.rewards import Reward, best_index, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig, RewardMHConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
-from inference_scaling.arllm.algorithms.mh import run_power_mh_chain, run_reward_mh_chain
-from inference_scaling.arllm.algorithms.mh_acceleration import (
-    FrozenReplaySuffixProposal,
-    run_reward_mh_chain_replay_proposal,
-)
+from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
-from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
@@ -312,65 +306,54 @@ class ARFamily:
                            for index, (grade, tokens) in enumerate(zip(grades, sequences, strict=True))],
         }, values[chosen]
 
-    def _reference(self, task: _Task) -> Any:
-        """The base policy for MH: temperature 1 denotes the task's sampling temperature."""
+    def _mh_config(self, task: _Task, *, alpha: float, reward_temperature: float | None,
+                   early_rejection: bool) -> MHConfig:
+        config = self.config
+        return MHConfig(alpha=alpha, reward_temperature=reward_temperature, total_length=task.maximum,
+                        block_size=min(int(config["block_size"]), task.maximum),
+                        steps_per_block=int(config["steps_per_block"]), suffix_schedule=str(config["suffix_schedule"]),
+                        iterations=config["iterations"], suffix_replay=bool(config["suffix_replay"]),
+                        early_rejection=early_rejection)
 
-        if task.sampling.temperature == 1.0:
-            return task.backend
-        return ReferencePolicyBackend(task.backend, temperature=task.sampling.temperature)
+    @staticmethod
+    def _mh_trace(result: MHChainResult) -> dict[str, Any]:
+        return {"updates": result.attempts, "skipped_updates": result.skipped, "accepted": result.accepted,
+                "acceptance_rate": result.acceptance_rate, "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
+                "mean_accepted_token_changes": result.mean_accepted_token_changes,
+                "replayed_tokens": result.replayed_tokens, "early_rejected": result.early_rejected,
+                "proposal_sources": result.proposal_sources}
 
     def _mh_power(self, task: _Task, reward: Reward | None, meter: Meter):
+        # The base policy is the task's sampling policy; the proposal temperature is relative to it.
         config = self.config
-        result = run_power_mh_chain(
-            self._reference(task), task.prompt,
-            PowerMHConfig(alpha=float(config["alpha"]), total_length=task.maximum,
-                     block_size=min(int(config["block_size"]), task.maximum),
-                     steps_per_block=int(config["steps_per_block"]), iterations=config["iterations"],
-                     suffix_schedule=str(config["suffix_schedule"]), suffix_replay=bool(config["suffix_replay"]),
-                     early_rejection=bool(config["early_rejection"])),
-            SamplingConfig(temperature=float(config["proposal_temperature"]), eos_token_id=self.eos),
-            SeedStream(task.seed),
+        result = run_mh_chain(
+            task.backend, task.prompt,
+            self._mh_config(task, alpha=float(config["alpha"]), reward_temperature=None,
+                            early_rejection=bool(config["early_rejection"])),
+            SeedStream(task.seed), base=task.sampling,
+            proposal=replace(task.sampling, temperature=task.sampling.temperature * float(config["proposal_temperature"])),
         )
-        return result.token_ids, {
-            "updates": result.attempts, "skipped_updates": result.skipped, "accepted": result.accepted,
-            "acceptance_rate": result.acceptance_rate,
-            "mean_proposed_suffix_length": result.mean_proposed_suffix_length,
-            "mean_accepted_token_changes": result.mean_accepted_token_changes, "replayed_tokens": result.replayed_tokens,
-            "early_rejected": result.early_rejected,
-        }, None
+        return result.token_ids, self._mh_trace(result), None
 
     def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
         config = self.config
-        reference = self._reference(task)
-        settings = RewardMHConfig(
-            total_length=task.maximum, block_size=min(int(config["block_size"]), task.maximum),
-            steps_per_block=int(config["steps_per_block"]), reward_temperature=reward.temperature,
-            suffix_schedule=str(config["suffix_schedule"]), iterations=config["iterations"],
-            suffix_replay=bool(config["suffix_replay"]),
+        history = config["frozen_history"]
+        frozen = config["proposal"] == "frozen_history"
+        samples = task.backend.sample_batch([
+            GenerationRequest(task.prompt, task.maximum, task.sampling,
+                              task.seeds.derive("reward_mh", task.problem.id, "history", index),
+                              f"reward-mh-history:{task.problem.id}:{index}")
+            for index in range(int(history["samples"]))
+        ]) if frozen else []
+        result = run_mh_chain(
+            task.backend, task.prompt,
+            self._mh_config(task, alpha=1.0, reward_temperature=reward.temperature, early_rejection=False),
+            SeedStream(task.seed), base=task.sampling, proposal=task.sampling, reward=reward.batch,
+            history=[(sample.token_ids, sample.token_logprobs, sample.token_cdf_bounds) for sample in samples],
+            history_mixture=float(history["mixture"]) if frozen else 0.0,
         )
-        trace: dict[str, Any] = {}
-        base = SamplingConfig(eos_token_id=self.eos)
-        if config["proposal"] == "frozen_history":
-            history = config["frozen_history"]
-            samples = reference.sample_batch([
-                GenerationRequest(task.prompt, task.maximum, base,
-                                  task.seeds.derive("reward_mh", task.problem.id, "history", index),
-                                  f"reward-mh-history:{task.problem.id}:{index}")
-                for index in range(int(history["samples"]))
-            ])
-            proposal = FrozenReplaySuffixProposal(
-                reference, task.prompt,
-                [(sample.token_ids, sample.token_logprobs, sample.token_cdf_bounds) for sample in samples],
-                history_mixture=float(history["mixture"]), sampling=base,
-            )
-            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.batch, SeedStream(task.seed))
-            trace["proposal_sources"] = dict(Counter(step.proposal_source for step in result.trace))
-        else:
-            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.batch, SeedStream(task.seed))
-        trace.update(updates=result.attempts, skipped_updates=result.skipped, accepted=result.accepted,
-                     acceptance_rate=result.acceptance_rate, replayed_tokens=result.replayed_tokens)
-        return result.token_ids, trace, float(result.reward)
+        return result.token_ids, self._mh_trace(result), float(result.reward)
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None

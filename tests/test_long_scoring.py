@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
-from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenStatistic
@@ -135,9 +135,10 @@ def test_every_speedup_at_once_leaves_is_and_power_mh_unchanged():
             backend, (1, 4, 3), ConditionalISConfig(block_first=on, total_length=8, block_size=2, candidate_count=3,
                                                     rollout_count=2, reward_temperature=0.5),
             pointwise(lambda _prompt, tokens: float(sum(tokens) % 5)), SeedStream(5), sampling=SamplingConfig(eos_token_id=2)),
-            run_power_mh_chain(backend, (1, 4, 3), PowerMHConfig(
-                early_rejection=on, suffix_replay=on, alpha=4.0, total_length=8, block_size=4, steps_per_block=3,
-                suffix_schedule="uniform", iterations=None), SamplingConfig(temperature=0.25, eos_token_id=2), SeedStream(8))))
+            run_mh_chain(backend, (1, 4, 3), MHConfig(
+                early_rejection=on, suffix_replay=on, alpha=4.0, reward_temperature=None, total_length=8, block_size=4,
+                steps_per_block=3, suffix_schedule="uniform", iterations=None), SeedStream(8),
+                base=SamplingConfig(eos_token_id=2), proposal=SamplingConfig(temperature=0.25, eos_token_id=2))))
     (_, is_plain, mh_plain), (fast, is_fast, mh_fast) = runs
     assert mh_fast.early_rejected and fast.snapshot().replayed_tokens
     assert is_fast.token_ids == is_plain.token_ids

@@ -1,6 +1,6 @@
 import pytest
 
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import SequenceSample
 
@@ -22,8 +22,9 @@ def test_policy_id_preserves_distinct_float_values() -> None:
     [
         lambda: SamplingConfig(temperature=0),
         lambda: SamplingConfig(top_p=1.1),
-        lambda: PowerMHConfig(early_rejection=False, suffix_replay=False, total_length=4, block_size=8, alpha=4.0, steps_per_block=10, suffix_schedule="uniform", iterations=None),
-        lambda: PowerMHConfig(early_rejection=False, suffix_replay=False, suffix_schedule="unknown", alpha=4.0, total_length=32768, block_size=32, steps_per_block=10, iterations=None),
+        lambda: MHConfig(alpha=4.0, reward_temperature=None, early_rejection=False, suffix_replay=False, iterations=None, steps_per_block=10, total_length=4, block_size=8, suffix_schedule="uniform"),
+        lambda: MHConfig(alpha=4.0, reward_temperature=None, early_rejection=False, suffix_replay=False, iterations=None, steps_per_block=10, total_length=32768, block_size=32, suffix_schedule="unknown"),
+        lambda: MHConfig(alpha=4.0, reward_temperature=0.0, early_rejection=False, suffix_replay=False, iterations=None, steps_per_block=10, total_length=4, block_size=2, suffix_schedule="uniform"),
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
         lambda: ConditionalISConfig(block_first=False, reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),

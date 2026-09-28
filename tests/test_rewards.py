@@ -5,8 +5,8 @@ import pytest
 from inference_scaling.app.rewards import Reward, memoized
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, RewardMHConfig
-from inference_scaling.arllm.algorithms.mh import run_reward_mh_chain
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -161,9 +161,10 @@ def test_model_rewards_read_the_statistics_that_generation_recorded(statistic) -
         conditional = run_conditional_is(backend, (), ConditionalISConfig(
             candidate_count=3, rollout_count=2, block_size=1, total_length=4, reward_temperature=0.5, block_first=False),
             reward, SeedStream(3))
-        chain = run_reward_mh_chain(backend, (), RewardMHConfig(
-            total_length=4, block_size=2, steps_per_block=4, reward_temperature=0.5, suffix_schedule="uniform",
-            iterations=None, suffix_replay=True), SamplingConfig(), reward, SeedStream(3))
+        chain = run_mh_chain(backend, (), MHConfig(
+            alpha=1.0, reward_temperature=0.5, total_length=4, block_size=2, steps_per_block=4, suffix_schedule="uniform",
+            iterations=None, suffix_replay=True, early_rejection=False), SeedStream(3), base=SamplingConfig(),
+            proposal=SamplingConfig(), reward=reward)
         return conditional.steps, chain.trace, chain.token_ids
 
     plain, recorded = _Counting(table, fallback=(0.4, 0.3, 0.3)), _Counting(table, fallback=(0.4, 0.3, 0.3))

@@ -5,8 +5,8 @@ from math import exp, log
 import pytest
 
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig
-from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -96,9 +96,10 @@ def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
         pointwise(lambda prompt, sequence: float(sequence[0] == 0)), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
-    mh = run_power_mh_chain(
-        backend, (3,), PowerMHConfig(early_rejection=False, suffix_replay=False, total_length=4, block_size=2, steps_per_block=2, alpha=4.0, suffix_schedule="uniform", iterations=None),
-        SamplingConfig(temperature=0.5, eos_token_id=2), SeedStream(8),
+    mh = run_mh_chain(
+        backend, (3,), MHConfig(reward_temperature=None, early_rejection=False, suffix_replay=False, total_length=4,
+                                block_size=2, steps_per_block=2, alpha=4.0, suffix_schedule="uniform", iterations=None),
+        SeedStream(8), base=SamplingConfig(eos_token_id=2), proposal=SamplingConfig(temperature=0.5, eos_token_id=2),
     )
     for tokens in (result.token_ids, mh.token_ids):
         assert tokens in _outputs(backend, 4)
@@ -137,19 +138,20 @@ def test_empty_thinking_block_continues_to_full_sequence():
 
 def test_suffix_replay_through_the_thinking_scope_leaves_the_chain_unchanged():
     raw = StoppingTabular({(3,): (0.3, 0.4, 0.3), (3, 1): (0.5, 0.2, 0.3)}, fallback=(0.4, 0.3, 0.3))
-    runs = [run_power_mh_chain(_backend(raw=raw), (3,), PowerMHConfig(
-        early_rejection=False, suffix_replay=replay, total_length=5, block_size=2, steps_per_block=4, alpha=2.0, suffix_schedule="uniform",
-        iterations=None), SamplingConfig(temperature=0.5), SeedStream(8)) for replay in (False, True)]
+    runs = [run_mh_chain(_backend(raw=raw), (3,), MHConfig(
+        reward_temperature=None, early_rejection=False, suffix_replay=replay, total_length=5, block_size=2,
+        steps_per_block=4, alpha=2.0, suffix_schedule="uniform", iterations=None), SeedStream(8),
+        base=SamplingConfig(), proposal=SamplingConfig(temperature=0.5)) for replay in (False, True)]
     assert runs[0].token_ids == runs[1].token_ids
     assert [replace(step, replayed_tokens=0) for step in runs[1].trace] == list(runs[0].trace)
 
 
 def test_early_rejection_through_the_thinking_scope_leaves_the_chain_unchanged():
     raw = StoppingTabular({(3,): (0.3, 0.4, 0.3), (3, 1): (0.5, 0.2, 0.3)}, fallback=(0.4, 0.3, 0.3))
-    runs = [run_power_mh_chain(_backend(raw=raw), (3,), PowerMHConfig(
-        early_rejection=rejection, suffix_replay=rejection, total_length=6, block_size=2, steps_per_block=4,
-        alpha=2.0, suffix_schedule="uniform", iterations=None), SamplingConfig(temperature=0.5), SeedStream(8))
-        for rejection in (False, True)]
+    runs = [run_mh_chain(_backend(raw=raw), (3,), MHConfig(
+        reward_temperature=None, early_rejection=rejection, suffix_replay=rejection, total_length=6, block_size=2,
+        steps_per_block=4, alpha=2.0, suffix_schedule="uniform", iterations=None), SeedStream(8),
+        base=SamplingConfig(), proposal=SamplingConfig(temperature=0.5)) for rejection in (False, True)]
     assert runs[0].token_ids == runs[1].token_ids
     assert [(step.cut, step.accepted) for step in runs[0].trace] == [(step.cut, step.accepted) for step in runs[1].trace]
 

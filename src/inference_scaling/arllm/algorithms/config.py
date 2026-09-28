@@ -16,14 +16,24 @@ from inference_scaling.shared.config import (
 
 
 @dataclass(frozen=True, slots=True)
-class PowerMHConfig:
+class MHConfig:
+    """Suffix MH toward ``p(y)**alpha * exp(r(y) / reward_temperature)`` (see ``mh``).
+
+    Without a reward the outputs grow in stages of ``block_size`` tokens with
+    ``steps_per_block`` updates each; a reward needs complete outputs, so a
+    rewarded chain runs as many updates in one full-length stage.
+    ``iterations`` runs that many updates in one full-length stage.
+    """
+
     alpha: float
+    # None: the target has no reward term.
+    reward_temperature: float | None
     total_length: int
     block_size: int
     steps_per_block: int
     suffix_schedule: str
     iterations: int | None
-    # Replay the current suffix as a draft of each proposal (same proposals, fewer model calls).
+    # Replay the current suffix as a draft of each base proposal (same proposals, fewer model calls).
     suffix_replay: bool
     # Stop generating a proposal once it can no longer be accepted (same chain, fewer tokens).
     early_rejection: bool
@@ -32,6 +42,8 @@ class PowerMHConfig:
         require_finite("alpha", self.alpha)
         if self.alpha < 1:
             raise ValueError("alpha must be at least one")
+        if self.reward_temperature is not None:
+            require_positive("reward_temperature", self.reward_temperature)
         for name in ("total_length", "block_size", "steps_per_block"):
             require_positive(name, getattr(self, name))
         if self.block_size > self.total_length:
@@ -42,47 +54,15 @@ class PowerMHConfig:
             require_positive("iterations", self.iterations)
 
     @property
-    def stages(self) -> tuple[int, ...]:
+    def stages(self) -> tuple[tuple[int, int], ...]:
+        """The length limit and the update count of each stage."""
+
         if self.iterations is not None:
-            return (self.total_length,)
-        lengths = tuple(range(self.block_size, self.total_length + 1, self.block_size))
-        return lengths if lengths and lengths[-1] == self.total_length else (*lengths, self.total_length)
-
-    @property
-    def stage_updates(self) -> int:
-        return self.steps_per_block if self.iterations is None else self.iterations
-
-
-@dataclass(frozen=True, slots=True)
-class RewardMHConfig:
-    """Full-sequence MH budget for a base-times-exponentiated-reward target."""
-
-    total_length: int
-    block_size: int
-    steps_per_block: int
-    reward_temperature: float
-    suffix_schedule: str
-    iterations: int | None
-    # Replay the current suffix as a draft of each base proposal (same proposals, fewer model calls).
-    suffix_replay: bool
-
-    def __post_init__(self) -> None:
-        for name in ("total_length", "block_size", "steps_per_block"):
-            require_positive(name, getattr(self, name))
-        require_positive("reward_temperature", self.reward_temperature)
-        if self.block_size > self.total_length:
-            raise ValueError("block_size cannot exceed total_length")
-        if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
-            raise ValueError("unknown MH suffix_schedule")
-        if self.iterations is not None:
-            require_positive("iterations", self.iterations)
-
-    @property
-    def updates(self) -> int:
-        if self.iterations is not None:
-            return self.iterations
-        blocks = (self.total_length + self.block_size - 1) // self.block_size
-        return blocks * self.steps_per_block
+            return ((self.total_length, self.iterations),)
+        limits = (*range(self.block_size, self.total_length, self.block_size), self.total_length)
+        if self.reward_temperature is not None:
+            return ((self.total_length, len(limits) * self.steps_per_block),)
+        return tuple((limit, self.steps_per_block) for limit in limits)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,4 +89,4 @@ class ConditionalISConfig:
             raise ValueError("block_size cannot exceed total_length")
 
 
-__all__ = ["ConditionalISConfig", "PowerMHConfig", "RewardMHConfig"]
+__all__ = ["ConditionalISConfig", "MHConfig"]

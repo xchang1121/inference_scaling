@@ -1,11 +1,7 @@
-from math import exp
-import pytest
-
-from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.scope import SamplingScope
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.shared.model.output import ThinkingFormat
 
 
@@ -31,19 +27,6 @@ class _Backend(TabularAutoregressiveBackend):
 
     def encode(self, text, *, add_special_tokens=False):
         return (self.tokenizer.get_vocab()[text],)
-
-
-def test_reference_policy_matches_direct_temperature_scoring():
-    raw = TabularAutoregressiveBackend({}, fallback=(0.75, 0.25))
-    backend = ReferencePolicyBackend(raw, temperature=0.6)
-    score = backend.score_batch([ScoreRequest((), ((0,), (1,)))])
-    expected = raw.score_batch([ScoreRequest((), ((0,), (1,)), SamplingConfig(temperature=0.6))])
-    assert score == expected
-    assert sum(exp(sum(item)) for item in score) == pytest.approx(1)
-    request = GenerationRequest((), 3, SamplingConfig(), 1, "sample")
-    sample = backend.sample_batch([request])[0]
-    assert sample.reference_token_logprobs == sample.token_logprobs
-    assert sample.policy_id == SamplingConfig().policy_id
 
 
 def test_scope_finishes_content_from_original_backend_with_remaining_budget():

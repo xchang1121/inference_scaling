@@ -1,31 +1,44 @@
 """Suffix-resampling Metropolis--Hastings over complete outputs.
 
-A state is one complete output: generation stops at EOS (or at a scope
-boundary) or at the stage's length limit ``T``. A move draws a cut position
-from a full-support distribution over the ``T`` positions of the stage, keeps
-the prefix before it, regenerates the suffix from an autoregressive proposal
-until it stops or reaches ``T``, and applies the full forward/reverse proposal
-correction. With ``suffix_replay`` the current suffix goes to the backend as a
-draft: the proposal is unchanged, and its tokens that repeat the current ones
-cost no model call. For the power target with a proposal temperature between
-``1/alpha`` and 1 each token's log-weight ``alpha log p - log q`` is at most
-zero, so with ``early_rejection`` the accept uniform is drawn first and the
-proposal stops as soon as it can no longer be accepted. The cut distribution does not depend on the state, so it cancels
-in the Hastings ratio. A cut at or after the end of a stopped output would
-regenerate an empty suffix; that move leaves the state unchanged and is
-skipped without a model call. Per-token base and proposal log-probabilities of
-the current state are cached.
+The target is ``p(y)**alpha * exp(r(y) / tau)`` for the base policy ``p``: the
+power target without a reward, the reward target with ``alpha = 1``. A state
+is one complete output: generation stops at EOS (or at a scope boundary) or at
+the stage's length limit ``T``. A move draws a cut position from a
+full-support distribution over the ``T`` positions of the stage, keeps the
+prefix before it, regenerates the suffix from the proposal until it stops or
+reaches ``T``, and applies the full forward/reverse proposal correction. The
+cut distribution does not depend on the state, so it cancels in the Hastings
+ratio; a cut at or after the end of a stopped output would regenerate an empty
+suffix, so that move is skipped without a model call. Per-token base and
+proposal log-probabilities of the current state are cached.
+
+``p**alpha`` is defined for every prefix, so a chain without a reward grows its
+outputs stage by stage; a reward needs complete outputs, so a rewarded chain
+has one full-length stage. The proposal is the base policy at another
+temperature, optionally mixed with a frozen history of earlier complete
+outputs: after the kept prefix, the history component proposes the rest of a
+uniformly chosen history output that continues it, whose base
+log-probabilities came with its generation, and the exact mixture
+probabilities enter the Hastings ratio. With ``suffix_replay`` the current
+suffix goes to the backend as a draft: the proposal is unchanged, and its
+tokens that repeat the current ones cost no model call. For the power target
+with a proposal temperature between ``1/alpha`` and 1 of the base, each token's
+log-weight ``alpha log p - log q`` is at most zero, so with ``early_rejection``
+the accept uniform is drawn first and the proposal stops as soon as it can no
+longer be accepted.
 """
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite, log
 from sys import float_info
 
 import numpy as np
 
-from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHConfig
+from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
@@ -39,12 +52,44 @@ from inference_scaling.arllm.types import (
     TokenSequence,
 )
 
+# An earlier complete output: its tokens, their base log-probabilities and, when reported, their CDF intervals.
+History = tuple[TokenSequence, tuple[float, ...], tuple[tuple[float, float], ...] | None]
 
-class _ChainStatistics:
-    """Acceptance and proposal statistics of a chain's ``trace``."""
 
-    __slots__ = ()
-    trace: tuple
+@dataclass(frozen=True, slots=True)
+class MHStep:
+    stage_length: int
+    step: int
+    cut: int
+    # Generated proposal tokens; a proposal stopped by early rejection counts the tokens before the stop,
+    # and its log_acceptance is the bound at the stop.
+    proposed_suffix_length: int
+    # "base" or "history".
+    proposal_source: str
+    current_reward: float
+    proposed_reward: float
+    log_acceptance: float
+    accepted: bool
+    suffix_probability: float
+    proposed_token_changes: int
+    accepted_token_changes: int
+    # Leading proposal tokens replayed from the current suffix.
+    replayed_tokens: int
+    early_rejected: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MHChainResult:
+    prompt: TokenSequence
+    token_ids: TokenSequence
+    # The final output's reward; zero without a reward.
+    reward: float
+    base_token_logprobs: tuple[float, ...]
+    proposal_token_logprobs: tuple[float, ...]
+    trace: tuple[MHStep, ...]
+    chain_id: int
+    # Cuts past the end of a stopped output: no proposal, state unchanged.
+    skipped: int
 
     @property
     def attempts(self) -> int:
@@ -66,10 +111,6 @@ class _ChainStatistics:
         return self._mean("proposed_suffix_length")
 
     @property
-    def mean_proposed_token_changes(self) -> float:
-        return self._mean("proposed_token_changes")
-
-    @property
     def mean_accepted_token_changes(self) -> float:
         return self._mean("accepted_token_changes")
 
@@ -77,71 +118,13 @@ class _ChainStatistics:
     def replayed_tokens(self) -> int:
         return sum(step.replayed_tokens for step in self.trace)
 
-
-@dataclass(frozen=True, slots=True)
-class PowerMHStep:
-    stage_length: int
-    step: int
-    cut: int
-    # Generated proposal tokens; a proposal stopped by early rejection counts the tokens before the stop,
-    # and its log_acceptance is the bound at the stop.
-    proposed_suffix_length: int
-    log_acceptance: float
-    accepted: bool
-    suffix_schedule: str
-    suffix_probability: float
-    proposed_token_changes: int
-    accepted_token_changes: int
-    # Leading proposal tokens replayed from the current suffix.
-    replayed_tokens: int
-    early_rejected: bool
-
-
-@dataclass(frozen=True, slots=True)
-class PowerMHChainResult(_ChainStatistics):
-    prompt: TokenSequence
-    token_ids: TokenSequence
-    base_token_logprobs: tuple[float, ...]
-    proposal_token_logprobs: tuple[float, ...]
-    trace: tuple[PowerMHStep, ...]
-    chain_id: int
-    # Cuts past the end of a stopped output: no proposal, state unchanged.
-    skipped: int = 0
-
     @property
     def early_rejected(self) -> int:
         return sum(step.early_rejected for step in self.trace)
 
-
-@dataclass(frozen=True, slots=True)
-class RewardMHStep:
-    step: int
-    cut: int
-    proposed_suffix_length: int
-    current_reward: float
-    proposed_reward: float
-    log_acceptance: float
-    accepted: bool
-    suffix_schedule: str
-    suffix_probability: float
-    proposed_token_changes: int
-    accepted_token_changes: int
-    # Leading proposal tokens replayed from the current suffix.
-    replayed_tokens: int
-
-
-@dataclass(frozen=True, slots=True)
-class RewardMHChainResult(_ChainStatistics):
-    prompt: TokenSequence
-    token_ids: TokenSequence
-    reward: float
-    base_token_logprobs: tuple[float, ...]
-    proposal_token_logprobs: tuple[float, ...]
-    trace: tuple[RewardMHStep, ...]
-    chain_id: int
-    # Cuts past the end of a stopped output: no proposal, state unchanged.
-    skipped: int = 0
-
+    @property
+    def proposal_sources(self) -> dict[str, int]:
+        return dict(Counter(step.proposal_source for step in self.trace))
 
 def suffix_length_probabilities(
     stage_length: int,
@@ -204,10 +187,6 @@ def _validate_proposal(sampling: SamplingConfig) -> None:
         )
 
 
-def _is_base_proposal(sampling: SamplingConfig) -> bool:
-    return sampling.temperature == 1 and sampling.top_p == 1 and sampling.top_k is None
-
-
 def _score_one(
     backend: AutoregressiveBackend,
     prefix: TokenSequence,
@@ -253,6 +232,7 @@ def _sample_suffix(
     prefix: TokenSequence,
     length: int,
     sampling: SamplingConfig,
+    base: SamplingConfig,
     seed: int,
     request_id: str,
     draft: Draft | None = None,
@@ -260,7 +240,8 @@ def _sample_suffix(
 ) -> _Suffix:
     """Generate up to ``length`` tokens with their proposal and base log-probabilities."""
 
-    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id, draft=draft,
+    sample = backend.sample_batch([GenerationRequest(prefix, length, sampling, seed, request_id,
+                                                     reference_temperature=base.temperature, draft=draft,
                                                      log_weight_stop=log_weight_stop)])[0]
     stopped = sample.finish_reason != "length"
     if not 0 < len(sample.token_ids) <= length or (len(sample.token_ids) < length and not stopped):
@@ -271,8 +252,7 @@ def _sample_suffix(
         raise RuntimeError("backend did not score tokens under the requested proposal policy")
     if any(not isfinite(value) for value in sample.token_logprobs):
         raise RuntimeError("a sampled proposal token must have finite proposal log-probability")
-    base = SamplingConfig(eos_token_id=sampling.eos_token_id)
-    if _is_base_proposal(sampling):
+    if sampling == base:
         base_logs = sample.token_logprobs
     elif sample.reference_policy_id == base.policy_id and sample.reference_token_logprobs is not None:
         base_logs = sample.reference_token_logprobs
@@ -290,67 +270,112 @@ def _token_changes(old: TokenSequence, new: TokenSequence) -> int:
     return sum(left != right for left, right in zip(old, new)) + abs(len(old) - len(new))
 
 
-def run_power_mh_chain(
+def run_mh_chain(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
-    config: PowerMHConfig,
-    proposal: SamplingConfig,
+    config: MHConfig,
     seeds: SeedStream,
     *,
+    base: SamplingConfig,
+    proposal: SamplingConfig,
+    reward: TokenBatchReward | None = None,
+    history: Sequence[History] = (),
+    history_mixture: float = 0.0,
     chain_id: int = 0,
-) -> PowerMHChainResult:
-    """Run the staged power-target MH for one chain.
+) -> MHChainResult:
+    """Run one chain toward ``p(y)**alpha * exp(r(y) / reward_temperature)`` for the ``base`` policy ``p``.
 
-    Stage ``k`` targets ``p(y)**alpha`` over outputs of at most ``T_k`` tokens;
-    an output that stopped earlier is complete and later stages do not extend it.
-    With a proposal temperature between ``1/alpha`` and 1 the decision compares the
-    clamped log-weights ``sum min(0, alpha log p - log q)`` of the two suffixes.
+    ``history`` holds complete outputs of the base policy under the chain's
+    length limit and stop rule; the proposal mixes them in with weight
+    ``history_mixture``, which needs the base policy as the proposal.
     """
 
+    _validate_proposal(base)
     _validate_proposal(proposal)
-    # Each token's log-weight is then at most zero; clamping removes only rounding.
-    monotone = 1 / config.alpha <= proposal.temperature <= 1
+    if (reward is None) != (config.reward_temperature is None):
+        raise ValueError("a reward and its temperature go together")
+    if not 0 <= history_mixture < 1:
+        raise ValueError("history_mixture must lie in [0, 1)")
+    if history_mixture and (reward is None or proposal != base):
+        raise ValueError("a frozen history mixes into the base proposal of a rewarded, full-length chain")
+    if any(not tokens or len(tokens) != len(logprobs) for tokens, logprobs, _ in history):
+        raise ValueError("each history output needs one log-probability per token")
+    # With a power target and a proposal temperature between 1/alpha and 1 of the base each token's
+    # log-weight is at most zero, so comparing the clamped weights removes only rounding.
+    monotone = reward is None and 1 / config.alpha <= proposal.temperature / base.temperature <= 1
     if config.early_rejection and not monotone:
-        raise ValueError("early rejection needs a proposal temperature between 1/alpha and 1")
+        raise ValueError("early rejection needs a target without a reward and a proposal temperature between 1/alpha "
+                         "and 1 of the base")
     weight = LogWeightStop(config.alpha, 0.0, 0.0)
+
+    def score(tokens: TokenSequence) -> float:
+        if reward is None:
+            return 0.0
+        value = float(reward(prompt, [tokens])[0])
+        if not isfinite(value):
+            raise ValueError("reward must be finite")
+        return value
+
+    def target(base_logprobs: Sequence[float], value: float) -> float:
+        return config.alpha * float(sum(base_logprobs)) + (value / config.reward_temperature if reward else 0.0)
+
+    def continuations(kept: TokenSequence) -> list[History]:
+        """The rest of each history output that continues ``kept``."""
+
+        cut = len(kept)
+        return [(tokens[cut:], logprobs[cut:], None if bounds is None else bounds[cut:])
+                for tokens, logprobs, bounds in history if len(tokens) > cut and tokens[:cut] == kept]
+
+    def log_q(kept: TokenSequence, suffix: TokenSequence, logprob: float) -> float:
+        """The proposal log-probability of ``suffix`` after ``kept``, given its policy log-probability."""
+
+        matches = continuations(kept) if history_mixture else []
+        if not matches:
+            return logprob
+        count = sum(tokens == suffix for tokens, _, _ in matches)
+        terms = [log(1 - history_mixture) + logprob] + ([log(history_mixture) + log(count / len(matches))]
+                                                         if count else [])
+        return float(np.logaddexp.reduce(terms))
+
+    def propose(kept: TokenSequence, limit: int, key: tuple[object, ...], request_id: str,
+                draft: Draft | None = None, stop: LogWeightStop | None = None) -> tuple[_Suffix, str]:
+        matches = continuations(kept) if history_mixture else []
+        if matches and float(seeds.generator(*key, "source").random()) < history_mixture:
+            tokens, logprobs, bounds = matches[int(seeds.generator(*key, "history").integers(len(matches)))]
+            return _Suffix(tokens, logprobs, logprobs, len(kept) + len(tokens) < limit, bounds, False), "history"
+        return _sample_suffix(backend, prefix=prompt + kept, length=limit - len(kept), sampling=proposal, base=base,
+                              seed=seeds.derive(*key), request_id=request_id, draft=draft,
+                              log_weight_stop=stop), "base"
+
     tokens: TokenSequence = ()
     base_logs: tuple[float, ...] = ()
     proposal_logs: tuple[float, ...] = ()
     bounds: tuple[tuple[float, float], ...] | None = ()
-    stopped = False
-    trace: list[PowerMHStep] = []
-    skipped = 0
-    for stage_index, stage_length in enumerate(config.stages):
-        if not stopped and len(tokens) < stage_length:
-            extension = _sample_suffix(
-                backend, prefix=prompt + tokens, length=stage_length - len(tokens), sampling=proposal,
-                seed=seeds.derive("mh", chain_id, stage_index, "extend"),
-                request_id=f"mh:{chain_id}:stage:{stage_index}:extend",
-            )
+    stopped, current_reward, skipped = False, 0.0, 0
+    trace: list[MHStep] = []
+    for stage, (limit, updates) in enumerate(config.stages):
+        if not stopped and len(tokens) < limit:
+            extension, _ = propose(tokens, limit, ("mh", chain_id, stage, "extend"), f"mh:{chain_id}:stage:{stage}:extend")
             tokens += extension.token_ids
             base_logs += extension.base_logprobs
             proposal_logs += extension.proposal_logprobs
             bounds = None if bounds is None or extension.bounds is None else bounds + extension.bounds
-            stopped = extension.stopped
-        for step_index in range(config.stage_updates):
-            cut, _, suffix_probability = _draw_suffix(
-                stage_length=stage_length,
-                schedule=config.suffix_schedule,
-                rng=seeds.generator("mh", chain_id, stage_index, step_index, "cut"),
-            )
+            stopped, current_reward = extension.stopped, score(tokens)
+        for step in range(updates):
+            cut, _, suffix_probability = _draw_suffix(stage_length=limit, schedule=config.suffix_schedule,
+                                                      rng=seeds.generator("mh", chain_id, stage, step, "cut"))
             if cut >= len(tokens):
                 skipped += 1
                 continue
+            kept = tokens[:cut]
             draft = _draft(tokens, proposal_logs, base_logs, bounds, cut) if config.suffix_replay else None
-            uniform = float(seeds.generator("mh", chain_id, stage_index, step_index, "accept").random())
+            uniform = float(seeds.generator("mh", chain_id, stage, step, "accept").random())
             current = weight.weight(base_logs[cut:], proposal_logs[cut:])
-            suffix = _sample_suffix(
-                backend, prefix=prompt + tokens[:cut], length=stage_length - cut, sampling=proposal,
-                seed=seeds.derive("mh", chain_id, stage_index, step_index, "proposal"),
-                request_id=f"mh:{chain_id}:stage:{stage_index}:step:{step_index}", draft=draft,
-                log_weight_stop=LogWeightStop(config.alpha, current, log(max(uniform, float_info.min)))
-                if config.early_rejection else None,
-            )
+            suffix, source = propose(
+                kept, limit, ("mh", chain_id, stage, step, "proposal"), f"mh:{chain_id}:stage:{stage}:step:{step}",
+                draft, LogWeightStop(config.alpha, current, log(max(uniform, float_info.min)))
+                if config.early_rejection else None)
+            proposed_reward = score(kept + suffix.token_ids)
             if monotone:
                 decision = decide_metropolis_hastings(
                     current_target_log_density=current, uniform=uniform,
@@ -358,108 +383,31 @@ def run_power_mh_chain(
                 )
             else:
                 decision = decide_metropolis_hastings(
-                    current_target_log_density=config.alpha * float(sum(base_logs[cut:])),
-                    proposed_target_log_density=config.alpha * float(sum(suffix.base_logprobs)),
-                    forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
-                    reverse_proposal_log_probability=float(sum(proposal_logs[cut:])), uniform=uniform,
+                    current_target_log_density=target(base_logs[cut:], current_reward),
+                    proposed_target_log_density=target(suffix.base_logprobs, proposed_reward),
+                    forward_proposal_log_probability=log_q(kept, suffix.token_ids, float(sum(suffix.proposal_logprobs))),
+                    reverse_proposal_log_probability=log_q(kept, tokens[cut:], float(sum(proposal_logs[cut:]))),
+                    uniform=uniform,
                 )
             if suffix.rejected and decision.accepted:
                 raise RuntimeError("an early-rejected proposal passed the acceptance test")
             changes = _token_changes(tokens[cut:], suffix.token_ids)
-            replayed = 0 if draft is None else _replayed(tokens[cut:], suffix.token_ids)
-            if decision.accepted:
-                tokens = tokens[:cut] + suffix.token_ids
-                base_logs = base_logs[:cut] + suffix.base_logprobs
-                proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
-                bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
-                stopped = suffix.stopped
-            trace.append(PowerMHStep(
-                stage_length=stage_length, step=step_index, cut=cut,
-                proposed_suffix_length=len(suffix.token_ids), log_acceptance=decision.log_acceptance,
-                accepted=decision.accepted, suffix_schedule=config.suffix_schedule,
+            replayed = 0 if draft is None or source != "base" else _replayed(tokens[cut:], suffix.token_ids)
+            trace.append(MHStep(
+                stage_length=limit, step=step, cut=cut, proposed_suffix_length=len(suffix.token_ids),
+                proposal_source=source, current_reward=current_reward, proposed_reward=proposed_reward,
+                log_acceptance=decision.log_acceptance, accepted=decision.accepted,
                 suffix_probability=suffix_probability, proposed_token_changes=changes,
                 accepted_token_changes=changes if decision.accepted else 0, replayed_tokens=replayed,
                 early_rejected=suffix.rejected,
             ))
-    return PowerMHChainResult(prompt, tokens, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
+            if decision.accepted:
+                tokens = kept + suffix.token_ids
+                base_logs = base_logs[:cut] + suffix.base_logprobs
+                proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
+                bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
+                stopped, current_reward = suffix.stopped, proposed_reward
+    return MHChainResult(prompt, tokens, current_reward, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 
 
-def run_reward_mh_chain(
-    backend: AutoregressiveBackend,
-    prompt: TokenSequence,
-    config: RewardMHConfig,
-    proposal: SamplingConfig,
-    reward: TokenBatchReward,
-    seeds: SeedStream,
-    *,
-    chain_id: int = 0,
-) -> RewardMHChainResult:
-    """Sample ``p_base(x) exp(reward(x) / temperature)`` with suffix MH.
-
-    The chain starts from one complete output and every update draws a cut over
-    all ``total_length`` positions. For a base-model proposal the likelihood
-    terms cancel, leaving only the reward difference; the expanded ratio below
-    also remains correct for any full-support temperature proposal.
-    """
-
-    _validate_proposal(proposal)
-
-    def score(sequence: TokenSequence) -> float:
-        value = float(reward(prompt, [sequence])[0])
-        if not isfinite(value):
-            raise ValueError("reward must be finite")
-        return value
-
-    initial = _sample_suffix(
-        backend, prefix=prompt, length=config.total_length, sampling=proposal,
-        seed=seeds.derive("reward_mh", chain_id, "initialize"), request_id=f"reward-mh:{chain_id}:initialize",
-    )
-    tokens, base_logs, proposal_logs = initial.token_ids, initial.base_logprobs, initial.proposal_logprobs
-    bounds = initial.bounds
-    current_reward = score(tokens)
-    trace: list[RewardMHStep] = []
-    skipped = 0
-    for step_index in range(config.updates):
-        cut, _, suffix_probability = _draw_suffix(
-            stage_length=config.total_length,
-            schedule=config.suffix_schedule,
-            rng=seeds.generator("reward_mh", chain_id, step_index, "cut"),
-        )
-        if cut >= len(tokens):
-            skipped += 1
-            continue
-        draft = _draft(tokens, proposal_logs, base_logs, bounds, cut) if config.suffix_replay else None
-        suffix = _sample_suffix(
-            backend, prefix=prompt + tokens[:cut], length=config.total_length - cut, sampling=proposal,
-            seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
-            request_id=f"reward-mh:{chain_id}:step:{step_index}", draft=draft,
-        )
-        proposed_reward = score(tokens[:cut] + suffix.token_ids)
-        decision = decide_metropolis_hastings(
-            current_target_log_density=float(sum(base_logs[cut:])) + current_reward / config.reward_temperature,
-            proposed_target_log_density=(
-                float(sum(suffix.base_logprobs)) + proposed_reward / config.reward_temperature
-            ),
-            forward_proposal_log_probability=float(sum(suffix.proposal_logprobs)),
-            reverse_proposal_log_probability=float(sum(proposal_logs[cut:])),
-            uniform=float(seeds.generator("reward_mh", chain_id, step_index, "accept").random()),
-        )
-        changes = _token_changes(tokens[cut:], suffix.token_ids)
-        replayed = 0 if draft is None else _replayed(tokens[cut:], suffix.token_ids)
-        previous_reward = current_reward
-        if decision.accepted:
-            tokens = tokens[:cut] + suffix.token_ids
-            base_logs = base_logs[:cut] + suffix.base_logprobs
-            proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
-            bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
-            current_reward = proposed_reward
-        trace.append(RewardMHStep(
-            step=step_index, cut=cut, proposed_suffix_length=len(suffix.token_ids),
-            current_reward=previous_reward, proposed_reward=proposed_reward,
-            log_acceptance=decision.log_acceptance, accepted=decision.accepted,
-            suffix_schedule=config.suffix_schedule, suffix_probability=suffix_probability,
-            proposed_token_changes=changes, accepted_token_changes=changes if decision.accepted else 0,
-            replayed_tokens=replayed,
-        ))
-    return RewardMHChainResult(prompt, tokens, current_reward, base_logs, proposal_logs, tuple(trace), chain_id,
-                               skipped)
+__all__ = ["History", "MHChainResult", "MHStep", "run_mh_chain", "suffix_length_probabilities"]
