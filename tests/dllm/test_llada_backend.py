@@ -11,8 +11,7 @@ from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionGenerationRequest
 
-SAMPLING = DiffusionSamplingConfig(block_length=2, steps_per_block=2, temperature=0.8, remasking="random", top_k=0,
-                                   top_p=1.0, cfg_scale=0.0)
+SAMPLING = DiffusionSamplingConfig(block_length=2, steps_per_block=2, temperature=0.8, remasking="random", top_k=0, top_p=1.0)
 GREEDY = replace(SAMPLING, steps_per_block=1, temperature=0.0, remasking="low_confidence")
 
 

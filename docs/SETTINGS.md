@@ -166,7 +166,7 @@
 | `engine.block_logits_only` | 布尔 | 输出投影只计算当前块的位置（模型仍读取整张画布）；logits 与轨迹不变，省去其余位置的 LM head 计算，计算量按实际投影的位置统计 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
 | `max_new_tokens` | 整数 | dLLM 输出上限，与数据集的 `max_new_tokens` 取较小值 |
-| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`cfg_scale`、`remasking`（`low_confidence` \| `random`） |
+| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`remasking`（`low_confidence` \| `random`） |
 | `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
 | `algorithms.best_of_n.samples` | 整数 | 候选数 |

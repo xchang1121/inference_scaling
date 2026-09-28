@@ -205,7 +205,6 @@
       "temperature": 1.0,
       "top_k": 0,
       "top_p": 1.0,
-      "cfg_scale": 0.0,
       "remasking": "low_confidence"
     },
     "exact_sampling": {
@@ -214,7 +213,6 @@
       "temperature": 1.0,
       "top_k": 0,
       "top_p": 1.0,
-      "cfg_scale": 0.0,
       "remasking": "random"
     },
     "algorithms": {

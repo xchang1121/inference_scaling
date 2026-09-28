@@ -41,7 +41,7 @@ def _backend(bias, name, eos=None):
 
 def _sampling(block_length):
     return DiffusionSamplingConfig(block_length=block_length, steps_per_block=block_length, temperature=1.0,
-                                   remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0)
+                                   remasking="random", top_k=0, top_p=1.0)
 
 
 def _config(mode, **counts):
@@ -193,8 +193,7 @@ def test_independence_mh_approaches_base_times_reward_target_without_scores():
     for seed in range(runs):
         result = run_diffusion_reward_mh(
             backend=CoinBackend(), prompt=(), config=DiffusionMHConfig(total_length=1, updates=8, reward_temperature=1.0),
-            sampling=DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=0.0, top_k=0, top_p=1.0,
-                                             cfg_scale=0.0, remasking="low_confidence"),
+            sampling=DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=0.0, top_k=0, top_p=1.0, remasking="low_confidence"),
             reward=pointwise(lambda _prompt, continuation: float(continuation[0])), seed=seed)
         ones += result.final.token_ids[0]
     assert ones / runs == pytest.approx(np.e / (1.0 + np.e), abs=0.03)

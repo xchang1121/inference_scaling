@@ -34,8 +34,7 @@ class CountingCoinBackend:
         return outputs
 
 
-EXACT = DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=1.0, remasking="random", top_k=0,
-                                top_p=1.0, cfg_scale=0.0)
+EXACT = DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=1.0, remasking="random", top_k=0, top_p=1.0)
 CONFIG = DiffusionMHConfig(total_length=2, updates=6, reward_temperature=1.0)
 
 

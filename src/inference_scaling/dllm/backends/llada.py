@@ -174,18 +174,10 @@ class LLaDATransformersBackend:
             self._head_token_slots += inputs.shape[0] * (inputs.shape[1] if head is None else end - start)
         return logits
 
-    def _block_logits(self, tokens: Any, start: int, end: int, *, prompt_length: int,
-                      sampling: DiffusionSamplingConfig) -> Any:
+    def _block_logits(self, tokens: Any, start: int, end: int, sampling: DiffusionSamplingConfig) -> Any:
         """Policy logits of positions ``start:end``; the model still reads the whole canvas."""
 
-        if sampling.cfg_scale > 0:
-            unconditional = tokens.clone()
-            unconditional[:, :prompt_length] = self._mask_token_id
-            both = self._logits(self._torch.cat((tokens, unconditional), dim=0), start, end).float()
-            logits, unconditional_logits = self._torch.chunk(both, 2, dim=0)
-            logits = unconditional_logits + (sampling.cfg_scale + 1.0) * (logits - unconditional_logits)
-        else:
-            logits = self._logits(tokens, start, end).to(self._torch.float32, copy=True)
+        logits = self._logits(tokens, start, end).to(self._torch.float32, copy=True)
         # A committed mask would leave the state unchanged and violate the fixed
         # transfer schedule.  The reverse policy is therefore normalized over
         # ordinary vocabulary tokens only.
@@ -256,7 +248,7 @@ class LLaDATransformersBackend:
             start = prompt_length + block_index * sampling.block_length
             end, available = start + sampling.block_length, sampling.block_length
             for step_index, count in enumerate(schedule):
-                logits = self._block_logits(tokens, start, end, prompt_length=prompt_length, sampling=sampling)
+                logits = self._block_logits(tokens, start, end, sampling)
                 sampled, token_logprobs = self._draw_tokens(logits, temperature=sampling.temperature,
                                                             generators=generators)
                 if sampling.remasking == "random":

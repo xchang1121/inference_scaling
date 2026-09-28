@@ -31,7 +31,6 @@ class DiffusionSamplingConfig:
     temperature: float
     top_k: int
     top_p: float
-    cfg_scale: float
     remasking: RemaskingStrategy
 
     def __post_init__(self) -> None:
@@ -42,7 +41,6 @@ class DiffusionSamplingConfig:
         require_nonnegative("temperature", self.temperature)
         require_nonnegative("top_k", self.top_k)
         require_probability("top_p", self.top_p, include_zero=False)
-        require_nonnegative("cfg_scale", self.cfg_scale)
         if self.remasking not in ("low_confidence", "random"):
             raise ValueError(f"unsupported remasking strategy {self.remasking!r}")
 
@@ -51,8 +49,7 @@ class DiffusionSamplingConfig:
         return (
             f"block={self.block_length};steps={self.steps_per_block};"
             f"temperature={canonical_float(self.temperature)};top_k={self.top_k};"
-            f"top_p={canonical_float(self.top_p)};"
-            f"cfg={canonical_float(self.cfg_scale)};remasking={self.remasking}"
+            f"top_p={canonical_float(self.top_p)};remasking={self.remasking}"
         )
 
     @property
@@ -73,7 +70,7 @@ def sampling_from_settings(section: Mapping[str, Any]) -> DiffusionSamplingConfi
     return DiffusionSamplingConfig(
         block_length=int(section["block_length"]), steps_per_block=int(section["steps_per_block"]),
         temperature=float(section["temperature"]), top_k=int(section["top_k"]), top_p=float(section["top_p"]),
-        cfg_scale=float(section["cfg_scale"]), remasking=section["remasking"],
+        remasking=section["remasking"],
     )
 
 

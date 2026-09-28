@@ -27,7 +27,6 @@ _DLLM_SAMPLING = {
     "temperature": float,
     "top_k": int,
     "top_p": float,
-    "cfg_scale": float,
     "remasking": _Choices({"low_confidence", "random"}),
 }
 
