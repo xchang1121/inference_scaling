@@ -1,10 +1,10 @@
 """The chosen reward bound to one problem.
 
 A reward is a fixed per-sequence score r(x, y); with temperature tau the
-sampling target is p(y | x) exp(r / tau). ``verifier`` and ``vote`` read the
-answer text of a completion and are built here for every model family;
-``logprob`` and ``consilience`` read the model's own probabilities and are
-built by the family that owns the model.
+sampling target is p(y | x) exp(r / tau). The ``verifier`` reads the answer
+text of a completion and is built here for every model family; ``logprob`` and
+``consilience`` read the model's own probabilities and are built by the family
+that owns the model.
 """
 
 from __future__ import annotations
@@ -17,11 +17,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from inference_scaling.datasets.base import Dataset, Problem
-from inference_scaling.shared.rewards.verifier import VerifierContext, build_verifier
-from inference_scaling.shared.rewards.vote import pool_agreement_reward, vote_index
+from inference_scaling.shared.rewards.vote import pool_agreement_reward
 from inference_scaling.shared.types import TokenBatchReward, TokenSequence, pointwise
 
-REWARDS = ("verifier", "vote", "logprob", "consilience")
+REWARDS = ("verifier", "logprob", "consilience")
 AnswerText = Callable[[TokenSequence, TokenSequence], str]
 
 
@@ -52,44 +51,47 @@ def memoized(batch: TokenBatchReward) -> TokenBatchReward:
     return score
 
 
-def text_reward(
-    kind: str,
+def verifier_reward(
     settings: Mapping[str, Any],
     *,
     dataset: Dataset,
     problem: Problem,
-    prompt_text: str,
     answer_text: AnswerText,
-    pool: Sequence[str] = (),
+    sample_pool: Callable[[int], Sequence[str]] | None,
 ) -> Reward:
-    """``verifier``: an external source; ``vote``: agreement with a frozen pool of independent samples."""
+    """1 when the dataset's grader finds the answer correct (the oracle), else 0; or the vote.
+
+    The vote, chosen by ``source = "vote"`` or by a dataset without reference
+    answers, is the fraction of the model's own answers that agree: those of
+    ``pool_size`` samples that ``sample_pool`` draws before the search, which
+    keeps the reward a fixed function of the sequence, or, without
+    ``sample_pool``, those of the scored batch, which makes Best-of-N a
+    majority vote.
+    """
 
     temperature = float(settings["temperature"])
-    if kind == "verifier":
-        verifier = build_verifier(
-            settings,
-            context=VerifierContext(prompt_text, problem.answer, {"dataset": dataset.name, "problem_id": problem.id}),
-            grade=lambda text: dataset.grade(text, problem),
-        )
-        return Reward(temperature, memoized(
-            lambda prompt, sequences: verifier.score_batch(prompt_text, [answer_text(prompt, tokens) for tokens in sequences])
-        ), 0, verifier.describe())
-    if kind != "vote":
-        raise ValueError(f"{kind} is not a text reward")
+    if settings["source"] == "dataset" and dataset.oracle:
+        return Reward(temperature, memoized(pointwise(
+            lambda prompt, tokens: float(dataset.grade(answer_text(prompt, tokens), problem).correct))), 0,
+            {"source": "dataset"})
+    if sample_pool is None:
+        def majority(prompt: TokenSequence, sequences: Sequence[TokenSequence]) -> list[float]:
+            texts = [answer_text(prompt, tokens) for tokens in sequences]
+            return list(map(pool_agreement_reward(dataset, texts), texts))
+
+        return Reward(temperature, majority, 0, {"source": "vote", "pool": "scored_batch"})
+    pool = list(sample_pool(int(settings["pool_size"])))
     agreement = pool_agreement_reward(dataset, pool)
-    grades = [dataset.grade(text, problem) for text in pool]
     return Reward(temperature, memoized(pointwise(lambda prompt, tokens: agreement(answer_text(prompt, tokens)))), 0,
-                  {"pool": [{"answer": grade.answer, "correct": grade.correct} for grade in grades]})
+                  {"source": "vote", "pool": [{"answer": grade.answer, "correct": grade.correct}
+                                              for grade in (dataset.grade(text, problem) for text in pool)]})
 
 
+def best_index(values: Sequence[float], rng: random.Random) -> int:
+    """Best-of-N: the highest reward; ties go to the seeded RNG."""
 
-def best_index(rule: Any, texts: Sequence[str], values: Sequence[float] | None, rng: random.Random) -> int:
-    """Best-of-N: the majority answer without a reward, else the highest reward; ties go to the seeded RNG."""
-
-    if values is None:
-        return vote_index(rule, texts, rng)
     top = max(values)
     return rng.choice([index for index, value in enumerate(values) if value == top])
 
 
-__all__ = ["REWARDS", "Reward", "best_index", "memoized", "text_reward"]
+__all__ = ["REWARDS", "Reward", "best_index", "memoized", "verifier_reward"]

@@ -15,11 +15,12 @@ from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBacken
 
 def test_cli_defaults_and_reward_rules() -> None:
     choices, output = parse([])
-    assert choices == Choices("is", "ar", "vote", "gsm8k") and output == Path("results")
+    assert choices == Choices("is", "ar", "verifier", "gsm8k") and output == Path("results")
     assert parse(["--algorithm", "sample"])[0].reward is None
     assert parse(["--algorithm", "best_of_n", "--reward", "verifier"])[0].label == "best_of_n-verifier"
-    with pytest.raises(SystemExit):
-        parse(["--algorithm", "greedy", "--reward", "vote"])
+    for argv in (["--algorithm", "greedy", "--reward", "verifier"], ["--reward", "vote"]):
+        with pytest.raises(SystemExit):
+            parse(argv)
 
 
 def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
@@ -29,7 +30,7 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
     with pytest.raises(SettingsError, match="unknown keys \\['extra'\\]"):
         check(broken, SCHEMA, "settings")
     broken = copy.deepcopy(settings)
-    del broken["rewards"]["vote"]["pool_size"]
+    del broken["rewards"]["verifier"]["pool_size"]
     with pytest.raises(SettingsError, match="missing keys \\['pool_size'\\]"):
         check(broken, SCHEMA, "settings")
     broken = copy.deepcopy(settings)
@@ -96,7 +97,7 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     model.mkdir()
     (model / "model.safetensors").write_bytes(b"weights")
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
-    settings["rewards"]["vote"]["pool_size"] = 3
+    settings["rewards"]["verifier"]["pool_size"] = 3
     joint = settings["ar"]["algorithms"]["is"]["joint"]
     joint.update(block_sizes=[2, 4], candidate_counts=[2, 4], rollout_counts=[1, 2])
     settings["ar"]["algorithms"]["is"]["chunk_adaptive"].update(initial_block_size=2, initial_candidate_count=2,
@@ -107,12 +108,12 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
 
 AR_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}),
-    ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}), ("best_of_n", "logprob", {}),
+    ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}), ("best_of_n", "logprob", {}),
     ("best_of_n", "consilience", {}),
     ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "thinking"}),
-    ("mh", "vote", {}), ("mh", "verifier", {"proposal": "frozen_history"}),
+    ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
     ("mh", "logprob", {"sampling_scope": "thinking"}), ("mh", "consilience", {}),
-    ("is", "vote", {}), ("is", "verifier", {"planning": "fixed"}), ("is", "logprob", {"planning": "chunk_adaptive"}),
+    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}), ("is", "logprob", {"planning": "chunk_adaptive"}),
     ("is", "consilience", {"planning": "fixed", "sampling_scope": "thinking"}),
 ]
 
@@ -126,6 +127,8 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         ar["algorithms"]["mh"]["proposal"] = options["proposal"]
     if "planning" in options:
         ar["algorithms"]["is"]["planning"] = options["planning"]
+    if "source" in options:
+        ar_settings["rewards"]["verifier"]["source"] = options["source"]
     choices = Choices(algorithm, "ar", reward, "gsm8k")
 
     summary = run(choices, ar_settings, tmp_path / "results")
@@ -137,7 +140,7 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         # The graded text is the answer after the thought, not the whole output.
         assert record["output"]["content"] == "#### 7" and record["correct"] and record["answer"] == "7"
         assert record["cost"]["forward_token_slots"] > 0
-        assert (record["reward"] is None) == (reward is None or (algorithm, reward) == ("best_of_n", "vote"))
+        assert (record["reward"] is None) == (reward is None)
     assert summary["accuracy"] == 1.0 and summary["records"] == 2
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["choices"] == {"algorithm": algorithm, "model": "ar", "reward": reward, "dataset": "gsm8k"}
@@ -157,7 +160,7 @@ def test_extra_draws_resume_the_same_run_and_report_pass_at_k(ar_settings, tmp_p
 
 def test_concurrent_problems_share_a_batching_backend_without_per_problem_cost(ar_settings, tmp_path):
     ar_settings["ar"]["engine"]["continuous_batching"]["workers"] = 2
-    summary = run(Choices("best_of_n", "ar", "vote", "gsm8k"), ar_settings, tmp_path / "results")
+    summary = run(Choices("best_of_n", "ar", "verifier", "gsm8k"), ar_settings, tmp_path / "results")
     records = (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()
     assert sorted(json.loads(line)["problem_id"] for line in records) == ["0", "1"]
     assert all(json.loads(line)["cost"] is None for line in records)

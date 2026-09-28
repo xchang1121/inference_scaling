@@ -52,14 +52,7 @@ SCHEMA: dict[str, Any] = {
         },
     },
     "rewards": {
-        "verifier": {
-            "temperature": float,
-            "source": _Choices({"dataset", "python", "constant"}),
-            "dataset": {"correct": float, "incorrect": float, "unparseable": float},
-            "python": {"factory": _NULLABLE_STR, "options": dict, "requires_reference": bool},
-            "constant": {"value": float},
-        },
-        "vote": {"temperature": float, "pool_size": int},
+        "verifier": {"temperature": float, "source": _Choices({"dataset", "vote"}), "pool_size": int},
         "logprob": {"temperature": float, "score_temperature": float},
         "consilience": {
             "temperature": float,

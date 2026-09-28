@@ -32,7 +32,7 @@ KL 正则化目标：
 ## 快速开始
 
 ```bash
-python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward vote --dataset gsm8k
+python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward verifier --dataset gsm8k
 python -m inference_scaling --algorithm best_of_n --reward verifier
 python -m inference_scaling --algorithm mh_power --dataset math500
 python -m inference_scaling --algorithm is --model dllm --reward verifier --output results
@@ -42,7 +42,7 @@ python -m inference_scaling --algorithm is --model dllm --reward verifier --outp
 | --- | --- | --- |
 | `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
 | `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
-| `--reward` | `verifier`、`vote`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `vote` |
+| `--reward` | `verifier`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `verifier` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
@@ -57,7 +57,7 @@ GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 | `sample` | 基础策略采样一次 | 按 `dllm.sampling` 分块解码一次 |
 | `greedy` | 贪心解码 | 温度 0 的分块解码 |
 | `beam` | token 级 beam search | 按轨迹概率保留的分块 beam |
-| `best_of_n` | $`N`$ 个样本中按奖励选一个；`vote` 时取得票最多的答案 | 同左 |
+| `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
 | `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
 | `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 逐块扩散 IS；候选与补全都来自基础模型 |
@@ -69,13 +69,12 @@ GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
 
 | 奖励 | 定义 | 实现 |
 | --- | --- | --- |
-| `verifier` | 外部奖励来源，即只有模型自身时拿不到的信息：数据集判定器对照参考答案（正确/错误/无答案三个取值）、Python 工厂 $`r=f(x,y)`$（如外部评分模型）或常数 | [`shared/rewards/verifier.py`](src/inference_scaling/shared/rewards/verifier.py) |
-| `vote` | `best_of_n`：候选互相投票，平票在最高票中按种子随机选；`is`/`mh`：与冻结的 `pool_size` 个独立样本答案一致的比例 | [`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
+| `verifier` | 按最终答案评分。默认对照参考答案（oracle：正确为 1，否则为 0）；`rewards.verifier.source = "vote"` 或数据集没有参考答案时改为投票：与模型自身答案一致的比例（`best_of_n` 在候选之间投票，`is`/`mh` 与冻结的 `pool_size` 个独立样本比较） | [`app/rewards.py`](src/inference_scaling/app/rewards.py)、[`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
 | `logprob` | 有效输出 token 的平均对数概率（AR） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
 | `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
-四种奖励都是逐序列的固定分数，因此条件 IS 可以复用保留序列的奖励，MH 的接受率只含奖励差。温度写在各奖励的
-设置中。答案文本取思考段之后的内容；`thinking_mode = "enabled"` 时未完成的思考没有最终答案。
+`is` 与 `mh` 所用的奖励都是逐序列的固定分数（投票用冻结样本池），因此条件 IS 可以复用保留序列的奖励，MH 的
+接受率只含奖励差。温度写在各奖励的设置中。答案文本取思考段之后的内容；`thinking_mode = "enabled"` 时未完成的思考没有最终答案。
 
 ## 数据集
 
@@ -119,8 +118,8 @@ python -m training
 | 阶段 | 内容 | 代码 |
 | --- | --- | --- |
 | `download` | 下载并校验 GSM8K 训练/测试拆分与固定版本的模型权重（Hugging Face） | [`training/download.py`](training/download.py) |
-| `grpo` | 在 GSM8K 训练集上训练 GRPO LoRA，奖励为配置的 verifier；记录墙钟、生成 token、显存与 GPU 功率积分 | [`training/grpo.py`](training/grpo.py) |
-| `vrpo_preferences` | 用 LLaDA 生成候选并按 verifier 选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
+| `grpo` | 在 GSM8K 训练集上训练 GRPO LoRA，奖励为数据集判定的正确性；记录墙钟、生成 token、显存与 GPU 功率积分 | [`training/grpo.py`](training/grpo.py) |
+| `vrpo_preferences` | 用 LLaDA 生成候选并按数据集判定的正确性选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
 | `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |
 
 训练得到的适配器填入推理设置的 `ar.model.adapter` 或 `dllm.model.adapter` 即可评测。
@@ -148,7 +147,7 @@ python -m pytest
 | `src/inference_scaling/datasets/` | 数据集：题目、提示、答案规则与判定器 |
 | `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS、预算 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（logprob、Consilience） |
 | `src/inference_scaling/dllm/` | LLaDA：`algorithms/`（条件扩散 IS、MH、分块 beam）、`backends/`、`training/`（VRPO） |
-| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`budget/`（预算规划）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（verifier、投票、Consilience 算术） |
+| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`budget/`（预算规划）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
 | `settings/` | 推理与训练设置 |
 | `training/` | 训练入口与各阶段 |
 | `tests/` | 分布、实现一致性、端到端运行与结果处理测试 |

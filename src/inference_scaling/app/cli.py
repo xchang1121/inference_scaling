@@ -19,7 +19,7 @@ ALGORITHMS = ("sample", "greedy", "beam", "best_of_n", "mh", "mh_power", "is")
 MODELS = ("ar", "dllm")
 # Algorithms whose target reweights the base model by exp(reward / temperature) or selects by reward.
 REWARD_ALGORITHMS = frozenset({"best_of_n", "mh", "is"})
-DEFAULT_REWARD = "vote"
+DEFAULT_REWARD = "verifier"
 
 
 def parse(argv: Sequence[str] | None = None) -> tuple[Choices, Path]:

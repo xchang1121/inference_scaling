@@ -2,111 +2,69 @@ from __future__ import annotations
 
 import random
 from fractions import Fraction
-from types import SimpleNamespace
 
 import pytest
 
-from inference_scaling.datasets.base import Grade
-from inference_scaling.shared.rewards.verifier import VerifierContext, build_verifier
-from inference_scaling.shared.rewards.vote import answer_groups, pool_agreement_reward, vote_index
+from inference_scaling.app.rewards import best_index, verifier_reward
+from inference_scaling.datasets.base import Grade, Problem
+from inference_scaling.shared.rewards.vote import pool_agreement_reward
 
 
-def _settings(source: str, **overrides) -> dict:
-    settings = {
-        "source": source,
-        "dataset": {"correct": 3.0, "incorrect": -1.0, "unparseable": -2.0},
-        "python": {"factory": None, "options": {}, "requires_reference": False},
-        "constant": {"value": 0.25},
-    }
-    for key, value in overrides.items():
-        settings[key] = {**settings[key], **value}
-    return settings
+class Numeric:
+    """Answers after ``####``, graded against the problem's reference."""
+
+    oracle = True
+
+    @staticmethod
+    def answer(text):
+        return Fraction(text.split("####")[-1]) if "####" in text else None
+
+    @staticmethod
+    def same(left, right):
+        return left == right
+
+    def grade(self, text, problem):
+        answer = self.answer(text)
+        return Grade(None if answer is None else str(answer), answer is not None, answer == Fraction(problem.answer))
 
 
-def test_dataset_verifier_maps_the_grade_to_configured_values() -> None:
-    grades = {"right": Grade("5", True, True), "wrong": Grade("4", True, False), "none": Grade(None, False, False)}
-    verifier = build_verifier(_settings("dataset"), context=VerifierContext("question", "5"), grade=grades.__getitem__)
-    assert verifier.score_batch("question", ["right", "wrong", "none"]) == (3.0, -1.0, -2.0)
-    with pytest.raises(ValueError, match="grader"):
-        build_verifier(_settings("dataset"), context=VerifierContext("question"), grade=None)
+# Each one-token sequence decodes to one of these texts.
+TEXTS = ("#### 2", "#### 3", "no answer", "#### 2.0")
 
 
-def test_constant_verifier_needs_no_dataset_or_reference() -> None:
-    verifier = build_verifier(_settings("constant"), context=VerifierContext("any task"), grade=None)
-    assert verifier.score("prompt", "completion") == 0.25
-    assert verifier.describe() == {"source": "constant", "value": 0.25}
+def _reward(source, dataset=None, pool=None):
+    return verifier_reward({"temperature": 0.1, "source": source, "pool_size": 3}, dataset=dataset or Numeric(),
+                           problem=Problem("0", "q", "2"), answer_text=lambda _prompt, tokens: TEXTS[tokens[0]],
+                           sample_pool=pool)
 
 
-class LengthVerifier:
-    def __init__(self, *, context: VerifierContext, scale: float) -> None:
-        self.context, self.scale = context, scale
-
-    def score(self, prompt: str, completion: str) -> float:
-        return self.scale * len(completion)
-
-    def score_batch(self, prompt: str, completions) -> list[float]:
-        return [self.score(prompt, completion) for completion in completions]
+def test_the_oracle_grades_against_the_reference_answer() -> None:
+    reward = _reward("dataset")
+    assert reward.batch((), [(0,), (1,), (2,), (3,)]) == [1.0, 0.0, 0.0, 1.0]
+    assert reward.description == {"source": "dataset"}
 
 
-def build_length_verifier(*, context: VerifierContext, scale: float = 1.0) -> LengthVerifier:
-    return LengthVerifier(context=context, scale=scale)
+def test_the_vote_agrees_with_a_frozen_pool_or_with_the_scored_batch() -> None:
+    drawn: list[int] = []
+    reward = _reward("vote", pool=lambda size: drawn.append(size) or ["#### 2", "#### 3", "#### 2"])
+    assert drawn == [3] and reward.batch((), [(0,), (1,), (2,)]) == pytest.approx([2 / 3, 1 / 3, 0.0])
+    assert [item["correct"] for item in reward.description["pool"]] == [True, False, True]
+    # Without a pool the candidates vote among themselves, so Best-of-N picks a text of the majority answer.
+    values = _reward("vote").batch((), [(0,), (1,), (2,), (3,)])
+    assert values == pytest.approx([0.5, 0.25, 0.0, 0.5])
+    assert {best_index(values, random.Random(seed)) for seed in range(20)} == {0, 3}
 
 
-def build_reference_callable(*, context: VerifierContext):
-    return lambda _prompt, completion: float(completion == context.reference)
-
-
-def build_nan_verifier(*, context: VerifierContext):
-    return lambda _prompt, _completion: float("nan")
-
-
-def test_python_factory_verifier_sees_the_reference_only_when_it_asks() -> None:
-    settings = _settings("python", python={"factory": f"{__name__}:build_length_verifier", "options": {"scale": 2.0}})
-    verifier = build_verifier(settings, context=VerifierContext("q", "secret"), grade=None)
-    assert verifier.score_batch("q", ["ab", "abc"]) == (4.0, 6.0)
-    assert verifier.describe()["options"] == {"scale": 2.0}
-
-    hidden = _settings("python", python={"factory": f"{__name__}:build_reference_callable"})
-    assert build_verifier(hidden, context=VerifierContext("q", "7"), grade=None).score("q", "7") == 0.0
-    shown = _settings("python", python={"factory": f"{__name__}:build_reference_callable", "requires_reference": True})
-    assert build_verifier(shown, context=VerifierContext("q", "7"), grade=None).score("q", "7") == 1.0
-    with pytest.raises(ValueError, match="requires a reference"):
-        build_verifier(shown, context=VerifierContext("q"), grade=None)
-
-
-def test_verifier_rejects_bad_factories_and_nonfinite_rewards() -> None:
-    with pytest.raises(ValueError, match="module:function"):
-        build_verifier(_settings("python", python={"factory": "no_colon"}), context=VerifierContext("q"), grade=None)
-    reserved = _settings("python", python={"factory": f"{__name__}:build_length_verifier", "options": {"context": 1}})
-    with pytest.raises(ValueError, match="reserved"):
-        build_verifier(reserved, context=VerifierContext("q"), grade=None)
-    nan = build_verifier(_settings("python", python={"factory": f"{__name__}:build_nan_verifier"}),
-                         context=VerifierContext("q"), grade=None)
-    with pytest.raises(ValueError, match="non-finite"):
-        nan.score("q", "x")
-    with pytest.raises(ValueError, match="non-finite"):
-        build_verifier(_settings("constant", constant={"value": float("inf")}), context=VerifierContext("q"), grade=None)
-
-
-NUMERIC = SimpleNamespace(
-    answer=lambda text: Fraction(text.split("####")[-1]) if "####" in text else None,
-    same=lambda left, right: left == right,
-)
-
-
-def test_vote_picks_the_most_voted_answer_and_breaks_ties_at_random() -> None:
-    texts = ["#### 2", "#### 3", "no answer", "#### 2.0"]
-    assert answer_groups(NUMERIC, [NUMERIC.answer(text) for text in texts]) == [[0, 3], [1]]
-    assert {vote_index(NUMERIC, texts, random.Random(seed)) for seed in range(20)} == {0, 3}
-    tied = ["#### 1", "#### 2"]
-    assert {vote_index(NUMERIC, tied, random.Random(seed)) for seed in range(50)} == {0, 1}
-    assert vote_index(NUMERIC, ["x", "y"], random.Random(3)) in {0, 1}
+def test_a_dataset_without_reference_answers_votes() -> None:
+    dataset = Numeric()
+    dataset.oracle = False
+    reward = _reward("dataset", dataset=dataset, pool=lambda size: ["#### 3"] * size)
+    assert reward.description["source"] == "vote" and reward.batch((), [(1,), (0,)]) == [1.0, 0.0]
 
 
 def test_pool_agreement_is_the_fraction_of_agreeing_pool_answers() -> None:
-    reward = pool_agreement_reward(NUMERIC, ["#### 2", "#### 3", "#### 2", "nothing"])
-    assert reward("#### 2") == pytest.approx(0.5)
-    assert reward("#### 3") == pytest.approx(0.25)
+    reward = pool_agreement_reward(Numeric(), ["#### 2", "#### 3", "#### 2", "nothing"])
+    assert reward("#### 2") == pytest.approx(0.5) and reward("#### 3") == pytest.approx(0.25)
     assert reward("no answer") == 0.0
     with pytest.raises(ValueError, match="nonempty pool"):
-        pool_agreement_reward(NUMERIC, [])
+        pool_agreement_reward(Numeric(), [])

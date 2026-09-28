@@ -1,7 +1,7 @@
 """GRPO LoRA training on the GSM8K training split, with a resumable cost record.
 
-The prompt is the GSM8K dataset prompt and the reward is the configured
-verifier, as in inference. Wall time, generated rollout tokens, peak CUDA
+The prompt is the GSM8K dataset prompt and the reward is the dataset's grade,
+the verifier's oracle in inference. Wall time, generated rollout tokens, peak CUDA
 memory and the sampled GPU power integral are recorded so training can be
 compared with the per-query cost of inference-time scaling.
 """
@@ -30,7 +30,6 @@ from inference_scaling.datasets.base import Problem
 from inference_scaling.datasets.gsm8k import GSM8K
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.model.loading import checkpoint_weight_files, resolve_checkpoint_path
-from inference_scaling.shared.rewards.verifier import Verifier, VerifierContext, build_verifier
 
 
 @dataclass
@@ -107,38 +106,25 @@ def _text(value: object) -> str:
 
 
 class VerifierReward:
-    """The configured verifier as a TRL batched reward function.
+    """The dataset's grade as a TRL batched reward function: 1 for a correct completion, else 0.
 
-    Rows carry the reference answer (``reference``) and problem id, so the
-    ``dataset`` source grades each completion as inference does.
+    Rows carry the reference answer (``reference``) and problem id, so each
+    completion is graded as the inference verifier's oracle grades it.
     """
 
-    def __init__(self, settings: Mapping[str, Any], dataset: GSM8K) -> None:
-        self.settings = settings
+    def __init__(self, dataset: GSM8K) -> None:
         self.dataset = dataset
-        self._verifiers: dict[tuple[str, str], Verifier] = {}
         self.calls = self.completions = self.completion_tokens = 0
         self.reward_sum = 0.0
         self.reward_minimum: float | None = None
         self.reward_maximum: float | None = None
 
-    def _verifier(self, prompt: str, reference: str, problem_id: str) -> Verifier:
-        key = (prompt, reference)
-        if key not in self._verifiers:
-            problem = Problem(problem_id, prompt, reference)
-            self._verifiers[key] = build_verifier(
-                self.settings, context=VerifierContext(prompt, reference, {"problem_id": problem_id}),
-                grade=lambda text: self.dataset.grade(text, problem),
-            )
-        return self._verifiers[key]
-
     def __call__(self, prompts: Sequence[object], completions: Sequence[object],
                  completion_ids: Sequence[Sequence[int]] | None = None, *, reference: Sequence[str],
                  problem_id: Sequence[str], **_: object) -> list[float]:
-        rewards = []
-        for prompt, completion, answer, identifier in zip(prompts, completions, reference, problem_id, strict=True):
-            text = _text(prompt)
-            rewards.append(self._verifier(text, str(answer), str(identifier)).score(text, _text(completion)))
+        rewards = [float(self.dataset.grade(_text(completion), Problem(str(identifier), _text(prompt), str(answer))).correct)
+                   for prompt, completion, answer, identifier in zip(prompts, completions, reference, problem_id,
+                                                                     strict=True)]
         self.calls += 1
         self.completions += len(rewards)
         self.completion_tokens += sum(len(tokens) for tokens in completion_ids or ())
@@ -242,7 +228,7 @@ def run(settings: Mapping[str, Any]) -> None:
     tokenizer.padding_side = "left"
     config = GRPOConfig(output_dir=str(output), **trainer_settings, model_init_kwargs={
         **model["model_kwargs"], "local_files_only": True, "trust_remote_code": model["trust_remote_code"]})
-    reward = VerifierReward(grpo["verifier"], train)
+    reward = VerifierReward(train)
     started = time.perf_counter()
     trainer = GRPOTrainer(model=str(base), reward_funcs=reward, args=config, train_dataset=dataset,
                           processing_class=tokenizer,

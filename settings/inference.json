@@ -43,14 +43,7 @@
     }
   },
   "rewards": {
-    "verifier": {
-      "temperature": 0.04,
-      "source": "dataset",
-      "dataset": {"correct": 1.0, "incorrect": 0.0, "unparseable": 0.0},
-      "python": {"factory": null, "options": {}, "requires_reference": false},
-      "constant": {"value": 0.0}
-    },
-    "vote": {"temperature": 0.1, "pool_size": 8},
+    "verifier": {"temperature": 0.1, "source": "dataset", "pool_size": 8},
     "logprob": {"temperature": 0.1, "score_temperature": 1.0},
     "consilience": {
       "temperature": 2.0,

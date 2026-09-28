@@ -22,7 +22,7 @@ from inference_scaling.app.records import (
     checkpoint_metadata_hashes,
     importance_trace,
 )
-from inference_scaling.app.rewards import Reward, best_index, text_reward
+from inference_scaling.app.rewards import Reward, best_index, verifier_reward
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
@@ -63,7 +63,7 @@ class DLLMFamily:
     def __init__(self, settings: Mapping[str, Any], choices: Any, dataset: Dataset) -> None:
         if choices.reward in {"logprob", "consilience"}:
             raise ValueError(f"the {choices.reward} reward reads autoregressive token probabilities; "
-                             "use --model ar, or --reward verifier or vote")
+                             "use --model ar, or --reward verifier")
         self.dllm = settings["dllm"]
         self.choices = choices
         self.dataset = dataset
@@ -117,18 +117,18 @@ class DLLMFamily:
             for index, seed in enumerate(seeds)
         ])
 
-    def _reward(self, problem: Problem, prompt_text: str, prompt: TokenSequence, seeds: SeedStream) -> Reward | None:
-        kind = self.choices.reward
-        if kind is None or (kind == "vote" and self.choices.algorithm == "best_of_n"):
+    def _reward(self, problem: Problem, prompt: TokenSequence, seeds: SeedStream) -> Reward | None:
+        if self.choices.reward is None:
             return None
-        pool: list[str] = []
-        if kind == "vote":
-            samples = self._samples(prompt, self.sampling, [
-                seeds.derive("vote-pool", problem.id, index) for index in range(int(self.reward_settings["pool_size"]))
-            ], f"vote-pool:{problem.id}")
-            pool = [self.answer_text(prompt, sample.token_ids) for sample in samples]
-        return text_reward(kind, self.reward_settings, dataset=self.dataset, problem=problem, prompt_text=prompt_text,
-                           answer_text=self.answer_text, pool=pool)
+
+        def sample_pool(size: int) -> list[str]:
+            samples = self._samples(prompt, self.sampling, [seeds.derive("vote-pool", problem.id, index)
+                                                            for index in range(size)], f"vote-pool:{problem.id}")
+            return [self.answer_text(prompt, sample.token_ids) for sample in samples]
+
+        # Best-of-N votes among its own candidates.
+        return verifier_reward(self.reward_settings, dataset=self.dataset, problem=problem, answer_text=self.answer_text,
+                               sample_pool=None if self.choices.algorithm == "best_of_n" else sample_pool)
 
     def solve(self, problem: Problem, seeds: SeedStream) -> dict[str, Any]:
         algorithm = self.choices.algorithm
@@ -137,7 +137,7 @@ class DLLMFamily:
         seed = seeds.derive(algorithm, problem.id)
         meter = Meter({"base": self.backend})
         with meter.phase("reward"):
-            reward = self._reward(problem, prompt_text, prompt, seeds)
+            reward = self._reward(problem, prompt, seeds)
         with meter.phase("search"):
             tokens, trace, value = getattr(self, "_" + algorithm)(problem, prompt, seed, seeds, reward)
         text = self.answer_text(prompt, tokens)
@@ -188,15 +188,15 @@ class DLLMFamily:
         sequences = [sample.token_ids for sample in samples]
         texts = [self.answer_text(prompt, tokens) for tokens in sequences]
         rng = random.Random(seeds.derive("best_of_n", problem.id, "tie-break"))
-        values = None if reward is None else [float(value) for value in reward.batch(prompt, sequences)]
-        chosen = best_index(self.dataset, texts, values, rng)
+        assert reward is not None
+        values = [float(value) for value in reward.batch(prompt, sequences)]
+        chosen = best_index(values, rng)
         grades = [self.dataset.grade(text, problem) for text in texts]
         return sequences[chosen], {
             "selected_index": chosen,
-            "candidates": [{"answer": grade.answer, "correct": grade.correct,
-                            "reward": None if values is None else values[index]}
+            "candidates": [{"answer": grade.answer, "correct": grade.correct, "reward": values[index]}
                            for index, grade in enumerate(grades)],
-        }, None if values is None else values[chosen]
+        }, values[chosen]
 
     def _mh_power(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         config = self.config

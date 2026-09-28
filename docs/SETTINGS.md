@@ -63,15 +63,9 @@
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `verifier.temperature` | 数 | 外部奖励的温度 |
-| `verifier.source` | `dataset` \| `python` \| `constant` | 外部奖励来源 |
-| `verifier.dataset.correct` / `incorrect` / `unparseable` | 数 | 数据集判定器对正确、错误、无答案的奖励值 |
-| `verifier.python.factory` | 字符串或 `null` | `package.module:function`，以 `factory(context=..., **options)` 调用，返回 `(prompt, completion) -> 分数` 或带 `score`（可选 `score_batch(prompt, completions)`）的对象，例如外部评分模型 |
-| `verifier.python.options` | 对象 | 传给工厂的参数（不能含 `context`） |
-| `verifier.python.requires_reference` | 布尔 | 为真时 `context.reference` 才包含参考答案 |
-| `verifier.constant.value` | 数 | 常数奖励（对照与测试） |
-| `vote.temperature` | 数 | 投票奖励的温度 |
-| `vote.pool_size` | 整数 | `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选互相投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
+| `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
+| `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
+| `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
 | `logprob.temperature` / `logprob.score_temperature` | 数 | 奖励温度；评分策略的温度（1 为模型原始分布）。奖励为有效输出 token 的平均对数概率 |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
@@ -123,7 +117,7 @@
 | `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的参数（如 `enable_thinking`） |
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
-| `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的奖励（`vote`、`verifier`）会回退到 `full` 并记录原因 |
+| `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的 `verifier` 会回退到 `full` 并记录原因 |
 | `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`mh_power`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
 
 ### `ar.algorithms`
@@ -179,6 +173,8 @@
 
 ## `settings/training.json`
 
+GRPO 的奖励与 VRPO 的偏好对都取数据集判定的正确性（正确为 1，否则为 0），即推理 verifier 的 oracle。
+
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `stages` | 数组 | 依次运行的阶段：`download`、`grpo`、`vrpo_preferences`、`vrpo`；各阶段可续跑 |
@@ -191,13 +187,11 @@
 | `grpo.output` / `grpo.resume` | 字符串 / 布尔 | LoRA 输出目录；从最新检查点续跑 |
 | `grpo.lora` | 对象 | `r`、`lora_alpha`、`lora_dropout`、`bias`、`target_modules` |
 | `grpo.trainer` | 对象 | 原样传给 `trl.GRPOConfig`（步数、批大小、生成数、学习率、KL 系数 `beta`、精度与检查点等） |
-| `grpo.verifier` | 对象 | 字段同 `rewards.verifier`（无温度）；`dataset` 来源按每行参考答案评分 |
 | `grpo.power_sample_seconds` | 数 | `nvidia-smi` 功率采样间隔 |
 | `vrpo.model` / `engine` / `prompt` / `sampling` | 对象 | 字段同 `dllm` 的对应部分（模型不含适配器） |
 | `vrpo.max_new_tokens` | 整数 | 候选生成长度与训练补全的截断长度 |
 | `vrpo.preferences.data` / `manifest` | 字符串 | 偏好对 JSONL 与清单 |
 | `vrpo.preferences.selection.count` / `seed` | 整数 | 从训练集抽取的候选题数 |
 | `vrpo.preferences.pairs` / `num_generations` / `include_reference_completion` / `seed` | 整数 / 整数 / 布尔 / 整数 | 目标偏好对数；每题生成数；是否把参考解答作为一个同样评分的候选；生成种子 |
-| `vrpo.verifier` | 对象 | 同 `grpo.verifier` |
 | `vrpo.training.*` | — | `output`、`resume`、`max_steps`、`gradient_accumulation_steps`、ELBO 估计的 `timestep_samples` / `masks_per_timestep` / `antithetic`、`learning_rate`、`beta`、`max_grad_norm`、`save_steps`、`seed`、`gradient_checkpointing` |
 | `vrpo.lora` | 对象 | 同 `grpo.lora` |

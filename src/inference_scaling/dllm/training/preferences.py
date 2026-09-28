@@ -25,8 +25,8 @@ def select_scored_preference_pair(
     """Select the highest- and lowest-reward distinct completions.
 
     A dataset-provided solution may be included as one more scored completion;
-    it is never assumed to be preferred without evaluation by the configured
-    verifier. Equal rewards contain no preference information and return
+    it is never assumed to be preferred without being graded like the
+    candidates. Equal rewards contain no preference information and return
     ``None``.
     """
 

@@ -3,7 +3,7 @@
 ``solve`` renders the dataset prompt with the chat template, runs the chosen
 algorithm inside the configured sampling scope and finishes the answer after a
 thinking segment. Per-problem costs are backend counter deltas by phase:
-``reward`` (the vote pool), ``search`` (the algorithm) and ``finish``.
+``reward`` (the verifier's vote pool), ``search`` (the algorithm) and ``finish``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from inference_scaling.app.records import (
     importance_trace,
     json_sha256,
 )
-from inference_scaling.app.rewards import Reward, best_index, memoized, text_reward
+from inference_scaling.app.rewards import Reward, best_index, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, PowerMHConfig, RewardMHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
@@ -61,7 +61,6 @@ FULL_SUPPORT = frozenset({"mh", "mh_power", "is"})
 @dataclass(frozen=True)
 class _Task:
     problem: Problem
-    prompt_text: str
     prompt: TokenSequence
     maximum: int
     sampling: SamplingConfig
@@ -175,14 +174,14 @@ class ARFamily:
         scope = SamplingScope.from_config(self.raw, self.ar, active=algorithm in SCOPED).for_prompt(prompt)
         # Text rewards and full-scope Consilience read the whole sequence.
         if scope.scope == "thinking" and (
-            reward in {"vote", "verifier"} or (reward == "consilience" and self.reward_settings["scope"] == "full")
+            reward == "verifier" or (reward == "consilience" and self.reward_settings["scope"] == "full")
         ):
             scope = scope.full_fallback("reward_uses_full_sequence")
         return scope
 
     def _reward(self, task: _Task) -> Reward | None:
         kind, settings = self.choices.reward, self.reward_settings
-        if kind is None or (kind == "vote" and self.choices.algorithm == "best_of_n"):
+        if kind is None:
             return None
         # Model rewards read the statistic that the task's backend records.
         model: Any
@@ -197,16 +196,17 @@ class ARFamily:
             # A generated sequence needs a scoring forward only when generation cannot compute the statistic.
             passes = 0 if self.raw.records(statistic, task.sampling) else 1
             return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
-        pool: list[str] = []
-        if kind == "vote":
+
+        def sample_pool(size: int) -> list[str]:
             # Pool seeds do not depend on the algorithm, so algorithms share one pool per draw.
             requests = [GenerationRequest(task.prompt, task.maximum, task.sampling,
                                           task.seeds.derive("vote-pool", task.problem.id, index),
-                                          f"vote-pool:{task.problem.id}:{index}")
-                        for index in range(int(settings["pool_size"]))]
-            pool = [self.answer_text(task.prompt, sample.token_ids) for sample in self.backend.sample_batch(requests)]
-        return text_reward(kind, settings, dataset=self.dataset, problem=task.problem, prompt_text=task.prompt_text,
-                           answer_text=self.answer_text, pool=pool)
+                                          f"vote-pool:{task.problem.id}:{index}") for index in range(size)]
+            return [self.answer_text(task.prompt, sample.token_ids) for sample in self.backend.sample_batch(requests)]
+
+        # Best-of-N votes among its own candidates.
+        return verifier_reward(settings, dataset=self.dataset, problem=task.problem, answer_text=self.answer_text,
+                               sample_pool=None if self.choices.algorithm == "best_of_n" else sample_pool)
 
     def solve(self, problem: Problem, seeds: SeedStream) -> dict[str, Any]:
         algorithm = self.choices.algorithm
@@ -230,7 +230,7 @@ class ARFamily:
             backend = StatisticRecorder(backend, TokenStatistic(
                 SamplingConfig(temperature=float(settings["score_temperature"])),
                 int(settings["top_k"]) if self.choices.reward == "consilience" else None))
-        task = _Task(problem, prompt_text, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend)
+        task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend)
         # Concurrent problems share the backend counters, so only sequential runs have per-problem costs.
         meter = Meter({"base": self.raw} if self.workers == 1 else {})
         with meter.phase("reward"):
@@ -301,15 +301,16 @@ class ARFamily:
         sequences = [sample.token_ids for sample in samples]
         texts = [self.answer_text(task.prompt, tokens) for tokens in sequences]
         rng = random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break"))
-        values = None if reward is None else [float(value) for value in reward.batch(task.prompt, sequences)]
-        chosen = best_index(self.dataset, texts, values, rng)
+        assert reward is not None
+        values = [float(value) for value in reward.batch(task.prompt, sequences)]
+        chosen = best_index(values, rng)
         grades = [self.dataset.grade(text, task.problem) for text in texts]
         return sequences[chosen], {
             "selected_index": chosen,
             "candidates": [{"answer": grade.answer, "correct": grade.correct, "tokens": len(tokens),
-                            "reward": None if values is None else values[index]}
+                            "reward": values[index]}
                            for index, (grade, tokens) in enumerate(zip(grades, sequences, strict=True))],
-        }, None if values is None else values[chosen]
+        }, values[chosen]
 
     def _reference(self, task: _Task) -> Any:
         """The base policy for MH: temperature 1 denotes the task's sampling temperature."""

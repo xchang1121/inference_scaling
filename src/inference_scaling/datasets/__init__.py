@@ -1,8 +1,8 @@
 """Evaluation datasets behind one interface.
 
 A dataset supplies its problems, the prompt text of a problem, an answer rule
-(the vote reward compares answers with it) and a grader against the reference
-answer (used for evaluation and by the dataset verifier). Sources, selection
+(the verifier's vote compares answers with it) and a grader against the reference
+answer (used for evaluation and as the verifier's oracle). Sources, selection
 and prompts come from the dataset's section of ``settings/inference.json``.
 """
 

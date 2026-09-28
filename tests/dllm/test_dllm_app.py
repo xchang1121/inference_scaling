@@ -58,16 +58,16 @@ def dllm_settings(base_settings, tmp_path, monkeypatch):
     algorithms["mh"].update(updates=3)
     algorithms["mh"]["frozen_history"]["samples"] = 2
     algorithms["is"].update(candidate_count=2, rollout_count=2, decision_block_size=2)
-    settings["rewards"]["vote"]["pool_size"] = 2
+    settings["rewards"]["verifier"]["pool_size"] = 2
     monkeypatch.setattr("inference_scaling.app.dllm.load_llada_backend", lambda model, engine: _tiny_backend())
     return settings
 
 
 DLLM_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}), ("mh_power", None, {}),
-    ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}),
-    ("mh", "verifier", {}), ("mh", "vote", {"proposal": "frozen_history"}),
-    ("is", "vote", {}), ("is", "verifier", {}), ("is", "verifier", {"candidate_canvas": "full", "kept_sequence": True}),
+    ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}),
+    ("mh", "verifier", {}), ("mh", "verifier", {"proposal": "frozen_history", "source": "vote"}),
+    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {}), ("is", "verifier", {"candidate_canvas": "full", "kept_sequence": True}),
 ]
 
 
@@ -78,6 +78,8 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
         algorithms["mh"]["proposal"] = options["proposal"]
     if "kept_sequence" in options:
         algorithms["is"].update(options)
+    if "source" in options:
+        dllm_settings["rewards"]["verifier"]["source"] = options["source"]
     summary = run(Choices(algorithm, "dllm", reward, "gsm8k"), dllm_settings, tmp_path / "results")
     records = [json.loads(line) for line in
                (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()]

@@ -25,7 +25,7 @@ def test_training_settings_validate_and_list_known_stages() -> None:
 
 def test_grpo_reward_grades_each_completion_against_its_row_reference(base_settings) -> None:
     dataset = GSM8K(base_settings["datasets"]["gsm8k"])
-    reward = VerifierReward(load_settings()["grpo"]["verifier"], dataset)
+    reward = VerifierReward(dataset)
     prompts = [[{"role": "user", "content": "q0"}]] * 3
     completions = [[{"role": "assistant", "content": text}] for text in ("#### 7", "#### 8", "no answer")]
     values = reward(prompts, completions, completion_ids=[[1, 2], [3], [4, 5, 6]], reference=["7", "7", "7"],

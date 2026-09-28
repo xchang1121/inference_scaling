@@ -1,4 +1,4 @@
-"""VRPO for LLaDA: verifier-scored preference pairs, then a LoRA adapter.
+"""VRPO for LLaDA: preference pairs graded by the dataset (the verifier's oracle), then a LoRA adapter.
 
 ``preferences`` samples candidates from the base model on GSM8K training
 problems and keeps the highest- and lowest-reward distinct completions (the
@@ -12,7 +12,6 @@ import json
 import random
 import time
 from collections.abc import Mapping
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,6 @@ from inference_scaling.dllm.training.vrpo import (
     vrpo_forward_token_slots,
 )
 from inference_scaling.dllm.types import DiffusionGenerationRequest
-from inference_scaling.shared.rewards.verifier import VerifierContext, build_verifier
 from inference_scaling.shared.model.loading import release_accelerator_memory
 from inference_scaling.shared.rng import SeedStream
 
@@ -47,7 +45,7 @@ def preferences(settings: Mapping[str, Any]) -> None:
     dataset = GSM8K({**settings["gsm8k"]["train"], "selection": options["selection"]})
     data_path, manifest_path = Path(str(options["data"])), Path(str(options["manifest"]))
     effective = {"vrpo": {key: vrpo[key] for key in ("model", "engine", "prompt", "sampling", "max_new_tokens",
-                                                     "preferences", "verifier")},
+                                                     "preferences")},
                  "train": dataset.describe(), "weight_sha256": pinned_weight_hashes(vrpo["model"], Path(str(settings["hash_cache_dir"]))),
                  "metadata_sha256": checkpoint_metadata_hashes(Path(str(vrpo["model"]["path"]))),
                  "source_sha256": json_sha256(source_sha256())}
@@ -86,22 +84,20 @@ def preferences(settings: Mapping[str, Any]) -> None:
                     for draw in range(int(options["num_generations"]))
                 ])
                 texts = [backend.decode(sample.token_ids) for sample in samples]
-                verifier = build_verifier(vrpo["verifier"], context=VerifierContext(prompt_text, problem.answer),
-                                          grade=partial(dataset.grade, problem=problem))
                 solution = str(problem.metadata["solution"])
-                rewards = verifier.score_batch(prompt_text, [*texts, solution] if reference_included else texts)
+                grades = [dataset.grade(text, problem) for text in ([*texts, solution] if reference_included else texts)]
+                rewards = [float(grade.correct) for grade in grades]
                 pair = select_scored_preference_pair(
                     candidate_texts=texts, candidate_rewards=rewards[:len(texts)],
                     reference_text=solution if reference_included else None,
                     reference_reward=rewards[-1] if reference_included else None,
                 )
-                grades = [dataset.grade(text, problem) for text in texts]
                 record: dict[str, Any] = {
                     "fingerprint": fingerprint, "problem_id": problem.id, "question": problem.question,
                     "reference": problem.answer,
                     "reference_completion_reward": rewards[-1] if reference_included else None,
                     "candidates": [{"text": text, "answer": grade.answer, "correct": grade.correct, "reward": reward}
-                                   for text, grade, reward in zip(texts, grades, rewards[:len(texts)], strict=True)],
+                                   for text, grade, reward in zip(texts, grades, rewards, strict=False)],
                     "status": "skipped_equal_rewards",
                 }
                 if pair is not None:

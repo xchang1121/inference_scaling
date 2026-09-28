@@ -107,12 +107,6 @@
       "optim": "adamw_torch_fused",
       "dataloader_num_workers": 0
     },
-    "verifier": {
-      "source": "dataset",
-      "dataset": {"correct": 1.0, "incorrect": 0.0, "unparseable": 0.0},
-      "python": {"factory": null, "options": {}, "requires_reference": false},
-      "constant": {"value": 0.0}
-    },
     "power_sample_seconds": 2.0
   },
   "vrpo": {
@@ -152,12 +146,6 @@
       "num_generations": 4,
       "include_reference_completion": true,
       "seed": 20260808
-    },
-    "verifier": {
-      "source": "dataset",
-      "dataset": {"correct": 1.0, "incorrect": 0.0, "unparseable": 0.0},
-      "python": {"factory": null, "options": {}, "requires_reference": false},
-      "constant": {"value": 0.0}
     },
     "training": {
       "output": "models/LLaDA-MoE-7B-A1B-Instruct-VRPO-GSM8K",

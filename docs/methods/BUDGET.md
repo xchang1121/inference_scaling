@@ -219,9 +219,9 @@ $`c_z=\hat\ell+s(P+L+\hat\ell)`$、$`c_u=0`$。完成预留 $`c_0+M_{\min}c_z`$ 
 第 2 节按可达前缀与预算状态条件化的逐步论证仍然适用。前面步骤超支时，规划器至少按完成预留看待剩余预算，
 完成序列不会被拒绝。
 
-这是请求级的前向 token 位置账本，不是任意后端的实际 FLOPs。`logprob` 与 `consilience` 各按一次完整序列评分计
-（$`s=1`$），`verifier` 与 `vote` 按文本计算（$`s=0`$）；`python` 来源 verifier 的内部计算（例如外部评分模型）和
-`vote` 样本池的生成都不进入账本。分块评分重复预填充、额外模型调用和后端内部实现可能使实测成本与账本不同；
+这是请求级的前向 token 位置账本，不是任意后端的实际 FLOPs。`logprob` 与 `consilience` 在后端能于生成时算出所读的
+逐 token 统计量时不计评分（$`s=0`$，见[算法文档](ALGORITHMS.md#alg-token-statistics)），否则各按一次完整序列评分计
+（$`s=1`$）；`verifier` 按文本计算（$`s=0`$），投票样本池的生成不进入账本。分块评分重复预填充、额外模型调用和后端内部实现可能使实测成本与账本不同；
 实际开销由后端计数器另外报告（记录的 `cost.phases`）。
 
 0 号候选的块及其保留补全已在之前的步骤生成并评分，实际记账不再计入。规划仍按 $`M`$ 个候选与 $`MK`$ 条补全
@@ -250,7 +250,7 @@ $`T`$ 越大，预留越早耗尽预算，调度越早进入块长为 $`T-L`$ �
 ```
 
 预填充、解码、评分和批量填充均按后端实际执行记录；该估算省略注意力的长度平方项及逐元素计算。
-墙钟、吞吐和显存独立测量。比较应包含长度测量、初始估计、`vote` 样本池和奖励评分。
+墙钟、吞吐和显存独立测量。比较应包含长度测量、初始估计、投票样本池和奖励评分。
 相同计划预算不代表相同实际 FLOPs；正式实验需同时给出二者。
 
 联合调度只接入 AR 的 `is`，要求同模型 on-policy 补全和固定逐序列奖励。`ar.output.sampling_scope = "thinking"`
@@ -266,7 +266,7 @@ $`K_m`$ 与 dLLM 块长适配均未接入。共享选择器不绑定模型族，
 联合预算是 AR `is` 的默认规划，统一入口的默认选择即运行它：
 
 ```bash
-python -m inference_scaling --algorithm is --model ar --reward vote --dataset gsm8k
+python -m inference_scaling --algorithm is --model ar --reward verifier --dataset gsm8k
 ```
 
 规划方式由 `ar.algorithms.is.planning` 选择：`fixed` 使用 `ar.algorithms.is.fixed` 中固定的 $`M,K,B_{\rm blk}`$，不做
@@ -352,7 +352,7 @@ result = run_joint_budget_is(
 )
 ```
 
-`reward(prompt_tokens, sequences)` 批量返回完整序列的奖励；它必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
+`reward(prompt_tokens, sequences)` 批量返回完整序列的奖励；它必须是固定逐序列函数。verifier 投票因此先冻结一个独立样本池；
 直接在当前候选池内重新统计多数标签会改变候选权重之间的依赖关系，不适用第 2 节证明。
 
 | 职责 | 代码 / 测试 |

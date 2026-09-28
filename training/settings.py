@@ -18,7 +18,6 @@ SETTINGS_PATH = Path("settings/training.json")
 STAGES = ("download", "grpo", "vrpo_preferences", "vrpo")
 
 _NULLABLE_STR = (str, None)
-_VERIFIER = {key: value for key, value in INFERENCE_SCHEMA["rewards"]["verifier"].items() if key != "temperature"}
 _LORA = {"r": int, "lora_alpha": int, "lora_dropout": float, "bias": str, "target_modules": [str]}
 
 SCHEMA: dict[str, Any] = {
@@ -55,7 +54,6 @@ SCHEMA: dict[str, Any] = {
         "lora": _LORA,
         # Passed to trl.GRPOConfig unchanged; TRL validates the names.
         "trainer": dict,
-        "verifier": _VERIFIER,
         "power_sample_seconds": float,
     },
     "vrpo": {
@@ -74,7 +72,6 @@ SCHEMA: dict[str, Any] = {
             "include_reference_completion": bool,
             "seed": int,
         },
-        "verifier": _VERIFIER,
         "training": {
             "output": str,
             "resume": bool,

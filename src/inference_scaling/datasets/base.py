@@ -35,12 +35,14 @@ def file_sha256(path: Path) -> str:
 class Dataset(ABC):
     """Problems, their prompt text, an answer rule and a grader.
 
-    ``answer``/``same`` form the answer rule the vote reward compares answers
-    with; ``grade`` checks a text against the reference answer and is used for
-    evaluation and by the dataset verifier.
+    ``answer``/``same`` form the answer rule the verifier's vote compares
+    answers with; ``grade`` checks a text against the reference answer and is
+    used for evaluation and as the verifier's oracle.
     """
 
     name: str
+    # Whether problems carry reference answers; a dataset without them has no oracle, so the verifier votes.
+    oracle = True
 
     def __init__(self, settings: Mapping[str, Any], problems: tuple[Problem, ...], source_sha256: str) -> None:
         if str(settings["prompt_template"]).count("{question}") != 1:

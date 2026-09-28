@@ -114,14 +114,14 @@ $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切�
 | `sample` | 基础模型分布 $`p`$ | 基线分布 | 按 `ar.sampling` 抽样一次 | 按 `dllm.sampling` 分块解码一次 |
 | `greedy` | 逐位置最大概率项 | 确定性基线 | 原生贪心解码 | 温度 0 的分块解码 |
 | `beam` | 累计对数概率最高的前缀 | 确定性搜索 | token 级 beam search | 按轨迹概率保留的分块 beam |
-| `best_of_n` | 式 (3) 或答案投票 | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励或投票选择 | 同左 |
+| `best_of_n` | 式 (3) | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励选择（verifier 投票时即多数投票） | 同左 |
 | `mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
 | `mh_power` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
 | `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：保留序列时同 AR，否则候选取完整画布时 $`K,M\to\infty`$ 趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），可选完整画布候选与保留序列 |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
-`--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`vote`、`logprob`、`consilience`（第 9 节），
-dLLM 只支持前两种。默认运行 `--algorithm is --model ar --reward vote --dataset gsm8k`；AR 的 `is` 默认采用联合预算
+`--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`logprob`、`consilience`（第 9 节），
+dLLM 只支持 `verifier`。默认运行 `--algorithm is --model ar --reward verifier --dataset gsm8k`；AR 的 `is` 默认采用联合预算
 规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
@@ -129,7 +129,7 @@ logit adjustment 只作理论参考，未接入统一入口。源码路径均位
 ### 2.1 统一入口的执行规则
 
 ```bash
-python -m inference_scaling --algorithm is --model ar --reward vote --dataset gsm8k --output results
+python -m inference_scaling --algorithm is --model ar --reward verifier --dataset gsm8k --output results
 ```
 
 命令行只选择算法、模型族、奖励和数据集；其余参数全部位于 `settings/inference.json`，缺失、未知或类型不符的
@@ -140,10 +140,10 @@ python -m inference_scaling --algorithm is --model ar --reward vote --dataset gs
    `ar.engine.context_window`）的较小值；dLLM 先与 `dllm.max_new_tokens` 取较小值，再取不超过它的
    `dllm.sampling.block_length` 最大整数倍。
 2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`mh_power` 与 `is` 只对思考段采样，
-   最终内容随后由基础模型生成。`vote`、`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
+   最终内容随后由基础模型生成。`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
    `full` 并记录原因 `reward_uses_full_sequence`。
-3. **奖励阶段**：按 `--reward` 构造逐序列奖励。`vote` 用于 `is` 或 `mh` 时，先从基础模型独立生成
-   `rewards.vote.pool_size` 条样本并冻结为投票池；池的随机种子与算法无关，同一重复下各算法共用同一池。
+3. **奖励阶段**：按 `--reward` 构造逐序列奖励。verifier 投票用于 `is` 或 `mh` 时，先从基础模型独立生成
+   `rewards.verifier.pool_size` 条样本并冻结为投票池；池的随机种子与算法无关，同一重复下各算法共用同一池。
 4. **搜索阶段**：运行所选算法，得到一条完整输出。
 5. **收尾与评测**：思考范围下补生成最终内容。数据集评分器只评测答案文本（完整思考段之后的内容；
    `ar.output.thinking_mode = "enabled"` 时，未结束的思考没有最终答案），给出 `answer`、`parseable` 与 `correct`。
@@ -233,7 +233,7 @@ flowchart LR
 | 第一步 | $`M`$ | $`M(K-1)`$ | $`MK`$ |
 | 后续每步 | $`M-1`$ | $`M(K-1)`$ | $`MK-1`$ |
 
-补全在生成时已返回基础模型概率，不需要重评分。`verifier` 与 `vote` 只读取答案文本；`logprob` 与 `consilience`
+补全在生成时已返回基础模型概率，不需要重评分。`verifier` 只读取答案文本；`logprob` 与 `consilience`
 读取的逐 token 统计量由生成一并算出（见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
@@ -257,7 +257,7 @@ flowchart LR
 | $`K`$ | `ar.algorithms.is.fixed.rollout_count`、`dllm.algorithms.is.rollout_count`；联合预算网格 `ar.algorithms.is.joint.rollout_counts` | 每个候选的 rollout 数 | 减少条件权重噪声，增加补全成本 |
 | $`N`$ | `ar.algorithms.best_of_n.samples`、`dllm.algorithms.best_of_n.samples` | Best-of-$`N`$ 的独立样本数 | 更接近奖励最大化，生成成本线性增加 |
 | $`\lambda`$ | `ar.algorithms.mh.frozen_history.mixture`、`dllm.algorithms.mh.frozen_history.mixture` | 冻结历史分量的比例 | 提高历史命中率，仍需完整混合概率 |
-| — | `rewards.vote.pool_size` | `vote` 奖励的冻结样本池大小 | 一致比例更稳定，奖励阶段生成成本增加 |
+| — | `rewards.verifier.pool_size` | verifier 投票的冻结样本池大小 | 一致比例更稳定，奖励阶段生成成本增加 |
 | — | `ar.algorithms.mh_power.proposal_temperature` | 幂目标 MH 的 proposal 温度 | 改变接受率与多样性 |
 | — | `ar.sampling.temperature` | 基础分布的温度 | 改变多样性、接受率和目标本身 |
 | — | `ar.engine.continuous_batching.max_batch_size` / `max_batch_tokens`、`ar.engine.transformers.max_score_batch_size` | 生成与评分批量 | 提高 GPU 利用率，也可能增加填充与峰值显存 |
@@ -270,7 +270,7 @@ flowchart LR
 | 方法族 | 主要文献 | 本仓库中的关系 |
 | --- | --- | --- |
 | beam search | [Freitag and Al-Onaizan (2017)](https://aclanthology.org/W17-3207/) | 作为确定性搜索基线 |
-| 自一致性（self-consistency） | [Wang et al. (2023)](https://openreview.net/pdf?id=1PL1NIMMrw) | `vote` 奖励：Best-of-$`N`$ 的答案投票，以及与冻结样本池的一致比例 |
+| 自一致性（self-consistency） | [Wang et al. (2023)](https://openreview.net/pdf?id=1PL1NIMMrw) | verifier 的投票来源：Best-of-$`N`$ 的多数投票，以及与冻结样本池的一致比例 |
 | Consilience 置信度轨迹 | [Kong et al. (2026)](https://arxiv.org/abs/2608.09898)；[代码](https://github.com/LechengKong/consilience) | 由同一模型的 top-$`K`$ token 概率构造固定逐序列奖励，不使用外部 verifier |
 | Metropolis--Hastings | [Hastings (1970)](https://doi.org/10.1093/biomet/57.1.97) | 用于幂分布和显式奖励目标的后缀转移 |
 | 重要性采样与全支持混合分布 | [Hesterberg (1995)](https://doi.org/10.1080/00401706.1995.10484303) | 用于条件奖励权重和覆盖完整支持集的冻结历史 proposal |
@@ -297,20 +297,20 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励选择一�
 
 <p align="right">式 (3)</p>
 
-式 (3) 随 $`N`$ 增大趋向奖励最大化。`--reward vote` 时不计算式 (3)，而按数据集的答案规则投票，选择得票最多的答案；
-无法解析的答案不投票。最高奖励或最高票出现平票时，按固定种子在并列候选中均匀选取。`logprob` 与 `consilience`
+式 (3) 随 $`N`$ 增大趋向奖励最大化。verifier 投票时，每个候选的奖励是 $`N`$ 个候选中与它答案相同的比例，式 (3)
+因而选出得票最多的答案（多数投票）；无法解析的答案得 0。最高奖励出现平票时，按固定种子在并列候选中均匀选取。`logprob` 与 `consilience`
 读取生成时算出的逐 token 统计量，不增加前向计算。
 
 ### 3.2 GRPO 与 VRPO 对照
 
-GRPO 对照使用同一基础模型和 GSM8K 训练集，奖励为 `settings/training.json` 中的 `grpo.verifier`，来源与推理的
-`rewards.verifier` 相同（第 9 节），默认按参考答案判定数值正确性。若忽略参数化限制，一个带 KL 正则的理想策略
+GRPO 对照使用同一基础模型和 GSM8K 训练集，奖励为数据集判定的正确性，即第 9 节 verifier 的 oracle：按参考答案
+判定数值正确性。若忽略参数化限制，一个带 KL 正则的理想策略
 优化问题具有式 (1) 的形式；实际 GRPO 只通过有限 rollout、组内相对优势和有限梯度更新去近似该目标。训练
 FLOPs 与训练后采样 FLOPs 分别统计；单次推理成本指训练完成后的生成成本。
 
 训练得到固定策略 $`p_{\theta_{\mathrm{GRPO}}}`$ 的 LoRA 适配器。把它填入 `ar.model.adapter` 后，分别以
 `--algorithm sample`（温度 1 随机采样）和 `--algorithm greedy`（逐 token 取最大概率项）评测。dLLM 的 VRPO 对照由
-`vrpo_preferences` 阶段构造 verifier 偏好对、`vrpo` 阶段训练适配器，填入 `dllm.model.adapter` 后同样评测。
+`vrpo_preferences` 阶段按正确性构造偏好对、`vrpo` 阶段训练适配器，填入 `dllm.model.adapter` 后同样评测。
 
 训练入口为 `python -m training`，按 `settings/training.json` 的 `stages` 依次运行。GRPO 位于
 [`training/grpo.py`](../../training/grpo.py)，VRPO 位于 [`training/vrpo.py`](../../training/vrpo.py) 与
@@ -533,8 +533,8 @@ $`p(z,u\mid x,g)e^{r(g,z,u)/\tau}`$，即式 (1) 给定前缀 $`g`$ 的条件分
 - 从目标分布出发，一轮扫描后仍是目标分布；`test_conditional_is.py` 在可枚举模型上核对这一点；
 - 第一步之后，每一步都不增大输出分布到目标的 KL 散度，且每一步结束时都有一条可直接输出的完整序列。
 
-这要求奖励只依赖被评分的序列，因为保留补全的奖励会被后续步骤复用。第 9 节的四种奖励都满足这一条件；
-`vote` 的样本池在算法运行前冻结，不随当前候选变化。
+这要求奖励只依赖被评分的序列，因为保留补全的奖励会被后续步骤复用。第 9 节的三种奖励都满足这一条件；
+verifier 投票的样本池在算法运行前冻结，不随当前候选变化。
 
 $`K`$ 在这里既估计块的价值，也提供候选答案：增大 $`K`$ 只是增加同一块下的完整后缀，因此宜取 1 或 2，
 把预算用在 $`M`$ 上。它相对整序列 SIR 是否更省，取决于前缀计算是否复用：后续步骤的新后缀共享已固定的
@@ -700,52 +700,46 @@ proposal 与当前状态无关，全部 proposal 在一次批量调用中生成�
 <a id="alg-rewards"></a>
 ## 9. 奖励信号
 
-`--reward` 选择四种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
-$`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
-奖励，MH 的接受率只含奖励差。`verifier` 与 `vote` 读取答案文本，由
+`--reward` 选择三种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
+$`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。`mh` 与 `is` 所用的奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS
+可以复用保留补全的奖励，MH 的接受率只含奖励差。`verifier` 读取答案文本，由
 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 为两个模型族构造；`logprob` 与 `consilience` 读取模型
 自身的 token 概率，只用于 AR，由 [`app/ar.py`](../../src/inference_scaling/app/ar.py) 构造。
 
 | 奖励 | 定义 | 设置 | 模型族与成本 |
 | --- | --- | --- | --- |
-| `verifier` | 外部来源：数据集评分器对照参考答案、Python 工厂 $`r=f(x,y)`$ 或常数 | `rewards.verifier.source` 及同名子表 | AR 与 dLLM；按文本计算，不计模型前向 |
-| `vote` | `best_of_n`：候选按答案投票；`is`、`mh`：与冻结样本池答案一致的比例 | `rewards.vote.pool_size` | AR 与 dLLM；样本池在奖励阶段生成并单独计量 |
+| `verifier` | 最终答案对照参考答案（oracle）或与模型自身答案一致的比例（投票） | `rewards.verifier.*` | AR 与 dLLM；按文本计算，不计模型前向；投票样本池在奖励阶段生成并单独计量 |
 | `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；读生成时算出的逐 token 统计量（见[下文](#alg-token-statistics)） |
 | `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；同上，统计量为逐 token 的 top-$`K`$ 置信度 |
 
 ### verifier
 
-[`shared/rewards/verifier.py`](../../src/inference_scaling/shared/rewards/verifier.py) 按 `rewards.verifier.source`
-为每个提示构造一个 verifier，并检查每个输出都是有限实数：
+verifier 按最终答案评分，`rewards.verifier.source` 选择参照：
 
-- `dataset`：数据集评分器对照题目参考答案，按正确、错误、无法解析分别取
-  `rewards.verifier.dataset.{correct,incorrect,unparseable}`；GSM8K 比较最终数值，MATH-500 使用 Math-Verify；
-- `python`：`rewards.verifier.python.factory` 以 `package.module:function` 指向可信本地工厂，调用
-  `factory(context=context, **options)`，返回可调用对象或带 `score`（可选 `score_batch`）的对象，例如外部评分模型；
-  只有 `requires_reference = true` 时，`context` 才包含参考答案；
-- `constant`：返回 `rewards.verifier.constant.value`，用于集成测试与无奖励对照。
-
-MH、IS 和 dLLM 算法只接收构造后的统一奖励回调。训练沿用同一组来源（`settings/training.json` 的 `grpo.verifier` 与
-`vrpo.verifier`，不含温度）：GRPO 把它包装为 TRL 的批量奖励，并记录奖励调用数、生成 token 数和奖励均值；VRPO
-偏好构造对每条生成调用同一 verifier，选择最高分与最低分文本。公开训练集解答只有在
-`vrpo.preferences.include_reference_completion = true` 时作为额外候选进入同一评分过程；关闭该字段后，偏好对只由
-模型生成与 verifier 分数确定。
-
-### vote
-
-`best_of_n` 直接对候选投票（第 3.1 节）。用于 `is` 与 `mh` 时，奖励是与冻结样本池的一致比例：
+- `dataset`（默认）：数据集评分器对照题目参考答案（oracle），正确为 1，错误或无法解析为 0；GSM8K 比较最终数值，
+  MATH-500 使用 Math-Verify。数据集没有参考答案（`Dataset.oracle` 为假）时改为投票；
+- `vote`：不读参考答案，参照模型自身的答案。`best_of_n` 不另生成样本，参照就是这 $`N`$ 个候选：每个候选的奖励为
+  同答案候选的比例，取最大者即多数投票（第 3.1 节）。用于 `is` 与 `mh` 时，奖励是与冻结样本池的一致比例：
 
 ```math
 r_{\mathrm{vote}}(x,y)=\frac1P\sum_{j=1}^{P}
 \mathbf 1\{a(y)\ne\varnothing,\ a(y)\equiv a(y^{(j)})\},
 ```
 
-其中 $`P`$ 为 `rewards.vote.pool_size`，$`y^{(j)}`$ 是算法运行前从基础模型独立生成并冻结的样本，$`a(y)`$ 为答案文本中的
+其中 $`P`$ 为 `rewards.verifier.pool_size`，$`y^{(j)}`$ 是算法运行前从基础模型独立生成并冻结的样本，$`a(y)`$ 为答案文本中的
 最终答案，$`\equiv`$ 为数据集的答案规则：GSM8K 比较最终数值；MATH-500 先把答案解析为规范形式，形式相同即等价，
 否则用 Math-Verify 判断，结论按形式对缓存。无法解析的答案
 得 0。样本池在运行期间固定，奖励因而是逐序列的固定函数；样本池的生成成本记入奖励阶段
-（`cost.phases.reward`），不计入联合预算 IS 的 `forward_token_budget`。实现位于
-[`shared/rewards/vote.py`](../../src/inference_scaling/shared/rewards/vote.py)。
+（`cost.phases.reward`），不计入联合预算 IS 的 `forward_token_budget`。
+
+两种参照共用温度 `rewards.verifier.temperature`（默认 0.1）：oracle 奖励只取 0 或 1，正确与错误序列的权重相差
+$`e^{10}\approx 2.2\times10^4`$ 倍，接近只在正确序列中采样；投票奖励以 $`1/P`$ 为步长，$`P=8`$ 时多一票权重乘
+$`e^{1.25}\approx 3.5`$，保留对多数的软偏好。verifier 由 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py)
+为两个模型族构造，投票位于 [`shared/rewards/vote.py`](../../src/inference_scaling/shared/rewards/vote.py)。训练不读
+`rewards.verifier`：GRPO 的奖励与 VRPO 的偏好构造都取数据集判定的正确性。GRPO 把它包装为 TRL 的批量奖励，并记录
+奖励调用数、生成 token 数和奖励均值；VRPO 选择得分最高与最低的文本。公开训练集解答只有在
+`vrpo.preferences.include_reference_completion = true` 时作为额外候选进入同一评分过程；关闭该字段后，偏好对只由
+模型生成与其正确性确定。
 
 ### 长度归一化对数概率
 
@@ -926,7 +920,7 @@ ScoreRequest(prefix, continuations, sampling)
 共同前缀长度和最终数值结果记录。
 
 预填充、解码与完整序列评分分别计数；墙钟、显存和吞吐单独报告。统一入口按阶段记录后端计数器的差值：
-`reward`（`vote` 样本池）、`search`（算法本身）与 `finish`（思考段之后的最终内容），写入记录的 `cost.phases`，并按模型
+`reward`（verifier 投票的样本池）、`search`（算法本身）与 `finish`（思考段之后的最终内容），写入记录的 `cost.phases`，并按模型
 角色（AR 为 `base`，dLLM 另有 `proposal`）汇总前向 token 位置数与 FLOPs。多个题目并发共享后端时，计数器无法分到
 单题，`cost` 为 `null`。前向 token/FLOPs 的定义、预算预留量与实际执行成本的区别，统一见
 [BUDGET.md 第 4 节](BUDGET.md#budget-accounting)。
@@ -1151,7 +1145,7 @@ logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、C
 | 逐步候选与 IS 权重 | [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py) | [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、[`candidates.py`](../../src/inference_scaling/arllm/algorithms/candidates.py) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_conditional_is.py`、`dllm/test_algorithms.py` |
 | 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py`、`test_joint_budget_cost_policy.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py)、[`mh_acceleration.py`](../../src/inference_scaling/arllm/algorithms/mh_acceleration.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py)、[`mh_acceleration.py`](../../src/inference_scaling/dllm/algorithms/mh_acceleration.py) | `test_shared_mh.py`、`test_mh.py`、`test_mh_acceleration.py`、`dllm/test_search.py`、`dllm/test_dllm_mh_acceleration.py` |
-| 奖励 | verifier、投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/) | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
+| 奖励 | 投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/)，verifier 由 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 构造 | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
 | 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`dllm/test_llada_backend.py` |
 | 输出与范围 | 分段、提示与生成上限位于 [`shared/model/`](../../src/inference_scaling/shared/model/) | [`output.py`](../../src/inference_scaling/arllm/output.py)、[`scope.py`](../../src/inference_scaling/arllm/scope.py) | — | `test_output_segments.py`、`test_sampling_scope.py`、`test_long_scoring.py` |
 | 训练对照 | 设置与校验位于 [`training/settings.py`](../../training/settings.py) | [`training/grpo.py`](../../training/grpo.py) | [`training/vrpo.py`](../../training/vrpo.py)、[`dllm/training/`](../../src/inference_scaling/dllm/training/) | `test_training.py`、`dllm/test_vrpo.py`、`dllm/test_preferences.py` |

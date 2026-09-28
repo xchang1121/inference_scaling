@@ -2,5 +2,5 @@
 
 ``sampling`` (algorithm kernels), ``budget`` (forward-token planning of IS),
 ``model`` (loading, prompting, generation limits, output parsing) and
-``rewards`` (verifiers, votes and Consilience arithmetic).
+``rewards`` (the verifier's vote and Consilience arithmetic).
 """
