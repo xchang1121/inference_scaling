@@ -227,7 +227,9 @@
       "is": {
         "candidate_count": 8,
         "rollout_count": 3,
-        "decision_block_size": 48
+        "decision_block_size": 48,
+        "candidate_canvas": "block",
+        "kept_sequence": false
       }
     }
   }

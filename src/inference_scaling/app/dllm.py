@@ -243,7 +243,9 @@ class DLLMFamily:
             config=DiffusionISConfig(candidate_count=int(config["candidate_count"]),
                                      rollout_count=int(config["rollout_count"]),
                                      block_size=min(int(config["decision_block_size"]), self.length),
-                                     total_length=self.length, reward_temperature=reward.temperature),
+                                     total_length=self.length, reward_temperature=reward.temperature,
+                                     candidate_canvas=config["candidate_canvas"],
+                                     kept_sequence=bool(config["kept_sequence"])),
             sampling=self.sampling, seed=seed, reward=reward.batch,
         )
         # The last block completes the sequence, so its single empty completion carries the output's reward.

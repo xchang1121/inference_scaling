@@ -67,7 +67,7 @@ DLLM_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}), ("mh_power", None, {}),
     ("best_of_n", "vote", {}), ("best_of_n", "verifier", {}),
     ("mh", "verifier", {}), ("mh", "vote", {"proposal": "frozen_history"}),
-    ("is", "vote", {}), ("is", "verifier", {}),
+    ("is", "vote", {}), ("is", "verifier", {}), ("is", "verifier", {"candidate_canvas": "full", "kept_sequence": True}),
 ]
 
 
@@ -76,6 +76,8 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
     algorithms = dllm_settings["dllm"]["algorithms"]
     if "proposal" in options:
         algorithms["mh"]["proposal"] = options["proposal"]
+    if "kept_sequence" in options:
+        algorithms["is"].update(options)
     summary = run(Choices(algorithm, "dllm", reward, "gsm8k"), dllm_settings, tmp_path / "results")
     records = [json.loads(line) for line in
                (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()]

@@ -6,6 +6,7 @@ The reverse-diffusion sampling policy lives in :mod:`inference_scaling.dllm.conf
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from inference_scaling.shared.config import require_positive
 
@@ -17,6 +18,10 @@ class DiffusionISConfig:
     block_size: int
     total_length: int
     reward_temperature: float
+    # "block": a candidate is requested alone; "full": it is cut from a complete output of the remaining canvas.
+    candidate_canvas: Literal["block", "full"]
+    # Keep one complete sequence between steps (conditional IS).
+    kept_sequence: bool
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -24,6 +29,10 @@ class DiffusionISConfig:
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
+        if self.candidate_canvas not in ("block", "full"):
+            raise ValueError("candidate_canvas must be 'block' or 'full'")
+        if self.kept_sequence and self.candidate_canvas != "full":
+            raise ValueError("kept_sequence needs candidate_canvas 'full': candidate 0 comes from a complete output")
 
 
 @dataclass(frozen=True, slots=True)

@@ -215,6 +215,8 @@ SCHEMA: dict[str, Any] = {
                 "candidate_count": int,
                 "rollout_count": int,
                 "decision_block_size": int,
+                "candidate_canvas": _Choices({"block", "full"}),
+                "kept_sequence": bool,
             },
         },
     },

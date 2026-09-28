@@ -117,7 +117,7 @@ $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切�
 | `best_of_n` | 式 (3) 或答案投票 | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励或投票选择 | 同左 |
 | `mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
 | `mh_power` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
-| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：$`K,M\to\infty`$ 时趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），候选与补全都来自基础模型 |
+| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：保留序列时同 AR，否则候选取完整画布时 $`K,M\to\infty`$ 趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），可选完整画布候选与保留序列 |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
 `--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`vote`、`logprob`、`consilience`（第 9 节），
@@ -624,12 +624,27 @@ logit 更新见 [Just-In-Time Reinforcement Learning，Li et al. (2026)](https:/
 <a id="alg-dllm-is"></a>
 ## 7. dLLM 逐块 IS
 
-dLLM 的 `is` 对式 (7) 执行逐块 SIR。每一步从基础模型按 `dllm.sampling` 生成 $`M`$ 个决策块候选，块长
-`dllm.algorithms.is.decision_block_size` 须为原生扩散块长 `dllm.sampling.block_length` 的整数倍；每个候选用同一策略
-生成 $`K`$ 条完整补全，用式 (8) 估计 $`h`$，按 $`\widehat h_m/\sum_j\widehat h_j`$ 选择候选后只提交该块并丢弃补全。
-候选与补全来自同一基础策略，对数权重即 $`r/\tau`$，不需要轨迹概率。与 AR 不同，它不保留完整序列；有限
-$`M,K`$ 下是逐块 SIR 近似，$`K,M\to\infty`$ 时趋近目标。生成在整块 EOS 后停止；最后一块的候选与以整块 EOS
-结束的候选已是完整输出，只有一条空补全，选中它即结束。
+dLLM 的 `is` 对式 (7) 执行逐块 SIR。每一步按 `dllm.sampling` 提出 $`M`$ 个决策块候选，块长
+`dllm.algorithms.is.decision_block_size` 须为原生扩散块长 `dllm.sampling.block_length` 的整数倍；每个候选有 $`K`$ 条
+完整补全，用式 (8) 估计 $`h`$，按 $`\widehat h_m/\sum_j\widehat h_j`$ 选择候选，对数权重即 $`r/\tau`$，不需要轨迹概率。
+生成在整块 EOS 后停止；最后一块的候选与以整块 EOS 结束的候选已是完整输出，只有一条空补全，选中它即结束。
+
+模型读取整张画布，包括尚未解码的掩码位置，所以同一前缀下，单独请求一个块（画布止于该块）与完整生成（画布到输出
+上限）中的该块，分布一般不同。补全与 `sample` 属于后者，式 (7) 的基础模型 $`p`$ 也指后者。
+`dllm.algorithms.is.candidate_canvas` 决定候选的来源：
+
+- `"block"`：候选单独请求，补全另行生成 $`K`$ 条，选择后只提交该块并丢弃补全。候选与补全不来自同一策略，
+  $`K,M\to\infty`$ 时候选按 $`p_{\rm block}(z\mid g)h(z)`$ 而不是 $`p(z\mid g)h(z)`$ 选出，只有两种画布下块分布相同，
+  这一偏差才为零；
+- `"full"`：同 AR，从一条到输出上限的完整输出切出候选块，其余部分是它的第一条补全，另生成 $`K-1`$ 条。候选与
+  补全来自同一策略，$`K,M\to\infty`$ 时趋近目标；每个候选少生成一条补全，但候选块在整张画布上去噪，每步读取更多位置。
+
+`dllm.algorithms.is.kept_sequence = true`（要求 `candidate_canvas = "full"`）时结构与第 6 节相同：每步在所选候选的
+补全中再按 $`e^{r/\tau}`$ 选一条，保留完整序列；下一步的 0 号候选是它的下一块，其余部分算作一条已评分的补全，
+奖励直接复用。第 6 节的论证逐字适用，第一步之后每一步保持目标不变。若新候选单独请求，0 号候选与新候选来自
+不同策略，论证不再成立，所以不允许与 `"block"` 组合。
+[`test_algorithms.py`](../../tests/dllm/test_algorithms.py) 在一个单独请求时块分布反向偏移的可枚举模型上核对：
+从目标分布出发，经过其后各步仍是目标分布；从基础分布出发则不是。两个开关默认为 `"block"` 与 `false`。
 
 <a id="alg-replay-mh"></a>
 ## 8. 冻结历史混合 proposal 的 MH
@@ -1113,7 +1128,7 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | 式 (9) 的冻结历史 proposal | `FrozenReplaySuffixProposal`、`run_reward_mh_chain_replay_proposal` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
 | 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.planning = "fixed"`、`ar.algorithms.is.fixed.*` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 联合预算 | `run_joint_budget_is`、`choose_joint_budget` | `ar.algorithms.is.joint.*`、`ar.algorithms.is.chunk_adaptive.*` | `trace.steps[].plan`、计划与实际前向 token（见 [BUDGET.md](BUDGET.md#budget-usage)） |
-| 第 7 节的 dLLM 逐块 IS | `run_conditional_diffusion_is` | `dllm.algorithms.is.{candidate_count,rollout_count,decision_block_size}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess` |
+| 第 7 节的 dLLM 逐块 IS | `run_conditional_diffusion_is` | `dllm.algorithms.is.{candidate_count,rollout_count,decision_block_size,candidate_canvas,kept_sequence}` | 候选对数权重、所选索引与保留补全、`trace.rollout_evaluations`、`trace.mean_rollout_ess` |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
 
 logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录

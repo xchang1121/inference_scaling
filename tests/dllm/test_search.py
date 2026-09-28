@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from math import log
 from types import SimpleNamespace
 
@@ -9,14 +10,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from inference_scaling.dllm.algorithms.search import (
-    run_diffusion_block_beam,
-    run_diffusion_trajectory_power_mh,
-)
-from inference_scaling.dllm.algorithms.config import (
-    DiffusionBlockBeamConfig,
-    DiffusionPowerMHConfig,
-)
+from inference_scaling.dllm.algorithms.search import run_diffusion_block_beam, run_diffusion_trajectory_power_mh
+from inference_scaling.dllm.algorithms.config import DiffusionBlockBeamConfig, DiffusionPowerMHConfig
 from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample, DiffusionTraceStep
@@ -28,65 +23,27 @@ class BinaryTrajectoryBackend:
     def sample_batch(self, requests):
         samples = []
         for request in requests:
-            rng = np.random.default_rng(request.seed)
-            token = int(rng.choice(2, p=(0.8, 0.2)))
-            logprob = log((0.8, 0.2)[token])
-            steps = tuple(
-                DiffusionTraceStep(
-                    block_index=index,
-                    step_index=0,
-                    positions=(index,),
-                    token_ids=(token,),
-                    logprob=logprob,
-                )
-                for index in range(request.generation_length)
-            )
-            samples.append(
-                DiffusionSample(
-                    prefix=request.prefix,
-                    token_ids=(token,) * request.generation_length,
-                    trace=steps,
-                    trajectory_logprob=logprob * request.generation_length,
-                    policy_id=request.sampling.policy_id,
-                    model_id=self.model_id,
-                    request_id=request.request_id,
-                    # The binary law ignores temperature, so the base probability equals the proposal's.
-                    reference_trajectory_logprob=(
-                        None if request.reference_temperature is None else logprob * request.generation_length
-                    ),
-                )
-            )
+            token = int(np.random.default_rng(request.seed).choice(2, p=(0.8, 0.2)))
+            logprob, length = log((0.8, 0.2)[token]), request.generation_length
+            steps = tuple(DiffusionTraceStep(index, 0, (index,), (token,), logprob) for index in range(length))
+            # The binary law ignores temperature, so the base probability equals the proposal's.
+            samples.append(DiffusionSample(
+                request.prefix, (token,) * length, steps, logprob * length, request.sampling.policy_id, self.model_id,
+                request.request_id,
+                reference_trajectory_logprob=None if request.reference_temperature is None else logprob * length))
         return samples
 
 
-EXACT = DiffusionSamplingConfig(
-    block_length=1,
-    steps_per_block=1,
-    temperature=1.0,
-    remasking="random", top_k=0, top_p=1.0, cfg_scale=0.0,
-)
+EXACT = DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=1.0, remasking="random", top_k=0,
+                                top_p=1.0, cfg_scale=0.0)
 
 
 def test_trajectory_power_mh_sharpens_the_exact_trajectory_distribution():
-    zeroes = 0
-    runs = 2000
-    for seed in range(runs):
-        result = run_diffusion_trajectory_power_mh(
-            backend=BinaryTrajectoryBackend(),
-            prompt=(),
-            config=DiffusionPowerMHConfig(
-                total_length=1,
-                decision_block_size=1,
-                updates_per_stage=8,
-                alpha=2.0,
-            ),
-            sampling=EXACT,
-            seed=seed,
-        )
-        zeroes += result.final.token_ids[0] == 0
-
-    expected = 0.8**2 / (0.8**2 + 0.2**2)
-    assert zeroes / runs == pytest.approx(expected, abs=0.025)
+    config = DiffusionPowerMHConfig(total_length=1, decision_block_size=1, updates_per_stage=8, alpha=2.0)
+    zeroes = sum(run_diffusion_trajectory_power_mh(backend=BinaryTrajectoryBackend(), prompt=(), config=config,
+                                                   sampling=EXACT, seed=seed).final.token_ids[0] == 0
+                 for seed in range(2000))
+    assert zeroes / 2000 == pytest.approx(0.8**2 / (0.8**2 + 0.2**2), abs=0.025)
 
 
 class ContextModel(torch.nn.Module):
@@ -126,53 +83,21 @@ def test_trajectory_power_mh_targets_the_blockwise_power_of_a_context_dependent_
 
 
 def test_block_beam_retains_width_and_accumulates_stage_probabilities():
-    result = run_diffusion_block_beam(
-        backend=BinaryTrajectoryBackend(),
-        prompt=(9,),
-        config=DiffusionBlockBeamConfig(
-            total_length=3,
-            decision_block_size=1,
-            width=4,
-            branching_factor=2,
-        ),
-        sampling=EXACT,
-        seed=4,
-    )
-
+    result = run_diffusion_block_beam(backend=BinaryTrajectoryBackend(), prompt=(9,), sampling=EXACT, seed=4,
+                                      config=DiffusionBlockBeamConfig(total_length=3, decision_block_size=1, width=4,
+                                                                      branching_factor=2))
     assert [stage.proposals for stage in result.stages] == [4, 8, 8]
-    assert len(result.beams) == 4
-    assert len(result.best.token_ids) == 3
+    assert len(result.beams) == 4 and len(result.best.token_ids) == 3
     assert result.best.trajectory_logprob == pytest.approx(sum(log((0.8, 0.2)[token]) for token in result.best.token_ids))
 
 
 def test_search_algorithms_reject_intractable_remasking_policy():
-    inexact = DiffusionSamplingConfig(
-        block_length=1,
-        steps_per_block=1,
-        temperature=0.0,
-        remasking="low_confidence", top_k=0, top_p=1.0, cfg_scale=0.0,
-    )
+    inexact = replace(EXACT, temperature=0.0, remasking="low_confidence")
     with pytest.raises(ValueError, match="exact diffusion policy"):
-        run_diffusion_trajectory_power_mh(
-            backend=BinaryTrajectoryBackend(),
-            prompt=(),
-            config=DiffusionPowerMHConfig(
-                total_length=1,
-                decision_block_size=1,
-                updates_per_stage=2,
-                alpha=2.0,
-            ),
-            sampling=inexact,
-        )
+        run_diffusion_trajectory_power_mh(backend=BinaryTrajectoryBackend(), prompt=(), sampling=inexact,
+                                          config=DiffusionPowerMHConfig(total_length=1, decision_block_size=1,
+                                                                        updates_per_stage=2, alpha=2.0))
     with pytest.raises(ValueError, match="exact diffusion policy"):
-        run_diffusion_block_beam(
-            backend=BinaryTrajectoryBackend(),
-            prompt=(),
-            config=DiffusionBlockBeamConfig(
-                total_length=1,
-                decision_block_size=1,
-                width=2,
-                branching_factor=2,
-            ),
-            sampling=inexact,
-        )
+        run_diffusion_block_beam(backend=BinaryTrajectoryBackend(), prompt=(), sampling=inexact,
+                                 config=DiffusionBlockBeamConfig(total_length=1, decision_block_size=1, width=2,
+                                                                 branching_factor=2))

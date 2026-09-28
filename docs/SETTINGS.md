@@ -174,6 +174,8 @@
 | `algorithms.mh.updates` | 整数 | 独立 MH 的更新数 |
 | `algorithms.mh.proposal` / `frozen_history.samples` / `frozen_history.mixture` | — | 同 AR；`frozen_history` 使用 `exact_sampling` 的冻结轨迹 |
 | `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 逐块扩散 IS 的 M、K 与决策块长 |
+| `algorithms.is.candidate_canvas` | `block` \| `full` | `block`：候选单独请求，画布止于该块；`full`：从到输出上限的完整输出切出，其余部分作为第一条补全，与补全同一策略（见[算法说明](methods/ALGORITHMS.md#alg-dllm-is)） |
+| `algorithms.is.kept_sequence` | 布尔 | 保留一条完整序列的条件 IS（同 AR）；需要 `candidate_canvas = "full"` |
 
 ## `settings/training.json`
 
