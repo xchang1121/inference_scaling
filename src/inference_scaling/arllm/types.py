@@ -30,7 +30,7 @@ class TokenStatistic:
     def __post_init__(self) -> None:
         if self.top_k is not None and self.top_k <= 0:
             raise ValueError("top_k must be positive")
-        if self.top_k is not None and (self.policy.top_p < 1 or self.policy.top_k is not None):
+        if self.top_k is not None and not self.policy.full_support:
             raise ValueError("a top-K statistic requires a full-support policy")
 
     def matches(self, sampling: SamplingConfig) -> bool:

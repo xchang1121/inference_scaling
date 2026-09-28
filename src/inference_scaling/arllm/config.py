@@ -35,6 +35,12 @@ class SamplingConfig:
             raise ValueError("eos_token_id must be non-negative")
 
     @property
+    def full_support(self) -> bool:
+        """No top-p or top-k truncation: every token keeps positive probability, as reweighting the policy needs."""
+
+        return self.top_p == 1 and self.top_k is None
+
+    @property
     def policy_id(self) -> str:
         return (
             f"temperature={canonical_float(self.temperature)};"

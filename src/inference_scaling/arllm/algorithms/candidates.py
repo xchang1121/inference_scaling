@@ -36,11 +36,8 @@ OWN_STREAM = OwnStream()
 
 
 def validate_base_sampling(sampling: SamplingConfig) -> None:
-    if sampling.top_p < 1 or sampling.top_k is not None:
-        raise ValueError(
-            "base candidates must use a full-support autoregressive policy: "
-            "top_p=1 and top_k=None"
-        )
+    if not sampling.full_support:
+        raise ValueError("base candidates must use a full-support autoregressive policy: top_p=1 and top_k=None")
 
 
 def sample_outputs(

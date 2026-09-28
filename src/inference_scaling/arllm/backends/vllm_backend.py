@@ -576,7 +576,7 @@ class VLLMBackend:
     def _supports_native_score(self, sampling: SamplingConfig | None) -> bool:
         # Prompt log-probabilities ignore logit biases, so a penalized model is scored elsewhere.
         policy = sampling or SamplingConfig()
-        return self._penalty is None and policy.temperature == 1 and policy.top_p == 1 and policy.top_k is None
+        return self._penalty is None and policy.temperature == 1 and policy.full_support
 
     def _score_native(self, items: Sequence[tuple[int, ScoreRequest, TokenSequence]],
                       results: list[tuple[float, ...]]) -> tuple[int, int, int]:

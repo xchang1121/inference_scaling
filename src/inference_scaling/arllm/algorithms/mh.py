@@ -179,14 +179,6 @@ def _draw_suffix(
     return cut, suffix_length, probabilities[suffix_length - 1]
 
 
-def _validate_proposal(sampling: SamplingConfig) -> None:
-    if sampling.top_k is not None or sampling.top_p < 1:
-        raise ValueError(
-            "hard top-k/top-p truncation normally violates MH's equal-support condition; "
-            "use a full-support proposal"
-        )
-
-
 def _score_one(
     backend: AutoregressiveBackend,
     prefix: TokenSequence,
@@ -290,8 +282,8 @@ def run_mh_chain(
     ``history_mixture``, which needs the base policy as the proposal.
     """
 
-    _validate_proposal(base)
-    _validate_proposal(proposal)
+    if not (base.full_support and proposal.full_support):
+        raise ValueError("top-k/top-p truncation violates MH's equal-support condition; use full-support policies")
     if (reward is None) != (config.reward_temperature is None):
         raise ValueError("a reward and its temperature go together")
     if not 0 <= history_mixture < 1:
