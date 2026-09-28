@@ -23,14 +23,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import (OWN_STREAM, Completion, OwnStream, cut_block, sample_outputs,
+from inference_scaling.arllm.algorithms.candidates import (OWN_STREAM, Block, OwnStream, cut_block, sample_outputs,
                                                            validate_base_sampling)
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
-from inference_scaling.shared.types import GeneratedBatchReward
-from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, SequenceSample, TokenSequence
+from inference_scaling.shared.types import TokenBatchReward
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,14 +40,11 @@ class RolloutEvaluation:
     token_ids: TokenSequence
     reward: float
     log_weight: float
-    # Base-policy log-probabilities of token_ids.
-    token_logprobs: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ConditionalCandidate:
     token_ids: TokenSequence
-    base_token_logprobs: tuple[float, ...]
     rollouts: tuple[RolloutEvaluation, ...]
     log_weight: float
 
@@ -81,14 +78,13 @@ def estimate_conditional_weights(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     generated_prefix: TokenSequence,
-    generated_prefix_logprobs: Sequence[float],
-    candidates: Sequence[SequenceSample],
-    first_completions: Sequence[Completion | OwnStream | None],
+    candidates: Sequence[Block],
+    first_completions: Sequence[TokenSequence | OwnStream | None],
     total_length: int,
     rollout_count: int,
     sampling: SamplingConfig,
     reward_temperature: float,
-    reward: GeneratedBatchReward,
+    reward: TokenBatchReward,
     seeds: SeedStream,
     step_index: int,
     retained: RolloutEvaluation | None = None,
@@ -115,9 +111,9 @@ def estimate_conditional_weights(
     # The candidate and completion position that each request fills.
     slots: list[tuple[int, int]] = []
     # Completions of each candidate still to be scored.
-    unscored: list[list[Completion | None]] = [[] for _ in candidates]
+    unscored: list[list[TokenSequence | None]] = [[] for _ in candidates]
 
-    def request(index: int, candidate: SequenceSample, length: int, seed: int, request_id: str, offset: int) -> None:
+    def request(index: int, candidate: Block, length: int, seed: int, request_id: str, offset: int) -> None:
         slots.append((index, len(unscored[index])))
         unscored[index].append(None)
         requests.append(GenerationRequest(prefix=prompt + generated_prefix + candidate.token_ids, max_new_tokens=length,
@@ -128,7 +124,7 @@ def estimate_conditional_weights(
         rollout_length = total_length - len(generated_prefix) - len(candidate.token_ids)
         if rollout_length == 0 or candidate.finish_reason != "length":
             if not kept:
-                unscored[index].append(((), ()))
+                unscored[index].append(())
             continue
         first = first_completions[index]
         if not kept:
@@ -147,14 +143,11 @@ def estimate_conditional_weights(
     if len(samples) != len(requests):
         raise RuntimeError("backend returned an invalid number of rollouts")
     for (index, position), sample in zip(slots, samples, strict=True):
-        unscored[index][position] = (sample.token_ids, sample.token_logprobs)
+        unscored[index][position] = sample.token_ids
 
-    prefix_logprobs = tuple(generated_prefix_logprobs)
-    pending = [(index, completion) for index, group in enumerate(unscored) for completion in group]
+    pending = [(index, tokens) for index, group in enumerate(unscored) for tokens in group if tokens is not None]
     rewards = tuple(float(value) for value in reward(
-        prompt, [generated_prefix + candidates[index].token_ids + tokens for index, (tokens, _) in pending],
-        [prefix_logprobs + candidates[index].token_logprobs + logprobs for index, (_, logprobs) in pending],
-    )) if pending else ()
+        prompt, [generated_prefix + candidates[index].token_ids + tokens for index, tokens in pending])) if pending else ()
     if len(rewards) != len(pending):
         raise ValueError("reward returned an invalid number of values")
     if any(not isfinite(value) for value in rewards):
@@ -162,12 +155,11 @@ def estimate_conditional_weights(
     by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
     if retained is not None:
         by_candidate[0].append(retained)
-    for (index, (tokens, logprobs)), value in zip(pending, rewards, strict=True):
-        by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature, logprobs))
+    for (index, tokens), value in zip(pending, rewards, strict=True):
+        by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature))
 
     return tuple(
-        ConditionalCandidate(candidate.token_ids, candidate.token_logprobs, tuple(group),
-                             logmeanexp([item.log_weight for item in group]))
+        ConditionalCandidate(candidate.token_ids, tuple(group), logmeanexp([item.log_weight for item in group]))
         for candidate, group in zip(candidates, by_candidate, strict=True)
     )
 
@@ -181,7 +173,6 @@ class RetainedSequence:
     """
 
     token_ids: TokenSequence = ()
-    token_logprobs: tuple[float, ...] = ()
     reward: float = 0.0
     fixed: int = 0
 
@@ -194,7 +185,7 @@ class ConditionalISAdapter:
     prompt: TokenSequence
     config: ConditionalISConfig
     sampling: SamplingConfig
-    reward: GeneratedBatchReward
+    reward: TokenBatchReward
 
     @property
     def initial_state(self) -> RetainedSequence:
@@ -207,31 +198,25 @@ class ConditionalISAdapter:
         return min(self.config.block_size, self.config.total_length - state.fixed)
 
     def propose(self, state: RetainedSequence, step_index: int,
-                seeds: SeedStream) -> list[tuple[SequenceSample, Completion | OwnStream | None]]:
+                seeds: SeedStream) -> list[tuple[Block, TokenSequence | OwnStream | None]]:
         """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs or drawn block-first."""
 
         validate_base_sampling(self.sampling)
         prefix = self.prompt + state.token_ids[: state.fixed]
         length = self._block_length(state)
-        proposals: list[tuple[SequenceSample, Completion | OwnStream | None]] = []
+        proposals: list[tuple[Block, TokenSequence | OwnStream | None]] = []
         if state.token_ids:
             end = state.fixed + length
-            proposals.append((SequenceSample(
-                prefix=prefix,
-                token_ids=state.token_ids[state.fixed : end],
-                token_logprobs=state.token_logprobs[state.fixed : end],
-                policy_id=self.sampling.policy_id,
-                model_id=self.backend.model_id,
-                request_id=f"conditional-is:step:{step_index}:retained",
-                # The kept sequence either continues after the block or ends with it.
-                finish_reason="length" if end < len(state.token_ids) else "stop",
-            ), None))
+            # The kept sequence either continues after the block or ends with it.
+            proposals.append((Block(state.token_ids[state.fixed : end], "length" if end < len(state.token_ids) else "stop"),
+                              None))
         fresh = self.config.candidate_count - len(proposals)
         if fresh:
             block_first = self.config.block_first
             outputs = sample_outputs(self.backend, prefix, fresh, length if block_first else self.config.total_length - state.fixed,
                                      self.sampling, seeds, step_index, first_index=len(proposals))
-            proposals.extend((output, OWN_STREAM) if block_first else cut_block(output, length) for output in outputs)
+            proposals.extend((Block(output.token_ids, output.finish_reason), OWN_STREAM) if block_first
+                             else cut_block(output, length) for output in outputs)
         return proposals
 
     def step(
@@ -245,11 +230,9 @@ class ConditionalISAdapter:
         retained = None
         if state.token_ids:
             start = state.fixed + len(proposals[0][0].token_ids)
-            retained = RolloutEvaluation(state.token_ids[start:], state.reward,
-                                         state.reward / self.config.reward_temperature, state.token_logprobs[start:])
+            retained = RolloutEvaluation(state.token_ids[start:], state.reward, state.reward / self.config.reward_temperature)
         candidates = estimate_conditional_weights(
             backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
-            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
             candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
             total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
             reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
@@ -271,10 +254,8 @@ class ConditionalISAdapter:
             # The carried completion was evaluated in an earlier step.
             rollout_evaluations_performed=sum(len(item.rollouts) for item in candidates) - int(carried),
         )
-        return record, RetainedSequence(
-            state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
-            state.token_logprobs[: state.fixed] + candidate.base_token_logprobs + completion.token_logprobs,
-            completion.reward, state.fixed + len(candidate.token_ids))
+        return record, RetainedSequence(state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
+                                        completion.reward, state.fixed + len(candidate.token_ids))
 
 
 def conditional_is_step(
@@ -284,7 +265,7 @@ def conditional_is_step(
     state: RetainedSequence,
     config: ConditionalISConfig,
     sampling: SamplingConfig,
-    reward: GeneratedBatchReward,
+    reward: TokenBatchReward,
     seeds: SeedStream,
     step_index: int,
 ) -> tuple[ConditionalISStep, RetainedSequence]:
@@ -298,7 +279,7 @@ def run_conditional_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: ConditionalISConfig,
-    reward: GeneratedBatchReward,
+    reward: TokenBatchReward,
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,

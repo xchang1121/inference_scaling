@@ -39,7 +39,7 @@ from inference_scaling.shared.budget.joint import (BlockBudgetEstimate, JointBud
                                                    estimate_weight_moments, positive_integer)
 from inference_scaling.shared.budget.planners import AdaptiveBudgetController, FullHorizonPlanner, PlanningState
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import GeneratedBatchReward
+from inference_scaling.shared.types import TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +139,7 @@ class _Ledger:
     so each distinct sequence is scored ``reward_forward_passes`` times once per run.
     """
 
-    def __init__(self, backend: AutoregressiveBackend, reward: GeneratedBatchReward, passes: int) -> None:
+    def __init__(self, backend: AutoregressiveBackend, reward: TokenBatchReward, passes: int) -> None:
         self.backend, self.model_id = backend, backend.model_id
         self._reward, self._passes = reward, passes
         self._scored: set[int] = set()
@@ -154,20 +154,18 @@ class _Ledger:
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         return self.backend.score_batch(requests)
 
-    def reward(
-        self, prompt: TokenSequence, sequences: Sequence[TokenSequence], logprobs: Sequence[Sequence[float]],
-    ) -> Sequence[float]:
+    def reward(self, prompt: TokenSequence, sequences: Sequence[TokenSequence]) -> Sequence[float]:
         fresh = {hash(sequence): len(sequence) for sequence in sequences if hash(sequence) not in self._scored}
         self._scored.update(fresh)
         self.slots += self._passes * sum(len(prompt) + length for length in fresh.values())
-        return self._reward(prompt, sequences, logprobs)
+        return self._reward(prompt, sequences)
 
 
 def run_joint_budget_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
     config: JointBudgetISConfig,
-    reward: GeneratedBatchReward,
+    reward: TokenBatchReward,
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
@@ -241,7 +239,6 @@ def run_joint_budget_is(
         cuts = [cut_block(output, estimate.block_size) for estimate in estimates for output in pool]
         pilots = estimate_conditional_weights(
             backend=ledger, prompt=prompt, generated_prefix=prefix,
-            generated_prefix_logprobs=state.token_logprobs[: state.fixed],
             candidates=[candidate for candidate, _ in cuts], first_completions=[first for _, first in cuts],
             total_length=config.total_length, rollout_count=config.pilot_rollouts, sampling=sampling,
             reward_temperature=config.reward_temperature, reward=ledger.reward,

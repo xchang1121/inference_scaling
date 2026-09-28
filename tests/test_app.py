@@ -4,7 +4,6 @@ import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -85,9 +84,9 @@ class ThinkingBackend(TabularAutoregressiveBackend):
     def direct_generate(self, prefix, *, max_new_tokens, num_beams):
         return (0, 1, 0, 2)[:max_new_tokens]
 
-    def score_statistics_batch(self, requests, *, confidence_top_k=None):
-        return [SimpleNamespace(token_topk_confidences=tuple(1.0 for _ in tokens))
-                for request in requests for tokens in request.continuations]
+    def _statistic(self, context, token, statistic):
+        # The model is certain, so a finite constant stands in for its infinite top-K confidence.
+        return 1.0
 
 
 @pytest.fixture

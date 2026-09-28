@@ -34,11 +34,12 @@ from inference_scaling.arllm.algorithms.mh_acceleration import (
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
+from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
 from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SequenceLogProbabilityReward
 from inference_scaling.arllm.scope import SamplingScope
-from inference_scaling.arllm.types import GenerationRequest
+from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.model.generation import generation_budget
 from inference_scaling.shared.model.loading import (
@@ -66,7 +67,7 @@ class _Task:
     sampling: SamplingConfig
     seed: int
     seeds: SeedStream
-    # The algorithm's backend, wrapped by the sampling scope.
+    # The algorithm's backend, wrapped by the sampling scope and a model reward's statistic recorder.
     backend: Any
 
 
@@ -183,25 +184,19 @@ class ARFamily:
         kind, settings = self.choices.reward, self.reward_settings
         if kind is None or (kind == "vote" and self.choices.algorithm == "best_of_n"):
             return None
-        # Model rewards score through the scoped backend.
+        # Model rewards read the statistic that the task's backend records.
         model: Any
-        if kind == "logprob":
-            scoring = SamplingConfig(temperature=float(settings["score_temperature"]), eos_token_id=self.eos)
-            model = SequenceLogProbabilityReward(task.backend, scoring)
-            # Under the generation policy, generation has already scored every token.
-            reused = scoring.policy_id == task.sampling.policy_id
-            return Reward(float(settings["temperature"]), memoized(model.batch), 0 if reused else 1, model.describe(),
-                          model, model.from_token_logprobs if reused else None)
-        if kind == "consilience":
-            model = ConsilienceReward(
-                task.backend, SamplingConfig(temperature=float(settings["score_temperature"])),
-                top_k=int(settings["top_k"]), window_fraction=float(settings["window_fraction"]),
+        if kind in {"logprob", "consilience"}:
+            statistic = task.backend.statistic
+            model = SequenceLogProbabilityReward(task.backend, statistic) if kind == "logprob" else ConsilienceReward(
+                task.backend, statistic, window_fraction=float(settings["window_fraction"]),
                 window_tokens=settings["window_tokens"], skip_fraction=float(settings["skip_fraction"]),
                 initial_penalty=float(settings["initial_penalty"]),
                 thinking_format=self.thinking_format if settings["scope"] == "thinking" else None,
-                scope=settings["scope"],
-            )
-            return Reward(float(settings["temperature"]), memoized(model.batch), 1, model.describe(), model)
+                scope=settings["scope"])
+            # A generated sequence needs a scoring forward only when generation cannot compute the statistic.
+            passes = 0 if self.raw.records(statistic, task.sampling) else 1
+            return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
         pool: list[str] = []
         if kind == "vote":
             # Pool seeds do not depend on the algorithm, so algorithms share one pool per draw.
@@ -228,8 +223,14 @@ class ARFamily:
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
                                 top_k=sampling["top_k"], eos_token_id=self.eos)
         scope = self._scope(prompt)
-        task = _Task(problem, prompt_text, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds,
-                     scope.wrap(self.backend, prompt))
+        backend = scope.wrap(self.backend, prompt)
+        if self.choices.reward in {"logprob", "consilience"}:
+            # A model reward reads a token statistic of the generated tokens, which generation records.
+            settings = self.reward_settings
+            backend = StatisticRecorder(backend, TokenStatistic(
+                SamplingConfig(temperature=float(settings["score_temperature"])),
+                int(settings["top_k"]) if self.choices.reward == "consilience" else None))
+        task = _Task(problem, prompt_text, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend)
         # Concurrent problems share the backend counters, so only sequential runs have per-problem costs.
         meter = Meter({"base": self.raw} if self.workers == 1 else {})
         with meter.phase("reward"):
@@ -241,10 +242,8 @@ class ARFamily:
                                         seed=seeds.derive(algorithm, problem.id, "final-content"))
         fallbacks = [info["sampling_fallback_reason"]] if info["sampling_fallback_reason"] else []
         consilience = getattr(reward, "model", None)
-        if isinstance(consilience, ConsilienceReward):
-            decision = consilience.describe_completion(prompt, tokens)
-            if decision["reward_fallback_reason"]:
-                fallbacks.append(f"consilience:{decision['reward_fallback_reason']}")
+        if isinstance(consilience, ConsilienceReward) and (reason := consilience.fallback(prompt, tokens)):
+            fallbacks.append(f"consilience:{reason}")
         trace = {"generation_budget": budget, **trace}
         if reward is not None:
             trace["reward"] = dict(reward.description)
@@ -302,8 +301,7 @@ class ARFamily:
         sequences = [sample.token_ids for sample in samples]
         texts = [self.answer_text(task.prompt, tokens) for tokens in sequences]
         rng = random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break"))
-        values = None if reward is None else reward.generated(
-            task.prompt, sequences, [sample.token_logprobs for sample in samples])
+        values = None if reward is None else [float(value) for value in reward.batch(task.prompt, sequences)]
         chosen = best_index(self.dataset, texts, values, rng)
         grades = [self.dataset.grade(text, task.problem) for text in texts]
         return sequences[chosen], {
@@ -365,12 +363,10 @@ class ARFamily:
                 [(sample.token_ids, sample.token_logprobs, sample.token_cdf_bounds) for sample in samples],
                 history_mixture=float(history["mixture"]), sampling=base,
             )
-            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.generated,
-                                                              SeedStream(task.seed))
+            result: Any = run_reward_mh_chain_replay_proposal(proposal, settings, reward.batch, SeedStream(task.seed))
             trace["proposal_sources"] = dict(Counter(step.proposal_source for step in result.trace))
         else:
-            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.generated,
-                                         SeedStream(task.seed))
+            result = run_reward_mh_chain(reference, task.prompt, settings, base, reward.batch, SeedStream(task.seed))
         trace.update(updates=result.attempts, skipped_updates=result.skipped, accepted=result.accepted,
                      acceptance_rate=result.acceptance_rate, replayed_tokens=result.replayed_tokens)
         return result.token_ids, trace, float(result.reward)
@@ -387,7 +383,7 @@ class ARFamily:
                                     block_size=min(int(fixed["block_size"]), task.maximum),
                                     total_length=task.maximum, reward_temperature=reward.temperature,
                                     block_first=bool(config["block_first"])),
-                reward.generated, SeedStream(task.seed), sampling=task.sampling,
+                reward.batch, SeedStream(task.seed), sampling=task.sampling,
             )
             return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
         joint = config["joint"]
@@ -402,7 +398,7 @@ class ARFamily:
             expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
             block_first=bool(config["block_first"]), **adaptive,
         )
-        joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.generated,
+        joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.batch,
                                            SeedStream(task.seed), sampling=task.sampling)
         trace = importance_trace([step.evaluation for step in joint_result.steps])
         for summary, step in zip(trace["steps"], joint_result.steps, strict=True):

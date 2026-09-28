@@ -6,7 +6,7 @@ import inspect
 import threading
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -18,12 +18,20 @@ from inference_scaling.shared.rng import uniform_stream
 from inference_scaling.arllm.backends.causal_scoring import run_causal_chunks
 from inference_scaling.arllm.backends.kv_cache import DynamicCache, GrowingCache, PrefixStore, StaticDecoder, cache_layers
 from inference_scaling.arllm.backends.replay import sample_with_drafts
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence, TokenStatistic
 
 try:
     import torch
 except ImportError:  # pragma: no cover - exercised in dependency-free installations
     torch = None  # type: ignore[assignment]
+
+
+def _token_statistic(log_probs, tokens, top_k: int | None):
+    """Per row, the token's log-probability or, with ``top_k``, minus the mean of the K largest."""
+
+    if top_k is None:
+        return log_probs.gather(-1, tokens[:, None]).squeeze(-1)
+    return -log_probs.topk(min(top_k, log_probs.shape[-1]), dim=-1).values.mean(dim=-1)
 
 
 def _require_torch():
@@ -47,13 +55,6 @@ class TransformersBackendSnapshot:
     generation_forward_token_slots: int
     score_forward_token_slots: int
     estimated_dense_forward_flops: int
-
-
-@dataclass(frozen=True, slots=True)
-class SequenceScoreStatistics:
-    """Per-token top-K confidence of one scored continuation (the Consilience statistic)."""
-
-    token_topk_confidences: tuple[float, ...]
 
 
 class TransformersBackend:
@@ -260,7 +261,7 @@ class TransformersBackend:
         return tuple(tuple(tensor.index_select(0, rows) for tensor in layer) for layer in cache)
 
     def _sample_same_policy(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
-        """Decode requests that share their policy, reference policy and stop sequences.
+        """Decode requests that share their policy, reference policy, stop sequences and statistic.
 
         Each distinct prefix resumes the stored KV state of its longest stored
         prefix, is prefilled once from there and its KV state copied to every row
@@ -272,7 +273,7 @@ class TransformersBackend:
 
         torch_module = _require_torch()
         first = requests[0]
-        sampling, reference_sampling = first.sampling, first.reference_policy
+        sampling, reference_sampling, statistic = first.sampling, first.reference_policy, first.statistic
         prefixes = [self._model_prefix(request.prefix) for request in requests]
         positions = {prefix: index for index, prefix in enumerate(dict.fromkeys(prefixes))}
         unique = list(positions)
@@ -286,7 +287,7 @@ class TransformersBackend:
         markers = [torch_module.tensor(stop, device=self.device) for stop in first.stop_sequences]
         tokens = torch_module.zeros((len(requests), steps), dtype=torch_module.long, device=self.device)
         logprobs = torch_module.zeros((len(requests), steps), dtype=torch_module.float32, device=self.device)
-        references = torch_module.zeros_like(logprobs)
+        references, statistics = torch_module.zeros_like(logprobs), torch_module.zeros_like(logprobs)
         bounds = torch_module.zeros((len(requests), steps, 2), dtype=torch_module.float64, device=self.device)
         lengths = torch_module.zeros(len(requests), dtype=torch_module.long, device=self.device)
         # Why each row ended: 0 at its token limit, 1 at EOS, 2 after a stop sequence, 3 rejected by its log-weight.
@@ -353,6 +354,10 @@ class TransformersBackend:
                     (below.masked_fill(sampled == 0, -1.0), cumulative.gather(-1, sampled[:, None]).squeeze(-1)), dim=-1)
                 logprobs[alive, step] = log_probs.gather(-1, sampled[:, None]).squeeze(-1)
                 references[alive, step] = reference_log_probs.gather(-1, sampled[:, None]).squeeze(-1)
+                if statistic is not None:
+                    statistics[alive, step] = _token_statistic(log_probs if statistic.matches(sampling) else
+                                                           self._policy_log_probs(logits, statistic.policy),
+                                                           sampled, statistic.top_k)
                 lengths[alive] = step + 1
                 reason = torch_module.zeros_like(sampled)
                 for marker in markers:
@@ -398,14 +403,15 @@ class TransformersBackend:
                                      return_dict=True, **({"logits_to_keep": 1} if self._supports_logits_to_keep else {}))
                 logits, cache = outputs.logits[:, -1, :], getattr(outputs, "past_key_values", None)
         rows = zip(requests, lengths.tolist(), reasons.tolist(), tokens.cpu().numpy(), logprobs.cpu().numpy(),
-                   references.cpu().numpy(), bounds.cpu().numpy(), strict=True)
+                   references.cpu().numpy(), bounds.cpu().numpy(), statistics.cpu().numpy(), strict=True)
         samples = [SequenceSample(
             prefix=request.prefix, token_ids=tuple(row_tokens[:length].tolist()),
             token_logprobs=tuple(row_logprobs[:length].tolist()), policy_id=request.sampling.policy_id,
             model_id=self.model_id, request_id=request.request_id, finish_reason=("length", "eos", "stop", "rejected")[reason],
             reference_token_logprobs=tuple(row_references[:length].tolist()), reference_policy_id=reference_sampling.policy_id,
             token_cdf_bounds=tuple(map(tuple, row_bounds[:length].tolist())),
-        ) for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds in rows]
+            token_statistics=None if statistic is None else tuple(row_statistics[:length].tolist()),
+        ) for request, length, reason, row_tokens, row_logprobs, row_references, row_bounds, row_statistics in rows]
         prefill_tokens = sum(len(prefix) - length for prefix, length in zip(unique, cached, strict=True))
         with self._statistics_lock:
             self._prefill_tokens += prefill_tokens
@@ -415,9 +421,10 @@ class TransformersBackend:
         return samples
 
     def _generate(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
-        grouped: dict[tuple[SamplingConfig, tuple[TokenSequence, ...], float], list[int]] = {}
+        grouped: dict[tuple[Any, ...], list[int]] = {}
         for index, request in enumerate(requests):
-            grouped.setdefault((request.sampling, request.stop_sequences, request.reference_temperature), []).append(index)
+            grouped.setdefault((request.sampling, request.stop_sequences, request.reference_temperature, request.statistic),
+                               []).append(index)
         results: dict[int, SequenceSample] = {}
         for indices in grouped.values():
             results.update(zip(indices, self._sample_same_policy([requests[index] for index in indices]), strict=True))
@@ -434,26 +441,13 @@ class TransformersBackend:
             self._replayed_tokens += replayed
         return outputs
 
-    def _token_scores(self, logits, sampling, continuation: TokenSequence, confidence_top_k: int | None):
-        """Log-probabilities of ``continuation`` and, when asked, its top-K confidences."""
-
-        torch_module = _require_torch()
-        log_probs = self._policy_log_probs(logits, sampling)
-        targets = torch_module.tensor(continuation, dtype=torch_module.long, device=log_probs.device)
-        selected = log_probs.gather(-1, targets[:, None]).squeeze(-1)
-        confidences: list[float] = []
-        if confidence_top_k is not None:
-            top = log_probs.topk(min(confidence_top_k, log_probs.shape[-1]), dim=-1).values
-            confidences = (-top.mean(dim=-1)).cpu().tolist()
-        return [float(value) for value in selected.cpu().tolist()], [float(value) for value in confidences]
-
-    def _score_batch(self, batch, confidence_top_k: int | None) -> tuple[list[tuple[list[float], list[float]]], int]:
-        """Teacher-force one batch of (request, continuation, inputs) rows in chunks; returns scores and slots."""
+    def _score_batch(self, batch, top_k: int | None) -> tuple[list[list[float]], int]:
+        """Teacher-force one batch of (request, continuation, inputs) rows in chunks; returns values and slots."""
 
         torch_module = _require_torch()
         input_ids, attention_mask = self._padded_inputs([inputs for _, _, inputs in batch])
         width = input_ids.shape[1]
-        scores: list[tuple[list[float], list[float]]] = [([], []) for _ in batch]
+        values: list[list[float]] = [[] for _ in batch]
 
         def consume(position: int, logits: Any) -> None:
             # Rows are left-padded: a continuation of n tokens is predicted by the last n positions.
@@ -461,12 +455,10 @@ class TransformersBackend:
                 first = width - len(continuation)
                 low = max(position, first)
                 if low < position + logits.shape[1]:
-                    logs, confidences = self._token_scores(
-                        logits[row, low - position :], request.sampling,
-                        continuation[low - first : position + logits.shape[1] - first], confidence_top_k,
-                    )
-                    scores[row][0].extend(logs)
-                    scores[row][1].extend(confidences)
+                    targets = torch_module.tensor(continuation[low - first : position + logits.shape[1] - first],
+                                                  dtype=torch_module.long, device=logits.device)
+                    values[row].extend(_token_statistic(self._policy_log_probs(logits[row, low - position :],
+                                                                               request.sampling), targets, top_k).tolist())
 
         with self._model_lock, torch_module.inference_mode():
             run_causal_chunks(
@@ -474,11 +466,10 @@ class TransformersBackend:
                 chunk_size=self.score_chunk_size, first_needed=width - max(len(item[1]) for item in batch),
                 supports_logits_to_keep=self._supports_logits_to_keep, on_logits=consume, cache=self._cache_class(),
             )
-        return scores, int(input_ids.numel())
+        return values, int(input_ids.numel())
 
-    def _score_rows(self, requests: Sequence[ScoreRequest],
-                    confidence_top_k: int | None) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
-        """Token log-probabilities and (optionally) top-K confidences of every continuation.
+    def _score_rows(self, requests: Sequence[ScoreRequest], top_k: int | None) -> list[tuple[float, ...]]:
+        """Token log-probabilities or, with ``top_k``, top-K confidences of every continuation.
 
         Continuations are teacher-forced in batches of similar length and in
         chunks of ``score_chunk_size`` positions over a KV cache, so a long
@@ -488,7 +479,7 @@ class TransformersBackend:
         """
 
         flattened = [(request, continuation) for request in requests for continuation in request.continuations]
-        results: list[tuple[tuple[float, ...], tuple[float, ...]]] = [((), ())] * len(flattened)
+        results: list[tuple[float, ...]] = [()] * len(flattened)
         items = sorted(
             ((index, request, continuation, self._model_prefix(request.prefix) + tuple(continuation[:-1]))
              for index, (request, continuation) in enumerate(flattened) if continuation),
@@ -500,10 +491,10 @@ class TransformersBackend:
             while size < min(len(items), self.max_score_batch_size) and (size + 1) * len(items[size][3]) <= capacity:
                 size += 1
             batch, items = items[:size], items[size:]
-            scores, slots = self._score_batch([item[1:] for item in batch], confidence_top_k)
+            values, slots = self._score_batch([item[1:] for item in batch], top_k)
             forwarded += slots
-            for (index, *_), (logs, confidences) in zip(batch, scores, strict=True):
-                results[index] = (tuple(logs), tuple(confidences))
+            for (index, *_), row in zip(batch, values, strict=True):
+                results[index] = tuple(row)
         with self._statistics_lock:
             self._score_calls += 1
             self._scored_tokens += sum(len(continuation) for _, continuation in flattened)
@@ -512,26 +503,18 @@ class TransformersBackend:
         return results
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
-        return [logs for logs, _ in self._score_rows(requests, None)]
+        return self._score_rows(requests, None)
 
-    def score_statistics_batch(self, requests: Sequence[ScoreRequest], *,
-                               confidence_top_k: int) -> list[SequenceScoreStatistics]:
-        """Top-K confidence trajectories of the continuations.
+    def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
+        """Each continuation's ``statistic`` per token, under the statistic's policy; the forwards count as scoring."""
 
-        A truncated policy gives some of the top-K candidates probability zero,
-        so only a full-support policy is accepted. The forward passes count as
-        ordinary scoring.
-        """
+        return self._score_rows([replace(request, sampling=statistic.policy) for request in requests], statistic.top_k)
 
-        if confidence_top_k <= 0:
-            raise ValueError("confidence_top_k must be positive")
-        for request in requests:
-            policy = request.sampling or SamplingConfig()
-            if policy.top_p < 1 or policy.top_k is not None:
-                raise ValueError("top-K confidence requires a full-support policy")
-            if not all(request.continuations):
-                raise ValueError("confidence rewards require nonempty continuations")
-        return [SequenceScoreStatistics(confidences) for _, confidences in self._score_rows(requests, confidence_top_k)]
+    @staticmethod
+    def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
+        """Generation computes any statistic from the logits it samples from."""
+
+        return True
 
     def snapshot(self) -> TransformersBackendSnapshot:
         with self._statistics_lock:

@@ -6,7 +6,7 @@ import torch
 
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest
+from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
 from inference_scaling.shared.rng import uniform_stream
 
 
@@ -168,18 +168,27 @@ def test_scoring_keeps_only_required_tail_logits() -> None:
 
 def test_confidence_statistics_match_reference_policy_definitions() -> None:
     backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]))
-    result = backend.score_statistics_batch([ScoreRequest((0,), ((0, 1),), SamplingConfig())], confidence_top_k=2)[0]
-    assert result.token_topk_confidences == pytest.approx([-np.mean(np.log([0.5, 0.3]))] * 2)
+    result = backend.token_statistics([ScoreRequest((0,), ((0, 1),))], TokenStatistic(SamplingConfig(), 2))[0]
+    assert result == pytest.approx([-np.mean(np.log([0.5, 0.3]))] * 2)
     snapshot = backend.snapshot()
     assert (snapshot.scored_tokens, snapshot.score_forward_token_slots) == (2, 2)
-
-
-def test_confidence_statistics_reject_truncated_support_and_nonpositive_top_k() -> None:
-    backend = _backend(ConstantLogitModel([0.5, 0.3, 0.2]))
     with pytest.raises(ValueError, match="full-support"):
-        backend.score_statistics_batch([ScoreRequest((0,), ((1,),), SamplingConfig(top_k=2))], confidence_top_k=2)
-    with pytest.raises(ValueError, match="confidence_top_k must be positive"):
-        backend.score_statistics_batch([ScoreRequest((0,), ((1,),), SamplingConfig())], confidence_top_k=0)
+        TokenStatistic(SamplingConfig(top_k=2), 2)
+    with pytest.raises(ValueError, match="top_k must be positive"):
+        TokenStatistic(SamplingConfig(), 0)
+
+
+def test_generation_reports_the_statistics_that_scoring_computes() -> None:
+    backend = _backend(ConstantLogitModel([0.5, 0.35, 0.15]))
+    # Another policy's top-K confidences, and the log-probabilities of the sampling policy itself.
+    for sampling, statistic in ((SamplingConfig(temperature=0.7, top_k=2), TokenStatistic(SamplingConfig(), 2)),
+                                (SamplingConfig(eos_token_id=2), TokenStatistic(SamplingConfig()))):
+        samples = backend.sample_batch([GenerationRequest((0,), 4, sampling, seed, str(seed), statistic=statistic)
+                                        for seed in range(3)])
+        scores = backend.token_statistics([ScoreRequest(sample.prefix, (sample.token_ids,)) for sample in samples],
+                                          statistic)
+        for sample, score in zip(samples, scores, strict=True):
+            assert sample.token_statistics == pytest.approx(score)
 
 
 def test_token_penalty_is_the_model_for_sampling_scoring_and_identity() -> None:

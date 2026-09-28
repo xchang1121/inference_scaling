@@ -108,7 +108,7 @@
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.mh_fused_logprobs` | 布尔 | 幂目标 MH 在同一次解码中取得 proposal 与基础模型概率；需要 `asynchronous = false`，只影响 `mh_power` |
-| `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（Consilience 与精确对数概率需要） |
+| `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从权重读取 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
 | `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时各题请求经连续批处理合并，记录中的逐题成本为 `null` |

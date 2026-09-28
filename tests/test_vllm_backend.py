@@ -14,7 +14,7 @@ from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
 from inference_scaling.arllm.algorithms.config import PowerMHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest
+from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -95,7 +95,10 @@ class _Engine:
             tokens = [int(policy.seed % 5) + 3] * min(2, policy.max_tokens)
             if policy.stop_token_ids and policy.seed == 12:
                 tokens[-1] = policy.stop_token_ids[0]
-            outputs.append(_Output([_Completion(tokens, [{token: _Logprob(-0.25)} for token in tokens])],
+            # The sampled token and, when asked for, as many less likely ones.
+            positions = [{token: _Logprob(-0.25), **{20 + other: _Logprob(-1.0) for other in range(getattr(policy, "logprobs", 0) or 0)}}
+                         for token in tokens]
+            outputs.append(_Output([_Completion(tokens, positions)],
                                    num_cached_tokens=min(2, len(prompt_ids))))
         return outputs
 
@@ -151,7 +154,7 @@ class _Fallback:
         self._count(requests)
         return [tuple(-0.5 for _ in continuation) for request in requests for continuation in request.continuations]
 
-    def score_statistics_batch(self, requests, **_kwargs):
+    def token_statistics(self, requests, statistic):
         self._count(requests)
         return [{"tokens": continuation} for request in requests for continuation in request.continuations]
 
@@ -231,15 +234,27 @@ def test_vllm_nonunit_score_requires_or_uses_exact_fallback() -> None:
     assert snapshot.delegated_estimated_dense_forward_flops == 600
 
 
-def test_vllm_delegates_full_vocabulary_confidence_statistics() -> None:
+def test_vllm_scores_log_probabilities_and_delegates_full_vocabulary_confidences() -> None:
     backend, _ = _backend(fallback=_Fallback())
-    request = ScoreRequest((1,), ((2, 3),), SamplingConfig())
-
-    assert backend.score_statistics_batch([request], confidence_top_k=5) == [{"tokens": (2, 3)}]
+    assert backend.token_statistics([ScoreRequest((8, 6), ((4, 5),))], TokenStatistic(SamplingConfig())) == [(-0.2, -0.3)]
+    assert backend.token_statistics([ScoreRequest((1,), ((2, 3),))], TokenStatistic(SamplingConfig(), 5)) == [
+        {"tokens": (2, 3)}]
     snapshot = backend.snapshot()
-    assert snapshot.delegated_score_sequences == 1
-    assert snapshot.score_forward_token_slots == 3
-    assert snapshot.estimated_dense_forward_flops == 600
+    assert (snapshot.native_score_sequences, snapshot.delegated_score_sequences) == (1, 1)
+    assert snapshot.delegated_estimated_dense_forward_flops == 600
+
+
+def test_vllm_generation_reports_the_statistics_of_its_own_policy() -> None:
+    backend, engine = _backend()
+    policy = SamplingConfig(eos_token_id=2)
+    top, log, other = backend.sample_batch([
+        GenerationRequest((1,), 2, policy, 11, name, statistic=statistic) for name, statistic in (
+            ("top", TokenStatistic(SamplingConfig(), 2)), ("log", TokenStatistic(SamplingConfig())),
+            ("other", TokenStatistic(SamplingConfig(temperature=0.5))))])
+    assert [params.logprobs for params in engine.calls[0][1]] == [2, 0, 0]
+    # The two most likely tokens have log-probabilities -0.25 and -1.
+    assert top.token_statistics == (0.625, 0.625) and log.token_statistics == log.token_logprobs
+    assert other.token_statistics is None and not backend.records(TokenStatistic(SamplingConfig(temperature=0.5)), policy)
 
 
 def test_vllm_encode_decode_and_close() -> None:

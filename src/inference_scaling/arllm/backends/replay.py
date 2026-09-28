@@ -78,13 +78,16 @@ def sample_with_drafts(
             head.reference_token_logprobs[:count] + (() if tail is None else tail.reference_token_logprobs or ()))
         bounds = None if tail is not None and tail.token_cdf_bounds is None else (
             head.token_cdf_bounds[:count] + (() if tail is None else tail.token_cdf_bounds or ()))
+        # A replayed token's statistic is not computed.
+        statistics = None if request.statistic is None or tail is not None and tail.token_statistics is None else (
+            (float("nan"),) * count + (() if tail is None else tail.token_statistics or ()))
         outputs.append(SequenceSample(
             prefix=request.prefix, token_ids=head.token_ids[:count] + (() if tail is None else tail.token_ids),
             token_logprobs=head.token_logprobs[:count] + (() if tail is None else tail.token_logprobs),
             policy_id=request.sampling.policy_id, model_id=model_id, request_id=request.request_id,
             finish_reason=end if tail is None else tail.finish_reason, reference_token_logprobs=references,
             reference_policy_id=None if references is None else request.reference_policy.policy_id,
-            token_cdf_bounds=bounds,
+            token_cdf_bounds=bounds, token_statistics=statistics,
         ))
     return outputs, sum(kept)
 

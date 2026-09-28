@@ -9,14 +9,18 @@ and its first completion continues the same request stream later.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from typing import NamedTuple
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, SequenceSample, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 
-# A generated completion: its tokens and their base-policy log-probabilities.
-Completion = tuple[TokenSequence, tuple[float, ...]]
+
+class Block(NamedTuple):
+    """A candidate block and why its output ended there (``"length"`` when the output goes on)."""
+
+    token_ids: TokenSequence
+    finish_reason: str
 
 
 class OwnStream:
@@ -72,16 +76,12 @@ def sample_outputs(
     return outputs
 
 
-def cut_block(output: SequenceSample, length: int) -> tuple[SequenceSample, Completion | None]:
+def cut_block(output: SequenceSample, length: int) -> tuple[Block, TokenSequence | None]:
     """A complete output as a candidate block and, when it continues, the block's first completion."""
 
     if len(output.token_ids) <= length:
-        return output, None
-    reference, bounds = output.reference_token_logprobs, output.token_cdf_bounds
-    block = replace(output, token_ids=output.token_ids[:length], token_logprobs=output.token_logprobs[:length],
-                    reference_token_logprobs=None if reference is None else reference[:length],
-                    token_cdf_bounds=None if bounds is None else bounds[:length], finish_reason="length")
-    return block, (output.token_ids[length:], output.token_logprobs[length:])
+        return Block(output.token_ids, output.finish_reason), None
+    return Block(output.token_ids[:length], "length"), output.token_ids[length:]
 
 
-__all__ = ["Completion", "OWN_STREAM", "OwnStream", "cut_block", "sample_outputs", "validate_base_sampling"]
+__all__ = ["Block", "OWN_STREAM", "OwnStream", "cut_block", "sample_outputs", "validate_base_sampling"]

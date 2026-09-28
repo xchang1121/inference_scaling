@@ -26,8 +26,8 @@ from functools import partial
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from math import isclose, isfinite, prod
+from dataclasses import dataclass, replace
+from math import fsum, isclose, isfinite, prod
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,8 @@ from packaging.version import Version
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
-from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.types import (AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence,
+                                          TokenStatistic)
 
 _PROTECTED_ENGINE_KWARGS = frozenset({
     "model", "tokenizer", "tokenizer_revision", "dtype", "tensor_parallel_size", "data_parallel_size",
@@ -204,6 +205,13 @@ def _logprob_value(position: Any, token_id: int) -> float:
     except (KeyError, TypeError) as error:
         raise RuntimeError(f"vLLM did not return the chosen token {token_id} in its log-probabilities") from error
     return float(getattr(value, "logprob", value))
+
+
+def _top_confidence(position: Any, top_k: int) -> float:
+    """Minus the mean of the ``top_k`` largest log-probabilities that vLLM returned for a position."""
+
+    values = sorted((float(getattr(value, "logprob", value)) for value in position.values()), reverse=True)
+    return -fsum(values[:top_k]) / top_k
 
 
 def _load_tokenizer(factory, model, tokenizer, tokenizer_revision, revision, cache_dir,
@@ -394,7 +402,7 @@ class VLLMBackend:
             raise ValueError("vLLM does not sample from a request's uniform stream, so it cannot replay drafts")
         if request.log_weight_stop is not None:
             raise ValueError("vLLM does not report the reference log-probabilities a log-weight stop needs")
-        policy = request.sampling
+        policy, statistic = request.sampling, self._statistic(request)
         # vLLM cannot continue a uniform stream, so a continuing request draws independent randomness.
         seed = request.seed if not request.uniform_offset else SeedStream(request.seed).derive(
             "uniform-offset", request.uniform_offset)
@@ -406,7 +414,8 @@ class VLLMBackend:
             top_p=float(policy.top_p),
             top_k=0 if policy.top_k is None else int(policy.top_k),
             seed=int(seed),
-            logprobs=0,
+            # The K most likely tokens' processed log-probabilities give the policy's top-K statistic.
+            logprobs=0 if statistic is None or statistic.top_k is None else statistic.top_k,
             flat_logprobs=False,
             logit_bias=self._logit_bias(),
             ignore_eos=True,
@@ -503,6 +512,9 @@ class VLLMBackend:
         if positions is None or len(positions) != len(tokens):
             raise RuntimeError("vLLM returned an invalid generated log-probability shape")
         token_logprobs = tuple(_logprob_value(position, token) for position, token in zip(positions, tokens, strict=True))
+        statistic = self._statistic(request)
+        statistics = None if statistic is None else token_logprobs if statistic.top_k is None else tuple(
+            _top_confidence(position, statistic.top_k) for position in positions)
         # The fused MH worker reports the base probabilities at temperature 1.
         reference_values = None if reference_token_logprobs is None or request.reference_temperature != 1 else tuple(
             float(value) for value in reference_token_logprobs)
@@ -523,6 +535,7 @@ class VLLMBackend:
             model_id=self.model_id, request_id=request.request_id, finish_reason=finish_reason,
             reference_token_logprobs=reference_values,
             reference_policy_id=None if reference_values is None else reference_sampling.policy_id,
+            token_statistics=statistics,
         )
         prompt_length = len(self._model_prefix(request.prefix))
         cached = min(prompt_length, int(getattr(output, "num_cached_tokens", 0) or 0))
@@ -642,16 +655,30 @@ class VLLMBackend:
             self._delegated_estimated_dense_forward_flops += delegated_flops
         return results
 
-    def score_statistics_batch(self, requests: Sequence[ScoreRequest], *, confidence_top_k: int) -> list[Any]:
-        """Delegate top-K confidence statistics to the exact backend.
+    @staticmethod
+    def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
+        """The engine reports its sampling policy's log-probabilities, so it computes that policy's statistics."""
+
+        return statistic.matches(sampling)
+
+    def _statistic(self, request: GenerationRequest) -> TokenStatistic | None:
+        """The request's statistic when the engine's log-probabilities give it."""
+
+        statistic = request.statistic
+        return statistic if statistic is not None and self.records(statistic, request.sampling) else None
+
+    def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
+        """Token log-probabilities score like ``score_batch``; the exact backend reads top-K confidences.
 
         Selected-token prompt log-probabilities are enough for IS and MH at the
         base policy, but top-K confidences need the whole next-token distribution.
         """
 
+        requests = [replace(request, sampling=statistic.policy) for request in requests]
+        if statistic.top_k is None:
+            return self.score_batch(requests)
         flattened = [continuation for request in requests for continuation in request.continuations]
-        outputs, slots, flops = self._run_delegated_score(requests, "score_statistics_batch",
-                                                          confidence_top_k=confidence_top_k)
+        outputs, slots, flops = self._run_delegated_score(requests, "token_statistics", statistic=statistic)
         if len(outputs) != len(flattened):
             raise RuntimeError("exact scoring backend returned an invalid result count")
         with self._statistics_lock:

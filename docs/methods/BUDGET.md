@@ -352,8 +352,7 @@ result = run_joint_budget_is(
 )
 ```
 
-`reward(prompt_tokens, sequences, token_logprobs)` 批量返回完整序列的奖励，`token_logprobs` 是各序列在生成策略下的
-逐 token 对数概率；它必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
+`reward(prompt_tokens, sequences)` 批量返回完整序列的奖励；它必须是固定逐序列函数。`vote` 奖励因此先冻结一个独立样本池；
 直接在当前候选池内重新统计多数标签会改变候选权重之间的依赖关系，不适用第 2 节证明。
 
 | 职责 | 代码 / 测试 |

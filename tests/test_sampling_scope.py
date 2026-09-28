@@ -1,6 +1,4 @@
 from math import exp
-from types import SimpleNamespace
-
 import pytest
 
 from inference_scaling.arllm.backends.reference import ReferencePolicyBackend
@@ -33,16 +31,6 @@ class _Backend(TabularAutoregressiveBackend):
 
     def encode(self, text, *, add_special_tokens=False):
         return (self.tokenizer.get_vocab()[text],)
-
-    def score_statistics_batch(self, requests, *, confidence_top_k=None):
-        # In this fixture token 0 is the entire thinking span. The end marker
-        # and the identically worded final content must stay outside scoring.
-        assert all(request.prefix == (3,) for request in requests)
-        assert all(tokens == (0,) for request in requests for tokens in request.continuations)
-        return [
-            SimpleNamespace(token_topk_confidences=(1.0,))
-            for request in requests for _ in request.continuations
-        ]
 
 
 def test_reference_policy_matches_direct_temperature_scoring():

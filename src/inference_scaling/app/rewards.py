@@ -30,20 +30,10 @@ class Reward:
     temperature: float
     # Rewards of complete sequences of one problem.
     batch: TokenBatchReward
-    # Base-model forward passes per scored sequence, charged by budgeted IS.
+    # Base-model forward passes per scored generated sequence, charged by budgeted IS.
     forward_passes: int
     description: Mapping[str, Any]
     model: Any = field(default=None, compare=False)
-    # The reward as a function of the generation policy's token log-probabilities, when it is one.
-    from_logprobs: Callable[[Sequence[float]], float] | None = None
-
-    def generated(self, prompt: TokenSequence, sequences: Sequence[TokenSequence],
-                  logprobs: Sequence[Sequence[float]]) -> list[float]:
-        """Rewards of generated sequences, read from their generation log-probabilities when they suffice."""
-
-        if self.from_logprobs is not None:
-            return [self.from_logprobs(values) for values in logprobs]
-        return [float(value) for value in self.batch(prompt, sequences)]
 
 
 def memoized(batch: TokenBatchReward) -> TokenBatchReward:

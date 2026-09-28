@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import Any
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample
@@ -45,9 +46,9 @@ class StoppedSequenceBackend:
     def tokenizer(self):
         return getattr(self.backend, "tokenizer")
 
-    def score_statistics_batch(self, requests, *, confidence_top_k):
-        # Statistic spans are chosen explicitly by the reward; these remain original model statistics.
-        return getattr(self.backend, "score_statistics_batch")(requests, confidence_top_k=confidence_top_k)
+    def token_statistics(self, requests, statistic):
+        # A reward chooses its span, so these are the unstopped model's statistics.
+        return getattr(self.backend, "token_statistics")(requests, statistic)
 
     def _stop_end(self, generated: TokenSequence) -> int | None:
         """End of the first boundary in the generated tokens: the thinking close or EOS."""
@@ -75,7 +76,8 @@ class StoppedSequenceBackend:
         tokens: list[list[int]] = [[] for _ in requests]
         logs: list[list[float]] = [[] for _ in requests]
         references: list[list[float] | None] = [[] for _ in requests]
-        bounds: list[list[tuple[float, float]] | None] = [[] for _ in requests]
+        bounds: list[list[Any] | None] = [[] for _ in requests]
+        statistics: list[list[Any] | None] = [[] if request.statistic else None for request in requests]
         # Why each request ended: None while it continues, else "stop" or "rejected".
         done: list[str | None] = [None] * len(requests)
         weights = [None if request.log_weight_stop is None else request.log_weight_stop.start for request in requests]
@@ -118,11 +120,12 @@ class StoppedSequenceBackend:
                     reference.extend((sample.reference_token_logprobs or ())[:keep])
                 else:
                     references[index] = None
-                bound = bounds[index]
-                if bound is not None and sample.token_cdf_bounds is not None:
-                    bound.extend(sample.token_cdf_bounds[:keep])
-                else:
-                    bounds[index] = None
+                for kept, values in ((bounds, sample.token_cdf_bounds), (statistics, sample.token_statistics)):
+                    current = kept[index]
+                    if current is not None and values is not None:
+                        current.extend(values[:keep])
+                    else:
+                        kept[index] = None
                 stop = inner_request.log_weight_stop
                 if stop is not None:
                     weights[index] = replace(stop, start=weights[index]).weight(
@@ -141,6 +144,7 @@ class StoppedSequenceBackend:
                 reference_token_logprobs=None if references[index] is None else tuple(references[index] or ()),
                 reference_policy_id=None if references[index] is None else request.reference_policy.policy_id,
                 token_cdf_bounds=None if bounds[index] is None else tuple(bounds[index] or ()),
+                token_statistics=None if statistics[index] is None else tuple(statistics[index] or ()),
             )
             for index, request in enumerate(requests)
         ]

@@ -14,7 +14,7 @@ import numpy as np
 
 from inference_scaling.arllm.backends.replay import sample_with_drafts
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample, TokenSequence, TokenStatistic
 from inference_scaling.shared.rng import uniform_stream
 
 
@@ -93,6 +93,7 @@ class TabularAutoregressiveBackend:
             logprobs: list[float] = []
             references: list[float] = []
             bounds: list[tuple[float, float]] = []
+            statistics: list[float] = []
             finish_reason = "length"
             stop, running = request.log_weight_stop, 0.0 if request.log_weight_stop is None else request.log_weight_stop.start
             for uniform in uniform_stream(request.seed, request.uniform_offset, request.max_new_tokens):
@@ -104,6 +105,8 @@ class TabularAutoregressiveBackend:
                 logprobs.append(float(np.log(probs[token])))
                 references.append(float(np.log(self.probabilities(tuple(context), request.reference_policy)[token])))
                 bounds.append((float(cdf[token - 1]) if token else -1.0, float(cdf[token])))
+                if request.statistic is not None:
+                    statistics.append(self._statistic(tuple(context), token, request.statistic))
                 context.append(token)
                 if request.sampling.eos_token_id == token:
                     finish_reason = "eos"
@@ -116,8 +119,23 @@ class TabularAutoregressiveBackend:
                 policy_id=request.sampling.policy_id, model_id=self.model_id, request_id=request.request_id,
                 finish_reason=finish_reason, reference_token_logprobs=tuple(references),
                 reference_policy_id=request.reference_policy.policy_id, token_cdf_bounds=tuple(bounds),
+                token_statistics=None if request.statistic is None else tuple(statistics),
             ))
         return outputs
+
+    def _statistic(self, context: TokenSequence, token: int, statistic: TokenStatistic) -> float:
+        with np.errstate(divide="ignore"):
+            logs = np.log(self.probabilities(context, statistic.policy))
+        return float(logs[token] if statistic.top_k is None else -np.sort(logs)[-statistic.top_k:].mean())
+
+    def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
+        return [tuple(self._statistic(request.prefix + continuation[:index], token, statistic)
+                      for index, token in enumerate(continuation))
+                for request in requests for continuation in request.continuations]
+
+    @staticmethod
+    def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
+        return True
 
     def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
         outputs: list[tuple[float, ...]] = []

@@ -29,7 +29,7 @@ from inference_scaling.arllm.algorithms.config import PowerMHConfig, RewardMHCon
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.types import GeneratedBatchReward
+from inference_scaling.shared.types import TokenBatchReward
 from inference_scaling.arllm.types import (
     AutoregressiveBackend,
     Draft,
@@ -389,7 +389,7 @@ def run_reward_mh_chain(
     prompt: TokenSequence,
     config: RewardMHConfig,
     proposal: SamplingConfig,
-    reward: GeneratedBatchReward,
+    reward: TokenBatchReward,
     seeds: SeedStream,
     *,
     chain_id: int = 0,
@@ -404,8 +404,8 @@ def run_reward_mh_chain(
 
     _validate_proposal(proposal)
 
-    def score(sequence: TokenSequence, logprobs: tuple[float, ...]) -> float:
-        value = float(reward(prompt, [sequence], [logprobs])[0])
+    def score(sequence: TokenSequence) -> float:
+        value = float(reward(prompt, [sequence])[0])
         if not isfinite(value):
             raise ValueError("reward must be finite")
         return value
@@ -416,7 +416,7 @@ def run_reward_mh_chain(
     )
     tokens, base_logs, proposal_logs = initial.token_ids, initial.base_logprobs, initial.proposal_logprobs
     bounds = initial.bounds
-    current_reward = score(tokens, base_logs)
+    current_reward = score(tokens)
     trace: list[RewardMHStep] = []
     skipped = 0
     for step_index in range(config.updates):
@@ -434,7 +434,7 @@ def run_reward_mh_chain(
             seed=seeds.derive("reward_mh", chain_id, step_index, "proposal"),
             request_id=f"reward-mh:{chain_id}:step:{step_index}", draft=draft,
         )
-        proposed_reward = score(tokens[:cut] + suffix.token_ids, base_logs[:cut] + suffix.base_logprobs)
+        proposed_reward = score(tokens[:cut] + suffix.token_ids)
         decision = decide_metropolis_hastings(
             current_target_log_density=float(sum(base_logs[cut:])) + current_reward / config.reward_temperature,
             proposed_target_log_density=(

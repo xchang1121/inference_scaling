@@ -7,12 +7,36 @@ policy, not merely unprocessed model logits.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from typing import Protocol, Sequence
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.types import TokenSequence
+
+
+@dataclass(frozen=True, slots=True)
+class TokenStatistic:
+    """One number per token, read from a policy's next-token log-probabilities before the token.
+
+    Without ``top_k`` it is the token's log-probability; with ``top_k = K`` it is minus the mean
+    log-probability of the K most likely tokens (Consilience's confidence), which needs a
+    full-support policy. Either depends only on the tokens up to the token itself.
+    """
+
+    policy: SamplingConfig
+    top_k: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.top_k is not None and self.top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if self.top_k is not None and (self.policy.top_p < 1 or self.policy.top_k is not None):
+            raise ValueError("a top-K statistic requires a full-support policy")
+
+    def matches(self, sampling: SamplingConfig) -> bool:
+        """Whether ``sampling`` draws from the statistic's policy (its EOS token aside)."""
+
+        return replace(sampling, eos_token_id=self.policy.eos_token_id) == self.policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +115,8 @@ class GenerationRequest:
     draft: Draft | None = None
     # End with finish_reason "rejected" once the output can no longer be accepted.
     log_weight_stop: LogWeightStop | None = None
+    # Also report this statistic of every generated token; a backend may not compute it.
+    statistic: TokenStatistic | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:
@@ -121,6 +147,8 @@ class SequenceSample:
     # Per token, the policy's cumulative probabilities (below, through) the token in token-id order:
     # an inverse-CDF sampler draws the token exactly when its uniform u satisfies below < u <= through.
     token_cdf_bounds: tuple[tuple[float, float], ...] | None = None
+    # The request's statistic of each token, NaN where the token was replayed; None when not computed.
+    token_statistics: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if len(self.token_ids) != len(self.token_logprobs):
@@ -129,7 +157,7 @@ class SequenceSample:
             raise ValueError("actual-policy token log-probabilities must be finite")
         if (self.reference_token_logprobs is None) != (self.reference_policy_id is None):
             raise ValueError("reference token probabilities and their policy id must be provided together")
-        for name in ("reference_token_logprobs", "token_cdf_bounds"):
+        for name in ("reference_token_logprobs", "token_cdf_bounds", "token_statistics"):
             values = getattr(self, name)
             if values is not None and len(values) != len(self.token_ids):
                 raise ValueError(f"{name} needs one entry per sampled token")

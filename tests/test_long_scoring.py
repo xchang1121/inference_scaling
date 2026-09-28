@@ -8,7 +8,7 @@ from inference_scaling.arllm.algorithms.config import ConditionalISConfig, Power
 from inference_scaling.arllm.algorithms.mh import run_power_mh_chain
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenStatistic
 from inference_scaling.shared.model.generation import generation_budget
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import pointwise
@@ -36,10 +36,10 @@ def test_chunked_scoring_matches_complete_causal_context(family):
                                   prefix_cache_bytes=2**24)
     requests = [ScoreRequest((1, 4, 3, 5, 8, 9), ((8, 4, 3, 9, 1, 6, 2), (5, 6)), SamplingConfig(temperature=0.7)),
                 ScoreRequest((), ((8,),), SamplingConfig())]
-    expected = complete.score_statistics_batch(requests, confidence_top_k=5)
-    actual = chunked.score_statistics_batch(requests, confidence_top_k=5)
-    for left, right in zip(expected, actual, strict=True):
-        assert right.token_topk_confidences == pytest.approx(left.token_topk_confidences, abs=2e-6)
+    statistic = TokenStatistic(SamplingConfig(temperature=0.7), 5)
+    for left, right in zip(complete.token_statistics(requests, statistic), chunked.token_statistics(requests, statistic),
+                           strict=True):
+        assert right == pytest.approx(left, abs=2e-6)
     for left, right in zip(complete.score_batch(requests), chunked.score_batch(requests), strict=True):
         assert right == pytest.approx(left, abs=2e-6)
     # A batch holds at most 8 * 4 padded positions: the two shorter inputs share one padded to 7 and

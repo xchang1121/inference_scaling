@@ -98,22 +98,17 @@ def test_conditional_is_rejects_policies_that_break_the_weight_formula(sampling)
                            pointwise(_reward), SeedStream(1), sampling=sampling)
 
 
-def test_conditional_is_scores_one_batch_with_generation_logprobs() -> None:
-    backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
+def test_conditional_is_scores_a_step_in_one_batch() -> None:
     seen: list[tuple[tuple[int, ...], ...]] = []
 
-    def reward_batch(_prompt, generated, logprobs):
+    def reward_batch(_prompt, generated):
         seen.append(tuple(generated))
-        # Every generated token, candidate and completion alike, comes with its log-probability.
-        assert all(tuple(values) == pytest.approx((np.log(0.5),) * len(tokens))
-                   for values, tokens in zip(logprobs, generated, strict=True))
         return tuple(float(tokens[-1] == 1) for tokens in generated)
 
-    result = run_conditional_is(backend, (), ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=1,
-                                                                 total_length=2, reward_temperature=1.0),
-                                reward_batch, SeedStream(91))
-    assert len(result.token_ids) == 2
-    assert len(seen[0]) == 4
+    result = run_conditional_is(TabularAutoregressiveBackend({}, fallback=(0.5, 0.5)), (), ConditionalISConfig(
+        block_first=False, candidate_count=2, rollout_count=2, block_size=1, total_length=2, reward_temperature=1.0),
+        reward_batch, SeedStream(91))
+    assert len(result.token_ids) == 2 and len(seen[0]) == 4
 
 
 def test_kept_completion_is_reused_without_rescoring() -> None:
@@ -164,7 +159,7 @@ def test_steps_started_at_the_target_stay_at_the_target() -> None:
     counts: dict[str, Counter[tuple[int, ...]]] = {"target": Counter(), "empty": Counter()}
     for trial, index in enumerate(starts):
         start = sequences[index]
-        for label, state in (("target", RetainedSequence(start, logprobs[start], reward((), start))),
+        for label, state in (("target", RetainedSequence(start, reward((), start))),
                              ("empty", adapter.initial_state)):
             seeds = SeedStream(trial)
             step_index = 0

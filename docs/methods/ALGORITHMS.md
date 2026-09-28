@@ -233,8 +233,8 @@ flowchart LR
 | 第一步 | $`M`$ | $`M(K-1)`$ | $`MK`$ |
 | 后续每步 | $`M-1`$ | $`M(K-1)`$ | $`MK-1`$ |
 
-补全在生成时已返回基础模型概率，不需要重评分。`verifier` 与 `vote` 只读取答案文本；`logprob` 的评分策略与采样
-策略相同时直接取这些概率，否则与 `consilience` 一样对每条完整序列需一次评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
+补全在生成时已返回基础模型概率，不需要重评分。`verifier` 与 `vote` 只读取答案文本；`logprob` 与 `consilience`
+读取的逐 token 统计量由生成一并算出（见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
@@ -298,8 +298,8 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励选择一�
 <p align="right">式 (3)</p>
 
 式 (3) 随 $`N`$ 增大趋向奖励最大化。`--reward vote` 时不计算式 (3)，而按数据集的答案规则投票，选择得票最多的答案；
-无法解析的答案不投票。最高奖励或最高票出现平票时，按固定种子在并列候选中均匀选取。`logprob` 的评分策略
-与采样策略相同时，直接复用生成时保存的逐 token 对数概率，不增加前向计算。
+无法解析的答案不投票。最高奖励或最高票出现平票时，按固定种子在并列候选中均匀选取。`logprob` 与 `consilience`
+读取生成时算出的逐 token 统计量，不增加前向计算。
 
 ### 3.2 GRPO 与 VRPO 对照
 
@@ -701,8 +701,7 @@ proposal 与当前状态无关，全部 proposal 在一次批量调用中生成�
 ## 9. 奖励信号
 
 `--reward` 选择四种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
-$`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`，AR 算法另传入各序列在生成策略下的逐 token
-对数概率；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
+$`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。四种奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS 可以复用保留补全的
 奖励，MH 的接受率只含奖励差。`verifier` 与 `vote` 读取答案文本，由
 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 为两个模型族构造；`logprob` 与 `consilience` 读取模型
 自身的 token 概率，只用于 AR，由 [`app/ar.py`](../../src/inference_scaling/app/ar.py) 构造。
@@ -711,8 +710,8 @@ $`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`�
 | --- | --- | --- | --- |
 | `verifier` | 外部来源：数据集评分器对照参考答案、Python 工厂 $`r=f(x,y)`$ 或常数 | `rewards.verifier.source` 及同名子表 | AR 与 dLLM；按文本计算，不计模型前向 |
 | `vote` | `best_of_n`：候选按答案投票；`is`、`mh`：与冻结样本池答案一致的比例 | `rewards.vote.pool_size` | AR 与 dLLM；样本池在奖励阶段生成并单独计量 |
-| `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；评分策略与采样策略相同时复用生成概率，否则每条序列一次评分前向 |
-| `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；每条序列一次评分前向，需要逐 token 的 top-$`K`$ 概率 |
+| `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；读生成时算出的逐 token 统计量（见[下文](#alg-token-statistics)） |
+| `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；同上，统计量为逐 token 的 top-$`K`$ 置信度 |
 
 ### verifier
 
@@ -765,10 +764,7 @@ p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
 
 这里 $`L`$ 是实际生成的 token 数，包含 EOS 或完整停止标记；空 completion
 的奖励为 0。不同长度但平均 token logprob 相同的序列得到相同奖励，不做候选组内归一化。评分策略的温度为
-`rewards.logprob.score_temperature`。评分策略与采样策略相同时，Best-of-$`N`$、MH 与 IS 直接取生成时保存的逐 token
-对数概率，联合预算 IS 因而不计奖励前向；
-其余情况通过 `SequenceLogProbabilityReward.batch` 调用 `score_batch`。vLLM 只在能够精确评分所选策略时直接评分，
-否则交给精确评分后端（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
+`rewards.logprob.score_temperature`；逐 token 对数概率的来源见[模型奖励的统计量](#alg-token-statistics)。
 
 变长序列的目标指数依赖 $`L`$，不等价于固定 $`p^\alpha`$；需要固定幂次目标时使用式 (2) 和
 `ar.algorithms.mh_power.alpha`。只归一化 reward，重要性采样的 $`p/q`$、MH 概率项和 `SequenceSample.logprob` 均保留
@@ -807,9 +803,7 @@ r_{\mathrm{Cns}}(x,y)=
 直接选择全序列模式。该回退规则在 rollout 评分时确定，作为逐序列奖励定义的一部分；最终输出的回退原因记入记录的
 `fallbacks`（前缀 `consilience:`）。
 
-评分请求按相同的因果前缀分组后批量提交。Transformers 后端从 logits 取得选中 token 概率、熵统计和
-top-$`K`$ 轨迹；vLLM 后端使用精确 Transformers 评分后端。额外评分前向产生的 token 数与 FLOPs 计入运行统计。
-Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
+$`c_t`$ 的来源见[模型奖励的统计量](#alg-token-statistics)。Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
 
 ```math
 \pi_\beta(y\mid x)\propto p(y\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,y)\},
@@ -820,6 +814,22 @@ Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 M
 对应 $`\beta=0.5`$，原始分数差 1 对应约 1.65 倍权重差。奖励保留逐序列定义，模型、概率策略、分段规则和奖励参数
 固定后，保留补全的奖励才能按相同目标复用。条件 IS 应对累计思考前缀、候选和补全构成的整段思考计分，
 各生成块单独计分后相加会得到不同奖励。
+
+<a id="alg-token-statistics"></a>
+### 模型奖励的统计量
+
+`logprob` 与 Consilience 都把一个逐 token 统计量归约到 completion 的一段上
+（[`TokenStatisticReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py)）：前者是评分策略下的 token
+对数概率在整段上的均值，后者是评分策略下的 $`c_t`$ 在评分段上的窗口分数。统计量只依赖该 token 及其之前的
+token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略不同时多一次
+log-softmax），vLLM 只在评分策略就是采样策略时从引擎返回的对数概率读出（top-$`K`$ 统计量请求返回 $`K`$ 个最可能
+token 的对数概率）。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
+生成请求带上奖励的统计量并保存输出；评分一条序列时，逐位置从在相同上下文之后生成过同一 token 的输出读出，
+只有含未在该上下文生成过的 token（如冻结历史 proposal 的后缀）时才对整条评分。重放的草稿 token 不计算统计量，
+由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 的对数概率在能精确评分所选策略时
+直接评分，top-$`K`$ 统计量与其余策略交给精确评分后端（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
+生成与评分得到的统计量只差浮点舍入。后端能在生成时算出统计量时，联合预算 IS 不计奖励前向；否则每条序列计一次，
+评分前向的 token 数与 FLOPs 计入运行统计。
 
 ### 思考段奖励与生成范围
 
@@ -879,8 +889,8 @@ c_t=\log K-\log m_t+D_{\mathrm{KL}}(U_K\Vert\widetilde p_t).
 ```
 
 因而 $`c_t`$ 与全词表熵之间不存在通用的单调关系。除最终正确率外，评测应记录首尾分数、思考长度、截断率、
-top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。若复用前缀统计量，应缓存逐 token 值；
-后缀重采样改变思考长度后，需要按新长度重算窗口范围和窗口均值。
+top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。复用的是逐 token 统计量，窗口范围与均值按每条序列的
+长度重算。
 
 <a id="alg-correctness-matrix"></a>
 ## 10. 正确性与近似来源
@@ -930,7 +940,7 @@ ScoreRequest(prefix, continuations, sampling)
 | rollout 请求合并 | 不同候选的异构请求组成同一次模型调用，结果按索引还原 | 省去每个候选完成后单独等待 |
 | 重复前缀 KV | 唯一前缀只执行一次预填充，再把 KV 和末位置 logits 复制到重复它的各行（重复次数可以不同） | 增加 KV 复制；减少重复预填充 |
 | 结束行移出 | 生成到 EOS、停止序列或长度上限的行立即移出批次；采样结果留在设备上，每步只同步一次 | 解码只计算仍在生成的行 |
-| 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与参考策略（请求给定的参考温度）的概率 | on-policy IS 和 MH 省去重复评分 |
+| 生成时返回概率 | 从同一次 logits 计算中保存实际 proposal 与参考策略（请求给定的参考温度）的概率，以及请求要求的奖励统计量 | on-policy IS 和 MH 省去重复评分；模型奖励省去评分前向 |
 | 评分小批量 | 长度相近的续写成批，每批至多 `ar.engine.transformers.max_score_batch_size` 行、同样多个分块的填充位置；配合 `logits_to_keep` | 限制全词表 logits 与 KV 的显存峰值 |
 | 前缀 KV 存储 | 结束的生成行按其 token 保存 KV（`ar.engine.transformers.prefix_cache_mib` 以内，最久未用先出）；每个唯一前缀从最长的已存前缀接着预填充，例如 IS 第二阶段的 $`g+c_k`$ 直接复用第一阶段第 $`k`$ 行 | 省去共同前缀（IS 的 $`g`$、MH 的保留前缀）的重复预填充；FLOPs 只计未命中的位置 |
 | 原地 KV | `ar.engine.transformers.in_place_kv` 时每层预留缓冲区，新位置原地写入，层变为已写部分的视图 | 省去 `DynamicCache` 每步整层复制；多占至多一半的预留显存 |
@@ -1049,7 +1059,7 @@ vLLM `0.26.x`、V1 model runner、无 speculative decoding。约束不满足时�
 python -m inference_scaling --algorithm mh_power --model ar --dataset gsm8k
 ```
 
-Consilience 的 top-$`K`$ 统计、非单位温度采样分布和把部分概率截为零的 top-k/top-p 所需精确评分交给
+生成时读不到的 Consilience top-$`K`$ 统计、非单位温度采样分布和把部分概率截为零的 top-k/top-p 所需精确评分交给
 Transformers 后端，即设 `"exact_scoring": "transformers"`。精确评分后端按 `ar.engine.device` 与 `ar.engine.dtype`
 加载同一份已解析的权重和 tokenizer；与 vLLM 共用 GPU 时，需要相应降低 `gpu_memory_utilization`。后端计数器分别
 记录 vLLM 直接评分的序列数（`native_score_sequences`）和交给 Transformers 的序列数、前向 token 位置数与 FLOPs
