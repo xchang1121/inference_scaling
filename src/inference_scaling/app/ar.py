@@ -21,7 +21,7 @@ from inference_scaling.app.records import (
     importance_trace,
     json_sha256,
 )
-from inference_scaling.app.rewards import Reward, best_index, memoized, verifier_reward
+from inference_scaling.app.rewards import Reward, best_of_n, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
@@ -291,20 +291,10 @@ class ARFamily:
                                       task.seeds.derive("best_of_n", task.problem.id, index),
                                       f"best-of-n:{task.problem.id}:{index}")
                     for index in range(int(self.config["samples"]))]
-        samples = task.backend.sample_batch(requests)
-        sequences = [sample.token_ids for sample in samples]
-        texts = [self.answer_text(task.prompt, tokens) for tokens in sequences]
-        rng = random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break"))
         assert reward is not None
-        values = [float(value) for value in reward.batch(task.prompt, sequences)]
-        chosen = best_index(values, rng)
-        grades = [self.dataset.grade(text, task.problem) for text in texts]
-        return sequences[chosen], {
-            "selected_index": chosen,
-            "candidates": [{"answer": grade.answer, "correct": grade.correct, "tokens": len(tokens),
-                            "reward": values[index]}
-                           for index, (grade, tokens) in enumerate(zip(grades, sequences, strict=True))],
-        }, values[chosen]
+        return best_of_n(reward, self.dataset, task.problem, task.prompt,
+                         [sample.token_ids for sample in task.backend.sample_batch(requests)], self.answer_text,
+                         random.Random(task.seeds.derive("best_of_n", task.problem.id, "tie-break")))
 
     def _mh_config(self, task: _Task, *, alpha: float, reward_temperature: float | None,
                    early_rejection: bool) -> MHConfig:

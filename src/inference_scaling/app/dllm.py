@@ -22,7 +22,7 @@ from inference_scaling.app.records import (
     checkpoint_metadata_hashes,
     importance_trace,
 )
-from inference_scaling.app.rewards import Reward, best_index, verifier_reward
+from inference_scaling.app.rewards import Reward, best_of_n, verifier_reward
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.dllm.algorithms.config import (
     DiffusionBlockBeamConfig,
@@ -184,18 +184,9 @@ class DLLMFamily:
         samples = self._samples(prompt, self.sampling, [
             seeds.derive("best_of_n", problem.id, index) for index in range(int(self.config["samples"]))
         ], f"best-of-n:{problem.id}")
-        sequences = [sample.token_ids for sample in samples]
-        texts = [self.answer_text(prompt, tokens) for tokens in sequences]
-        rng = random.Random(seeds.derive("best_of_n", problem.id, "tie-break"))
         assert reward is not None
-        values = [float(value) for value in reward.batch(prompt, sequences)]
-        chosen = best_index(values, rng)
-        grades = [self.dataset.grade(text, problem) for text in texts]
-        return sequences[chosen], {
-            "selected_index": chosen,
-            "candidates": [{"answer": grade.answer, "correct": grade.correct, "reward": values[index]}
-                           for index, grade in enumerate(grades)],
-        }, values[chosen]
+        return best_of_n(reward, self.dataset, problem, prompt, [sample.token_ids for sample in samples],
+                         self.answer_text, random.Random(seeds.derive("best_of_n", problem.id, "tie-break")))
 
     def _mh_power(self, problem: Problem, prompt: TokenSequence, seed: int, seeds: SeedStream, reward: Reward | None):
         config = self.config

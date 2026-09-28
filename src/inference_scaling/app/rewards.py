@@ -87,11 +87,18 @@ def verifier_reward(
                                               for grade in (dataset.grade(text, problem) for text in pool)]})
 
 
-def best_index(values: Sequence[float], rng: random.Random) -> int:
-    """Best-of-N: the highest reward; ties go to the seeded RNG."""
+def best_of_n(reward: Reward, dataset: Dataset, problem: Problem, prompt: TokenSequence,
+              sequences: Sequence[TokenSequence], answer_text: AnswerText,
+              rng: random.Random) -> tuple[TokenSequence, dict[str, Any], float]:
+    """The sequence of highest reward, ties to the seeded RNG; the trace grades every candidate."""
 
+    values = [float(value) for value in reward.batch(prompt, sequences)]
     top = max(values)
-    return rng.choice([index for index, value in enumerate(values) if value == top])
+    chosen = rng.choice([index for index, value in enumerate(values) if value == top])
+    grades = [dataset.grade(answer_text(prompt, tokens), problem) for tokens in sequences]
+    return sequences[chosen], {"selected_index": chosen, "candidates": [
+        {"answer": grade.answer, "correct": grade.correct, "tokens": len(tokens), "reward": value}
+        for grade, tokens, value in zip(grades, sequences, values, strict=True)]}, values[chosen]
 
 
-__all__ = ["REWARDS", "Reward", "best_index", "memoized", "verifier_reward"]
+__all__ = ["REWARDS", "Reward", "best_of_n", "memoized", "verifier_reward"]
