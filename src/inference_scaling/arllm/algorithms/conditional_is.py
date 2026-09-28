@@ -28,49 +28,10 @@ from inference_scaling.arllm.algorithms.candidates import (OWN_STREAM, Block, Ow
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
+from inference_scaling.shared.sampling.conditional_is import (ConditionalCandidate, ConditionalISResult, ConditionalISStep,
+                                                              RolloutEvaluation, select, weigh)
 from inference_scaling.shared.types import TokenBatchReward
 from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
-
-
-@dataclass(frozen=True, slots=True)
-class RolloutEvaluation:
-    """One base-policy completion of a candidate; its log weight is reward / temperature."""
-
-    token_ids: TokenSequence
-    reward: float
-    log_weight: float
-
-
-@dataclass(frozen=True, slots=True)
-class ConditionalCandidate:
-    token_ids: TokenSequence
-    rollouts: tuple[RolloutEvaluation, ...]
-    log_weight: float
-
-
-@dataclass(frozen=True, slots=True)
-class ConditionalISStep:
-    generated_length_before: int
-    candidates: tuple[ConditionalCandidate, ...]
-    selected_index: int
-    # Completion of the selected candidate kept in the sequence.
-    completion_index: int
-    # Whether candidate 0 continues the kept sequence (false on the first step).
-    retained_candidate: bool
-    # Completions generated and scored in this step; a reused one is excluded.
-    rollout_evaluations_performed: int
-
-    @property
-    def selected(self) -> ConditionalCandidate:
-        return self.candidates[self.selected_index]
-
-
-@dataclass(frozen=True, slots=True)
-class ConditionalISResult:
-    prompt: TokenSequence
-    token_ids: TokenSequence
-    steps: tuple[ConditionalISStep, ...]
 
 
 def estimate_conditional_weights(
@@ -158,10 +119,7 @@ def estimate_conditional_weights(
     for (index, tokens), value in zip(pending, rewards, strict=True):
         by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature))
 
-    return tuple(
-        ConditionalCandidate(candidate.token_ids, tuple(group), logmeanexp([item.log_weight for item in group]))
-        for candidate, group in zip(candidates, by_candidate, strict=True)
-    )
+    return weigh([candidate.token_ids for candidate in candidates], by_candidate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,19 +196,13 @@ class ConditionalISAdapter:
             reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
             step_index=step_index, retained=retained,
         )
-        # Drawn for every candidate so the kept completion is independent of which candidate the step selects.
-        completions = [categorical_index_from_uniform(
-            normalize_log_weights([rollout.log_weight for rollout in candidate.rollouts]),
-            float(seeds.generator("conditional_is", step_index, "candidate", index, "completion").random()),
-        ) for index, candidate in enumerate(candidates)]
-        selected = categorical_index_from_uniform(normalize_log_weights([candidate.log_weight for candidate in candidates]),
-                                                  float(seeds.generator("conditional_is", step_index, "select").random()))
+        selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
-        completion = candidate.rollouts[completions[selected]]
+        completion = candidate.rollouts[kept]
         carried = bool(state.token_ids)
         record = ConditionalISStep(
             generated_length_before=state.fixed, candidates=candidates, selected_index=selected,
-            completion_index=completions[selected], retained_candidate=carried,
+            completion_index=kept, retained_candidate=carried,
             # The carried completion was evaluated in an earlier step.
             rollout_evaluations_performed=sum(len(item.rollouts) for item in candidates) - int(carried),
         )

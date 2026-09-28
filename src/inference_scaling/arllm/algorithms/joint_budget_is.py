@@ -26,7 +26,6 @@ from math import ceil, isfinite
 
 from inference_scaling.arllm.algorithms.candidates import cut_block, sample_outputs, validate_base_sampling
 from inference_scaling.arllm.algorithms.conditional_is import (
-    ConditionalISStep,
     RetainedSequence,
     conditional_is_step,
     estimate_conditional_weights,
@@ -39,6 +38,7 @@ from inference_scaling.shared.budget.joint import (BlockBudgetEstimate, JointBud
                                                    estimate_weight_moments, positive_integer)
 from inference_scaling.shared.budget.planners import AdaptiveBudgetController, FullHorizonPlanner, PlanningState
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.sampling.conditional_is import ConditionalISStep
 from inference_scaling.shared.types import TokenBatchReward
 
 

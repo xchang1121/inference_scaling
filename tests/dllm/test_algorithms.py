@@ -10,12 +10,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from inference_scaling.dllm.algorithms.is_sampling import DiffusionRolloutEvaluation, run_conditional_diffusion_is
+from inference_scaling.dllm.algorithms.is_sampling import run_conditional_diffusion_is
 from inference_scaling.dllm.algorithms.mh import run_diffusion_reward_mh
 from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample
+from inference_scaling.shared.sampling.conditional_is import RolloutEvaluation
 from inference_scaling.shared.types import pointwise
 
 # (candidate_canvas, kept_sequence) of every IS variant.
@@ -146,7 +147,7 @@ def test_full_canvas_candidates_and_a_kept_sequence_leave_the_target_invariant()
             counts[run_conditional_diffusion_is(
                 backend=backend, prompt=(7,), config=config, sampling=_sampling(1), seed=seed,
                 reward=pointwise(lambda _prompt, sequence: score[sequence]),
-                start=DiffusionRolloutEvaluation(y, score[y], score[y] / 0.5)).token_ids] += 1
+                start=RolloutEvaluation(y, score[y], score[y] / 0.5)).token_ids] += 1
         return 0.5 * sum(abs(counts[y] / runs - target[y]) for y in outcomes)
 
     # Started at the target, every step keeps it; started at the base policy, three steps do not reach it.

@@ -22,7 +22,7 @@ from inference_scaling.app.records import (
     json_sha256,
 )
 from inference_scaling.app.rewards import Reward, best_index, memoized, verifier_reward
-from inference_scaling.arllm.algorithms.conditional_is import ConditionalISResult, run_conditional_is
+from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
 from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
@@ -360,7 +360,7 @@ class ARFamily:
         config = self.config
         if config["planning"] == "fixed":
             fixed = config["fixed"]
-            result: ConditionalISResult = run_conditional_is(
+            result = run_conditional_is(
                 task.backend, task.prompt,
                 ConditionalISConfig(candidate_count=int(fixed["candidate_count"]),
                                     rollout_count=int(fixed["rollout_count"]),
