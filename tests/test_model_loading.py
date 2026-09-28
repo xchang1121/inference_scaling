@@ -26,11 +26,13 @@ def test_sharded_weights_are_hashed_and_a_pin_is_enforced(tmp_path):
         (model / f"model-{number:05d}-of-00002.safetensors").write_bytes(bytes([number]))
 
     identity = _family(tmp_path, model).artifacts()["base"]
-    assert sorted(identity["weight_files"]) == ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+    assert sorted(identity["weight_sha256"]) == ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
     assert "config.json" in identity["metadata_sha256"]
     assert _family(tmp_path, model, weight_sha256=identity["weight_sha256"]).artifacts()["base"] == identity
+    with pytest.raises(ValueError, match="not the pinned"):
+        _family(tmp_path, model, weight_sha256={"model.safetensors": "0" * 64}).artifacts()
     (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
-    with pytest.raises(ValueError, match="hash to"):
+    with pytest.raises(ValueError, match="hash mismatch"):
         _family(tmp_path, model, weight_sha256=identity["weight_sha256"]).artifacts()
 
 

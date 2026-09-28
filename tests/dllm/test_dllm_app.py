@@ -46,9 +46,9 @@ def dllm_settings(base_settings, tmp_path, monkeypatch):
     settings["datasets"]["gsm8k"]["max_new_tokens"] = 5
     model = tmp_path / "llada"
     model.mkdir()
-    (model / "w.safetensors").write_bytes(b"w")
-    settings["dllm"]["model"].update(path=str(model), weight_files=["w.safetensors"], weight_bytes=[1],
-                                     weight_sha256=[hashlib.sha256(b"w").hexdigest()], mask_token_id=3)
+    (model / "model.safetensors").write_bytes(b"w")
+    settings["dllm"]["model"].update(path=str(model), weight_sha256={"model.safetensors": hashlib.sha256(b"w").hexdigest()},
+                                     mask_token_id=3)
     for section in ("sampling", "exact_sampling"):
         settings["dllm"][section].update(block_length=2, steps_per_block=2)
     algorithms = settings["dllm"]["algorithms"]

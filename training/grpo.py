@@ -18,18 +18,18 @@ from pathlib import Path
 from typing import Any
 
 from inference_scaling.app.records import (
-    cached_file_sha256,
     checkpoint_metadata_hashes,
     environment,
     git_state,
     json_sha256,
     source_sha256,
+    weight_hashes,
     write_json_atomic,
 )
 from inference_scaling.datasets.base import Problem
 from inference_scaling.datasets.gsm8k import GSM8K
 from inference_scaling.shared.compute import dense_forward_flops
-from inference_scaling.shared.model.loading import checkpoint_weight_files, resolve_checkpoint_path
+from inference_scaling.shared.model.loading import resolve_checkpoint_path
 
 
 @dataclass
@@ -184,12 +184,7 @@ def run(settings: Mapping[str, Any]) -> None:
         raise RuntimeError("GRPO training requires CUDA")
     base = resolve_checkpoint_path(str(model["path"]), revision=model["revision"], cache_dir=model["cache_dir"],
                                    local_files_only=model["local_files_only"])
-    cache_dir = Path(str(settings["hash_cache_dir"]))
-    weights = {path.relative_to(base).as_posix(): cached_file_sha256(path, cache_dir=cache_dir)
-               for path in checkpoint_weight_files(base)}
-    digest = next(iter(weights.values())) if len(weights) == 1 else json_sha256(weights)
-    if model["weight_sha256"] is not None and digest != model["weight_sha256"]:
-        raise ValueError(f"weights of {model['path']} hash to {digest}, not {model['weight_sha256']}")
+    weights = weight_hashes(base, model["weight_sha256"], cache_dir=Path(str(settings["hash_cache_dir"])))
 
     train, test = GSM8K(settings["gsm8k"]["train"]), GSM8K(settings["gsm8k"]["test"])
     overlap = {problem.question for problem in train.problems} & {problem.question for problem in test.problems}

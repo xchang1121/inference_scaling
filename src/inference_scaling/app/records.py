@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from inference_scaling.datasets.base import file_sha256
+from inference_scaling.shared.model.loading import checkpoint_weight_files
 from inference_scaling.shared.metrics import importance_effective_sample_size
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +61,17 @@ def cached_file_sha256(path: Path, *, cache_dir: Path, expected: str | None = No
     if expected is not None and digest != expected:
         raise ValueError(f"hash mismatch for {artifact}: expected {expected}, got {digest}")
     return digest
+
+
+def weight_hashes(directory: Path, pinned: Mapping[str, str] | None, *, cache_dir: Path) -> dict[str, str]:
+    """The SHA-256 of each weight file of a checkpoint; a pin must name exactly these files and match them."""
+
+    root = directory.resolve()
+    files = {path.relative_to(root).as_posix(): path for path in checkpoint_weight_files(root)}
+    if pinned is not None and set(pinned) != set(files):
+        raise ValueError(f"the weight files of {directory} are {sorted(files)}, not the pinned {sorted(pinned)}")
+    return {name: cached_file_sha256(path, cache_dir=cache_dir, expected=None if pinned is None else str(pinned[name]))
+            for name, path in files.items()}
 
 
 def directory_hashes(path: Path, *, names: Iterable[str] | None = None, suffixes: Iterable[str] = ()) -> dict[str, str]:
@@ -309,6 +321,7 @@ __all__ = [
     "snapshot_delta",
     "source_sha256",
     "summarize",
+    "weight_hashes",
     "wilson_interval",
     "write_json_atomic",
 ]

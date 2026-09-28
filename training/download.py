@@ -7,19 +7,18 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from inference_scaling.app.records import cached_file_sha256
+from inference_scaling.app.records import weight_hashes
 from inference_scaling.datasets.gsm8k import GSM8K
 
 
 def _verified(model: Mapping[str, Any], cache_dir: Path) -> bool:
-    """Whether every pinned weight file is present with its hash; unpinned models only need the directory."""
+    """Whether the pinned weight files are present with their hashes; unpinned models only need the directory."""
 
     directory = Path(str(model["path"]))
     if model["weight_sha256"] is None:
         return directory.is_dir()
     try:
-        for name, digest in model["weight_sha256"].items():
-            cached_file_sha256(directory / name, cache_dir=cache_dir, expected=str(digest))
+        weight_hashes(directory, model["weight_sha256"], cache_dir=cache_dir)
     except (FileNotFoundError, ValueError):
         return False
     return True

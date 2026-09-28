@@ -16,10 +16,9 @@ from typing import Any, Mapping
 from inference_scaling.app.records import (
     Meter,
     adapter_hashes,
-    cached_file_sha256,
     checkpoint_metadata_hashes,
     importance_trace,
-    json_sha256,
+    weight_hashes,
 )
 from inference_scaling.app.rewards import Reward, best_of_n, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
@@ -37,7 +36,6 @@ from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.model.generation import generation_budget
 from inference_scaling.shared.model.loading import (
-    checkpoint_weight_files,
     release_accelerator_memory,
     resolve_checkpoint_path,
     synchronize_accelerator,
@@ -105,13 +103,10 @@ class ARFamily:
 
         model = self.ar["model"]
         directory = self._resolve(str(model["path"]), model["revision"])
-        files = {path.relative_to(directory).as_posix(): cached_file_sha256(path, cache_dir=self.cache_dir)
-                 for path in checkpoint_weight_files(directory)}
-        digest = next(iter(files.values())) if len(files) == 1 else json_sha256(files)
-        if model["weight_sha256"] is not None and digest != model["weight_sha256"]:
-            raise ValueError(f"weights of {model['path']} hash to {digest}, not {model['weight_sha256']}")
-        identity: dict[str, Any] = {"path": str(model["path"]), "resolved": str(directory), "weight_sha256": digest,
-                                    "weight_files": files, "metadata_sha256": checkpoint_metadata_hashes(directory)}
+        identity: dict[str, Any] = {
+            "path": str(model["path"]), "resolved": str(directory),
+            "weight_sha256": weight_hashes(directory, model["weight_sha256"], cache_dir=self.cache_dir),
+            "metadata_sha256": checkpoint_metadata_hashes(directory)}
         if model["adapter"] is not None:
             adapter = self._resolve(str(model["adapter"]["path"]), model["adapter"]["revision"])
             identity["adapter"] = {"path": str(model["adapter"]["path"]), "resolved": str(adapter),

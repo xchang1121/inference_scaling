@@ -56,7 +56,7 @@
     "model": {
       "path": "models/Qwen2.5-1.5B-Instruct",
       "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
-      "weight_sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "weight_sha256": {"model.safetensors": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"},
       "tokenizer": null,
       "tokenizer_revision": null,
       "tokenizer_kwargs": {},
@@ -112,17 +112,11 @@
   "vrpo": {
     "model": {
       "path": "models/LLaDA-MoE-7B-A1B-Instruct-783d3467",
-      "weight_files": [
-        "model-00001-of-00003.safetensors",
-        "model-00002-of-00003.safetensors",
-        "model-00003-of-00003.safetensors"
-      ],
-      "weight_bytes": [4999258928, 4997188984, 4717712520],
-      "weight_sha256": [
-        "84a7f34af2f3f14d767b0106b8fa7f0d7f9b95a0eeac74f2ab3f21bd69a03908",
-        "2ddb9174a03003263250c789942372382e2ce97f115377e28cb749c082f0b2d7",
-        "b1998424a021938681487ece097838f7131324eb4f776b8b0ce0c515526b31f4"
-      ],
+      "weight_sha256": {
+        "model-00001-of-00003.safetensors": "84a7f34af2f3f14d767b0106b8fa7f0d7f9b95a0eeac74f2ab3f21bd69a03908",
+        "model-00002-of-00003.safetensors": "2ddb9174a03003263250c789942372382e2ce97f115377e28cb749c082f0b2d7",
+        "model-00003-of-00003.safetensors": "b1998424a021938681487ece097838f7131324eb4f776b8b0ce0c515526b31f4"
+      },
       "mask_token_id": 156895,
       "trust_remote_code": true
     },

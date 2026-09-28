@@ -1067,9 +1067,9 @@ vLLM 的公开指标不含这部分重算的 token 数，所以 `preemptions > 0
 `ar.engine.backend` 构造 Transformers 或 vLLM 后端，dLLM 由
 [`dllm/backends/loader.py`](../../src/inference_scaling/dllm/backends/loader.py) 加载。AR 模型由 `ar.model` 指定：
 `path` 为本地目录或 Hub ID，`revision`、`tokenizer`、`tokenizer_revision` 固定版本，`adapter` 为可选的 LoRA 适配器；
-`weight_sha256` 非空时强制校验权重哈希。单文件权重、索引分片权重及适配器分别校验；Hub 路径先解析为本地快照，
+`weight_sha256`（文件名到 SHA-256）非空时逐个校验权重文件；单文件与索引分片权重同样处理，适配器另行哈希；Hub 路径先解析为本地快照，
 再交给生成与评分端。独立 tokenizer 的文件也进入运行指纹。`trust_remote_code` 默认关闭，
-`local_files_only = true` 时不下载。dLLM 的 `dllm.model` 固定每个权重文件的大小与 SHA-256。
+`local_files_only = true` 时不下载。dLLM 的 `dllm.model.weight_sha256` 与训练设置使用同一格式。
 
 ```python
 backend = load_backend(settings["ar"]["model"], settings["ar"]["engine"], seed=settings["run"]["seed"], logprobs=0)

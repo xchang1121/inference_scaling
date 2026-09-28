@@ -21,10 +21,10 @@ from inference_scaling.app.records import (
     load_jsonl,
     snapshot_delta,
     source_sha256,
+    weight_hashes,
     write_json_atomic,
 )
 from inference_scaling.datasets.gsm8k import GSM8K
-from inference_scaling.app.dllm import pinned_weight_hashes
 from inference_scaling.dllm.backends.llada import active_parameter_counts
 from inference_scaling.dllm.backends.loader import load_llada_backend
 from inference_scaling.dllm.config import VRPOSamplingConfig, sampling_from_settings
@@ -46,7 +46,8 @@ def preferences(settings: Mapping[str, Any]) -> None:
     data_path, manifest_path = Path(str(options["data"])), Path(str(options["manifest"]))
     effective = {"vrpo": {key: vrpo[key] for key in ("model", "engine", "prompt", "sampling", "max_new_tokens",
                                                      "preferences")},
-                 "train": dataset.describe(), "weight_sha256": pinned_weight_hashes(vrpo["model"], Path(str(settings["hash_cache_dir"]))),
+                 "train": dataset.describe(), "weight_sha256": weight_hashes(Path(str(vrpo["model"]["path"])), vrpo["model"]["weight_sha256"],
+                                                                 cache_dir=Path(str(settings["hash_cache_dir"]))),
                  "metadata_sha256": checkpoint_metadata_hashes(Path(str(vrpo["model"]["path"]))),
                  "source_sha256": json_sha256(source_sha256())}
     fingerprint = json_sha256(effective)

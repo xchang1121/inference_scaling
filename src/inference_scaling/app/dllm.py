@@ -18,9 +18,9 @@ from typing import Any, Mapping
 from inference_scaling.app.records import (
     Meter,
     adapter_hashes,
-    cached_file_sha256,
     checkpoint_metadata_hashes,
     importance_trace,
+    weight_hashes,
 )
 from inference_scaling.app.rewards import Reward, best_of_n, verifier_reward
 from inference_scaling.datasets.base import Dataset, Problem
@@ -39,20 +39,6 @@ from inference_scaling.dllm.types import DiffusionGenerationRequest
 from inference_scaling.shared.model.loading import release_accelerator_memory, synchronize_accelerator
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
-
-
-def pinned_weight_hashes(model: Mapping[str, Any], cache_dir: Path) -> dict[str, str]:
-    """Check every pinned weight file of a ``dllm.model`` section by size and SHA-256."""
-
-    directory = Path(str(model["path"]))
-    names, sizes, hashes = model["weight_files"], model["weight_bytes"], model["weight_sha256"]
-    if not len(names) == len(sizes) == len(hashes):
-        raise ValueError("weight_files, weight_bytes and weight_sha256 differ in length")
-    for name, size in zip(names, sizes, strict=True):
-        if not (directory / name).is_file() or (directory / name).stat().st_size != size:
-            raise FileNotFoundError(f"{directory / name} is absent or has the wrong size")
-    return {name: cached_file_sha256(directory / name, cache_dir=cache_dir, expected=str(digest))
-            for name, digest in zip(names, hashes, strict=True)}
 
 
 class DLLMFamily:
@@ -80,13 +66,13 @@ class DLLMFamily:
         self.backend: Any = None
 
     def artifacts(self) -> dict[str, Any]:
-        """Pinned weight files, checked by size and SHA-256."""
+        """The weight files and their hashes; the configured hashes are enforced."""
 
         model = self.dllm["model"]
         directory = Path(str(model["path"]))
         identity: dict[str, Any] = {
             "path": str(directory),
-            "weight_sha256": pinned_weight_hashes(model, self.cache_dir),
+            "weight_sha256": weight_hashes(directory, model["weight_sha256"], cache_dir=self.cache_dir),
             "metadata_sha256": checkpoint_metadata_hashes(directory),
         }
         if model["adapter"] is not None:

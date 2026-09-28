@@ -20,6 +20,8 @@ SETTINGS_PATH = Path("settings/inference.json")
 _Choices = frozenset
 _NULLABLE_INT = (int, None)
 _NULLABLE_STR = (str, None)
+# Weight file name -> SHA-256, enforced when given.
+_PINS = (dict, None)
 
 _DLLM_SAMPLING = {
     "block_length": int,
@@ -69,7 +71,7 @@ SCHEMA: dict[str, Any] = {
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
-            "weight_sha256": _NULLABLE_STR,
+            "weight_sha256": _PINS,
             "adapter": (None, {"path": str, "revision": _NULLABLE_STR}),
             "tokenizer": _NULLABLE_STR,
             "tokenizer_revision": _NULLABLE_STR,
@@ -179,9 +181,7 @@ SCHEMA: dict[str, Any] = {
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
-            "weight_files": [str],
-            "weight_bytes": [int],
-            "weight_sha256": [str],
+            "weight_sha256": _PINS,
             "mask_token_id": int,
             "trust_remote_code": bool,
             "adapter": (None, {"path": str}),

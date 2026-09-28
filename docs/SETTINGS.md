@@ -79,7 +79,7 @@
 | --- | --- | --- |
 | `path` | 字符串 | 本地目录或 Hub 模型 ID |
 | `revision` | 字符串或 `null` | 固定的 Hub 提交 |
-| `weight_sha256` | 字符串或 `null` | 权重摘要（单文件为其 SHA-256，分片为各分片哈希映射的哈希）；非空时强制校验 |
+| `weight_sha256` | 对象或 `null` | 权重文件名到 SHA-256 的对象；非空时必须恰好列出检查点的全部权重文件并逐个校验（下载、训练与 `dllm.model` 用同一格式） |
 | `adapter` | `null` 或 `{path, revision}` | 叠加在基础模型上的 PEFT 适配器（如 GRPO 训练结果） |
 | `tokenizer` / `tokenizer_revision` / `tokenizer_kwargs` | 字符串或 `null` / 字符串或 `null` / 对象 | 独立的 tokenizer 及其参数 |
 | `cache_dir` / `local_files_only` / `trust_remote_code` | 字符串或 `null` / 布尔 / 布尔 | Hub 缓存与加载选项 |
@@ -153,7 +153,7 @@
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `model.path` / `revision` | 字符串 / 字符串或 `null` | LLaDA 目录与记录用的提交 |
-| `model.weight_files` / `weight_bytes` / `weight_sha256` | 数组 | 逐分片的文件名、字节数与 SHA-256，全部强制校验 |
+| `model.weight_sha256` | 对象或 `null` | 同 `ar.model.weight_sha256` |
 | `model.mask_token_id` / `trust_remote_code` | 整数 / 布尔 | 掩码 token 与自定义代码加载 |
 | `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |

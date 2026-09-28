@@ -40,7 +40,7 @@ SCHEMA: dict[str, Any] = {
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
-            "weight_sha256": _NULLABLE_STR,
+            "weight_sha256": (dict, None),
             "tokenizer": _NULLABLE_STR,
             "tokenizer_revision": _NULLABLE_STR,
             "tokenizer_kwargs": dict,
