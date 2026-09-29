@@ -207,9 +207,9 @@
 | `server.seed` | 整数 | 各请求随机流的根种子，按请求序号派生 |
 | `default_effort` / `effort_aliases` | 字符串 / 对象 | 请求未给推理强度时的档位；其他强度名到档位名的映射（如 `minimal` → `low`） |
 | `efforts.<名>.reasoning_effort` | `low` \| `medium` \| `xhigh` | chat template 的推理强度 |
-| `efforts.<名>.max_new_tokens` | 整数 | 思考与答案共用的输出上限；请求的 `max_tokens` 只能调低它 |
-| `efforts.<名>.forward_token_budget` | 整数 | 思考段联合预算 IS 的前向 token 预算；提示很长时抬到最低可行值（2 倍提示加 3 倍输出上限） |
-| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；进行中的一步与答案生成照常完成 |
+| `efforts.<名>.max_new_tokens` | 整数 | 单条序列（思考与答案共用）的输出上限；再受上下文（`ar.engine.vllm.max_model_len` 减提示）限制，请求的 `max_tokens` 只能调低它 |
+| `efforts.<名>.forward_token_budget` | 整数 | 一个请求所有序列（长度探测、试点、候选、补全）的前向 token 总和，不是单条长度，所以可以超过上下文；取输出上限的 4、6、8 倍，即约写满 4、6、8 条；提示很长时抬到最低可行值（2 倍提示加 3 倍输出上限） |
+| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；进行中的一步与答案生成照常完成。第一步至少要依次写完长度探测和候选，所以取值应覆盖约 2 条满长序列的解码时间 |
 
 ## `settings/training.json`
 

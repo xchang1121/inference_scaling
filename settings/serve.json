@@ -9,9 +9,9 @@
   },
   "default_effort": "medium",
   "efforts": {
-    "low": {"reasoning_effort": "low", "max_new_tokens": 16384, "forward_token_budget": 65536, "max_seconds": 60.0},
-    "medium": {"reasoning_effort": "medium", "max_new_tokens": 32768, "forward_token_budget": 262144, "max_seconds": 300.0},
-    "high": {"reasoning_effort": "xhigh", "max_new_tokens": 131072, "forward_token_budget": 524288, "max_seconds": 1200.0}
+    "low": {"reasoning_effort": "low", "max_new_tokens": 8192, "forward_token_budget": 32768, "max_seconds": 180.0},
+    "medium": {"reasoning_effort": "medium", "max_new_tokens": 32768, "forward_token_budget": 196608, "max_seconds": 900.0},
+    "high": {"reasoning_effort": "xhigh", "max_new_tokens": 65536, "forward_token_budget": 524288, "max_seconds": 2400.0}
   },
   "effort_aliases": {"none": "low", "minimal": "low", "xhigh": "high", "max": "high"}
 }
