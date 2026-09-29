@@ -133,14 +133,8 @@ python -m pip install -e ".[serve]"   # 另按硬件安装 vLLM（NVIDIA）或 v
 python -m inference_scaling.serve
 ```
 
-服务读取 `settings/inference.json` 的 `ar`（模型、引擎、IS 规划与网格）与 `rewards.consilience`，以及
-[`settings/serve.json`](settings/serve.json)（端口、模型名、并发、推理强度档位），提供 OpenAI 兼容的
-`/v1/chat/completions` 与 Anthropic 兼容的 `/v1/messages`（另有 `/v1/models`、`/v1/messages/count_tokens`、`/health`）。
-每个请求只在思考段上做联合预算 IS（Consilience 加权），再从选中的思考正常生成一次答案；Qwen3.8 的 XML 工具调用解析为
-OpenAI `tool_calls` 或 Anthropic `tool_use`。请求的 `reasoning_effort`（Anthropic 为 `output_config.effort`）选择档位，
-档位给出模板的推理强度、输出上限、前向 token 预算与时长上限，块长、候选数与补全数由规划器在其内选择。流式请求先收到
-开头事件，搜索期间收到 keep-alive，选定后收到思考、答案与工具调用。鉴权与限流由网关负责；昇腾上保持
-`ar.engine.vllm.fused_logprobs = false`（融合 worker 针对 GPU runner）。
+OpenAI 与 Anthropic 兼容的接口；每个请求在思考段上做联合预算 IS（Consilience 加权）后作答。安装、配置、启动、
+接入网关与限制见 [serve/README.md](src/inference_scaling/serve/README.md)。
 
 ## 安装
 
