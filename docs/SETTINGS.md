@@ -160,16 +160,16 @@
 | `model.path` / `revision` / `local_files_only` | Hub ID / 固定提交 / `false` | 首次运行下载 BF16 权重（约 55.6 GB）；提交固定文件内容，清单另记每个权重文件的哈希 |
 | `model.token_penalty` | `null` | 惩罚改变基础分布且未在该模型上验证；思考长度改由 `reasoning_effort` 控制 |
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
-| `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存；数千 token 的序列各占约 0.5 GiB，32 条并发不超出缓存，避免抢占（抢占使计算量记录变为下界） |
+| `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
 | `vllm.max_model_len` / `max_num_batched_tokens` | 40960 / 16384 | 覆盖 `math500` 的 32,768 token 输出上限加提示；预填充批取 vLLM 在 H100 级 GPU 上的默认值（A100 上宜取 8192） |
 | `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
-| `prompt.chat_template_kwargs` | `{"reasoning_effort": "medium"}` | 模板默认的 `xhigh` 思考很长，而 IS 的每个候选与补全都要生成到思考结束 |
+| `prompt.chat_template_kwargs` | `{"reasoning_effort": "xhigh"}` | 模板默认值，思考最充分；IS 的每个候选与补全都要生成到思考结束，要降成本可改 `medium` 或 `low` |
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
 | `datasets.gsm8k.max_new_tokens` | 16384 | 思考段与答案共用的上限 |
-| `algorithms.is` | `full_horizon`，预算 131,072，块长网格 256–2048；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算与 M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
+| `algorithms.is` | `full_horizon`，预算 131,072，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算与 M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 对 GSM8K 的输出上限沿用旧默认的相对调度（块长为上限的 1/16）；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `dllm`

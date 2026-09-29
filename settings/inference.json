@@ -109,7 +109,7 @@
         "batch_wait_seconds": 0.01
       }
     },
-    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {"reasoning_effort": "medium"}},
+    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {"reasoning_effort": "xhigh"}},
     "output": {
       "thinking_mode": "enabled",
       "thinking_start_text": null,
@@ -148,7 +148,7 @@
         "fixed": {"candidate_count": 4, "rollout_count": 1, "block_size": 1024},
         "joint": {
           "forward_token_budget": 131072,
-          "block_sizes": [256, 512, 1024, 2048],
+          "block_sizes": [64, 128, 512, 1024],
           "candidate_counts": [2, 4, 8, 16],
           "rollout_counts": [1, 2, 4],
           "pilot_candidates": 2,
