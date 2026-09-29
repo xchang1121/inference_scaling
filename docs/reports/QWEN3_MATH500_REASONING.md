@@ -39,7 +39,7 @@
 
 模型设为 `ar.model.path = "Qwen/Qwen3-1.7B"`（`revision` 固定版本，`weight_sha256` 固定权重），并设
 `ar.engine.backend = "transformers"`、`ar.sampling.temperature = 0.6`、`ar.prompt.chat_template_kwargs = {}`、
-`ar.output.sampling_scope = "full"`、`datasets.math500.selection.count = 30`。BF16 与思考模式
+`ar.output.sampling_scope = "full"`、`datasets.math500.selection.count = 30`、`max_new_tokens = 32768`。BF16 与思考模式
 （`ar.output.thinking_mode = "enabled"`）同默认设置，普通采样取 `"disabled"`。
 
 | 方法 | 命令 | 设置改动 |

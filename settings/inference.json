@@ -15,7 +15,7 @@
       },
       "selection": {"count": 32, "seed": 20260808},
       "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer.",
-      "max_new_tokens": 16384
+      "max_new_tokens": 131072
     },
     "math500": {
       "path": "data/math500/test.jsonl",
@@ -39,7 +39,7 @@
       },
       "prompt_template": "{question}\nPlease reason step by step, and put your final answer within \\boxed{}.",
       "judge_timeout_seconds": 20,
-      "max_new_tokens": 32768
+      "max_new_tokens": 131072
     }
   },
   "rewards": {
@@ -90,7 +90,7 @@
         "tensor_parallel_size": 1,
         "data_parallel_size": 1,
         "gpu_memory_utilization": 0.92,
-        "max_model_len": 40960,
+        "max_model_len": 133120,
         "max_num_seqs": 32,
         "max_num_batched_tokens": 16384,
         "quantization": null,
@@ -147,7 +147,7 @@
         "block_first": false,
         "fixed": {"candidate_count": 4, "rollout_count": 1, "block_size": 1024},
         "joint": {
-          "forward_token_budget": 131072,
+          "forward_token_budget": 524288,
           "block_sizes": [64, 128, 512, 1024],
           "candidate_counts": [2, 4, 8, 16],
           "rollout_counts": [1, 2, 4],

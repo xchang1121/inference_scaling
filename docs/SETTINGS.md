@@ -162,15 +162,15 @@
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
-| `vllm.max_model_len` / `max_num_batched_tokens` | 40960 / 16384 | 覆盖 `math500` 的 32,768 token 输出上限加提示；预填充批取 vLLM 在 H100 级 GPU 上的默认值（A100 上宜取 8192） |
+| `vllm.max_model_len` / `max_num_batched_tokens` | 133120 / 16384 | 131,072 token 的输出上限加 2,048 token 的提示余量，一条满长序列的 KV 约 8 GiB；预填充批取 vLLM 在 H100 级 GPU 上的默认值（A100 上宜取 8192） |
 | `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
 | `prompt.chat_template_kwargs` | `{"reasoning_effort": "xhigh"}` | 模板默认值，思考最充分；IS 的每个候选与补全都要生成到思考结束，要降成本可改 `medium` 或 `low` |
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
-| `datasets.gsm8k.max_new_tokens` | 16384 | 思考段与答案共用的上限 |
-| `algorithms.is` | `full_horizon`，预算 131,072，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算与 M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
-| `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 对 GSM8K 的输出上限沿用旧默认的相对调度（块长为上限的 1/16）；两个开关需要 Transformers 的请求级均匀数流 |
+| `datasets.<name>.max_new_tokens` | 131072 | 思考段与答案共用，给 `xhigh` 的长思考留足长度 |
+| `algorithms.is` | `full_horizon`，预算 524,288，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算至少约为输出上限的 3 倍（先生成一条输出测长度，再预留两个候选写完），否则思考写满上限的题会报错；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
+| `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `dllm`
 
