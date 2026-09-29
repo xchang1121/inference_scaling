@@ -22,6 +22,7 @@ import importlib.metadata
 import inspect
 import json
 import itertools
+from contextlib import contextmanager, nullcontext
 from functools import partial
 import os
 import re
@@ -49,17 +50,36 @@ _PROTECTED_ENGINE_KWARGS = frozenset({
     "speculative_config", "disable_log_stats",
 })
 
-_MH_FUSED_WORKER = "inference_scaling.arllm.backends.vllm_mh_worker.MHFusedLogprobWorker"
+_FUSED_WORKER = "inference_scaling.arllm.backends.vllm_fused_worker.FusedLogprobWorker"
+# Per request, the fused worker's base log-probabilities and Self-Certainty of the generated tokens.
+FusedValues = tuple[tuple[float, ...], tuple[float, ...]]
 # Token-only generation without speculative decoding runs neither a vision tower nor a multi-token-prediction head.
 _UNUSED_TENSOR = re.compile(r"(?:^|\.)(?:visual|vision_tower|vision_model|mtp)\.")
 
 
-def _validate_mh_fused_vllm_version() -> None:
-    """Fail before allocating a model when the worker adapter is incompatible."""
+@contextmanager
+def _fused_engine(engine_arguments: dict[str, Any]):
+    """Engine arguments that install the fused worker, under the V1 model runner that it adapts.
+
+    Sampling stays synchronous inside the engine, so each value belongs to the
+    request step that sampled the token. The version check fails before a
+    model is allocated.
+    """
 
     installed = Version(importlib.metadata.version("vllm"))
     if not Version("0.26") <= installed < Version("0.27"):
-        raise RuntimeError(f"MH fused log-probabilities require vLLM >=0.26,<0.27; found {installed}")
+        raise RuntimeError(f"fused log-probabilities require vLLM >=0.26,<0.27; found {installed}")
+    previous = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
+    if previous is not None and previous.strip().lower() in {"1", "true", "yes", "on"}:
+        raise ValueError("fused log-probabilities conflict with VLLM_USE_V2_MODEL_RUNNER=1")
+    os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "0"
+    try:
+        yield {**engine_arguments, "worker_cls": _FUSED_WORKER, "async_scheduling": False}
+    finally:
+        if previous is None:
+            os.environ.pop("VLLM_USE_V2_MODEL_RUNNER", None)
+        else:
+            os.environ["VLLM_USE_V2_MODEL_RUNNER"] = previous
 
 
 def _load_vllm_sampling_api() -> tuple[Any, Any, Any]:
@@ -91,7 +111,7 @@ class VLLMBackendSnapshot:
     maximum_in_flight_requests: int
     # Running requests the engine evicted for KV space; each one recomputes its tokens outside these counts.
     preemptions: int
-    mh_fused_logprobs: bool = False
+    fused_logprobs: bool = False
     fused_reference_sequences: int = 0
     fused_reference_tokens: int = 0
 
@@ -245,7 +265,7 @@ class VLLMBackend:
                  sampling_params_factory: Callable[..., Any], tokens_prompt_factory: Callable[..., Any] | None = None,
                  beam_search_params_factory: Callable[..., Any] | None = None,
                  scoring_backend: AutoregressiveBackend | None = None, lora_request: Any | None = None,
-                 mh_fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
+                 fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
                  metrics: Callable[[], Sequence[Any]] | None = None) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
@@ -262,7 +282,7 @@ class VLLMBackend:
         self._beam_search_params_factory = beam_search_params_factory
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
-        self._mh_fused_logprobs = bool(mh_fused_logprobs)
+        self._fused_logprobs = bool(fused_logprobs)
         self.bos_token_id = None if getattr(tokenizer, "bos_token_id", None) is None else int(tokenizer.bos_token_id)
         self._engine_lock = threading.RLock()
         self._delegated_score_lock = threading.RLock()
@@ -270,7 +290,7 @@ class VLLMBackend:
         self._closed = False
         self._active_engine_requests = 0
         for name in VLLMBackendSnapshot.__dataclass_fields__:
-            if name != "mh_fused_logprobs":
+            if name != "fused_logprobs":
                 setattr(self, "_" + name, 0)
         # vLLM's metrics snapshot; the engine's preemption counter is read relative to this backend's start.
         self._metrics = metrics
@@ -286,7 +306,7 @@ class VLLMBackend:
         max_num_batched_tokens: int | None, quantization: str | None, enforce_eager: bool, enable_prefix_caching: bool,
         max_lora_rank: int, parameter_count: int | None, seed: int, scoring_backend: AutoregressiveBackend | None,
         engine_kwargs: dict[str, Any] | None, token_penalty: Mapping[str, Any] | None,
-        enable_mh_fused_logprobs: bool = False,
+        enable_fused_logprobs: bool = False,
     ) -> "VLLMBackend":
         """Load the tokenizer and engine; :meth:`_create` picks the vLLM frontend."""
 
@@ -333,7 +353,7 @@ class VLLMBackend:
 
             lora_request = LoRARequest("inference-scaling", 1, adapter_name_or_path)
         return cls._create(
-            kwargs, tokenizer, enable_mh_fused_logprobs,
+            kwargs, tokenizer, enable_fused_logprobs,
             model_id=model_identity(
                 model_name_or_path, adapter_name_or_path, revision=revision, adapter_revision=adapter_revision,
                 tokenizer=tokenizer_name_or_path, tokenizer_revision=tokenizer_revision,
@@ -346,28 +366,13 @@ class VLLMBackend:
         )
 
     @classmethod
-    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, mh_fused_logprobs: bool,
+    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, fused_logprobs: bool,
                 **options: Any) -> "VLLMBackend":
         from vllm import LLM
 
-        if not mh_fused_logprobs:
-            return cls(LLM(**engine_arguments), tokenizer, **options)
-        # The adapter targets vLLM's stable V1 runner in 0.26. Sampling stays
-        # synchronous inside the engine so the selected raw probability is
-        # associated with the same request step.
-        _validate_mh_fused_vllm_version()
-        previous = os.environ.get("VLLM_USE_V2_MODEL_RUNNER")
-        if previous is not None and previous.strip().lower() in {"1", "true", "yes", "on"}:
-            raise ValueError("MH fused log-probabilities conflict with VLLM_USE_V2_MODEL_RUNNER=1")
-        os.environ["VLLM_USE_V2_MODEL_RUNNER"] = "0"
-        try:
-            engine = LLM(**engine_arguments, worker_cls=_MH_FUSED_WORKER, async_scheduling=False)
-        finally:
-            if previous is None:
-                os.environ.pop("VLLM_USE_V2_MODEL_RUNNER", None)
-            else:
-                os.environ["VLLM_USE_V2_MODEL_RUNNER"] = previous
-        return cls(engine, tokenizer, mh_fused_logprobs=True, **options)
+        with _fused_engine(engine_arguments) if fused_logprobs else nullcontext(engine_arguments) as arguments:
+            engine = LLM(**arguments)
+        return cls(engine, tokenizer, fused_logprobs=fused_logprobs, **options)
 
     @property
     def model_id(self) -> str:
@@ -419,7 +424,7 @@ class VLLMBackend:
             top_k=0 if policy.top_k is None else int(policy.top_k),
             seed=int(seed),
             # The K most likely tokens' processed log-probabilities give the policy's top-K statistic.
-            logprobs=0 if statistic is None else statistic.top_k,
+            logprobs=0 if statistic is None or statistic.top_k is None else statistic.top_k,
             flat_logprobs=False,
             logit_bias=self._logit_bias(),
             ignore_eos=True,
@@ -437,9 +442,8 @@ class VLLMBackend:
             detokenize=False, skip_special_tokens=False, spaces_between_special_tokens=False,
         )
 
-    def _generate(self, prompts: Sequence[Any], params: Any,
-                  drain: Callable[[list[Any]], None] | None = None) -> list[Any]:
-        """One engine call; ``drain`` reads the fused MH side channel under the same lock."""
+    def _generate(self, prompts: Sequence[Any], params: Any, fused: dict[str, FusedValues] | None = None) -> list[Any]:
+        """One engine call. With the fused worker every finished request's values are released, and kept in ``fused``."""
 
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
@@ -450,43 +454,35 @@ class VLLMBackend:
         try:
             with self._engine_lock:
                 outputs = list(self._engine.generate(list(prompts), **kwargs))
-                if drain is not None:
-                    drain(outputs)
+                if self._fused_logprobs:
+                    request_ids = [getattr(output, "request_id", None) for output in outputs]
+                    if None in request_ids or len(set(request_ids)) != len(request_ids):
+                        raise RuntimeError("vLLM returned missing or duplicate request ids")
+                    released = self._merge_fused(self._engine.collective_rpc(
+                        "pop_fused_logprobs", args=(tuple(map(str, request_ids)),)))
+                    if fused is not None:
+                        fused.update(released)
         finally:
             self._engine_requests_finished(len(prompts))
         return outputs
 
-    def _collect_mh_reference_logprobs(self, outputs: Sequence[Any]) -> dict[str, tuple[float, ...]]:
-        callback = getattr(self._engine, "collective_rpc", None)
-        if callback is None:
-            raise RuntimeError("the configured vLLM engine does not expose collective_rpc; "
-                               "disable mh_fused_logprobs or use the supported offline LLM frontend")
-        if any(getattr(output, "request_id", None) is None for output in outputs):
-            raise RuntimeError("vLLM omitted the request id required for fused MH accounting")
-        request_ids = [str(output.request_id) for output in outputs]
-        if len(set(request_ids)) != len(request_ids):
-            raise RuntimeError("vLLM returned duplicate request ids")
+    @staticmethod
+    def _merge_fused(responses: Any) -> dict[str, FusedValues]:
+        """The fused values of each tensor-parallel worker, which must agree."""
 
-        responses = callback("pop_mh_reference_logprobs", args=(tuple(request_ids),))
-        if inspect.isawaitable(responses):
-            raise RuntimeError("MH fused log-probabilities require the synchronous vLLM frontend")
-        merged: dict[str, tuple[float, ...]] = {}
+        merged: dict[str, FusedValues] = {}
         for response in (responses,) if isinstance(responses, Mapping) else tuple(responses):
             if not isinstance(response, Mapping):
-                raise RuntimeError("the fused MH worker returned an invalid probability payload")
-            for raw_request_id, raw_values in response.items():
-                request_id, values = str(raw_request_id), tuple(float(value) for value in raw_values)
-                if any(not isfinite(value) for value in values):
-                    raise RuntimeError("the fused MH worker returned a non-finite probability")
-                previous = merged.get(request_id)
-                if previous is not None and (len(previous) != len(values) or not all(
-                        isclose(left, right, rel_tol=1e-5, abs_tol=1e-6) for left, right in zip(previous, values))):
-                    raise RuntimeError("tensor-parallel vLLM workers disagreed on base log-probabilities")
-                merged[request_id] = values
-
-        missing = [request_id for request_id in request_ids if request_id not in merged]
-        if missing:
-            raise RuntimeError("the fused MH worker omitted completed requests: " + ", ".join(missing))
+                raise RuntimeError("the fused worker returned an invalid payload")
+            for raw_request_id, (raw_references, raw_certainties) in response.items():
+                values = (tuple(map(float, raw_references)), tuple(map(float, raw_certainties)))
+                if len(values[0]) != len(values[1]) or not all(isfinite(value) for part in values for value in part):
+                    raise RuntimeError("the fused worker returned mismatched or non-finite values")
+                previous = merged.setdefault(str(raw_request_id), values)
+                if any(len(old) != len(new) or not all(isclose(left, right, rel_tol=1e-5, abs_tol=1e-6)
+                                                       for left, right in zip(old, new))
+                       for old, new in zip(previous, values)):
+                    raise RuntimeError("tensor-parallel vLLM workers disagreed on fused log-probabilities")
         return merged
 
     def _engine_requests_started(self, count: int) -> None:
@@ -508,8 +504,7 @@ class VLLMBackend:
         return completions[0]
 
     def _sample_from_output(self, request: GenerationRequest, output: Any,
-                            reference_token_logprobs: Sequence[float] | None = None,
-                            ) -> tuple[SequenceSample, int, int, int]:
+                            fused: FusedValues | None = None) -> tuple[SequenceSample, int, int, int]:
         completion = self._completion(output)
         tokens = tuple(int(token) for token in completion.token_ids)
         positions = completion.logprobs
@@ -517,11 +512,16 @@ class VLLMBackend:
             raise RuntimeError("vLLM returned an invalid generated log-probability shape")
         token_logprobs = tuple(_logprob_value(position, token) for position, token in zip(positions, tokens, strict=True))
         statistic = self._statistic(request)
-        statistics = None if statistic is None or statistic.top_k is None else tuple(
-            _top_confidence(position, statistic.top_k) for position in positions)
-        # The fused MH worker reports the base probabilities at temperature 1.
-        reference_values = None if reference_token_logprobs is None or request.reference_temperature != 1 else tuple(
-            float(value) for value in reference_token_logprobs)
+        if statistic is None:
+            statistics = None
+        elif statistic.top_k is not None:
+            statistics = tuple(_top_confidence(position, statistic.top_k) for position in positions)
+        elif fused is not None:
+            statistics = fused[1]
+        else:
+            raise RuntimeError("the fused worker omitted a generated request")
+        # The fused worker reports the base probabilities at temperature 1.
+        reference_values = None if fused is None or request.reference_temperature != 1 else fused[0]
         reference_sampling = request.reference_policy
         if reference_values is None and request.sampling == reference_sampling:
             reference_values = token_logprobs
@@ -548,17 +548,12 @@ class VLLMBackend:
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         if not requests:
             return []
-        references: dict[str, tuple[float, ...]] = {}
-        outputs = self._generate(
-            [self._prompt(request.prefix) for request in requests],
-            [self._sampling_params(request) for request in requests],
-            (lambda done: references.update(self._collect_mh_reference_logprobs(done)))
-            if self._mh_fused_logprobs else None,
-        )
+        fused: dict[str, FusedValues] = {}
+        outputs = self._generate([self._prompt(request.prefix) for request in requests],
+                                 [self._sampling_params(request) for request in requests], fused)
         if len(outputs) != len(requests):
             raise RuntimeError("vLLM returned an invalid number of request outputs")
-        parsed = [self._sample_from_output(request, output, None if getattr(output, "request_id", None) is None
-                                           else references.get(str(output.request_id)))
+        parsed = [self._sample_from_output(request, output, fused.get(str(getattr(output, "request_id", None))))
                   for request, output in zip(requests, outputs, strict=True)]
         samples = [item[0] for item in parsed]
         forward_slots = sum(item[3] for item in parsed)
@@ -659,12 +654,13 @@ class VLLMBackend:
             self._delegated_estimated_dense_forward_flops += delegated_flops
         return results
 
-    @staticmethod
-    def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
-        """The engine reports its sampling policy's most likely log-probabilities, so it computes that policy's
-        top-K confidences but not a statistic of the whole vocabulary."""
+    def records(self, statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
+        """The engine's most likely log-probabilities give its sampling policy's top-K confidences; the fused worker
+        reads the unpenalized model at temperature 1, which gives that model's divergence from uniform."""
 
-        return statistic.top_k is not None and statistic.matches(sampling)
+        if statistic.top_k is not None:
+            return statistic.matches(sampling)
+        return self._fused_logprobs and self._penalty is None and statistic.policy.temperature == 1
 
     def _statistic(self, request: GenerationRequest) -> TokenStatistic | None:
         """The request's statistic when the engine's log-probabilities give it."""
@@ -779,10 +775,8 @@ class AsyncVLLMBackend(VLLMBackend):
         super().__init__(self._runner.engine, tokenizer, **options)
 
     @classmethod
-    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, mh_fused_logprobs: bool,
+    def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, fused_logprobs: bool,
                 **options: Any) -> "AsyncVLLMBackend":
-        if mh_fused_logprobs:
-            raise ValueError("MH fused log-probabilities need the synchronous vLLM engine")
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.sampling_params import RequestOutputKind
         from vllm.v1.engine.async_llm import AsyncLLM
@@ -790,16 +784,19 @@ class AsyncVLLMBackend(VLLMBackend):
         # Only a request's finished output is read, so the engine need not stream every step.
         options["sampling_params_factory"] = partial(options["sampling_params_factory"],
                                                      output_kind=RequestOutputKind.FINAL_ONLY)
-        return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_arguments)),
-                   **options)
+        # The engine core process starts, and reads the model-runner environment, while the backend is constructed.
+        with _fused_engine(engine_arguments) if fused_logprobs else nullcontext(engine_arguments) as arguments:
+            return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**arguments)),
+                       fused_logprobs=fused_logprobs, **options)
 
     def _next_request_id(self) -> str:
         with self._request_counter_lock:
             value = next(self._request_counter)
         return f"inference-scaling:{self.model_id}:{value}"
 
-    async def _generate_one(self, prompt: Any, params: Any) -> Any:
-        kwargs = {"prompt": prompt, "sampling_params": params, "request_id": self._next_request_id()}
+    async def _generate_one(self, prompt: Any, params: Any, fused: dict[str, FusedValues] | None = None) -> Any:
+        request_id = self._next_request_id()
+        kwargs = {"prompt": prompt, "sampling_params": params, "request_id": request_id}
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
         self._engine_requests_started(1)
@@ -807,25 +804,28 @@ class AsyncVLLMBackend(VLLMBackend):
         try:
             async for output in self._engine.generate(**kwargs):
                 final = output
+            if self._fused_logprobs:
+                # The worker keeps a request's values until released, whether or not the caller reads them.
+                released = self._merge_fused(await self._engine.collective_rpc("pop_fused_logprobs", args=((request_id,),)))
+                if fused is not None:
+                    fused.update(released)
         finally:
             self._engine_requests_finished(1)
         if final is None:
             raise RuntimeError("asynchronous vLLM request returned no output")
         return final
 
-    async def _generate_many(self, prompts: Sequence[Any], params: Any) -> list[Any]:
+    async def _generate_many(self, prompts: Sequence[Any], params: Any, fused: dict[str, FusedValues] | None) -> list[Any]:
         policies = params if isinstance(params, list) else [params] * len(prompts)
         if len(policies) != len(prompts):
             raise ValueError("the number of vLLM sampling policies must match the prompts")
-        return list(await asyncio.gather(*(self._generate_one(prompt, policy)
+        return list(await asyncio.gather(*(self._generate_one(prompt, policy, fused)
                                            for prompt, policy in zip(prompts, policies, strict=True))))
 
-    def _generate(self, prompts: Sequence[Any], params: Any,
-                  drain: Callable[[list[Any]], None] | None = None) -> list[Any]:
-        # Fused MH log-probabilities need the synchronous engine, so there is nothing to drain.
+    def _generate(self, prompts: Sequence[Any], params: Any, fused: dict[str, FusedValues] | None = None) -> list[Any]:
         if self._closed:
             raise RuntimeError("vLLM backend is closed")
-        return self._runner.run(self._generate_many(tuple(prompts), params))
+        return self._runner.run(self._generate_many(tuple(prompts), params, fused))
 
     def _beam_score(self, tokens: Sequence[int], cumulative_logprob: float) -> float:
         length = len(tokens)

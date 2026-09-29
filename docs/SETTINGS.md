@@ -66,7 +66,7 @@
 | `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
 | `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
 | `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
-| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；计算分布所用的温度（1 为模型原始分布）；评分范围（原始定义为 `full`）。奖励为评分段上各位置的分布相对全词表均匀分布的 KL 散度的均值；要用整个词表的概率，vLLM 引擎需设 `ar.engine.vllm.exact_scoring = "transformers"` |
+| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；计算分布所用的温度（1 为模型原始分布）；评分范围（原始定义为 `full`）。奖励为评分段上各位置的分布相对全词表均匀分布的 KL 散度的均值；要用整个词表的概率，vLLM 引擎需设 `ar.engine.vllm.fused_logprobs = true`（评分温度 1）或 `exact_scoring = "transformers"` |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
 | `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty` 倍首段均值 |
@@ -83,7 +83,7 @@
 | `adapter` | `null` 或 `{path, revision}` | 叠加在基础模型上的 PEFT 适配器（如 GRPO 训练结果） |
 | `tokenizer` / `tokenizer_revision` / `tokenizer_kwargs` | 字符串或 `null` / 字符串或 `null` / 对象 | 独立的 tokenizer 及其参数 |
 | `cache_dir` / `local_files_only` / `trust_remote_code` | 字符串或 `null` / 布尔 / 布尔 | Hub 缓存与加载选项 |
-| `token_penalty` | `null` 或 `{words, strength}` | 每个词前有空格的小写与首字母大写形式、以及行首的首字母大写形式（只取单个 token 的形式），其 logit 在温度之前减去 `strength`；惩罚后的分布就是模型本身，采样、参考概率与评分都用它（见[算法说明](methods/ALGORITHMS.md#token-penalty)）。vLLM 的原生评分与 `mh_fused_logprobs` 读未惩罚的 logit，所以评分需要 `exact_scoring = "transformers"`，同步引擎也不能做 beam search；`null` 关闭 |
+| `token_penalty` | `null` 或 `{words, strength}` | 每个词前有空格的小写与首字母大写形式、以及行首的首字母大写形式（只取单个 token 的形式），其 logit 在温度之前减去 `strength`；惩罚后的分布就是模型本身，采样、参考概率与评分都用它（见[算法说明](methods/ALGORITHMS.md#token-penalty)）。vLLM 的原生评分与 `fused_logprobs` 读未惩罚的 logit，所以评分需要 `exact_scoring = "transformers"`，同步引擎也不能做 beam search；`null` 关闭 |
 
 ### `ar.engine`
 
@@ -101,7 +101,7 @@
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
-| `vllm.mh_fused_logprobs` | 布尔 | 幂目标 MH 在同一次解码中取得 proposal 与基础模型概率；需要 `asynchronous = false`，只影响 `mh_power` |
+| `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。两种引擎都可用；需要 vLLM 0.26.x，关闭 vLLM 的异步调度，不能与 `token_penalty` 同用 |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
@@ -168,7 +168,7 @@
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
-| `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：单卡改 `backend = "transformers"`，多卡可设 `exact_scoring = "transformers"` 并把 `device` 指向另一张卡 |
+| `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
 | `datasets.<name>.max_new_tokens` | 131072 | 思考段与答案共用，给 `xhigh` 的长思考留足长度 |
 | `algorithms.is` | `full_horizon`，预算 524,288，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算至少约为输出上限的 3 倍（先生成一条输出测长度，再预留两个候选写完），否则思考写满上限的题会报错；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |

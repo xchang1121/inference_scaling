@@ -177,10 +177,13 @@ def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):
     assert record["trace"]["stopping_reason"] == "stop"
 
 
-def test_self_certainty_on_vllm_needs_an_exact_scorer_before_loading(ar_settings, tmp_path):
+def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_settings, tmp_path):
     ar_settings["ar"]["engine"]["backend"] = "vllm"
+    choices = Choices("is", "ar", "self_certainty", "gsm8k")
     with pytest.raises(ValueError, match="whole next-token distribution"):
-        run(Choices("is", "ar", "self_certainty", "gsm8k"), ar_settings, tmp_path / "results")
+        run(choices, ar_settings, tmp_path / "results")
+    ar_settings["ar"]["engine"]["vllm"]["fused_logprobs"] = True
+    assert run(choices, ar_settings, tmp_path / "results")["accuracy"] == 1.0
 
 
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):

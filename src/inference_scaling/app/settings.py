@@ -108,7 +108,7 @@ SCHEMA: dict[str, Any] = {
                 "enforce_eager": bool,
                 "enable_prefix_caching": bool,
                 "max_lora_rank": int,
-                "mh_fused_logprobs": bool,
+                "fused_logprobs": bool,
                 "exact_scoring": _Choices({"none", "transformers"}),
                 "parameter_count": _NULLABLE_INT,
                 "engine_kwargs": dict,

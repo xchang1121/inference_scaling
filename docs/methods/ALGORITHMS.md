@@ -101,7 +101,7 @@ $`\tilde p(y)`$ 等于 $`p(y)e^{-\lambda N_S(y)}`$ 再除以各步分母之积�
 maybe、perhaps，取 $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切换；arXiv:2606.00206 在量化模型上对 50 个同类
 标记在 $`\lambda\in[0.5,4]`$ 上扫描，思维链缩短 12%–23%，准确率持平或提高。该文只取前有空格的形式；这里另取行首的
 首字母大写形式（段首的 “Wait”），不取无空格的小写形式，因为它多是其他词的片段。vLLM 用 `logit_bias` 施加惩罚，
-它在温度之前生效；原生评分与 `mh_fused_logprobs` 读未惩罚的 logit，所以评分转交精确后端，同步引擎的 beam search
+它在温度之前生效；原生评分与 `fused_logprobs` 读未惩罚的 logit，所以评分转交精确后端，同步引擎的 beam search
 报错。$`\lambda`$ 应在 `selection.skip` 跳过的留出题上选择，并在相同 FLOP 下与幂指数 $`\alpha`$ 比较。
 
 <a id="alg-overview"></a>
@@ -231,7 +231,7 @@ flowchart LR
 | 后续每步 | $`M-1`$ | $`M(K-1)`$ | $`MK-1`$ |
 
 补全在生成时已返回基础模型概率，不需要重评分。`verifier` 只读取答案文本；`self_certainty` 与 `consilience`
-读取的逐 token 统计量由生成一并算出（vLLM 上的 `self_certainty` 除外，见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
+读取的逐 token 统计量由生成一并算出（未开启融合概率的 vLLM 上的 `self_certainty` 除外，见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
@@ -296,7 +296,7 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励选择一�
 
 式 (3) 随 $`N`$ 增大趋向奖励最大化。verifier 投票时，每个候选的奖励是 $`N`$ 个候选中与它答案相同的比例，式 (3)
 因而选出得票最多的答案（多数投票）；无法解析的答案得 0。最高奖励出现平票时，按固定种子在并列候选中均匀选取。`self_certainty` 与 `consilience`
-读取生成时算出的逐 token 统计量，不增加前向计算（vLLM 上的 `self_certainty` 除外）。
+读取生成时算出的逐 token 统计量，不增加前向计算（未开启融合概率的 vLLM 上的 `self_certainty` 除外）。
 
 ### 3.2 GRPO 与 VRPO 对照
 
@@ -703,7 +703,7 @@ $`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`�
 | 奖励 | 定义 | 设置 | 模型族与成本 |
 | --- | --- | --- | --- |
 | `verifier` | 最终答案对照参考答案（oracle）或与模型自身答案一致的比例（投票） | `rewards.verifier.*` | AR 与 dLLM；按文本计算，不计模型前向；投票样本池在奖励阶段生成并单独计量 |
-| `self_certainty` | 评分段上各位置的分布相对均匀分布的 KL 散度的均值 | `rewards.self_certainty.*` | AR；Transformers 生成时算出，vLLM 需要精确评分后端（见[下文](#alg-token-statistics)） |
+| `self_certainty` | 评分段上各位置的分布相对均匀分布的 KL 散度的均值 | `rewards.self_certainty.*` | AR；Transformers 或开启融合概率的 vLLM 在生成时算出（见[下文](#alg-token-statistics)） |
 | `consilience` | top-$`K`$ 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；读生成时算出的 top-$`K`$ 置信度 |
 
 ### verifier
@@ -751,9 +751,10 @@ r_{\mathrm{SC}}(x,y)=\frac{1}{L}\sum_{t=1}^{L}s_t(x,y),
 
 $`V`$ 为词表大小，$`L`$ 为评分段长度。均值使奖励不随长度增长；原始定义对整条输出取平均，`scope` 因而默认 `full`。
 它不同于采到 token 的平均对数概率：后者在温度 1 下是路径上平均负熵的单样本估计，一次采到小概率 token 就大幅降低
-奖励；$`s_t`$ 直接读分布，没有这份采样噪声。$`s_t`$ 要用整个词表的概率：Transformers 后端生成时算出；vLLM 只返回
-最可能的几个 token 的对数概率，需要设 `ar.engine.vllm.exact_scoring = "transformers"`（Transformers 副本对每条序列
-评分一次），否则在加载模型前报错。
+奖励；$`s_t`$ 直接读分布，没有这份采样噪声。$`s_t`$ 要用整个词表的概率：Transformers 后端生成时算出；vLLM 的输出只有
+最可能的几个 token，由[融合概率](#infra-fused-logprobs)在采样的同一步读出（`ar.engine.vllm.fused_logprobs = true`，
+评分温度须为 1），或交给精确评分后端（`exact_scoring = "transformers"`，每条序列多一次评分前向）；两者都没有时在
+加载模型前报错。
 
 Consilience 读 top-$`K`$ 置信度：对第 $`t`$ 个位置取概率最高的 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，
 
@@ -805,7 +806,7 @@ Self-Certainty 与 Consilience 分别把评分策略下的 $`s_t`$ 与 $`c_t`$ �
 （[`TokenStatisticReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py)）：前者取均值，后者取窗口分数。
 统计量只依赖该位置之前的 token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略
 不同时多一次 log-softmax）；vLLM 只在评分策略就是采样策略时，从引擎返回的 $`K`$ 个最可能 token 的对数概率读出 $`c_t`$，
-算不了需要全词表的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
+开启融合概率时再读出评分温度为 1 的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
 生成请求带上奖励的统计量并保存输出；评分一条序列时，逐位置从在相同上下文之后生成过同一 token 的输出读出，
 只有含未在该上下文生成过的 token（如冻结历史 proposal 的后缀）时才对整条评分。重放的草稿 token 不计算统计量，
 由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 交给精确评分后端
@@ -965,63 +966,59 @@ AR-LLM 由 `ar.engine.backend` 选择引擎，vLLM 再由 `ar.engine.vllm.asynch
 | --- | --- | --- |
 | `transformers` | 显式 KV、批处理和完整概率评分 | 参考实现、概率诊断、全词表与 top-$`K`$ 统计 |
 | `vllm`，`asynchronous = true` | 长期运行的 `AsyncLLM`，只返回完成的输出 | 连续调度与 APC |
-| `vllm`，`asynchronous = false` | 同步 `LLM` | MH 融合概率与原生 beam |
+| `vllm`，`asynchronous = false` | 同步 `LLM` | 原生 beam |
 
 | 能力 | Transformers | vLLM |
 | --- | --- | --- |
 | 调度 | 显式组成批次与连续批处理封装 | 长期运行的 `AsyncLLM` 原生连续调度器 |
 | 前缀复用 | 每批唯一前缀只执行一次预填充并复制 KV | 跨调用 APC（`enable_prefix_caching`） |
-| 生成概率 | 实际采样分布与基础模型分布同时返回 | 默认返回 `processed_logprobs`；同步 MH 可在同一 logits 步返回两套概率 |
+| 生成概率 | 实际采样分布与基础模型分布同时返回 | 默认返回 `processed_logprobs`；融合概率在同一 logits 步另返回基础模型概率与 Self-Certainty |
 | 补全评分 | 任意可表示的采样策略 | 温度 1 由 vLLM 直接处理；其余交给精确 Transformers 后端 |
 
 当前 vLLM 后端用于 AR-LLM。dLLM 需要返回反向扩散轨迹、每一步的转移对数概率与可提交的分块状态，因此
 使用第 11.3 节的批量 Transformers 后端；公共算法接口和计算量统计不随执行引擎变化。
 
-#### 11.4.1 同步 MH 的双概率记录
+<a id="infra-fused-logprobs"></a>
+#### 11.4.1 融合概率记录
 
-幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $`q`$ 和基础模型概率 $`p`$。vLLM
-的常规输出只含 $`q`$，因而原路径在生成后还要对完整后缀执行一次 $`p`$ 的前向评分。为消除这次重复前向，
-本仓库在 vLLM 0.26 的同步 worker 中先从原始 logits 取出最终选中 token 的 $`\log p`$，再由原采样器产生
-token 与 $`\log q`$。worker 只向主进程
-传回每步一个标量，不复制全词表 logits，也不修改 MH 接受率。`SequenceSample` 携带这组基础模型概率后，
-MH 的已有缓存分支会跳过整段重评分。
-
-设当前前缀为 $`h`$，新后缀为 $`s=(s_1,\ldots,s_\ell)`$。一次解码返回的两组标量分别累加为
-
-```math
-\log p(s\mid h)=\sum_{t=1}^{\ell}\log p(s_t\mid h,s_{\lt t}),
-\qquad
-\log q(s\mid h)=\sum_{t=1}^{\ell}\log q(s_t\mid h,s_{\lt t}).
-```
-
-$`p`$ 来自采样处理前的 logits，$`q`$ 来自温度、top-k 和 top-p 等处理后的实际采样分布。MH 接受率继续使用
-第 4 节的完整正反 proposal 比；融合只改变取得 $`\log p(s\mid h)`$ 的执行位置。
+幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $`q`$ 和基础模型概率 $`p`$；Self-Certainty
+需要每步整个词表上的 $`p`$。vLLM 的常规输出只含 $`q`$ 下最可能的几个 token，因而原路径在生成后还要对完整后缀
+执行一次 $`p`$ 的前向评分。为消除这次重复前向，本仓库在 vLLM 0.26 的 worker 中先从原始 logits 取出
+$`\log p`$ 的两个量：最终选中 token 的 $`\log p`$，以及分布相对均匀分布的 KL 散度
+$`-\log V-\frac1V\sum_j\log p_j`$（第 9 节的 $`s_t`$），再由原采样器产生 token 与 $`\log q`$。worker 只向主进程
+传回每步两个标量，不复制全词表 logits，也不修改 MH 接受率。`SequenceSample` 携带这组基础模型概率后，
+MH 的已有缓存分支会跳过整段重评分；`self_certainty` 直接读出记录的 $`s_t`$。$`p`$ 来自采样处理前的 logits，
+$`q`$ 来自温度、top-k 和 top-p 等处理后的实际采样分布；MH 接受率继续使用第 4 节的完整正反 proposal 比，融合只改变
+取得 $`\log p`$ 的执行位置。同步引擎在每次调用后、异步引擎在每个请求结束后用 `collective_rpc` 取回并释放该请求的值。
 
 ```python
 raw_logprobs = logits.log_softmax(dim=-1, dtype=torch.float32)
 sample = sampler(logits)
 selected_reference = raw_logprobs.gather(-1, sample.sampled_token_ids)
+self_certainty = -raw_logprobs.mean(dim=-1) - math.log(raw_logprobs.shape[-1])
 ```
 
 | 概率记录路径 | proposal 解码 | 生成后的基础模型后缀评分 | 返回主进程的新增数据 |
 | --- | ---: | ---: | ---: |
 | 常规 vLLM | 1 次 | 1 次 | 无 |
-| MH 融合路径 | 1 次 | 0 次 | 每个生成 token 一个 FP32 标量 |
+| 融合路径 | 1 次 | 0 次 | 每个生成 token 两个 FP32 标量 |
 
-该路径通过 `ar.engine.vllm.mh_fused_logprobs = true` 显式启用，当前约束为 `ar.engine.vllm.asynchronous = false`、
-vLLM `0.26.x`、V1 model runner、无 speculative decoding。约束不满足时加载直接报错，不会回退到不完整的概率。
-异步 vLLM、全词表熵统计和任意给定序列评分仍使用原实现。一次 MH 运行可在记录的 `cost.phases.search.base` 中核对
+该路径通过 `ar.engine.vllm.fused_logprobs = true` 显式启用，两种引擎都可用；约束为 vLLM `0.26.x`、V1 model runner、
+无 speculative decoding、无 `ar.model.token_penalty`，并关闭 vLLM 的异步调度，使每个值属于采样它的那一步。约束不满足时
+加载直接报错，不会回退到不完整的概率。原始 logits 对应温度 1 的模型，所以只有评分温度为 1 的 Self-Certainty 由它记录。
+任意给定序列评分仍使用原实现。一次 MH 运行可在记录的 `cost.phases.search.base` 中核对
 `fused_reference_sequences`、`fused_reference_tokens` 和 `score_calls`；与常规 vLLM 的比较对象是同一模型、
 同一 proposal、同一随机种子及相同 MH 更新次数，差别仅为是否执行生成后的基础模型重评分。
 
 #### 11.4.2 运行设置
 
 默认设置就是 vLLM 路径：异步引擎、BF16、前缀缓存、`exact_scoring = "none"`，各项取值见
-[默认 AR 配置](../SETTINGS.md#ar-defaults)。同步幂目标 MH 的融合概率只需再设 `"asynchronous": false` 与
-`"mh_fused_logprobs": true`，然后运行：
+[默认 AR 配置](../SETTINGS.md#ar-defaults)。幂目标 MH 省去基础模型重评分、或在 vLLM 上使用 Self-Certainty，只需再设
+`"fused_logprobs": true`，然后运行：
 
 ```bash
 python -m inference_scaling --algorithm mh_power --model ar --dataset gsm8k
+python -m inference_scaling --reward self_certainty
 ```
 
 生成时读不到的 Consilience top-$`K`$ 统计（评分温度不等于采样温度时）、非单位温度采样分布和把部分概率截为零的

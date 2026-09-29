@@ -97,7 +97,7 @@
         "enforce_eager": false,
         "enable_prefix_caching": true,
         "max_lora_rank": 16,
-        "mh_fused_logprobs": false,
+        "fused_logprobs": false,
         "exact_scoring": "none",
         "parameter_count": null,
         "engine_kwargs": {"enable_chunked_prefill": true, "language_model_only": true}

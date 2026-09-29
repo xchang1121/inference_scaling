@@ -116,24 +116,25 @@ class _BeamEngine(_Engine):
 
 
 class _FusedEngine(_Engine):
+    """Every generated token's base log-probability is -0.4 and its Self-Certainty 3."""
+
     def __init__(self):
         super().__init__()
-        self.references = {}
+        self.fused = {}
         self.rpc_calls = []
 
     def generate(self, prompts, *, sampling_params, use_tqdm, **kwargs):
         outputs = super().generate(prompts, sampling_params=sampling_params, use_tqdm=use_tqdm, **kwargs)
         call = len(self.calls)
         for index, output in enumerate(outputs):
-            request_id = f"engine:{call}:{index}"
-            output.request_id = request_id
+            output.request_id = f"engine:{call}:{index}"
             tokens = output.outputs[0].token_ids
-            self.references[request_id] = tuple(-0.4 for _ in tokens)
+            self.fused[output.request_id] = ((-0.4,) * len(tokens), (3.0,) * len(tokens))
         return outputs
 
     def collective_rpc(self, method, *, args):
         self.rpc_calls.append((method, args))
-        return [{request_id: self.references.pop(request_id) for request_id in args[0] if request_id in self.references}]
+        return [{request_id: self.fused.pop(request_id) for request_id in args[0] if request_id in self.fused}]
 
 
 class _Fallback:
@@ -198,7 +199,7 @@ def test_vllm_stops_at_single_token_markers_and_labels_the_reference_policy() ->
 def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     engine = _FusedEngine()
     backend = VLLMBackend(engine, _Tokenizer(), model_id="fake", parameter_count=100,
-                          sampling_params_factory=_SamplingParams, mh_fused_logprobs=True)
+                          sampling_params_factory=_SamplingParams, fused_logprobs=True)
     result = run_mh_chain(backend, (1,), MHConfig(
         early_rejection=False, suffix_replay=False, alpha=2.0, reward_temperature=None, total_length=2, block_size=2,
         steps_per_block=1, suffix_schedule="uniform", iterations=None), SeedStream(7), base=SamplingConfig(),
@@ -207,10 +208,10 @@ def test_vllm_fused_reference_eliminates_mh_score_forward() -> None:
     assert result.base_token_logprobs == (-0.4, -0.4)
     snapshot = backend.snapshot()
     assert snapshot.score_calls == 0
-    assert snapshot.mh_fused_logprobs
+    assert snapshot.fused_logprobs
     assert snapshot.fused_reference_sequences == 2
     assert snapshot.fused_reference_tokens >= 3
-    assert len(engine.rpc_calls) == 2
+    assert len(engine.rpc_calls) == 2 and not engine.fused
 
 
 def test_vllm_native_score_extracts_continuation_prompt_logprobs() -> None:
@@ -337,10 +338,13 @@ def test_vllm_rejects_drafts_and_log_weight_stops() -> None:
 
 
 class _AsyncEngine(_Engine):
+    """Also a fused worker: every token's base log-probability is -0.4 and its Self-Certainty 3."""
+
     def __init__(self):
         super().__init__()
         self.active = 0
         self.maximum_active = 0
+        self.fused = {}
 
     async def _stream(self, *, prompt, sampling_params, request_id, **kwargs):
         self.active += 1
@@ -348,13 +352,29 @@ class _AsyncEngine(_Engine):
         await asyncio.sleep(0.02)
         token = int(sampling_params.seed % 5) + 3
         self.active -= 1
-        yield _Output([_Completion([token], [{token: _Logprob(-0.25)}])])
+        self.fused[request_id] = ((-0.4,), (3.0,))
+        yield _Output([_Completion([token], [{token: _Logprob(-0.25)}])], request_id=request_id)
 
     def generate(self, **kwargs):
         return self._stream(**kwargs)
 
+    async def collective_rpc(self, method, timeout=None, args=(), kwargs=None):
+        return [{request_id: self.fused.pop(request_id) for request_id in args[0] if request_id in self.fused}]
+
     async def shutdown(self):
         self.closed = True
+
+
+def test_the_fused_worker_records_self_certainty_on_either_engine() -> None:
+    policy, full = SamplingConfig(eos_token_id=2), TokenStatistic(SamplingConfig())
+    options = {"model_id": "fake", "parameter_count": 100, "sampling_params_factory": _SamplingParams, "fused_logprobs": True}
+    for engine, backend_class in ((_FusedEngine(), VLLMBackend), (_AsyncEngine(), AsyncVLLMBackend)):
+        backend = backend_class(engine, _Tokenizer(), **options)
+        # The worker reads the model at temperature 1 only.
+        assert backend.records(full, policy) and not backend.records(TokenStatistic(SamplingConfig(temperature=0.5)), policy)
+        sample = backend.sample_batch([GenerationRequest((1,), 2, policy, 11, "r", statistic=full)])[0]
+        assert sample.token_statistics == (3.0,) * len(sample.token_ids) and not engine.fused
+        backend.close()
 
 
 def test_async_vllm_overlaps_requests_from_independent_callers() -> None:

@@ -71,7 +71,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | 奖励 | 定义 | 实现 |
 | --- | --- | --- |
 | `verifier` | 按最终答案评分。默认对照参考答案（oracle：正确为 1，否则为 0）；`rewards.verifier.source = "vote"` 或数据集没有参考答案时改为投票：与模型自身答案一致的比例（`best_of_n` 在候选之间投票，`is`/`mh` 与冻结的 `pool_size` 个独立样本比较） | [`app/rewards.py`](src/inference_scaling/app/rewards.py)、[`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
-| `self_certainty` | [Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的下一 token 分布相对全词表均匀分布的 KL 散度，对整条输出取均值（AR；vLLM 上需要 Transformers 精确评分） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
+| `self_certainty` | [Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的下一 token 分布相对全词表均匀分布的 KL 散度，对整条输出取均值（AR；vLLM 上需开启 `fused_logprobs`） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
 | `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
 `is` 与 `mh` 所用的奖励都是逐序列的固定分数（投票用冻结样本池），因此条件 IS 可以复用保留序列的奖励，MH 的
@@ -101,7 +101,7 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 | 优化 | 设置 |
 | --- | --- |
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
-| vLLM 引擎、前缀缓存、同步引擎上 MH 的融合概率 | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.mh_fused_logprobs` |
+| vLLM 引擎、前缀缓存、融合概率（MH 的基础概率与 Self-Certainty 在采样同一步读出） | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |

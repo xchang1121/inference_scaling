@@ -61,10 +61,8 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
     if engine["backend"] == "transformers":
         return _transformers(str(model["path"]), identity, model, engine)
     vllm = engine["vllm"]
-    if vllm["mh_fused_logprobs"] and vllm["asynchronous"]:
-        raise ValueError("vllm.mh_fused_logprobs needs the synchronous engine (vllm.asynchronous = false)")
-    if vllm["mh_fused_logprobs"] and model["token_penalty"] is not None:
-        raise ValueError("vllm.mh_fused_logprobs reads the unpenalized logits; disable it or ar.model.token_penalty")
+    if vllm["fused_logprobs"] and model["token_penalty"] is not None:
+        raise ValueError("vllm.fused_logprobs reads the unpenalized logits; disable it or ar.model.token_penalty")
     # Resolve Hub names once so the engine and the exact scorer read the same files.
     path = str(model["path"])
     if not Path(path).is_dir():
@@ -80,9 +78,6 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
     if logprobs > int(engine_kwargs.get("max_logprobs", 0)) and logprobs > 0:
         engine_kwargs["max_logprobs"] = logprobs
     scorer = _transformers(path, identity, model, engine) if vllm["exact_scoring"] == "transformers" else None
-    options: dict[str, Any] = {}
-    if not vllm["asynchronous"]:
-        options["enable_mh_fused_logprobs"] = bool(vllm["mh_fused_logprobs"])
     try:
         return (AsyncVLLMBackend if vllm["asynchronous"] else VLLMBackend).from_pretrained(
             path,
@@ -103,7 +98,7 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
             seed=seed,
             scoring_backend=scorer,
             engine_kwargs=engine_kwargs,
-            **options,
+            enable_fused_logprobs=bool(vllm["fused_logprobs"]),
         )
     except BaseException:
         close_backend(scorer)

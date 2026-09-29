@@ -91,9 +91,12 @@ class ARFamily:
             if engine["backend"] == "vllm" and self.config.get(option):
                 raise ValueError(f"ar.algorithms.{choices.algorithm}.{option} needs the transformers engine, which "
                                  "samples from request uniform streams and reports reference log-probabilities")
-        if choices.reward == "self_certainty" and engine["backend"] == "vllm" and engine["vllm"]["exact_scoring"] == "none":
-            raise ValueError("self_certainty reads the whole next-token distribution, which vLLM does not return; "
-                             "set ar.engine.backend or ar.engine.vllm.exact_scoring to transformers")
+        vllm = engine["vllm"]
+        # vLLM returns the whole next-token distribution only through the fused worker, at temperature 1.
+        if choices.reward == "self_certainty" and engine["backend"] == "vllm" and vllm["exact_scoring"] == "none" and not (
+                vllm["fused_logprobs"] and float(settings["rewards"]["self_certainty"]["score_temperature"]) == 1):
+            raise ValueError("self_certainty reads the whole next-token distribution; on vLLM set "
+                             "ar.engine.vllm.fused_logprobs (at score_temperature 1) or exact_scoring = transformers")
         self.raw: Any = None
         self.backend: Any = None
 
