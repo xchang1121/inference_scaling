@@ -7,8 +7,8 @@ from inference_scaling.shared.rewards.consilience import confidence_windows
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.output import thinking_format_from_backend
 
-# The shipped output settings: automatic thinking format and mode.
-AUTO = load_settings()["ar"]["output"]
+# The shipped output settings with an automatic thinking mode.
+AUTO = {**load_settings()["ar"]["output"], "thinking_mode": "auto"}
 
 
 @pytest.mark.parametrize(

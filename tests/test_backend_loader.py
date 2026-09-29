@@ -33,7 +33,7 @@ def test_transformers_loader_passes_every_configured_option(monkeypatch) -> None
         "tokenizer_name_or_path": None,
         "tokenizer_revision": None,
         "tokenizer_kwargs": {},
-        "local_files_only": True,
+        "local_files_only": model["local_files_only"],
         "trust_remote_code": False,
         "token_penalty": model["token_penalty"],
         "cache_dir": None,

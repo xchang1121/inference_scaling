@@ -24,6 +24,7 @@ import json
 import itertools
 from functools import partial
 import os
+import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -49,6 +50,8 @@ _PROTECTED_ENGINE_KWARGS = frozenset({
 })
 
 _MH_FUSED_WORKER = "inference_scaling.arllm.backends.vllm_mh_worker.MHFusedLogprobWorker"
+# Token-only generation without speculative decoding runs neither a vision tower nor a multi-token-prediction head.
+_UNUSED_TENSOR = re.compile(r"(?:^|\.)(?:visual|vision_tower|vision_model|mtp)\.")
 
 
 def _validate_mh_fused_vllm_version() -> None:
@@ -164,7 +167,7 @@ class _AsyncLoopRunner:
 
 
 def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
-    """Read local safetensor shapes without materializing model weights."""
+    """Parameters of a token-only forward, read from local safetensor shapes without materializing weights."""
 
     root = Path(model_name_or_path)
     if not root.exists():
@@ -193,7 +196,8 @@ def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
                 if name in names:
                     raise ValueError(f"duplicate tensor {name!r} across checkpoint shards")
                 names.add(name)
-                total += prod(int(dimension) for dimension in handle.get_slice(name).get_shape())
+                if not _UNUSED_TENSOR.search(name):
+                    total += prod(int(dimension) for dimension in handle.get_slice(name).get_shape())
     return total
 
 

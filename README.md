@@ -32,23 +32,24 @@ KL 正则化目标：
 ## 快速开始
 
 ```bash
-python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward verifier --dataset gsm8k
+python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward consilience --dataset gsm8k
 python -m inference_scaling --algorithm best_of_n --reward verifier
 python -m inference_scaling --algorithm mh_power --dataset math500
-python -m inference_scaling --algorithm is --model dllm --reward verifier --output results
+python -m inference_scaling --algorithm is --model dllm --output results
 ```
 
 | 参数 | 取值 | 默认 |
 | --- | --- | --- |
 | `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
 | `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
-| `--reward` | `verifier`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `verifier` |
+| `--reward` | `verifier`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | AR 为 `consilience`，dLLM 为 `verifier` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
 没有其他命令行参数。块长、候选数、温度、引擎与优化选项都在设置文件中，缺少、多出或类型不符的字段在加载模型前
-报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。例如对齐模型的采样只需在 `ar.model.adapter` 填入
-GRPO 适配器，再运行 `--algorithm sample` 或 `--algorithm greedy`。
+报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认的 AR 设置在单张 H100 级 GPU 上用 vLLM 以 BF16 运行
+[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) 的思考模式，各项取值的依据见
+[SETTINGS.md](docs/SETTINGS.md#ar-defaults)。
 
 ## 算法
 
@@ -122,7 +123,8 @@ python -m training
 | `vrpo_preferences` | 用 LLaDA 生成候选并按数据集判定的正确性选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
 | `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |
 
-训练得到的适配器填入推理设置的 `ar.model.adapter` 或 `dllm.model.adapter` 即可评测。
+训练得到的适配器填入推理设置的 `ar.model.adapter` 或 `dllm.model.adapter` 即可评测；GRPO 适配器还要把 `ar.model`
+改回训练所用的 Qwen2.5-1.5B-Instruct。
 
 ## 安装
 

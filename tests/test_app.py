@@ -15,8 +15,8 @@ from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBacken
 
 def test_cli_defaults_and_reward_rules() -> None:
     choices, output = parse([])
-    assert choices == Choices("is", "ar", "verifier", "gsm8k") and output == Path("results")
-    assert parse(["--algorithm", "sample"])[0].reward is None
+    assert choices == Choices("is", "ar", "consilience", "gsm8k") and output == Path("results")
+    assert parse(["--model", "dllm"])[0].reward == "verifier" and parse(["--algorithm", "sample"])[0].reward is None
     assert parse(["--algorithm", "best_of_n", "--reward", "verifier"])[0].label == "best_of_n-verifier"
     for argv in (["--algorithm", "greedy", "--reward", "verifier"], ["--reward", "vote"]):
         with pytest.raises(SystemExit):
@@ -110,11 +110,11 @@ AR_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}),
     ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}), ("best_of_n", "logprob", {}),
     ("best_of_n", "consilience", {}),
-    ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "thinking"}),
+    ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
     ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
-    ("mh", "logprob", {"sampling_scope": "thinking"}), ("mh", "consilience", {}),
+    ("mh", "logprob", {"sampling_scope": "full"}), ("mh", "consilience", {}),
     ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}), ("is", "logprob", {"planning": "chunk_adaptive"}),
-    ("is", "consilience", {"planning": "fixed", "sampling_scope": "thinking"}),
+    ("is", "consilience", {"planning": "fixed", "sampling_scope": "full"}),
 ]
 
 

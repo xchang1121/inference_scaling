@@ -15,7 +15,7 @@
       },
       "selection": {"count": 32, "seed": 20260808},
       "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer.",
-      "max_new_tokens": 192
+      "max_new_tokens": 16384
     },
     "math500": {
       "path": "data/math500/test.jsonl",
@@ -58,25 +58,22 @@
   },
   "ar": {
     "model": {
-      "path": "models/Qwen2.5-1.5B-Instruct",
-      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
-      "weight_sha256": {"model.safetensors": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"},
+      "path": "Qwen/Qwen3.8-27B",
+      "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "weight_sha256": null,
       "adapter": null,
       "tokenizer": null,
       "tokenizer_revision": null,
       "tokenizer_kwargs": {},
       "cache_dir": null,
-      "local_files_only": true,
+      "local_files_only": false,
       "trust_remote_code": false,
-      "token_penalty": {
-        "words": ["wait", "hmm", "alternatively", "actually", "however", "but", "maybe", "perhaps"],
-        "strength": 1.0
-      }
+      "token_penalty": null
     },
     "engine": {
-      "backend": "transformers",
+      "backend": "vllm",
       "device": "cuda",
-      "dtype": "float32",
+      "dtype": "bfloat16",
       "context_window": null,
       "transformers": {
         "attn_implementation": "sdpa",
@@ -92,10 +89,10 @@
         "asynchronous": true,
         "tensor_parallel_size": 1,
         "data_parallel_size": 1,
-        "gpu_memory_utilization": 0.62,
-        "max_model_len": null,
-        "max_num_seqs": 48,
-        "max_num_batched_tokens": 12288,
+        "gpu_memory_utilization": 0.92,
+        "max_model_len": 40960,
+        "max_num_seqs": 32,
+        "max_num_batched_tokens": 16384,
         "quantization": null,
         "enforce_eager": false,
         "enable_prefix_caching": true,
@@ -103,7 +100,7 @@
         "mh_fused_logprobs": false,
         "exact_scoring": "none",
         "parameter_count": null,
-        "engine_kwargs": {"enable_chunked_prefill": true}
+        "engine_kwargs": {"enable_chunked_prefill": true, "language_model_only": true}
       },
       "continuous_batching": {
         "workers": 1,
@@ -112,13 +109,13 @@
         "batch_wait_seconds": 0.01
       }
     },
-    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {}},
+    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {"reasoning_effort": "medium"}},
     "output": {
-      "thinking_mode": "auto",
+      "thinking_mode": "enabled",
       "thinking_start_text": null,
       "thinking_end_text": null,
       "starts_in_thinking": null,
-      "sampling_scope": "full"
+      "sampling_scope": "thinking"
     },
     "sampling": {"temperature": 1.0, "top_p": 1.0, "top_k": null},
     "algorithms": {
@@ -127,31 +124,31 @@
       "beam": {"num_beams": 8},
       "best_of_n": {"samples": 8},
       "mh": {
-        "block_size": 12,
+        "block_size": 1024,
         "steps_per_block": 3,
         "iterations": null,
         "suffix_schedule": "uniform",
         "proposal": "base",
         "frozen_history": {"samples": 8, "mixture": 0.25},
-        "suffix_replay": true
+        "suffix_replay": false
       },
       "mh_power": {
         "alpha": 4.0,
         "proposal_temperature": 0.25,
-        "block_size": 12,
+        "block_size": 1024,
         "steps_per_block": 3,
         "iterations": null,
         "suffix_schedule": "uniform",
-        "suffix_replay": true,
-        "early_rejection": true
+        "suffix_replay": false,
+        "early_rejection": false
       },
       "is": {
         "planning": "full_horizon",
-        "block_first": true,
-        "fixed": {"candidate_count": 8, "rollout_count": 3, "block_size": 48},
+        "block_first": false,
+        "fixed": {"candidate_count": 4, "rollout_count": 1, "block_size": 1024},
         "joint": {
-          "forward_token_budget": 98304,
-          "block_sizes": [32, 64, 128],
+          "forward_token_budget": 131072,
+          "block_sizes": [256, 512, 1024, 2048],
           "candidate_counts": [2, 4, 8, 16],
           "rollout_counts": [1, 2, 4],
           "pilot_candidates": 2,
@@ -161,9 +158,9 @@
           "expected_output_tokens": null
         },
         "chunk_adaptive": {
-          "initial_block_size": 64,
+          "initial_block_size": 1024,
           "initial_candidate_count": 4,
-          "initial_rollout_count": 2,
+          "initial_rollout_count": 1,
           "adjustment_min_improvement": 0.1
         }
       }

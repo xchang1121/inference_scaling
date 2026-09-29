@@ -89,13 +89,14 @@ replay 从历史库读取与当前条件匹配的 rollout（每条最终估计�
 
 ## 6. 复现
 
-每条记录的 `cost` 按阶段给出前向 token 位置数与 FLOPs，结果目录的 `summary.json` 汇总墙钟与成本。旧方法没有对应命令。
+每条记录的 `cost` 按阶段给出前向 token 位置数与 FLOPs，结果目录的 `summary.json` 汇总墙钟与成本。模型、引擎与
+长度先按[算法质量报告第 6 节](GSM8K_3090_ALIGNED_RESULTS.md#quality-reproduction)改回。旧方法没有对应命令。
 
 | 机制 | 命令 | 设置改动 |
 | --- | --- | --- |
-| 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"`，IS 设 `planning = "fixed"` |
+| 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`，加 `--reward verifier`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"`，IS 设 `planning = "fixed"` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`datasets.gsm8k.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
-| 冻结历史 proposal | `--algorithm mh` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
+| 冻结历史 proposal | `--algorithm mh --reward verifier` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
 | 训练成本 | `python -m training` | `stages = ["grpo"]`；训练成本写入 `grpo.output` 下的 `training_cost.json` |
 
 与当时实现的差异：冻结历史与后缀对照当时用人工奖励（末 token 奇偶）在单题上测成本，当前命令用正式奖励在 GSM8K 上

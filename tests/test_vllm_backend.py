@@ -8,10 +8,11 @@ from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import numpy
 import pytest
 
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
-from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _load_vllm_sampling_api
+from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _checkpoint_parameter_count, _load_vllm_sampling_api
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
@@ -265,6 +266,14 @@ def test_vllm_encode_decode_and_close() -> None:
     backend.close()
     backend.close()
     assert engine.closed
+
+
+def test_parameter_count_skips_the_vision_tower_and_multi_token_prediction(tmp_path) -> None:
+    from safetensors.numpy import save_file
+
+    shapes = {"model.language_model.layers.0.weight": (2, 3), "model.visual.blocks.0.weight": (4, 4), "mtp.fc.weight": (5,)}
+    save_file({name: numpy.zeros(shape, numpy.float32) for name, shape in shapes.items()}, str(tmp_path / "model.safetensors"))
+    assert _checkpoint_parameter_count(str(tmp_path)) == 6
 
 
 def test_vllm_counts_the_engine_preemptions_since_the_backend_started() -> None:

@@ -97,8 +97,8 @@ $`\log q(y\mid y')`$。共享核计算
 $`\tilde p`$ 取代 $`p`$ 成为模型：温度作用于惩罚后的 logit，采样、参考概率、评分与读取模型概率的奖励都来自它，
 式 (1)、式 (2) 与上述性质对 $`\tilde p`$ 原样成立；它仍是全支撑分布，重要性修正条件不受影响。整条序列上，
 $`\tilde p(y)`$ 等于 $`p(y)e^{-\lambda N_S(y)}`$ 再除以各步分母之积，$`N_S`$ 为 $`S`$ 中 token 的出现次数。
-默认词集是推理中表示犹豫、转向与回溯的 wait、hmm、alternatively、actually、however、but、maybe、perhaps，
-$`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切换；arXiv:2606.00206 在量化模型上对 50 个同类
+默认设置不启用（`null`）；常用词集是推理中表示犹豫、转向与回溯的 wait、hmm、alternatively、actually、however、but、
+maybe、perhaps，取 $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切换；arXiv:2606.00206 在量化模型上对 50 个同类
 标记在 $`\lambda\in[0.5,4]`$ 上扫描，思维链缩短 12%–23%，准确率持平或提高。该文只取前有空格的形式；这里另取行首的
 首字母大写形式（段首的 “Wait”），不取无空格的小写形式，因为它多是其他词的片段。vLLM 用 `logit_bias` 施加惩罚，
 它在温度之前生效；原生评分与 `mh_fused_logprobs` 读未惩罚的 logit，所以评分转交精确后端，同步引擎的 beam search
@@ -121,15 +121,15 @@ $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit 惩罚抑制思路切�
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
 `--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`logprob`、`consilience`（第 9 节），
-dLLM 只支持 `verifier`。默认运行 `--algorithm is --model ar --reward verifier --dataset gsm8k`；AR 的 `is` 默认采用联合预算
-规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
+dLLM 只支持 `verifier`（也是它的默认奖励）。默认运行 `--algorithm is --model ar --reward consilience --dataset gsm8k`；
+AR 的 `is` 默认采用联合预算规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
 <a id="alg-execution"></a>
 ### 2.1 统一入口的执行规则
 
 ```bash
-python -m inference_scaling --algorithm is --model ar --reward verifier --dataset gsm8k --output results
+python -m inference_scaling --algorithm is --model ar --reward consilience --dataset gsm8k --output results
 ```
 
 命令行只选择算法、模型族、奖励和数据集；其余参数全部位于 `settings/inference.json`，缺失、未知或类型不符的
@@ -1022,34 +1022,17 @@ vLLM `0.26.x`、V1 model runner、无 speculative decoding。约束不满足时�
 
 #### 11.4.2 运行设置
 
-24 GiB 单卡的 vLLM 设置对应 `settings/inference.json` 中 `ar.engine` 的以下字段（未列出的字段保持原值）：
-
-```json
-{
-  "backend": "vllm",
-  "device": "cuda",
-  "dtype": "float32",
-  "vllm": {
-    "asynchronous": true,
-    "gpu_memory_utilization": 0.62,
-    "max_num_seqs": 48,
-    "max_num_batched_tokens": 12288,
-    "enable_prefix_caching": true,
-    "exact_scoring": "none",
-    "engine_kwargs": {"enable_chunked_prefill": true}
-  }
-}
-```
-
-同步幂目标 MH 的融合概率只需再设 `"asynchronous": false` 与 `"mh_fused_logprobs": true`，然后运行：
+默认设置就是 vLLM 路径：异步引擎、BF16、前缀缓存、`exact_scoring = "none"`，各项取值见
+[默认 AR 配置](../SETTINGS.md#ar-defaults)。同步幂目标 MH 的融合概率只需再设 `"asynchronous": false` 与
+`"mh_fused_logprobs": true`，然后运行：
 
 ```bash
 python -m inference_scaling --algorithm mh_power --model ar --dataset gsm8k
 ```
 
-生成时读不到的 Consilience top-$`K`$ 统计、非单位温度采样分布和把部分概率截为零的 top-k/top-p 所需精确评分交给
-Transformers 后端，即设 `"exact_scoring": "transformers"`。精确评分后端按 `ar.engine.device` 与 `ar.engine.dtype`
-加载同一份已解析的权重和 tokenizer；与 vLLM 共用 GPU 时，需要相应降低 `gpu_memory_utilization`。后端计数器分别
+生成时读不到的 Consilience top-$`K`$ 统计（评分温度不等于采样温度时）、非单位温度采样分布和把部分概率截为零的
+top-k/top-p 所需精确评分交给 Transformers 后端，即设 `"exact_scoring": "transformers"`。精确评分后端按 `ar.engine.device`
+与 `ar.engine.dtype` 加载同一份已解析的权重和 tokenizer；与 vLLM 共用 GPU 时，需要相应降低 `gpu_memory_utilization`。后端计数器分别
 记录 vLLM 直接评分的序列数（`native_score_sequences`）和交给 Transformers 的序列数、前向 token 位置数与 FLOPs
 （`delegated_*`）。vLLM `0.25.x`--`0.26.x` 的 Linux/WSL2 安装见仓库 [README](../../README.md#安装)。
 

@@ -103,7 +103,7 @@
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.mh_fused_logprobs` | 布尔 | 幂目标 MH 在同一次解码中取得 proposal 与基础模型概率；需要 `asynchronous = false`，只影响 `mh_power` |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
-| `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从权重读取 |
+| `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
 | `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时各题请求经连续批处理合并，记录中的逐题成本为 `null` |
 | `continuous_batching.max_batch_size` / `max_batch_tokens` / `batch_wait_seconds` | 整数 / 整数 / 数 | 合并批的上限与等待时间 |
@@ -114,7 +114,7 @@
 | --- | --- | --- |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
 | `prompt.format` | `auto` \| `chat` \| `plain` | 使用 chat template、强制使用，或直接用用户文本 |
-| `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的参数（如 `enable_thinking`） |
+| `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的参数（如 Qwen3.8 的 `reasoning_effort`：`low`、`medium`、`xhigh`）；`thinking_mode` 不为 `auto` 时模板的 `enable_thinking` 随之设置 |
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的 `verifier` 会回退到 `full` 并记录原因 |
@@ -147,6 +147,30 @@
 | `is.chunk_adaptive.initial_block_size` / `initial_candidate_count` / `initial_rollout_count` / `adjustment_min_improvement` | `chunk_adaptive` 的起始配置与调整所需的最小改进比例 |
 
 规划细节见 [BUDGET.md](methods/BUDGET.md)。
+
+<a id="ar-defaults"></a>
+### 默认 AR 配置
+
+仓库提供的 `ar` 设置面向 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)（Gated DeltaNet 与门控注意力 3:1 混合的
+64 层模型）在单张 H100 级（80 GB 及以上）GPU 上运行 `is` + `consilience`。显存更大时同一比例自动得到更多缓存；
+多卡时调 `tensor_parallel_size` 或 `data_parallel_size`。下表中 `ar` 下的字段省略前缀 `ar.`。
+
+| 设置 | 取值 | 依据 |
+| --- | --- | --- |
+| `model.path` / `revision` / `local_files_only` | Hub ID / 固定提交 / `false` | 首次运行下载 BF16 权重（约 55.6 GB）；提交固定文件内容，清单另记每个权重文件的哈希 |
+| `model.token_penalty` | `null` | 惩罚改变基础分布且未在该模型上验证；思考长度改由 `reasoning_effort` 控制 |
+| `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
+| `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存；数千 token 的序列各占约 0.5 GiB，32 条并发不超出缓存，避免抢占（抢占使计算量记录变为下界） |
+| `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
+| `vllm.max_model_len` / `max_num_batched_tokens` | 40960 / 16384 | 覆盖 `math500` 的 32,768 token 输出上限加提示；预填充批取 vLLM 在 H100 级 GPU 上的默认值（A100 上宜取 8192） |
+| `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
+| `prompt.chat_template_kwargs` | `{"reasoning_effort": "medium"}` | 模板默认的 `xhigh` 思考很长，而 IS 的每个候选与补全都要生成到思考结束 |
+| `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
+| `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
+| `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
+| `datasets.gsm8k.max_new_tokens` | 16384 | 思考段与答案共用的上限 |
+| `algorithms.is` | `full_horizon`，预算 131,072，块长网格 256–2048；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算与 M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
+| `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 对 GSM8K 的输出上限沿用旧默认的相对调度（块长为上限的 1/16）；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `dllm`
 

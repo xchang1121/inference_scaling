@@ -266,7 +266,7 @@ $`K_m`$ 与 dLLM 块长适配均未接入。共享选择器不绑定模型族，
 联合预算是 AR `is` 的默认规划，统一入口的默认选择即运行它：
 
 ```bash
-python -m inference_scaling --algorithm is --model ar --reward verifier --dataset gsm8k
+python -m inference_scaling --algorithm is --model ar --reward consilience --dataset gsm8k
 ```
 
 规划方式由 `ar.algorithms.is.planning` 选择：`fixed` 使用 `ar.algorithms.is.fixed` 中固定的 $`M,K,B_{\rm blk}`$，不做
@@ -292,20 +292,8 @@ python -m inference_scaling --algorithm is --model ar --reward verifier --datase
 
 ### 按下一块预算动态调整
 
-默认 `planning = "full_horizon"`。选择 `chunk_adaptive` 时读取初值与调整门槛，例如把 `ar.algorithms.is` 中的
-以下字段改为：
-
-```json
-{
-  "planning": "chunk_adaptive",
-  "chunk_adaptive": {
-    "initial_block_size": 128,
-    "initial_candidate_count": 4,
-    "initial_rollout_count": 2,
-    "adjustment_min_improvement": 0.1
-  }
-}
-```
+默认 `planning = "full_horizon"`。设 `planning = "chunk_adaptive"` 时从 `ar.algorithms.is.chunk_adaptive` 读取初值与
+调整门槛（默认 B=1024、M=4、K=1，门槛 0.1）。
 
 - 三个初值必须属于各自网格。
 - 每次运行从初值开始，第一块不先做 pilot；后续仅在新 pilot 有效、存在方差信号、
@@ -335,22 +323,9 @@ pilot 成本已在选择前扣除且对本次可选方案相同。跨 B 的误�
 
 底层 `choose_joint_budget(..., forecast_full_horizon=False)` 只接受一个块长估计，
 避免直接比较不同覆盖长度；运行层负责相邻块比较和独立收尾。
-上述设置是示例，不代表已经运行真实模型或验证解题准确率。
+这些默认值尚未在真实模型上验证解题准确率。
 
-### Python 接口
-
-```python
-from inference_scaling.arllm.algorithms.joint_budget_is import (
-    JointBudgetISConfig, run_joint_budget_is,
-)
-from inference_scaling.shared.rng import SeedStream
-
-result = run_joint_budget_is(
-    backend, prompt_tokens,
-    JointBudgetISConfig(forward_token_budget=2_000_000),
-    reward, SeedStream(0), sampling=sampling,
-)
-```
+### 奖励接口与代码索引
 
 `reward(prompt_tokens, sequences)` 批量返回完整序列的奖励；它必须是固定逐序列函数。verifier 投票因此先冻结一个独立样本池；
 直接在当前候选池内重新统计多数标签会改变候选权重之间的依赖关系，不适用第 2 节证明。

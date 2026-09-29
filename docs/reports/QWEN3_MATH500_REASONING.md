@@ -38,14 +38,14 @@
 ## 复现
 
 模型设为 `ar.model.path = "Qwen/Qwen3-1.7B"`（`revision` 固定版本，`weight_sha256` 固定权重），并设
-`ar.engine.dtype = "bfloat16"`、`ar.sampling.temperature = 0.6`、`datasets.math500.selection.count = 30`。思考模式由
-`ar.prompt.chat_template_kwargs.enable_thinking = true` 与 `ar.output.thinking_mode = "enabled"` 打开，普通采样取
-`false` 与 `"disabled"`。
+`ar.engine.backend = "transformers"`、`ar.sampling.temperature = 0.6`、`ar.prompt.chat_template_kwargs = {}`、
+`ar.output.sampling_scope = "full"`、`datasets.math500.selection.count = 30`。BF16 与思考模式
+（`ar.output.thinking_mode = "enabled"`）同默认设置，普通采样取 `"disabled"`。
 
 | 方法 | 命令 | 设置改动 |
 | --- | --- | --- |
 | 普通采样、思考模式单次采样 | `python -m inference_scaling --algorithm sample --dataset math500` | 见上；单条长度改 `datasets.math500.max_new_tokens` |
-| 多数投票 | `--algorithm best_of_n --dataset math500` | `rewards.verifier.source = "vote"`，`best_of_n.samples = 2 / 4` |
+| 多数投票 | `--algorithm best_of_n --dataset math500 --reward verifier` | `rewards.verifier.source = "vote"`，`best_of_n.samples = 2 / 4` |
 | IS，三种奖励 | `--algorithm is --dataset math500 --reward verifier`（或 `logprob`、`consilience`） | `planning = "fixed"`，`fixed.candidate_count = 2 / 4`，`rollout_count = 1`，`block_size` 不小于单条长度（对完整序列一次重采样）；`max_new_tokens = 8192 / 16384` |
 | MH，三种奖励 | `--algorithm mh --dataset math500 --reward …` | `iterations = 1 / 3`，`suffix_schedule = "uniform"` |
 

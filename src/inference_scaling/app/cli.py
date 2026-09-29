@@ -19,7 +19,8 @@ ALGORITHMS = ("sample", "greedy", "beam", "best_of_n", "mh", "mh_power", "is")
 MODELS = ("ar", "dllm")
 # Algorithms whose target reweights the base model by exp(reward / temperature) or selects by reward.
 REWARD_ALGORITHMS = frozenset({"best_of_n", "mh", "is"})
-DEFAULT_REWARD = "verifier"
+# A diffusion model has no autoregressive token probabilities for the model rewards.
+DEFAULT_REWARDS = {"ar": "consilience", "dllm": "verifier"}
 
 
 def parse(argv: Sequence[str] | None = None) -> tuple[Choices, Path]:
@@ -29,14 +30,14 @@ def parse(argv: Sequence[str] | None = None) -> tuple[Choices, Path]:
     )
     parser.add_argument("--algorithm", choices=ALGORITHMS, default="is")
     parser.add_argument("--model", choices=MODELS, default="ar", help="model family")
-    parser.add_argument("--reward", choices=REWARDS,
-                        help=f"reward of {', '.join(sorted(REWARD_ALGORITHMS))} (default: {DEFAULT_REWARD})")
+    parser.add_argument("--reward", choices=REWARDS, help=f"reward of {', '.join(sorted(REWARD_ALGORITHMS))} (default: "
+                        + ", ".join(f"{reward} for {model}" for model, reward in DEFAULT_REWARDS.items()) + ")")
     parser.add_argument("--dataset", choices=sorted(DATASETS), default="gsm8k")
     parser.add_argument("--output", type=Path, default=Path("results"), help="root of the results directories")
     args = parser.parse_args(argv)
     reward = args.reward
     if args.algorithm in REWARD_ALGORITHMS:
-        reward = reward or DEFAULT_REWARD
+        reward = reward or DEFAULT_REWARDS[args.model]
     elif reward is not None:
         parser.error(f"--algorithm {args.algorithm} does not use a reward")
     return Choices(args.algorithm, args.model, reward, args.dataset), args.output
