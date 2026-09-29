@@ -236,27 +236,26 @@ def test_vllm_nonunit_score_requires_or_uses_exact_fallback() -> None:
     assert snapshot.delegated_estimated_dense_forward_flops == 600
 
 
-def test_vllm_scores_log_probabilities_and_delegates_full_vocabulary_confidences() -> None:
+def test_vllm_delegates_top_k_confidences_to_the_exact_backend() -> None:
     backend, _ = _backend(fallback=_Fallback())
-    assert backend.token_statistics([ScoreRequest((8, 6), ((4, 5),))], TokenStatistic(SamplingConfig())) == [(-0.2, -0.3)]
     assert backend.token_statistics([ScoreRequest((1,), ((2, 3),))], TokenStatistic(SamplingConfig(), 5)) == [
         {"tokens": (2, 3)}]
     snapshot = backend.snapshot()
-    assert (snapshot.native_score_sequences, snapshot.delegated_score_sequences) == (1, 1)
+    assert (snapshot.native_score_sequences, snapshot.delegated_score_sequences) == (0, 1)
     assert snapshot.delegated_estimated_dense_forward_flops == 600
 
 
 def test_vllm_generation_reports_the_statistics_of_its_own_policy() -> None:
     backend, engine = _backend()
     policy = SamplingConfig(eos_token_id=2)
-    top, log, other = backend.sample_batch([
+    other_policy, full = TokenStatistic(SamplingConfig(temperature=0.5), 2), TokenStatistic(SamplingConfig())
+    top, whole, other = backend.sample_batch([
         GenerationRequest((1,), 2, policy, 11, name, statistic=statistic) for name, statistic in (
-            ("top", TokenStatistic(SamplingConfig(), 2)), ("log", TokenStatistic(SamplingConfig())),
-            ("other", TokenStatistic(SamplingConfig(temperature=0.5))))])
+            ("top", TokenStatistic(SamplingConfig(), 2)), ("whole", full), ("other", other_policy))])
     assert [params.logprobs for params in engine.calls[0][1]] == [2, 0, 0]
-    # The two most likely tokens have log-probabilities -0.25 and -1.
-    assert top.token_statistics == (0.625, 0.625) and log.token_statistics == log.token_logprobs
-    assert other.token_statistics is None and not backend.records(TokenStatistic(SamplingConfig(temperature=0.5)), policy)
+    # The two most likely tokens have log-probabilities -0.25 and -1; the engine never returns the whole vocabulary.
+    assert top.token_statistics == (0.625, 0.625) and whole.token_statistics is None
+    assert other.token_statistics is None and not backend.records(other_policy, policy) and not backend.records(full, policy)
 
 
 def test_vllm_encode_decode_and_close() -> None:

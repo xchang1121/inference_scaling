@@ -2,8 +2,8 @@
 
 A reward is a fixed per-sequence score r(x, y); with temperature tau the
 sampling target is p(y | x) exp(r / tau). The ``verifier`` reads the answer
-text of a completion and is built here for every model family; ``logprob`` and
-``consilience`` read the model's own probabilities and are built by the family
+text of a completion and is built here for every model family; ``self_certainty``
+and ``consilience`` read the model's own probabilities and are built by the family
 that owns the model.
 """
 
@@ -20,7 +20,7 @@ from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.rewards.vote import pool_agreement_reward
 from inference_scaling.shared.types import TokenBatchReward, TokenSequence, pointwise
 
-REWARDS = ("verifier", "logprob", "consilience")
+REWARDS = ("verifier", "self_certainty", "consilience")
 AnswerText = Callable[[TokenSequence, TokenSequence], str]
 
 

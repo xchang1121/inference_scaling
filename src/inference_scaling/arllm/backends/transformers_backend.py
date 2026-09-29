@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import math
 import threading
 import warnings
 from collections.abc import Mapping, Sequence
@@ -26,11 +27,11 @@ except ImportError:  # pragma: no cover - exercised in dependency-free installat
     torch = None  # type: ignore[assignment]
 
 
-def _token_statistic(log_probs, tokens, top_k: int | None):
-    """Per row, the token's log-probability or, with ``top_k``, minus the mean of the K largest."""
+def _token_statistic(log_probs, top_k: int | None):
+    """Per row, minus the mean of the K largest log-probabilities, or without ``top_k`` the KL divergence from uniform."""
 
     if top_k is None:
-        return log_probs.gather(-1, tokens[:, None]).squeeze(-1)
+        return -log_probs.mean(dim=-1) - math.log(log_probs.shape[-1])
     return -log_probs.topk(min(top_k, log_probs.shape[-1]), dim=-1).values.mean(dim=-1)
 
 
@@ -357,7 +358,7 @@ class TransformersBackend:
                 if statistic is not None:
                     statistics[alive, step] = _token_statistic(log_probs if statistic.matches(sampling) else
                                                            self._policy_log_probs(logits, statistic.policy),
-                                                           sampled, statistic.top_k)
+                                                           statistic.top_k)
                 lengths[alive] = step + 1
                 reason = torch_module.zeros_like(sampled)
                 for marker in markers:
@@ -441,7 +442,7 @@ class TransformersBackend:
             self._replayed_tokens += replayed
         return outputs
 
-    def _score_batch(self, batch, top_k: int | None) -> tuple[list[list[float]], int]:
+    def _score_batch(self, batch, statistic: TokenStatistic | None) -> tuple[list[list[float]], int]:
         """Teacher-force one batch of (request, continuation, inputs) rows in chunks; returns values and slots."""
 
         torch_module = _require_torch()
@@ -457,8 +458,9 @@ class TransformersBackend:
                 if low < position + logits.shape[1]:
                     targets = torch_module.tensor(continuation[low - first : position + logits.shape[1] - first],
                                                   dtype=torch_module.long, device=logits.device)
-                    values[row].extend(_token_statistic(self._policy_log_probs(logits[row, low - position :],
-                                                                               request.sampling), targets, top_k).tolist())
+                    log_probs = self._policy_log_probs(logits[row, low - position :], request.sampling)
+                    values[row].extend((log_probs.gather(-1, targets[:, None]).squeeze(-1) if statistic is None
+                                        else _token_statistic(log_probs, statistic.top_k)).tolist())
 
         with self._model_lock, torch_module.inference_mode():
             run_causal_chunks(
@@ -468,8 +470,8 @@ class TransformersBackend:
             )
         return values, int(input_ids.numel())
 
-    def _score_rows(self, requests: Sequence[ScoreRequest], top_k: int | None) -> list[tuple[float, ...]]:
-        """Token log-probabilities or, with ``top_k``, top-K confidences of every continuation.
+    def _score_rows(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic | None) -> list[tuple[float, ...]]:
+        """Token log-probabilities or, with ``statistic``, that statistic of every continuation.
 
         Continuations are teacher-forced in batches of similar length and in
         chunks of ``score_chunk_size`` positions over a KV cache, so a long
@@ -491,7 +493,7 @@ class TransformersBackend:
             while size < min(len(items), self.max_score_batch_size) and (size + 1) * len(items[size][3]) <= capacity:
                 size += 1
             batch, items = items[:size], items[size:]
-            values, slots = self._score_batch([item[1:] for item in batch], top_k)
+            values, slots = self._score_batch([item[1:] for item in batch], statistic)
             forwarded += slots
             for (index, *_), row in zip(batch, values, strict=True):
                 results[index] = tuple(row)
@@ -508,7 +510,7 @@ class TransformersBackend:
     def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
         """Each continuation's ``statistic`` per token, under the statistic's policy; the forwards count as scoring."""
 
-        return self._score_rows([replace(request, sampling=statistic.policy) for request in requests], statistic.top_k)
+        return self._score_rows([replace(request, sampling=statistic.policy) for request in requests], statistic)
 
     @staticmethod
     def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:

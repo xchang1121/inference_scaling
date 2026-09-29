@@ -92,7 +92,7 @@ def test_every_dllm_algorithm_writes_graded_records(dllm_settings, tmp_path, alg
         assert record["cost"]["forward_token_slots"] > 0
 
 
-@pytest.mark.parametrize("reward", ["logprob", "consilience"])
+@pytest.mark.parametrize("reward", ["self_certainty", "consilience"])
 def test_diffusion_rejects_autoregressive_probability_rewards(dllm_settings, tmp_path, reward):
     with pytest.raises(ValueError, match="autoregressive token probabilities"):
         run(Choices("is", "dllm", reward, "gsm8k"), dllm_settings, tmp_path / "results")

@@ -66,12 +66,12 @@
 | `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
 | `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
 | `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
-| `logprob.temperature` / `logprob.score_temperature` | 数 | 奖励温度；评分策略的温度（1 为模型原始分布）。奖励为有效输出 token 的平均对数概率 |
+| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；计算分布所用的温度（1 为模型原始分布）；评分范围（原始定义为 `full`）。奖励为评分段上各位置的分布相对全词表均匀分布的 KL 散度的均值；要用整个词表的概率，vLLM 引擎需设 `ar.engine.vllm.exact_scoring = "transformers"` |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
 | `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty` 倍首段均值 |
 
-`logprob` 与 `consilience` 读取自回归模型的概率，只用于 `--model ar`。
+`self_certainty` 与 `consilience` 读取自回归模型的概率，只用于 `--model ar`。
 
 ### `ar.model`
 
@@ -168,6 +168,7 @@
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
+| `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：单卡改 `backend = "transformers"`，多卡可设 `exact_scoring = "transformers"` 并把 `device` 指向另一张卡 |
 | `datasets.<name>.max_new_tokens` | 131072 | 思考段与答案共用，给 `xhigh` 的长思考留足长度 |
 | `algorithms.is` | `full_horizon`，预算 524,288，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算至少约为输出上限的 3 倍（先生成一条输出测长度，再预留两个候选写完），否则思考写满上限的题会报错；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |

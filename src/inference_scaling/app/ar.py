@@ -30,7 +30,7 @@ from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
-from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SequenceLogProbabilityReward
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward, TokenStatisticReward
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
 from inference_scaling.datasets.base import Dataset, Problem
@@ -48,6 +48,8 @@ from inference_scaling.shared.types import TokenSequence
 SCOPED = frozenset({"mh", "mh_power", "is"})
 # Algorithms whose target reweights the full-support base policy.
 FULL_SUPPORT = frozenset({"mh", "mh_power", "is"})
+# Rewards that read how decided the model's next-token distributions are.
+CONFIDENCE_REWARDS = frozenset({"self_certainty", "consilience"})
 
 
 @dataclass(frozen=True)
@@ -84,10 +86,14 @@ class ARFamily:
         sampling = self.ar["sampling"]
         if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
+        engine = self.ar["engine"]
         for option in ("suffix_replay", "early_rejection"):
-            if self.ar["engine"]["backend"] == "vllm" and self.config.get(option):
+            if engine["backend"] == "vllm" and self.config.get(option):
                 raise ValueError(f"ar.algorithms.{choices.algorithm}.{option} needs the transformers engine, which "
                                  "samples from request uniform streams and reports reference log-probabilities")
+        if choices.reward == "self_certainty" and engine["backend"] == "vllm" and engine["vllm"]["exact_scoring"] == "none":
+            raise ValueError("self_certainty reads the whole next-token distribution, which vLLM does not return; "
+                             "set ar.engine.backend or ar.engine.vllm.exact_scoring to transformers")
         self.raw: Any = None
         self.backend: Any = None
 
@@ -161,9 +167,9 @@ class ARFamily:
     def _scope(self, prompt: TokenSequence) -> SamplingScope:
         algorithm, reward = self.choices.algorithm, self.choices.reward
         scope = SamplingScope.from_config(self.raw, self.ar, active=algorithm in SCOPED).for_prompt(prompt)
-        # Text rewards and full-scope Consilience read the whole sequence.
+        # Text rewards and full-scope confidence rewards read the whole sequence.
         if scope.scope == "thinking" and (
-            reward == "verifier" or (reward == "consilience" and self.reward_settings["scope"] == "full")
+            reward == "verifier" or (reward in CONFIDENCE_REWARDS and self.reward_settings["scope"] == "full")
         ):
             scope = scope.full_fallback("reward_uses_full_sequence")
         return scope
@@ -174,14 +180,14 @@ class ARFamily:
             return None
         # Model rewards read the statistic that the task's backend records.
         model: Any
-        if kind in {"logprob", "consilience"}:
+        if kind in CONFIDENCE_REWARDS:
             statistic = task.backend.statistic
-            model = SequenceLogProbabilityReward(task.backend, statistic) if kind == "logprob" else ConsilienceReward(
+            span = {"thinking_format": self.thinking_format if settings["scope"] == "thinking" else None,
+                    "scope": settings["scope"]}
+            model = SelfCertaintyReward(task.backend, statistic, **span) if kind == "self_certainty" else ConsilienceReward(
                 task.backend, statistic, window_fraction=float(settings["window_fraction"]),
                 window_tokens=settings["window_tokens"], skip_fraction=float(settings["skip_fraction"]),
-                initial_penalty=float(settings["initial_penalty"]),
-                thinking_format=self.thinking_format if settings["scope"] == "thinking" else None,
-                scope=settings["scope"])
+                initial_penalty=float(settings["initial_penalty"]), **span)
             # A generated sequence needs a scoring forward only when generation cannot compute the statistic.
             passes = 0 if self.raw.records(statistic, task.sampling) else 1
             return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
@@ -213,8 +219,8 @@ class ARFamily:
                                 top_k=sampling["top_k"], eos_token_id=self.eos)
         scope = self._scope(prompt)
         backend = scope.wrap(self.backend, prompt)
-        if self.choices.reward in {"logprob", "consilience"}:
-            # A model reward reads a token statistic of the generated tokens, which generation records.
+        if self.choices.reward in CONFIDENCE_REWARDS:
+            # A confidence reward reads a token statistic of the generated tokens, which generation records.
             settings = self.reward_settings
             backend = StatisticRecorder(backend, TokenStatistic(
                 SamplingConfig(temperature=float(settings["score_temperature"])),
@@ -230,9 +236,9 @@ class ARFamily:
             tokens, info = scope.finish(self.backend, prompt, tokens, max_new_tokens=maximum, sampling=policy,
                                         seed=seeds.derive(algorithm, problem.id, "final-content"))
         fallbacks = [info["sampling_fallback_reason"]] if info["sampling_fallback_reason"] else []
-        consilience = getattr(reward, "model", None)
-        if isinstance(consilience, ConsilienceReward) and (reason := consilience.fallback(prompt, tokens)):
-            fallbacks.append(f"consilience:{reason}")
+        confidence = getattr(reward, "model", None)
+        if isinstance(confidence, TokenStatisticReward) and (reason := confidence.fallback(prompt, tokens)):
+            fallbacks.append(f"{self.choices.reward}:{reason}")
         trace = {"generation_budget": budget, **trace}
         if reward is not None:
             trace["reward"] = dict(reward.description)

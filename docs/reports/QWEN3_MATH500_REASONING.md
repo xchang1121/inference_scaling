@@ -18,7 +18,7 @@
 ## 结论
 
 - **思考模式提高了准确率。** 单次采样从 14/30 提高到 21/30，平均前向 token 位置数从 1,333 增至 10,024。
-- **高预算下 log-probability IS 的正确数最高。** 24/30，比思考模式单次采样多 3 题（+10.0 个百分点，题目级配对
+- **旧方法：高预算下 log-probability IS 的正确数最高。** 24/30，比思考模式单次采样多 3 题（+10.0 个百分点，题目级配对
   自助法 95% 区间 [−3.3, 23.3]，仍包含 0），平均前向 token 位置数约为其 3.6 倍；与同一候选池的多数投票计算量相同，
   多答对 1 题。
 - **单条长度分配影响低预算结果。** 把思考模式单次采样限制到 8,192 / 16,384 token 时，准确率为 46.7% / 66.7%，完整
@@ -46,9 +46,9 @@
 | --- | --- | --- |
 | 普通采样、思考模式单次采样 | `python -m inference_scaling --algorithm sample --dataset math500` | 见上；单条长度改 `datasets.math500.max_new_tokens` |
 | 多数投票 | `--algorithm best_of_n --dataset math500 --reward verifier` | `rewards.verifier.source = "vote"`，`best_of_n.samples = 2 / 4` |
-| IS，三种奖励 | `--algorithm is --dataset math500 --reward verifier`（或 `logprob`、`consilience`） | `planning = "fixed"`，`fixed.candidate_count = 2 / 4`，`rollout_count = 1`，`block_size` 不小于单条长度（对完整序列一次重采样）；`max_new_tokens = 8192 / 16384` |
-| MH，三种奖励 | `--algorithm mh --dataset math500 --reward …` | `iterations = 1 / 3`，`suffix_schedule = "uniform"` |
+| IS | `--algorithm is --dataset math500 --reward verifier`（或 `consilience`） | `planning = "fixed"`，`fixed.candidate_count = 2 / 4`，`rollout_count = 1`，`block_size` 不小于单条长度（对完整序列一次重采样）；`max_new_tokens = 8192 / 16384` |
+| MH | `--algorithm mh --dataset math500 --reward verifier`（或 `consilience`） | `iterations = 1 / 3`，`suffix_schedule = "uniform"` |
 
-自一致性奖励设 `source = "vote"`、`pool_size = 2`、`temperature = 0.25`；log-probability 奖励设 `temperature = 10`；
-Consilience 使用默认设置。与当时实现的差异：log-probability 奖励当时是对数概率之和（目标为 $`p^{1.1}`$），当前
-`logprob` 为长度平均；两档预算当时由统一的前向 token 预算约束，当前以候选数与单条长度复现。
+自一致性奖励设 `source = "vote"`、`pool_size = 2`、`temperature = 0.25`；Consilience 使用默认设置。log-probability
+奖励（当时为对数概率之和，目标为 $`p^{1.1}`$）已从代码中删除，没有对应命令。与当时实现的差异：两档预算当时由统一
+的前向 token 预算约束，当前以候选数与单条长度复现。

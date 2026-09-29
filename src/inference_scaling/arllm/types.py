@@ -17,11 +17,13 @@ from inference_scaling.shared.types import TokenSequence
 
 @dataclass(frozen=True, slots=True)
 class TokenStatistic:
-    """One number per token, read from a policy's next-token log-probabilities before the token.
+    """How decided a policy's next-token distribution is before each token, whichever token was sampled.
 
-    Without ``top_k`` it is the token's log-probability; with ``top_k = K`` it is minus the mean
-    log-probability of the K most likely tokens (Consilience's confidence), which needs a
-    full-support policy. Either depends only on the tokens up to the token itself.
+    With ``top_k = K`` it is minus the mean log-probability of the K most likely
+    tokens (Consilience's confidence); without ``top_k`` it is the KL divergence
+    from the uniform distribution over the V tokens of the vocabulary,
+    ``-log V - mean_j log p_j`` (Self-Certainty's). It depends only on the
+    tokens before the token and needs a full-support policy.
     """
 
     policy: SamplingConfig
@@ -30,8 +32,8 @@ class TokenStatistic:
     def __post_init__(self) -> None:
         if self.top_k is not None and self.top_k <= 0:
             raise ValueError("top_k must be positive")
-        if self.top_k is not None and not self.policy.full_support:
-            raise ValueError("a top-K statistic requires a full-support policy")
+        if not self.policy.full_support:
+            raise ValueError("a token statistic requires a full-support policy")
 
     def matches(self, sampling: SamplingConfig) -> bool:
         """Whether ``sampling`` draws from the statistic's policy (its EOS token aside)."""

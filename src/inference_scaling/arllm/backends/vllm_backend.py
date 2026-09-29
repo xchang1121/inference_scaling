@@ -419,7 +419,7 @@ class VLLMBackend:
             top_k=0 if policy.top_k is None else int(policy.top_k),
             seed=int(seed),
             # The K most likely tokens' processed log-probabilities give the policy's top-K statistic.
-            logprobs=0 if statistic is None or statistic.top_k is None else statistic.top_k,
+            logprobs=0 if statistic is None else statistic.top_k,
             flat_logprobs=False,
             logit_bias=self._logit_bias(),
             ignore_eos=True,
@@ -517,7 +517,7 @@ class VLLMBackend:
             raise RuntimeError("vLLM returned an invalid generated log-probability shape")
         token_logprobs = tuple(_logprob_value(position, token) for position, token in zip(positions, tokens, strict=True))
         statistic = self._statistic(request)
-        statistics = None if statistic is None else token_logprobs if statistic.top_k is None else tuple(
+        statistics = None if statistic is None or statistic.top_k is None else tuple(
             _top_confidence(position, statistic.top_k) for position in positions)
         # The fused MH worker reports the base probabilities at temperature 1.
         reference_values = None if reference_token_logprobs is None or request.reference_temperature != 1 else tuple(
@@ -661,9 +661,10 @@ class VLLMBackend:
 
     @staticmethod
     def records(statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
-        """The engine reports its sampling policy's log-probabilities, so it computes that policy's statistics."""
+        """The engine reports its sampling policy's most likely log-probabilities, so it computes that policy's
+        top-K confidences but not a statistic of the whole vocabulary."""
 
-        return statistic.matches(sampling)
+        return statistic.top_k is not None and statistic.matches(sampling)
 
     def _statistic(self, request: GenerationRequest) -> TokenStatistic | None:
         """The request's statistic when the engine's log-probabilities give it."""
@@ -672,15 +673,12 @@ class VLLMBackend:
         return statistic if statistic is not None and self.records(statistic, request.sampling) else None
 
     def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
-        """Token log-probabilities score like ``score_batch``; the exact backend reads top-K confidences.
+        """The exact backend reads token statistics, which need the whole next-token distribution.
 
-        Selected-token prompt log-probabilities are enough for IS and MH at the
-        base policy, but top-K confidences need the whole next-token distribution.
+        vLLM's prompt log-probabilities cover only the given tokens, which is enough for IS and MH at the base policy.
         """
 
         requests = [replace(request, sampling=statistic.policy) for request in requests]
-        if statistic.top_k is None:
-            return self.score_batch(requests)
         flattened = [continuation for request in requests for continuation in request.continuations]
         outputs, slots, flops = self._run_delegated_score(requests, "token_statistics", statistic=statistic)
         if len(outputs) != len(flattened):

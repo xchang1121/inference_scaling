@@ -120,7 +120,7 @@ maybe、perhaps，取 $`\lambda=1`$。TIP（arXiv:2501.18585）用同类 logit �
 | `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：保留序列时同 AR，否则候选取完整画布时 $`K,M\to\infty`$ 趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），可选完整画布候选与保留序列 |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
-`--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`logprob`、`consilience`（第 9 节），
+`--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`self_certainty`、`consilience`（第 9 节），
 dLLM 只支持 `verifier`（也是它的默认奖励）。默认运行 `--algorithm is --model ar --reward consilience --dataset gsm8k`；
 AR 的 `is` 默认采用联合预算规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
@@ -230,8 +230,8 @@ flowchart LR
 | 第一步 | $`M`$ | $`M(K-1)`$ | $`MK`$ |
 | 后续每步 | $`M-1`$ | $`M(K-1)`$ | $`MK-1`$ |
 
-补全在生成时已返回基础模型概率，不需要重评分。`verifier` 只读取答案文本；`logprob` 与 `consilience`
-读取的逐 token 统计量由生成一并算出（见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
+补全在生成时已返回基础模型概率，不需要重评分。`verifier` 只读取答案文本；`self_certainty` 与 `consilience`
+读取的逐 token 统计量由生成一并算出（vLLM 上的 `self_certainty` 除外，见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
@@ -295,8 +295,8 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励选择一�
 <p align="right">式 (3)</p>
 
 式 (3) 随 $`N`$ 增大趋向奖励最大化。verifier 投票时，每个候选的奖励是 $`N`$ 个候选中与它答案相同的比例，式 (3)
-因而选出得票最多的答案（多数投票）；无法解析的答案得 0。最高奖励出现平票时，按固定种子在并列候选中均匀选取。`logprob` 与 `consilience`
-读取生成时算出的逐 token 统计量，不增加前向计算。
+因而选出得票最多的答案（多数投票）；无法解析的答案得 0。最高奖励出现平票时，按固定种子在并列候选中均匀选取。`self_certainty` 与 `consilience`
+读取生成时算出的逐 token 统计量，不增加前向计算（vLLM 上的 `self_certainty` 除外）。
 
 ### 3.2 GRPO 与 VRPO 对照
 
@@ -697,14 +697,14 @@ proposal 与当前状态无关，全部 proposal 在一次批量调用中生成�
 `--reward` 选择三种奖励之一，只作用于 `best_of_n`、`mh` 和 `is`；`rewards.<name>.temperature` 是式 (1) 的
 $`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`；它对每个序列计算同一个函数，按输入顺序返回结果，并按题目记忆：重复的完整序列只评分一次。`mh` 与 `is` 所用的奖励都是逐序列的固定函数，不依赖同批其他候选，因此条件 IS
 可以复用保留补全的奖励，MH 的接受率只含奖励差。`verifier` 读取答案文本，由
-[`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 为两个模型族构造；`logprob` 与 `consilience` 读取模型
-自身的 token 概率，只用于 AR，由 [`app/ar.py`](../../src/inference_scaling/app/ar.py) 构造。
+[`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 为两个模型族构造；`self_certainty` 与 `consilience` 读取
+模型自身的下一 token 分布，只用于 AR，由 [`app/ar.py`](../../src/inference_scaling/app/ar.py) 构造。
 
 | 奖励 | 定义 | 设置 | 模型族与成本 |
 | --- | --- | --- | --- |
 | `verifier` | 最终答案对照参考答案（oracle）或与模型自身答案一致的比例（投票） | `rewards.verifier.*` | AR 与 dLLM；按文本计算，不计模型前向；投票样本池在奖励阶段生成并单独计量 |
-| `logprob` | 有效 completion 上的 token 平均对数概率 | `rewards.logprob.score_temperature` | AR；读生成时算出的逐 token 统计量（见[下文](#alg-token-statistics)） |
-| `consilience` | top-$`K`$ token 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；同上，统计量为逐 token 的 top-$`K`$ 置信度 |
+| `self_certainty` | 评分段上各位置的分布相对均匀分布的 KL 散度的均值 | `rewards.self_certainty.*` | AR；Transformers 生成时算出，vLLM 需要精确评分后端（见[下文](#alg-token-statistics)） |
+| `consilience` | top-$`K`$ 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；读生成时算出的 top-$`K`$ 置信度 |
 
 ### verifier
 
@@ -735,44 +735,44 @@ $`e^{1.25}\approx 3.5`$，保留对多数的软偏好。verifier 由 [`app/rewar
 `vrpo.preferences.include_reference_completion = true` 时作为额外候选进入同一评分过程；关闭该字段后，偏好对只由
 模型生成与其正确性确定。
 
-### 长度归一化对数概率
+<a id="alg-self-certainty"></a>
+### Self-Certainty 与置信度
 
-`logprob` 使用有效 completion 上的均值。令
-
-```math
-r_{\log p}(x,y)=\frac{1}{L}\log p(y\mid x).
-```
-
-代入式 (1) 后，未归一化目标为
+两种模型奖励都读下一 token 分布有多集中，与实际采到哪个 token 无关。`self_certainty` 是原始
+[Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的分布相对词表上均匀分布 $`U`$ 的 KL 散度，在评分段上
+取均值，空段取 0：
 
 ```math
-p(y\mid x)\exp\{r_{\log p}(x,y)/\tau\}
-=p(y\mid x)^{1+1/(\tau L)}.
+s_t(x,y)=D_{\mathrm{KL}}\!\left(U\,\Vert\,p(\cdot\mid x,y_{\lt t})\right)
+=-\log V-\frac{1}{V}\sum_{j=1}^{V}\log p\!\left(j\mid x,y_{\lt t}\right),
+\qquad
+r_{\mathrm{SC}}(x,y)=\frac{1}{L}\sum_{t=1}^{L}s_t(x,y),
 ```
 
-这里 $`L`$ 是实际生成的 token 数，包含 EOS 或完整停止标记；空 completion
-的奖励为 0。不同长度但平均 token logprob 相同的序列得到相同奖励，不做候选组内归一化。评分策略的温度为
-`rewards.logprob.score_temperature`；逐 token 对数概率的来源见[模型奖励的统计量](#alg-token-statistics)。
+$`V`$ 为词表大小，$`L`$ 为评分段长度。均值使奖励不随长度增长；原始定义对整条输出取平均，`scope` 因而默认 `full`。
+它不同于采到 token 的平均对数概率：后者在温度 1 下是路径上平均负熵的单样本估计，一次采到小概率 token 就大幅降低
+奖励；$`s_t`$ 直接读分布，没有这份采样噪声。$`s_t`$ 要用整个词表的概率：Transformers 后端生成时算出；vLLM 只返回
+最可能的几个 token 的对数概率，需要设 `ar.engine.vllm.exact_scoring = "transformers"`（Transformers 副本对每条序列
+评分一次），否则在加载模型前报错。
 
-变长序列的目标指数依赖 $`L`$，不等价于固定 $`p^\alpha`$；需要固定幂次目标时使用式 (2) 和
-`ar.algorithms.mh_power.alpha`。只归一化 reward，重要性采样的 $`p/q`$、MH 概率项和 `SequenceSample.logprob` 均保留
-真实序列 logprob 的求和语义。
-
-<a id="alg-consilience"></a>
-### Consilience
-
-对第 $`t`$ 个生成位置取得概率最高的
-$`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，定义
+Consilience 读 top-$`K`$ 置信度：对第 $`t`$ 个位置取概率最高的 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，
 
 ```math
 c_t(x,y)=-\frac{1}{K}\sum_{j=1}^{K}
 \log p\!\left(v_{t,j}\mid x,y_{\lt t}\right).
 ```
 
-这里对 top-$`K`$ 项取等权平均，保留公式中的负号。计算该分数的模型和概率策略固定（评分温度为 `rewards.consilience.score_temperature`），
-使同一条轨迹的奖励与其来源 proposal 无关。
+分布越尖，第 2 名以后的概率越小，$`c_t`$ 越大；vLLM 生成时就能返回这 $`K`$ 个对数概率（默认 $`K=5`$）。两种统计量
+所用的模型和概率策略固定（评分温度为 `rewards.<name>.score_temperature`），使同一条轨迹的奖励与其来源 proposal 无关。
 
-若用于评分的思考序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
+两种奖励取 `scope = "thinking"` 时优先对完整、非空的思考段评分（Consilience 默认如此）。关闭思考、缺少边界、思考
+未结束、思考段为空或结构解析失败时，同一公式应用于全序列；`scope = "full"` 直接选择全序列模式。该回退规则在 rollout 评分时确定，作为
+逐序列奖励定义的一部分；最终输出的回退原因记入记录的 `fallbacks`（前缀为奖励名，如 `consilience:`）。
+
+<a id="alg-consilience"></a>
+### Consilience
+
+Consilience 比较同一段思考首尾的置信度。若用于评分的思考序列长度为 $`L`$，跳过位置数为 $`P=\lfloor 0.05L\rfloor`$，窗口长度为
 $`W=\max\{1,\lfloor 0.2L\rfloor\}`$，则默认奖励为
 
 ```math
@@ -784,12 +784,7 @@ r_{\mathrm{Cns}}(x,y)=
 默认 $`K=5`$。短序列的窗口长度限制为不超过 $`L-P`$。`rewards.consilience` 中的 `top_k`、`window_fraction`、
 `skip_fraction` 和 `initial_penalty` 分别控制 $`K`$、窗口比例、跳过比例和首段系数；`window_tokens` 可将比例窗口
 替换为固定 token 数。比例窗口以思考 token 数为分母。边界标记计入生成概率，评分时排除标记及其后的最终内容。
-
-[`ConsilienceReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py) 默认（`scope = "thinking"`）优先对完整、非空的
-思考段评分。关闭思考、缺少边界、思考未结束、思考段为空或结构解析失败时，同一统计公式应用于全序列。
-零 token 的空序列取分数 0。`rewards.consilience.scope = "full"`
-直接选择全序列模式。该回退规则在 rollout 评分时确定，作为逐序列奖励定义的一部分；最终输出的回退原因记入记录的
-`fallbacks`（前缀 `consilience:`）。
+零 token 的空序列取分数 0。
 
 $`c_t`$ 的来源见[模型奖励的统计量](#alg-token-statistics)。Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
 
@@ -806,16 +801,15 @@ $`c_t`$ 的来源见[模型奖励的统计量](#alg-token-statistics)。Best-of-
 <a id="alg-token-statistics"></a>
 ### 模型奖励的统计量
 
-`logprob` 与 Consilience 都把一个逐 token 统计量归约到 completion 的一段上
-（[`TokenStatisticReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py)）：前者是评分策略下的 token
-对数概率在整段上的均值，后者是评分策略下的 $`c_t`$ 在评分段上的窗口分数。统计量只依赖该 token 及其之前的
-token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略不同时多一次
-log-softmax），vLLM 只在评分策略就是采样策略时从引擎返回的对数概率读出（top-$`K`$ 统计量请求返回 $`K`$ 个最可能
-token 的对数概率）。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
+Self-Certainty 与 Consilience 分别把评分策略下的 $`s_t`$ 与 $`c_t`$ 归约到 completion 的一段上
+（[`TokenStatisticReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py)）：前者取均值，后者取窗口分数。
+统计量只依赖该位置之前的 token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略
+不同时多一次 log-softmax）；vLLM 只在评分策略就是采样策略时，从引擎返回的 $`K`$ 个最可能 token 的对数概率读出 $`c_t`$，
+算不了需要全词表的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
 生成请求带上奖励的统计量并保存输出；评分一条序列时，逐位置从在相同上下文之后生成过同一 token 的输出读出，
 只有含未在该上下文生成过的 token（如冻结历史 proposal 的后缀）时才对整条评分。重放的草稿 token 不计算统计量，
-由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 的对数概率在能精确评分所选策略时
-直接评分，top-$`K`$ 统计量与其余策略交给精确评分后端（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
+由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 交给精确评分后端
+（`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
 生成与评分得到的统计量只差浮点舍入。后端能在生成时算出统计量时，联合预算 IS 不计奖励前向；否则每条序列计一次，
 评分前向的 token 数与 FLOPs 计入运行统计。
 
@@ -853,7 +847,7 @@ token 的对数概率）。每题的 [`StatisticRecorder`](../../src/inference_s
 | --- | --- | --- |
 | `<think>…</think>`、`<thinking>…</thinking>`、`[THINK]…[/THINK]`、`<reasoning>…</reasoning>` | 结合 tokenizer、chat template 与生成 token；支持提示中预填起始标记 | 在完整非空思考块结束处停止，再生成最终内容 |
 | 自定义标记 | `thinking_start_text` / `thinking_end_text`；`starts_in_thinking` 声明生成是否从思考段内开始 | 使用相同停止与概率规则 |
-| 非思考模式或解析失败 | 保留完整输出；Consilience 使用全序列统计 | `full`，并记录原因 |
+| 非思考模式或解析失败 | 保留完整输出；置信度奖励使用全序列统计 | `full`，并记录原因 |
 
 `thinking_mode` 取 `auto`、`enabled` 或 `disabled`。自动模式结合 `ar.prompt.chat_template_kwargs.enable_thinking`、
 提示末尾的空思考块和实际输出判断；模板预填的空思考块视为关闭思考。缺少已知格式时保留“格式未识别”状态，
@@ -861,7 +855,7 @@ token 的对数概率）。每题的 [`StatisticRecorder`](../../src/inference_s
 的采样范围。
 
 记录的 `output` 给出完整文本、思考段、最终内容、思考段状态和实际采样范围；`fallbacks` 列出采样范围的回退原因，
-以及最终输出的 Consilience 评分回退，`summary.json` 的 `failures.fallbacks` 汇总各原因次数。最终内容单独进入任务
+以及最终输出的置信度奖励评分回退，`summary.json` 的 `failures.fallbacks` 汇总各原因次数。最终内容单独进入任务
 评测，原始完整生成同时保留。
 
 ### 信号与成本诊断

@@ -172,6 +172,9 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
     assert result == pytest.approx([-np.mean(np.log([0.5, 0.3]))] * 2)
     snapshot = backend.snapshot()
     assert (snapshot.scored_tokens, snapshot.score_forward_token_slots) == (2, 2)
+    # Self-Certainty's KL divergence from the uniform distribution over the three tokens.
+    assert backend.token_statistics([ScoreRequest((0,), ((0, 1),))], TokenStatistic(SamplingConfig()))[0] == pytest.approx(
+        [-np.mean(np.log([0.5, 0.3, 0.2])) - np.log(3)] * 2)
     with pytest.raises(ValueError, match="full-support"):
         TokenStatistic(SamplingConfig(top_k=2), 2)
     with pytest.raises(ValueError, match="top_k must be positive"):
@@ -180,7 +183,7 @@ def test_confidence_statistics_match_reference_policy_definitions() -> None:
 
 def test_generation_reports_the_statistics_that_scoring_computes() -> None:
     backend = _backend(ConstantLogitModel([0.5, 0.35, 0.15]))
-    # Another policy's top-K confidences, and the log-probabilities of the sampling policy itself.
+    # Another policy's top-K confidences, and the sampling policy's own divergence from uniform.
     for sampling, statistic in ((SamplingConfig(temperature=0.7, top_k=2), TokenStatistic(SamplingConfig(), 2)),
                                 (SamplingConfig(eos_token_id=2), TokenStatistic(SamplingConfig()))):
         samples = backend.sample_batch([GenerationRequest((0,), 4, sampling, seed, str(seed), statistic=statistic)

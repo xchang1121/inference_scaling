@@ -55,7 +55,7 @@ SCHEMA: dict[str, Any] = {
     },
     "rewards": {
         "verifier": {"temperature": float, "source": _Choices({"dataset", "vote"}), "pool_size": int},
-        "logprob": {"temperature": float, "score_temperature": float},
+        "self_certainty": {"temperature": float, "score_temperature": float, "scope": _Choices({"thinking", "full"})},
         "consilience": {
             "temperature": float,
             "score_temperature": float,

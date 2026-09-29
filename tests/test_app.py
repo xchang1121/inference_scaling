@@ -85,7 +85,7 @@ class ThinkingBackend(TabularAutoregressiveBackend):
     def direct_generate(self, prefix, *, max_new_tokens, num_beams):
         return (0, 1, 0, 2)[:max_new_tokens]
 
-    def _statistic(self, context, token, statistic):
+    def _statistic(self, context, statistic):
         # The model is certain, so a finite constant stands in for its infinite top-K confidence.
         return 1.0
 
@@ -97,6 +97,8 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     model.mkdir()
     (model / "model.safetensors").write_bytes(b"weights")
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
+    # The fake backend computes any token statistic, as the Transformers engine does.
+    settings["ar"]["engine"]["backend"] = "transformers"
     settings["rewards"]["verifier"]["pool_size"] = 3
     joint = settings["ar"]["algorithms"]["is"]["joint"]
     joint.update(block_sizes=[2, 4], candidate_counts=[2, 4], rollout_counts=[1, 2])
@@ -108,12 +110,13 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
 
 AR_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}),
-    ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}), ("best_of_n", "logprob", {}),
+    ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}), ("best_of_n", "self_certainty", {}),
     ("best_of_n", "consilience", {}),
     ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
     ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
-    ("mh", "logprob", {"sampling_scope": "full"}), ("mh", "consilience", {}),
-    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}), ("is", "logprob", {"planning": "chunk_adaptive"}),
+    ("mh", "self_certainty", {"sampling_scope": "full"}), ("mh", "consilience", {}),
+    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}),
+    ("is", "self_certainty", {"planning": "chunk_adaptive"}),
     ("is", "consilience", {"planning": "fixed", "sampling_scope": "full"}),
 ]
 
@@ -167,16 +170,20 @@ def test_concurrent_problems_share_a_batching_backend_without_per_problem_cost(a
 
 
 def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):
-    ar_settings["ar"]["output"]["sampling_scope"] = "thinking"
-    summary = run(Choices("is", "ar", "logprob", "gsm8k"), ar_settings, tmp_path / "results")
+    summary = run(Choices("is", "ar", "consilience", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "thinking" and record["correct"]
     # The kept thought ends at its closing boundary, not at EOS or the length limit.
     assert record["trace"]["stopping_reason"] == "stop"
 
 
+def test_self_certainty_on_vllm_needs_an_exact_scorer_before_loading(ar_settings, tmp_path):
+    ar_settings["ar"]["engine"]["backend"] = "vllm"
+    with pytest.raises(ValueError, match="whole next-token distribution"):
+        run(Choices("is", "ar", "self_certainty", "gsm8k"), ar_settings, tmp_path / "results")
+
+
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):
-    ar_settings["ar"]["output"]["sampling_scope"] = "thinking"
     ar_settings["ar"]["algorithms"]["is"]["planning"] = "fixed"
     summary = run(Choices("is", "ar", "verifier", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])

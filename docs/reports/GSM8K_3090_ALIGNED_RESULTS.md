@@ -129,6 +129,6 @@ Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后�
 | pass@k | 同上各命令 | `run.draws = 8` |
 | 预算消融 | `--algorithm is --reward verifier`、`--algorithm mh_power` | `datasets.gsm8k.selection.count = 8`，IS 设 `source = "vote"`；`fixed.candidate_count`、`fixed.block_size`、`steps_per_block`、`datasets.gsm8k.max_new_tokens` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule`；`max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
-| 奖励选择 | `--algorithm is --reward verifier`、`--reward logprob` | `selection.count = 8`，`planning = "fixed"`；verifier 设 `source = "vote"` |
+| 奖励选择 | `--algorithm is --reward verifier`、`--reward self_certainty` | `selection.count = 8`，`planning = "fixed"`；verifier 设 `source = "vote"`。当时的自确定度还在每批候选内做 min-max 归一化，当前是逐序列的原始定义；平均对数概率与平均负熵已删除 |
 
 与当时实现的差异：自一致性奖励现在与冻结的 `pool_size` 个独立样本比较，当时为已评估补全的累计众数。

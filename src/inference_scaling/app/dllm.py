@@ -46,7 +46,7 @@ class DLLMFamily:
     workers = 1
 
     def __init__(self, settings: Mapping[str, Any], choices: Any, dataset: Dataset) -> None:
-        if choices.reward in {"logprob", "consilience"}:
+        if choices.reward in {"self_certainty", "consilience"}:
             raise ValueError(f"the {choices.reward} reward reads autoregressive token probabilities; "
                              "use --model ar, or --reward verifier")
         self.dllm = settings["dllm"]

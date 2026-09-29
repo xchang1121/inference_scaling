@@ -1,4 +1,4 @@
-from math import exp, log
+from math import log
 
 import pytest
 
@@ -11,46 +11,33 @@ from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import thinking_format_from_backend
-from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SequenceLogProbabilityReward
-from inference_scaling.arllm.types import TokenStatistic
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward
+from inference_scaling.arllm.types import ScoreRequest, TokenStatistic
 from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
 from inference_scaling.shared.rng import SeedStream
 
-LOGPROB, TOP = TokenStatistic(SamplingConfig()), TokenStatistic(SamplingConfig(), 3)
+TOP, FULL = TokenStatistic(SamplingConfig(), 3), TokenStatistic(SamplingConfig())
 
 
-def test_sequence_log_probability_reward_averages_all_token_scores() -> None:
-    backend = TabularAutoregressiveBackend({(): (0.75, 0.25), (1,): (0.4, 0.6)}, fallback=(0.5, 0.5))
-    reward = SequenceLogProbabilityReward(backend, LOGPROB)
-    assert reward((), (1, 0)) == pytest.approx((log(0.25) + log(0.4)) / 2)
-    assert reward.batch((), ((0,), (1, 1))) == pytest.approx((log(0.75), (log(0.25) + log(0.6)) / 2))
-    # Length and batch order leave a reward unchanged; an empty completion has reward zero.
-    completions = ((1, 0), (1,) + (0,) * 100, ())
-    expected = ((log(0.25) + log(0.4)) / 2, (log(0.25) + log(0.4) + 99 * log(0.5)) / 101, 0.0)
-    assert reward.batch((), completions) == pytest.approx(expected)
-    assert reward.batch((), completions[::-1]) == pytest.approx(expected[::-1])
-    assert reward.batch((), ()) == () and reward.reduce((-2.0, 0.0)) == -1.0
+def test_token_statistics_read_the_distribution_not_the_sampled_token() -> None:
+    backend, request = TabularAutoregressiveBackend({(): (0.7, 0.2, 0.1)}, fallback=(0.4, 0.3, 0.3)), ScoreRequest((), ((0,), (2,)))
+    # The top-2 confidence and the divergence from uniform are the same whichever token was sampled.
+    for statistic, value in ((TokenStatistic(SamplingConfig(), 2), -(log(0.7) + log(0.2)) / 2),
+                             (FULL, -(log(0.7) + log(0.2) + log(0.1)) / 3 - log(3))):
+        assert backend.token_statistics([request], statistic) == [pytest.approx((value,))] * 2
 
 
-def test_log_probability_reward_describes_its_policy_and_reads_log_probabilities() -> None:
-    backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
-    sampling = SamplingConfig(temperature=0.8)
-    assert SequenceLogProbabilityReward(backend, TokenStatistic(sampling)).describe() == {
-        "source": "model_sequence_log_probability", "model_id": "tabular", "policy_id": sampling.policy_id,
-        "normalization": "mean_per_token",
-    }
-    with pytest.raises(ValueError, match="log-probabilities"):
-        SequenceLogProbabilityReward(backend, TOP)
-
-
-def test_log_probability_reward_reweighting_uses_length_dependent_exponent() -> None:
-    reward = SequenceLogProbabilityReward(TabularAutoregressiveBackend({}, fallback=(0.75, 0.25)), LOGPROB)
-    completions, probabilities, temperature = ((0,), (1, 0)), (0.75, 0.25 * 0.75), 0.3
-    reweighted = [probability * exp(reward((), completion) / temperature)
-                  for probability, completion in zip(probabilities, completions, strict=True)]
-    powers = [probability ** (1.0 + 1.0 / (temperature * len(completion)))
-              for probability, completion in zip(probabilities, completions, strict=True)]
-    assert [value / sum(reweighted) for value in reweighted] == pytest.approx([value / sum(powers) for value in powers])
+def test_self_certainty_is_the_mean_divergence_whatever_the_length() -> None:
+    reward = SelfCertaintyReward(_Confidences({1: 9.0, 2: 3.0, 3: 5.0}), FULL, scope="full")
+    # Repeating a trajectory keeps its mean, so a longer thought earns nothing for its length; an empty one scores zero.
+    assert reward.batch((), ((1, 2), (1, 2, 1, 2), (3,), ())) == pytest.approx((6.0, 6.0, 5.0, 0.0))
+    assert reward.describe() == {"source": "model_self_certainty", "model_id": "trajectory-model",
+                                 "policy_id": FULL.policy.policy_id, "top_k": None, "scope": "full",
+                                 "fallback": "full_sequence", "thinking_format": None}
+    with pytest.raises(ValueError, match="finite"):
+        SelfCertaintyReward(_Confidences({1: float("nan")}), FULL, scope="full")((), (1,))
+    with pytest.raises(ValueError, match="whole vocabulary"):
+        SelfCertaintyReward(_Confidences({}), TOP, scope="full")
 
 
 def test_problem_reward_scores_each_sequence_once() -> None:
@@ -67,7 +54,7 @@ def test_problem_reward_scores_each_sequence_once() -> None:
 
 
 class _Confidences:
-    """A fixed confidence for each token, whatever its context."""
+    """A fixed statistic for each token, whatever its context."""
 
     model_id = "trajectory-model"
 
@@ -75,7 +62,7 @@ class _Confidences:
         self.values, self.requests = values, []
 
     def token_statistics(self, requests, statistic):
-        assert statistic == TOP
+        assert statistic in (TOP, FULL)
         self.requests.extend(requests)
         return [tuple(self.values[token] for token in continuation)
                 for request in requests for continuation in request.continuations]
@@ -100,7 +87,7 @@ def test_consilience_reward_is_batch_order_invariant_and_pointwise() -> None:
 @pytest.mark.parametrize(("kwargs", "message"), [
     ({"window_fraction": 0.0}, "window_fraction"), ({"window_tokens": 0}, "window_tokens"),
     ({"skip_fraction": 1.0}, "skip_fraction"), ({"initial_penalty": -1.0}, "initial_penalty"),
-    ({"statistic": LOGPROB}, "top-K confidence"),
+    ({"scope": "answer"}, "thinking or full"), ({"statistic": FULL}, "top-K confidence"),
 ])
 def test_consilience_reward_validates_parameters(kwargs, message) -> None:
     with pytest.raises(ValueError, match=message):
@@ -151,13 +138,13 @@ class _Counting(TabularAutoregressiveBackend):
         return super().token_statistics(requests, statistic)
 
 
-@pytest.mark.parametrize("statistic", [TokenStatistic(SamplingConfig(temperature=0.7)), TokenStatistic(SamplingConfig(), 2)])
-def test_model_rewards_read_the_statistics_that_generation_recorded(statistic) -> None:
+@pytest.mark.parametrize(("reward_class", "statistic"), [(SelfCertaintyReward, TokenStatistic(SamplingConfig(temperature=0.7))),
+                                                         (ConsilienceReward, TokenStatistic(SamplingConfig(), 2))])
+def test_model_rewards_read_the_statistics_that_generation_recorded(reward_class, statistic) -> None:
     table = {(): (0.5, 0.3, 0.2), (0,): (0.2, 0.5, 0.3), (1,): (0.6, 0.2, 0.2)}
 
     def run(backend):
-        reward = (SequenceLogProbabilityReward(backend, statistic) if statistic.top_k is None else
-                  ConsilienceReward(backend, statistic, window_tokens=1, scope="full")).batch
+        reward = reward_class(backend, statistic, scope="full").batch
         conditional = run_conditional_is(backend, (), ConditionalISConfig(
             candidate_count=3, rollout_count=2, block_size=1, total_length=4, reward_temperature=0.5, block_first=False),
             reward, SeedStream(3))

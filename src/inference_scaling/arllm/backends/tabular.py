@@ -106,7 +106,7 @@ class TabularAutoregressiveBackend:
                 references.append(float(np.log(self.probabilities(tuple(context), request.reference_policy)[token])))
                 bounds.append((float(cdf[token - 1]) if token else -1.0, float(cdf[token])))
                 if request.statistic is not None:
-                    statistics.append(self._statistic(tuple(context), token, request.statistic))
+                    statistics.append(self._statistic(tuple(context), request.statistic))
                 context.append(token)
                 if request.sampling.eos_token_id == token:
                     finish_reason = "eos"
@@ -123,14 +123,14 @@ class TabularAutoregressiveBackend:
             ))
         return outputs
 
-    def _statistic(self, context: TokenSequence, token: int, statistic: TokenStatistic) -> float:
+    def _statistic(self, context: TokenSequence, statistic: TokenStatistic) -> float:
         with np.errstate(divide="ignore"):
             logs = np.log(self.probabilities(context, statistic.policy))
-        return float(logs[token] if statistic.top_k is None else -np.sort(logs)[-statistic.top_k:].mean())
+        return float(-logs.mean() - np.log(len(logs)) if statistic.top_k is None else -np.sort(logs)[-statistic.top_k:].mean())
 
     def token_statistics(self, requests: Sequence[ScoreRequest], statistic: TokenStatistic) -> list[tuple[float, ...]]:
-        return [tuple(self._statistic(request.prefix + continuation[:index], token, statistic)
-                      for index, token in enumerate(continuation))
+        return [tuple(self._statistic(request.prefix + continuation[:index], statistic)
+                      for index in range(len(continuation)))
                 for request in requests for continuation in request.continuations]
 
     @staticmethod

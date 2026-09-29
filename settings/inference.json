@@ -44,7 +44,7 @@
   },
   "rewards": {
     "verifier": {"temperature": 0.1, "source": "dataset", "pool_size": 8},
-    "logprob": {"temperature": 0.1, "score_temperature": 1.0},
+    "self_certainty": {"temperature": 0.25, "score_temperature": 1.0, "scope": "full"},
     "consilience": {
       "temperature": 2.0,
       "score_temperature": 1.0,

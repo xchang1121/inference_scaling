@@ -42,7 +42,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | --- | --- | --- |
 | `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
 | `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
-| `--reward` | `verifier`、`logprob`、`consilience`；只用于 `best_of_n`、`mh`、`is` | AR 为 `consilience`，dLLM 为 `verifier` |
+| `--reward` | `verifier`、`self_certainty`、`consilience`；只用于 `best_of_n`、`mh`、`is` | AR 为 `consilience`，dLLM 为 `verifier` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
@@ -71,7 +71,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | 奖励 | 定义 | 实现 |
 | --- | --- | --- |
 | `verifier` | 按最终答案评分。默认对照参考答案（oracle：正确为 1，否则为 0）；`rewards.verifier.source = "vote"` 或数据集没有参考答案时改为投票：与模型自身答案一致的比例（`best_of_n` 在候选之间投票，`is`/`mh` 与冻结的 `pool_size` 个独立样本比较） | [`app/rewards.py`](src/inference_scaling/app/rewards.py)、[`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
-| `logprob` | 有效输出 token 的平均对数概率（AR） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
+| `self_certainty` | [Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的下一 token 分布相对全词表均匀分布的 KL 散度，对整条输出取均值（AR；vLLM 上需要 Transformers 精确评分） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
 | `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
 `is` 与 `mh` 所用的奖励都是逐序列的固定分数（投票用冻结样本池），因此条件 IS 可以复用保留序列的奖励，MH 的
@@ -147,7 +147,7 @@ python -m pytest
 | --- | --- |
 | `src/inference_scaling/app/` | 推理入口：命令行、设置 schema、运行与续跑、结果记录、两个模型族的算法组装、奖励绑定 |
 | `src/inference_scaling/datasets/` | 数据集：题目、提示、答案规则与判定器 |
-| `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS、预算 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（logprob、Consilience） |
+| `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS、预算 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（Self-Certainty、Consilience） |
 | `src/inference_scaling/dllm/` | LLaDA：`algorithms/`（条件扩散 IS、MH、分块 beam）、`backends/`、`training/`（VRPO） |
 | `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`budget/`（预算规划）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
 | `settings/` | 推理与训练设置 |
