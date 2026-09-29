@@ -288,7 +288,7 @@ python -m inference_scaling --algorithm is --model ar --reward consilience --dat
 | `reserved_forward_tokens`、`planned_forward_tokens_used` | 各步计划成本合计与账本实际消耗合计（含长度测量与初始估计） |
 | `steps[].pilot_forward_tokens`、`length_probe_forward_tokens` | 实际消耗中每步的初始估计部分与长度测量部分 |
 | `steps[].expected_remaining_tokens`、`steps[].forward_tokens` | 规划该步时的期望剩余长度与该步正式样本的实际消耗 |
-| `stopping_reason` | `eos` 或 `length` |
+| `stopping_reason` | `eos`、`length`，或推理服务的时长上限到期时的 `deadline` |
 
 ### 按下一块预算动态调整
 

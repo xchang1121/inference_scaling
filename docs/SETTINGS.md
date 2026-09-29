@@ -6,6 +6,7 @@
 | --- | --- |
 | `settings/inference.json` | `python -m inference_scaling`（命令行只选择算法、模型族、奖励和数据集） |
 | `settings/training.json` | `python -m training`（没有命令行参数） |
+| `settings/serve.json` | `python -m inference_scaling.serve`（另读 `settings/inference.json` 的 `ar` 与 `rewards.consilience`） |
 
 两个文件都按代码中的 schema 严格校验（[`app/settings.py`](../src/inference_scaling/app/settings.py)、
 [`training/settings.py`](../training/settings.py)）：缺少字段、多出字段或类型不符都会在加载模型前报错。
@@ -195,6 +196,20 @@
 | `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 逐块扩散 IS 的 M、K 与决策块长 |
 | `algorithms.is.candidate_canvas` | `block` \| `full` | `block`：候选单独请求，画布止于该块；`full`：从到输出上限的完整输出切出，其余部分作为第一条补全，与补全同一策略（见[算法说明](methods/ALGORITHMS.md#alg-dllm-is)） |
 | `algorithms.is.kept_sequence` | 布尔 | 保留一条完整序列的条件 IS（同 AR）；需要 `candidate_canvas = "full"` |
+
+## `settings/serve.json`
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `server.host` / `port` / `served_model_name` | 字符串 / 整数 / 字符串 | 监听地址与 `/v1/models` 报告的模型名（请求里的模型名不做校验） |
+| `server.max_concurrent_requests` | 整数 | 同时推理的请求数；各请求共用一个引擎的连续批处理，超出的请求排队 |
+| `server.keepalive_seconds` | 数 | 流式请求在搜索期间发送 keep-alive 的间隔 |
+| `server.seed` | 整数 | 各请求随机流的根种子，按请求序号派生 |
+| `default_effort` / `effort_aliases` | 字符串 / 对象 | 请求未给推理强度时的档位；其他强度名到档位名的映射（如 `minimal` → `low`） |
+| `efforts.<名>.reasoning_effort` | `low` \| `medium` \| `xhigh` | chat template 的推理强度 |
+| `efforts.<名>.max_new_tokens` | 整数 | 思考与答案共用的输出上限；请求的 `max_tokens` 只能调低它 |
+| `efforts.<名>.forward_token_budget` | 整数 | 思考段联合预算 IS 的前向 token 预算；提示很长时抬到最低可行值（2 倍提示加 3 倍输出上限） |
+| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；进行中的一步与答案生成照常完成 |
 
 ## `settings/training.json`
 

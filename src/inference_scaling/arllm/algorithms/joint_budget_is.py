@@ -20,6 +20,7 @@ spend more than planned when its completions run longer than expected.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import ceil, isfinite
@@ -169,8 +170,12 @@ def run_joint_budget_is(
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
+    deadline: float | None = None,
 ) -> JointBudgetISResult:
     """Replan at each cut of the kept sequence; pilots never supply production candidates/weights.
+
+    Past ``deadline`` (a ``time.monotonic`` value) no further step starts and
+    the kept complete sequence is returned; the first step always runs.
 
     Full-horizon planning includes a complete-to-EOS option. Adaptive chunks
     complete only at the output limit or when the incumbent chunk plus the
@@ -256,7 +261,11 @@ def run_joint_budget_is(
                                not candidate.rollouts[0].token_ids for candidate in pilot]))
         return moments
 
+    timed_out = False
     while not state.token_ids or state.fixed < len(state.token_ids):
+        if deadline is not None and state.token_ids and time.monotonic() >= deadline:
+            timed_out = True
+            break
         pool.clear()
         remaining = config.total_length - state.fixed
         finish_reserve = reserve(state.fixed, expected)
@@ -292,7 +301,8 @@ def run_joint_budget_is(
     return JointBudgetISResult(
         prompt, state.token_ids, tuple(steps), pilot_reserved + sum(int(step.plan.reserved_cost) for step in steps),
         pilot_reserved,
-        "eos" if sampling.eos_token_id is not None and state.token_ids[-1] == sampling.eos_token_id
+        "deadline" if timed_out
+        else "eos" if sampling.eos_token_id is not None and state.token_ids[-1] == sampling.eos_token_id
         else "length" if len(state.token_ids) >= config.total_length else "stop",
         actual_forward_tokens=ledger.slots, pilot_actual_forward_tokens=sum(step.pilot_actual_cost for step in steps),
         length_probe_forward_tokens=probe_cost,

@@ -40,6 +40,11 @@ vllm = [
   "transformers>=5.14,<6",
   "vllm>=0.25,<0.27",
 ]
+# The service's HTTP layer; the engine (vLLM, or vLLM with vllm-ascend) is installed for the target hardware.
+serve = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+]
 training = [
   "datasets==5.0.1",
   "peft==0.20.0",

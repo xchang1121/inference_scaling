@@ -49,6 +49,16 @@ def charged(backend, scored, prompt_length, passes):
     return generated + passes * sum(prompt_length + len(sequence) for sequence in set(scored))
 
 
+def test_a_passed_deadline_keeps_the_first_steps_complete_sequence():
+    # The first adaptive step commits one token, so a second step would follow.
+    config = joint_config(forward_token_budget=400, total_length=4, block_sizes=(1,), candidate_counts=(2,),
+                          rollout_counts=(1,), reward_forward_passes=0, planning_mode="chunk_adaptive",
+                          initial_block_size=1, initial_candidate_count=2, initial_rollout_count=1)
+    result = run_joint_budget_is(RecordingBackend(), (), config, pointwise(lambda _p, y: float(sum(y))), SeedStream(42),
+                                 deadline=0.0)
+    assert len(result.steps) == 1 and len(result.token_ids) == 4 and result.stopping_reason == "deadline"
+
+
 def test_budget_includes_pilots_and_independent_production_samples():
     backend = RecordingBackend()
     result = run_joint_budget_is(

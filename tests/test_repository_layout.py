@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 SUBPACKAGES = {
-    "": ("app", "arllm", "datasets", "dllm", "shared"),
+    "": ("app", "arllm", "datasets", "dllm", "serve", "shared"),
     "shared": ("budget", "model", "rewards", "sampling"),
     "arllm": ("algorithms", "backends", "rewards"),
     "dllm": ("algorithms", "backends", "training"),
@@ -13,10 +13,14 @@ SUBPACKAGES = {
 # (and their app modules, which run in different environments) never import each other.
 FORBIDDEN_IMPORTS = {
     "inference_scaling.datasets": ("inference_scaling.shared", "inference_scaling.arllm", "inference_scaling.dllm",
-                                   "inference_scaling.app"),
-    "inference_scaling.shared": ("inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.app"),
-    "inference_scaling.arllm": ("inference_scaling.dllm", "inference_scaling.app"),
-    "inference_scaling.dllm": ("inference_scaling.arllm", "inference_scaling.app"),
+                                   "inference_scaling.app", "inference_scaling.serve"),
+    "inference_scaling.shared": ("inference_scaling.arllm", "inference_scaling.dllm", "inference_scaling.app",
+                                 "inference_scaling.serve"),
+    "inference_scaling.arllm": ("inference_scaling.dllm", "inference_scaling.app", "inference_scaling.serve"),
+    "inference_scaling.dllm": ("inference_scaling.arllm", "inference_scaling.app", "inference_scaling.serve"),
+    "inference_scaling.app": ("inference_scaling.serve",),
+    # The service serves the AR model only.
+    "inference_scaling.serve": ("inference_scaling.dllm", "inference_scaling.app.dllm"),
     "inference_scaling.arllm.backends": ("inference_scaling.arllm.algorithms", "inference_scaling.arllm.rewards"),
     "inference_scaling.dllm.backends": ("inference_scaling.dllm.algorithms", "inference_scaling.dllm.training"),
     "inference_scaling.app.dllm": ("inference_scaling.app.ar", "inference_scaling.arllm"),
@@ -39,7 +43,7 @@ def test_packages_group_code_by_concern():
         for name in names:
             assert (package / parent / name / "__init__.py").is_file()
     assert not Path("experiments").exists() and not Path("configs").exists()
-    assert sorted(path.name for path in Path("settings").iterdir()) == ["inference.json", "training.json"]
+    assert sorted(path.name for path in Path("settings").iterdir()) == ["inference.json", "serve.json", "training.json"]
 
 
 def test_lower_layers_never_import_the_layers_built_on_them():

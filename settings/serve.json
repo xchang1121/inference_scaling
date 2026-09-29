@@ -1,0 +1,17 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "served_model_name": "qwen3.8-27b-is",
+    "max_concurrent_requests": 4,
+    "keepalive_seconds": 10.0,
+    "seed": 20260929
+  },
+  "default_effort": "medium",
+  "efforts": {
+    "low": {"reasoning_effort": "low", "max_new_tokens": 16384, "forward_token_budget": 65536, "max_seconds": 60.0},
+    "medium": {"reasoning_effort": "medium", "max_new_tokens": 32768, "forward_token_budget": 262144, "max_seconds": 300.0},
+    "high": {"reasoning_effort": "xhigh", "max_new_tokens": 131072, "forward_token_budget": 524288, "max_seconds": 1200.0}
+  },
+  "effort_aliases": {"none": "low", "minimal": "low", "xhigh": "high", "max": "high"}
+}

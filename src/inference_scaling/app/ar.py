@@ -68,6 +68,59 @@ def _kept_reward(step: Any) -> float:
     return float(step.selected.rollouts[step.completion_index].reward)
 
 
+def confidence_statistic(kind: str, settings: Mapping[str, Any]) -> TokenStatistic:
+    """The token statistic that the ``kind`` confidence reward reads."""
+
+    return TokenStatistic(SamplingConfig(temperature=float(settings["score_temperature"])),
+                          int(settings["top_k"]) if kind == "consilience" else None)
+
+
+def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, raw: Any, sampling: SamplingConfig,
+                      thinking_format: Any) -> Reward:
+    """Self-Certainty or Consilience of the statistic that ``backend`` (a ``StatisticRecorder``) records."""
+
+    statistic = backend.statistic
+    span = {"thinking_format": thinking_format if settings["scope"] == "thinking" else None, "scope": settings["scope"]}
+    model = SelfCertaintyReward(backend, statistic, **span) if kind == "self_certainty" else ConsilienceReward(
+        backend, statistic, window_fraction=float(settings["window_fraction"]), window_tokens=settings["window_tokens"],
+        skip_fraction=float(settings["skip_fraction"]), initial_penalty=float(settings["initial_penalty"]), **span)
+    # A generated sequence needs a scoring forward only when generation cannot compute the statistic.
+    passes = 0 if raw.records(statistic, sampling) else 1
+    return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
+
+
+def joint_budget_config(config: Mapping[str, Any], reward: Reward, *, total_length: int,
+                        forward_token_budget: int) -> JointBudgetISConfig:
+    """The budgeted IS of ``ar.algorithms.is`` with its planning mode and grids."""
+
+    joint = config["joint"]
+    adaptive = config["chunk_adaptive"] if config["planning"] == "chunk_adaptive" else {}
+    return JointBudgetISConfig(
+        forward_token_budget=forward_token_budget, total_length=total_length,
+        block_sizes=tuple(joint["block_sizes"]), candidate_counts=tuple(joint["candidate_counts"]),
+        rollout_counts=tuple(joint["rollout_counts"]), pilot_candidates=int(joint["pilot_candidates"]),
+        pilot_rollouts=int(joint["pilot_rollouts"]), pilot_fraction=float(joint["pilot_fraction"]),
+        reward_temperature=reward.temperature, reward_forward_passes=reward.forward_passes,
+        relative_variance_floor=float(joint["relative_variance_floor"]),
+        expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
+        block_first=bool(config["block_first"]), **adaptive,
+    )
+
+
+def joint_budget_trace(result: Any) -> dict[str, Any]:
+    """The IS trace of a budgeted run: per step the plan and its forward tokens."""
+
+    trace = importance_trace([step.evaluation for step in result.steps])
+    for summary, step in zip(trace["steps"], result.steps, strict=True):
+        summary.update(plan=asdict(step.plan), pilot_forward_tokens=step.pilot_actual_cost,
+                       forward_tokens=step.actual_cost, expected_remaining_tokens=step.expected_remaining,
+                       adjustment=step.adjustment)
+    trace.update(stopping_reason=result.stopping_reason, reserved_forward_tokens=result.reserved_forward_tokens,
+                 planned_forward_tokens_used=result.actual_forward_tokens,
+                 length_probe_forward_tokens=result.length_probe_forward_tokens)
+    return trace
+
+
 class ARFamily:
     name = "ar"
 
@@ -181,19 +234,8 @@ class ARFamily:
         kind, settings = self.choices.reward, self.reward_settings
         if kind is None:
             return None
-        # Model rewards read the statistic that the task's backend records.
-        model: Any
         if kind in CONFIDENCE_REWARDS:
-            statistic = task.backend.statistic
-            span = {"thinking_format": self.thinking_format if settings["scope"] == "thinking" else None,
-                    "scope": settings["scope"]}
-            model = SelfCertaintyReward(task.backend, statistic, **span) if kind == "self_certainty" else ConsilienceReward(
-                task.backend, statistic, window_fraction=float(settings["window_fraction"]),
-                window_tokens=settings["window_tokens"], skip_fraction=float(settings["skip_fraction"]),
-                initial_penalty=float(settings["initial_penalty"]), **span)
-            # A generated sequence needs a scoring forward only when generation cannot compute the statistic.
-            passes = 0 if self.raw.records(statistic, task.sampling) else 1
-            return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
+            return confidence_reward(kind, settings, task.backend, self.raw, task.sampling, self.thinking_format)
 
         def sample_pool(size: int) -> list[str]:
             # Pool seeds do not depend on the algorithm, so algorithms share one pool per draw.
@@ -224,10 +266,7 @@ class ARFamily:
         backend = scope.wrap(self.backend, prompt)
         if self.choices.reward in CONFIDENCE_REWARDS:
             # A confidence reward reads a token statistic of the generated tokens, which generation records.
-            settings = self.reward_settings
-            backend = StatisticRecorder(backend, TokenStatistic(
-                SamplingConfig(temperature=float(settings["score_temperature"])),
-                int(settings["top_k"]) if self.choices.reward == "consilience" else None))
+            backend = StatisticRecorder(backend, confidence_statistic(self.choices.reward, self.reward_settings))
         task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend)
         # Concurrent problems share the backend counters, so only sequential runs have per-problem costs.
         meter = Meter({"base": self.raw} if self.workers == 1 else {})
@@ -364,30 +403,11 @@ class ARFamily:
                 reward.batch, SeedStream(task.seed), sampling=task.sampling,
             )
             return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
-        joint = config["joint"]
-        adaptive = config["chunk_adaptive"] if config["planning"] == "chunk_adaptive" else {}
-        settings = JointBudgetISConfig(
-            forward_token_budget=int(joint["forward_token_budget"]), total_length=task.maximum,
-            block_sizes=tuple(joint["block_sizes"]), candidate_counts=tuple(joint["candidate_counts"]),
-            rollout_counts=tuple(joint["rollout_counts"]), pilot_candidates=int(joint["pilot_candidates"]),
-            pilot_rollouts=int(joint["pilot_rollouts"]), pilot_fraction=float(joint["pilot_fraction"]),
-            reward_temperature=reward.temperature, reward_forward_passes=reward.forward_passes,
-            relative_variance_floor=float(joint["relative_variance_floor"]),
-            expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
-            block_first=bool(config["block_first"]), **adaptive,
-        )
-        joint_result = run_joint_budget_is(task.backend, task.prompt, settings, reward.batch,
-                                           SeedStream(task.seed), sampling=task.sampling)
-        trace = importance_trace([step.evaluation for step in joint_result.steps])
-        for summary, step in zip(trace["steps"], joint_result.steps, strict=True):
-            summary.update(plan=asdict(step.plan), pilot_forward_tokens=step.pilot_actual_cost,
-                           forward_tokens=step.actual_cost, expected_remaining_tokens=step.expected_remaining,
-                           adjustment=step.adjustment)
-        trace.update(stopping_reason=joint_result.stopping_reason,
-                     reserved_forward_tokens=joint_result.reserved_forward_tokens,
-                     planned_forward_tokens_used=joint_result.actual_forward_tokens,
-                     length_probe_forward_tokens=joint_result.length_probe_forward_tokens)
-        return joint_result.token_ids, trace, _kept_reward(joint_result.steps[-1].evaluation)
+        settings = joint_budget_config(config, reward, total_length=task.maximum,
+                                       forward_token_budget=int(config["joint"]["forward_token_budget"]))
+        joint = run_joint_budget_is(task.backend, task.prompt, settings, reward.batch, SeedStream(task.seed),
+                                    sampling=task.sampling)
+        return joint.token_ids, joint_budget_trace(joint), _kept_reward(joint.steps[-1].evaluation)
 
 
-__all__ = ["ARFamily"]
+__all__ = ["ARFamily", "confidence_reward", "confidence_statistic", "joint_budget_config", "joint_budget_trace"]
