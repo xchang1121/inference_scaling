@@ -26,6 +26,7 @@ from inference_scaling.app.records import (
     load_jsonl,
     source_sha256,
     summarize,
+    summarize_executions,
     write_json_atomic,
 )
 from inference_scaling.datasets import load_dataset
@@ -111,6 +112,8 @@ def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str
         fingerprint = json_sha256(identity)
         directory = output / choices.dataset / choices.model / choices.label / fingerprint[:16]
         manifest_path, records_path = directory / "manifest.json", directory / "records.jsonl"
+        executions_path = directory / "executions.json"
+        executions = json.loads(executions_path.read_text(encoding="utf-8")) if executions_path.is_file() else []
         if not manifest_path.is_file():
             write_json_atomic(manifest_path, {
                 "fingerprint": fingerprint, **identity, "settings": settings,
@@ -124,28 +127,53 @@ def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str
                    if (problem.id, draw) not in done]
         if pending:
             family.load()
+            family.synchronize()
+            before = family.cost_snapshot()
+            execution: dict[str, Any] = {"started": _now(), "status": "running", "workers": family.workers,
+                                         "requested_records": len(pending), "completed": [], "output_tokens": 0}
+            executions.append(execution)
+            write_json_atomic(executions_path, executions)
+            started = time.perf_counter()
             lock = threading.Lock()
-            with records_path.open("a", encoding="utf-8") as sink:
+            try:
+                with records_path.open("a", encoding="utf-8") as sink:
 
-                def work(item: tuple[Problem, int]) -> None:
-                    problem, draw = item
-                    record = _solve(family, dataset, problem, draw, seed)
-                    with lock:
-                        sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-                        sink.flush()
-                        done.add((problem.id, draw))
-                        print(f"[{len(done)}/{len(dataset.problems) * draws}] {choices.label} problem={problem.id} "
-                              f"draw={draw} correct={record['correct']} seconds={record['elapsed_seconds']:.1f}",
-                              flush=True)
+                    def work(item: tuple[Problem, int]) -> None:
+                        problem, draw = item
+                        record = _solve(family, dataset, problem, draw, seed)
+                        with lock:
+                            sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+                            sink.flush()
+                            done.add((problem.id, draw))
+                            execution["completed"].append({"problem_id": problem.id, "draw": draw})
+                            execution["output_tokens"] += record["output"]["tokens"]
+                            print(f"[{len(done)}/{len(dataset.problems) * draws}] {choices.label} problem={problem.id} "
+                                  f"draw={draw} correct={record['correct']} seconds={record['elapsed_seconds']:.1f}",
+                                  flush=True)
 
-                with ThreadPoolExecutor(max_workers=family.workers) as pool:
-                    for future in [pool.submit(work, item) for item in pending]:
-                        future.result()
+                    with ThreadPoolExecutor(max_workers=family.workers) as pool:
+                        for future in [pool.submit(work, item) for item in pending]:
+                            future.result()
+                execution["status"] = "complete"
+            finally:
+                # The executor drains before this snapshot, including other workers after a failure.
+                family.synchronize()
+                after = family.cost_snapshot()
+                execution.update(status="complete" if execution["status"] == "complete" else "failed",
+                                 wall_seconds=time.perf_counter() - started,
+                                 cost={name: after[name] - value for name, value in before.items()})
+                write_json_atomic(executions_path, executions)
         selected = {problem.id for problem in dataset.problems}
-        records = [record for record in load_jsonl(records_path)
+        stored = load_jsonl(records_path)
+        records = [record for record in stored
                    if record["problem_id"] in selected and record["draw"] < draws]
         summary = {"fingerprint": fingerprint, "directory": str(directory), "updated": _now(),
                    **summarize(records, draws=draws)}
+        summary["execution_totals"] = summarize_executions(executions, stored)
+        summary["cost_total_scope"] = "selected_records"
+        if family.workers > 1:
+            summary["cost_total"] = summary["execution_totals"]["cost_total"]
+            summary["cost_total_scope"] = "all_executions"
         write_json_atomic(directory / "summary.json", summary)
         return summary
     finally:

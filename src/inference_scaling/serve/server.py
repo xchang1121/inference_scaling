@@ -11,6 +11,7 @@ FastAPI reads the handlers' annotations at runtime, so they are not postponed.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from inference_scaling.serve.protocol import (
@@ -37,7 +38,18 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     server = serve["server"]
     model, keepalive = str(server["served_model_name"]), float(server["keepalive_seconds"])
     slots = asyncio.Semaphore(int(server["max_concurrent_requests"]))
-    app = FastAPI(title="inference-scaling")
+    active: set[asyncio.Task[Reply]] = set()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            # The engine must stay alive until detached requests finish too.
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
+
+    app = FastAPI(title="inference-scaling", lifespan=lifespan)
 
     @app.exception_handler(ProtocolError)
     async def invalid(_request: Request, error: ProtocolError) -> JSONResponse:
@@ -46,8 +58,23 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     async def reason(conversation: Conversation) -> tuple[Any, "asyncio.Future[Reply]"]:
         prepared = reasoner.prepare(conversation)
         await slots.acquire()
-        task = asyncio.ensure_future(asyncio.to_thread(reasoner.generate, prepared))
-        task.add_done_callback(lambda _: slots.release())
+        loop = asyncio.get_running_loop()
+
+        def generate() -> Reply:
+            try:
+                return reasoner.generate(prepared)
+            finally:
+                # Cancelling an asyncio waiter cannot stop a running thread.
+                loop.call_soon_threadsafe(slots.release)
+
+        def finished(task: asyncio.Task[Reply]) -> None:
+            active.discard(task)
+            if not task.cancelled():
+                task.exception()  # Observe failures even after a client disconnects.
+
+        task = asyncio.create_task(asyncio.to_thread(generate))
+        active.add(task)
+        task.add_done_callback(finished)
         return prepared, task
 
     async def stream(start: str, task: "asyncio.Future[Reply]", ping: str, body: Callable[[Reply], Iterator[str]]
@@ -74,7 +101,7 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         request_id = "chatcmpl-" + uuid.uuid4().hex
         _, task = await reason(conversation)
         if not conversation.stream:
-            return openai_response(await task, model, request_id)
+            return openai_response(await asyncio.shield(task), model, request_id)
         return StreamingResponse(stream(openai_stream_start(model, request_id), task, OPENAI_KEEPALIVE,
                                         lambda reply: openai_stream_body(reply, model, request_id)),
                                  media_type="text/event-stream")
@@ -87,7 +114,7 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         thinking = (body.get("thinking") or {}).get("type") == "enabled"
         prepared, task = await reason(conversation)
         if not conversation.stream:
-            return anthropic_response(await task, model, request_id, thinking)
+            return anthropic_response(await asyncio.shield(task), model, request_id, thinking)
         return StreamingResponse(stream(anthropic_stream_start(model, request_id, len(prepared.prompt)), task,
                                         ANTHROPIC_KEEPALIVE, lambda reply: anthropic_stream_body(reply, thinking)),
                                  media_type="text/event-stream")

@@ -145,6 +145,10 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         assert record["cost"]["forward_token_slots"] > 0
         assert (record["reward"] is None) == (reward is None)
     assert summary["accuracy"] == 1.0 and summary["records"] == 2
+    execution = summary["execution_totals"]
+    assert execution["cost_total"]["forward_token_slots"] == summary["cost_total"]["forward_token_slots"]
+    assert execution["cost_total"]["flops"] == summary["cost_total"]["flops"]
+    assert execution["complete_accounting"] and execution["completed_records"] == 2
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["choices"] == {"algorithm": algorithm, "model": "ar", "reward": reward, "dataset": "gsm8k"}
     assert manifest["effective_settings"]["algorithm"] == ar["algorithms"][algorithm]
@@ -167,6 +171,55 @@ def test_concurrent_problems_share_a_batching_backend_without_per_problem_cost(a
     records = (Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()
     assert sorted(json.loads(line)["problem_id"] for line in records) == ["0", "1"]
     assert all(json.loads(line)["cost"] is None for line in records)
+    execution = summary["execution_totals"]
+    assert summary["cost_total_scope"] == "all_executions"
+    assert summary["cost_total"]["forward_token_slots"] > 0 and summary["cost_total"]["flops"] > 0
+    assert execution["wall_seconds"] > 0 and execution["output_tokens_per_second"] > 0
+    assert execution["output_tokens"] == sum(json.loads(line)["output"]["tokens"] for line in records)
+    assert execution["completed_records"] == 2 and execution["complete_accounting"]
+
+    choices = Choices("best_of_n", "ar", "verifier", "gsm8k")
+    first = summary
+    again = run(choices, ar_settings, tmp_path / "results")
+    assert again["execution_totals"] == first["execution_totals"]
+    ar_settings["run"]["draws"] = 2
+    second = run(choices, ar_settings, tmp_path / "results")
+    assert second["directory"] == first["directory"]
+    assert second["cost_total"]["forward_token_slots"] == 2 * first["cost_total"]["forward_token_slots"] > 0
+    assert second["execution_totals"]["completed_records"] == 4
+    assert second["execution_totals"]["wall_seconds"] > first["execution_totals"]["wall_seconds"]
+    executions = json.loads((Path(second["directory"]) / "executions.json").read_text(encoding="utf-8"))
+    assert len(executions) == 2 and all(entry["status"] == "complete" for entry in executions)
+    # Asking for fewer draws changes quality summaries, not the historical cost scope.
+    ar_settings["run"]["draws"] = 1
+    smaller = run(choices, ar_settings, tmp_path / "results")
+    assert smaller["records"] == 2 and smaller["execution_totals"] == second["execution_totals"]
+
+
+def test_failed_execution_cost_survives_resume(ar_settings, tmp_path, monkeypatch):
+    from inference_scaling.app.ar import ARFamily
+
+    ar_settings["ar"]["engine"]["continuous_batching"]["workers"] = 2
+    solve = ARFamily.solve
+
+    def fail_after_generation(self, problem, seeds):
+        result = solve(self, problem, seeds)
+        if problem.id == "0":
+            raise RuntimeError("grading failed after generation")
+        return result
+
+    monkeypatch.setattr(ARFamily, "solve", fail_after_generation)
+    choices = Choices("sample", "ar", None, "gsm8k")
+    with pytest.raises(RuntimeError, match="grading failed"):
+        run(choices, ar_settings, tmp_path / "results")
+    path = next((tmp_path / "results").rglob("executions.json"))
+    failed = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert failed["status"] == "failed" and failed["cost"]["flops"] > 0 and len(failed["completed"]) == 1
+    monkeypatch.setattr(ARFamily, "solve", solve)
+    summary = run(choices, ar_settings, tmp_path / "results")
+    assert summary["records"] == 2 and summary["execution_totals"]["failed_executions"] == 1
+    assert summary["execution_totals"]["complete_accounting"]
+    assert summary["cost_total"]["flops"] > failed["cost"]["flops"]
 
 
 def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):

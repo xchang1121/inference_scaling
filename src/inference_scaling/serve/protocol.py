@@ -84,6 +84,9 @@ def _with_system(system: list[str], messages: list[dict[str, Any]]) -> list[dict
 def openai_conversation(body: Mapping[str, Any]) -> Conversation:
     if body.get("n", 1) != 1:
         raise ProtocolError("n must be 1")
+    choice = body.get("tool_choice", "auto")
+    if choice not in (None, "auto", "none"):
+        raise ProtocolError("tool_choice supports only auto or none; forced tool calls are not supported")
     system: list[str] = []
     messages: list[dict[str, Any]] = []
     for message in body.get("messages") or []:
@@ -105,12 +108,17 @@ def openai_conversation(body: Mapping[str, Any]) -> Conversation:
         else:
             raise ProtocolError(f"unsupported message role {role!r}")
     tools = [tool for tool in body.get("tools") or [] if tool.get("type", "function") == "function"]
-    return Conversation(_with_system(system, messages), tools if tools and body.get("tool_choice") != "none" else None,
+    return Conversation(_with_system(system, messages), tools if tools and choice != "none" else None,
                         body.get("reasoning_effort"), body.get("max_completion_tokens") or body.get("max_tokens"),
                         bool(body.get("stream")))
 
 
 def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
+    choice = body.get("tool_choice")
+    if choice is not None and (not isinstance(choice, Mapping) or choice.get("type") not in ("auto", "none")
+                               or set(choice) != {"type"}):
+        raise ProtocolError("tool_choice supports only {type: auto} or {type: none}; "
+                            "forced tool calls and additional tool-choice options are not supported")
     messages: list[dict[str, Any]] = []
     for message in body.get("messages") or []:
         content = message.get("content")
@@ -143,7 +151,7 @@ def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
     tools = [{"type": "function", "function": {"name": tool["name"], "description": tool.get("description", ""),
                                                "parameters": tool["input_schema"]}}
              for tool in body.get("tools") or [] if "input_schema" in tool]
-    choice = body.get("tool_choice") or {}
+    choice = choice or {}
     effort = (body.get("output_config") or {}).get("effort") or body.get("reasoning_effort")
     return Conversation(_with_system([_text(system)] if system else [], messages),
                         tools if tools and choice.get("type") != "none" else None, effort, body.get("max_tokens"),

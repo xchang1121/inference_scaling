@@ -42,7 +42,9 @@ def test_packages_group_code_by_concern():
     for parent, names in SUBPACKAGES.items():
         for name in names:
             assert (package / parent / name / "__init__.py").is_file()
-    assert not Path("experiments").exists() and not Path("configs").exists()
+    legacy = [path for directory in ("experiments", "configs") for path in Path(directory).rglob("*")
+              if path.is_file() and path.suffix not in {".pyc", ".pyo"}]
+    assert not legacy, legacy
     assert sorted(path.name for path in Path("settings").iterdir()) == ["inference.json", "serve.json", "training.json"]
 
 

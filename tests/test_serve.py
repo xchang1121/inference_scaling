@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import json
+import threading
 import time
 from types import SimpleNamespace
 
@@ -127,6 +129,9 @@ def test_openai_chat_completions_answer_and_stream(client) -> None:
     chunks = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: {")]
     assert [chunk["choices"][0]["finish_reason"] for chunk in chunks][-1] == "tool_calls"
     assert client.get("/v1/models").json()["data"][0]["id"] == "qwen3.8-27b-is"
+    for choice in ("required", {"type": "function", "function": {"name": "edit"}}):
+        error = client.post("/v1/chat/completions", json=body | {"tool_choice": choice})
+        assert error.status_code == 400 and "tool_choice" in error.json()["error"]["message"]
 
 
 def test_anthropic_messages_answer_and_stream(client) -> None:
@@ -142,3 +147,65 @@ def test_anthropic_messages_answer_and_stream(client) -> None:
     assert client.post("/v1/messages/count_tokens", json=body).json() == {"input_tokens": 3}
     error = client.post("/v1/messages", json=body | {"messages": [{"role": "user", "content": [{"type": "image"}]}]})
     assert error.status_code == 400
+    for choice in ({"type": "any"}, {"type": "tool", "name": "edit"}):
+        error = client.post("/v1/messages", json=body | {"tool_choice": choice})
+        assert error.status_code == 400 and "tool_choice" in error.json()["error"]["message"]
+
+
+def test_cancelled_response_holds_slot_until_worker_finishes():
+    pytest.importorskip("fastapi")
+    from inference_scaling.serve.server import create_app
+
+    class BlockingReasoner:
+        def __init__(self):
+            self.started, self.release = threading.Event(), threading.Event()
+            self.calls = self.active = self.maximum = 0
+            self.lock = threading.Lock()
+
+        def prepare(self, conversation):
+            return SimpleNamespace(prompt=(1,))
+
+        def generate(self, prepared):
+            with self.lock:
+                self.calls += 1
+                index = self.calls
+                self.active += 1
+                self.maximum = max(self.maximum, self.active)
+            try:
+                self.started.set()
+                assert self.release.wait(3)
+                if index == 1:
+                    raise RuntimeError("detached request failed")
+                return Reply("", "ok", (), "stop", 1, 1, {})
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    class Request:
+        async def json(self):
+            return {"messages": [{"role": "user", "content": "q"}]}
+
+    async def check():
+        reasoner = BlockingReasoner()
+        serve = load_serve_settings()
+        serve["server"]["max_concurrent_requests"] = 1
+        app = create_app(reasoner, serve)
+        endpoint = next(route.endpoint for route in app.routes if route.path == "/v1/chat/completions")
+        async with app.router.lifespan_context(app):
+            first = asyncio.create_task(endpoint(Request()))
+            second = None
+            try:
+                assert await asyncio.to_thread(reasoner.started.wait, 2)
+                first.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+                second = asyncio.create_task(endpoint(Request()))
+                await asyncio.sleep(0.05)
+                assert reasoner.calls == reasoner.active == 1
+            finally:
+                reasoner.release.set()
+                await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
+            assert second is not None and second.result()
+        assert reasoner.maximum == 1 and reasoner.active == 0 and reasoner.calls == 2
+
+    asyncio.run(check())

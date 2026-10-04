@@ -1,5 +1,17 @@
-from inference_scaling.app.records import pass_at_k
+from inference_scaling.app.records import pass_at_k, summarize_executions
 from training.grpo import estimate_grpo_compute, estimate_grpo_compute_from_logs
+
+
+def test_execution_summary_marks_missing_cost_after_a_crash():
+    records = [{"problem_id": "a", "draw": 0}, {"problem_id": "b", "draw": 0}]
+    executions = [{"status": "complete", "cost": {"forward_token_slots": 30, "flops": 600},
+                   "wall_seconds": 2, "completed": records[:1], "output_tokens": 10},
+                  {"status": "running"}]
+    summary = summarize_executions(executions, records)
+    assert summary["cost_total"] == {"forward_token_slots": 30, "flops": 600}
+    assert summary["output_tokens_per_second"] == 5
+    assert summary["unmetered_records"] == summary["incomplete_executions"] == 1
+    assert not summary["complete_accounting"]
 
 
 def test_grpo_compute_is_split_into_observed_forward_equivalents() -> None:

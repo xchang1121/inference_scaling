@@ -5,7 +5,7 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice`、`stream`、`reasoning_effort` |
+| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice=auto/none`、`stream`、`reasoning_effort` |
 | `POST /v1/messages` | Anthropic 格式，支持 `tools`、`stream`、`thinking`、`output_config.effort` |
 | `POST /v1/messages/count_tokens` | Anthropic 的 token 计数 |
 | `GET /v1/models`、`GET /health` | 模型名与健康检查 |
@@ -99,7 +99,9 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
 ## 限制
 
 - 思考要选定后才能发出：流式请求先收到开头事件，搜索期间收到 keep-alive，选定后一次收到思考、答案与工具调用。
-- 客户端断开后服务端仍把该请求算完。
+- 客户端断开或取消等待后，已启动的推理继续执行，并在实际结束后释放并发名额；服务正常关闭时等待这些请求完成。
+- 工具选择支持 OpenAI 的 `auto`、`none` 和 Anthropic 的 `{type: auto}`、`{type: none}`。
+  强制调用（`required`、`any`、指定工具）及额外工具选择选项返回 HTTP 400。
 - 请求的 `temperature`、`top_p` 不生效：IS 在完整分布上采样，策略取自 `ar.sampling`。
 - 只支持文本内容，`n` 只能为 1。
 - 未写完的思考没有答案，作为思考返回，`finish_reason` 为 `length`（Anthropic 为 `max_tokens`）。

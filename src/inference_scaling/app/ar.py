@@ -9,6 +9,7 @@ thinking segment. Per-problem costs are backend counter deltas by phase:
 from __future__ import annotations
 
 import random
+import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
@@ -152,6 +153,8 @@ class ARFamily:
                              "ar.engine.vllm.fused_logprobs (at score_temperature 1) or exact_scoring = transformers")
         self.raw: Any = None
         self.backend: Any = None
+        self._direct_slots = 0
+        self._cost_lock = threading.Lock()
 
     # Identity -------------------------------------------------------------------------
 
@@ -199,6 +202,14 @@ class ARFamily:
 
     def synchronize(self) -> None:
         synchronize_accelerator(self.ar["engine"]["device"])
+
+    def cost_snapshot(self) -> dict[str, int]:
+        """Run-level counters, including greedy/beam work outside the backend counters."""
+        snapshot = self.raw.snapshot()
+        with self._cost_lock:
+            extra = self._direct_slots
+        return {"forward_token_slots": snapshot.generation_forward_token_slots + snapshot.score_forward_token_slots + extra,
+                "flops": snapshot.estimated_dense_forward_flops + 2 * self.raw.parameter_count * extra}
 
     def close(self) -> None:
         if self.backend is not None and self.backend is not self.raw:
@@ -319,6 +330,8 @@ class ARFamily:
         tokens = tokens[: tokens.index(self.eos) + 1] if self.eos in tokens else tokens
         # Native generate() bypasses the backend counters: charge every beam every step.
         slots = beams * (len(task.prompt) + max(0, len(tokens) - 1))
+        with self._cost_lock:
+            self._direct_slots += slots
         meter.add({"generation_forward_token_slots": slots,
                    "estimated_dense_forward_flops": 2 * self.raw.parameter_count * slots})
         return tokens, {"num_beams": beams, "estimated_forward_token_slots": slots}, None

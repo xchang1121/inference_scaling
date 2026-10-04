@@ -86,6 +86,13 @@ class DLLMFamily:
     def synchronize(self) -> None:
         synchronize_accelerator(self.dllm["engine"]["device"])
 
+    def cost_snapshot(self) -> dict[str, int]:
+        """Run-level counters using the same body/head FLOP estimate as per-problem costs."""
+        snapshot = self.backend.snapshot()
+        body, head = snapshot.active_parameters - snapshot.head_parameters, snapshot.head_parameters
+        return {"forward_token_slots": snapshot.model_token_slots,
+                "flops": 2 * body * snapshot.model_token_slots + 2 * head * snapshot.head_token_slots}
+
     def close(self) -> None:
         self.backend = None
         release_accelerator_memory()

@@ -2,8 +2,8 @@
 
 A run directory holds ``manifest.json`` (choices, settings, code, environment,
 model and dataset identities), ``records.jsonl`` (one line per problem and
-draw) and ``summary.json`` (aggregates over the records of the selected
-problems and draws).
+draw), ``executions.json`` (run-level costs across resumes) and ``summary.json``
+(selected-record quality and separately scoped execution totals).
 """
 
 from __future__ import annotations
@@ -307,6 +307,30 @@ def summarize(records: Sequence[Mapping[str, Any]], *, draws: int) -> dict[str, 
     return summary
 
 
+def summarize_executions(executions: Sequence[Mapping[str, Any]], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """All measured invocations, including failed work, without assigning shared costs to individual problems.
+
+    A running entry left by a process crash has unknown cost. Output rates count
+    successfully saved outputs only; search candidates and failed attempts still
+    contribute to the measured time and compute. Counts span all stored draws.
+    """
+    measured = [entry for entry in executions if entry["status"] != "running"]
+    costs = {name: sum(entry["cost"][name] for entry in measured) for name in ("forward_token_slots", "flops")}
+    seconds = sum(entry["wall_seconds"] for entry in measured)
+    covered = {(item["problem_id"], item["draw"]) for entry in measured for item in entry["completed"]}
+    completed = sum(len(entry["completed"]) for entry in measured)
+    output_tokens = sum(entry["output_tokens"] for entry in measured)
+    missing = sum((record["problem_id"], record["draw"]) not in covered for record in records)
+    incomplete = sum(entry["status"] == "running" for entry in executions)
+    return {"scope": "all_executions", "cost_total": costs, "wall_seconds": seconds,
+            "completed_records": completed, "output_tokens": output_tokens,
+            "records_per_second": completed / seconds if seconds > 0 else None,
+            "output_tokens_per_second": output_tokens / seconds if seconds > 0 else None,
+            "failed_executions": sum(entry["status"] == "failed" for entry in measured),
+            "incomplete_executions": incomplete, "unmetered_records": missing,
+            "complete_accounting": not incomplete and not missing}
+
+
 __all__ = [
     "adapter_hashes",
     "cached_file_sha256",
@@ -321,6 +345,7 @@ __all__ = [
     "snapshot_delta",
     "source_sha256",
     "summarize",
+    "summarize_executions",
     "weight_hashes",
     "wilson_interval",
     "write_json_atomic",
