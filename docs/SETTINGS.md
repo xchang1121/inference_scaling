@@ -159,7 +159,7 @@
 | 设置 | 取值 | 依据 |
 | --- | --- | --- |
 | `model.path` / `revision` / `local_files_only` | Hub ID / 固定提交 / `false` | 首次运行下载 BF16 权重（约 55.6 GB）；提交固定文件内容，清单另记每个权重文件的哈希 |
-| `model.token_penalty` | `null` | 惩罚改变基础分布且未在该模型上验证；思考长度改由 `reasoning_effort` 控制 |
+| `model.token_penalty` | 8 个词，`strength = 1.0` | wait、hmm、alternatively、actually、however、but、maybe、perhaps；覆盖 thinking 与正文，改变基础分布；该模型上的质量与速度收益尚未验证，设为 `null` 可关闭 |
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |

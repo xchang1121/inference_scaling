@@ -68,7 +68,10 @@
       "cache_dir": null,
       "local_files_only": false,
       "trust_remote_code": false,
-      "token_penalty": null
+      "token_penalty": {
+        "words": ["wait", "hmm", "alternatively", "actually", "however", "but", "maybe", "perhaps"],
+        "strength": 1.0
+      }
     },
     "engine": {
       "backend": "vllm",
