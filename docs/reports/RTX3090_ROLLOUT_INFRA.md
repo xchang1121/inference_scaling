@@ -2,7 +2,7 @@
 
 本报告比较批处理、rollout 复用、MH proposal 和奖励调度的执行成本；准确率见
 [算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)，机制见[算法文档](../methods/ALGORITHMS.md#alg-runtime)，成本口径见
-[BUDGET.md](../methods/BUDGET.md#budget-accounting)。结论来自统一入口之前的实验，数字按当时的实现测得。标注“旧方法”
+算法文档的[成本统计](../methods/ALGORITHMS.md#alg-runtime)。结论来自统一入口之前的实验，数字按当时的实现测得。标注“旧方法”
 的机制已从代码中删除，这里只保留其说明与结论；其余机制的复现命令对应当前实现（第 6 节）。
 
 主模型为 Qwen2.5-1.5B-Instruct，旧方法的辅助模型为 Qwen2.5-0.5B-Instruct，硬件为单张 RTX 3090 24 GiB，全部数值

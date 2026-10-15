@@ -38,8 +38,8 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
     with pytest.raises(SettingsError, match="must be an integer"):
         check(broken, SCHEMA, "settings")
     broken = copy.deepcopy(settings)
-    broken["ar"]["algorithms"]["is"]["planning"] = "sometimes"
-    with pytest.raises(SettingsError, match="must be one of"):
+    broken["ar"]["algorithms"]["is"]["planning"] = "full_horizon"
+    with pytest.raises(SettingsError, match="unknown keys"):
         check(broken, SCHEMA, "settings")
 
 
@@ -99,11 +99,9 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
     # The fake backend computes any token statistic, as the Transformers engine does.
     settings["ar"]["engine"]["backend"] = "transformers"
+    settings["ar"]["engine"]["device"] = "cpu"
     settings["rewards"]["verifier"]["pool_size"] = 3
-    joint = settings["ar"]["algorithms"]["is"]["joint"]
-    joint.update(block_sizes=[2, 4], candidate_counts=[2, 4], rollout_counts=[1, 2])
-    settings["ar"]["algorithms"]["is"]["chunk_adaptive"].update(initial_block_size=2, initial_candidate_count=2,
-                                                                  initial_rollout_count=1)
+    settings["ar"]["algorithms"]["is"]["fixed"].update(block_size=2, candidate_count=2, rollout_count=1)
     monkeypatch.setattr("inference_scaling.app.ar.load_backend", lambda *args, **kwargs: ThinkingBackend())
     return settings
 
@@ -115,9 +113,8 @@ AR_RUNS = [
     ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
     ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
     ("mh", "self_certainty", {"sampling_scope": "full"}), ("mh", "consilience", {}),
-    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}),
-    ("is", "self_certainty", {"planning": "chunk_adaptive"}),
-    ("is", "consilience", {"planning": "fixed", "sampling_scope": "full"}),
+    ("is", "verifier", {"source": "vote"}), ("is", "self_certainty", {}),
+    ("is", "consilience", {"sampling_scope": "full"}),
 ]
 
 
@@ -128,8 +125,6 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         ar["output"]["sampling_scope"] = options["sampling_scope"]
     if "proposal" in options:
         ar["algorithms"]["mh"]["proposal"] = options["proposal"]
-    if "planning" in options:
-        ar["algorithms"]["is"]["planning"] = options["planning"]
     if "source" in options:
         ar_settings["rewards"]["verifier"]["source"] = options["source"]
     choices = Choices(algorithm, "ar", reward, "gsm8k")
@@ -222,12 +217,13 @@ def test_failed_execution_cost_survives_resume(ar_settings, tmp_path, monkeypatc
     assert summary["cost_total"]["flops"] > failed["cost"]["flops"]
 
 
-def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):
+def test_fixed_is_selects_the_thinking_segment(ar_settings, tmp_path):
     summary = run(Choices("is", "ar", "consilience", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "thinking" and record["correct"]
     # The kept thought ends at its closing boundary, not at EOS or the length limit.
     assert record["trace"]["stopping_reason"] == "stop"
+    assert record["trace"]["forward_tokens"] > 0
 
 
 def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_settings, tmp_path):
@@ -240,7 +236,6 @@ def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_set
 
 
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):
-    ar_settings["ar"]["algorithms"]["is"]["planning"] = "fixed"
     summary = run(Choices("is", "ar", "verifier", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "full"

@@ -146,26 +146,8 @@
         "early_rejection": false
       },
       "is": {
-        "planning": "full_horizon",
         "block_first": false,
-        "fixed": {"candidate_count": 4, "rollout_count": 1, "block_size": 1024},
-        "joint": {
-          "forward_token_budget": 524288,
-          "block_sizes": [64, 128, 512, 1024],
-          "candidate_counts": [2, 4, 8, 16],
-          "rollout_counts": [1, 2, 4],
-          "pilot_candidates": 2,
-          "pilot_rollouts": 2,
-          "pilot_fraction": 0.15,
-          "relative_variance_floor": 0.0001,
-          "expected_output_tokens": null
-        },
-        "chunk_adaptive": {
-          "initial_block_size": 1024,
-          "initial_candidate_count": 4,
-          "initial_rollout_count": 1,
-          "adjustment_min_improvement": 0.1
-        }
+        "fixed": {"candidate_count": 4, "rollout_count": 1, "block_size": 1024}
       }
     }
   },

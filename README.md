@@ -61,7 +61,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
 | `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `is` | 保留完整序列的条件 IS：`fixed` 固定候选数 M、补全数 K、块长 B，或在前向 token 预算内逐块重新规划（[BUDGET.md](docs/methods/BUDGET.md)） | 逐块扩散 IS；候选与补全都来自基础模型 |
+| `is` | 保留完整序列的条件 IS：从 `ar.algorithms.is.fixed` 读取固定的候选数 M、补全数 K、块长 B | 逐块扩散 IS；候选与补全都来自基础模型 |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。
@@ -140,7 +140,7 @@ python -m pip install -e ".[serve]"   # 另按硬件安装 vLLM（NVIDIA）或 v
 python -m inference_scaling.serve
 ```
 
-OpenAI 与 Anthropic 兼容的接口；每个请求在思考段上做联合预算 IS（Consilience 加权）后作答。安装、配置、启动、
+OpenAI 与 Anthropic 兼容的接口；每个请求在思考段上做固定参数 IS（Consilience 加权）后作答。安装、配置、启动、
 接入网关与限制见 [serve/README.md](src/inference_scaling/serve/README.md)。
 
 ## 安装
@@ -164,13 +164,13 @@ python -m pytest
 | --- | --- |
 | `src/inference_scaling/app/` | 推理入口：命令行、设置 schema、运行与续跑、结果记录、两个模型族的算法组装、奖励绑定 |
 | `src/inference_scaling/datasets/` | 数据集：题目、提示、答案规则与判定器 |
-| `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS、预算 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（Self-Certainty、Consilience） |
+| `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（Self-Certainty、Consilience） |
 | `src/inference_scaling/dllm/` | LLaDA：`algorithms/`（条件扩散 IS、MH、分块 beam）、`backends/`、`training/`（VRPO） |
-| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`budget/`（预算规划）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
+| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
 | `settings/` | 推理与训练设置 |
 | `training/` | 训练入口与各阶段 |
 | `tests/` | 分布、实现一致性、端到端运行与结果处理测试 |
-| `docs/` | [设置说明](docs/SETTINGS.md)、[算法](docs/methods/ALGORITHMS.md)、[预算](docs/methods/BUDGET.md)与实验报告 |
+| `docs/` | [设置说明](docs/SETTINGS.md)、[算法](docs/methods/ALGORITHMS.md)与实验报告 |
 | `results/` | 运行结果，Git 忽略 |
 | `online-speculation/` | 独立的在线推测解码项目 |
 

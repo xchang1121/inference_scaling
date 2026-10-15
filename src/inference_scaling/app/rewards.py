@@ -29,7 +29,7 @@ class Reward:
     temperature: float
     # Rewards of complete sequences of one problem.
     batch: TokenBatchReward
-    # Base-model forward passes per scored generated sequence, charged by budgeted IS.
+    # Base-model forward passes per scored generated sequence, used by IS cost accounting.
     forward_passes: int
     description: Mapping[str, Any]
     model: Any = field(default=None, compare=False)

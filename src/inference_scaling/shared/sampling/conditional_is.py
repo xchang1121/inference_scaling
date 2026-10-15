@@ -54,6 +54,8 @@ class ConditionalISResult:
     prompt: TokenSequence
     token_ids: TokenSequence
     steps: tuple[ConditionalISStep, ...]
+    stopping_reason: str = "stop"
+    actual_forward_tokens: int = 0
 
 
 def weigh(blocks: Sequence[TokenSequence],

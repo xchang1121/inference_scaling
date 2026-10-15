@@ -88,6 +88,24 @@ def test_conditional_is_returns_a_complete_sequence_within_total_length() -> Non
     assert len(result.token_ids) == 5
     assert [step.generated_length_before for step in result.steps] == [0, 2, 4]
     assert [len(step.selected.token_ids) for step in result.steps] == [2, 2, 1]
+    assert result.stopping_reason == "length" and result.actual_forward_tokens > 0
+
+
+def test_deadline_finishes_first_step_and_keeps_complete_sequence() -> None:
+    config = ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=1, block_size=2,
+                                 total_length=6, reward_temperature=1.0)
+    result = run_conditional_is(_backend(), (), config, pointwise(_reward), SeedStream(7), deadline=0.0)
+    assert len(result.steps) == 1
+    assert len(result.token_ids) == 6 and result.stopping_reason == "deadline"
+    assert result.actual_forward_tokens == 12
+
+
+def test_forward_token_count_includes_prefill_and_reward_passes() -> None:
+    config = ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=1, block_size=3,
+                                 total_length=3, reward_temperature=1.0)
+    result = run_conditional_is(_backend(), (0,), config, pointwise(_reward), SeedStream(3),
+                                reward_forward_passes=1)
+    assert result.actual_forward_tokens == (1 + 2 * 3) + 2 * (1 + 3)
 
 
 @pytest.mark.parametrize("sampling", [SamplingConfig(top_p=0.9), SamplingConfig(top_k=1)])

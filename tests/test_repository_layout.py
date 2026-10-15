@@ -5,7 +5,7 @@ from pathlib import Path
 
 SUBPACKAGES = {
     "": ("app", "arllm", "datasets", "dllm", "serve", "shared"),
-    "shared": ("budget", "model", "rewards", "sampling"),
+    "shared": ("model", "rewards", "sampling"),
     "arllm": ("algorithms", "backends", "rewards"),
     "dllm": ("algorithms", "backends", "training"),
 }

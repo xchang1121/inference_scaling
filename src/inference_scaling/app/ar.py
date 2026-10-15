@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import random
 import threading
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -24,7 +24,6 @@ from inference_scaling.app.records import (
 from inference_scaling.app.rewards import Reward, best_of_n, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
-from inference_scaling.arllm.algorithms.joint_budget_is import JointBudgetISConfig, run_joint_budget_is
 from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
@@ -89,37 +88,14 @@ def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, raw:
     passes = 0 if raw.records(statistic, sampling) else 1
     return Reward(float(settings["temperature"]), memoized(model.batch), passes, model.describe(), model)
 
+def fixed_is_config(config: Mapping[str, Any], *, total_length: int, reward_temperature: float) -> ConditionalISConfig:
+    fixed = config["fixed"]
+    return ConditionalISConfig(candidate_count=int(fixed["candidate_count"]),
+                               rollout_count=int(fixed["rollout_count"]),
+                               block_size=min(int(fixed["block_size"]), total_length),
+                               total_length=total_length, reward_temperature=reward_temperature,
+                               block_first=bool(config["block_first"]))
 
-def joint_budget_config(config: Mapping[str, Any], reward: Reward, *, total_length: int,
-                        forward_token_budget: int) -> JointBudgetISConfig:
-    """The budgeted IS of ``ar.algorithms.is`` with its planning mode and grids."""
-
-    joint = config["joint"]
-    adaptive = config["chunk_adaptive"] if config["planning"] == "chunk_adaptive" else {}
-    return JointBudgetISConfig(
-        forward_token_budget=forward_token_budget, total_length=total_length,
-        block_sizes=tuple(joint["block_sizes"]), candidate_counts=tuple(joint["candidate_counts"]),
-        rollout_counts=tuple(joint["rollout_counts"]), pilot_candidates=int(joint["pilot_candidates"]),
-        pilot_rollouts=int(joint["pilot_rollouts"]), pilot_fraction=float(joint["pilot_fraction"]),
-        reward_temperature=reward.temperature, reward_forward_passes=reward.forward_passes,
-        relative_variance_floor=float(joint["relative_variance_floor"]),
-        expected_output_tokens=joint["expected_output_tokens"], planning_mode=str(config["planning"]),
-        block_first=bool(config["block_first"]), **adaptive,
-    )
-
-
-def joint_budget_trace(result: Any) -> dict[str, Any]:
-    """The IS trace of a budgeted run: per step the plan and its forward tokens."""
-
-    trace = importance_trace([step.evaluation for step in result.steps])
-    for summary, step in zip(trace["steps"], result.steps, strict=True):
-        summary.update(plan=asdict(step.plan), pilot_forward_tokens=step.pilot_actual_cost,
-                       forward_tokens=step.actual_cost, expected_remaining_tokens=step.expected_remaining,
-                       adjustment=step.adjustment)
-    trace.update(stopping_reason=result.stopping_reason, reserved_forward_tokens=result.reserved_forward_tokens,
-                 planned_forward_tokens_used=result.actual_forward_tokens,
-                 length_probe_forward_tokens=result.length_probe_forward_tokens)
-    return trace
 
 
 class ARFamily:
@@ -403,24 +379,15 @@ class ARFamily:
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
-        config = self.config
-        if config["planning"] == "fixed":
-            fixed = config["fixed"]
-            result = run_conditional_is(
-                task.backend, task.prompt,
-                ConditionalISConfig(candidate_count=int(fixed["candidate_count"]),
-                                    rollout_count=int(fixed["rollout_count"]),
-                                    block_size=min(int(fixed["block_size"]), task.maximum),
-                                    total_length=task.maximum, reward_temperature=reward.temperature,
-                                    block_first=bool(config["block_first"])),
-                reward.batch, SeedStream(task.seed), sampling=task.sampling,
-            )
-            return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
-        settings = joint_budget_config(config, reward, total_length=task.maximum,
-                                       forward_token_budget=int(config["joint"]["forward_token_budget"]))
-        joint = run_joint_budget_is(task.backend, task.prompt, settings, reward.batch, SeedStream(task.seed),
-                                    sampling=task.sampling)
-        return joint.token_ids, joint_budget_trace(joint), _kept_reward(joint.steps[-1].evaluation)
+        result = run_conditional_is(
+            task.backend, task.prompt,
+            fixed_is_config(self.config, total_length=task.maximum, reward_temperature=reward.temperature),
+            reward.batch, SeedStream(task.seed), sampling=task.sampling,
+            reward_forward_passes=reward.forward_passes,
+        )
+        trace = importance_trace(result.steps)
+        trace.update(stopping_reason=result.stopping_reason, forward_tokens=result.actual_forward_tokens)
+        return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 
-__all__ = ["ARFamily", "confidence_reward", "confidence_statistic", "joint_budget_config", "joint_budget_trace"]
+__all__ = ["ARFamily", "confidence_reward", "confidence_statistic", "fixed_is_config"]

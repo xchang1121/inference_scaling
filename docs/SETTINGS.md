@@ -137,17 +137,8 @@
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
-| `is.planning` | `fixed`：固定候选数、补全数与块长；`full_horizon` / `chunk_adaptive`：在前向 token 预算内逐块重新规划 |
 | `is.block_first` | 新候选先只生成一块，第一条补全作为续写请求与其余补全同批生成（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）；Transformers 上结果不变，缩短每步的关键路径 |
-| `is.fixed.candidate_count` / `rollout_count` / `block_size` | 固定规划的 M、K、B |
-| `is.joint.forward_token_budget` | 每题的前向 token 位置预算 |
-| `is.joint.block_sizes` / `candidate_counts` / `rollout_counts` | B、M、K 的候选网格 |
-| `is.joint.pilot_candidates` / `pilot_rollouts` / `pilot_fraction` | 试点共享的完整输出数、每候选补全数与最多占用的预算比例 |
-| `is.joint.relative_variance_floor` | 规划时相对方差的下限 |
-| `is.joint.expected_output_tokens` | 初始期望输出长度；`null` 时先生成一条完整输出测量 |
-| `is.chunk_adaptive.initial_block_size` / `initial_candidate_count` / `initial_rollout_count` / `adjustment_min_improvement` | `chunk_adaptive` 的起始配置与调整所需的最小改进比例 |
-
-规划细节见 [BUDGET.md](methods/BUDGET.md)。
+| `is.fixed.candidate_count` / `rollout_count` / `block_size` | 实验与服务统一使用的固定 M、K、B；不设总前向 token 上限，实际消耗仍记录 |
 
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
@@ -171,7 +162,7 @@
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
 | `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
 | `datasets.<name>.max_new_tokens` | 131072 | 思考段与答案共用，给 `xhigh` 的长思考留足长度 |
-| `algorithms.is` | `full_horizon`，预算 524,288，块长网格 64、128、512、1024；`fixed` 为 M=4、K=1、B=1024；`block_first = false` | 预算至少约为输出上限的 3 倍（先生成一条输出测长度，再预留两个候选写完），否则思考写满上限的题会报错；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
+| `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 实验与服务共用固定配置；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `dllm`
@@ -208,8 +199,7 @@
 | `default_effort` / `effort_aliases` | 字符串 / 对象 | 请求未给推理强度时的档位；其他强度名到档位名的映射（如 `minimal` → `low`） |
 | `efforts.<名>.reasoning_effort` | `low` \| `medium` \| `xhigh` | chat template 的推理强度 |
 | `efforts.<名>.max_new_tokens` | 整数 | 单条序列（思考与答案共用）的输出上限；再受上下文（`ar.engine.vllm.max_model_len` 减提示）限制，请求的 `max_tokens` 只能调低它 |
-| `efforts.<名>.forward_token_budget` | 整数 | 一个请求所有序列（长度探测、试点、候选、补全）的前向 token 总和，不是单条长度，所以可以超过上下文；取输出上限的 4、6、8 倍，即约写满 4、6、8 条；提示很长时抬到最低可行值（2 倍提示加 3 倍输出上限） |
-| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；进行中的一步与答案生成照常完成。第一步至少要依次写完长度探测和候选，所以取值应覆盖约 2 条满长序列的解码时间 |
+| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；进行中的一步与答案生成照常完成。第一步至少要写完候选，因此取值应覆盖一轮的解码时间 |
 
 ## `settings/training.json`
 

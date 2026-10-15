@@ -92,8 +92,30 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     # The model thinks "7", closes the thought and answers "7".
     assert (reply.thinking, reply.content, reply.finish, reply.tool_calls) == ("#### 7", "#### 7", "stop", ())
     assert reply.scaling["effort"] == "low" and reply.scaling["steps"] >= 1 and reply.scaling["sampling_scope"] == "thinking"
+    assert reply.scaling["forward_tokens"] > 0 and "forward_token_budget" not in reply.scaling
     with pytest.raises(ProtocolError, match="effort"):
         reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "huge"}))
+
+
+def test_service_reads_fixed_is_parameters_from_settings(monkeypatch) -> None:
+    settings = load_settings()
+    settings["ar"]["algorithms"]["is"]["fixed"].update(candidate_count=2, rollout_count=2, block_size=3)
+    captured = {}
+
+    def fixed_is(_backend, _prompt, config, _reward, _seeds, **kwargs):
+        captured["config"] = config
+        captured["kwargs"] = kwargs
+        from inference_scaling.shared.sampling.conditional_is import ConditionalISResult
+        return ConditionalISResult((), (1, 2), (), "deadline", 12)
+
+    monkeypatch.setattr("inference_scaling.serve.reasoner.run_conditional_is", fixed_is)
+    reasoner = Reasoner(settings, load_serve_settings(), _ChatBackend())
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    reply = reasoner.generate(prepared)
+    assert (captured["config"].candidate_count, captured["config"].rollout_count,
+            captured["config"].block_size) == (2, 2, 3)
+    assert captured["kwargs"]["deadline"] is not None
+    assert reply.scaling["stopping_reason"] == "deadline" and reply.scaling["forward_tokens"] == 12
 
 
 class _StubReasoner:

@@ -123,7 +123,7 @@ Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后�
 | Beam-8 | `python -m inference_scaling --algorithm beam` | — |
 | 多数投票-8 | `python -m inference_scaling --algorithm best_of_n --reward verifier` | `rewards.verifier.source = "vote"` |
 | 幂目标 MH | `python -m inference_scaling --algorithm mh_power` | — |
-| 条件 IS，自一致性奖励 | `python -m inference_scaling --algorithm is --reward verifier` | `rewards.verifier.source = "vote"`，`ar.algorithms.is.planning = "fixed"` |
+| 条件 IS，自一致性奖励 | `python -m inference_scaling --algorithm is --reward verifier` | `rewards.verifier.source = "vote"`，`ar.algorithms.is.fixed` 指定 M、K、B |
 | 正确性奖励的 MH 与条件 IS | `--algorithm mh --reward verifier`、`--algorithm is --reward verifier` | `rewards.verifier.temperature = 0.04`；IS 设 `planning = "fixed"` |
 | GRPO | `python -m training`，再用 `--algorithm sample`、`--algorithm greedy` 评测 | 训练时 `stages = ["grpo"]`；评测时 `ar.model.adapter` 指向 `grpo.output` |
 | pass@k | 同上各命令 | `run.draws = 8` |

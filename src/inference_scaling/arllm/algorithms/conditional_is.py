@@ -19,6 +19,7 @@ depend only on the sequence it scores.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
@@ -31,7 +32,7 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import (ConditionalCandidate, ConditionalISResult, ConditionalISStep,
                                                               RolloutEvaluation, select, weigh)
 from inference_scaling.shared.types import TokenBatchReward
-from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
+from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence
 
 
 def estimate_conditional_weights(
@@ -227,6 +228,29 @@ def conditional_is_step(
     return adapter.step(state, step_index, seeds)
 
 
+class _ForwardTokenLedger:
+    def __init__(self, backend: AutoregressiveBackend, reward: TokenBatchReward, reward_forward_passes: int) -> None:
+        self.backend, self.model_id = backend, backend.model_id
+        self._reward, self._passes = reward, reward_forward_passes
+        self._scored: set[TokenSequence] = set()
+        self.slots = 0
+
+    def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
+        samples = self.backend.sample_batch(requests)
+        self.slots += sum(map(len, {request.prefix for request in requests if not request.uniform_offset}))
+        self.slots += sum(len(sample.token_ids) for sample in samples)
+        return samples
+
+    def score_batch(self, requests: Sequence[ScoreRequest]) -> list[tuple[float, ...]]:
+        return self.backend.score_batch(requests)
+
+    def reward(self, prompt: TokenSequence, sequences: Sequence[TokenSequence]) -> Sequence[float]:
+        fresh = set(sequences) - self._scored
+        self._scored.update(fresh)
+        self.slots += self._passes * sum(len(prompt) + len(sequence) for sequence in fresh)
+        return self._reward(prompt, sequences)
+
+
 def run_conditional_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
@@ -235,15 +259,26 @@ def run_conditional_is(
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
+    deadline: float | None = None,
+    reward_forward_passes: int = 0,
 ) -> ConditionalISResult:
     """Generate a complete sequence by conditional SIR moves at successive block boundaries."""
 
     sampling = sampling or SamplingConfig()
     validate_base_sampling(sampling)
-    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=sampling, reward=reward)
+    ledger = _ForwardTokenLedger(backend, reward, reward_forward_passes)
+    adapter = ConditionalISAdapter(backend=ledger, prompt=prompt, config=config, sampling=sampling, reward=ledger.reward)
     state = adapter.initial_state
     steps: list[ConditionalISStep] = []
+    timed_out = False
     while not adapter.is_terminal(state):
+        if steps and deadline is not None and time.monotonic() >= deadline:
+            timed_out = True
+            break
         record, state = adapter.step(state, len(steps), seeds)
         steps.append(record)
-    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps))
+    reason = ("deadline" if timed_out else "eos" if sampling.eos_token_id is not None
+              and state.token_ids[-1] == sampling.eos_token_id else "length"
+              if len(state.token_ids) >= config.total_length else "stop")
+    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps),
+                               stopping_reason=reason, actual_forward_tokens=ledger.slots)

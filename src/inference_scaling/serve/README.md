@@ -1,6 +1,6 @@
 # 推理服务
 
-一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；每个请求只在思考段上做联合预算 IS
+一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；每个请求只在思考段上做固定参数 IS
 （Consilience 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
 
 | 接口 | 用途 |
@@ -13,7 +13,7 @@
 ## 一个请求的处理
 
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
-2. 按推理强度选档位，在档位的前向 token 预算与时长上限内做思考段联合预算 IS：块长、候选数、补全数由规划器选择，
+2. 按推理强度选档位，在档位的输出上限与时长上限内做思考段条件 IS：块长、候选数、补全数从 `ar.algorithms.is.fixed` 读取，
    候选与补全写到 `</think>` 停止，按 Consilience 加权。
 3. 从选中的思考正常生成一次答案。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
@@ -34,7 +34,7 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 
 ## 2. 配置
 
-服务读取 `settings/inference.json` 的 `ar`（模型、引擎、采样、IS 规划与网格）和 `rewards.consilience`，以及
+服务读取 `settings/inference.json` 的 `ar`（模型、引擎、采样、IS 固定参数）和 `rewards.consilience`，以及
 `settings/serve.json`。字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#settingsservejson)。
 
 `settings/inference.json` 需要按机器改的项：
@@ -51,17 +51,15 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 `settings/serve.json` 的推理强度档位（请求的 `reasoning_effort` 或 `output_config.effort` 选择，默认 `medium`；
 `none`、`minimal` 映射到 `low`，`xhigh`、`max` 映射到 `high`）：
 
-| 档位 | 模板推理强度 | 单条输出上限 | 前向 token 预算 | 时长上限 |
-| --- | --- | ---: | ---: | ---: |
-| `low` | low | 8,192 | 32,768 | 180 s |
-| `medium` | medium | 32,768 | 196,608 | 900 s |
-| `high` | xhigh | 65,536 | 524,288 | 2400 s |
+| 档位 | 模板推理强度 | 单条输出上限 | 时长上限 |
+| --- | --- | ---: | ---: |
+| `low` | low | 8,192 | 180 s |
+| `medium` | medium | 32,768 | 900 s |
+| `high` | xhigh | 65,536 | 2400 s |
 
 - 单条输出上限再受上下文（`max_model_len` 减提示）限制；请求的 `max_tokens` 只能调低它。
-- 预算是一个请求所有序列（长度探测、试点、候选、补全）的前向 token 之和，约为 4、6、8 条满长序列；提示很长时自动
-  抬到最低可行值（2 倍提示加 3 倍输出上限），请求不会被拒。
-- 到时长上限后不再开始新的 IS 步，保留当前完整思考；第一步至少依次写完长度探测和候选，不受时长约束。
-- 这些是初值；上线后按返回的 `scaling.seconds` 与 `steps` 调整。
+- 固定参数不设置总前向 token 上限；`scaling.forward_tokens` 记录实际消耗。
+- 到时长上限后不再开始新的 IS 步，保留当前完整思考；第一步必须完成，不受时长约束。
 
 ## 3. 启动与验证
 
