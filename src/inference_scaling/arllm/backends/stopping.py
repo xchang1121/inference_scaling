@@ -46,6 +46,13 @@ class StoppedSequenceBackend:
     def tokenizer(self):
         return getattr(self.backend, "tokenizer")
 
+    @property
+    def supports_streaming_generation(self) -> bool:
+        return bool(getattr(self.backend, "supports_streaming_generation", False))
+
+    def open_generation_session(self):
+        return StoppedGenerationSession(self)
+
     def token_statistics(self, requests, statistic):
         # A reward chooses its span, so these are the unstopped model's statistics.
         return getattr(self.backend, "token_statistics")(requests, statistic)
@@ -179,4 +186,103 @@ class StoppedSequenceBackend:
         return [value for value in results if value is not None]
 
 
-__all__ = ["StoppedSequenceBackend"]
+class StoppedGenerationSession:
+    """The same scope law as sample_batch, with early boundary detection."""
+
+    def __init__(self, backend: StoppedSequenceBackend) -> None:
+        self.backend = backend
+        self.inner = getattr(backend.backend, "open_generation_session")()
+        self.requests: dict[str, GenerationRequest] = {}
+        self.tokens: dict[str, list[int]] = {}
+        self.routes: dict[str, tuple[str, GenerationRequest]] = {}
+        self.current: dict[str, str] = {}
+        self.phases: dict[str, str] = {}
+        self.checkpoints: dict[str, int | None] = {}
+        self.generated: dict[str, TokenSequence] = {}
+
+    def submit(self, requests: Sequence[GenerationRequest], *, phase: str = "rollout", checkpoint: int | None = None) -> None:
+        pending = []
+        for request in requests:
+            if request.request_id in self.requests:
+                raise ValueError("duplicate scoped request id")
+            if request.draft is not None or request.log_weight_stop is not None:
+                raise ValueError("streamed scope does not support draft replay or log-weight stopping")
+            generated = self.backend._generated(request.prefix)
+            if self.backend._stop_end(generated) is not None:
+                raise ValueError("the prefix already ended at a stop boundary")
+            self.requests[request.request_id] = request
+            self.tokens[request.request_id] = []
+            self.phases[request.request_id] = phase
+            self.checkpoints[request.request_id] = checkpoint
+            self.generated[request.request_id] = generated
+            pending.append(self._continuation(request.request_id))
+        self.inner.submit(pending, phase=phase, checkpoint=checkpoint)
+
+    def _continuation(self, key: str) -> GenerationRequest:
+        request, tokens = self.requests[key], self.tokens[key]
+        offset = len(tokens)
+        inner = replace(request, prefix=request.prefix + tuple(tokens), max_new_tokens=request.max_new_tokens - offset,
+                        sampling=self.backend._inner_policy(request.sampling), request_id=f"{key}:stop:{offset}",
+                        stop_sequences=self.backend.stop_sequences, uniform_offset=request.uniform_offset + offset)
+        self.routes[inner.request_id] = key, inner
+        self.current[key] = inner.request_id
+        return inner
+
+    def next_event(self):
+        from inference_scaling.arllm.backends.scheduling import GenerationEvent
+        event = self.inner.next_event()
+        sample = event.delta
+        key, inner_request = self.routes[sample.request_id]
+        request, tokens = self.requests[key], self.tokens[key]
+        if (sample.prefix != inner_request.prefix or sample.model_id != self.backend.backend.model_id
+                or sample.policy_id != inner_request.sampling.policy_id):
+            raise RuntimeError("wrapped stream violated request identity")
+        generated = self.generated[key]
+        # Parse only when a new EOS/close marker appears, avoiding a full-prefix
+        # parse on every decode step (including markers split between deltas).
+        width = max((len(marker) for marker in self.backend.stop_sequences), default=1)
+        tail = tuple(tokens[-width:]) if len(tokens) >= width else (generated + tuple(tokens))[-width:]
+        recent = tail + sample.token_ids
+        possible = self.backend.eos_token_id in sample.token_ids or any(
+            recent[index:index + len(marker)] == marker
+            for marker in self.backend.stop_sequences for index in range(max(0, len(tail) - len(marker) + 1), len(recent)))
+        end = self.backend._stop_end(generated + tuple(tokens) + sample.token_ids) if possible else None
+        keep = len(sample.token_ids) if end is None else end - len(generated) - len(tokens)
+        if not 0 <= keep <= len(sample.token_ids):
+            raise RuntimeError("scope boundary moved behind streamed tokens")
+        tokens.extend(sample.token_ids[:keep])
+        if len(tokens) > request.max_new_tokens:
+            raise RuntimeError("scoped stream exceeded its generation limit")
+        finished = end is not None or len(tokens) == request.max_new_tokens
+        reason = "stop" if end is not None else "length"
+        if end is not None and not event.finished:
+            self.inner.stop(sample.request_id)
+        if event.finished and not finished:
+            if sample.finish_reason != "stop" or not sample.token_ids:
+                raise RuntimeError("generation ended without EOS or a thinking boundary")
+            # A native marker may be an empty/invalid thinking close. Match the
+            # batch wrapper's continuation seed and uniform offset exactly.
+            checkpoint = self.checkpoints[key]
+            checkpoint = None if checkpoint is None or checkpoint <= len(tokens) else checkpoint - len(tokens)
+            self.inner.submit([self._continuation(key)], phase=self.phases[key], checkpoint=checkpoint)
+        return GenerationEvent(replace(
+            sample, prefix=request.prefix, request_id=key, policy_id=request.sampling.policy_id,
+            model_id=self.backend.model_id, token_ids=sample.token_ids[:keep],
+            token_logprobs=sample.token_logprobs[:keep], finish_reason=reason,
+            reference_token_logprobs=None if sample.reference_policy_id != inner_request.reference_policy.policy_id else (
+                sample.reference_token_logprobs or ())[:keep],
+            reference_policy_id=None if sample.reference_policy_id != inner_request.reference_policy.policy_id else request.reference_policy.policy_id,
+            token_cdf_bounds=None if sample.token_cdf_bounds is None else sample.token_cdf_bounds[:keep],
+            token_statistics=None if sample.token_statistics is None else sample.token_statistics[:keep]), finished)
+
+    def seal(self) -> None:
+        self.inner.seal()
+
+    def stop(self, request_id: str) -> None:
+        self.inner.stop(self.current[request_id])
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+__all__ = ["StoppedSequenceBackend", "StoppedGenerationSession"]

@@ -184,18 +184,22 @@ class ConditionalISAdapter:
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        proposals = self.propose(state, step_index, seeds)
-        retained = None
-        if state.token_ids:
-            start = state.fixed + len(proposals[0][0].token_ids)
-            retained = RolloutEvaluation(state.token_ids[start:], state.reward, state.reward / self.config.reward_temperature)
-        candidates = estimate_conditional_weights(
-            backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
-            candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
-            total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
-            reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
-            step_index=step_index, retained=retained,
-        )
+        if getattr(self.backend, "supports_streaming_generation", False):
+            from inference_scaling.arllm.algorithms.streamed_is import streamed_candidates
+            candidates = streamed_candidates(self, state, step_index, seeds)
+        else:
+            proposals = self.propose(state, step_index, seeds)
+            retained = None
+            if state.token_ids:
+                start = state.fixed + len(proposals[0][0].token_ids)
+                retained = RolloutEvaluation(state.token_ids[start:], state.reward, state.reward / self.config.reward_temperature)
+            candidates = estimate_conditional_weights(
+                backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
+                candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
+                total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
+                reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
+                step_index=step_index, retained=retained,
+            )
         selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]

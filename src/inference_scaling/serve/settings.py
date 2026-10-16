@@ -1,7 +1,7 @@
 """``settings/serve.json``: the server and its reasoning-effort profiles, strictly checked.
 
 An effort profile sets the chat template's reasoning effort, the output limit,
-and the wall-clock limit. IS uses the fixed parameters from inference settings.
+and an optional wall-clock limit. IS uses the fixed parameters from inference settings.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ SERVE_PATH = Path("settings/serve.json")
 EFFORT = {
     "reasoning_effort": frozenset({"low", "medium", "xhigh"}),
     "max_new_tokens": int,
-    "max_seconds": float,
+    "max_seconds": (float, None),
 }
 SCHEMA: dict[str, Any] = {
     "server": {"host": str, "port": int, "served_model_name": str, "max_concurrent_requests": int,
@@ -36,7 +36,7 @@ def load_serve_settings(path: Path = SERVE_PATH) -> dict[str, Any]:
     efforts = settings["efforts"]
     for name, profile in efforts.items():
         check(profile, EFFORT, f"serve.efforts.{name}")
-        if profile["max_new_tokens"] <= 0 or profile["max_seconds"] <= 0:
+        if profile["max_new_tokens"] <= 0 or (profile["max_seconds"] is not None and profile["max_seconds"] <= 0):
             raise SettingsError(f"serve.efforts.{name} needs positive limits")
     for alias, target in settings["effort_aliases"].items():
         if target not in efforts:

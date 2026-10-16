@@ -14,12 +14,12 @@
 
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
 2. 按推理强度选档位，使用 `ar.algorithms.is` 配置的固定块长、候选数与补全数做思考段条件 IS；
-   候选与补全写到 `</think>` 停止，按 Consilience 加权。档位设置单条输出上限与开始新一步的时限。
+   候选与补全写到 `</think>` 停止，按 Consilience 加权。档位设置单条输出上限，默认只按逻辑停止条件结束。
 3. 从选中的思考正常生成一次答案。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
    schema 取类型。
 
-返回里额外带 `scaling`：档位、固定的候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或到时的 `deadline`）与耗时。
+返回里额外带 `scaling`：档位、固定的候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 
 ## 1. 安装（昇腾）
 
@@ -48,18 +48,19 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
 | `ar.engine.vllm.enable_prefix_caching` | 先 `true` | 混合模型的前缀缓存出错或输出异常时改 `false`，只影响速度 |
 | `ar.algorithms.is` | `candidate_count = 4`、`rollout_count = 1`、`block_size = 1024`、`block_first = false` | 所有档位共用；候选数、补全数与块长固定，块长在输出上限处截短 |
+| `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
 `settings/serve.json` 的推理强度档位（请求的 `reasoning_effort` 或 `output_config.effort` 选择，默认 `medium`；
 `none`、`minimal` 映射到 `low`，`xhigh`、`max` 映射到 `high`）：
 
 | 档位 | 模板推理强度 | 单条输出上限 | 时长上限 |
 | --- | --- | ---: | ---: |
-| `low` | low | 8,192 | 180 s |
-| `medium` | medium | 32,768 | 900 s |
-| `high` | xhigh | 65,536 | 2400 s |
+| `low` | low | 8,192 | `null` |
+| `medium` | medium | 32,768 | `null` |
+| `high` | xhigh | 65,536 | `null` |
 
 - 单条输出上限再受上下文（`max_model_len` 减提示）限制；请求的 `max_tokens` 只能调低它。
-- 到时长上限后不再开始新的 IS 步，保留当前完整思考；至少完成第一步，进行中的一步与答案生成照常完成。
+- 默认不设墙钟停止条件，使调度快慢不改变 IS 步数。显式设置 `max_seconds` 后，到时不再开始新的 IS 步；至少完成第一步，进行中的一步与答案仍完成，但不再保证调度前后的有限步输出分布相同。
 - 这些是初值；上线后按返回的 `scaling.seconds` 与 `steps` 调整。
 
 ## 3. 启动与验证
@@ -87,7 +88,7 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
 ## 4. 接入网关与客户端
 
 - 网关上游设为 `http://<机器>:8000`；鉴权、限流、计费由网关负责，服务不校验请求里的模型名。
-- `max_seconds` 只在完整 IS 步之间检查；网关与客户端超时还需覆盖正在进行的一步、答案生成及排队时间。
+- `max_seconds` 默认 `null`；显式启用后只在完整 IS 步之间检查。网关与客户端超时需覆盖推理、答案生成及排队时间。
 - 建议用流式：搜索期间每 `keepalive_seconds`（默认 10 s）发一次 keep-alive，网关空闲超时需大于该值。
 - OpenAI SDK 与 agent 框架：`base_url = "https://<网关>/v1"`，`model = "qwen3.8-27b-is"`。
 - Claude Code 等 Anthropic 客户端：`ANTHROPIC_BASE_URL=https://<网关>`，`ANTHROPIC_MODEL=qwen3.8-27b-is`，

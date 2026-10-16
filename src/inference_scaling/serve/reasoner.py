@@ -2,8 +2,9 @@
 
 The model, engine, base sampling policy, fixed IS parameters and the
 Consilience reward are those of ``settings/inference.json``; the request's
-effort profile sets the template's reasoning effort, the output limit and the
-wall-clock limit. The time limit is checked only between complete IS steps.
+effort profile sets the template's reasoning effort and output limit. An optional
+wall-clock limit is checked only between complete IS steps; the default uses
+logical stopping so execution speed cannot change the number of IS moves.
 """
 
 from __future__ import annotations
@@ -95,11 +96,12 @@ class Reasoner:
         config = conditional_is_config(self.ar["algorithms"]["is"], reward, total_length=maximum)
         adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=policy, reward=reward.batch)
         start = time.monotonic()
-        deadline = start + float(prepared.profile["max_seconds"])
+        limit = prepared.profile["max_seconds"]
+        deadline = None if limit is None else start + float(limit)
         state, steps = adapter.initial_state, 0
         while not adapter.is_terminal(state):
             # Always finish the first step, and never interrupt a rollout or select from an incomplete batch.
-            if steps and time.monotonic() >= deadline:
+            if steps and deadline is not None and time.monotonic() >= deadline:
                 break
             _, state = adapter.step(state, steps, SeedStream(seeds))
             steps += 1
@@ -119,6 +121,8 @@ class Reasoner:
             "effort": prepared.effort, "steps": steps, "stopping_reason": stopping_reason,
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,
+            "stopping_policy": "logical" if deadline is None else "wall_clock",
+            "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",
             "sampling_scope": info["sampling_scope"], "seconds": round(time.monotonic() - start, 3)})
 
 

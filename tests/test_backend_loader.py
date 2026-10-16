@@ -103,3 +103,28 @@ def test_fused_logprobs_reach_either_engine_but_need_an_unpenalized_model(monkey
         captured.clear()
         loader.load_backend(model, engine, seed=0, logprobs=0)
         assert captured["enable_fused_logprobs"] is True and "max_logprobs" not in captured["engine_kwargs"]
+
+
+def test_scheduler_capacity_is_clamped_to_native_engine_slots(monkeypatch, tmp_path) -> None:
+    model, engine = _sections("vllm")
+    model["path"] = str(tmp_path)
+    engine["vllm"]["max_num_seqs"] = 5
+    backend = object.__new__(loader.AsyncVLLMBackend)
+    configured = []
+    backend.configure_scheduler = configured.append
+    monkeypatch.setattr(loader.AsyncVLLMBackend, "from_pretrained", lambda *args, **kwargs: backend)
+    assert loader.load_backend(model, engine, seed=0, logprobs=0) is backend
+    assert configured[0].max_in_flight == 5 and configured[0].enabled
+
+
+def test_bad_scheduler_capacity_is_rejected_before_loading_the_model(monkeypatch, tmp_path) -> None:
+    model, engine = _sections("vllm")
+    model["path"] = str(tmp_path)
+    engine["rollout_scheduler"]["max_in_flight"] = 0
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("invalid scheduling settings must not start an engine")
+
+    monkeypatch.setattr(loader.AsyncVLLMBackend, "from_pretrained", unexpected)
+    with pytest.raises(ValueError, match="capacities"):
+        loader.load_backend(model, engine, seed=0, logprobs=0)

@@ -8,6 +8,7 @@ from typing import Any
 
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
+from inference_scaling.arllm.backends.scheduling import SchedulerConfig
 from inference_scaling.shared.model.loading import resolve_checkpoint_path
 
 
@@ -61,6 +62,13 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
     if engine["backend"] == "transformers":
         return _transformers(str(model["path"]), identity, model, engine)
     vllm = engine["vllm"]
+    scheduler = None
+    if vllm["asynchronous"]:
+        options = dict(engine["rollout_scheduler"])
+        if vllm["max_num_seqs"] is not None:
+            options["max_in_flight"] = min(options["max_in_flight"], int(vllm["max_num_seqs"]))
+        # Validate before loading the model or starting engine processes.
+        scheduler = SchedulerConfig(**options)
     if vllm["fused_logprobs"] and model["token_penalty"] is not None:
         raise ValueError("vllm.fused_logprobs reads the unpenalized logits; disable it or ar.model.token_penalty")
     # Resolve Hub names once so the engine and the exact scorer read the same files.
@@ -79,7 +87,7 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
         engine_kwargs["max_logprobs"] = logprobs
     scorer = _transformers(path, identity, model, engine) if vllm["exact_scoring"] == "transformers" else None
     try:
-        return (AsyncVLLMBackend if vllm["asynchronous"] else VLLMBackend).from_pretrained(
+        backend = (AsyncVLLMBackend if vllm["asynchronous"] else VLLMBackend).from_pretrained(
             path,
             **identity,
             download_dir=model["cache_dir"],
@@ -100,6 +108,9 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
             engine_kwargs=engine_kwargs,
             enable_fused_logprobs=bool(vllm["fused_logprobs"]),
         )
+        if isinstance(backend, AsyncVLLMBackend):
+            backend.configure_scheduler(scheduler)
+        return backend
     except BaseException:
         close_backend(scorer)
         raise

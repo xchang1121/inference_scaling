@@ -131,6 +131,19 @@ def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monke
     assert [len(batch) for batch in backend.batches] == [3, 3, 1]
 
 
+def test_reasoner_default_uses_logical_stopping_even_when_time_passes(monkeypatch) -> None:
+    settings, serve = load_settings(), load_serve_settings()
+    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
+    assert serve["efforts"]["medium"]["max_seconds"] is None
+    reasoner = Reasoner(settings, serve, _ChatBackend())
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    clock = iter([0.0, 10000.0])
+    monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
+    reply = reasoner.generate(prepared)
+    assert reply.scaling["steps"] == 2 and reply.scaling["stopping_policy"] == "logical"
+    assert reply.scaling["stopping_reason"] == "stop"
+
+
 def test_reasoner_clamps_the_fixed_block_to_the_requested_output_limit() -> None:
     backend = _ChatBackend()
     reasoner = Reasoner(load_settings(), load_serve_settings(), backend)

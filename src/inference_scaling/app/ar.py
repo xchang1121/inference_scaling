@@ -381,7 +381,9 @@ class ARFamily:
             task.backend, task.prompt, conditional_is_config(self.config, reward, total_length=task.maximum),
             reward.batch, SeedStream(task.seed), sampling=task.sampling,
         )
-        return result.token_ids, importance_trace(list(result.steps)), _kept_reward(result.steps[-1])
+        trace = importance_trace(list(result.steps))
+        trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
+        return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 
 __all__ = ["ARFamily", "conditional_is_config", "confidence_reward", "confidence_statistic"]

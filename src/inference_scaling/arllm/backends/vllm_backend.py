@@ -27,6 +27,7 @@ from functools import partial
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from math import fsum, isclose, isfinite, prod
@@ -766,13 +767,103 @@ class AsyncVLLMBackend(VLLMBackend):
     supports_native_continuous_batching = True
 
     def __init__(self, engine: Any | None, tokenizer: Any, *, engine_factory: Callable[[], Any] | None = None,
+                 streaming_output_kind: Any = 1,
                  **options: Any) -> None:
         if (engine is None) == (engine_factory is None):
             raise ValueError("provide exactly one of engine or engine_factory")
         self._runner = _AsyncLoopRunner(engine_factory if engine_factory is not None else lambda: engine)
         self._request_counter = itertools.count()
         self._request_counter_lock = threading.Lock()
+        self._streaming_output_kind = streaming_output_kind
         super().__init__(self._runner.engine, tokenizer, **options)
+        from inference_scaling.arllm.backends.scheduling import SchedulerConfig
+        self.configure_scheduler(SchedulerConfig(enabled=False))
+
+    def configure_scheduler(self, config) -> None:
+        from inference_scaling.arllm.backends.scheduling import AsyncAdmissionPool
+        if hasattr(self, "_admission") and (self._admission.queue.active or self._admission.queue.pending):
+            raise RuntimeError("cannot reconfigure a busy scheduler")
+        self.scheduler_config = config
+        self._kv_checked_at, self._kv_cached = float("-inf"), 0.0
+        self._admission = AsyncAdmissionPool(config, self._kv_usage)
+
+    def _kv_usage(self) -> float:
+        if self._metrics is None:
+            return 0.0
+        now = time.monotonic()
+        if now - self._kv_checked_at >= .05:
+            self._kv_cached = max((float(metric.value) for metric in self._metrics()
+                                   if metric.name == "vllm:kv_cache_usage_perc"), default=0.0)
+            self._kv_checked_at = now
+        return self._kv_cached
+
+    @property
+    def supports_streaming_generation(self) -> bool:
+        # Fused full-vocabulary statistics are currently delivered only at completion.
+        return self.scheduler_config.enabled and not self._fused_logprobs
+
+    def open_generation_session(self):
+        if self._closed:
+            raise RuntimeError("vLLM backend is closed")
+        if not self.supports_streaming_generation:
+            raise ValueError("streaming scheduling requires the asynchronous non-fused vLLM backend")
+        from inference_scaling.arllm.backends.streaming import AsyncGenerationSession
+        return AsyncGenerationSession(self)
+
+    async def _stream_request(self, request, group, phase, checkpoint, emit) -> None:
+        from inference_scaling.arllm.backends.scheduling import Admission, GenerationEvent, SampleBuffer
+
+        request_id = self._next_request_id()
+        params = self._sampling_params(request)
+        params.output_kind = self._streaming_output_kind
+        prompt_length = len(self._model_prefix(request.prefix))
+        item = Admission(request_id, group, prompt_length, request.max_new_tokens, phase)
+        await self._admission.acquire(item)
+        total, cached, started, finished = 0, 0, False, False
+        chunk, progressed = SampleBuffer(), False
+        try:
+            kwargs = {"prompt": self._prompt(request.prefix), "sampling_params": params, "request_id": request_id}
+            if self._lora_request is not None:
+                kwargs["lora_request"] = self._lora_request
+            self._engine_requests_started(1)
+            started = True
+            async for output in self._engine.generate(**kwargs):
+                sample, _, output_cached, _ = self._sample_from_output(request, output)
+                cached = max(cached, output_cached)
+                total += len(sample.token_ids)
+                if total > request.max_new_tokens:
+                    raise RuntimeError("stream exceeded its generation limit")
+                finished = bool(getattr(output, "finished", self._completion(output).finish_reason is not None))
+                if sample.token_ids and not progressed:
+                    self._admission.progress(request_id)
+                    progressed = True
+                chunk.append(sample)
+                ready = checkpoint is not None and total >= checkpoint
+                if ready or finished or len(chunk.tokens) >= 32:
+                    await emit(GenerationEvent(chunk.sample(), finished))
+                    chunk = SampleBuffer()
+                    if ready:
+                        checkpoint = None
+            if not finished:
+                raise RuntimeError("asynchronous vLLM stream omitted its terminal event")
+        finally:
+            try:
+                if started and not finished:
+                    await self._engine.abort(request_id)
+            finally:
+                if started:
+                    self._engine_requests_finished(1)
+                    forward = prompt_length - cached + max(0, total - 1)
+                    with self._statistics_lock:
+                        self._sample_calls += 1
+                        self._sampled_sequences += 1
+                        self._generated_tokens += total
+                        self._prefill_tokens += prompt_length - cached
+                        self._shared_prefill_tokens_saved += cached
+                        self._generation_forward_token_slots += forward
+                        self._estimated_dense_forward_flops += dense_forward_flops(self.parameter_count, forward)
+                        self._engine_requests += 1
+                self._admission.finish(request_id, total if finished else None)
 
     @classmethod
     def _create(cls, engine_arguments: dict[str, Any], tokenizer: Any, fused_logprobs: bool,
@@ -787,15 +878,21 @@ class AsyncVLLMBackend(VLLMBackend):
         # The engine core process starts, and reads the model-runner environment, while the backend is constructed.
         with _fused_engine(engine_arguments) if fused_logprobs else nullcontext(engine_arguments) as arguments:
             return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**arguments)),
-                       fused_logprobs=fused_logprobs, **options)
+                       fused_logprobs=fused_logprobs, streaming_output_kind=RequestOutputKind.DELTA, **options)
 
     def _next_request_id(self) -> str:
         with self._request_counter_lock:
             value = next(self._request_counter)
         return f"inference-scaling:{self.model_id}:{value}"
 
-    async def _generate_one(self, prompt: Any, params: Any, fused: dict[str, FusedValues] | None = None) -> Any:
+    async def _generate_one(self, prompt: Any, params: Any, fused: dict[str, FusedValues] | None = None,
+                            group: str | None = None) -> Any:
         request_id = self._next_request_id()
+        admitted = self.scheduler_config.enabled
+        if admitted:
+            from inference_scaling.arllm.backends.scheduling import Admission
+            await self._admission.acquire(Admission(request_id, group or request_id,
+                                                    len(prompt["prompt_token_ids"]), params.max_tokens))
         kwargs = {"prompt": prompt, "sampling_params": params, "request_id": request_id}
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
@@ -811,6 +908,8 @@ class AsyncVLLMBackend(VLLMBackend):
                     fused.update(released)
         finally:
             self._engine_requests_finished(1)
+            if admitted:
+                self._admission.finish(request_id)
         if final is None:
             raise RuntimeError("asynchronous vLLM request returned no output")
         return final
@@ -819,7 +918,8 @@ class AsyncVLLMBackend(VLLMBackend):
         policies = params if isinstance(params, list) else [params] * len(prompts)
         if len(policies) != len(prompts):
             raise ValueError("the number of vLLM sampling policies must match the prompts")
-        return list(await asyncio.gather(*(self._generate_one(prompt, policy, fused)
+        group = self._next_request_id()
+        return list(await asyncio.gather(*(self._generate_one(prompt, policy, fused, group)
                                            for prompt, policy in zip(prompts, policies, strict=True))))
 
     def _generate(self, prompts: Sequence[Any], params: Any, fused: dict[str, FusedValues] | None = None) -> list[Any]:

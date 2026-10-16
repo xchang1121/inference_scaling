@@ -119,6 +119,15 @@ SCHEMA: dict[str, Any] = {
                 "max_batch_tokens": int,
                 "batch_wait_seconds": float,
             },
+            "rollout_scheduler": {
+                "enabled": bool,
+                "max_in_flight": int,
+                "max_prefill_tokens": int,
+                "kv_high_watermark": float,
+                "aging_seconds": float,
+                "tail_prefill_tokens": int,
+                "policy": _Choices({"fair_lpt", "fifo"}),
+            },
         },
         "prompt": {"system": _NULLABLE_STR, "format": _Choices({"auto", "chat", "plain"}), "chat_template_kwargs": dict},
         "output": {

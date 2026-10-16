@@ -110,6 +110,15 @@
         "max_batch_size": 24,
         "max_batch_tokens": 12288,
         "batch_wait_seconds": 0.01
+      },
+      "rollout_scheduler": {
+        "enabled": true,
+        "max_in_flight": 32,
+        "max_prefill_tokens": 16384,
+        "kv_high_watermark": 0.9,
+        "aging_seconds": 2.0,
+        "tail_prefill_tokens": 4096,
+        "policy": "fair_lpt"
       }
     },
     "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {"reasoning_effort": "xhigh"}},

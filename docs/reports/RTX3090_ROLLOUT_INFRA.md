@@ -1,12 +1,13 @@
-# 推理成本与执行效率：RTX 3090
+# 推理成本与执行效率：RTX 3090 与 CPU 调度验证
 
-本报告比较批处理、rollout 复用、MH proposal 和奖励调度的执行成本；准确率见
+本报告比较批处理、rollout 复用、MH proposal、奖励调度与固定采样树调度的执行成本；准确率见
 [算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)，机制与成本口径见[算法文档](../methods/ALGORITHMS.md#alg-runtime)。
-结论来自统一入口之前的实验，数字按当时的实现测得。标注“旧方法”
-的机制已从代码中删除，这里只保留其说明与结论；其余机制的复现命令对应当前实现（第 6 节）。
+第 1–5 节记录统一入口之前的 RTX 3090 实验，数字按当时的实现测得。标注“旧方法”
+的机制已从代码中删除，这里保留其说明与结论；其余机制的复现命令对应当前实现（第 7 节）。
+第 6 节记录 2026-10-16 实现的 rollout 调度，以及 CPU 上的分布验证和虚拟时延实验。
 
-主模型为 Qwen2.5-1.5B-Instruct，旧方法的辅助模型为 Qwen2.5-0.5B-Instruct，硬件为单张 RTX 3090 24 GiB，全部数值
-来自 Transformers。成本比统一为“实验路径 / 本组基线”，小于 1 表示成本下降；墙钟不含模型与数据加载，建库与后台
+RTX 3090 实验的主模型为 Qwen2.5-1.5B-Instruct，旧方法的辅助模型为 Qwen2.5-0.5B-Instruct，硬件为单张 RTX 3090 24 GiB，
+后端为 Transformers。其成本比统一为“实验路径 / 本组基线”，小于 1 表示成本下降；墙钟不含模型与数据加载，建库与后台
 收尾单列。FLOPs 按“2 × 参数量 × 实际前向 token 位置数”估算，覆盖预填充、生成、重评分与草稿验证，不含注意力的
 长度平方项；“±”为三个随机种子的样本标准差。
 
@@ -87,7 +88,55 @@ replay 从历史库读取与当前条件匹配的 rollout（每条最终估计�
 总体上，连续批处理主要提高设备利用率，候选缓存与已有历史减少在线生成，冻结历史 MH 以评分替代部分串行生成，奖励
 调度的收益依赖可重叠的等待时间。选择方案时应同时比较墙钟、各模型的 FLOPs 以及当前请求实际承担的建库与设计成本。
 
-## 6. 复现
+<a id="infra-report-rollout-scheduling"></a>
+## 6. 固定采样树的 rollout 调度
+
+异步 vLLM 已接入共享准入队列和流式条件 IS。调度保持每轮 M、K、B、请求编号与随机种子、奖励、权重和选择规则，
+通过提前释放依赖已满足的请求、安排执行顺序来减少等待。
+
+- **前缀就绪即释放分支。** 新候选生成到 B 个 token 后立即提交 K−1 条补全，原生请求持续生成第零条补全；
+  保留候选的额外补全在本轮开始时提交。所有规定叶子完成后，按固定候选与叶子编号计算权重和选择。
+- **共享资源准入。** 同一引擎的多个调用者、候选、补全和评分共用原生请求上限；预填充 token 预算和 KV 高水位
+  控制新请求进入。加载时将配置上限与 vLLM 的 `max_num_seqs` 对齐。
+- **长尾与公平调度。** 先平衡各题活动请求数，再推进候选前缀，并把预计较长的请求提前。长度预测使用请求上限和
+  已完成请求的长度历史；等待老化保障队列推进，尾部保护暂缓其他题的大预填充，让最后几条 rollout 完成解码。
+- **流式统计与评分。** 前缀统计随事件更新，叶子完成即可评分，保留叶子奖励直接复用。实现覆盖思考边界、EOS、
+  同一引擎上的生成与评分，以及错误时的取消和资源释放。
+- **逻辑停止。** 服务档位默认 `max_seconds = null`，按长度、EOS 和思考边界停止。运行记录与服务响应通过
+  `rollout_scheduler = streaming/batch` 标明实际路径，服务响应另用 `stopping_policy = logical/wall_clock` 标明停止方式。
+
+`ar.engine.rollout_scheduler` 默认启用：`max_in_flight = 32`、`max_prefill_tokens = 16384`、
+`kv_high_watermark = 0.9`、`aging_seconds = 2.0`、`tail_prefill_tokens = 4096`、`policy = fair_lpt`。
+异步 vLLM 的常规统计模式使用流式路径，融合统计模式使用批次路径和共享准入。
+完整配置见[设置说明](../SETTINGS.md#arengine)，执行过程与分布推导见[调度说明](../methods/ROLLOUT_SCHEDULING.md)。
+
+CPU 模拟复用生产实现的准入队列，比较完整算法的候选、叶子、奖励、权重、选择和最终序列：
+
+| 检查 | 规模 | 结果 |
+| --- | --- | --- |
+| 完整生成配对 | 两种 `block_first` × 并发 1/2/8 × FIFO/fair-LPT × 500 个种子，共 6,000 组 | 逐次完全相同，输出直方图 TV=0；覆盖服务时间与生成内容相关的场景 |
+| 条件转移核穷举 | 二 token、二元词表、M=K=2，6 种调度 | 调度前后矩阵最大差 0，`max(abs(πP−π)) = 1.11×10⁻¹⁶` |
+| 从精确目标初始化的完整 IS | 三 token、二元词表、M=K=2，6,000 组配对 | 逐次完全相同，经验分布与枚举目标 TV≈0.00697 |
+| 时延实验配对 | 两种负载 × 五种并发 × 64 个种子，共 640 组 | 结果全部相同，峰值并发满足配置上限 |
+
+合计 12,640 组配对结果完全一致，穷举检查验证原条件核的目标不变性。
+
+虚拟时延比较一轮 M=6、K=4、B=8 的采样树：基线等待全部候选完成后再提交额外补全，新路径在前缀就绪时提交补全。
+固定长度负载为每条序列 64 token；长尾负载按首 token 选择 EOS 概率 0.008 或 0.08，长度上限 192。
+每 token 解码为 1 ms，每个提示 token 预填充为 0.02 ms。表中加速为同一组 64 个种子的“基线平均时延 / 调度后平均时延”。
+
+| 并发上限 | 固定长度平均加速 | 长尾平均加速 | 长尾基线 P95 / s | 长尾调度后 P95 / s |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.000× | 1.000× | 1.07331 | 1.07331 |
+| 2 | 1.000× | 1.087× | 0.56668 | 0.54229 |
+| 4 | 1.159× | 1.276× | 0.40777 | 0.33964 |
+| 8 | 1.317× | 1.489× | 0.37616 | 0.21502 |
+| 16 | 1.465× | 1.553× | 0.37616 | 0.19216 |
+
+本次 640 棵树的完成时间全部持平或缩短。完整数据、实验环境与集成覆盖见
+[CPU 验证报告](ROLLOUT_SCHEDULING_CPU.md)及其 [JSON 数据](ROLLOUT_SCHEDULING_CPU.json)。
+
+## 7. 复现
 
 每条记录的 `cost` 按阶段给出前向 token 位置数与 FLOPs，结果目录的 `summary.json` 汇总墙钟与成本。模型、引擎与
 长度先按[算法质量报告第 6 节](GSM8K_3090_ALIGNED_RESULTS.md#quality-reproduction)改回。旧方法没有对应命令。
@@ -98,6 +147,16 @@ replay 从历史库读取与当前条件匹配的 rollout（每条最终估计�
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`datasets.gsm8k.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
 | 冻结历史 proposal | `--algorithm mh --reward verifier` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
 | 训练成本 | `python -m training` | `stages = ["grpo"]`；训练成本写入 `grpo.output` 下的 `training_cost.json` |
+
+Rollout 调度的 CPU 模拟和集成测试：
+
+```bash
+python scripts/simulate_rollout_scheduling.py --trials 500 --stationary-trials 6000 --latency-trials 64
+python -m pytest tests/test_rollout_scheduler.py tests/test_streaming_vllm.py tests/test_backend_loader.py tests/test_serve.py -q
+```
+
+异步 vLLM 的 IS 入口为 `python -m inference_scaling --algorithm is --reward consilience`；
+使用 `ar.engine.rollout_scheduler.enabled` 切换流式调度，使用 `policy = fifo/fair_lpt` 比较准入策略。
 
 与当时实现的差异：冻结历史与后缀对照当时用人工奖励（末 token 奇偶）在单题上测成本，当前命令用正式奖励在 GSM8K 上
 测量同一机制。

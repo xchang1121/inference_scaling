@@ -108,6 +108,7 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 | 优化 | 设置 |
 | --- | --- |
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
+| IS 前缀就绪即释放分支、共享并发上限与长尾调度 | `ar.engine.rollout_scheduler`（默认启用；异步 vLLM，非融合统计模式；[实现与分布保证](docs/methods/ROLLOUT_SCHEDULING.md)、[INFRA 结果](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-report-rollout-scheduling)） |
 | vLLM 引擎、前缀缓存、融合概率（MH 的基础概率与 Self-Certainty 在采样同一步读出） | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |

@@ -108,6 +108,13 @@
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
 | `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时各题请求经连续批处理合并，记录中的逐题成本为 `null` |
 | `continuous_batching.max_batch_size` / `max_batch_tokens` / `batch_wait_seconds` | 整数 / 整数 / 数 | 合并批的上限与等待时间 |
+| `rollout_scheduler.enabled` | 布尔 | 默认 `true`；异步 vLLM 共用一个准入队列，IS 在候选前缀就绪时释放分支。`fused_logprobs = true` 时保留批次生成、仍限制准入；同步 vLLM 与 Transformers 保留原路径。实际路径记录为 `rollout_scheduler = streaming/batch`；详见[调度说明](methods/ROLLOUT_SCHEDULING.md) |
+| `rollout_scheduler.max_in_flight` | 正整数 | 默认 `32`；所有调用者共用的原生请求上限，加载时再取它与非空 `vllm.max_num_seqs` 的较小值 |
+| `rollout_scheduler.max_prefill_tokens` | 正整数 | 默认 `16384`；尚未产生首 token 的准入请求，其完整提示长度之和的保守预算；超大提示可单独预填充，避免永久饥饿 |
+| `rollout_scheduler.kv_high_watermark` | `(0, 1]` | 默认 `0.9`；KV 使用率达到水位后暂缓新请求。它是软限，正在解码的请求继续；空闲时允许一条请求进入，避免陈旧指标阻止进展 |
+| `rollout_scheduler.policy` | `fair_lpt` \| `fifo` | 默认 `fair_lpt`：优先等待过久的任务，否则先平衡各题活动请求数、再推进候选前缀，再按预计剩余长度从长到短准入；预测只使用长度上限与已完成请求的长度历史 |
+| `rollout_scheduler.aging_seconds` | 正数 | 默认 `2.0`；等待超过此时间后按等待先后准入，并允许突破长尾预填充保护；不突破并发上限或丢弃样本 |
+| `rollout_scheduler.tail_prefill_tokens` | 正整数 | 默认 `4096`；一轮已释放所有分支、没有待准入请求且仅余至多两条活动请求时，暂缓其他题超过此提示长度的新预填充，直到尾部完成或待办老化 |
 
 ### `ar.prompt`、`ar.output`、`ar.sampling`
 
@@ -138,7 +145,7 @@
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.candidate_count` / `rollout_count` / `block_size` | 固定的候选数 M、每候选补全数 K 与块长 B；块长在输出上限处截短 |
-| `is.block_first` | 新候选先只生成一块，第一条补全作为续写请求与其余补全同批生成（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）；Transformers 上结果不变，缩短每步的关键路径 |
+| `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
@@ -199,7 +206,7 @@
 | `default_effort` / `effort_aliases` | 字符串 / 对象 | 请求未给推理强度时的档位；其他强度名到档位名的映射（如 `minimal` → `low`） |
 | `efforts.<名>.reasoning_effort` | `low` \| `medium` \| `xhigh` | chat template 的推理强度 |
 | `efforts.<名>.max_new_tokens` | 整数 | 单条序列（思考与答案共用）的输出上限；再受上下文（`ar.engine.vllm.max_model_len` 减提示）限制，请求的 `max_tokens` 只能调低它 |
-| `efforts.<名>.max_seconds` | 数 | 超过后不再开始新的 IS 步，保留当前完整思考；至少完成第一步，进行中的一步与答案生成照常完成，因此不是请求总时长的硬上限 |
+| `efforts.<名>.max_seconds` | 正数或 `null` | 默认 `null`，只按逻辑长度、EOS/思考边界完成，保持执行调度不影响输出分布。设为数值后，超时不再开始新的 IS 步，至少完成第一步，进行中的一步与答案仍完成；这不是请求总时长硬限，且不再保证调度前后的有限步输出分布相同 |
 
 ## `settings/training.json`
 
