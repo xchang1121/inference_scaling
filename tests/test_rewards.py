@@ -47,7 +47,7 @@ def test_problem_reward_scores_each_sequence_once() -> None:
         batches.append(list(sequences))
         return [float(sum(tokens)) for tokens in sequences]
 
-    reward = Reward(1.0, memoized(batch), 1, {})
+    reward = Reward(1.0, memoized(batch), {})
     assert reward.batch((), [(1, 2), (3,), (1, 2)]) == [3.0, 3.0, 3.0]
     assert reward.batch((), [(3,), (4,)]) == [3.0, 4.0]
     assert batches == [[(1, 2), (3,)], [(4,)]]

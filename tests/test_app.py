@@ -38,9 +38,17 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
     with pytest.raises(SettingsError, match="must be an integer"):
         check(broken, SCHEMA, "settings")
     broken = copy.deepcopy(settings)
-    broken["ar"]["algorithms"]["is"]["planning"] = "sometimes"
+    broken["ar"]["algorithms"]["mh"]["proposal"] = "sometimes"
     with pytest.raises(SettingsError, match="must be one of"):
         check(broken, SCHEMA, "settings")
+
+
+@pytest.mark.parametrize("key", ["planning", "fixed", "joint", "chunk_adaptive"])
+def test_settings_reject_removed_is_planning_keys(key) -> None:
+    settings = load_settings()
+    settings["ar"]["algorithms"]["is"][key] = {}
+    with pytest.raises(SettingsError, match="unknown keys"):
+        check(settings, SCHEMA, "settings")
 
 
 class ThinkingTokenizer:
@@ -98,12 +106,9 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     (model / "model.safetensors").write_bytes(b"weights")
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
     # The fake backend computes any token statistic, as the Transformers engine does.
-    settings["ar"]["engine"]["backend"] = "transformers"
+    settings["ar"]["engine"].update(backend="transformers", device="cpu")
     settings["rewards"]["verifier"]["pool_size"] = 3
-    joint = settings["ar"]["algorithms"]["is"]["joint"]
-    joint.update(block_sizes=[2, 4], candidate_counts=[2, 4], rollout_counts=[1, 2])
-    settings["ar"]["algorithms"]["is"]["chunk_adaptive"].update(initial_block_size=2, initial_candidate_count=2,
-                                                                  initial_rollout_count=1)
+    settings["ar"]["algorithms"]["is"].update(candidate_count=2, rollout_count=1, block_size=2)
     monkeypatch.setattr("inference_scaling.app.ar.load_backend", lambda *args, **kwargs: ThinkingBackend())
     return settings
 
@@ -115,9 +120,9 @@ AR_RUNS = [
     ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
     ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
     ("mh", "self_certainty", {"sampling_scope": "full"}), ("mh", "consilience", {}),
-    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {"planning": "fixed"}),
-    ("is", "self_certainty", {"planning": "chunk_adaptive"}),
-    ("is", "consilience", {"planning": "fixed", "sampling_scope": "full"}),
+    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {}),
+    ("is", "self_certainty", {"block_first": True}),
+    ("is", "consilience", {"sampling_scope": "full"}),
 ]
 
 
@@ -128,8 +133,8 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         ar["output"]["sampling_scope"] = options["sampling_scope"]
     if "proposal" in options:
         ar["algorithms"]["mh"]["proposal"] = options["proposal"]
-    if "planning" in options:
-        ar["algorithms"]["is"]["planning"] = options["planning"]
+    if "block_first" in options:
+        ar["algorithms"]["is"]["block_first"] = options["block_first"]
     if "source" in options:
         ar_settings["rewards"]["verifier"]["source"] = options["source"]
     choices = Choices(algorithm, "ar", reward, "gsm8k")
@@ -222,12 +227,17 @@ def test_failed_execution_cost_survives_resume(ar_settings, tmp_path, monkeypatc
     assert summary["cost_total"]["flops"] > failed["cost"]["flops"]
 
 
-def test_budgeted_is_plans_the_thinking_segment(ar_settings, tmp_path):
+def test_fixed_is_uses_the_configured_shape_for_each_thinking_step(ar_settings, tmp_path):
+    ar_settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
     summary = run(Choices("is", "ar", "consilience", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "thinking" and record["correct"]
-    # The kept thought ends at its closing boundary, not at EOS or the length limit.
-    assert record["trace"]["stopping_reason"] == "stop"
+    steps = record["trace"]["steps"]
+    assert [step["prefix_length"] for step in steps] == [0, 1]
+    assert [len(step["candidate_log_weights"]) for step in steps] == [3, 3]
+    # Three candidates each have two completions; at the final block only the two fresh candidates need scoring.
+    assert [step["rollout_evaluations_performed"] for step in steps] == [6, 2]
+    assert all("plan" not in step for step in steps)
 
 
 def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_settings, tmp_path):
@@ -240,7 +250,6 @@ def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_set
 
 
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):
-    ar_settings["ar"]["algorithms"]["is"]["planning"] = "fixed"
     summary = run(Choices("is", "ar", "verifier", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "full"

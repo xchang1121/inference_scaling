@@ -113,7 +113,7 @@ IS 的准确率点估计更高。rollout 复用、动态候选和预算分配的
 `revision = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"`；`ar.engine.backend = "transformers"`、`dtype = "float32"`；
 `ar.prompt.chat_template_kwargs = {}`、`ar.output.thinking_mode = "auto"`、`sampling_scope = "full"`；
 `datasets.gsm8k.max_new_tokens = 192`；`mh` 与 `mh_power` 的 `block_size = 12`；
-`ar.algorithms.is.fixed = {"candidate_count": 8, "rollout_count": 3, "block_size": 48}`。其余（32 题、温度 1、Beam 8 路、
+`ar.algorithms.is = {"candidate_count": 8, "rollout_count": 3, "block_size": 48, "block_first": false}`。其余（32 题、温度 1、Beam 8 路、
 Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后缀）与默认相同。自一致性奖励设
 `rewards.verifier.source = "vote"`，正确性奖励保持 `"dataset"`。旧方法没有对应命令。
 
@@ -123,12 +123,12 @@ Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后�
 | Beam-8 | `python -m inference_scaling --algorithm beam` | — |
 | 多数投票-8 | `python -m inference_scaling --algorithm best_of_n --reward verifier` | `rewards.verifier.source = "vote"` |
 | 幂目标 MH | `python -m inference_scaling --algorithm mh_power` | — |
-| 条件 IS，自一致性奖励 | `python -m inference_scaling --algorithm is --reward verifier` | `rewards.verifier.source = "vote"`，`ar.algorithms.is.planning = "fixed"` |
-| 正确性奖励的 MH 与条件 IS | `--algorithm mh --reward verifier`、`--algorithm is --reward verifier` | `rewards.verifier.temperature = 0.04`；IS 设 `planning = "fixed"` |
+| 条件 IS，自一致性奖励 | `python -m inference_scaling --algorithm is --reward verifier` | `rewards.verifier.source = "vote"` |
+| 正确性奖励的 MH 与条件 IS | `--algorithm mh --reward verifier`、`--algorithm is --reward verifier` | `rewards.verifier.temperature = 0.04` |
 | GRPO | `python -m training`，再用 `--algorithm sample`、`--algorithm greedy` 评测 | 训练时 `stages = ["grpo"]`；评测时 `ar.model.adapter` 指向 `grpo.output` |
 | pass@k | 同上各命令 | `run.draws = 8` |
-| 预算消融 | `--algorithm is --reward verifier`、`--algorithm mh_power` | `datasets.gsm8k.selection.count = 8`，IS 设 `source = "vote"`；`fixed.candidate_count`、`fixed.block_size`、`steps_per_block`、`datasets.gsm8k.max_new_tokens` |
+| 预算消融 | `--algorithm is --reward verifier`、`--algorithm mh_power` | `datasets.gsm8k.selection.count = 8`，IS 设 `source = "vote"`；`candidate_count`、`block_size`、`steps_per_block`、`datasets.gsm8k.max_new_tokens` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule`；`max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
-| 奖励选择 | `--algorithm is --reward verifier`、`--reward self_certainty` | `selection.count = 8`，`planning = "fixed"`；verifier 设 `source = "vote"`。当时的自确定度还在每批候选内做 min-max 归一化，当前是逐序列的原始定义；平均对数概率与平均负熵已删除 |
+| 奖励选择 | `--algorithm is --reward verifier`、`--reward self_certainty` | `selection.count = 8`；verifier 设 `source = "vote"`。当时的自确定度还在每批候选内做 min-max 归一化，当前是逐序列的原始定义；平均对数概率与平均负熵已删除 |
 
 与当时实现的差异：自一致性奖励现在与冻结的 `pool_size` 个独立样本比较，当时为已评估补全的累计众数。

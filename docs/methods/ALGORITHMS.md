@@ -2,8 +2,7 @@
 
 本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节给出统一入口 `python -m inference_scaling` 的执行规则，
 以及 MH 与 IS 的完整数据流；后续各节分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、
-KV 复用、vLLM 和计算量统计统一列在第 11 节。[设置说明](../SETTINGS.md)逐项说明 `settings/inference.json` 的字段；
-[预算控制](BUDGET.md)集中说明候选数、补全数与块长的联合调度。
+KV 复用、vLLM 和计算量统计统一列在第 11 节。[设置说明](../SETTINGS.md)逐项说明 `settings/inference.json` 的字段。
 [算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
 [执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)分别汇总准确率与执行开销。
 
@@ -54,7 +53,7 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 为与代码和设置字段对应，文档保留少量英文标识。rollout 指从当前候选继续生成到终止位置的补全；proposal
 指产生候选的提议分布；`history` 指冻结历史 proposal 在链开始前生成并冻结的样本。转移核指“给定当前状态时，
 下一状态的条件分布”。代码字段名继续写在反引号内，说明文字使用上述中文含义。设置键写作点分路径，
-例如 `ar.algorithms.is.planning` 表示 `settings/inference.json` 中 `ar` → `algorithms` → `is` → `planning` 字段。
+例如 `ar.algorithms.is.block_size` 表示 `settings/inference.json` 中 `ar` → `algorithms` → `is` → `block_size` 字段。
 
 重要性修正要求 $`p(y)\gt 0\Rightarrow q(y)\gt 0`$。把部分概率直接截为零的 top-k/top-p 可能破坏该条件，统一入口
 因此要求 `mh`、`mh_power` 与 `is` 使用 `ar.sampling.top_p = 1` 和 `ar.sampling.top_k = null`；权重截断以偏差换取
@@ -69,7 +68,6 @@ AR-LLM 与 dLLM 的生成状态不同：前者追加 token 后缀，后者更新
 | --- | --- | --- | --- |
 | `normalize_log_weights`、`categorical_index_from_uniform` | 归一化候选权重并按显式均匀数重采样 | 保留完整序列的条件 IS | 逐块 IS |
 | `decide_metropolis_hastings` | 根据未归一化目标概率与正反 proposal 概率执行接受或拒绝 | 随机后缀 proposal | 分块轨迹或整段 proposal |
-| `choose_joint_budget` 与两种规划器 | 按初始样本矩和成本估计选择候选数、补全数与块长 | 联合预算 IS | 未接入 |
 
 对任意逐步生成模型，MH 适配层为当前状态 $`y`$ 和 proposal $`y'`$ 提供四个标量：
 $`\log\widetilde\pi(y)`$、$`\log\widetilde\pi(y')`$、$`\log q(y'\mid y)`$ 与
@@ -117,12 +115,12 @@ Qwen3.8-27B 默认对 wait、hmm、alternatively、actually、however、but、ma
 | `best_of_n` | 式 (3) | 随 $`N`$ 增大趋向奖励最大化 | 独立样本后按奖励选择（verifier 投票时即多数投票） | 同左 |
 | `mh` | 式 (1) | 目标分布保持不变；每次 proposal 需要一次奖励 | 后缀 MH（第 5 节），可选冻结历史 proposal（第 8 节） | 整段独立 proposal MH，可选冻结历史轨迹混合 |
 | `mh_power` | 式 (2) | 目标分布保持不变；有限更新存在收敛误差 | 后缀 MH（第 4 节） | 反向轨迹幂 MH |
-| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：保留序列时同 AR，否则候选取完整画布时 $`K,M\to\infty`$ 趋近目标 | 保留完整序列的条件 IS（第 6 节），固定配置或联合预算规划 | 逐块 IS（第 7 节），可选完整画布候选与保留序列 |
+| `is` | 式 (1) | AR：首步为整序列 SIR，此后每步保持目标不变；dLLM：保留序列时同 AR，否则候选取完整画布时 $`K,M\to\infty`$ 趋近目标 | 固定配置、保留完整序列的条件 IS（第 6 节） | 逐块 IS（第 7 节），可选完整画布候选与保留序列 |
 | GRPO / VRPO | 参数化策略的训练近似 | 受模型族、优化轮次与采样预算影响 | `python -m training` 的 `grpo` 阶段 | `vrpo_preferences` 与 `vrpo` 阶段 |
 
 `--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`self_certainty`、`consilience`（第 9 节），
 dLLM 只支持 `verifier`（也是它的默认奖励）。默认运行 `--algorithm is --model ar --reward consilience --dataset gsm8k`；
-AR 的 `is` 默认采用联合预算规划（`ar.algorithms.is.planning = "full_horizon"`，见[预算控制](BUDGET.md#budget-joint)）。第 6.1 节的可枚举候选
+AR 的 `is` 默认固定使用 M=4、K=1、B=1024（`ar.algorithms.is`）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
 <a id="alg-execution"></a>
@@ -206,17 +204,13 @@ proposal 作为参数传入；统一入口的调用位于 [`app/ar.py`](../../sr
 <a id="alg-qwen-default-is"></a>
 #### 2.1.2 条件 IS
 
-`is` 从基础模型生成候选和补全，并保留一条完整序列（第 6 节）。`ar.algorithms.is.planning = "fixed"` 时，每步使用
-`ar.algorithms.is.fixed` 中的候选数 $`M`$、补全数 $`K`$ 与块长 $`B`$；`full_horizon` 与 `chunk_adaptive` 在每个块边界
-由[联合预算](BUDGET.md#budget-joint)重新选择这三个量：先用独立的初始样本估计方差，再生成正式样本。
+`is` 从基础模型生成候选和补全，并保留一条完整序列（第 6 节）。每步使用 `ar.algorithms.is` 中固定的
+候选数 $`M`$、补全数 $`K`$ 与块长 $`B`$，块长在输出上限处截短。
 
 ```mermaid
 flowchart LR
-    A[当前完整序列 y 与下一切点] --> B{planning = fixed?}
-    B -- 是 --> D[使用固定的 M K B]
-    B -- 否 --> C[独立初始样本估计方差并选择 M K B]
-    C --> E[0 号候选沿用 y 的下一块与剩余部分]
-    D --> E
+    A[当前完整序列 y 与下一切点] --> D[使用固定的 M K B]
+    D --> E[0 号候选沿用 y 的下一块与剩余部分]
     E --> F[基础模型生成其余候选与补全]
     F --> G[按奖励权重计算候选权重]
     G --> H[选择一个候选及其一条补全]
@@ -235,9 +229,8 @@ flowchart LR
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
-[`conditional_is_step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、
-[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
-[`run_joint_budget_is`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py)。
+[`conditional_is_step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
+[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。
 
 ### 2.2 核心符号、设置字段与成本影响
 
@@ -246,12 +239,12 @@ flowchart LR
 | 符号 | 设置键 | 作用 | 增大后的主要影响 |
 | --- | --- | --- | --- |
 | $`L`$ | `datasets.<name>.max_new_tokens` | 最大生成长度，受模型上下文限制 | 增加生成、评分和 KV 成本 |
-| $`B`$ | `ar.algorithms.mh_power.block_size`、`ar.algorithms.mh.block_size`、`ar.algorithms.is.fixed.block_size`；dLLM `beam`、`mh_power`、`is` 的 `decision_block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
+| $`B`$ | `ar.algorithms.mh_power.block_size`、`ar.algorithms.mh.block_size`、`ar.algorithms.is.block_size`；dLLM `beam`、`mh_power`、`is` 的 `decision_block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
 | $`n`$ | `ar.algorithms.mh_power.steps_per_block` / `iterations`（`mh` 同名）；`dllm.algorithms.mh_power.updates_per_stage`、`dllm.algorithms.mh.updates` | MH 更新数 | 减小有限链误差，增加 proposal 与奖励调用 |
 | $`\alpha`$ | `ar.algorithms.mh_power.alpha`、`dllm.algorithms.mh_power.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低接受率 |
 | $`\tau`$ | `rewards.<name>.temperature` | 奖励相对基础概率的尺度 | 减弱奖励差异对权重和接受率的影响 |
-| $`M`$ | `ar.algorithms.is.fixed.candidate_count`、`dllm.algorithms.is.candidate_count`；联合预算网格 `ar.algorithms.is.joint.candidate_counts` | 每步基础模型候选数 | 改善候选覆盖，增加候选和 rollout 成本 |
-| $`K`$ | `ar.algorithms.is.fixed.rollout_count`、`dllm.algorithms.is.rollout_count`；联合预算网格 `ar.algorithms.is.joint.rollout_counts` | 每个候选的 rollout 数 | 减少条件权重噪声，增加补全成本 |
+| $`M`$ | `ar.algorithms.is.candidate_count`、`dllm.algorithms.is.candidate_count` | 每步基础模型候选数 | 改善候选覆盖，增加候选和 rollout 成本 |
+| $`K`$ | `ar.algorithms.is.rollout_count`、`dllm.algorithms.is.rollout_count` | 每个候选的 rollout 数 | 减少条件权重噪声，增加补全成本 |
 | $`N`$ | `ar.algorithms.best_of_n.samples`、`dllm.algorithms.best_of_n.samples` | Best-of-$`N`$ 的独立样本数 | 更接近奖励最大化，生成成本线性增加 |
 | $`\lambda`$ | `ar.algorithms.mh.frozen_history.mixture`、`dllm.algorithms.mh.frozen_history.mixture` | 冻结历史分量的比例 | 提高历史命中率，仍需完整混合概率 |
 | — | `rewards.verifier.pool_size` | verifier 投票的冻结样本池大小 | 一致比例更稳定，奖励阶段生成成本增加 |
@@ -499,8 +492,7 @@ AR 的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一�
 4. 以 $`\widehat h_m/\sum_j\widehat h_j`$ 的概率选择候选，再在它的补全中按 $`e^{r(g,z_m,u_{mk})/\tau}`$
    选一条，保留 $`y=(g,z_m,u_{mk})`$，进入下一个块边界。保留补全的奖励直接复用，不再评分。
 
-`ar.algorithms.is.planning = "fixed"` 时 $`M,K,B`$ 取自 `ar.algorithms.is.fixed`；其余两种规划在每个块边界重新选择
-这三个量，见[联合动态调度](BUDGET.md#budget-joint)。
+$`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`，在一次运行中保持固定。
 
 `ar.algorithms.is.block_first` 打开时，第 2 步先只生成各候选的 $`B`$ 个 token，第一条补全改为续写请求：沿用候选的种子，
 均匀数流从第 $`B`$ 个位置接着取，与其余 $`K-1`$ 条补全同批生成。在均匀数流按位置索引的后端上，续写逐 token 等于原先
@@ -536,8 +528,7 @@ verifier 投票的样本池在算法运行前冻结，不随当前候选变化�
 $`K`$ 在这里既估计块的价值，也提供候选答案：增大 $`K`$ 只是增加同一块下的完整后缀，因此宜取 1 或 2，
 把预算用在 $`M`$ 上。它相对整序列 SIR 是否更省，取决于前缀计算是否复用：后续步骤的新后缀共享已固定的
 前缀，复用前缀 KV 时每条新后缀只需生成切点之后的 token；每个请求都重新计算整个前缀时，一条新后缀的
-前向成本与一条新的完整序列相同。联合预算规划把“生成至 EOS 的整序列 SIR”作为一个候选配置，按预测误差与成本
-和分块方案比较。
+前向成本与一条新的完整序列相同。块长不小于输出上限时，只做一次整序列 SIR。
 
 关键实现先按候选的平均权重选择候选，再在所选候选内按权重保留一条补全：
 
@@ -724,7 +715,7 @@ r_{\mathrm{vote}}(x,y)=\frac1P\sum_{j=1}^{P}
 最终答案，$`\equiv`$ 为数据集的答案规则：GSM8K 比较最终数值；MATH-500 先把答案解析为规范形式，形式相同即等价，
 否则用 Math-Verify 判断，结论按形式对缓存。无法解析的答案
 得 0。样本池在运行期间固定，奖励因而是逐序列的固定函数；样本池的生成成本记入奖励阶段
-（`cost.phases.reward`），不计入联合预算 IS 的 `forward_token_budget`。
+（`cost.phases.reward`）。
 
 两种参照共用温度 `rewards.verifier.temperature`（默认 0.1）：oracle 奖励只取 0 或 1，正确与错误序列的权重相差
 $`e^{10}\approx 2.2\times10^4`$ 倍，接近只在正确序列中采样；投票奖励以 $`1/P`$ 为步长，$`P=8`$ 时多一票权重乘
@@ -811,7 +802,7 @@ Self-Certainty 与 Consilience 分别把评分策略下的 $`s_t`$ 与 $`c_t`$ �
 只有含未在该上下文生成过的 token（如冻结历史 proposal 的后缀）时才对整条评分。重放的草稿 token 不计算统计量，
 由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 交给精确评分后端
 （`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
-生成与评分得到的统计量只差浮点舍入。后端能在生成时算出统计量时，联合预算 IS 不计奖励前向；否则每条序列计一次，
+生成与评分得到的统计量只差浮点舍入。直接复用生成时的统计量无需额外评分前向；发生评分时，
 评分前向的 token 数与 FLOPs 计入运行统计。
 
 ### 思考段奖励与生成范围
@@ -883,7 +874,6 @@ top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。复用
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 多尺度后缀或冻结历史 proposal | 目标固定；正反 proposal 概率完整进入 Hastings 比 | 后缀长度、各分量抽样次数、接受率 |
 | 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、前向 token 位置数 |
-| 联合预算规划 | 初始样本只用于调度，最终权重只使用独立的正式样本 | 每步 $`M,K,B`$、计划与实际前向 token |
 | 可枚举候选 + logit adjustment | 精确 $`h`$ 时得到式 (7)；估计 $`h`$ 时只保留条件权重误差 | 候选集合完整性、每候选 rollout、调整前后 logits |
 | 连续批处理 | 统计量固定，执行顺序变化 | 请求随机种子、token 与计算量 |
 
@@ -911,8 +901,11 @@ ScoreRequest(prefix, continuations, sampling)
 预填充、解码与完整序列评分分别计数；墙钟、显存和吞吐单独报告。统一入口按阶段记录后端计数器的差值：
 `reward`（verifier 投票的样本池）、`search`（算法本身）与 `finish`（思考段之后的最终内容），写入记录的 `cost.phases`，并按模型
 角色（AR 为 `base`，dLLM 另有 `proposal`）汇总前向 token 位置数与 FLOPs。多个题目并发共享后端时，计数器无法分到
-单题，`cost` 为 `null`。前向 token/FLOPs 的定义、预算预留量与实际执行成本的区别，统一见
-[BUDGET.md 第 4 节](BUDGET.md#budget-accounting)。
+单题，`cost` 为 `null`。
+
+前向 token 位置数包括预填充、解码、完整序列评分以及实际参与计算的批量填充。模型 $`j`$ 的参数量为 $`N_j`$、
+前向 token 位置数为 $`S_j`$ 时，密集前向 FLOPs 估计为 $`\widehat F=2\sum_j N_jS_j`$；该估计省略注意力的
+长度平方项及逐元素计算。比较总成本应包含投票样本池、搜索、奖励评分和最终答案生成；墙钟、吞吐与显存独立测量。
 
 <a id="infra-prefix-kv"></a>
 ### 11.2 批处理、KV 与概率评分
@@ -1098,8 +1091,7 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | --- | --- | --- | --- |
 | 式 (4)、(6) 的后缀 MH | `run_mh_chain`、`decide_metropolis_hastings` | `ar.algorithms.mh_power.*`、`ar.algorithms.mh.*`、`rewards.<name>.temperature` | 生效的后缀分布、更新数、接受率、提议/接受后改变的 token 数 |
 | 式 (9) 的冻结历史 proposal | `run_mh_chain` 的 `history` 与 `history_mixture` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
-| 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.planning = "fixed"`、`ar.algorithms.is.fixed.*` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
-| 联合预算 | `run_joint_budget_is`、`choose_joint_budget` | `ar.algorithms.is.joint.*`、`ar.algorithms.is.chunk_adaptive.*` | `trace.steps[].plan`、计划与实际前向 token（见 [BUDGET.md](BUDGET.md#budget-usage)） |
+| 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.{candidate_count,rollout_count,block_size,block_first}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 第 7 节的 dLLM 逐块 IS | `run_conditional_diffusion_is` | `dllm.algorithms.is.{candidate_count,rollout_count,decision_block_size,candidate_canvas,kept_sequence}` | 候选对数权重、所选索引与保留补全、`trace.rollout_evaluations`、`trace.mean_rollout_ess` |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
 
@@ -1111,7 +1103,6 @@ logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、C
 | 统一入口 | [`cli.py`](../../src/inference_scaling/app/cli.py)、[`settings.py`](../../src/inference_scaling/app/settings.py)、[`run.py`](../../src/inference_scaling/app/run.py)、[`records.py`](../../src/inference_scaling/app/records.py)、[`rewards.py`](../../src/inference_scaling/app/rewards.py) | [`app/ar.py`](../../src/inference_scaling/app/ar.py) | [`app/dllm.py`](../../src/inference_scaling/app/dllm.py) | `test_app.py`、`dllm/test_dllm_app.py` |
 | 数据集 | [`datasets/`](../../src/inference_scaling/datasets/) | — | — | `test_datasets.py` |
 | 逐步候选与 IS 权重 | [`importance.py`](../../src/inference_scaling/shared/sampling/importance.py)、[`conditional_is.py`](../../src/inference_scaling/shared/sampling/conditional_is.py)（两族共用的候选加权与选择） | [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)、[`candidates.py`](../../src/inference_scaling/arllm/algorithms/candidates.py) | [`is_sampling.py`](../../src/inference_scaling/dllm/algorithms/is_sampling.py) | `test_conditional_is.py`、`dllm/test_algorithms.py` |
-| 联合预算 | [`budget/joint.py`](../../src/inference_scaling/shared/budget/joint.py)、[`budget/planners.py`](../../src/inference_scaling/shared/budget/planners.py)、[`budget/costs.py`](../../src/inference_scaling/shared/budget/costs.py) | [`joint_budget_is.py`](../../src/inference_scaling/arllm/algorithms/joint_budget_is.py) | — | `test_joint_budget.py`、`test_joint_budget_is.py`、`test_joint_budget_adaptive.py`、`test_joint_budget_cost_policy.py` |
 | MH | [`mh.py`](../../src/inference_scaling/shared/sampling/mh.py) | [`mh.py`](../../src/inference_scaling/arllm/algorithms/mh.py) | [`mh.py`](../../src/inference_scaling/dllm/algorithms/mh.py)、[`search.py`](../../src/inference_scaling/dllm/algorithms/search.py) | `test_shared_mh.py`、`test_mh.py`、`dllm/test_search.py`、`dllm/test_dllm_mh.py` |
 | 奖励 | 投票与 Consilience 算术位于 [`shared/rewards/`](../../src/inference_scaling/shared/rewards/)，verifier 由 [`app/rewards.py`](../../src/inference_scaling/app/rewards.py) 构造 | 模型自身奖励位于 [`arllm/rewards/`](../../src/inference_scaling/arllm/rewards/) | 只用文本奖励 | `test_verifier.py`、`test_rewards.py` |
 | 生成后端 | 公共请求、随机数和计算量记录位于 [`shared/`](../../src/inference_scaling/shared/) | [`backends/`](../../src/inference_scaling/arllm/backends/) | [`llada.py`](../../src/inference_scaling/dllm/backends/llada.py) | `test_transformers_backend.py`、`test_vllm_backend.py`、`test_batching_backend.py`、`dllm/test_llada_backend.py` |

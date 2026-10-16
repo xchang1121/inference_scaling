@@ -29,8 +29,6 @@ class Reward:
     temperature: float
     # Rewards of complete sequences of one problem.
     batch: TokenBatchReward
-    # Base-model forward passes per scored generated sequence, charged by budgeted IS.
-    forward_passes: int
     description: Mapping[str, Any]
     model: Any = field(default=None, compare=False)
 
@@ -72,17 +70,17 @@ def verifier_reward(
     temperature = float(settings["temperature"])
     if settings["source"] == "dataset" and dataset.oracle:
         return Reward(temperature, memoized(pointwise(
-            lambda prompt, tokens: float(dataset.grade(answer_text(prompt, tokens), problem).correct))), 0,
+            lambda prompt, tokens: float(dataset.grade(answer_text(prompt, tokens), problem).correct))),
             {"source": "dataset"})
     if sample_pool is None:
         def majority(prompt: TokenSequence, sequences: Sequence[TokenSequence]) -> list[float]:
             texts = [answer_text(prompt, tokens) for tokens in sequences]
             return list(map(pool_agreement_reward(dataset, texts), texts))
 
-        return Reward(temperature, majority, 0, {"source": "vote", "pool": "scored_batch"})
+        return Reward(temperature, majority, {"source": "vote", "pool": "scored_batch"})
     pool = list(sample_pool(int(settings["pool_size"])))
     agreement = pool_agreement_reward(dataset, pool)
-    return Reward(temperature, memoized(pointwise(lambda prompt, tokens: agreement(answer_text(prompt, tokens)))), 0,
+    return Reward(temperature, memoized(pointwise(lambda prompt, tokens: agreement(answer_text(prompt, tokens)))),
                   {"source": "vote", "pool": [{"answer": grade.answer, "correct": grade.correct}
                                               for grade in (dataset.grade(text, problem) for text in pool)]})
 

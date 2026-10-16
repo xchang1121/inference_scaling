@@ -2,8 +2,7 @@
 
 A fresh candidate is drawn as a complete output and cut at the block boundary:
 the block is the candidate and the rest is its first completion, a draw from
-the base policy given the block. Fixed and budgeted conditional IS use the
-same seeds and request ids. Drawn block-first, the candidate is the block alone
+the base policy given the block. Drawn block-first, the candidate is the block alone
 and its first completion continues the same request stream later.
 """
 

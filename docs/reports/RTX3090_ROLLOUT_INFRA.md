@@ -1,8 +1,8 @@
 # 推理成本与执行效率：RTX 3090
 
 本报告比较批处理、rollout 复用、MH proposal 和奖励调度的执行成本；准确率见
-[算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)，机制见[算法文档](../methods/ALGORITHMS.md#alg-runtime)，成本口径见
-[BUDGET.md](../methods/BUDGET.md#budget-accounting)。结论来自统一入口之前的实验，数字按当时的实现测得。标注“旧方法”
+[算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)，机制与成本口径见[算法文档](../methods/ALGORITHMS.md#alg-runtime)。
+结论来自统一入口之前的实验，数字按当时的实现测得。标注“旧方法”
 的机制已从代码中删除，这里只保留其说明与结论；其余机制的复现命令对应当前实现（第 6 节）。
 
 主模型为 Qwen2.5-1.5B-Instruct，旧方法的辅助模型为 Qwen2.5-0.5B-Instruct，硬件为单张 RTX 3090 24 GiB，全部数值
@@ -94,7 +94,7 @@ replay 从历史库读取与当前条件匹配的 rollout（每条最终估计�
 
 | 机制 | 命令 | 设置改动 |
 | --- | --- | --- |
-| 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`，加 `--reward verifier`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"`，IS 设 `planning = "fixed"` |
+| 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`，加 `--reward verifier`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`datasets.gsm8k.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
 | 冻结历史 proposal | `--algorithm mh --reward verifier` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
 | 训练成本 | `python -m training` | `stages = ["grpo"]`；训练成本写入 `grpo.output` 下的 `training_cost.json` |

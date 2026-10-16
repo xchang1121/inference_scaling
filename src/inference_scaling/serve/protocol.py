@@ -46,7 +46,7 @@ class Reply:
     finish: Literal["stop", "tool_calls", "length"]
     prompt_tokens: int
     completion_tokens: int
-    # How the search went: effort, steps, forward tokens, stopping reason and seconds.
+    # How the search went: effort, fixed IS parameters, steps, stopping reason and seconds.
     scaling: dict[str, Any]
 
 

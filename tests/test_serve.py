@@ -80,6 +80,11 @@ class _ChatBackend(ThinkingBackend):
     def __init__(self) -> None:
         super().__init__()
         self.tokenizer = _ChatTokenizer()
+        self.batches = []
+
+    def sample_batch(self, requests):
+        self.batches.append(list(requests))
+        return super().sample_batch(requests)
 
 
 def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
@@ -92,8 +97,47 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     # The model thinks "7", closes the thought and answers "7".
     assert (reply.thinking, reply.content, reply.finish, reply.tool_calls) == ("#### 7", "#### 7", "stop", ())
     assert reply.scaling["effort"] == "low" and reply.scaling["steps"] >= 1 and reply.scaling["sampling_scope"] == "thinking"
+    assert reply.scaling["stopping_reason"] == "stop"
     with pytest.raises(ProtocolError, match="effort"):
         reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "huge"}))
+
+
+@pytest.mark.parametrize("block_first", [False, True])
+def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(block_first) -> None:
+    settings = load_settings()
+    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, block_first=block_first)
+    backend = _ChatBackend()
+    reasoner = Reasoner(settings, load_serve_settings(), backend)
+    reply = reasoner.generate(reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]})))
+    assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
+    assert (reply.scaling["steps"], reply.scaling["candidate_count"], reply.scaling["rollout_count"],
+            reply.scaling["block_size"]) == (2, 3, 2, 1)
+    # Candidate generation, completions, the two fresh terminal candidates, and one final answer.
+    assert [len(batch) for batch in backend.batches] == [3, 6 if block_first else 3, 2, 1]
+
+
+def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monkeypatch) -> None:
+    settings, serve = load_settings(), load_serve_settings()
+    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
+    serve["efforts"]["medium"]["max_seconds"] = 0.5
+    backend = _ChatBackend()
+    reasoner = Reasoner(settings, serve, backend)
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    clock = iter([0.0, 1.0, 1.0])
+    monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
+    reply = reasoner.generate(prepared)
+    assert reply.scaling["stopping_reason"] == "deadline" and reply.scaling["steps"] == 1
+    assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
+    assert [len(batch) for batch in backend.batches] == [3, 3, 1]
+
+
+def test_reasoner_clamps_the_fixed_block_to_the_requested_output_limit() -> None:
+    backend = _ChatBackend()
+    reasoner = Reasoner(load_settings(), load_serve_settings(), backend)
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 1}))
+    reply = reasoner.generate(prepared)
+    assert reply.scaling["block_size"] == 1 and reply.scaling["stopping_reason"] == "length"
+    assert reply.completion_tokens == 1 and reply.finish == "length" and not reply.content
 
 
 class _StubReasoner:
