@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import itertools
 import math
-from collections import Counter
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,7 +15,9 @@ from inference_scaling.dllm.backends.llada import LLaDATransformersBackend
 from inference_scaling.dllm.algorithms.config import DiffusionISConfig, DiffusionMHConfig
 from inference_scaling.dllm.config import DiffusionSamplingConfig
 from inference_scaling.dllm.types import DiffusionSample
-from inference_scaling.shared.sampling.conditional_is import RolloutEvaluation
+from inference_scaling.shared.sampling.conditional_is import RolloutEvaluation, select
+from inference_scaling.shared.sampling.importance import normalize_log_weights
+from inference_scaling.shared.sampling.mh import decide_metropolis_hastings
 from inference_scaling.shared.types import pointwise
 
 # (candidate_canvas, kept_sequence) of every IS variant.
@@ -56,7 +57,7 @@ def test_conditional_is_decision_block_can_span_native_diffusion_blocks(mode):
         backend=_backend((0.0, 0.5, 1.0, -2.0), "base"), prompt=(0,), sampling=_sampling(2), reward=SUM, seed=17,
         config=_config(mode, candidate_count=2, rollout_count=1, block_size=4, total_length=8))
     assert len(result.steps) == 2
-    assert all(len(candidate.token_ids) == 4 for step in result.steps for candidate in step.candidates)
+    assert all(candidate.token_count == 4 for step in result.steps for candidate in step.candidates)
     assert len(result.token_ids) == 8
 
 
@@ -72,10 +73,10 @@ def test_conditional_is_ends_when_it_selects_a_block_of_eos(mode):
             final = step.generated_length_before + 2 == config.total_length
             for candidate in step.candidates:
                 # A finished candidate has one empty completion; the others have K non-empty ones.
-                terminal = final or candidate.token_ids == (1, 1)
-                assert [bool(item.token_ids) for item in candidate.rollouts] == ([False] if terminal else [True, True])
+                terminal = final or candidate.rollouts[0].token_count == 0
+                assert [bool(item.token_count) for item in candidate.rollouts] == ([False] if terminal else [True, True])
             mixed |= len({len(candidate.rollouts) for candidate in step.candidates}) > 1
-        assert all(step.selected.token_ids != (1, 1) for step in result.steps[:-1])
+        assert all(result.token_ids[index:index + 2] != (1, 1) for index in range(0, len(result.token_ids) - 2, 2))
         assert result.steps[-1].selected.rollouts[0].reward == sum(result.token_ids)
     assert mixed
 
@@ -128,31 +129,42 @@ def _tables(rng, length):
     return full, {context: 1 - value for context, value in full.items()}
 
 
-def test_full_canvas_candidates_and_a_kept_sequence_leave_the_target_invariant():
-    rng, length, runs = np.random.default_rng(4), 3, 3000
-    full, short = _tables(rng, length)
-    outcomes = list(itertools.product((0, 1), repeat=length))
-    score = dict(zip(outcomes, rng.normal(0.0, 1.0, len(outcomes))))
-    base = {y: math.prod(full[y[:i]] if token else 1 - full[y[:i]] for i, token in enumerate(y)) for y in outcomes}
-    target = {y: base[y] * math.exp(score[y] / 0.5) for y in outcomes}
-    target = {y: value / sum(target.values()) for y, value in target.items()}
-    backend = CanvasBackend(full, short, 1, 1 + length)
-    config = DiffusionISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=length,
-                               reward_temperature=0.5, candidate_canvas="full", kept_sequence=True)
+def test_full_canvas_candidates_and_a_kept_sequence_leave_the_target_invariant(monkeypatch):
+    states = list(itertools.product((0, 1), repeat=2))
+    full, short = _tables(np.random.default_rng(4), 2)
+    base = {y: math.prod(full[y[:i]] if token else 1 - full[y[:i]] for i, token in enumerate(y)) for y in states}
+    target = np.asarray([base[y] * math.exp(sum(y)) for y in states])
+    target /= target.sum()
+    config = DiffusionISConfig(candidate_count=2, rollout_count=2, block_size=1, total_length=2,
+                               reward_temperature=1, candidate_canvas="full", kept_sequence=True)
+    # Inspect one actual step and integrate its two categorical selections exactly.
+    monkeypatch.setattr("inference_scaling.dllm.algorithms.is_sampling.diffusion_decision_stage_lengths", lambda **_: (1,))
+    captured = []
+    def inspect(candidates, *args):
+        captured[:] = candidates
+        return select(candidates, *args)
+    monkeypatch.setattr("inference_scaling.dllm.algorithms.is_sampling.select", inspect)
 
-    def distance(start):
-        counts: Counter = Counter()
-        for seed in range(runs):
-            y = outcomes[rng.choice(len(outcomes), p=[start[item] for item in outcomes])]
-            counts[run_conditional_diffusion_is(
-                backend=backend, prompt=(7,), config=config, sampling=_sampling(1), seed=seed,
-                reward=pointwise(lambda _prompt, sequence: score[sequence]),
-                start=RolloutEvaluation(y, score[y], score[y] / 0.5)).token_ids] += 1
-        return 0.5 * sum(abs(counts[y] / runs - target[y]) for y in outcomes)
+    class Draws(CanvasBackend):
+        def sample_batch(self, requests):
+            assert all(len(request.prefix) + request.generation_length == 3 for request in requests)
+            return [DiffusionSample(request.prefix,
+                                    (c, d) if request.request_id.endswith(":candidate:1") else
+                                    (e if ":candidate:0:" in request.request_id else f,), (), None,
+                                    request.sampling.policy_id, self.model_id, request.request_id) for request in requests]
 
-    # Started at the target, every step keeps it; started at the base policy, three steps do not reach it.
-    assert distance(target) < 0.04 < 0.08 < distance(base)
-    assert all(len(request.prefix) + request.generation_length == 1 + length for request in backend.requests)
+    matrix = np.zeros((4, 4))
+    for row, y in enumerate(states):
+        for c, d, e, f in itertools.product((0, 1), repeat=4):
+            run_conditional_diffusion_is(
+                backend=Draws(full, short, 1, 3), prompt=(7,), config=config, sampling=_sampling(1), seed=1,
+                reward=SUM, start=RolloutEvaluation(y, sum(y), sum(y)))
+            density = base[c, d] * (full[y[:1]] if e else 1 - full[y[:1]]) * (full[c,] if f else 1 - full[c,])
+            for candidate, probability in zip(captured, normalize_log_weights([item.log_weight for item in captured])):
+                for leaf, conditional in zip(candidate.rollouts, normalize_log_weights([item.log_weight for item in candidate.rollouts])):
+                    matrix[row, states.index(candidate.token_ids + leaf.token_ids)] += density * probability * conditional
+    np.testing.assert_allclose(matrix.sum(axis=1), 1, atol=1e-13, rtol=0)
+    np.testing.assert_allclose(target @ matrix, target, atol=1e-13, rtol=0)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -176,25 +188,29 @@ def test_candidate_canvas_and_kept_sequence_set_the_requests_and_reuse_the_kept_
     assert all((step.completion_index is not None) == kept for step in result.steps)
 
 
-def _empty_sample(value: int, request_id: str) -> DiffusionSample:
-    return DiffusionSample(prefix=(), token_ids=(value,), trace=(), trajectory_logprob=None, policy_id="uniform",
-                           model_id="coin", request_id=request_id)
+def test_independence_mh_preserves_base_times_reward_target_without_scores(monkeypatch):
+    matrix = np.zeros((2, 2))
+    decisions = []
+    def inspect(**kwargs):
+        decision = decide_metropolis_hastings(**kwargs)
+        decisions.append(decision)
+        return decision
+    monkeypatch.setattr("inference_scaling.dllm.algorithms.mh.decide_metropolis_hastings", inspect)
 
+    class Draws:
+        model_id = "coin"
+        def sample_batch(self, requests):
+            return [DiffusionSample(request.prefix, (value,), (), None, request.sampling.policy_id,
+                                    self.model_id, request.request_id)
+                    for request, value in zip(requests, (current, proposed), strict=True)]
 
-class CoinBackend:
-    model_id = "coin"
-
-    def sample_batch(self, requests):
-        return [_empty_sample(int(np.random.default_rng(request.seed).integers(0, 2)), request.request_id)
-                for request in requests]
-
-
-def test_independence_mh_approaches_base_times_reward_target_without_scores():
-    ones, runs = 0, 2500
-    for seed in range(runs):
-        result = run_diffusion_reward_mh(
-            backend=CoinBackend(), prompt=(), config=DiffusionMHConfig(total_length=1, updates=8, reward_temperature=1.0),
-            sampling=DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=0.0, top_k=0, top_p=1.0, remasking="low_confidence"),
-            reward=pointwise(lambda _prompt, continuation: float(continuation[0])), seed=seed)
-        ones += result.final.token_ids[0]
-    assert ones / runs == pytest.approx(np.e / (1.0 + np.e), abs=0.03)
+    for current, proposed in itertools.product((0, 1), repeat=2):
+        run_diffusion_reward_mh(
+            backend=Draws(), prompt=(), config=DiffusionMHConfig(total_length=1, updates=1, reward_temperature=1),
+            sampling=_sampling(1), reward=SUM, seed=1)
+        acceptance = math.exp(decisions[-1].log_acceptance)
+        matrix[current, proposed] += .5 * acceptance
+        matrix[current, current] += .5 * (1 - acceptance)
+    target = np.asarray([1, np.e]) / (1 + np.e)
+    np.testing.assert_allclose(matrix.sum(axis=1), 1, atol=1e-13, rtol=0)
+    np.testing.assert_allclose(target @ matrix, target, atol=1e-13, rtol=0)

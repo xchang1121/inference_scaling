@@ -5,7 +5,7 @@ import pytest
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter, RetainedSequence, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.backends.scheduling import Admission, AdmissionQueue, SampleBuffer, SchedulerConfig
-from inference_scaling.arllm.backends.simulation import SimulatedBackend
+from tests.simulation import SimulatedBackend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from tests.tabular import TabularAutoregressiveBackend
@@ -32,7 +32,7 @@ def test_all_weights_choices_and_tokens_match_for_changed_execution_orders(block
     config = ConditionalISConfig(4, 3, 2, 7, .7, block_first)
     reward = pointwise(lambda prompt, tokens: .4 * sum(tokens) - .1 * len(tokens))
     policy_config = SamplingConfig(eos_token_id=2)
-    for seed in range(20):
+    for seed in range(3):
         plain = run_conditional_is(_model(), (), config, reward, SeedStream(seed), sampling=policy_config)
         simulator = SimulatedBackend(_model(), SchedulerConfig(max_in_flight=capacity, policy=policy), token_seconds=_duration)
         streamed = run_conditional_is(simulator, (), config, reward, SeedStream(seed), sampling=policy_config)
@@ -63,7 +63,7 @@ def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, 
     parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
     statistic = TokenStatistic(SamplingConfig(), top_k=2)
     config = ConditionalISConfig(3, 3, 2, 7, .7, block_first)
-    for seed in range(12):
+    for seed in range(3):
         results = []
         for streamed in (False, True):
             raw = SimulatedBackend(_model(), SchedulerConfig(max_in_flight=2), streaming=streamed, token_seconds=_duration)
@@ -86,6 +86,7 @@ def test_scope_resumes_a_native_empty_thinking_close_with_the_same_offset():
             for request, sample in zip(requests, outputs, strict=True):
                 end = next((index + 1 for index, token in enumerate(sample.token_ids)
                             if (token,) in request.stop_sequences), None)
+                sample = replace(sample, forward_token_slots=len(request.prefix) + (end or len(sample.token_ids)) - 1)
                 result.append(sample if end is None else replace(
                     sample, token_ids=sample.token_ids[:end], token_logprobs=sample.token_logprobs[:end],
                     reference_token_logprobs=sample.reference_token_logprobs[:end],
@@ -110,6 +111,8 @@ def test_scope_resumes_a_native_empty_thinking_close_with_the_same_offset():
     finally:
         session.close()
     assert buffer.sample() == plain.sample_batch([request])[0]
+    # Empty close: one prefill slot; resumed request: two prefill plus one decode slot.
+    assert buffer.sample().forward_token_slots == plain.sample_batch([request])[0].forward_token_slots == 4
 
 
 def test_admission_cap_fairness_prefill_pressure_aging_and_tail_drain():

@@ -1,6 +1,9 @@
 from dataclasses import replace
 from itertools import product
-from math import exp, log, prod
+from math import exp, log
+from types import SimpleNamespace
+
+import numpy as np
 
 import pytest
 
@@ -8,8 +11,7 @@ from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain, suffix_length_probabilities
 from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, SequenceSample
-from inference_scaling.shared.metrics import empirical_distribution, total_variation
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, SequenceSample
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import pointwise
 
@@ -26,23 +28,6 @@ def _config(**overrides) -> MHConfig:
 
 def _chain(backend, config, proposal, seed, *, base=BASE, prompt=(), **options):
     return run_mh_chain(backend, prompt, config, SeedStream(seed), base=base, proposal=proposal, **options)
-
-
-def _target(probabilities: tuple[float, ...], length: int, weight):
-    weights = {sequence: weight(sequence, prod(probabilities[token] for token in sequence))
-               for sequence in product(range(len(probabilities)), repeat=length)}
-    return {sequence: value / sum(weights.values()) for sequence, value in weights.items()}
-
-
-def _complete_target(probabilities, eos, length, weight):
-    """Normalized weights over outputs that end at their first EOS or at the length limit."""
-    outputs = [
-        tokens for size in range(1, length + 1) for tokens in product(range(len(probabilities)), repeat=size)
-        if (eos in tokens and tokens.index(eos) == size - 1) or (eos not in tokens and size == length)
-    ]
-    weights = {tokens: weight(tokens, prod(probabilities[token] for token in tokens)) for tokens in outputs}
-    normalizer = sum(weights.values())
-    return {tokens: value / normalizer for tokens, value in weights.items()}
 
 
 def test_explicit_iterations_preserve_the_full_length_kernel_and_seed_stream():
@@ -81,26 +66,73 @@ def test_nonuniform_schedules_reduce_the_expected_proposed_suffix_length() -> No
     assert expectation("inverse_length") < expectation("uniform") and expectation("multiscale") < expectation("uniform")
 
 
-@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
-def test_the_power_chain_approaches_the_enumerated_power_target(schedule: str) -> None:
-    probabilities = (0.65, 0.35)
-    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    config = _config(steps_per_block=20, suffix_schedule=schedule)
-    outputs = [_chain(backend, config, SamplingConfig(temperature=0.7), 2026, chain_id=chain) for chain in range(2500)]
-    target = _target(probabilities, 2, lambda _, probability: probability**2)
-    assert total_variation(empirical_distribution(result.token_ids for result in outputs), target) < 0.045
+@pytest.mark.parametrize("mode,temperature,eos", [("power", 1.0, None), ("power", .6, None),
+                                                 ("power", 1.0, 1), ("reward", 1.0, 1), ("history", 1.0, None)])
+def test_exact_transition_matrix_preserves_the_target(monkeypatch, mode, temperature, eos):
+    # Enumerate every complete state and suffix proposal; integrate acceptance
+    # from the real chain's trace instead of running thousands of random chains.
+    probabilities, length = (.65, .35), 3
+    base = SamplingConfig(temperature=temperature, eos_token_id=eos)
+    proposal = base if mode == "history" else replace(base, temperature=.7 * temperature)
+    config = _config(total_length=length, block_size=length, alpha=2 if mode == "power" else 1,
+                     reward_temperature=None if mode == "power" else .8)
+    states = [tokens for size in range(1, length + 1) for tokens in product((0, 1), repeat=size)
+              if (eos in tokens and tokens.index(eos) == size - 1) or (eos not in tokens and size == length)]
+    history = [(tokens, tuple(log(probabilities[token]) for token in tokens), None)
+               for tokens in ((1, 1, 1),) * 4 + ((1, 0, 0),)]
+    reward = lambda _, tokens: float(sum(tokens))
+    mixture = .65 if mode == "history" else 0
 
+    class ForcedSeeds(SeedStream):
+        def generator(self, *key):
+            # Force the base branch while checking the exact mixture density.
+            return SimpleNamespace(random=lambda: .99) if key[-1] == "source" else super().generator(*key)
 
-def test_the_base_policy_at_another_temperature_is_the_target_base() -> None:
-    probabilities, temperature = (0.65, 0.35), 0.6
-    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    base = SamplingConfig(temperature=temperature)
-    outputs = [_chain(backend, _config(steps_per_block=20), SamplingConfig(temperature=0.7 * temperature), 7, base=base,
-                      chain_id=chain) for chain in range(2500)]
-    tempered = tuple(value ** (1 / temperature) / sum(other ** (1 / temperature) for other in probabilities)
-                     for value in probabilities)
-    target = _target(tempered, 2, lambda _, probability: probability**2)
-    assert total_variation(empirical_distribution(result.token_ids for result in outputs), target) < 0.045
+    class Draws(TabularAutoregressiveBackend):
+        def sample_batch(self, requests):
+            return [SequenceSample(
+                request.prefix, current if request.request_id.endswith(":extend") else proposed[cut:],
+                super(Draws, self).score_batch([ScoreRequest(request.prefix, (
+                    current if request.request_id.endswith(":extend") else proposed[cut:],), request.sampling)])[0],
+                request.sampling.policy_id, self.model_id, request.request_id,
+                finish_reason="eos" if eos in (current if request.request_id.endswith(":extend") else proposed) else "length",
+            ) for request in requests]
+
+    backend = Draws({}, fallback=probabilities)
+    masses = [exp(config.alpha * sum(backend.score_batch([ScoreRequest((), (state,), base)])[0])
+                  + (reward((), state) / .8 if mode != "power" else 0)) for state in states]
+    target = np.asarray(masses) / sum(masses)
+    kernels = []
+    for cut in range(length):
+        monkeypatch.setattr("inference_scaling.arllm.algorithms.mh._draw_suffix",
+                            lambda cut=cut, **_: (cut, length - cut, 1.0))
+        matrix = np.zeros((len(states), len(states)))
+        for row, current in enumerate(states):
+            if cut >= len(current):
+                result = run_mh_chain(backend, (), config, ForcedSeeds(1), base=base, proposal=proposal,
+                                      reward=None if mode == "power" else pointwise(reward))
+                assert result.skipped == 1 and result.token_ids == current
+                matrix[row, row] = 1
+                continue
+            matches = [tokens for tokens, _, _ in history if tokens[:cut] == current[:cut]]
+            for column, proposed in enumerate(states):
+                if proposed[:cut] != current[:cut] or len(proposed) <= cut:
+                    continue
+                result = run_mh_chain(backend, (), config, ForcedSeeds(1), base=base, proposal=proposal,
+                                      reward=None if mode == "power" else pointwise(reward),
+                                      history=history if mixture else (), history_mixture=mixture)
+                density = exp(sum(backend.score_batch([ScoreRequest(current[:cut], (proposed[cut:],), proposal)])[0]))
+                if mixture and matches:
+                    density = (1 - mixture) * density + mixture * matches.count(proposed) / len(matches)
+                accept = exp(result.trace[0].log_acceptance)
+                matrix[row, column] += density * accept
+                matrix[row, row] += density * (1 - accept)
+        kernels.append(matrix)
+    for schedule in ("uniform", "inverse_length", "multiscale"):
+        matrix = sum(weight * kernel for weight, kernel in zip(
+            reversed(suffix_length_probabilities(length, schedule)), kernels, strict=True))
+        np.testing.assert_allclose(matrix.sum(axis=1), 1, atol=1e-13, rtol=0)
+        np.testing.assert_allclose(target @ matrix, target, atol=1e-13, rtol=0)
 
 
 def test_the_base_proposal_at_alpha_one_accepts_every_move() -> None:
@@ -127,40 +159,6 @@ def test_the_chain_reuses_reference_scores_emitted_during_proposal_generation() 
 
     result = _chain(DualScoreBackend(), _config(total_length=4, steps_per_block=3), SamplingConfig(temperature=0.5), 7)
     assert len(result.token_ids) == 4
-
-
-def test_the_reward_chain_approaches_the_enumerated_base_times_weight_target() -> None:
-    probabilities, temperature = (0.7, 0.3), 0.8
-
-    def reward(_, sequence):
-        return float(sequence == (1, 1))
-
-    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    config = _config(alpha=1, reward_temperature=temperature, block_size=1, steps_per_block=25)
-    outputs = [_chain(backend, config, SamplingConfig(temperature=0.7), 91, reward=pointwise(reward), chain_id=chain)
-               for chain in range(3000)]
-    target = _target(probabilities, 2, lambda sequence, probability: probability * exp(reward((), sequence) / temperature))
-    assert total_variation(empirical_distribution(result.token_ids for result in outputs), target) < 0.04
-
-
-@pytest.mark.parametrize("chain", ["power", "reward"])
-def test_variable_length_chains_target_complete_outputs(chain) -> None:
-    probabilities = (0.6, 0.4)  # token 1 is EOS
-    backend = TabularAutoregressiveBackend({}, fallback=probabilities)
-    proposal, base = SamplingConfig(temperature=0.7, eos_token_id=1), SamplingConfig(eos_token_id=1)
-    if chain == "power":
-        results = [_chain(backend, _config(total_length=3, block_size=3, steps_per_block=12), proposal, 5, base=base,
-                          chain_id=index) for index in range(2000)]
-        target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability**2)
-    else:
-        config = _config(alpha=1, reward_temperature=0.8, total_length=3, block_size=3, steps_per_block=12)
-        results = [_chain(backend, config, proposal, 5, base=base, reward=pointwise(lambda _, tokens: float(len(tokens))),
-                          chain_id=index) for index in range(2000)]
-        target = _complete_target(probabilities, 1, 3, lambda tokens, probability: probability * exp(len(tokens) / 0.8))
-    assert total_variation(empirical_distribution(result.token_ids for result in results), target) < 0.03
-    # A cut past the end of a stopped output is skipped without a proposal.
-    assert all(result.attempts + result.skipped == 12 for result in results)
-    assert sum(result.skipped for result in results) > 0
 
 
 @pytest.mark.parametrize("sampling", [SamplingConfig(top_k=1), SamplingConfig(top_p=0.9)])
@@ -218,28 +216,6 @@ def test_a_frozen_history_of_weight_zero_is_the_plain_reward_chain() -> None:
     assert plain == _chain(backend, config, BASE, 4, reward=reward, history=_history(backend, 3, BASE))
     with pytest.raises(ValueError, match="rewarded, full-length chain"):
         _chain(backend, _config(), BASE, 4, history=_history(backend, 3, BASE), history_mixture=0.5)
-
-
-class GenerationOnlyBackend(TabularAutoregressiveBackend):
-    def score_batch(self, requests):
-        raise AssertionError("replay reuses the history's generation log-probabilities")
-
-
-def test_a_frozen_history_proposal_approaches_the_exact_reward_target() -> None:
-    probabilities, temperature = (0.65, 0.35), 0.7
-    history = [(sequence, tuple(log(probabilities[token]) for token in sequence), None)
-               for sequence in ((1, 1),) * 40 + ((1, 0),) * 10]
-
-    def reward(_, sequence):
-        return float(sequence == (1, 1))
-
-    backend = GenerationOnlyBackend({}, fallback=probabilities)
-    config = _config(alpha=1, reward_temperature=temperature, block_size=1, steps_per_block=20)
-    outputs = [_chain(backend, config, BASE, 117, reward=pointwise(reward), history=history, history_mixture=0.65,
-                      chain_id=chain) for chain in range(2500)]
-    target = _target(probabilities, 2, lambda sequence, probability: probability * exp(reward((), sequence) / temperature))
-    assert total_variation(empirical_distribution(result.token_ids for result in outputs), target) < 0.04
-    assert {step.proposal_source for result in outputs for step in result.trace} == {"base", "history"}
 
 
 def test_suffix_replay_leaves_the_frozen_history_chain_unchanged() -> None:

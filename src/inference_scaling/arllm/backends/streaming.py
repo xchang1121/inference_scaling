@@ -3,10 +3,52 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Sequence
 
 from inference_scaling.arllm.backends.scheduling import GenerationEvent, SampleBuffer
 from inference_scaling.arllm.types import GenerationRequest
+
+
+class BatchGenerationSession:
+    """The same dependency interface over synchronous batches; prefixes run first."""
+
+    def __init__(self, backend) -> None:
+        self.backend = backend
+        self.pending: list[tuple[GenerationRequest, str]] = []
+        self.events: deque[GenerationEvent] = deque()
+        self.ids: set[str] = set()
+
+    def submit(self, requests, *, phase="rollout", checkpoint=None) -> None:
+        for request in requests:
+            if request.request_id in self.ids:
+                raise ValueError("duplicate logical request id")
+            self.ids.add(request.request_id)
+            self.pending.append((request, phase))
+
+    def next_event(self) -> GenerationEvent:
+        if not self.events:
+            prefixes = any(phase == "prefix" for _, phase in self.pending)
+            jobs = [job for job, phase in self.pending if (phase == "prefix") == prefixes]
+            self.pending = [(job, phase) for job, phase in self.pending if (phase == "prefix") != prefixes]
+            if not jobs:
+                raise RuntimeError("batch session has no pending request")
+            samples = self.backend.sample_batch(jobs)
+            if len(samples) != len(jobs):
+                raise RuntimeError("backend returned an invalid sample count")
+            self.events.extend(GenerationEvent(sample, True) for sample in samples)
+        return self.events.popleft()
+
+    def seal(self) -> None:
+        pass
+
+    def stop(self, request_id: str) -> None:
+        self.pending = [(job, phase) for job, phase in self.pending if job.request_id != request_id]
+        self.events = deque(event for event in self.events if event.delta.request_id != request_id)
+
+    def close(self) -> None:
+        self.pending.clear()
+        self.events.clear()
 
 
 class EventMailbox:
@@ -114,4 +156,4 @@ class AsyncGenerationSession:
         self.backend._runner.run(close())
 
 
-__all__ = ["AsyncGenerationSession", "EventMailbox"]
+__all__ = ["AsyncGenerationSession", "BatchGenerationSession", "EventMailbox"]

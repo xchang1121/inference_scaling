@@ -3,12 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-SUBPACKAGES = {
-    "": ("app", "arllm", "datasets", "dllm", "serve", "shared"),
-    "shared": ("model", "rewards", "sampling"),
-    "arllm": ("algorithms", "backends", "rewards"),
-    "dllm": ("algorithms", "backends", "training"),
-}
 # Lower layers never import the layers built on them; the two model families
 # (and their app modules, which run in different environments) never import each other.
 FORBIDDEN_IMPORTS = {
@@ -35,17 +29,6 @@ def _module_imports(root: str):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 yield module, node.module, [alias.name for alias in node.names]
-
-
-def test_packages_group_code_by_concern():
-    package = Path("src/inference_scaling")
-    for parent, names in SUBPACKAGES.items():
-        for name in names:
-            assert (package / parent / name / "__init__.py").is_file()
-    legacy = [path for directory in ("experiments", "configs") for path in Path(directory).rglob("*")
-              if path.is_file() and path.suffix not in {".pyc", ".pyo"}]
-    assert not legacy, legacy
-    assert sorted(path.name for path in Path("settings").iterdir()) == ["inference.json", "serve.json", "training.json"]
 
 
 def test_lower_layers_never_import_the_layers_built_on_them():

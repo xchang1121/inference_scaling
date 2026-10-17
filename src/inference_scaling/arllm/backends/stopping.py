@@ -85,9 +85,8 @@ class StoppedSequenceBackend:
         references: list[list[float] | None] = [[] for _ in requests]
         bounds: list[list[Any] | None] = [[] for _ in requests]
         statistics: list[list[Any] | None] = [[] if request.statistic else None for request in requests]
-        # Cost of the last inner request of each row: its prefix holds everything generated so far,
-        # so it replaces the earlier rows' counts instead of adding to them.
-        slots: list[int | None] = [None] * len(requests)
+        # Sum actual inner requests, including repeated prefills after a native stop.
+        slots: list[int | None] = [0] * len(requests)
         # Why each request ended: None while it continues, else "stop" or "rejected".
         done: list[str | None] = [None] * len(requests)
         weights = [None if request.log_weight_stop is None else request.log_weight_stop.start for request in requests]
@@ -125,7 +124,8 @@ class StoppedSequenceBackend:
                 keep = len(sample.token_ids) if end is None else end - len(generated)
                 tokens[index].extend(sample.token_ids[:keep])
                 logs[index].extend(sample.token_logprobs[:keep])
-                slots[index] = sample.forward_token_slots
+                slots[index] = (None if slots[index] is None or sample.forward_token_slots is None
+                                else slots[index] + sample.forward_token_slots)
                 reference = references[index]
                 if reference is not None and sample.reference_policy_id == inner_request.reference_policy.policy_id:
                     reference.extend((sample.reference_token_logprobs or ())[:keep])
@@ -204,6 +204,7 @@ class StoppedGenerationSession:
         self.phases: dict[str, str] = {}
         self.checkpoints: dict[str, int | None] = {}
         self.generated: dict[str, TokenSequence] = {}
+        self.slots: dict[str, int | None] = {}
 
     def submit(self, requests: Sequence[GenerationRequest], *, phase: str = "rollout", checkpoint: int | None = None) -> None:
         pending = []
@@ -217,6 +218,7 @@ class StoppedGenerationSession:
                 raise ValueError("the prefix already ended at a stop boundary")
             self.requests[request.request_id] = request
             self.tokens[request.request_id] = []
+            self.slots[request.request_id] = 0
             self.phases[request.request_id] = phase
             self.checkpoints[request.request_id] = checkpoint
             self.generated[request.request_id] = generated
@@ -260,7 +262,11 @@ class StoppedGenerationSession:
             raise RuntimeError("scoped stream exceeded its generation limit")
         finished = end is not None or len(tokens) == request.max_new_tokens
         reason = "stop" if end is not None else "length"
+        if event.finished:
+            self.slots[key] = (None if self.slots[key] is None or sample.forward_token_slots is None
+                               else self.slots[key] + sample.forward_token_slots)
         if end is not None and not event.finished:
+            self.slots[key] = None
             self.inner.stop(sample.request_id)
         if event.finished and not finished:
             if sample.finish_reason != "stop" or not sample.token_ids:
@@ -279,8 +285,7 @@ class StoppedGenerationSession:
             reference_policy_id=None if sample.reference_policy_id != inner_request.reference_policy.policy_id else request.reference_policy.policy_id,
             token_cdf_bounds=None if sample.token_cdf_bounds is None else sample.token_cdf_bounds[:keep],
             token_statistics=None if sample.token_statistics is None else sample.token_statistics[:keep],
-            # A continued request bills the whole sequence again, so its earlier part is not charged here.
-            forward_token_slots=None if event.finished and not finished else sample.forward_token_slots), finished)
+            forward_token_slots=self.slots[key] if finished else None), finished)
 
     def seal(self) -> None:
         self.inner.seal()

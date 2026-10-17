@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter, RetainedSequence, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.backends.scheduling import SchedulerConfig
-from inference_scaling.arllm.backends.simulation import SimulatedBackend
+from tests.simulation import SimulatedBackend
 from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest, SequenceSample

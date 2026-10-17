@@ -43,14 +43,6 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
         check(broken, SCHEMA, "settings")
 
 
-@pytest.mark.parametrize("key", ["planning", "fixed", "joint", "chunk_adaptive"])
-def test_settings_reject_removed_is_planning_keys(key) -> None:
-    settings = load_settings()
-    settings["ar"]["algorithms"]["is"][key] = {}
-    with pytest.raises(SettingsError, match="unknown keys"):
-        check(settings, SCHEMA, "settings")
-
-
 class ThinkingTokenizer:
     eos_token_id = 2
 

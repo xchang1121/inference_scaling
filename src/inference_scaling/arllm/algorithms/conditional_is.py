@@ -1,140 +1,26 @@
-"""Conditional importance sampling on a kept complete sequence.
+"""Conditional SIR on a kept complete sequence, with token-free step history.
 
-The target is ``p(y | x) exp(r(x, y) / tau)`` for a reward ``r`` of the complete
-sequence.  Each step cuts the kept sequence at the next block boundary.
-Candidate 0 is the kept sequence's next block, and the rest of the kept
-sequence counts as one of that candidate's completions; the other candidates,
-and the other completions of candidate 0, are fresh base-policy samples.  A
-fresh candidate is cut from a complete output, whose rest is its first
-completion.  Every completion runs until it stops (at EOS or a scope boundary)
-or reaches the length limit, and is scored as a complete sequence.
-A candidate is selected with probability proportional to the mean
-``exp(r / tau)`` of its completions, and one of its completions is kept with
-probability proportional to its own weight, so a step selects a whole suffix in
-proportion to its reward weight.  This is a conditional SIR move: given the
-prefix before the cut it leaves the target invariant, and every step ends with a
-complete sequence.  The kept completion's reward is reused, so the reward must
-depend only on the sequence it scores.
+Candidate zero reuses the current block, completion and reward. Other branches
+are fresh base samples. Batch and streaming execution use the same candidate
+tree; execution order never changes seeds, weights or selection.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
 from dataclasses import dataclass
-from math import isfinite
 
-from inference_scaling.arllm.algorithms.candidates import (OWN_STREAM, Block, OwnStream, cut_block, sample_outputs,
-                                                           validate_base_sampling)
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
+from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.conditional_is import (ConditionalCandidate, ConditionalISResult, ConditionalISStep,
-                                                              RolloutEvaluation, select, weigh)
+from inference_scaling.shared.sampling.conditional_is import ConditionalISResult, ConditionalISStep, select
 from inference_scaling.shared.types import TokenBatchReward
-from inference_scaling.arllm.types import AutoregressiveBackend, GenerationRequest, TokenSequence
-
-
-def estimate_conditional_weights(
-    *,
-    backend: AutoregressiveBackend,
-    prompt: TokenSequence,
-    generated_prefix: TokenSequence,
-    candidates: Sequence[Block],
-    first_completions: Sequence[TokenSequence | OwnStream | None],
-    total_length: int,
-    rollout_count: int,
-    sampling: SamplingConfig,
-    reward_temperature: float,
-    reward: TokenBatchReward,
-    seeds: SeedStream,
-    step_index: int,
-    retained: RolloutEvaluation | None = None,
-) -> tuple[tuple[ConditionalCandidate, ...], int | None]:
-    """Estimate each candidate's weight with ``rollout_count`` base-policy completions.
-
-    A candidate that ends the sequence has one empty completion. The first
-    completion of any other candidate is given: ``retained``, an already
-    evaluated completion of candidate 0 that is neither regenerated nor
-    re-scored, the rest of the output the candidate was cut from, or
-    ``OWN_STREAM`` for a block-first candidate, whose first completion continues
-    its own request here. The others are generated here, all in one batch, and
-    scored in one reward batch.
-
-    Returns the candidates and the forward token slots this step generated, when
-    the backend measures them per request.
-    """
-
-    if rollout_count <= 0:
-        raise ValueError("rollout_count must be positive")
-    if reward_temperature <= 0:
-        raise ValueError("reward_temperature must be positive")
-    if len(first_completions) != len(candidates):
-        raise ValueError("each candidate needs its first completion or None")
-
-    requests: list[GenerationRequest] = []
-    # The candidate and completion position that each request fills.
-    slots: list[tuple[int, int]] = []
-    # Completions of each candidate still to be scored.
-    unscored: list[list[TokenSequence | None]] = [[] for _ in candidates]
-
-    def request(index: int, candidate: Block, length: int, seed: int, request_id: str, offset: int) -> None:
-        slots.append((index, len(unscored[index])))
-        unscored[index].append(None)
-        requests.append(GenerationRequest(prefix=prompt + generated_prefix + candidate.token_ids, max_new_tokens=length,
-                                          sampling=sampling, seed=seed, request_id=request_id, uniform_offset=offset))
-
-    for index, candidate in enumerate(candidates):
-        kept = retained is not None and index == 0
-        rollout_length = total_length - len(generated_prefix) - len(candidate.token_ids)
-        if rollout_length == 0 or candidate.finish_reason != "length":
-            if not kept:
-                unscored[index].append(())
-            continue
-        first = first_completions[index]
-        if not kept:
-            if first is None:
-                raise ValueError("a continuing candidate needs its first completion")
-            if isinstance(first, OwnStream):
-                request(index, candidate, rollout_length, seeds.derive("conditional_is", step_index, "candidate", index),
-                        f"conditional-is:step:{step_index}:candidate:{index}:continuation", len(candidate.token_ids))
-            else:
-                unscored[index].append(first)
-        for rollout_index in range(1, rollout_count):
-            request(index, candidate, rollout_length,
-                    seeds.derive("conditional_is", step_index, "candidate", index, "rollout", rollout_index),
-                    f"conditional-is:step:{step_index}:candidate:{index}:rollout:{rollout_index}", 0)
-    samples = backend.sample_batch(requests) if requests else []
-    if len(samples) != len(requests):
-        raise RuntimeError("backend returned an invalid number of rollouts")
-    for (index, position), sample in zip(slots, samples, strict=True):
-        unscored[index][position] = sample.token_ids
-
-    pending = [(index, tokens) for index, group in enumerate(unscored) for tokens in group if tokens is not None]
-    rewards = tuple(float(value) for value in reward(
-        prompt, [generated_prefix + candidates[index].token_ids + tokens for index, tokens in pending])) if pending else ()
-    if len(rewards) != len(pending):
-        raise ValueError("reward returned an invalid number of values")
-    if any(not isfinite(value) for value in rewards):
-        raise ValueError("reward must be finite")
-    by_candidate: list[list[RolloutEvaluation]] = [[] for _ in candidates]
-    if retained is not None:
-        by_candidate[0].append(retained)
-    for (index, tokens), value in zip(pending, rewards, strict=True):
-        by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature))
-
-    measured = all(sample.forward_token_slots is not None for sample in samples)
-    forward_slots = sum(sample.forward_token_slots or 0 for sample in samples)
-    return weigh([candidate.token_ids for candidate in candidates], by_candidate), (
-        forward_slots if measured else None)
 
 
 @dataclass(frozen=True, slots=True)
 class RetainedSequence:
-    """Complete sequence kept between steps.
-
-    Every candidate of the next step shares the first ``fixed`` tokens.  An
-    empty sequence means that no step has run yet.
-    """
+    """Only the selected complete sequence survives; fixed is its committed prefix length."""
 
     token_ids: TokenSequence = ()
     reward: float = 0.0
@@ -143,8 +29,6 @@ class RetainedSequence:
 
 @dataclass(frozen=True, kw_only=True)
 class ConditionalISAdapter:
-    """One conditional IS move: propose candidates, weight them, keep one completion."""
-
     backend: AutoregressiveBackend
     prompt: TokenSequence
     config: ConditionalISConfig
@@ -158,84 +42,28 @@ class ConditionalISAdapter:
     def is_terminal(self, state: RetainedSequence) -> bool:
         return bool(state.token_ids) and state.fixed >= len(state.token_ids)
 
-    def _block_length(self, state: RetainedSequence) -> int:
-        return min(self.config.block_size, self.config.total_length - state.fixed)
-
-    def propose(self, state: RetainedSequence, step_index: int,
-                seeds: SeedStream) -> list[tuple[Block, TokenSequence | OwnStream | None]]:
-        """Candidate 0 continues the kept sequence; fresh candidates are cut from complete outputs or drawn block-first."""
-
-        validate_base_sampling(self.sampling)
-        prefix = self.prompt + state.token_ids[: state.fixed]
-        length = self._block_length(state)
-        proposals: list[tuple[Block, TokenSequence | OwnStream | None]] = []
-        if state.token_ids:
-            end = state.fixed + length
-            # The kept sequence either continues after the block or ends with it.
-            proposals.append((Block(state.token_ids[state.fixed : end], "length" if end < len(state.token_ids) else "stop"),
-                              None))
-        fresh = self.config.candidate_count - len(proposals)
-        if fresh:
-            block_first = self.config.block_first
-            outputs = sample_outputs(self.backend, prefix, fresh, length if block_first else self.config.total_length - state.fixed,
-                                     self.sampling, seeds, step_index, first_index=len(proposals))
-            proposals.extend((Block(output.token_ids, output.finish_reason), OWN_STREAM) if block_first
-                             else cut_block(output, length) for output in outputs)
-        return proposals
-
-    def step(
-        self, state: RetainedSequence, step_index: int, seeds: SeedStream,
-    ) -> tuple[ConditionalISStep, RetainedSequence]:
-        """Select a candidate in proportion to its weight, keep one of its completions and advance."""
+    def step(self, state: RetainedSequence, step_index: int,
+             seeds: SeedStream) -> tuple[ConditionalISStep, RetainedSequence]:
+        """Return the current tree for immediate inspection, and the selected state."""
+        from inference_scaling.arllm.algorithms.candidates import evaluate_candidates
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        if getattr(self.backend, "supports_streaming_generation", False):
-            from inference_scaling.arllm.algorithms.streamed_is import streamed_candidates
-            candidates, forward_slots = streamed_candidates(self, state, step_index, seeds)
-        else:
-            proposals = self.propose(state, step_index, seeds)
-            retained = None
-            if state.token_ids:
-                start = state.fixed + len(proposals[0][0].token_ids)
-                retained = RolloutEvaluation(state.token_ids[start:], state.reward, state.reward / self.config.reward_temperature)
-            candidates, forward_slots = estimate_conditional_weights(
-                backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
-                candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
-                total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
-                reward_temperature=self.config.reward_temperature, reward=self.reward, seeds=seeds,
-                step_index=step_index, retained=retained,
-            )
+        candidates, forward_slots = evaluate_candidates(self, state, step_index, seeds)
         selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
         carried = bool(state.token_ids)
         record = ConditionalISStep(
-            generated_length_before=state.fixed, candidates=candidates, selected_index=selected,
-            completion_index=kept, retained_candidate=carried,
-            # The carried completion was evaluated in an earlier step.
-            rollout_evaluations_performed=sum(len(item.rollouts) for item in candidates) - int(carried),
-            forward_token_slots=forward_slots,
+            state.fixed, candidates, selected, kept, carried,
+            sum(len(item.rollouts) for item in candidates) - int(carried), forward_slots,
         )
-        return record, RetainedSequence(state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
-                                        completion.reward, state.fixed + len(candidate.token_ids))
-
-
-def conditional_is_step(
-    *,
-    backend: AutoregressiveBackend,
-    prompt: TokenSequence,
-    state: RetainedSequence,
-    config: ConditionalISConfig,
-    sampling: SamplingConfig,
-    reward: TokenBatchReward,
-    seeds: SeedStream,
-    step_index: int,
-) -> tuple[ConditionalISStep, RetainedSequence]:
-    """Run one step from ``state`` and return its record and the kept sequence."""
-
-    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=sampling, reward=reward)
-    return adapter.step(state, step_index, seeds)
+        updated = RetainedSequence(state.token_ids[:state.fixed] + candidate.token_ids + completion.token_ids,
+                                   completion.reward, state.fixed + len(candidate.token_ids))
+        retain = getattr(self.backend, "retain_statistics", None)
+        if retain is not None:
+            retain(self.prompt, updated.token_ids)
+        return record, updated
 
 
 def run_conditional_is(
@@ -246,18 +74,22 @@ def run_conditional_is(
     seeds: SeedStream,
     *,
     sampling: SamplingConfig | None = None,
+    deadline: float | None = None,
 ) -> ConditionalISResult:
-    """Generate a complete sequence by conditional SIR moves at successive block boundaries."""
-
-    sampling = sampling or SamplingConfig()
-    validate_base_sampling(sampling)
-    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=sampling, reward=reward)
+    """CLI/service loop. A deadline is checked between steps, never within a candidate tree."""
+    adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config,
+                                   sampling=sampling or SamplingConfig(), reward=reward)
     state = adapter.initial_state
     steps: list[ConditionalISStep] = []
     while not adapter.is_terminal(state):
+        if steps and deadline is not None and time.monotonic() >= deadline:
+            break
         record, state = adapter.step(state, len(steps), seeds)
-        steps.append(record)
+        steps.append(record.compact())
+        del record
     forward_slots = None if any(step.forward_token_slots is None for step in steps) else sum(
         step.forward_token_slots or 0 for step in steps)
-    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps),
-                               forward_token_slots=forward_slots)
+    reason = ("deadline" if not adapter.is_terminal(state)
+              else "eos" if state.token_ids[-1] == adapter.sampling.eos_token_id
+              else "length" if len(state.token_ids) >= config.total_length else "stop")
+    return ConditionalISResult(prompt, state.token_ids, tuple(steps), forward_slots, reason)

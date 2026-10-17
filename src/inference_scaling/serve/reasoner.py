@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from inference_scaling.app.ar import conditional_is_config, confidence_reward, confidence_statistic
-from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter
+from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.config import SamplingConfig
@@ -94,22 +94,12 @@ class Reasoner:
         backend = StatisticRecorder(scope.wrap(raw, prompt), confidence_statistic("consilience", self.reward_settings))
         reward = confidence_reward("consilience", self.reward_settings, backend, thinking_format)
         config = conditional_is_config(self.ar["algorithms"]["is"], reward, total_length=maximum)
-        adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config, sampling=policy, reward=reward.batch)
         start = time.monotonic()
         limit = prepared.profile["max_seconds"]
         deadline = None if limit is None else start + float(limit)
-        state, steps = adapter.initial_state, 0
-        while not adapter.is_terminal(state):
-            # Always finish the first step, and never interrupt a rollout or select from an incomplete batch.
-            if steps and deadline is not None and time.monotonic() >= deadline:
-                break
-            _, state = adapter.step(state, steps, SeedStream(seeds))
-            steps += 1
-        stopping_reason = (
-            "deadline" if not adapter.is_terminal(state)
-            else "eos" if state.token_ids[-1] == policy.eos_token_id
-            else "length" if len(state.token_ids) >= maximum else "stop")
-        tokens, info = scope.finish(raw, prompt, state.token_ids, max_new_tokens=maximum, sampling=policy,
+        result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
+                                    sampling=policy, deadline=deadline)
+        tokens, info = scope.finish(raw, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
                                     seed=SeedStream(seeds).derive("final-content"))
         # An unfinished thought has no answer; it is returned as the reasoning.
         complete = info["thinking_status"] == "complete"
@@ -118,7 +108,7 @@ class Reasoner:
         finish: Literal["stop", "tool_calls", "length"] = (
             "length" if not info["ended_by_eos"] else "tool_calls" if calls else "stop")
         return Reply(thinking.strip(), content, calls, finish, len(prompt), len(tokens), {
-            "effort": prepared.effort, "steps": steps, "stopping_reason": stopping_reason,
+            "effort": prepared.effort, "steps": len(result.steps), "stopping_reason": result.stopping_reason,
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,
             "stopping_policy": "logical" if deadline is None else "wall_clock",

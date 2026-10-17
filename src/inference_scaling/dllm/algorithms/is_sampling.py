@@ -109,7 +109,7 @@ def run_conditional_diffusion_is(
         evaluated = weigh([block for block, _, _ in proposals], grouped)
         selected, drawn = select(evaluated, seeds, "dllm-is", step_index)
         completion = drawn if config.kept_sequence else None
-        steps.append(ConditionalISStep(len(state), evaluated, selected, completion, kept is not None, len(completions)))
+        steps.append(ConditionalISStep(len(state), evaluated, selected, completion, kept is not None, len(completions)).compact())
         state += evaluated[selected].token_ids
         if proposals[selected][1]:
             break

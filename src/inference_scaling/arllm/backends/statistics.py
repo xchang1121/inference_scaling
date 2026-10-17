@@ -45,6 +45,15 @@ class StatisticRecorder:
     def open_generation_session(self):
         return StatisticSession(self)
 
+    def retain_statistics(self, prompt: TokenSequence, completion: TokenSequence) -> None:
+        """Collapse finished branches to the retained sequence without scoring missing positions."""
+        if self._streams:
+            raise RuntimeError("cannot prune statistics while a generation session is open")
+        values = self._recorded(prompt + completion, len(prompt))
+        self._outputs.clear()
+        if len(values) and not np.isnan(values).all():
+            self._outputs[len(prompt)] = {prompt: [(np.asarray(completion), values)]}
+
     def _recorded(self, sequence: TokenSequence, start: int) -> np.ndarray:
         """Statistics of ``sequence[start:]`` from outputs generated inside it; NaN where there is none."""
 

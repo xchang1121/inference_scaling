@@ -192,6 +192,7 @@ class Meter:
         self.phases: dict[str, dict[str, dict[str, Any]]] = {}
         self.extra: Counter[str] = Counter()
         self.attributed: Counter[str] = Counter()
+        self.complete = True
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -213,19 +214,92 @@ class Meter:
 
         self.extra.update(values)
 
-    def attribute(self, values: Mapping[str, int]) -> None:
+    def attribute(self, values: Mapping[str, int] | None) -> None:
         """Charge work measured per request; ignored when the engine counters already cover it."""
 
         if not self.backends:
-            self.attributed.update(values)
+            if values is None:
+                self.complete = False
+            else:
+                self.attributed.update(values)
 
     def cost(self, slots: Callable[[Mapping[str, Any]], int],
              flops: Callable[[str, Mapping[str, Any]], float]) -> dict[str, Any] | None:
         deltas = [(role, delta) for phase in self.phases.values() for role, delta in phase.items()]
-        if not any(delta for _, delta in deltas):
+        if not self.complete or not any(delta for _, delta in deltas):
             return None
         return {"phases": self.phases, "forward_token_slots": sum(slots(delta) for _, delta in deltas),
                 "flops": sum(flops(role, delta) for role, delta in deltas)}
+
+
+class RequestMeter:
+    """Attribute every model request to its problem, independently of the algorithm.
+
+    Scoring without per-request counters and interrupted streams mark the whole
+    problem incomplete. The run-level counters still account for those calls.
+    """
+
+    def __init__(self, backend: Any, meter: Meter, parameter_count: int) -> None:
+        self.backend, self.meter, self.parameter_count = backend, meter, parameter_count
+
+    def __getattr__(self, name: str):
+        return getattr(self.backend, name)
+
+    def attribute(self, slots: int | None) -> None:
+        self.meter.attribute(None if slots is None else {
+            "generation_forward_token_slots": slots, "score_forward_token_slots": 0,
+            "estimated_dense_forward_flops": 2 * self.parameter_count * slots})
+
+    def sample_batch(self, requests):
+        samples = self.backend.sample_batch(requests)
+        for sample in samples:
+            self.attribute(sample.forward_token_slots)
+        return samples
+
+    def score_batch(self, requests):
+        if any(continuation for request in requests for continuation in request.continuations):
+            self.attribute(None)
+        return self.backend.score_batch(requests)
+
+    def token_statistics(self, requests, statistic):
+        if any(continuation for request in requests for continuation in request.continuations):
+            self.attribute(None)
+        return self.backend.token_statistics(requests, statistic)
+
+    def open_generation_session(self):
+        return MeteredSession(self, self.backend.open_generation_session())
+
+
+class MeteredSession:
+    def __init__(self, recorder: RequestMeter, inner: Any) -> None:
+        self.recorder, self.inner = recorder, inner
+        self.pending: set[str] = set()
+
+    def submit(self, requests, *, phase="rollout", checkpoint=None) -> None:
+        self.pending.update(request.request_id for request in requests)
+        self.inner.submit(requests, phase=phase, checkpoint=checkpoint)
+
+    def next_event(self):
+        event = self.inner.next_event()
+        if event.finished:
+            self.pending.remove(event.delta.request_id)
+            self.recorder.attribute(event.delta.forward_token_slots)
+        return event
+
+    def seal(self) -> None:
+        self.inner.seal()
+
+    def stop(self, request_id: str) -> None:
+        if request_id in self.pending:
+            self.recorder.attribute(None)
+            self.pending.remove(request_id)
+        self.inner.stop(request_id)
+
+    def close(self) -> None:
+        if self.pending:
+            self.recorder.attribute(None)
+            self.pending.clear()
+        self.inner.close()
 
 
 def importance_trace(steps: Sequence[Any]) -> dict[str, Any]:

@@ -96,13 +96,15 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 
 `execution_totals` 累计该结果目录所有执行的计算量与墙钟时间，包含失败尝试的已测成本；时间包含推理、判定和结果写入，
 排除模型加载。吞吐量为已保存输出的 token 数（或记录数）除以累计墙钟时间，候选与 rollout 的计算计入成本。
-并发运行时，后端能按请求归属成本的算法（如 `is`）仍给出逐题 `cost`，其余记录的 `cost` 为 `null`；
+逐题成本统一统计奖励池、候选与补全生成、奖励重评分及正文续写。串行运行使用后端计数器差值；并发运行要求每次调用均有请求级计数，
+任一调用缺少计数时，该题的 `cost` 为 `null`；
 只要有一条记录缺少成本，`cost_total_scope` 就是 `all_executions`，`cost_total` 改用运行级总量，否则为
 `selected_records`，汇总当前选定记录。`cost_attributed_records` 给出有逐题成本的记录数。
 减少 `draws` 只改变质量统计范围，运行级汇总仍覆盖全部历史执行。进程异常退出留下 `running` 记录，或历史记录缺少成本时，
 `complete_accounting = false`，已知成本仅为部分统计。
 
 指纹由有效设置、模型与数据哈希和包源码哈希决定。相同指纹的目录会续跑缺少的记录；增加 `run.draws` 也在原目录继续。
+IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token 保留在当前序列及本轮候选中。MH 当前状态、草稿重放和显式冻结 proposal 池仍按算法需要保留。
 计算量以前向 token 位置计：FLOPs 约为 `2 × 参数量 × 前向 token 位置数`（LLaDA 用激活参数量）。
 
 ## 执行优化
@@ -116,7 +118,7 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
-互相冲突的组合（如异步引擎上的融合概率）在加载模型前报错；与所选算法无关的优化不生效。
+互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。
 
 ## 训练
 

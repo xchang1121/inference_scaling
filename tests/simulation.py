@@ -1,4 +1,4 @@
-"""CPU discrete-event engine for checking scheduling without a GPU.
+"""CPU test engine for checking scheduling without a GPU.
 
 The wrapped backend supplies exact samples. The simulator privately materializes
 them at admission, then exposes only emitted deltas. Admission never reads the

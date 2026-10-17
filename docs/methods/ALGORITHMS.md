@@ -151,7 +151,8 @@ python -m inference_scaling --algorithm is --model ar --reward consilience --dat
    `run.draws` 不进入指纹，因此可以在原目录追加重复次数。
 
 随机数由 `run.seed` 按重复序号、算法和题目逐层派生。`ar.engine.continuous_batching.workers` 大于 1 时，多个题目
-并发并共享[连续批处理](#infra-prefix-kv)后端；后端计数器因而由多个题目共用，记录不再给出逐题计算量。
+并发并共享[连续批处理](#infra-prefix-kv)后端。逐题成本要求所有生成与评分调用均有请求级计数；
+任一调用无法归属时，该题成本为 `null`，汇总改用运行级计数器。
 
 <a id="alg-qwen-default-mh"></a>
 #### 2.1.1 后缀 MH
@@ -229,8 +230,11 @@ flowchart LR
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
-[`conditional_is_step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
-[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。
+[`ConditionalISAdapter.step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)和
+[`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)。批量与流式执行共用
+[`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py) 构造固定候选树；CLI 与服务共用采样循环。
+完整 token 仅用于当前状态和本轮候选，结束的步骤保存长度、权重、奖励、选择索引与计数。
+候选生成及补全请求的前向 token 位置全部累计，任一请求未计量时总量标记为未知。
 
 ### 2.2 核心符号、设置字段与成本影响
 
@@ -798,8 +802,9 @@ Self-Certainty 与 Consilience 分别把评分策略下的 $`s_t`$ 与 $`c_t`$ �
 统计量只依赖该位置之前的 token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略
 不同时多一次 log-softmax）；vLLM 只在评分策略就是采样策略时，从引擎返回的 $`K`$ 个最可能 token 的对数概率读出 $`c_t`$，
 开启融合概率时再读出评分温度为 1 的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
-生成请求带上奖励的统计量并保存输出；评分一条序列时，逐位置从在相同上下文之后生成过同一 token 的输出读出，
-只有含未在该上下文生成过的 token（如冻结历史 proposal 的后缀）时才对整条评分。重放的草稿 token 不计算统计量，
+生成请求带上奖励的统计量；IS/MH 每轮选择后只保留当前序列的 token 与统计量，释放其余分支。
+评分一条序列时，逐位置读取相同上下文、相同 token 的当前缓存；未覆盖评分段时（如冻结历史 proposal 的后缀或
+已释放分支），对整条评分。重放的草稿 token 不计算统计量，
 由原先生成它的输出提供。评分走后端的 `token_statistics`：Transformers 教师强制；vLLM 交给精确评分后端
 （`ar.engine.vllm.exact_scoring = "transformers"`），缺失时报错。
 生成与评分得到的统计量只差浮点舍入。直接复用生成时的统计量无需额外评分前向；发生评分时，
@@ -1091,7 +1096,7 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | --- | --- | --- | --- |
 | 式 (4)、(6) 的后缀 MH | `run_mh_chain`、`decide_metropolis_hastings` | `ar.algorithms.mh_power.*`、`ar.algorithms.mh.*`、`rewards.<name>.temperature` | 生效的后缀分布、更新数、接受率、提议/接受后改变的 token 数 |
 | 式 (9) 的冻结历史 proposal | `run_mh_chain` 的 `history` 与 `history_mixture` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
-| 式 (7)、(8) 的条件 IS | `conditional_is_step`、`run_conditional_is` | `ar.algorithms.is.{candidate_count,rollout_count,block_size,block_first}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
+| 式 (7)、(8) 的条件 IS | `ConditionalISAdapter.step`、`run_conditional_is` | `ar.algorithms.is.{candidate_count,rollout_count,block_size,block_first}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 第 7 节的 dLLM 逐块 IS | `run_conditional_diffusion_is` | `dllm.algorithms.is.{candidate_count,rollout_count,decision_block_size,candidate_canvas,kept_sequence}` | 候选对数权重、所选索引与保留补全、`trace.rollout_evaluations`、`trace.mean_rollout_ess` |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
 

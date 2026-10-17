@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from inference_scaling.app.records import (
     Meter,
+    RequestMeter,
     adapter_hashes,
     checkpoint_metadata_hashes,
     importance_trace,
@@ -62,17 +63,11 @@ class _Task:
     seeds: SeedStream
     # The algorithm's backend, wrapped by the sampling scope and a model reward's statistic recorder.
     backend: Any
+    base_backend: Any
 
 
 def _kept_reward(step: Any) -> float:
     return float(step.selected.rollouts[step.completion_index].reward)
-
-
-def _attribution(backend: Any, forward_token_slots: int) -> dict[str, int]:
-    """Cost fields for work a caller measured per request, in the shape the backend counters use."""
-
-    return {"generation_forward_token_slots": forward_token_slots, "score_forward_token_slots": 0,
-            "estimated_dense_forward_flops": 2 * backend.parameter_count * forward_token_slots}
 
 
 def confidence_statistic(kind: str, settings: Mapping[str, Any]) -> TokenStatistic:
@@ -222,7 +217,7 @@ class ARFamily:
             scope = scope.full_fallback("reward_uses_full_sequence")
         return scope
 
-    def _reward(self, task: _Task, meter: Meter) -> Reward | None:
+    def _reward(self, task: _Task) -> Reward | None:
         kind, settings = self.choices.reward, self.reward_settings
         if kind is None:
             return None
@@ -234,10 +229,7 @@ class ARFamily:
             requests = [GenerationRequest(task.prompt, task.maximum, task.sampling,
                                           task.seeds.derive("vote-pool", task.problem.id, index),
                                           f"vote-pool:{task.problem.id}:{index}") for index in range(size)]
-            samples = self.backend.sample_batch(requests)
-            slots = [sample.forward_token_slots for sample in samples]
-            if all(value is not None for value in slots):
-                meter.attribute(_attribution(self.raw, sum(slots)))  # type: ignore[arg-type]
+            samples = task.base_backend.sample_batch(requests)
             return [self.answer_text(task.prompt, sample.token_ids) for sample in samples]
 
         # Best-of-N votes among its own candidates.
@@ -259,22 +251,20 @@ class ARFamily:
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
                                 top_k=sampling["top_k"], eos_token_id=self.eos)
         scope = self._scope(prompt)
-        backend = scope.wrap(self.backend, prompt)
+        meter = Meter({"base": self.raw} if self.workers == 1 else {})
+        measured = RequestMeter(self.backend, meter, self.raw.parameter_count)
+        backend = scope.wrap(measured, prompt)
         if self.choices.reward in CONFIDENCE_REWARDS:
             # A confidence reward reads a token statistic of the generated tokens, which generation records.
             backend = StatisticRecorder(backend, confidence_statistic(self.choices.reward, self.reward_settings))
-        task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend)
-        # Concurrent problems share the backend counters, so only sequential runs have per-problem costs.
-        meter = Meter({"base": self.raw} if self.workers == 1 else {})
+        task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend, measured)
         with meter.phase("reward"):
-            reward = self._reward(task, meter)
+            reward = self._reward(task)
         with meter.phase("search"):
             tokens, trace, value = getattr(self, "_" + algorithm)(task, reward, meter)
         with meter.phase("finish"):
-            tokens, info = scope.finish(self.backend, prompt, tokens, max_new_tokens=maximum, sampling=policy,
+            tokens, info = scope.finish(measured, prompt, tokens, max_new_tokens=maximum, sampling=policy,
                                         seed=seeds.derive(algorithm, problem.id, "final-content"))
-            if info["final_content_forward_token_slots"] is not None:
-                meter.attribute(_attribution(self.raw, info["final_content_forward_token_slots"]))
         fallbacks = [info["sampling_fallback_reason"]] if info["sampling_fallback_reason"] else []
         confidence = getattr(reward, "model", None)
         if isinstance(confidence, TokenStatisticReward) and (reason := confidence.fallback(prompt, tokens)):
@@ -396,8 +386,6 @@ class ARFamily:
         )
         trace = importance_trace(list(result.steps))
         trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
-        if result.forward_token_slots is not None:
-            meter.attribute(_attribution(self.raw, result.forward_token_slots))
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

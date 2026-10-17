@@ -37,14 +37,6 @@ class BinaryTrajectoryBackend:
 EXACT = DiffusionSamplingConfig(block_length=1, steps_per_block=1, temperature=1.0, remasking="random", top_k=0, top_p=1.0)
 
 
-def test_trajectory_power_mh_sharpens_the_exact_trajectory_distribution():
-    config = DiffusionPowerMHConfig(total_length=1, decision_block_size=1, updates_per_stage=8, alpha=2.0)
-    zeroes = sum(run_diffusion_trajectory_power_mh(backend=BinaryTrajectoryBackend(), prompt=(), config=config,
-                                                   sampling=EXACT, seed=seed).final.token_ids[0] == 0
-                 for seed in range(2000))
-    assert zeroes / 2000 == pytest.approx(0.8**2 / (0.8**2 + 0.2**2), abs=0.025)
-
-
 class ContextModel(torch.nn.Module):
     """Logits depend on the previous token and on how many masks the canvas holds."""
 

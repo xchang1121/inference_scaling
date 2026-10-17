@@ -34,11 +34,11 @@ vLLM 使用 DELTA 输出，在候选 B 处及时通知，其余 token 通常合�
 
 主要实现：
 
-- [固定树与事件处理](../../src/inference_scaling/arllm/algorithms/streamed_is.py)
+- [固定树与事件处理](../../src/inference_scaling/arllm/algorithms/candidates.py)
 - [共享准入队列](../../src/inference_scaling/arllm/backends/scheduling.py)
 - [异步会话和事件合并](../../src/inference_scaling/arllm/backends/streaming.py)
 - [异步 vLLM 接口](../../src/inference_scaling/arllm/backends/vllm_backend.py)
-- [CPU 模拟引擎](../../src/inference_scaling/arllm/backends/simulation.py)
+- [CPU 模拟引擎](../../tests/simulation.py)
 
 当前 `fused_logprobs=true` 只在请求结束后提供全词表统计量，因此回退到原批次算法，仍使用异步引擎的共享准入限制。同步 vLLM、Transformers 保留原路径。运行记录和服务返回值的 `rollout_scheduler` 显示实际使用 `streaming` 或 `batch`，设置本身不等于流式路径已生效。
 

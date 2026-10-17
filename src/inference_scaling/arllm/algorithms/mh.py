@@ -399,6 +399,9 @@ def run_mh_chain(
                 proposal_logs = proposal_logs[:cut] + suffix.proposal_logprobs
                 bounds = None if bounds is None or suffix.bounds is None else bounds[:cut] + suffix.bounds
                 stopped, current_reward = suffix.stopped, proposed_reward
+            retain = getattr(backend, "retain_statistics", None)
+            if retain is not None:
+                retain(prompt, tokens)
     return MHChainResult(prompt, tokens, current_reward, base_logs, proposal_logs, tuple(trace), chain_id, skipped)
 
 

@@ -9,7 +9,7 @@ suffix in proportion to its reward weight.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
@@ -33,9 +33,23 @@ class ConditionalCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutSummary:
+    token_count: int
+    reward: float
+    log_weight: float
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSummary:
+    token_count: int
+    rollouts: tuple[RolloutSummary, ...]
+    log_weight: float
+
+
+@dataclass(frozen=True, slots=True)
 class ConditionalISStep:
     generated_length_before: int
-    candidates: tuple[ConditionalCandidate, ...]
+    candidates: tuple[ConditionalCandidate | CandidateSummary, ...]
     selected_index: int
     # The completion of the selected candidate kept in the sequence; None when the sampler keeps none.
     completion_index: int | None
@@ -48,8 +62,16 @@ class ConditionalISStep:
     forward_token_slots: int | None = field(default=None, compare=False)
 
     @property
-    def selected(self) -> ConditionalCandidate:
+    def selected(self) -> ConditionalCandidate | CandidateSummary:
         return self.candidates[self.selected_index]
+
+    def compact(self) -> ConditionalISStep:
+        """Only lengths and scalar statistics survive a completed step."""
+        return replace(self, candidates=tuple(
+            CandidateSummary(len(candidate.token_ids), tuple(
+                RolloutSummary(len(rollout.token_ids), rollout.reward, rollout.log_weight)
+                for rollout in candidate.rollouts), candidate.log_weight)
+            if isinstance(candidate, ConditionalCandidate) else candidate for candidate in self.candidates))
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +81,7 @@ class ConditionalISResult:
     steps: tuple[ConditionalISStep, ...]
     # Forward token slots of all steps, measured per request; None when any step could not be attributed.
     forward_token_slots: int | None = field(default=None, compare=False)
+    stopping_reason: str = "stop"
 
 
 def weigh(blocks: Sequence[TokenSequence],

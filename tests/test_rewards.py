@@ -148,10 +148,14 @@ def test_model_rewards_read_the_statistics_that_generation_recorded(reward_class
         conditional = run_conditional_is(backend, (), ConditionalISConfig(
             candidate_count=3, rollout_count=2, block_size=1, total_length=4, reward_temperature=0.5, block_first=False),
             reward, SeedStream(3))
+        if isinstance(backend, StatisticRecorder):
+            assert sum(len(rows) for outputs in backend._outputs.values() for rows in outputs.values()) == 1
         chain = run_mh_chain(backend, (), MHConfig(
             alpha=1.0, reward_temperature=0.5, total_length=4, block_size=2, steps_per_block=4, suffix_schedule="uniform",
             iterations=None, suffix_replay=True, early_rejection=False), SeedStream(3), base=SamplingConfig(),
             proposal=SamplingConfig(), reward=reward)
+        if isinstance(backend, StatisticRecorder):
+            assert sum(len(rows) for outputs in backend._outputs.values() for rows in outputs.values()) == 1
         return conditional.steps, chain.trace, chain.token_ids
 
     plain, recorded = _Counting(table, fallback=(0.4, 0.3, 0.3)), _Counting(table, fallback=(0.4, 0.3, 0.3))
