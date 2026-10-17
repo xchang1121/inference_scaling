@@ -85,6 +85,9 @@ class StoppedSequenceBackend:
         references: list[list[float] | None] = [[] for _ in requests]
         bounds: list[list[Any] | None] = [[] for _ in requests]
         statistics: list[list[Any] | None] = [[] if request.statistic else None for request in requests]
+        # Cost of the last inner request of each row: its prefix holds everything generated so far,
+        # so it replaces the earlier rows' counts instead of adding to them.
+        slots: list[int | None] = [None] * len(requests)
         # Why each request ended: None while it continues, else "stop" or "rejected".
         done: list[str | None] = [None] * len(requests)
         weights = [None if request.log_weight_stop is None else request.log_weight_stop.start for request in requests]
@@ -122,6 +125,7 @@ class StoppedSequenceBackend:
                 keep = len(sample.token_ids) if end is None else end - len(generated)
                 tokens[index].extend(sample.token_ids[:keep])
                 logs[index].extend(sample.token_logprobs[:keep])
+                slots[index] = sample.forward_token_slots
                 reference = references[index]
                 if reference is not None and sample.reference_policy_id == inner_request.reference_policy.policy_id:
                     reference.extend((sample.reference_token_logprobs or ())[:keep])
@@ -152,6 +156,7 @@ class StoppedSequenceBackend:
                 reference_policy_id=None if references[index] is None else request.reference_policy.policy_id,
                 token_cdf_bounds=None if bounds[index] is None else tuple(bounds[index] or ()),
                 token_statistics=None if statistics[index] is None else tuple(statistics[index] or ()),
+                forward_token_slots=slots[index],
             )
             for index, request in enumerate(requests)
         ]
@@ -273,7 +278,9 @@ class StoppedGenerationSession:
                 sample.reference_token_logprobs or ())[:keep],
             reference_policy_id=None if sample.reference_policy_id != inner_request.reference_policy.policy_id else request.reference_policy.policy_id,
             token_cdf_bounds=None if sample.token_cdf_bounds is None else sample.token_cdf_bounds[:keep],
-            token_statistics=None if sample.token_statistics is None else sample.token_statistics[:keep]), finished)
+            token_statistics=None if sample.token_statistics is None else sample.token_statistics[:keep],
+            # A continued request bills the whole sequence again, so its earlier part is not charged here.
+            forward_token_slots=None if event.finished and not finished else sample.forward_token_slots), finished)
 
     def seal(self) -> None:
         self.inner.seal()

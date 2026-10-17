@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 
 def streamed_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, step: int, seeds: SeedStream):
+    """This step's candidates, and the forward token slots they cost when every one of them was measured."""
     validate_base_sampling(adapter.sampling)
     config, prompt = adapter.config, adapter.prompt
     fixed = state.token_ids[:state.fixed]
@@ -67,6 +68,9 @@ def streamed_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
 
     try:
         carried = int(bool(state.token_ids))
+        # Forward token slots of the requests this step measured; an unmeasured one makes the total unknown.
+        slots: int = 0
+        measured = True
         if carried:
             end = state.fixed + width
             blocks[0] = Block(state.token_ids[state.fixed:end], "length" if end < len(state.token_ids) else "stop")
@@ -115,6 +119,10 @@ def streamed_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                 if sample.finish_reason == "length" and len(tokens) != job.max_new_tokens:
                     raise RuntimeError("generation ended before its length limit without a stop")
                 finished.add(key)
+                if sample.forward_token_slots is None:
+                    measured = False
+                else:
+                    slots += sample.forward_token_slots
                 if not (root and config.block_first):
                     block = blocks[index]
                     assert block is not None
@@ -128,7 +136,7 @@ def streamed_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             if set(group) != set(range(count)):
                 raise RuntimeError("stream omitted a required completion")
             canonical.append([group[index] for index in range(count)])
-        return weigh([block.token_ids for block in blocks if block is not None], canonical)
+        return weigh([block.token_ids for block in blocks if block is not None], canonical), (slots if measured else None)
     finally:
         session.close()
 

@@ -10,6 +10,7 @@ import argparse
 import itertools
 import json
 import platform
+import sys
 import time
 from collections import Counter
 from math import exp, log
@@ -17,11 +18,15 @@ from pathlib import Path
 
 import numpy as np
 
+# The deterministic tabular backend is a test double, so it lives with the test suite; this script is
+# the CPU harness that reproduces the scheduler checks against it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter, RetainedSequence, run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.backends.scheduling import SchedulerConfig
 from inference_scaling.arllm.backends.simulation import SimulatedBackend
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest, SequenceSample
 from inference_scaling.shared.rng import SeedStream

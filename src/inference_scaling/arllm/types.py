@@ -151,6 +151,9 @@ class SequenceSample:
     token_cdf_bounds: tuple[tuple[float, float], ...] | None = None
     # The request's statistic of each token, NaN where the token was replayed; None when not computed.
     token_statistics: tuple[float, ...] | None = None
+    # Forward token slots this request cost, measured per request so a caller can bill it while engine-wide
+    # counters are shared with other problems; None when the backend cannot separate it.
+    forward_token_slots: int | None = None
 
     def __post_init__(self) -> None:
         if len(self.token_ids) != len(self.token_logprobs):
@@ -163,6 +166,8 @@ class SequenceSample:
             values = getattr(self, name)
             if values is not None and len(values) != len(self.token_ids):
                 raise ValueError(f"{name} needs one entry per sampled token")
+        if self.forward_token_slots is not None and self.forward_token_slots < 0:
+            raise ValueError("forward_token_slots cannot be negative")
 
     @property
     def logprob(self) -> float:

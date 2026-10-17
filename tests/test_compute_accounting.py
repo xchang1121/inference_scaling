@@ -1,5 +1,56 @@
-from inference_scaling.app.records import pass_at_k, summarize_executions
+from dataclasses import dataclass
+
+from inference_scaling.app.records import Meter, pass_at_k, summarize_executions
 from training.grpo import estimate_grpo_compute, estimate_grpo_compute_from_logs
+
+
+def _cost(meter: Meter) -> dict | None:
+    # The same closures ``ARFamily.solve`` uses, so a partial attributed delta cannot slip through.
+    return meter.cost(lambda delta: delta.get("generation_forward_token_slots", 0)
+                      + delta.get("score_forward_token_slots", 0),
+                      lambda _role, delta: delta.get("estimated_dense_forward_flops", 0))
+
+
+@dataclass(frozen=True)
+class _Counters:
+    generation_forward_token_slots: int = 0
+    score_forward_token_slots: int = 0
+    estimated_dense_forward_flops: int = 0
+
+
+class _Engine:
+    """A backend whose counters cover all of its work, as a synchronous engine's do."""
+
+    def __init__(self) -> None:
+        self.counters = _Counters()
+
+    def snapshot(self) -> _Counters:
+        return self.counters
+
+
+def test_meter_attributes_per_request_work_when_problems_run_concurrently():
+    # No engine counters: concurrent problems share them, so the caller reports what each request cost.
+    meter = Meter({})
+    with meter.phase("search"):
+        meter.attribute({"generation_forward_token_slots": 30, "estimated_dense_forward_flops": 600})
+    assert _cost(meter) == {"phases": {"search": {"base": {"generation_forward_token_slots": 30,
+                                                            "estimated_dense_forward_flops": 600}}},
+                            "forward_token_slots": 30, "flops": 600}
+    # A phase that measured nothing does not invent a zero cost.
+    empty = Meter({})
+    with empty.phase("search"):
+        pass
+    assert _cost(empty) is None
+
+
+def test_meter_ignores_attribution_when_the_counters_already_cover_it():
+    engine = _Engine()
+    meter = Meter({"base": engine})
+    with meter.phase("search"):
+        engine.counters = _Counters(12, 0, 240)
+        meter.attribute({"generation_forward_token_slots": 12, "estimated_dense_forward_flops": 240})
+    # The engine delta is used as it is, so the same work is not counted twice.
+    assert _cost(meter)["forward_token_slots"] == 12
 
 
 def test_execution_summary_marks_missing_cost_after_a_crash():

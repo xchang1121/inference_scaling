@@ -10,7 +10,7 @@ import pytest
 from inference_scaling.app.cli import parse
 from inference_scaling.app.run import Choices, run
 from inference_scaling.app.settings import SCHEMA, SettingsError, check, load_settings
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 
 
 def test_cli_defaults_and_reward_rules() -> None:

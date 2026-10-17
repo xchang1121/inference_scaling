@@ -8,7 +8,7 @@ from inference_scaling.arllm.backends.scheduling import Admission, AdmissionQueu
 from inference_scaling.arllm.backends.simulation import SimulatedBackend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenStatistic
 from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser

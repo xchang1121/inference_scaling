@@ -106,7 +106,7 @@
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
-| `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时各题请求经连续批处理合并，记录中的逐题成本为 `null` |
+| `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时 `is` 的后端按请求归属前向 token 开销，逐题成本仍然保留，其余算法的逐题成本为 `null` |
 | `continuous_batching.max_batch_size` / `max_batch_tokens` / `batch_wait_seconds` | 整数 / 整数 / 数 | 合并批的上限与等待时间 |
 | `rollout_scheduler.enabled` | 布尔 | 默认 `true`；异步 vLLM 共用一个准入队列，IS 在候选前缀就绪时释放分支。`fused_logprobs = true` 时保留批次生成、仍限制准入；同步 vLLM 与 Transformers 保留原路径。实际路径记录为 `rollout_scheduler = streaming/batch`；详见[调度说明](methods/ROLLOUT_SCHEDULING.md) |
 | `rollout_scheduler.max_in_flight` | 正整数 | 默认 `32`；所有调用者共用的原生请求上限，加载时再取它与非空 `vllm.max_num_seqs` 的较小值 |

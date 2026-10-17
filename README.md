@@ -96,7 +96,9 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 
 `execution_totals` 累计该结果目录所有执行的计算量与墙钟时间，包含失败尝试的已测成本；时间包含推理、判定和结果写入，
 排除模型加载。吞吐量为已保存输出的 token 数（或记录数）除以累计墙钟时间，候选与 rollout 的计算计入成本。
-并发运行的单题 `cost` 为 `null`，`cost_total_scope = "all_executions"`；串行运行的 `cost_total` 汇总当前选定记录。
+并发运行时，后端能按请求归属成本的算法（如 `is`）仍给出逐题 `cost`，其余记录的 `cost` 为 `null`；
+只要有一条记录缺少成本，`cost_total_scope` 就是 `all_executions`，`cost_total` 改用运行级总量，否则为
+`selected_records`，汇总当前选定记录。`cost_attributed_records` 给出有逐题成本的记录数。
 减少 `draws` 只改变质量统计范围，运行级汇总仍覆盖全部历史执行。进程异常退出留下 `running` 记录，或历史记录缺少成本时，
 `complete_accounting = false`，已知成本仅为部分统计。
 

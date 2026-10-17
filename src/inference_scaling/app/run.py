@@ -170,8 +170,11 @@ def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str
         summary = {"fingerprint": fingerprint, "directory": str(directory), "updated": _now(),
                    **summarize(records, draws=draws)}
         summary["execution_totals"] = summarize_executions(executions, stored)
+        # A backend that measures each request keeps per-problem cost even while problems run concurrently.
+        attributed = sum(record["cost"] is not None for record in records)
+        summary["cost_attributed_records"] = attributed
         summary["cost_total_scope"] = "selected_records"
-        if family.workers > 1:
+        if family.workers > 1 and attributed < len(records):
             summary["cost_total"] = summary["execution_totals"]["cost_total"]
             summary["cost_total_scope"] = "all_executions"
         write_json_atomic(directory / "summary.json", summary)

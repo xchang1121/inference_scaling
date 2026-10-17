@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 from math import exp
 
 import numpy as np
@@ -6,7 +7,7 @@ import pytest
 
 from inference_scaling.arllm.algorithms.conditional_is import (ConditionalISAdapter, RetainedSequence,
                                                                conditional_is_step, run_conditional_is)
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest
@@ -109,6 +110,26 @@ def test_conditional_is_scores_a_step_in_one_batch() -> None:
         block_first=False, candidate_count=2, rollout_count=2, block_size=1, total_length=2, reward_temperature=1.0),
         reward_batch, SeedStream(91))
     assert len(result.token_ids) == 2 and len(seen[0]) == 4
+
+
+class _Measured(TabularAutoregressiveBackend):
+    """The tabular backend reporting a per-request cost, as a metered engine does."""
+
+    def sample_batch(self, requests):
+        return [replace(sample, forward_token_slots=len(sample.prefix) + max(0, len(sample.token_ids) - 1))
+                for sample in super().sample_batch(requests)]
+
+
+def test_is_reports_the_forward_slots_its_requests_cost() -> None:
+    config = ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=1,
+                                 total_length=2, reward_temperature=1.0)
+    measured = run_conditional_is(_Measured({}, fallback=(0.5, 0.5)), (), config, pointwise(_reward), SeedStream(91))
+    assert measured.forward_token_slots == sum(step.forward_token_slots for step in measured.steps)
+    assert measured.forward_token_slots > 0
+    # A backend that does not measure per request leaves the cost unknown rather than zero.
+    silent = run_conditional_is(TabularAutoregressiveBackend({}, fallback=(0.5, 0.5)), (), config, pointwise(_reward),
+                                SeedStream(91))
+    assert silent.token_ids == measured.token_ids and silent.forward_token_slots is None
 
 
 def test_kept_completion_is_reused_without_rescoring() -> None:

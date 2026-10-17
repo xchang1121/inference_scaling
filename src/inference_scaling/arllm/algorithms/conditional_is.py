@@ -49,7 +49,7 @@ def estimate_conditional_weights(
     seeds: SeedStream,
     step_index: int,
     retained: RolloutEvaluation | None = None,
-) -> tuple[ConditionalCandidate, ...]:
+) -> tuple[tuple[ConditionalCandidate, ...], int | None]:
     """Estimate each candidate's weight with ``rollout_count`` base-policy completions.
 
     A candidate that ends the sequence has one empty completion. The first
@@ -59,6 +59,9 @@ def estimate_conditional_weights(
     ``OWN_STREAM`` for a block-first candidate, whose first completion continues
     its own request here. The others are generated here, all in one batch, and
     scored in one reward batch.
+
+    Returns the candidates and the forward token slots this step generated, when
+    the backend measures them per request.
     """
 
     if rollout_count <= 0:
@@ -119,7 +122,10 @@ def estimate_conditional_weights(
     for (index, tokens), value in zip(pending, rewards, strict=True):
         by_candidate[index].append(RolloutEvaluation(tokens, value, value / reward_temperature))
 
-    return weigh([candidate.token_ids for candidate in candidates], by_candidate)
+    measured = all(sample.forward_token_slots is not None for sample in samples)
+    forward_slots = sum(sample.forward_token_slots or 0 for sample in samples)
+    return weigh([candidate.token_ids for candidate in candidates], by_candidate), (
+        forward_slots if measured else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,14 +192,14 @@ class ConditionalISAdapter:
             raise ValueError("cannot advance a terminal generation state")
         if getattr(self.backend, "supports_streaming_generation", False):
             from inference_scaling.arllm.algorithms.streamed_is import streamed_candidates
-            candidates = streamed_candidates(self, state, step_index, seeds)
+            candidates, forward_slots = streamed_candidates(self, state, step_index, seeds)
         else:
             proposals = self.propose(state, step_index, seeds)
             retained = None
             if state.token_ids:
                 start = state.fixed + len(proposals[0][0].token_ids)
                 retained = RolloutEvaluation(state.token_ids[start:], state.reward, state.reward / self.config.reward_temperature)
-            candidates = estimate_conditional_weights(
+            candidates, forward_slots = estimate_conditional_weights(
                 backend=self.backend, prompt=self.prompt, generated_prefix=state.token_ids[: state.fixed],
                 candidates=[candidate for candidate, _ in proposals], first_completions=[first for _, first in proposals],
                 total_length=self.config.total_length, rollout_count=self.config.rollout_count, sampling=self.sampling,
@@ -209,6 +215,7 @@ class ConditionalISAdapter:
             completion_index=kept, retained_candidate=carried,
             # The carried completion was evaluated in an earlier step.
             rollout_evaluations_performed=sum(len(item.rollouts) for item in candidates) - int(carried),
+            forward_token_slots=forward_slots,
         )
         return record, RetainedSequence(state.token_ids[: state.fixed] + candidate.token_ids + completion.token_ids,
                                         completion.reward, state.fixed + len(candidate.token_ids))
@@ -250,4 +257,7 @@ def run_conditional_is(
     while not adapter.is_terminal(state):
         record, state = adapter.step(state, len(steps), seeds)
         steps.append(record)
-    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps))
+    forward_slots = None if any(step.forward_token_slots is None for step in steps) else sum(
+        step.forward_token_slots or 0 for step in steps)
+    return ConditionalISResult(prompt=prompt, token_ids=state.token_ids, steps=tuple(steps),
+                               forward_token_slots=forward_slots)

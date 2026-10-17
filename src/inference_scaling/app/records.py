@@ -178,16 +178,20 @@ def snapshot_delta(before: Any, after: Any) -> dict[str, Any]:
 
 
 class Meter:
-    """Backend counter deltas of one problem, by phase and model role.
+    """One problem's cost, by phase and model role.
 
-    Without backends (concurrent problems share the counters) there is no
-    per-problem cost.
+    Two sources feed it. The engine-wide counters give a delta per phase, which
+    is exact only while one problem runs at a time. A backend that measures each
+    request instead reports that through :meth:`attribute`, which also works
+    while several problems share the engine. Work no counter sees at all
+    (native greedy and beam decoding) is charged with :meth:`add`.
     """
 
     def __init__(self, backends: Mapping[str, Any]) -> None:
         self.backends = {role: backend for role, backend in backends.items() if backend is not None}
         self.phases: dict[str, dict[str, dict[str, Any]]] = {}
         self.extra: Counter[str] = Counter()
+        self.attributed: Counter[str] = Counter()
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -196,22 +200,30 @@ class Meter:
             yield
         finally:
             deltas = {role: snapshot_delta(before[role], backend.snapshot()) for role, backend in self.backends.items()}
-            if deltas:
-                for key, value in self.extra.items():
-                    deltas["base"][key] = deltas["base"].get(key, 0) + value
-                self.phases[name] = deltas
-            self.extra.clear()
+            for values in (self.attributed, self.extra):
+                if values:
+                    base = deltas.setdefault("base", {})
+                    for key, value in values.items():
+                        base[key] = base.get(key, 0) + value
+                    values.clear()
+            self.phases[name] = deltas
 
     def add(self, values: Mapping[str, int]) -> None:
         """Charge base-model work the counters do not see to the current phase."""
 
         self.extra.update(values)
 
+    def attribute(self, values: Mapping[str, int]) -> None:
+        """Charge work measured per request; ignored when the engine counters already cover it."""
+
+        if not self.backends:
+            self.attributed.update(values)
+
     def cost(self, slots: Callable[[Mapping[str, Any]], int],
              flops: Callable[[str, Mapping[str, Any]], float]) -> dict[str, Any] | None:
-        if not self.backends:
-            return None
         deltas = [(role, delta) for phase in self.phases.values() for role, delta in phase.items()]
+        if not any(delta for _, delta in deltas):
+            return None
         return {"phases": self.phases, "forward_token_slots": sum(slots(delta) for _, delta in deltas),
                 "flops": sum(flops(role, delta) for role, delta in deltas)}
 

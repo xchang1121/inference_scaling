@@ -9,7 +9,7 @@ suffix in proportion to its reward weight.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
@@ -43,6 +43,9 @@ class ConditionalISStep:
     retained_candidate: bool
     # Completions generated and scored in this step; a reused one is excluded.
     rollout_evaluations_performed: int
+    # Forward token slots this step cost, measured per request; None when the backend cannot separate it.
+    # Measurement never enters the step's identity: two execution paths are compared on what they sampled.
+    forward_token_slots: int | None = field(default=None, compare=False)
 
     @property
     def selected(self) -> ConditionalCandidate:
@@ -54,6 +57,8 @@ class ConditionalISResult:
     prompt: TokenSequence
     token_ids: TokenSequence
     steps: tuple[ConditionalISStep, ...]
+    # Forward token slots of all steps, measured per request; None when any step could not be attributed.
+    forward_token_slots: int | None = field(default=None, compare=False)
 
 
 def weigh(blocks: Sequence[TokenSequence],

@@ -76,6 +76,7 @@ class SamplingScope:
     ) -> tuple[TokenSequence, dict[str, Any]]:
         sequence = tuple(tokens)
         final_generated = 0
+        final_slots = None
         if self.scope == "thinking":
             assert self.thinking_format is not None
             segments = self.thinking_format.split(prompt, sequence, eos_token_id=backend.tokenizer.eos_token_id)
@@ -88,6 +89,7 @@ class SamplingScope:
                         seed=seed, request_id="scope:final-content",
                     )])[0]
                     final_generated = len(sample.token_ids)
+                    final_slots = sample.forward_token_slots
                     sequence += sample.token_ids
         information = self.describe_output(backend, prompt, sequence)
         effective_scope, reason = self.scope, self.fallback_reason
@@ -100,6 +102,7 @@ class SamplingScope:
             "thinking_with_full_sequence_fallback" if self.scope == "thinking" else "full"
         )
         information["final_content_generated_tokens"] = final_generated
+        information["final_content_forward_token_slots"] = final_slots
         information["generation_budget_exhausted"] = (
             len(sequence) >= max_new_tokens and not information["ended_by_eos"]
         )

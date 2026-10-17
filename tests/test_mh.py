@@ -6,7 +6,7 @@ import pytest
 
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain, suffix_length_probabilities
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, SequenceSample
 from inference_scaling.shared.metrics import empirical_distribution, total_variation

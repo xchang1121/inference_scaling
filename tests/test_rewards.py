@@ -8,7 +8,7 @@ from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
-from inference_scaling.arllm.backends.tabular import TabularAutoregressiveBackend
+from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import thinking_format_from_backend
 from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward

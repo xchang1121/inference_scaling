@@ -556,7 +556,8 @@ class VLLMBackend:
             raise RuntimeError("vLLM returned an invalid number of request outputs")
         parsed = [self._sample_from_output(request, output, fused.get(str(getattr(output, "request_id", None))))
                   for request, output in zip(requests, outputs, strict=True)]
-        samples = [item[0] for item in parsed]
+        # Each request carries its own cost, so a caller can bill it while other callers share the engine.
+        samples = [replace(item[0], forward_token_slots=item[3]) for item in parsed]
         forward_slots = sum(item[3] for item in parsed)
         fused = [sample for sample in samples
                  if sample.reference_token_logprobs is not None and sample.reference_policy_id != sample.policy_id]
@@ -840,6 +841,9 @@ class AsyncVLLMBackend(VLLMBackend):
                 chunk.append(sample)
                 ready = checkpoint is not None and total >= checkpoint
                 if ready or finished or len(chunk.tokens) >= 32:
+                    if finished:
+                        # The delta events carry one step each; the request's whole cost is known only here.
+                        chunk.last = replace(chunk.last, forward_token_slots=prompt_length - cached + max(0, total - 1))
                     await emit(GenerationEvent(chunk.sample(), finished))
                     chunk = SampleBuffer()
                     if ready:
