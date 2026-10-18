@@ -21,6 +21,9 @@
 
 返回里额外带 `scaling`：档位、固定的候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 
+`scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
+K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
+
 ## 1. 安装（昇腾）
 
 在已能用 vLLM + vllm-ascend 起 Qwen3.8-27B 的环境里：

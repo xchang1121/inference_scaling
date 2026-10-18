@@ -51,7 +51,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         routes[key] = index, rollout, root
         buffers[key] = []
         job = GenerationRequest(prompt + fixed + prefix, length, adapter.sampling, seed, key,
-                                uniform_offset=len(prefix) if continuation else 0)
+                                uniform_offset=len(prefix) if continuation else 0, intermediate_events=False)
         submitted[key] = job
         return job
 
@@ -93,10 +93,13 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         roots = [request(index, 0, (), width if config.block_first else remaining, root=True)
                  for index in range(carried, config.candidate_count)]
         if roots:
-            session.submit(roots, phase="prefix", checkpoint=width)
+            checkpoint = width if config.rollout_count > 1 and not config.block_first else None
+            session.submit(roots, phase="prefix", checkpoint=checkpoint)
         if carried:
             branch(0)
-        sealed = False
+        sealed = config.rollout_count == 1 and not config.block_first
+        if sealed:
+            session.seal()
         while len(finished) < len(routes):
             if not sealed and all(block is not None for block in blocks):
                 session.seal()

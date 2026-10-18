@@ -85,6 +85,8 @@ def test_async_vllm_uses_its_public_signature_and_shares_files_with_the_exact_sc
     assert kwargs["seed"] == 5
     assert kwargs["engine_kwargs"] == {**engine["vllm"]["engine_kwargs"], "max_logprobs": 16}
     assert kwargs["enable_fused_logprobs"] is False
+    assert kwargs["flat_logprobs"] is True and kwargs["stream_interval"] == 32
+    assert kwargs["async_scheduling"] is None
 
 
 def test_fused_logprobs_reach_either_engine_but_need_an_unpenalized_model(monkeypatch, tmp_path) -> None:

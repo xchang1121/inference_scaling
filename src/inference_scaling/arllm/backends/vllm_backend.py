@@ -46,7 +46,7 @@ _PROTECTED_ENGINE_KWARGS = frozenset({
     "model", "tokenizer", "tokenizer_revision", "dtype", "tensor_parallel_size", "data_parallel_size",
     "gpu_memory_utilization", "quantization", "enforce_eager", "trust_remote_code", "revision", "download_dir", "seed",
     "enable_prefix_caching", "generation_config", "logprobs_mode", "enable_lora", "max_lora_rank", "max_model_len",
-    "max_num_seqs", "max_num_batched_tokens", "worker_cls", "async_scheduling",
+    "max_num_seqs", "max_num_batched_tokens", "worker_cls", "async_scheduling", "stream_interval",
     # Rejected draft tokens would escape the forward-token accounting; the statistics count preemptions.
     "speculative_config", "disable_log_stats",
 })
@@ -112,6 +112,8 @@ class VLLMBackendSnapshot:
     maximum_in_flight_requests: int
     # Running requests the engine evicted for KV space; each one recomputes its tokens outside these counts.
     preemptions: int
+    stream_outputs: int = 0
+    stream_events: int = 0
     fused_logprobs: bool = False
     fused_reference_sequences: int = 0
     fused_reference_tokens: int = 0
@@ -239,6 +241,35 @@ def _top_confidence(position: Any, top_k: int) -> float:
     return -fsum(values[:top_k]) / top_k
 
 
+def _generated_logprobs(positions: Any, tokens: TokenSequence,
+                       top_k: int | None) -> tuple[tuple[float, ...], tuple[float, ...] | None]:
+    """Read flat arrays directly; iterating FlatLogprobs would rebuild dictionaries.
+
+    Native rows contain the sampled token followed by the top-K tokens, with a
+    duplicate when the sampled token is in top-K. Match the dictionary API's
+    last value for that token, and reduce just the K top entries with fsum.
+    """
+    if positions is None or len(positions) != len(tokens):
+        raise RuntimeError("vLLM returned an invalid generated log-probability shape")
+    if not hasattr(positions, "start_indices"):
+        return (tuple(_logprob_value(position, token) for position, token in zip(positions, tokens, strict=True)),
+                None if top_k is None else tuple(_top_confidence(position, top_k) for position in positions))
+    logs, statistics = [], []
+    for token, start, end in zip(tokens, positions.start_indices, positions.end_indices, strict=True):
+        ids, values = positions.token_ids[start:end], positions.logprobs[start:end]
+        if not ids or token not in ids:
+            raise RuntimeError("vLLM omitted a required token log-probability")
+        logs.append(float(values[len(ids) - 1 - ids[::-1].index(token)]))
+        if top_k is not None:
+            if len(ids) == top_k + 1 and ids[0] == token:
+                statistics.append(-fsum(values[1:]) / top_k)
+            else:
+                # A collector may already have removed the sampled/top-K duplicate through append(dict).
+                distinct = dict(zip(ids, values, strict=True))
+                statistics.append(-fsum(sorted(distinct.values(), reverse=True)[:top_k]) / top_k)
+    return tuple(logs), None if top_k is None else tuple(statistics)
+
+
 def _load_tokenizer(factory, model, tokenizer, tokenizer_revision, revision, cache_dir,
                     local_files_only, trust_remote_code, options):
     options = dict(options or {})
@@ -262,12 +293,14 @@ class VLLMBackend:
     both settings and explicitly enables automatic prefix caching.
     """
 
+    supports_native_token_stops = True
+
     def __init__(self, engine: Any, tokenizer: Any, *, model_id: str, parameter_count: int,
                  sampling_params_factory: Callable[..., Any], tokens_prompt_factory: Callable[..., Any] | None = None,
                  beam_search_params_factory: Callable[..., Any] | None = None,
                  scoring_backend: AutoregressiveBackend | None = None, lora_request: Any | None = None,
                  fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
-                 metrics: Callable[[], Sequence[Any]] | None = None) -> None:
+                 metrics: Callable[[], Sequence[Any]] | None = None, flat_logprobs: bool = True) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
         # A token penalty makes the penalized model the model, so it is part of the identity.
@@ -284,6 +317,7 @@ class VLLMBackend:
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
         self._fused_logprobs = bool(fused_logprobs)
+        self._flat_logprobs = bool(flat_logprobs)
         self.bos_token_id = None if getattr(tokenizer, "bos_token_id", None) is None else int(tokenizer.bos_token_id)
         self._engine_lock = threading.RLock()
         self._delegated_score_lock = threading.RLock()
@@ -308,9 +342,14 @@ class VLLMBackend:
         max_lora_rank: int, parameter_count: int | None, seed: int, scoring_backend: AutoregressiveBackend | None,
         engine_kwargs: dict[str, Any] | None, token_penalty: Mapping[str, Any] | None,
         enable_fused_logprobs: bool = False,
+        flat_logprobs: bool = True, stream_interval: int = 32, async_scheduling: bool | None = None,
     ) -> "VLLMBackend":
         """Load the tokenizer and engine; :meth:`_create` picks the vLLM frontend."""
 
+        if stream_interval < 1:
+            raise ValueError("stream_interval must be positive")
+        if enable_fused_logprobs and async_scheduling is True:
+            raise ValueError("fused log-probabilities require async_scheduling=false or null")
         try:
             from transformers import AutoTokenizer
             from vllm.v1.metrics.reader import get_metrics_snapshot
@@ -335,7 +374,10 @@ class VLLMBackend:
             "enable_lora": adapter_name_or_path is not None, "max_lora_rank": int(max_lora_rank),
             # The offline engine keeps no statistics by default; they carry the preemption counter.
             "disable_log_stats": False,
+            "stream_interval": int(stream_interval),
         }
+        if async_scheduling is not None:
+            kwargs["async_scheduling"] = async_scheduling
         optional = {"max_model_len": max_model_len, "max_num_seqs": max_num_seqs,
                     "max_num_batched_tokens": max_num_batched_tokens}
         kwargs.update({name: value for name, value in optional.items() if value is not None})
@@ -364,6 +406,7 @@ class VLLMBackend:
             token_penalty=None if token_penalty is None else TokenPenalty.from_words(
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
             metrics=get_metrics_snapshot,
+            flat_logprobs=flat_logprobs,
         )
 
     @classmethod
@@ -426,7 +469,7 @@ class VLLMBackend:
             seed=int(seed),
             # The K most likely tokens' processed log-probabilities give the policy's top-K statistic.
             logprobs=0 if statistic is None or statistic.top_k is None else statistic.top_k,
-            flat_logprobs=False,
+            flat_logprobs=self._flat_logprobs,
             logit_bias=self._logit_bias(),
             ignore_eos=True,
             stop_token_ids=[int(token) for token in (
@@ -509,18 +552,13 @@ class VLLMBackend:
         completion = self._completion(output)
         tokens = tuple(int(token) for token in completion.token_ids)
         positions = completion.logprobs
-        if positions is None or len(positions) != len(tokens):
-            raise RuntimeError("vLLM returned an invalid generated log-probability shape")
-        token_logprobs = tuple(_logprob_value(position, token) for position, token in zip(positions, tokens, strict=True))
         statistic = self._statistic(request)
-        if statistic is None:
-            statistics = None
-        elif statistic.top_k is not None:
-            statistics = tuple(_top_confidence(position, statistic.top_k) for position in positions)
-        elif fused is not None:
+        token_logprobs, statistics = _generated_logprobs(
+            positions, tokens, None if statistic is None else statistic.top_k)
+        if statistic is not None and statistic.top_k is None:
+            if fused is None:
+                raise RuntimeError("the fused worker omitted a generated request")
             statistics = fused[1]
-        else:
-            raise RuntimeError("the fused worker omitted a generated request")
         # The fused worker reports the base probabilities at temperature 1.
         reference_values = None if fused is None or request.reference_temperature != 1 else fused[0]
         reference_sampling = request.reference_policy
@@ -706,6 +744,23 @@ class VLLMBackend:
                 self._preemptions = preemptions
             return VLLMBackendSnapshot(**{name: getattr(self, "_" + name) for name in VLLMBackendSnapshot.__dataclass_fields__})
 
+    def execution_config(self) -> dict[str, Any]:
+        """Effective settings; graph eligibility does not establish actual capture or execution."""
+        config = getattr(self._engine, "vllm_config", None)
+        if config is None:
+            config = getattr(getattr(self._engine, "llm_engine", None), "vllm_config", None)
+        scheduler = getattr(config, "scheduler_config", None)
+        compilation = getattr(config, "compilation_config", None)
+        mode = getattr(compilation, "cudagraph_mode", None)
+        return {
+            "flat_logprobs": self._flat_logprobs,
+            "stream_interval": getattr(scheduler, "stream_interval", None),
+            "async_scheduling": getattr(scheduler, "async_scheduling", None),
+            "enforce_eager": getattr(getattr(config, "model_config", None), "enforce_eager", None),
+            "cudagraph_mode": None if mode is None else str(mode),
+            "cudagraph_capture_sizes": getattr(compilation, "cudagraph_capture_sizes", None),
+        }
+
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
         return tuple(int(token) for token in self.tokenizer.encode(text, add_special_tokens=add_special_tokens))
 
@@ -821,6 +876,7 @@ class AsyncVLLMBackend(VLLMBackend):
         item = Admission(request_id, group, prompt_length, request.max_new_tokens, phase)
         await self._admission.acquire(item)
         total, cached, started, finished = 0, 0, False, False
+        outputs, events = 0, 0
         chunk, progressed = SampleBuffer(), False
         try:
             kwargs = {"prompt": self._prompt(request.prefix), "sampling_params": params, "request_id": request_id}
@@ -829,6 +885,7 @@ class AsyncVLLMBackend(VLLMBackend):
             self._engine_requests_started(1)
             started = True
             async for output in self._engine.generate(**kwargs):
+                outputs += 1
                 sample, _, output_cached, _ = self._sample_from_output(request, output)
                 cached = max(cached, output_cached)
                 total += len(sample.token_ids)
@@ -840,11 +897,12 @@ class AsyncVLLMBackend(VLLMBackend):
                     progressed = True
                 chunk.append(sample)
                 ready = checkpoint is not None and total >= checkpoint
-                if ready or finished or len(chunk.tokens) >= 32:
+                if ready or finished or (request.intermediate_events and len(chunk.tokens) >= 32):
                     if finished:
-                        # The delta events carry one step each; the request's whole cost is known only here.
+                        # Only the terminal delta determines the complete request's cost.
                         chunk.last = replace(chunk.last, forward_token_slots=prompt_length - cached + max(0, total - 1))
                     await emit(GenerationEvent(chunk.sample(), finished))
+                    events += 1
                     chunk = SampleBuffer()
                     if ready:
                         checkpoint = None
@@ -867,6 +925,8 @@ class AsyncVLLMBackend(VLLMBackend):
                         self._generation_forward_token_slots += forward
                         self._estimated_dense_forward_flops += dense_forward_flops(self.parameter_count, forward)
                         self._engine_requests += 1
+                        self._stream_outputs += outputs
+                        self._stream_events += events
                 self._admission.finish(request_id, total if finished else None)
 
     @classmethod
@@ -876,7 +936,8 @@ class AsyncVLLMBackend(VLLMBackend):
         from vllm.sampling_params import RequestOutputKind
         from vllm.v1.engine.async_llm import AsyncLLM
 
-        # Only a request's finished output is read, so the engine need not stream every step.
+        # Batch calls need only final outputs. Sessions override this with buffered DELTA output
+        # to retain the first-token admission signal and any prefix/boundary notifications.
         options["sampling_params_factory"] = partial(options["sampling_params_factory"],
                                                      output_kind=RequestOutputKind.FINAL_ONLY)
         # The engine core process starts, and reads the model-runner environment, while the backend is constructed.

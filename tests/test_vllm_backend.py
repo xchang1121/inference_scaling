@@ -12,7 +12,8 @@ import numpy
 import pytest
 
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
-from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend, _checkpoint_parameter_count, _load_vllm_sampling_api
+from inference_scaling.arllm.backends.vllm_backend import (AsyncVLLMBackend, VLLMBackend, _checkpoint_parameter_count,
+                                                        _generated_logprobs, _load_vllm_sampling_api)
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
@@ -22,6 +23,49 @@ from inference_scaling.shared.rng import SeedStream
 @dataclass
 class _Logprob:
     logprob: float
+    rank: int | None = None
+    decoded_token: str | None = None
+
+
+class FlatLogprobs:
+    """vLLM's primitive arrays, including sampled/top-K duplicates; dictionary reconstruction is forbidden."""
+    def __init__(self, rows):
+        self.start_indices, self.end_indices, self.token_ids, self.logprobs = [], [], [], []
+        self.ranks, self.decoded_tokens = [], []
+        for ids, values in rows:
+            self.start_indices.append(len(self.token_ids))
+            for token, value in zip(ids, values, strict=True):
+                self.token_ids.append(token)
+                self.logprobs.append(value)
+                self.ranks.append(None)
+                self.decoded_tokens.append(None)
+            self.end_indices.append(len(self.token_ids))
+
+    def __len__(self):
+        return len(self.start_indices)
+
+    def __iter__(self):
+        raise AssertionError("flat probabilities must not be expanded into per-token dictionaries")
+
+
+def test_flat_probabilities_match_dictionary_rewards_including_sampled_topk_duplicates():
+    from inference_scaling.shared.rewards.consilience import confidence_windows
+
+    # Sampled token outside top-K, inside top-K, and rows stored through append(dict).
+    rows = [([9, 3, 4, 5], [-7.0, -.1, -2., -3.]),
+            ([4, 3, 4, 5], [-2., -.1, -2., -3.]),
+            ([4, 3, 5], [-2., -.1, -3.])] * 15
+    tokens = (9, 4, 4) * 15
+    dictionaries = [dict(zip(ids, map(_Logprob, values), strict=True)) for ids, values in rows]
+    flat = FlatLogprobs(rows)
+    for top_k in (None, 3):
+        expected = _generated_logprobs(dictionaries, tokens, top_k)
+        actual = _generated_logprobs(flat, tokens, top_k)
+        assert actual == expected
+        if top_k is not None:
+            assert confidence_windows(actual[1]) == confidence_windows(expected[1])
+    with pytest.raises(RuntimeError, match="required token"):
+        _generated_logprobs(FlatLogprobs([([3], [-1.])]), (4,), None)
 
 
 @dataclass

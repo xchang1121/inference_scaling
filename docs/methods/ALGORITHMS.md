@@ -963,7 +963,7 @@ AR-LLM 由 `ar.engine.backend` 选择引擎，vLLM 再由 `ar.engine.vllm.asynch
 | 设置 | 引擎 | 适用路径 |
 | --- | --- | --- |
 | `transformers` | 显式 KV、批处理和完整概率评分 | 参考实现、概率诊断、全词表与 top-$`K`$ 统计 |
-| `vllm`，`asynchronous = true` | 长期运行的 `AsyncLLM`，只返回完成的输出 | 连续调度与 APC |
+| `vllm`，`asynchronous = true` | 长期运行的 `AsyncLLM`；IS 交付完成结果及所需的前缀/停止检测事件 | 连续调度与 APC |
 | `vllm`，`asynchronous = false` | 同步 `LLM` | 原生 beam |
 
 | 能力 | Transformers | vLLM |
@@ -975,6 +975,16 @@ AR-LLM 由 `ar.engine.backend` 选择引擎，vLLM 再由 `ar.engine.vllm.asynch
 
 当前 vLLM 后端用于 AR-LLM。dLLM 需要返回反向扩散轨迹、每一步的转移对数概率与可提交的分块状态，因此
 使用第 11.3 节的批量 Transformers 后端；公共算法接口和计算量统计不随执行引擎变化。
+
+条件 IS 的 K=1 请求向算法只交付完成结果；K>1 的新候选在下一次引擎增量覆盖 B 时通知，随后继续原请求，
+不重启随机流。多 token 思考边界保留中间事件供外层解析。引擎内部保留首 token 通知，用来释放准入队列中的
+预填充额度；其余输出默认每 32 token 交付一次。该路径降低消息与解析开销，候选数、完整 rollout、权重和选择顺序不变。
+
+生成概率默认使用 vLLM 的扁平数组。实现直接取出已采样 token 的概率，对 top-K 项使用原有 `fsum` 归约得到
+Consilience 的逐 token 统计量；已采样 token 同时位于 top-K 时，重复项只按 top-K 原集合计入一次。
+采样温度和词表惩罚仍由引擎先处理。该路径使用常规 worker，支持异步调度；与下述读取原始 logits 的融合统计路径分开。
+执行细节和输出律保持条件见[调度说明](ROLLOUT_SCHEDULING.md#compact-output)，结果见
+[CPU 输出层测试](../reports/RTX3090_ROLLOUT_INFRA.md#infra-cpu-output)。
 
 <a id="infra-fused-logprobs"></a>
 #### 11.4.1 融合概率记录

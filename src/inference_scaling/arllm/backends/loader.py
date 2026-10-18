@@ -62,6 +62,10 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
     if engine["backend"] == "transformers":
         return _transformers(str(model["path"]), identity, model, engine)
     vllm = engine["vllm"]
+    if vllm["stream_interval"] < 1:
+        raise ValueError("vllm.stream_interval must be positive")
+    if vllm["fused_logprobs"] and vllm["async_scheduling"] is True:
+        raise ValueError("fused log-probabilities require async_scheduling=false or null")
     scheduler = None
     if vllm["asynchronous"]:
         options = dict(engine["rollout_scheduler"])
@@ -107,6 +111,9 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
             scoring_backend=scorer,
             engine_kwargs=engine_kwargs,
             enable_fused_logprobs=bool(vllm["fused_logprobs"]),
+            flat_logprobs=bool(vllm["flat_logprobs"]),
+            stream_interval=int(vllm["stream_interval"]),
+            async_scheduling=vllm["async_scheduling"],
         )
         if isinstance(backend, AsyncVLLMBackend):
             backend.configure_scheduler(scheduler)

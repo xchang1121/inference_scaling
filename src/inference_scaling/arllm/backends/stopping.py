@@ -230,7 +230,11 @@ class StoppedGenerationSession:
         offset = len(tokens)
         inner = replace(request, prefix=request.prefix + tuple(tokens), max_new_tokens=request.max_new_tokens - offset,
                         sampling=self.backend._inner_policy(request.sampling), request_id=f"{key}:stop:{offset}",
-                        stop_sequences=self.backend.stop_sequences, uniform_offset=request.uniform_offset + offset)
+                        stop_sequences=self.backend.stop_sequences, uniform_offset=request.uniform_offset + offset,
+                        # Single-token markers stop natively; longer markers need this wrapper's deltas.
+                        intermediate_events=request.intermediate_events or not getattr(
+                            self.backend.backend, "supports_native_token_stops", False) or any(
+                            len(marker) > 1 for marker in self.backend.stop_sequences))
         self.routes[inner.request_id] = key, inner
         self.current[key] = inner.request_id
         return inner

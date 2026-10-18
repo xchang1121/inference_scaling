@@ -179,6 +179,9 @@ class ARFamily:
     def synchronize(self) -> None:
         synchronize_accelerator(self.ar["engine"]["device"])
 
+    def execution_config(self) -> dict[str, Any]:
+        return getattr(self.raw, "execution_config", lambda: {})()
+
     def cost_snapshot(self) -> dict[str, int]:
         """Run-level counters, including greedy/beam work outside the backend counters."""
         snapshot = self.raw.snapshot()

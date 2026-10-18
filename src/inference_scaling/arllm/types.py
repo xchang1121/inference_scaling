@@ -119,6 +119,9 @@ class GenerationRequest:
     log_weight_stop: LogWeightStop | None = None
     # Also report this statistic of every generated token; a backend may not compute it.
     statistic: TokenStatistic | None = None
+    # Execution hint only: omit intermediate events except an explicit checkpoint.
+    # Scope wrappers enable them when an external parser must detect a stop boundary.
+    intermediate_events: bool = True
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:

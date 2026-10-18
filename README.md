@@ -113,6 +113,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | --- | --- |
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
 | IS 前缀就绪即释放分支、共享并发上限与长尾调度 | `ar.engine.rollout_scheduler`（默认启用；异步 vLLM，非融合统计模式；[实现与分布保证](docs/methods/ROLLOUT_SCHEDULING.md)、[INFRA 结果](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-report-rollout-scheduling)） |
+| IS 必要事件交付、紧凑概率输出 | K=1 向算法交付完成结果，K>1 增加分支所需的前缀事件；`ar.engine.vllm.stream_interval = 32`、`flat_logprobs = true`（[CPU 输出层测试](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-cpu-output)） |
 | vLLM 引擎、前缀缓存、融合概率（MH 的基础概率与 Self-Certainty 在采样同一步读出） | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |

@@ -131,6 +131,7 @@ def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str
             before = family.cost_snapshot()
             execution: dict[str, Any] = {"started": _now(), "status": "running", "workers": family.workers,
                                          "requested_records": len(pending), "completed": [], "output_tokens": 0}
+            execution["engine_execution"] = getattr(family, "execution_config", lambda: {})()
             executions.append(execution)
             write_json_atomic(executions_path, executions)
             started = time.perf_counter()

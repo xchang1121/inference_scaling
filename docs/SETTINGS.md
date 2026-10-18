@@ -100,6 +100,9 @@
 | `transformers.in_place_kv` | 布尔 | 解码时把新位置写入预留缓冲区，而不是每步复制整层 KV；结果不变 |
 | `transformers.cuda_graphs` | 布尔 | 解码步在固定形状上执行：KV 放入常驻缓冲区，行数与关注的位置数取整到 2 的幂，其余部分由掩码屏蔽；CUDA 上每种形状的第一步捕获为 CUDA graph，之后重放（CPU 上走同一路径但不捕获）。结果与动态解码相同，至多差浮点舍入；缓冲区保留到见过的最大批。需要模型在单一设备上、注意力为 `sdpa` 或 `eager` |
 | `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
+| `vllm.async_scheduling` | 布尔或 `null` | 引擎内部的 CPU/GPU 异步调度，与 `asynchronous` 接口选项分开；默认 `null`，由 vLLM 按模型和设备决定。融合统计模式要求 `false` 或 `null`，实际生效值记录在 `engine_execution` |
+| `vllm.stream_interval` | 正整数 | 默认 `32`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付，减少 Python 输出开销。K>1 的前缀通知因分批最多额外等待 `stream_interval−1` 个 token（队列等待另计）；较短的块可设为 `1`。多 token 停止标记仍由外层增量检测，可能产生边界后的额外解码 |
+| `vllm.flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。两种引擎都可用；需要 vLLM 0.26.x，关闭 vLLM 的异步调度，不能与 `token_penalty` 同用 |

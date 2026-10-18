@@ -98,6 +98,9 @@ SCHEMA: dict[str, Any] = {
             },
             "vllm": {
                 "asynchronous": bool,
+                "async_scheduling": (bool, None),
+                "stream_interval": int,
+                "flat_logprobs": bool,
                 "tensor_parallel_size": int,
                 "data_parallel_size": int,
                 "gpu_memory_utilization": float,

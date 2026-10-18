@@ -5,7 +5,7 @@
 ## 请求释放与完成
 
 1. 保留候选的前缀已经已知，其额外 K−1 条补全在本轮开始时提交；保留补全的奖励直接复用。
-2. 新候选仍是一条完整原生请求。到 B 个 token 时发出前缀事件，立即提交 K−1 条子请求；原请求继续产生第零条补全，不中断、不以新种子重新续写。子请求的完整提示由已有前缀组成，前缀缓存由 vLLM 处理。
+2. 新候选仍是一条完整原生请求。K>1 时，在第一份覆盖 B 个 token 的引擎增量到达后发出前缀事件，提交 K−1 条子请求；原请求继续产生第零条补全，不中断、不以新种子重新续写。K=1 没有额外分支，只需完成通知。子请求的完整提示由已有前缀组成，前缀缓存由 vLLM 处理。
 3. 在 B 以内已结束的候选只有一条空补全，仍使用原来的 K_m=1。`block_first=true` 时，原有分块请求与续写的种子、offset 保持原样。
 4. 叶子完成便在调用线程计算奖励，归入固定的 `(candidate, rollout)` 槽位；记录器在前缀事件到达时即可提供对应的 token 统计量。所有必需叶子齐全后，才按编号顺序调用原来的 `weigh`、`select`。
 
@@ -24,11 +24,33 @@
 
 默认 `fair_lpt`，也提供 `fifo` 作对照。调度不会抢占正在运行的统计样本。它消除的是候选与补全之间的批次屏障，并改善资源使用和任务排列；单条不可并行的自回归长尾仍存在。单并发且总工作不变时，不应期待调度本身带来加速。
 
-仓库默认 K=1，没有额外分支可以提前释放，因此不会获得 K>1 时的分支重叠收益；仍有跨题准入和资源保护。调度器不会为追求加速擅自增大 K。
+仓库默认 K=1，没有额外分支可以提前释放，收益来自减少输出处理、跨题准入和资源保护。调度器保持配置中的 K。
 
-## 流式实现细节
+<a id="compact-output"></a>
+## 输出交付与概率处理
 
-vLLM 使用 DELTA 输出，在候选 B 处及时通知，其余 token 通常合并为 32 个一组。调用线程还未读取的同一请求事件继续合并，只保留一份待通知记录；缓冲内存与待处理 token 数线性相关，不为每个 token 保留独立事件对象。引擎事件消费器不会因调用线程正在评分而堵住，评分仍可向同一引擎提交请求。
+vLLM 内部使用 DELTA 输出，`stream_interval` 默认 32。首 token 立即交付以确认预填充结束，其余增量按间隔交付，
+结束时交付剩余 token。仅在外层合并事件无法省掉内层逐 token 概率解析，因此间隔设置在 vLLM 引擎中。
+
+算法交付由 `GenerationRequest.intermediate_events` 与会话的 `checkpoint` 决定：
+
+- IS 请求关闭普通中间事件。K=1 只交付完成结果，原生请求继续并行执行；K>1 的新候选增加一次前缀事件，后续补全只交付完成结果。
+- K>1 的前缀事件因输出分批可能比第 B 个 token 晚至多 `stream_interval−1` 个 token（队列等待另计），但前缀仍严格取前 B 个，原请求的样本和随机流不变。短块可减小间隔。
+- 单 token 的 thinking 结束标记由 vLLM 原生停止；多 token 标记或未声明原生停止能力的后端保留普通中间事件。外层语义停止前可能存在额外解码，实际成本按后端计数；逻辑输出仍截在原边界。
+- K=1 且 `block_first=false` 时，提交新候选后即可声明本轮无新增请求，使已有尾部保护及时生效。
+
+调用线程尚未读取的同一请求事件继续合并，只保留一份待通知记录。缓冲空间随待处理 token 数线性增长；
+生成事件消费不等待奖励计算，奖励仍可向同一引擎提交评分请求。
+
+`flat_logprobs=true` 使用 vLLM 的 `FlatLogprobs` 数组。直接读取数组可省掉每个位置的字典和概率对象；
+对 sampled-token 与 top-K 的重复项保留与字典接口相同的语义，Consilience 仍按原公式和 `fsum` 计算。
+没有修改 worker 的采样、温度或词表惩罚；传输内容仍包含必要的 top-K 概率，归约后算法只保存原有的逐 token 标量。
+
+`stream_outputs` 记录后端处理的引擎增量数，`stream_events` 记录向外层交付的事件数。
+实验的 `executions.json` 和服务的 `scaling` 中，`engine_execution` 记录生效的 `async_scheduling`、输出间隔、
+`enforce_eager`、CUDA Graph 模式与捕获批大小配置。`asynchronous=true` 只说明使用异步接口，不能据此断定引擎内部
+异步调度已开启；CUDA Graph 配置也不等于每个解码步实际命中图。默认保留 vLLM 的硬件适配选择，可通过
+`vllm.async_scheduling` 和 `engine_kwargs.compilation_config` 显式调整。
 
 思考边界包装器支持多 token 标记跨事件与跨请求前缀；只在出现可能的 EOS/结束标记时解析完整序列。原生结束标记若对应空思考，按原有 offset 和派生种子继续。错误路径等待活动请求取消和额度释放后再返回错误，不使用不完整树作选择。
 
@@ -43,6 +65,9 @@ vLLM 使用 DELTA 输出，在候选 B 处及时通知，其余 token 通常合�
 当前 `fused_logprobs=true` 只在请求结束后提供全词表统计量，因此回退到原批次算法，仍使用异步引擎的共享准入限制。同步 vLLM、Transformers 保留原路径。运行记录和服务返回值的 `rollout_scheduler` 显示实际使用 `streaming` 或 `batch`，设置本身不等于流式路径已生效。
 
 所用公共接口见 vLLM [RequestOutputKind](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/sampling_params.py)、[AsyncLLM.generate/abort](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/v1/engine/async_llm.py) 和 [KV 指标说明](https://docs.vllm.ai/en/latest/usage/metrics/)。
+
+紧凑输出所用接口见 [FlatLogprobs](https://docs.vllm.ai/en/v0.26.0/api/vllm/logprobs/) 与
+[stream_interval](https://docs.vllm.ai/en/v0.26.0/api/vllm/config/scheduler/#vllm.config.scheduler.SchedulerConfig.stream_interval)。
 
 ## 分布为何保持不变
 
