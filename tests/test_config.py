@@ -29,6 +29,8 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: SamplingConfig(top_p=float("inf")),
         lambda: ConditionalISConfig(block_first=False, reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),
         lambda: ConditionalISConfig(block_first=False, block_size=8, total_length=4, candidate_count=4, rollout_count=4, reward_temperature=1.0),
+        lambda: ConditionalISConfig(4, 1, 1, 4, 1.0, False, completion_fraction=0),
+        lambda: ConditionalISConfig(4, 1, 1, 4, 1.0, False, completion_fraction=1.1),
     ],
 )
 def test_invalid_configs_fail_early(factory) -> None:

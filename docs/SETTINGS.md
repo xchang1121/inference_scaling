@@ -148,6 +148,8 @@
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.candidate_count` / `rollout_count` / `block_size` | 固定的候选数 M、每候选补全数 K 与块长 B；块长在输出上限处截短 |
+| `is.sibling_replay` | 默认 `false`。复用所选块的其他完整补全及奖励，替代下一轮部分新候选根；K=1 无额外可复用样本。见[同块补全复用](methods/ALGORITHMS.md#is-sibling-replay) |
+| `is.completion_fraction` | 默认 `1.0`，等待全部补全。设为 `(0,1)` 后，各候选的平均完成比例达到该值即取消未完成请求；至少取得一条新结果，未完成补全权重为零，保留原定 K 分母。需要流式后端，会引入长度相关偏差。见[完成配额](methods/ALGORITHMS.md#is-completion-quota) |
 | `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 
 <a id="ar-defaults"></a>

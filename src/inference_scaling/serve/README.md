@@ -21,6 +21,9 @@
 
 返回里额外带 `scaling`：档位、固定的候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 
+`sibling_replay` 与 `completion_fraction` 显示两个可选机制的实际设置：同块完整补全复用，以及取消未完成请求的完成配额。
+默认分别为 `false` 和 `1.0`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
+
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
 

@@ -161,7 +161,9 @@
         "candidate_count": 4,
         "rollout_count": 1,
         "block_size": 1024,
-        "block_first": false
+        "block_first": false,
+        "sibling_replay": false,
+        "completion_fraction": 1.0
       }
     }
   },

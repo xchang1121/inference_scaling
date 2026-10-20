@@ -59,10 +59,11 @@ def test_retained_children_start_without_waiting_for_fresh_candidate_tails():
 
 @pytest.mark.parametrize("marker", [(1,), (0, 1)])
 @pytest.mark.parametrize("block_first", [False, True])
-def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first):
+@pytest.mark.parametrize("sibling_replay", [False, True])
+def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first, sibling_replay):
     parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
     statistic = TokenStatistic(SamplingConfig(), top_k=2)
-    config = ConditionalISConfig(3, 3, 2, 7, .7, block_first)
+    config = ConditionalISConfig(3, 3, 2, 7, .7, block_first, sibling_replay=sibling_replay)
     for seed in range(3):
         results = []
         for streamed in (False, True):

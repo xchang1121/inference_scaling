@@ -551,6 +551,42 @@ AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algo
 补全都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。dLLM 的条件 IS 是分块版本：
 选择候选后只提交该块，见第 7 节。
 
+<a id="is-sibling-replay"></a>
+### 同块完整补全复用
+
+`ar.algorithms.is.sibling_replay=true` 时，选中块的其他完整补全随机排序后，最多保留 M−1 条。
+下一轮把这些补全按固定 B 切为候选块和剩余后缀，直接复用奖励；其余候选根照常生成，每个非终止候选仍补齐 K 条。
+只保留当前选中块的补全，未选块和更早的候选池立即释放。K=1 没有额外补全，行为不变。
+
+每复用一条根即可省去该根的生成和评分，随后轮次仍可能因所选长度不同而增减。
+这些根经历了上一轮选择，不能当作重新独立抽到的基础模型样本；有限预算结果与关闭复用时不同，
+不据此推断分布误差更小。默认关闭。实现见
+[`ConditionalISAdapter.step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py) 与
+[`StatisticRecorder.retain_statistics`](../../src/inference_scaling/arllm/backends/statistics.py)。
+
+<a id="is-completion-quota"></a>
+### 按候选完成比例停止
+
+`ar.algorithms.is.completion_fraction=f<1` 允许舍弃长尾。设候选 m 原定有 K_m 条补全，已完成 n_m 条，
+当平均完成比例达到 f 时结束本轮，并取消其余请求。块内已经终止的候选取 K_m=1；
+前缀尚未形成的候选按 K_m=K 计，完成数为零。若 B 覆盖全部剩余长度，则所有候选取 K_m=1。
+有新生成任务时，还要求至少有一条新补全完成，避免仅凭缓存立即结束。
+
+```math
+\frac{1}{M}\sum_{m=1}^{M}\frac{n_m}{K_m}\ge f,
+\qquad
+\widehat w_m=\frac{1}{K_m}\sum_{k\in\mathrm{completed}(m)}\exp(r_{mk}/\tau).
+```
+
+没有完成补全的候选不参与选择。其余候选使用上述权重，候选内仍按完整补全的原奖励权重选择。
+分母保持原定 K_m，避免将仅完成一条的候选当成已完成全部补全。
+取消会根据样本耗时筛选数据，因此估计有偏，不能沿用完整等待的目标不变性结论。
+默认 f=1，所有原定补全完成后再选择；更小的 f 属于速度与采样质量的折中，准确率需另行评估。
+
+实现见 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)。
+取消后保留已生成前缀的概率统计量，供已完成子请求计算奖励；下一轮清理无关记录。
+请求级计费可能遗漏取消前尚未交付的计算，因此记录不完整标记；性能对照另读引擎实际执行统计，计入取消和批次补齐。
+
 <a id="alg-logit-adjustment"></a>
 ### 6.1 可枚举候选的 logit adjustment
 

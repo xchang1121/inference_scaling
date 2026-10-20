@@ -34,25 +34,30 @@ class StatisticRecorder:
     def model_id(self) -> str:
         return self.backend.model_id
 
+    def _remember(self, prefix, tokens, values) -> None:
+        if values is not None and not np.isnan(values).all():
+            self._outputs.setdefault(len(prefix), {}).setdefault(prefix, []).append(
+                (np.asarray(tokens), np.asarray(values, dtype=np.float64)))
+
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         samples = self.backend.sample_batch([replace(request, statistic=self.statistic) for request in requests])
         for sample in samples:
-            if sample.token_statistics is not None:
-                self._outputs.setdefault(len(sample.prefix), {}).setdefault(sample.prefix, []).append(
-                    (np.asarray(sample.token_ids), np.asarray(sample.token_statistics, dtype=np.float64)))
+            self._remember(sample.prefix, sample.token_ids, sample.token_statistics)
         return samples
 
     def open_generation_session(self):
         return StatisticSession(self)
 
-    def retain_statistics(self, prompt: TokenSequence, completion: TokenSequence) -> None:
-        """Collapse finished branches to the retained sequence without scoring missing positions."""
+    def retain_statistics(self, prompt: TokenSequence, completion: TokenSequence, *siblings: TokenSequence) -> None:
+        """Keep completed sequences needed by the next step, without scoring missing positions."""
         if self._streams:
             raise RuntimeError("cannot prune statistics while a generation session is open")
-        values = self._recorded(prompt + completion, len(prompt))
+        records = [(np.asarray(tokens), self._recorded(prompt + tokens, len(prompt)))
+                   for tokens in dict.fromkeys((completion, *siblings))]
         self._outputs.clear()
-        if len(values) and not np.isnan(values).all():
-            self._outputs[len(prompt)] = {prompt: [(np.asarray(completion), values)]}
+        records = [(tokens, values) for tokens, values in records if len(values) and not np.isnan(values).all()]
+        if records:
+            self._outputs[len(prompt)] = {prompt: records}
 
     def _recorded(self, sequence: TokenSequence, start: int) -> np.ndarray:
         """Statistics of ``sequence[start:]`` from outputs generated inside it; NaN where there is none."""
@@ -102,9 +107,7 @@ class StatisticSession:
         tokens.extend(sample.token_ids)
         values.extend(sample.token_statistics if sample.token_statistics is not None else [float("nan")] * len(sample.token_ids))
         if event.finished:
-            if not np.isnan(values).all():
-                self.recorder._outputs.setdefault(len(prefix), {}).setdefault(prefix, []).append(
-                    (np.asarray(tokens), np.asarray(values, dtype=np.float64)))
+            self.recorder._remember(prefix, tokens, values)
             del records[sample.request_id]
         return event
 
@@ -118,7 +121,10 @@ class StatisticSession:
         try:
             self.inner.close()
         finally:
-            self.recorder._streams.pop(self, None)
+            # A finished child may reuse a cancelled parent's generated block.
+            # Keep its observed statistics until retain_statistics prunes the pool.
+            for prefix, tokens, values in self.recorder._streams.pop(self, {}).values():
+                self.recorder._remember(prefix, tokens, values)
 
 
 __all__ = ["StatisticRecorder", "StatisticSession"]

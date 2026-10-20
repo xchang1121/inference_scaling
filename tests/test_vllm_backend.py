@@ -303,10 +303,21 @@ def test_vllm_generation_reports_the_statistics_of_its_own_policy() -> None:
     assert other.token_statistics is None and not backend.records(other_policy, policy) and not backend.records(full, policy)
 
 
-def test_vllm_encode_decode_and_close() -> None:
+def test_vllm_public_helpers_and_close() -> None:
     backend, engine = _backend()
     assert backend.encode("ab", add_special_tokens=False) == (7, 8)
     assert backend.decode((1, 2, 3)) == "1,2,3"
+    assert backend.execution_config()["compile_sizes"] is None
+    config = SimpleNamespace(model_config=SimpleNamespace(quantization="awq"), compilation_config=SimpleNamespace(
+        cudagraph_capture_sizes=[1, 2, 4, 8], compile_sizes=[1], compile_ranges_endpoints=[2048]))
+    engine.vllm_config = config
+    observed = backend.execution_config()
+    assert observed["quantization"] == "awq"
+    assert observed["compile_sizes"] == [1] and observed["compile_ranges_endpoints"] == [2048]
+    assert observed["cudagraph_capture_sizes"] == [1, 2, 4, 8]
+    del engine.vllm_config
+    engine.llm_engine = SimpleNamespace(vllm_config=config)
+    assert backend.execution_config() == observed
     backend.close()
     backend.close()
     assert engine.closed
@@ -318,6 +329,16 @@ def test_parameter_count_skips_the_vision_tower_and_multi_token_prediction(tmp_p
     shapes = {"model.language_model.layers.0.weight": (2, 3), "model.visual.blocks.0.weight": (4, 4), "mtp.fc.weight": (5,)}
     save_file({name: numpy.zeros(shape, numpy.float32) for name, shape in shapes.items()}, str(tmp_path / "model.safetensors"))
     assert _checkpoint_parameter_count(str(tmp_path)) == 6
+
+    # An exported duplicate is shared only when the model config says so.
+    shapes.update({"model.embed_tokens.weight": (7, 2), "lm_head.weight": (7, 2)})
+    save_file({name: numpy.zeros(shape, numpy.float32) for name, shape in shapes.items()}, str(tmp_path / "model.safetensors"))
+    assert _checkpoint_parameter_count(str(tmp_path)) == 34
+    (tmp_path / "config.json").write_text('{"tie_word_embeddings": true}', encoding="utf-8")
+    assert _checkpoint_parameter_count(str(tmp_path)) == 20
+    (tmp_path / "config.json").write_text(
+        '{"tie_word_embeddings": true, "text_config": {"tie_word_embeddings": false}}', encoding="utf-8")
+    assert _checkpoint_parameter_count(str(tmp_path)) == 34
 
 
 def test_vllm_counts_the_engine_preemptions_since_the_backend_started() -> None:

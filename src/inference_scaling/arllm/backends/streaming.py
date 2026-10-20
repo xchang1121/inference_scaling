@@ -133,7 +133,7 @@ class AsyncGenerationSession:
         self.backend._runner.run(seal())
 
     def stop(self, request_id: str) -> None:
-        # Only a semantic stop boundary or caller failure may cancel a request.
+        # Explicit semantic stop; whole-pool quotas cancel through close().
         self.stopped.add(request_id)
 
         async def stop() -> None:

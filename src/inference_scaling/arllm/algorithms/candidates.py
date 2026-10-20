@@ -1,12 +1,14 @@
-"""Conditional IS's fixed tree, released as soon as its dependencies are known.
+"""Conditional IS's tree, released as soon as its dependencies are known.
 
 The original full request remains completion zero. Neither completion order nor
-runtime enters the weights; every result returns to its predetermined slot.
+runtime enters ordinary IS weights. Optional completion quotas drop unfinished
+leaves and change the sampling law; completed results keep their original slots.
 """
 
 from __future__ import annotations
 
-from math import isfinite
+from dataclasses import replace
+from math import ceil, isfinite, log
 from typing import TYPE_CHECKING, NamedTuple
 
 from inference_scaling.arllm.backends.scheduling import GenerationSession
@@ -25,20 +27,25 @@ class Block(NamedTuple):
 
 
 def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, step: int, seeds: SeedStream):
-    """This step's candidates, and the forward token slots they cost when every one of them was measured."""
+    """Candidates, measured forward slots, and original indices of the surviving groups."""
     if not adapter.sampling.full_support:
         raise ValueError("base candidates require full support: top_p=1 and top_k=None")
     config, prompt = adapter.config, adapter.prompt
+    candidate_count = config.candidate_count
+    rollout_count = config.rollout_count
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
-    blocks: list[Block | None] = [None] * config.candidate_count
+    blocks: list[Block | None] = [None] * candidate_count
     leaves: list[dict[int, RolloutEvaluation]] = [{} for _ in blocks]
     routes: dict[str, tuple[int, int, bool]] = {}
     buffers: dict[str, list[int]] = {}
     submitted: dict[str, GenerationRequest] = {}
     finished: set[str] = set()
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
+    partial = config.completion_fraction < 1
+    if partial and not streaming:
+        raise ValueError("completion quotas require a streaming generation backend")
     session: GenerationSession = (getattr(adapter.backend, "open_generation_session")() if streaming
                                   else BatchGenerationSession(adapter.backend))
     pending: dict[tuple[int, int], tuple[int, ...]] = {}
@@ -61,7 +68,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         length = remaining - len(block.token_ids)
         if block.finish_reason != "length" or length == 0:
             return
-        jobs = [request(index, k, block.token_ids, length) for k in range(1, config.rollout_count)]
+        jobs = [request(index, k, block.token_ids, length) for k in range(1, rollout_count)]
         if continuation:
             jobs.insert(0, request(index, 0, block.token_ids, length, continuation=True))
         if jobs:
@@ -90,16 +97,42 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             end = state.fixed + width
             blocks[0] = Block(state.token_ids[state.fixed:end], "length" if end < len(state.token_ids) else "stop")
             leaves[0][0] = RolloutEvaluation(state.token_ids[end:], state.reward, state.reward / config.reward_temperature)
+        recycled = state.siblings[:candidate_count - carried] if config.sibling_replay else ()
+        for index, sibling in enumerate(recycled, start=carried):
+            blocks[index] = Block(sibling.token_ids[:width], "length" if width < len(sibling.token_ids) else "stop")
+            leaves[index][0] = RolloutEvaluation(sibling.token_ids[width:], sibling.reward,
+                                                sibling.reward / config.reward_temperature)
+        saved = carried + len(recycled)
         roots = [request(index, 0, (), width if config.block_first else remaining, root=True)
-                 for index in range(carried, config.candidate_count)]
+                 for index in range(saved, candidate_count)]
         if roots:
-            checkpoint = width if config.rollout_count > 1 and not config.block_first else None
+            checkpoint = width if rollout_count > 1 and not config.block_first else None
             session.submit(roots, phase="prefix", checkpoint=checkpoint)
-        if carried:
-            branch(0)
-        sealed = config.rollout_count == 1 and not config.block_first
+        for index in range(saved):
+            branch(index)
+        sealed = rollout_count == 1 and not config.block_first
         if sealed:
             session.seal()
+
+        def expected(block):
+            if block is None:
+                # A missing prefix can still create K leaves. Use that upper bound
+                # until it terminates, rather than waiting for an unusable group.
+                return rollout_count if width < remaining else 1
+            return rollout_count if block.finish_reason == "length" and len(block.token_ids) < remaining else 1
+
+        def quota_ready():
+            if not partial:
+                return False
+            # A terminal block already has a known weight: its K empty
+            # continuations coincide. Count each group's completed fraction
+            # in units of 1/K, without generating duplicate empty continuations.
+            completed = sum(len(group) * rollout_count // expected(block)
+                            for block, group in zip(blocks, leaves, strict=True))
+            required = ceil(config.completion_fraction * candidate_count * rollout_count)
+            fresh = saved + int(bool(roots) or rollout_count > 1)
+            return sum(map(len, leaves)) >= fresh and completed >= required
+
         while len(finished) < len(routes):
             if not sealed and all(block is not None for block in blocks):
                 session.seal()
@@ -146,19 +179,33 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     assert block is not None
                     evaluate(index, rollout, tuple(tokens[len(block.token_ids):] if root else tokens))
                 del buffers[key]
+            if quota_ready():
+                break
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])
             pending.clear()
-        if any(block is None for block in blocks):
+        if not partial and any(block is None for block in blocks):
             raise RuntimeError("stream omitted a candidate prefix")
         canonical = []
-        for block, group in zip(blocks, leaves, strict=True):
-            assert block is not None
-            count = config.rollout_count if block.finish_reason == "length" and len(block.token_ids) < remaining else 1
-            if set(group) != set(range(count)):
+        canonical_blocks = []
+        indices = []
+        for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
+            if not partial and set(group) != set(range(expected(block))):
                 raise RuntimeError("stream omitted a required completion")
-            canonical.append([group[index] for index in range(count)])
-        return weigh([block.token_ids for block in blocks if block is not None], canonical), (slots if measured else None)
+            if group:
+                assert block is not None
+                indices.append(index)
+                canonical_blocks.append(block)
+                canonical.append([group[k] for k in sorted(group)])
+        result = weigh([block.token_ids for block in canonical_blocks], canonical)
+        if partial:
+            # Missing leaves contribute zero; keep the planned denominator.
+            result = tuple(replace(item, log_weight=item.log_weight + log(len(item.rollouts) / expected(block)))
+                           for item, block in zip(result, canonical_blocks, strict=True))
+        if len(finished) != len(routes):
+            measured = False
+        sources = tuple(indices) if len(indices) != candidate_count else None
+        return result, (slots if measured else None), sources
     finally:
         session.close()
 

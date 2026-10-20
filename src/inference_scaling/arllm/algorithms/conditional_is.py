@@ -1,8 +1,8 @@
 """Conditional SIR on a kept complete sequence, with token-free step history.
 
-Candidate zero reuses the current block, completion and reward. Other branches
-are fresh base samples. Batch and streaming execution use the same candidate
-tree; execution order never changes seeds, weights or selection.
+Candidate zero reuses the current block, completion and reward. Optional sibling
+replay keeps a bounded subset of the chosen block's other completions for the
+next step. Batch and streaming execution share the same tree and selection.
 """
 
 from __future__ import annotations
@@ -14,17 +14,19 @@ from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.conditional_is import ConditionalISResult, ConditionalISStep, select
+from inference_scaling.shared.sampling.conditional_is import ConditionalISResult, ConditionalISStep, RolloutEvaluation, select
 from inference_scaling.shared.types import TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)
 class RetainedSequence:
-    """Only the selected complete sequence survives; fixed is its committed prefix length."""
+    """Selected sequence and optional same-prefix siblings; no older candidate pools."""
 
     token_ids: TokenSequence = ()
     reward: float = 0.0
     fixed: int = 0
+    # Suffixes relative to token_ids[:fixed], in uniformly random order.
+    siblings: tuple[RolloutEvaluation, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -49,20 +51,31 @@ class ConditionalISAdapter:
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        candidates, forward_slots = evaluate_candidates(self, state, step_index, seeds)
+        candidates, forward_slots, sources = evaluate_candidates(self, state, step_index, seeds)
+        carried = bool(state.token_ids)
         selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
-        carried = bool(state.token_ids)
+        reused = (min(len(state.siblings), self.config.candidate_count - int(carried))
+                  if self.config.sibling_replay else 0)
         record = ConditionalISStep(
             state.fixed, candidates, selected, kept, carried,
-            sum(len(item.rollouts) for item in candidates) - int(carried), forward_slots,
+            sum(len(item.rollouts) for item in candidates) - int(carried) - reused, forward_slots,
+            (self.config.block_size, self.config.candidate_count, self.config.rollout_count),
+            sources,
         )
-        updated = RetainedSequence(state.token_ids[:state.fixed] + candidate.token_ids + completion.token_ids,
-                                   completion.reward, state.fixed + len(candidate.token_ids))
+        fixed = state.token_ids[:state.fixed] + candidate.token_ids
+        siblings: tuple[RolloutEvaluation, ...] = ()
+        if self.config.sibling_replay and completion.token_ids:
+            available = [item for index, item in enumerate(candidate.rollouts) if index != kept]
+            count = min(len(available), self.config.candidate_count - 1)
+            if count:
+                order = seeds.generator("conditional_is", step_index, "siblings").permutation(len(available))
+                siblings = tuple(available[int(index)] for index in order[:count])
+        updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings)
         retain = getattr(self.backend, "retain_statistics", None)
         if retain is not None:
-            retain(self.prompt, updated.token_ids)
+            retain(self.prompt, updated.token_ids, *(fixed + sibling.token_ids for sibling in siblings))
         return record, updated
 
 

@@ -1,6 +1,7 @@
 import asyncio
 import threading
-from math import log
+from dataclasses import replace
+from math import exp, fsum, log
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward
-from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
+from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, TokenStatistic
 from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
 from inference_scaling.shared.rng import SeedStream, uniform_stream
 from inference_scaling.shared.types import pointwise
@@ -109,6 +110,7 @@ def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_f
         before = backend.snapshot()
         result = run_conditional_is(backend, (1,), config, reward, SeedStream(4))
         assert result == baseline
+        assert all(len(step.candidates) == config.candidate_count for step in result.steps)
         assert 1 < engine.maximum_active <= 5
         assert not engine.aborted
         assert backend.snapshot().generated_tokens > 0
@@ -126,24 +128,69 @@ def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_f
                                        if event[0] == "finish" and event[1] in {root[1] for root in roots})
                 assert first_child < last_root_finish
         assert backend.execution_config() == {
-            "flat_logprobs": True, "stream_interval": interval, "async_scheduling": True,
-            "enforce_eager": False, "cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4]}
+            "flat_logprobs": True,
+            "stream_interval": interval, "async_scheduling": True,
+            "enforce_eager": False, "quantization": None,
+            "cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4],
+            "compile_sizes": None, "compile_ranges_endpoints": None}
+        # The optional quota changes selection, but retains complete continuations
+        # and the original K denominator instead of rewarding partially finished groups.
+        partial = run_conditional_is(backend, (1,), replace(config, completion_fraction=.75), reward, SeedStream(4))
+        assert len(partial.token_ids) == 12
+        for step in partial.steps:
+            expected = rollouts if step.generated_length_before + config.block_size < config.total_length else 1
+            if sum(len(candidate.rollouts) for candidate in step.candidates) < step.sampling_plan[1] * expected:
+                assert step.forward_token_slots is None and partial.forward_token_slots is None
+            for candidate in step.candidates:
+                weights = [item.log_weight for item in candidate.rollouts]
+                top = max(weights)
+                assert candidate.log_weight == pytest.approx(
+                    top + log(fsum(exp(value - top) for value in weights) / expected))
+            if step.candidate_indices is not None:
+                assert len(step.candidate_indices) == len(step.candidates)
+                assert tuple(sorted(set(step.candidate_indices))) == step.candidate_indices
+        assert engine.active == 0 and not backend._admission.queue.active and not backend._admission.queue.pending
+        assert backend.snapshot().cancelled_requests == len(engine.aborted)
+        if not block_first and interval == 1:
+            # The entire sequence is one block: a late root has no known block
+            # when the first three complete. It must not hold the quota barrier.
+            single_block = run_conditional_is(backend, (1,), replace(
+                config, block_size=config.total_length, completion_fraction=.75), reward, SeedStream(4))
+            assert len(single_block.steps) == 1 and len(single_block.steps[0].candidates) == 3
+            assert len(single_block.token_ids) == config.total_length
+            assert all(len(candidate.rollouts) == 1 for candidate in single_block.steps[0].candidates)
+            assert engine.active == 0
+            # Three roots terminate before B. Their weights are fully known,
+            # even with K>1; an unknown fourth root must not inflate the quota.
+            terminal = run_conditional_is(backend, (1,), replace(config, completion_fraction=.75),
+                                          reward, SeedStream(2), sampling=SamplingConfig(eos_token_id=4))
+            assert len(terminal.steps) == 1 and len(terminal.steps[0].candidates) == 3
+            assert terminal.token_ids[-1] == 4 and len(terminal.token_ids) <= config.block_size
+            assert all(len(candidate.rollouts) == 1 for candidate in terminal.steps[0].candidates)
+            assert all(candidate.log_weight == candidate.rollouts[0].log_weight
+                       for candidate in terminal.steps[0].candidates)
+            assert engine.active == 0
     finally:
         backend.close()
     assert engine.active == 0
 
 
-def test_shared_pool_bounds_independent_callers_and_keeps_logical_ids_isolated():
+@pytest.mark.parametrize("batch", [False, True])
+def test_shared_pool_bounds_independent_callers_and_keeps_logical_ids_isolated(batch):
     engine = DeltaEngine()
     backend = backend_for(engine)
-    backend.configure_scheduler(SchedulerConfig(max_in_flight=2))
+    backend.configure_scheduler(SchedulerConfig(max_in_flight=2, max_prefill_tokens=1))
     barrier = threading.Barrier(2)
 
     def run(seed):
+        requests = [GenerationRequest((1,), 3, SamplingConfig(), seed + index, f"same:{index}") for index in range(3)]
+        if batch:
+            barrier.wait()
+            return backend.sample_batch(requests)
         session = backend.open_generation_session()
         try:
             barrier.wait()
-            session.submit([GenerationRequest((1,), 3, SamplingConfig(), seed + index, f"same:{index}") for index in range(3)])
+            session.submit(requests)
             buffers = {f"same:{index}": SampleBuffer() for index in range(3)}
             done = set()
             while len(done) < 3:
@@ -163,6 +210,11 @@ def test_shared_pool_bounds_independent_callers_and_keeps_logical_ids_isolated()
         assert backend.snapshot().maximum_in_flight_requests == 2
         assert len({event[1] for event in engine.trace if event[0] == "start"}) == 6
         assert not backend._admission.queue.pending and not backend._admission.queue.active
+        backend.configure_scheduler(SchedulerConfig(enabled=False))
+        expected = [backend.sample_batch([
+            GenerationRequest((1,), 3, SamplingConfig(), seed + index, f"same:{index}") for index in range(3)])
+            for seed in (10, 40)]
+        assert results == expected
     finally:
         backend.close()
 
@@ -191,7 +243,9 @@ def test_explicit_scope_stop_aborts_only_its_request_and_releases_capacity():
     engine = DeltaEngine()
     backend = backend_for(engine)
     backend.configure_scheduler(SchedulerConfig(max_in_flight=1))
-    session = backend.open_generation_session()
+    statistic = TokenStatistic(SamplingConfig(), 1)
+    recorder = StatisticRecorder(backend, statistic)
+    session = recorder.open_generation_session()
     try:
         session.submit([GenerationRequest((1,), 8, SamplingConfig(), index, str(index)) for index in range(2)], checkpoint=1)
         first = session.next_event()
@@ -203,6 +257,13 @@ def test_explicit_scope_stop_aborts_only_its_request_and_releases_capacity():
             if event.finished:
                 break
         assert engine.aborted
+        assert backend.snapshot().cancelled_requests == 1
+        session.close()
+        # A child using this prefix still needs the cancelled parent's statistic.
+        recorder.retain_statistics(first.delta.prefix, first.delta.token_ids)
+        assert recorder.token_statistics(
+            [ScoreRequest(first.delta.prefix, (first.delta.token_ids,))], statistic,
+        ) == [first.delta.token_statistics]
     finally:
         session.close()
         backend.close()

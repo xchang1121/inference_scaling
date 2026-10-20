@@ -170,6 +170,8 @@ SCHEMA: dict[str, Any] = {
                 "rollout_count": int,
                 "block_size": int,
                 "block_first": bool,
+                "sibling_replay": bool,
+                "completion_fraction": float,
             },
         },
     },

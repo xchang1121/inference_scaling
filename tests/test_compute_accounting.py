@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from inference_scaling.app.records import Meter, RequestMeter, pass_at_k, summarize_executions
@@ -18,6 +18,8 @@ class _Counters:
     generation_forward_token_slots: int = 0
     score_forward_token_slots: int = 0
     estimated_dense_forward_flops: int = 0
+    cancelled_requests: int = 0
+    preemptions: int = 0
 
 
 class _Engine:
@@ -67,6 +69,11 @@ def test_meter_ignores_attribution_when_the_counters_already_cover_it():
         meter.attribute(None)
     # The engine delta is used as it is, so the same work is not counted twice.
     assert _cost(meter)["forward_token_slots"] == 12
+    for counter in ("cancelled_requests", "preemptions"):
+        partial = Meter({"base": engine})
+        with partial.phase("search"):
+            engine.counters = replace(engine.counters, **{counter: 1})
+        assert _cost(partial) is None
 
 
 def test_execution_summary_marks_missing_cost_after_a_crash():
@@ -79,6 +86,11 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     assert summary["output_tokens_per_second"] == 5
     assert summary["unmetered_records"] == summary["incomplete_executions"] == 1
     assert not summary["complete_accounting"]
+    # All outputs are present, but a cancelled stream left unobserved native work.
+    executions[0]["cost"]["unmeasured_work_events"] = 1
+    summary = summarize_executions(executions[:1], records[:1])
+    assert summary["incomplete_executions"] == summary["unmetered_records"] == 0
+    assert summary["unmeasured_work_events"] == 1 and not summary["complete_accounting"]
 
 
 def test_grpo_compute_is_split_into_observed_forward_equivalents() -> None:

@@ -60,6 +60,10 @@ class ConditionalISStep:
     # Forward token slots this step cost, measured per request; None when the backend cannot separate it.
     # Measurement never enters the step's identity: two execution paths are compared on what they sampled.
     forward_token_slots: int | None = field(default=None, compare=False)
+    # Requested (block size, candidates, rollouts), before terminal groups collapse to one leaf.
+    sampling_plan: tuple[int, int, int] | None = None
+    # Original candidate slots when completion quotas remove entire groups.
+    candidate_indices: tuple[int, ...] | None = None
 
     @property
     def selected(self) -> ConditionalCandidate | CandidateSummary:

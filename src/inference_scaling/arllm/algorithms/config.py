@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from inference_scaling.shared.config import (
     require_finite,
     require_positive,
+    require_probability,
 )
 
 
@@ -80,10 +81,17 @@ class ConditionalISConfig:
     reward_temperature: float
     # Draw fresh candidates as blocks and their first completions with the other completions.
     block_first: bool
+    # Reuse completed siblings of the selected block; finite-budget sampling changes.
+    sibling_replay: bool = False
+    # Below one: stop at this mean completed fraction of candidate groups; length-biased.
+    completion_fraction: float = 1.0
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             require_positive(name, getattr(self, name))
+        if type(self.sibling_replay) is not bool:
+            raise ValueError("sibling_replay must be a boolean")
+        require_probability("completion_fraction", self.completion_fraction, include_zero=False)
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")

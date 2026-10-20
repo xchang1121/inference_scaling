@@ -23,6 +23,7 @@ import inspect
 import json
 import itertools
 from contextlib import contextmanager, nullcontext
+from copy import copy
 from functools import partial
 import os
 import re
@@ -117,6 +118,8 @@ class VLLMBackendSnapshot:
     fused_logprobs: bool = False
     fused_reference_sequences: int = 0
     fused_reference_tokens: int = 0
+    # Aborted streams can have executed tokens not yet delivered by the engine.
+    cancelled_requests: int = 0
 
 
 class _AsyncLoopRunner:
@@ -190,15 +193,18 @@ class _AsyncLoopRunner:
 
 
 def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
-    """Parameters of a token-only forward, read from local safetensor shapes without materializing weights."""
+    """Unique token-only parameters, read from safetensor shapes without loading weights."""
 
     root = Path(model_name_or_path)
     if not root.exists():
         return None
     files = [root] if root.is_file() and root.suffix == ".safetensors" else []
+    config = {}
     if root.is_dir():
         config_path = root / "config.json"
-        if config_path.is_file() and json.loads(config_path.read_text(encoding="utf-8")).get("quantization_config"):
+        if config_path.is_file():
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        if config.get("quantization_config"):
             return None  # Packed tensor sizes are not dense parameter counts.
         try:
             files = list(checkpoint_weight_files(root))
@@ -213,6 +219,8 @@ def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
 
     total = 0
     names: set[str] = set()
+    embeddings: set[tuple[int, ...]] = set()
+    heads: list[tuple[int, ...]] = []
     for path in files:
         with safe_open(path, framework="pt", device="cpu") as handle:
             for name in handle.keys():
@@ -220,7 +228,20 @@ def _checkpoint_parameter_count(model_name_or_path: str) -> int | None:
                     raise ValueError(f"duplicate tensor {name!r} across checkpoint shards")
                 names.add(name)
                 if not _UNUSED_TENSOR.search(name):
-                    total += prod(int(dimension) for dimension in handle.get_slice(name).get_shape())
+                    shape = tuple(int(dimension) for dimension in handle.get_slice(name).get_shape())
+                    total += prod(shape)
+                    if re.search(r"(?:^|\.)(?:embed_tokens|word_embeddings|wte|shared)\.weight$", name):
+                        embeddings.add(shape)
+                    elif re.search(r"(?:^|\.)lm_head\.weight$", name):
+                        heads.append(shape)
+    # Some exports store both copies even though the runtime ties the output
+    # projection to the input embedding. The explicit model config, not equal
+    # tensor shapes alone, establishes sharing. Other naming schemes retain the
+    # explicit parameter_count override rather than guessing a tied pair.
+    text_config = config.get("text_config") or config
+    if (text_config.get("tie_word_embeddings", config.get("tie_word_embeddings", False))
+            and len(heads) == 1 and heads[0] in embeddings):
+        total -= prod(heads[0])
     return total
 
 
@@ -270,6 +291,23 @@ def _generated_logprobs(positions: Any, tokens: TokenSequence,
     return tuple(logs), None if top_k is None else tuple(statistics)
 
 
+def _append_logprobs(previous: Any, incoming: Any) -> Any:
+    """Append native delta arrays without FlatLogprobs.extend's dictionary expansion."""
+    if previous is None:
+        return incoming
+    if incoming is None:
+        return previous
+    if hasattr(previous, "start_indices"):
+        offset = len(previous.token_ids)
+        previous.start_indices.extend(offset + index for index in incoming.start_indices)
+        previous.end_indices.extend(offset + index for index in incoming.end_indices)
+        for field in ("token_ids", "logprobs", "ranks", "decoded_tokens"):
+            getattr(previous, field).extend(getattr(incoming, field))
+    else:
+        previous.extend(incoming)
+    return previous
+
+
 def _load_tokenizer(factory, model, tokenizer, tokenizer_revision, revision, cache_dir,
                     local_files_only, trust_remote_code, options):
     options = dict(options or {})
@@ -294,6 +332,7 @@ class VLLMBackend:
     """
 
     supports_native_token_stops = True
+    _cancelled_requests: int
 
     def __init__(self, engine: Any, tokenizer: Any, *, model_id: str, parameter_count: int,
                  sampling_params_factory: Callable[..., Any], tokens_prompt_factory: Callable[..., Any] | None = None,
@@ -757,8 +796,11 @@ class VLLMBackend:
             "stream_interval": getattr(scheduler, "stream_interval", None),
             "async_scheduling": getattr(scheduler, "async_scheduling", None),
             "enforce_eager": getattr(getattr(config, "model_config", None), "enforce_eager", None),
+            "quantization": getattr(getattr(config, "model_config", None), "quantization", None),
             "cudagraph_mode": None if mode is None else str(mode),
             "cudagraph_capture_sizes": getattr(compilation, "cudagraph_capture_sizes", None),
+            "compile_sizes": getattr(compilation, "compile_sizes", None),
+            "compile_ranges_endpoints": getattr(compilation, "compile_ranges_endpoints", None),
         }
 
     def encode(self, text: str, *, add_special_tokens: bool = True) -> TokenSequence:
@@ -915,18 +957,21 @@ class AsyncVLLMBackend(VLLMBackend):
             finally:
                 if started:
                     self._engine_requests_finished(1)
-                    forward = prompt_length - cached + max(0, total - 1)
+                    # Before the first output, even the amount of executed prefill is unknown.
+                    prefill = prompt_length - cached if outputs else 0
+                    forward = prefill + max(0, total - 1)
                     with self._statistics_lock:
                         self._sample_calls += 1
                         self._sampled_sequences += 1
                         self._generated_tokens += total
-                        self._prefill_tokens += prompt_length - cached
+                        self._prefill_tokens += prefill
                         self._shared_prefill_tokens_saved += cached
                         self._generation_forward_token_slots += forward
                         self._estimated_dense_forward_flops += dense_forward_flops(self.parameter_count, forward)
                         self._engine_requests += 1
                         self._stream_outputs += outputs
                         self._stream_events += events
+                        self._cancelled_requests += int(not finished)
                 self._admission.finish(request_id, total if finished else None)
 
     @classmethod
@@ -936,8 +981,8 @@ class AsyncVLLMBackend(VLLMBackend):
         from vllm.sampling_params import RequestOutputKind
         from vllm.v1.engine.async_llm import AsyncLLM
 
-        # Batch calls need only final outputs. Sessions override this with buffered DELTA output
-        # to retain the first-token admission signal and any prefix/boundary notifications.
+        # Unscheduled batch calls need only final outputs. Scheduled calls use DELTA
+        # internally to release prefill capacity on the first token, then return one result.
         options["sampling_params_factory"] = partial(options["sampling_params_factory"],
                                                      output_kind=RequestOutputKind.FINAL_ONLY)
         # The engine core process starts, and reads the model-runner environment, while the backend is constructed.
@@ -958,14 +1003,28 @@ class AsyncVLLMBackend(VLLMBackend):
             from inference_scaling.arllm.backends.scheduling import Admission
             await self._admission.acquire(Admission(request_id, group or request_id,
                                                     len(prompt["prompt_token_ids"]), params.max_tokens))
+            params = copy(params)
+            params.output_kind = self._streaming_output_kind
         kwargs = {"prompt": prompt, "sampling_params": params, "request_id": request_id}
         if self._lora_request is not None:
             kwargs["lora_request"] = self._lora_request
         self._engine_requests_started(1)
         final = None
+        tokens, text = [], []
+        logprobs, prompt_logprobs, progressed = None, None, False
         try:
             async for output in self._engine.generate(**kwargs):
                 final = output
+                if admitted:
+                    completion = self._completion(output)
+                    tokens.extend(completion.token_ids)
+                    text.append(getattr(completion, "text", ""))
+                    logprobs = _append_logprobs(logprobs, completion.logprobs)
+                    if getattr(output, "prompt_logprobs", None):
+                        prompt_logprobs = output.prompt_logprobs
+                    if tokens and not progressed:
+                        self._admission.progress(request_id)
+                        progressed = True
             if self._fused_logprobs:
                 # The worker keeps a request's values until released, whether or not the caller reads them.
                 released = self._merge_fused(await self._engine.collective_rpc("pop_fused_logprobs", args=((request_id,),)))
@@ -977,6 +1036,13 @@ class AsyncVLLMBackend(VLLMBackend):
                 self._admission.finish(request_id)
         if final is None:
             raise RuntimeError("asynchronous vLLM request returned no output")
+        if admitted:
+            completion = self._completion(final)
+            completion.token_ids, completion.logprobs = tokens, logprobs
+            if hasattr(completion, "text"):
+                completion.text = "".join(text)
+            if prompt_logprobs is not None:
+                final.prompt_logprobs = prompt_logprobs
         return final
 
     async def _generate_many(self, prompts: Sequence[Any], params: Any, fused: dict[str, FusedValues] | None) -> list[Any]:

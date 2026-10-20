@@ -83,9 +83,21 @@ class _FusedLogprobGPUModelRunner(_GPUModelRunner):
     def pop_fused_logprobs(self, request_ids: Sequence[str]) -> dict[str, FusedValues]:
         """Return and release finished requests' values."""
 
-        released = {str(request_id): self._fused_by_request.pop(str(request_id), None) for request_id in request_ids}
+        # vLLM 0.26 exposes the original ID but appends an eight-hex-digit UUID
+        # suffix inside the engine. Preserve randomization and match the full ID,
+        # including any hyphens in the caller's own ID. Disabled randomization
+        # uses the exact ID. Multiple matches must never combine two requests.
+        keys = {
+            external: [key for key in self._fused_by_request
+                       if key == external or (key.startswith(external + "-") and len(key) == len(external) + 9
+                                              and all(char in "0123456789abcdef" for char in key[-8:]))]
+            for external in map(str, request_ids)
+        }
+        if any(len(matches) > 1 for matches in keys.values()):
+            raise RuntimeError("ambiguous fused-logprob request ID")
+        released = {external: self._fused_by_request.pop(matches[0]) for external, matches in keys.items() if matches}
         return {request_id: (tuple(value for value, _ in values), tuple(value for _, value in values))
-                for request_id, values in released.items() if values is not None}
+                for request_id, values in released.items()}
 
 
 class FusedLogprobWorker(_GPUWorker):

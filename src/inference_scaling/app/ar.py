@@ -95,6 +95,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         candidate_count=int(config["candidate_count"]), rollout_count=int(config["rollout_count"]),
         block_size=min(int(config["block_size"]), total_length), total_length=total_length,
         reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
+        sibling_replay=bool(config["sibling_replay"]), completion_fraction=float(config["completion_fraction"]),
     )
 
 
@@ -188,7 +189,8 @@ class ARFamily:
         with self._cost_lock:
             extra = self._direct_slots
         return {"forward_token_slots": snapshot.generation_forward_token_slots + snapshot.score_forward_token_slots + extra,
-                "flops": snapshot.estimated_dense_forward_flops + 2 * self.raw.parameter_count * extra}
+                "flops": snapshot.estimated_dense_forward_flops + 2 * self.raw.parameter_count * extra,
+                "unmeasured_work_events": getattr(snapshot, "cancelled_requests", 0) + getattr(snapshot, "preemptions", 0)}
 
     def close(self) -> None:
         if self.backend is not None and self.backend is not self.raw:
@@ -389,6 +391,8 @@ class ARFamily:
         )
         trace = importance_trace(list(result.steps))
         trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
+        trace["sibling_replay"] = bool(self.config["sibling_replay"])
+        trace["completion_fraction"] = self.config["completion_fraction"]
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

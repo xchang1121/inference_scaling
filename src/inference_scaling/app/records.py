@@ -226,7 +226,8 @@ class Meter:
     def cost(self, slots: Callable[[Mapping[str, Any]], int],
              flops: Callable[[str, Mapping[str, Any]], float]) -> dict[str, Any] | None:
         deltas = [(role, delta) for phase in self.phases.values() for role, delta in phase.items()]
-        if not self.complete or not any(delta for _, delta in deltas):
+        if (not self.complete or not any(delta for _, delta in deltas)
+                or any(delta.get("cancelled_requests", 0) or delta.get("preemptions", 0) for _, delta in deltas)):
             return None
         return {"phases": self.phases, "forward_token_slots": sum(slots(delta) for _, delta in deltas),
                 "flops": sum(flops(role, delta) for role, delta in deltas)}
@@ -236,7 +237,8 @@ class RequestMeter:
     """Attribute every model request to its problem, independently of the algorithm.
 
     Scoring without per-request counters and interrupted streams mark the whole
-    problem incomplete. The run-level counters still account for those calls.
+    problem incomplete. Run-level counters retain the observed work; aborted
+    streams and preemptions can leave additional execution unmeasured.
     """
 
     def __init__(self, backend: Any, meter: Meter, parameter_count: int) -> None:
@@ -307,7 +309,7 @@ def importance_trace(steps: Sequence[Any]) -> dict[str, Any]:
 
     rollouts = [rollout for step in steps for candidate in step.candidates for rollout in candidate.rollouts]
     rewards = [float(rollout.reward) for rollout in rollouts]
-    optional = ("completion_index", "retained_candidate", "rollout_evaluations_performed")
+    optional = ("completion_index", "retained_candidate", "rollout_evaluations_performed", "sampling_plan", "candidate_indices")
     return {
         "steps": [{
             "prefix_length": step.generated_length_before,
@@ -408,13 +410,15 @@ def summarize_executions(executions: Sequence[Mapping[str, Any]], records: Seque
     output_tokens = sum(entry["output_tokens"] for entry in measured)
     missing = sum((record["problem_id"], record["draw"]) not in covered for record in records)
     incomplete = sum(entry["status"] == "running" for entry in executions)
+    unmeasured = sum(entry["cost"].get("unmeasured_work_events", 0) for entry in measured)
     return {"scope": "all_executions", "cost_total": costs, "wall_seconds": seconds,
             "completed_records": completed, "output_tokens": output_tokens,
             "records_per_second": completed / seconds if seconds > 0 else None,
             "output_tokens_per_second": output_tokens / seconds if seconds > 0 else None,
             "failed_executions": sum(entry["status"] == "failed" for entry in measured),
             "incomplete_executions": incomplete, "unmetered_records": missing,
-            "complete_accounting": not incomplete and not missing}
+            "unmeasured_work_events": unmeasured,
+            "complete_accounting": not incomplete and not missing and not unmeasured}
 
 
 __all__ = [

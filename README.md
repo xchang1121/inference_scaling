@@ -188,3 +188,6 @@ python -m pytest
 [Qwen3 / MATH-500 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)与
 [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告保留统一入口之前实验得到的结论与图；
 已删除方法只保留说明，其余方法给出在当前实现上复现的命令与设置。
+
+[昇腾调度验证](docs/reports/ASCEND_IS_INFRA.md)记录完整等待、同块补全复用与完成配额的单题对照。
+入口为 `scripts/benchmark_is_gpu.py`，同时记录同后端 Base、IS 墙钟时间、长尾等待与实际执行量。
