@@ -78,11 +78,14 @@ class EventMailbox:
         self.pending[key] = buffer, event.finished
 
     async def get(self) -> GenerationEvent | BaseException:
-        key = await self.ready.get()
-        if isinstance(key, BaseException):
-            return key
-        buffer, finished = self.pending.pop(key)
-        return GenerationEvent(buffer.sample(), finished)
+        while True:
+            key = await self.ready.get()
+            if isinstance(key, BaseException):
+                return key
+            pending = self.pending.pop(key, None)
+            if pending is not None:
+                buffer, finished = pending
+                return GenerationEvent(buffer.sample(), finished)
 
 
 class AsyncGenerationSession:
@@ -100,7 +103,7 @@ class AsyncGenerationSession:
 
         async def submit() -> None:
             for request in requests:
-                if request.request_id in self.tasks:
+                if request.request_id in self.tasks or request.request_id in self.stopped:
                     raise ValueError("duplicate logical request id in session")
 
                 async def run(request=request) -> None:
@@ -137,10 +140,13 @@ class AsyncGenerationSession:
         self.stopped.add(request_id)
 
         async def stop() -> None:
-            task = self.tasks.get(request_id)
+            task = self.tasks.pop(request_id, None)
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            # The producer has stopped. Discard unread tokens; get() skips the
+            # corresponding stale notification without retaining its payload.
+            self.events.pending.pop(request_id, None)
         self.backend._runner.run(stop())
 
     def close(self) -> None:

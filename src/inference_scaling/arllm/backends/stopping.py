@@ -295,7 +295,14 @@ class StoppedGenerationSession:
         self.inner.seal()
 
     def stop(self, request_id: str) -> None:
-        self.inner.stop(self.current[request_id])
+        current = self.current.pop(request_id, None)
+        if current is not None:
+            self.inner.stop(current)
+        for records in (self.requests, self.tokens, self.phases, self.checkpoints, self.generated, self.slots):
+            records.pop(request_id, None)
+        for key, (logical, _) in tuple(self.routes.items()):
+            if logical == request_id:
+                del self.routes[key]
 
     def close(self) -> None:
         self.inner.close()

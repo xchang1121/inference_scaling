@@ -22,6 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from inference_scaling.app.ar import ARFamily
+from inference_scaling.app import ar as ar_app
 from inference_scaling.arllm.algorithms import candidates
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter
 from inference_scaling.datasets.math500 import MATH500
@@ -224,7 +225,59 @@ class GraphMeasurements:
             self.manager.record = self.original
 
 
-def measured_solve(family, problem, seed, graph_measurements):
+class AdmissionMeasurements:
+    """Actual admitted intervals, including requests canceled by completion quotas."""
+
+    def __init__(self, raw):
+        self.raw, self.original = raw, raw.configure_scheduler
+        self.intervals, self.search = {}, None
+        raw.configure_scheduler = self.configure
+        self.configure(raw.scheduler_config)
+
+    def configure(self, config):
+        self.original(config)
+        self.intervals, self.search = {}, None
+        pool = self.raw._admission
+        acquire, finish = pool.acquire, pool.finish
+        self.pool = pool, acquire, finish
+
+        async def measured_acquire(item):
+            await acquire(item)
+            self.intervals[item.key] = {"submitted": time.perf_counter()}
+
+        def measured_finish(key, generated=None):
+            if key in self.intervals and "finished" not in self.intervals[key]:
+                self.intervals[key]["finished"] = time.perf_counter()
+            return finish(key, generated)
+
+        pool.acquire, pool.finish = measured_acquire, measured_finish
+
+    def summary(self):
+        if not self.raw.scheduler_config.enabled:
+            return {"admitted_requests": None, "single_admitted_seconds": None,
+                    "is_single_admitted_seconds": None}
+        async def collect():
+            if any("finished" not in interval for interval in self.intervals.values()):
+                raise RuntimeError("admitted work outlived a measured solve")
+            scoped = {}
+            if self.search is not None:
+                start, end = self.search
+                scoped = {key: {"submitted": max(start, interval["submitted"]),
+                                "finished": min(end, interval["finished"])}
+                          for key, interval in self.intervals.items()
+                          if interval["submitted"] < end and interval["finished"] > start}
+            return {"admitted_requests": len(self.intervals),
+                    "single_admitted_seconds": single_request_seconds(self.intervals),
+                    "is_single_admitted_seconds": single_request_seconds(scoped)}
+        return self.raw._runner.run(collect())
+
+    def close(self):
+        self.raw.configure_scheduler = self.original
+        pool, acquire, finish = self.pool
+        pool.acquire, pool.finish = acquire, finish
+
+
+def measured_solve(family, problem, seed, graph_measurements, admission_measurements=None):
     """One cold-prefix question with identical timing/accounting for Base and IS."""
     reset_cache(family.raw)
     family.raw.configure_scheduler(family.raw.scheduler_config)
@@ -244,7 +297,10 @@ def measured_solve(family, problem, seed, graph_measurements):
                 if isinstance(value, (int, float)) and not isinstance(value, bool)
                 and key != "maximum_in_flight_requests"}
     execution = graph_measurements.difference(graph_before)
-    if execution and execution["graph_execution"]["forward_token_slots"] < counters["generation_forward_token_slots"]:
+    if admission_measurements is not None:
+        execution.update(admission_measurements.summary())
+    if ("graph_execution" in execution
+            and execution["graph_execution"]["forward_token_slots"] < counters["generation_forward_token_slots"]):
         raise RuntimeError("native execution statistics omitted observed work")
     return result, elapsed, counters, execution
 
@@ -414,9 +470,22 @@ def main():
     candidates.BatchGenerationSession = lambda backend: TimedSession(original_batch_session(backend), backend.row)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     graph_measurements = None
+    admission_measurements = None
+    original_run = ar_app.run_conditional_is
+
+    def timed_run(*request_args, **request_kwargs):
+        start = time.perf_counter()
+        try:
+            return original_run(*request_args, **request_kwargs)
+        finally:
+            if admission_measurements is not None:
+                admission_measurements.search = start, time.perf_counter()
+
+    ar_app.run_conditional_is = timed_run
     try:
         family.load()
         graph_measurements = GraphMeasurements(family.raw)
+        admission_measurements = AdmissionMeasurements(family.raw)
         original_generate_one = family.raw._generate_one
 
         async def timed_generate_one(*request_args, **request_kwargs):
@@ -464,7 +533,7 @@ def main():
                         family.config, family.reward_settings = family.ar["algorithms"]["sample"], None
                         for problem in dataset.problems:
                             result, elapsed, counters, execution = measured_solve(
-                                family, problem, args.seed, graph_measurements)
+                                family, problem, args.seed, graph_measurements, admission_measurements)
                             base_seconds[problem.id] = elapsed
                             row = {"kind": "base", "label": args.label, "repeat": repeat,
                                    "problem_id": problem.id, "seconds": elapsed,
@@ -487,7 +556,7 @@ def main():
                     for problem in dataset.problems:
                         rounds.clear()
                         result, elapsed, counters, execution = measured_solve(
-                            family, problem, args.seed, graph_measurements)
+                            family, problem, args.seed, graph_measurements, admission_measurements)
                         row = {"kind": "measurement", "label": args.label, "repeat": repeat, "k": k,
                                "problem_id": problem.id, "seconds": elapsed, "rounds": list(rounds),
                                "base_seconds": base_seconds.get(problem.id),
@@ -514,8 +583,11 @@ def main():
     finally:
         ConditionalISAdapter.step = original_step
         candidates.BatchGenerationSession = original_batch_session
+        ar_app.run_conditional_is = original_run
         if graph_measurements is not None:
             graph_measurements.close()
+        if admission_measurements is not None:
+            admission_measurements.close()
         family.close()
         dataset.close()
 
