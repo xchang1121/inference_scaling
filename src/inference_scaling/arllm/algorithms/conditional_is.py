@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from math import ceil, exp, fsum, isfinite
 
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
@@ -102,6 +103,34 @@ def _consolidated_candidate_count(record: ConditionalISStep, fixed: int, config:
     return work_sum // length_sum if length_sum else 0
 
 
+def _final_candidate_count(record: ConditionalISStep, fixed: int, config: ConditionalISConfig,
+                           seeds: SeedStream) -> int:
+    """Allocate a complete final pool or reuse the retained sequence without new samples.
+
+    The decision uses only unused first-tree groups and an independent random draw.
+    It changes finite-budget exploration, not the reward or completion-time policy.
+    """
+    full = _consolidated_candidate_count(record, fixed, config)
+    if config.final_pool_limit is not None:
+        full = min(full, config.final_pool_limit)
+    unused = [group for index, group in enumerate(record.candidates) if index != record.selected_index]
+    if not full or len(unused) < 2:
+        # A single auxiliary group cannot estimate variation between prefixes.
+        return full
+    peak = max(leaf.log_weight for group in unused for leaf in group.rollouts)
+    if not isfinite(peak):
+        return full
+    means = [fsum(exp(leaf.log_weight - peak) for leaf in group.rollouts) / len(group.rollouts)
+             for group in unused]
+    seconds = [fsum(exp(2 * (leaf.log_weight - peak)) for leaf in group.rollouts) / len(group.rollouts)
+               for group in unused]
+    mean, second = fsum(means) / len(unused), fsum(seconds) / len(unused)
+    dispersion = max(0., min(1., 1 - mean * mean / second))
+    minimum = min(full, config.candidate_count - 1)
+    expected = minimum + ceil((full - minimum) * dispersion)
+    return full if float(seeds.generator("conditional_is", "final_pool_gate").random()) < expected / full else 0
+
+
 def run_conditional_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
@@ -123,9 +152,7 @@ def run_conditional_is(
         record, state = adapter.step(state, len(steps), seeds)
         if (not steps and config.exploration_schedule == "two_stage"
                 and config.candidate_count > 1 and not adapter.is_terminal(state)):
-            count = _consolidated_candidate_count(record, state.fixed, config)
-            if config.final_pool_limit is not None:
-                count = min(count, config.final_pool_limit)
+            count = _final_candidate_count(record, state.fixed, config, seeds)
             adapter = replace(adapter, config=replace(config, candidate_count=1 + count,
                               rollout_count=1, block_size=config.total_length - state.fixed))
         steps.append(record.compact())

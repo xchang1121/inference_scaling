@@ -87,9 +87,9 @@ class ConditionalISConfig:
     completion_fraction: float = 1.0
     # Race at most twice the missing completions per block, retaining the first K; length-biased.
     rollout_race: bool = False
-    # After the first complete tree, optionally spend predicted work in one final suffix pool.
+    # After the first tree, allocate a complete final pool using unused groups' lengths and weights.
     exploration_schedule: str = "fixed"
-    # Runtime capacity for fresh suffixes in that final pool; None preserves the work forecast.
+    # Fresh-suffix capacity; None leaves the forecast uncapped but retains weight-based allocation.
     final_pool_limit: int | None = None
 
     def __post_init__(self) -> None:
