@@ -87,9 +87,9 @@ class ConditionalISConfig:
     completion_fraction: float = 1.0
     # Race at most twice the missing completions per block, retaining the first K; length-biased.
     rollout_race: bool = False
-    # After the first tree, allocate a complete final pool using unused groups' lengths and weights.
+    # Allocate a final pool from unused groups; restrict it to an auxiliary interval around the kept length.
     exploration_schedule: str = "fixed"
-    # Fresh-suffix capacity; None leaves the forecast uncapped but retains weight-based allocation.
+    # Fresh-suffix capacity; None retains weight-based allocation and the auxiliary length interval.
     final_pool_limit: int | None = None
 
     def __post_init__(self) -> None:

@@ -62,7 +62,7 @@ class ConditionalISStep:
     forward_token_slots: int | None = field(default=None, compare=False)
     # Requested (block size, candidates, rollouts), before terminal groups collapse to one leaf.
     sampling_plan: tuple[int, int, int] | None = None
-    # Original candidate slots when completion quotas remove entire groups.
+    # Original candidate slots when quotas or auxiliary constraints remove entire groups.
     candidate_indices: tuple[int, ...] | None = None
 
     @property

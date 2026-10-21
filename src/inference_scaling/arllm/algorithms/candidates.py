@@ -1,14 +1,15 @@
 """Conditional IS's tree, released as soon as its dependencies are known.
 
 The original full request remains completion zero. Neither completion order nor
-runtime enters ordinary IS weights. Optional completion quotas and per-block
-races select by completion time and change the sampling law.
+runtime enters ordinary IS weights. The two-stage final pool can exclude samples
+outside an auxiliary length interval. Optional completion quotas and per-block
+races instead select by completion time and change the sampling law.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-from math import ceil, isfinite, log
+from math import ceil, floor, isfinite, log
 from typing import TYPE_CHECKING, NamedTuple
 
 from inference_scaling.arllm.backends.scheduling import GenerationSession
@@ -36,6 +37,18 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
+    minimum_length = None
+    length_limit = remaining
+    if (config.exploration_schedule == "two_stage" and step == 1 and state.token_ids
+            and rollout_count == 1 and width == remaining and candidate_count > 1):
+        # q(t | x) = 1/(t log 2) on len(x) <= t < 2 len(x). With the
+        # first block fixed, this density is constant for eligible suffixes.
+        # Over-limit samples have zero conditional weight, so their reward is
+        # unnecessary. The retained complete suffix always remains eligible.
+        bound = len(state.token_ids) * 2 ** float(seeds.generator("conditional_is", step, "length_window").random())
+        length_limit = min(remaining, floor(bound - state.fixed))
+        minimum_length = bound / 2 - state.fixed
+    excluded: set[int] = set()
     blocks: list[Block | None] = [None] * candidate_count
     leaves: list[dict[int, RolloutEvaluation]] = [{} for _ in blocks]
     routes: dict[str, tuple[int, int, bool]] = {}
@@ -107,7 +120,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             leaves[index][0] = RolloutEvaluation(sibling.token_ids[width:], sibling.reward,
                                                 sibling.reward / config.reward_temperature)
         saved = carried + len(recycled)
-        roots = [request(index, 0, (), width if config.block_first else remaining, root=True)
+        roots = [request(index, 0, (), min(width, length_limit) if config.block_first else length_limit, root=True)
                  for index in range(saved, candidate_count)]
         if roots:
             checkpoint = width if (rollout_count > 1 or config.rollout_race) and not config.block_first else None
@@ -173,6 +186,22 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             tokens.extend(sample.token_ids)
             if len(tokens) > job.max_new_tokens:
                 raise RuntimeError("stream exceeded its generation limit")
+            if event.finished:
+                if not tokens:
+                    raise RuntimeError("generation produced an empty sequence")
+                if sample.finish_reason == "length" and len(tokens) != job.max_new_tokens:
+                    raise RuntimeError("generation ended before its length limit without a stop")
+                finished.add(key)
+                if sample.forward_token_slots is None:
+                    measured = False
+                else:
+                    slots += sample.forward_token_slots
+                if minimum_length is not None and (
+                        (sample.finish_reason == "length" and length_limit < remaining)
+                        or len(tokens) <= minimum_length):
+                    excluded.add(index)
+                    del buffers[key]
+                    continue
             if root and blocks[index] is None:
                 if config.block_first:
                     if event.finished:
@@ -187,15 +216,6 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     blocks[index] = Block(tuple(tokens[:width]), "stop" if terminal else "length")
                     branch(index)
             if event.finished:
-                if not tokens:
-                    raise RuntimeError("generation produced an empty sequence")
-                if sample.finish_reason == "length" and len(tokens) != job.max_new_tokens:
-                    raise RuntimeError("generation ended before its length limit without a stop")
-                finished.add(key)
-                if sample.forward_token_slots is None:
-                    measured = False
-                else:
-                    slots += sample.forward_token_slots
                 if not (root and config.block_first):
                     block = blocks[index]
                     assert block is not None
@@ -207,7 +227,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])
             pending.clear()
-        if not partial and any(block is None for block in blocks):
+        if not partial and any(block is None and index not in excluded for index, block in enumerate(blocks)):
             raise RuntimeError("stream omitted a candidate prefix")
         canonical = []
         canonical_blocks = []
@@ -215,7 +235,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
             complete = (len(group) == expected(block) if config.rollout_race
                         else set(group) == set(range(expected(block))))
-            if not partial and not complete:
+            if not partial and not complete and index not in excluded:
                 raise RuntimeError("stream omitted a required completion")
             if group:
                 assert block is not None
