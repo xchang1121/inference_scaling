@@ -8,7 +8,7 @@ next step. Batch and streaming execution share the same tree and selection.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
@@ -79,6 +79,29 @@ class ConditionalISAdapter:
         return record, updated
 
 
+def _consolidated_candidate_count(record: ConditionalISStep, fixed: int, config: ConditionalISConfig) -> int:
+    """Fresh suffixes affordable under the unselected groups' fixed-block work forecast.
+
+    Groups have equal mass, including terminal groups with a single leaf. The
+    forecast uses no information from the selected group or the next pool.
+    It predicts generated tokens, not a hard token/FLOPs or concurrency limit.
+    """
+    length_sum = work_sum = 0
+    for index, candidate in enumerate(record.candidates):
+        if index == record.selected_index:
+            continue
+        multiplicity = config.rollout_count // len(candidate.rollouts)
+        for leaf in candidate.rollouts:
+            length = max(0, record.generated_length_before + len(candidate.token_ids) + len(leaf.token_ids) - fixed)
+            rounds = (length + config.block_size - 1) // config.block_size
+            suffix_sum = rounds * length - config.block_size * rounds * (rounds - 1) // 2
+            work = ((config.candidate_count - 1) * suffix_sum
+                    + config.candidate_count * (config.rollout_count - 1) * (suffix_sum - length))
+            length_sum += multiplicity * length
+            work_sum += multiplicity * work
+    return work_sum // length_sum if length_sum else 0
+
+
 def run_conditional_is(
     backend: AutoregressiveBackend,
     prompt: TokenSequence,
@@ -98,6 +121,11 @@ def run_conditional_is(
         if steps and deadline is not None and time.monotonic() >= deadline:
             break
         record, state = adapter.step(state, len(steps), seeds)
+        if (not steps and config.exploration_schedule == "two_stage"
+                and config.candidate_count > 1 and not adapter.is_terminal(state)):
+            count = _consolidated_candidate_count(record, state.fixed, config)
+            adapter = replace(adapter, config=replace(config, candidate_count=1 + count,
+                              rollout_count=1, block_size=config.total_length - state.fixed))
         steps.append(record.compact())
         del record
     forward_slots = None if any(step.forward_token_slots is None for step in steps) else sum(

@@ -89,7 +89,7 @@ def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, thin
 
 
 def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_length: int) -> ConditionalISConfig:
-    """The fixed candidate count, completion count and block size used by CLI and service."""
+    """The initial exploration budget and schedule shared by CLI and service."""
 
     return ConditionalISConfig(
         candidate_count=int(config["candidate_count"]), rollout_count=int(config["rollout_count"]),
@@ -97,6 +97,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
         sibling_replay=bool(config["sibling_replay"]), completion_fraction=float(config["completion_fraction"]),
         rollout_race=bool(config["rollout_race"]),
+        exploration_schedule=str(config.get("exploration_schedule", "fixed")),
     )
 
 
@@ -395,6 +396,7 @@ class ARFamily:
         trace["sibling_replay"] = bool(self.config["sibling_replay"])
         trace["completion_fraction"] = self.config["completion_fraction"]
         trace["rollout_race"] = self.config["rollout_race"]
+        trace["exploration_schedule"] = self.config.get("exploration_schedule", "fixed")
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

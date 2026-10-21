@@ -87,6 +87,8 @@ class ConditionalISConfig:
     completion_fraction: float = 1.0
     # Race at most twice the missing completions per block, retaining the first K; length-biased.
     rollout_race: bool = False
+    # After the first complete tree, optionally spend predicted work in one final suffix pool.
+    exploration_schedule: str = "fixed"
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -95,6 +97,11 @@ class ConditionalISConfig:
             raise ValueError("sibling_replay must be a boolean")
         if type(self.rollout_race) is not bool:
             raise ValueError("rollout_race must be a boolean")
+        if self.exploration_schedule not in {"fixed", "two_stage"}:
+            raise ValueError("unknown IS exploration_schedule")
+        if self.exploration_schedule == "two_stage" and (
+                self.sibling_replay or self.completion_fraction != 1.0 or self.rollout_race):
+            raise ValueError("two_stage exploration requires complete trees without sibling replay or rollout races")
         require_probability("completion_fraction", self.completion_fraction, include_zero=False)
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:

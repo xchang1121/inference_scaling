@@ -61,7 +61,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
 | `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `is` | 保留完整序列的条件 IS：固定候选数 M、补全数 K、块长 B | 逐块扩散 IS；候选与补全都来自基础模型 |
+| `is` | 保留完整序列的条件 IS：默认固定 M/K/B，可选[两阶段完整探索](docs/methods/ALGORITHMS.md#is-two-stage) | 逐块扩散 IS；候选与补全都来自基础模型 |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。
@@ -146,7 +146,7 @@ python -m pip install -e ".[serve]"   # 另按硬件安装 vLLM（NVIDIA）或 v
 python -m inference_scaling.serve
 ```
 
-OpenAI 与 Anthropic 兼容的接口；每个请求在思考段上做固定配置的条件 IS（Consilience 加权）后作答。安装、配置、启动、
+OpenAI 与 Anthropic 兼容的接口；每个请求按配置在思考段上做条件 IS（Consilience 加权）后作答。安装、配置、启动、
 接入网关与限制见 [serve/README.md](src/inference_scaling/serve/README.md)。
 
 ## 安装

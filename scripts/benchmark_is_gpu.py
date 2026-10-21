@@ -135,7 +135,8 @@ def settings_for(args):
     ar["algorithms"]["is"].update(candidate_count=args.candidate_count,
                                   block_size=args.block_size, block_first=False,
                                   sibling_replay=args.sibling_replay, completion_fraction=args.completion_fraction,
-                                  rollout_race=args.rollout_race)
+                                  rollout_race=args.rollout_race,
+                                  exploration_schedule=getattr(args, "exploration_schedule", "fixed"))
     if args.completion_fraction < 1 or args.rollout_race:
         # Request-level counters can miss buffered work at cancellation.
         vllm["engine_kwargs"]["cudagraph_metrics"] = True
@@ -371,6 +372,7 @@ def main():
                         help="race up to twice the missing completions per candidate and keep the first K; length-biased")
     parser.add_argument("--max-new-tokens", type=int, default=8192)
     parser.add_argument("--block-size", type=int, default=1024)
+    parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage"), default="fixed")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -404,6 +406,9 @@ def main():
         parser.error("completion fraction must be in (0, 1]")
     if (args.completion_fraction < 1 or args.rollout_race) and args.execution != "stream":
         parser.error("completion quotas and rollout races require streaming")
+    if args.exploration_schedule == "two_stage" and (
+            args.sibling_replay or args.completion_fraction != 1.0 or args.rollout_race):
+        parser.error("two_stage exploration requires complete trees without sibling replay or rollout races")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401

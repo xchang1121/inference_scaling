@@ -24,6 +24,11 @@
 `sibling_replay`、`completion_fraction` 与 `rollout_race` 分别记录同块补全复用、整轮完成配额和候选内超发的设置。超发最多将缺失补全数翻倍，每候选收齐 K 条后取消其余请求；完成时间筛选会引入偏差，默认关闭。配置为 `ar.algorithms.is.rollout_race`，需要流式后端。
 默认 `sibling_replay=false`、`completion_fraction=1.0`、`rollout_race=false`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
 
+`ar.algorithms.is.exploration_schedule` 默认 `fixed`。设为 `two_stage` 后，首轮使用配置的 M/K/B，
+后续预测生成工作集中到一次完整后缀候选池；与上述三项复用/取消选项互斥。
+`scaling.exploration_schedule` 记录该选择，`scaling.sampling_plans` 按轮记录实际 `(B, M, K)`。
+原理与限制见[两阶段完整探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
+
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
 

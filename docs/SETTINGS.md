@@ -147,7 +147,8 @@
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
-| `is.candidate_count` / `rollout_count` / `block_size` | 固定的候选数 M、每候选补全数 K 与块长 B；块长在输出上限处截短 |
+| `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
+| `is.exploration_schedule` | 默认 `fixed`；`two_stage` 按首轮未选 rollout 的长度预测剩余生成工作，集中为一次完整后缀候选池，至多两轮。不与同块补全复用、完成配额或超发混用；预测不等于实际 token/FLOPs 上限。见[两阶段完整探索](methods/ALGORITHMS.md#is-two-stage) |
 | `is.sibling_replay` | 默认 `false`。复用所选块的其他完整补全及奖励，替代下一轮部分新候选根；K=1 无额外可复用样本。见[同块补全复用](methods/ALGORITHMS.md#is-sibling-replay) |
 | `is.completion_fraction` | 默认 `1.0`，每个候选收齐所需补全。设为 `(0,1)` 后，各候选的平均完成比例达到该值即取消未完成请求；至少取得一条新结果，未完成补全权重为零，保留原定 K 分母。需要流式后端，会引入长度相关偏差。见[完成配额](methods/ALGORITHMS.md#is-completion-quota) |
 | `is.rollout_race` | 默认 `false`。每候选至多发出双份缺失补全，收齐 K 条后取消该组其余请求；已有完整补全计入 K。需要流式后端，会偏向较快完成的轨迹，额外生成量可能增加。见[候选内超发](methods/ALGORITHMS.md#is-rollout-race) |

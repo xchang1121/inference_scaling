@@ -496,7 +496,8 @@ AR 的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一�
 4. 以 $`\widehat h_m/\sum_j\widehat h_j`$ 的概率选择候选，再在它的补全中按 $`e^{r(g,z_m,u_{mk})/\tau}`$
    选一条，保留 $`y=(g,z_m,u_{mk})`$，进入下一个块边界。保留补全的奖励直接复用，不再评分。
 
-$`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`，在一次运行中保持固定。
+$`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`。
+默认 `exploration_schedule="fixed"` 在一次运行中保持这三个量固定；可选的两阶段探索见下节。
 
 `ar.algorithms.is.block_first` 打开时，第 2 步先只生成各候选的 $`B`$ 个 token，第一条补全改为续写请求：沿用候选的种子，
 均匀数流从第 $`B`$ 个位置接着取，与其余 $`K-1`$ 条补全同批生成。在均匀数流按位置索引的后端上，续写逐 token 等于原先
@@ -550,6 +551,53 @@ kept = prefix + candidates[m].token_ids + rollouts[k].token_ids
 AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有
 补全都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。dLLM 的条件 IS 是分块版本：
 选择候选后只提交该块，见第 7 节。
+
+<a id="is-two-stage"></a>
+### 两阶段完整探索
+
+`ar.algorithms.is.exploration_schedule="two_stage"` 将首轮之后的多次后缀探索合并为一轮。首轮沿用原 M/K/B，
+选中完整序列并固定首块。随后只用未选候选组的完整 rollout 长度，估计原固定块流程的剩余生成工作：
+
+```math
+q(\ell)=\left\lceil\ell/B\right\rceil,\qquad
+S(\ell)=q(\ell)\ell-\frac{Bq(\ell)(q(\ell)-1)}{2},
+```
+
+```math
+C(\ell)=(M-1)S(\ell)+M(K-1)\bigl(S(\ell)-\ell\bigr).
+```
+
+这里 $`\ell`$ 是扣除首块后的剩余长度。S 累加后续每个切点的剩余长度；每轮生成 M−1 条新候选根，
+并在全部 M 个块后生成 K−1 条额外补全，得到 C。它是以已观察长度近似后续轨迹的工作预测，
+没有计入预填充、奖励评分或设备批次填充，也不构成实际 token/FLOPs 上界。
+
+对未选组逐组平均，终止组取 $`K_m=1`$，其余组取 $`K_m=K`$。最终新候选数为
+
+```math
+N=\left\lfloor
+\frac{\sum_{m\ne m_*}K_m^{-1}\sum_{k=1}^{K_m}C(\ell_{mk})}
+     {\sum_{m\ne m_*}K_m^{-1}\sum_{k=1}^{K_m}\ell_{mk}}
+\right\rfloor.
+```
+
+分母为零时 N=0。第二轮复用当前完整后缀及奖励，另外生成 N 条完整后缀，按原奖励权重在 N+1 条序列中选择。
+此时 M=N+1、K=1、B=剩余生成上限；一次提交完整后缀，全流程至多两轮。首轮已经终止时直接输出；
+初始 M=1 时沿用固定块流程。N 在第二轮生成前确定，不按完成速度筛选或取消样本。
+
+收益来源是减少跨轮依赖、重复预填充及多次等待最长补全。原生并发上限仍由后端执行，
+候选过多时会分批准入，因此减少轮数不保证所有配置都更快。实际 M/K/B 写入各步 `sampling_plan`。
+
+统计依据复用式 (8a)：在候选树与被选叶子的联合目标下，对选中组的其他叶子求和后，
+被选完整序列服从目标分布；其余候选组仍按基础模型独立生成，且与被选序列独立。
+上述 N 只取决于这些未选组的对称统计量。因此，在首块固定后，给定 N 的第二轮仍是原条件 SIR，
+对 N 求平均也保持同一条件目标。终止组通过组内平均计权，等价于将其空补全重复 K 次。
+这要求完整候选树、逐序列固定奖励和基于长度或 EOS/思考边界的逻辑停止。
+两阶段模式不与同块补全复用、完成配额或超发混用；墙钟截止需另行分析。
+
+从基础模型起步时，首轮结果仍是有限样本近似。两阶段模式与固定块模式的有限预算输出分布不同，
+不存在由目标不变性直接推出的精度或分布误差优势。需要结合生成量、FLOPs、时延与质量评价。
+实现复用 [`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py) 的原步骤，
+仅增加 `_consolidated_candidate_count` 与首轮后的配置更新，默认关闭。
 
 <a id="is-sibling-replay"></a>
 ### 同块完整补全复用
