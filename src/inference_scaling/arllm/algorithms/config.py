@@ -85,12 +85,16 @@ class ConditionalISConfig:
     sibling_replay: bool = False
     # Below one: stop at this mean completed fraction of candidate groups; length-biased.
     completion_fraction: float = 1.0
+    # Race at most twice the missing completions per block, retaining the first K; length-biased.
+    rollout_race: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             require_positive(name, getattr(self, name))
         if type(self.sibling_replay) is not bool:
             raise ValueError("sibling_replay must be a boolean")
+        if type(self.rollout_race) is not bool:
+            raise ValueError("rollout_race must be a boolean")
         require_probability("completion_fraction", self.completion_fraction, include_zero=False)
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:

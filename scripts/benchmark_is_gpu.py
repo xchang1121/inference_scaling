@@ -61,7 +61,11 @@ class TimedSession:
         return self.inner.seal()
 
     def stop(self, request_id):
-        return self.inner.stop(request_id)
+        result = self.inner.stop(request_id)
+        job = self.requests[request_id]
+        if "finished" not in job:
+            job.update(finished=time.perf_counter() - self.row["started"], reason="discarded", forward_token_slots=None)
+        return result
 
     def close(self):
         try:
@@ -129,8 +133,9 @@ def settings_for(args):
     ar["engine"]["rollout_scheduler"].update(enabled=args.execution == "stream", max_in_flight=16)
     ar["algorithms"]["is"].update(candidate_count=args.candidate_count,
                                   block_size=args.block_size, block_first=False,
-                                  sibling_replay=args.sibling_replay, completion_fraction=args.completion_fraction)
-    if args.completion_fraction < 1:
+                                  sibling_replay=args.sibling_replay, completion_fraction=args.completion_fraction,
+                                  rollout_race=args.rollout_race)
+    if args.completion_fraction < 1 or args.rollout_race:
         # Request-level counters can miss buffered work at cancellation.
         vllm["engine_kwargs"]["cudagraph_metrics"] = True
     settings["run"]["seed"] = args.seed
@@ -306,6 +311,8 @@ def main():
     parser.add_argument("--completion-fraction", type=float, default=1.0,
                         help="stop at this mean completed fraction of candidate groups; below 1 is length-biased")
     parser.add_argument("--sibling-replay", action="store_true", help="reuse the selected block's other complete rollouts")
+    parser.add_argument("--rollout-race", action="store_true",
+                        help="race up to twice the missing completions per candidate and keep the first K; length-biased")
     parser.add_argument("--max-new-tokens", type=int, default=8192)
     parser.add_argument("--block-size", type=int, default=1024)
     parser.add_argument("--repeats", type=int, default=1)
@@ -339,8 +346,8 @@ def main():
         parser.error("--selection-skip requires MATH-500 and a nonnegative offset")
     if not 0 < args.completion_fraction <= 1:
         parser.error("completion fraction must be in (0, 1]")
-    if args.completion_fraction < 1 and args.execution != "stream":
-        parser.error("completion quotas require streaming")
+    if (args.completion_fraction < 1 or args.rollout_race) and args.execution != "stream":
+        parser.error("completion quotas and rollout races require streaming")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401
@@ -376,6 +383,7 @@ def main():
         ]
         row["sampling_plan"] = record.sampling_plan
         row["candidate_indices"] = record.candidate_indices
+        row["rollout_race"] = args.rollout_race
         if args.completion_fraction < 1:
             width, count, rollouts = record.sampling_plan
             sources = record.candidate_indices or tuple(range(count))

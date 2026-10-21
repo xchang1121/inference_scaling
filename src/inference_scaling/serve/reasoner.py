@@ -113,6 +113,7 @@ class Reasoner:
             "block_size": config.block_size,
             "sibling_replay": config.sibling_replay,
             "completion_fraction": config.completion_fraction,
+            "rollout_race": config.rollout_race,
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",
             "engine_execution": getattr(raw, "execution_config", lambda: {})(),

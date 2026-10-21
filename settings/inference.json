@@ -163,7 +163,8 @@
         "block_size": 1024,
         "block_first": false,
         "sibling_replay": false,
-        "completion_fraction": 1.0
+        "completion_fraction": 1.0,
+        "rollout_race": false
       }
     }
   },

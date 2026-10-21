@@ -138,7 +138,7 @@ class AdmissionQueue:
                 return (0, order, 0, 0, 0)
             aged = now - entered >= config.aging_seconds
             return (0, entered, 0, 0, order) if aged else (
-                1, groups[item.group], int(item.phase != "prefix"), -estimate, order)
+                1, groups[item.group], {"prefix": 0, "spare": 2}.get(item.phase, 1), -estimate, order)
 
         for item, entered, _, _ in sorted(self.pending.values(), key=priority):
             if self.active:

@@ -581,11 +581,37 @@ AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algo
 没有完成补全的候选不参与选择。其余候选使用上述权重，候选内仍按完整补全的原奖励权重选择。
 分母保持原定 K_m，避免将仅完成一条的候选当成已完成全部补全。
 取消会根据样本耗时筛选数据，因此估计有偏，不能沿用完整等待的目标不变性结论。
-默认 f=1，所有原定补全完成后再选择；更小的 f 属于速度与采样质量的折中，准确率需另行评估。
+默认 f=1 且关闭超发，所有原定补全完成后再选择；更小的 f 属于速度与采样质量的折中，准确率需另行评估。
 
 实现见 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)。
 取消后保留已生成前缀的概率统计量，供已完成子请求计算奖励；下一轮清理无关记录。
 请求级计费可能遗漏取消前尚未交付的计算，因此记录不完整标记；性能对照另读引擎实际执行统计，计入取消和批次补齐。
+
+<a id="is-rollout-race"></a>
+### 候选内超发补全
+
+`ar.algorithms.is.rollout_race=true` 在同一候选块后生成额外补全，以较早完成的补全替代长尾。
+候选原需 K_m 条、已有 c_m 条完整补全时，保留原定的 K_m−c_m 条请求，再发出至多 K_m−c_m 条备份。
+备份提交前已经完成的请求继续减少缺额。默认关闭的整轮配额保持 f=1 时，每个候选收齐 K_m 条即取消该组剩余请求，
+无需等待其他候选；复用的补全直接计入完成数。块内终止仍取 K_m=1，不生成重复空补全。
+
+记 A_m 为该候选保留的 K_m 条完整补全，权重和组内选择为
+
+```math
+\widehat w_m=\frac{1}{K_m}\sum_{k\in A_m}\exp(r_{mk}/\tau),
+\qquad
+\Pr(k\mid m,A_m)=\frac{\exp(r_{mk}/\tau)}{\sum_{j\in A_m}\exp(r_{mj}/\tau)}.
+```
+
+K=1 时，新候选的原请求与同前缀备份竞争，先收到完整结果的一条参与候选权重计算；已保留的候选无需重新补全。
+K>1 时，竞争范围扩展到同一候选的多条补全。M、K、B、完整序列奖励与候选归一化方式保持不变。
+`completion_fraction<1` 可在部分候选尚未收齐时结束整轮，此时继续使用上节的缺失叶权重规则。
+
+完成速度参与了 A_m 的选择，因此上述平均值一般有偏，增加 K 也不自动恢复原条件期望。
+本选项不具有原条件 IS 的目标不变性保证。收益来自用额外并发工作替代少数长尾等待；
+实际 token/FLOPs 可能增加，并发饱和或轨迹长度接近时也可能变慢。默认关闭，使用流式后端。
+实现与成本口径见[rollout 调度](ROLLOUT_SCHEDULING.md#可选复用完成配额与超发)及
+[`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)。
 
 <a id="alg-logit-adjustment"></a>
 ### 6.1 可枚举候选的 logit adjustment

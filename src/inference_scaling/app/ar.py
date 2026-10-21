@@ -96,6 +96,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         block_size=min(int(config["block_size"]), total_length), total_length=total_length,
         reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
         sibling_replay=bool(config["sibling_replay"]), completion_fraction=float(config["completion_fraction"]),
+        rollout_race=bool(config["rollout_race"]),
     )
 
 
@@ -393,6 +394,7 @@ class ARFamily:
         trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
         trace["sibling_replay"] = bool(self.config["sibling_replay"])
         trace["completion_fraction"] = self.config["completion_fraction"]
+        trace["rollout_race"] = self.config["rollout_race"]
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

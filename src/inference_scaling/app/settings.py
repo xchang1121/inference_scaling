@@ -172,6 +172,7 @@ SCHEMA: dict[str, Any] = {
                 "block_first": bool,
                 "sibling_replay": bool,
                 "completion_fraction": float,
+                "rollout_race": bool,
             },
         },
     },

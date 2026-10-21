@@ -1,8 +1,8 @@
 """Conditional IS's tree, released as soon as its dependencies are known.
 
 The original full request remains completion zero. Neither completion order nor
-runtime enters ordinary IS weights. Optional completion quotas drop unfinished
-leaves and change the sampling law; completed results keep their original slots.
+runtime enters ordinary IS weights. Optional completion quotas and per-block
+races select by completion time and change the sampling law.
 """
 
 from __future__ import annotations
@@ -42,10 +42,12 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     buffers: dict[str, list[int]] = {}
     submitted: dict[str, GenerationRequest] = {}
     finished: set[str] = set()
+    cancelled: set[str] = set()
+    backup_groups: list[int] = []
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
     partial = config.completion_fraction < 1
-    if partial and not streaming:
-        raise ValueError("completion quotas require a streaming generation backend")
+    if (partial or config.rollout_race) and not streaming:
+        raise ValueError("completion quotas and rollout races require a streaming generation backend")
     session: GenerationSession = (getattr(adapter.backend, "open_generation_session")() if streaming
                                   else BatchGenerationSession(adapter.backend))
     pending: dict[tuple[int, int], tuple[int, ...]] = {}
@@ -68,6 +70,8 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         length = remaining - len(block.token_ids)
         if block.finish_reason != "length" or length == 0:
             return
+        if config.rollout_race:
+            backup_groups.append(index)
         jobs = [request(index, k, block.token_ids, length) for k in range(1, rollout_count)]
         if continuation:
             jobs.insert(0, request(index, 0, block.token_ids, length, continuation=True))
@@ -106,11 +110,11 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         roots = [request(index, 0, (), width if config.block_first else remaining, root=True)
                  for index in range(saved, candidate_count)]
         if roots:
-            checkpoint = width if rollout_count > 1 and not config.block_first else None
+            checkpoint = width if (rollout_count > 1 or config.rollout_race) and not config.block_first else None
             session.submit(roots, phase="prefix", checkpoint=checkpoint)
         for index in range(saved):
             branch(index)
-        sealed = rollout_count == 1 and not config.block_first
+        sealed = rollout_count == 1 and not config.block_first and not config.rollout_race
         if sealed:
             session.seal()
 
@@ -133,14 +137,32 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             fresh = saved + int(bool(roots) or rollout_count > 1)
             return sum(map(len, leaves)) >= fresh and completed >= required
 
-        while len(finished) < len(routes):
+        def cancel_completed_group(index):
+            if not config.rollout_race or len(leaves[index]) < expected(blocks[index]):
+                return
+            for key, (candidate, _, _) in routes.items():
+                if candidate == index and key not in finished and key not in cancelled:
+                    session.stop(key)
+                    cancelled.add(key)
+                    buffers.pop(key, None)
+
+        while len(finished) + len(cancelled) < len(routes):
             if not sealed and all(block is not None for block in blocks):
+                # Submit all original branches before backups can use free slots.
+                # Already completed/reused leaves reduce the missing quota.
+                for index in backup_groups:
+                    block = blocks[index]
+                    assert block is not None
+                    missing = max(0, expected(block) - len(leaves[index]))
+                    if missing:
+                        session.submit([request(index, k, block.token_ids, remaining - len(block.token_ids))
+                                        for k in range(rollout_count, rollout_count + missing)], phase="spare")
                 session.seal()
                 sealed = True
             event = session.next_event()
             sample = event.delta
             key = sample.request_id
-            if key not in routes or key in finished:
+            if key not in routes or key in finished or key in cancelled:
                 raise RuntimeError("stream returned an unknown or completed request")
             job = submitted[key]
             if (sample.prefix != job.prefix or sample.model_id != adapter.backend.model_id
@@ -179,6 +201,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     assert block is not None
                     evaluate(index, rollout, tuple(tokens[len(block.token_ids):] if root else tokens))
                 del buffers[key]
+                cancel_completed_group(index)
             if quota_ready():
                 break
         if pending:
@@ -190,7 +213,9 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         canonical_blocks = []
         indices = []
         for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
-            if not partial and set(group) != set(range(expected(block))):
+            complete = (len(group) == expected(block) if config.rollout_race
+                        else set(group) == set(range(expected(block))))
+            if not partial and not complete:
                 raise RuntimeError("stream omitted a required completion")
             if group:
                 assert block is not None
