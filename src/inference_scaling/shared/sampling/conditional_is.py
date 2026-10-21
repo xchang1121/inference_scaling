@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from math import log
+
+import numpy as np
 
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
@@ -111,4 +114,32 @@ def select(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: 
     return selected, completions[selected]
 
 
-__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select", "weigh"]
+def select_metropolized(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: object) -> tuple[int, int]:
+    """One Metropolized index update from candidate zero's first complete rollout.
+
+    Leaf mass is exp(log_weight) / group_size, including terminal one-leaf
+    groups. SIR's index probabilities are the stationary distribution of this
+    update; a smaller finite-budget error from a base sample is not guaranteed.
+    """
+    if not candidates or any(not candidate.rollouts for candidate in candidates):
+        raise ValueError("Metropolized selection requires non-empty candidate groups")
+    labels = [(m, k) for m, candidate in enumerate(candidates) for k in range(len(candidate.rollouts))]
+    logs = np.array([candidates[m].rollouts[k].log_weight - log(len(candidates[m].rollouts)) for m, k in labels])
+    if not np.isfinite(logs).all():
+        raise ValueError("Metropolized selection requires finite complete rollout weights")
+    weights = np.exp(logs - logs.max())
+    leave_out = weights.sum() - weights
+    denominator = np.maximum(leave_out[0], leave_out)
+    probabilities = np.divide(weights, denominator, out=np.zeros_like(weights), where=denominator > 0)
+    probabilities[0] = 0.
+    stay = 1 - probabilities.sum()
+    if stay < -1e-12:
+        raise ArithmeticError("invalid Metropolized index probabilities")
+    probabilities[0] = max(0., stay)
+    probabilities /= probabilities.sum()
+    chosen = categorical_index_from_uniform(probabilities.tolist(), float(seeds.generator(*key, "metropolized").random()))
+    return labels[chosen]
+
+
+__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select",
+           "select_metropolized", "weigh"]

@@ -497,7 +497,8 @@ AR 的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一�
    选一条，保留 $`y=(g,z_m,u_{mk})`$，进入下一个块边界。保留补全的奖励直接复用，不再评分。
 
 $`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`。
-默认 `exploration_schedule="fixed"` 在一次运行中保持这三个量固定；可选的两阶段探索见下节。
+默认 `exploration_schedule="fixed"` 在一次运行中保持这三个量固定；还可选择
+[单轮完整候选池](#is-single-pool)或[两阶段探索](#is-two-stage)。
 
 `ar.algorithms.is.block_first` 打开时，第 2 步先只生成各候选的 $`B`$ 个 token，第一条补全改为续写请求：沿用候选的种子，
 均匀数流从第 $`B`$ 个位置接着取，与其余 $`K-1`$ 条补全同批生成。在均匀数流按位置索引的后端上，续写逐 token 等于原先
@@ -551,6 +552,51 @@ kept = prefix + candidates[m].token_ids + rollouts[k].token_ids
 AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有
 补全都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。dLLM 的条件 IS 是分块版本：
 选择候选后只提交该块，见第 7 节。
+
+<a id="is-single-pool"></a>
+### 单轮完整候选池
+
+`ar.algorithms.is.exploration_schedule="single_pool"` 只生成首轮完整候选池，从中选出一条完整序列后结束探索。
+首轮仍使用配置的 M/K/B：先生成 M 个候选块，每个块有 K 条完整补全；已终止的块只有一条。
+所有请求完成后再选择，保留原采样策略、完整序列奖励和前缀计算复用。节省的计算来自省略后续探索，首轮最长请求的等待仍然存在。
+
+该模式采用 Metropolized 索引更新。设第 $`m`$ 组实际有 $`K_m`$ 条补全，展平后的叶子权重为
+
+```math
+w_{mk}=\frac{\exp(r(z_m,u_{mk})/\tau)}{K_m}.
+```
+
+更新的起点 $`i`$ 固定为第 0 组第 0 条补全，由生成前的编号确定。先在其余叶子中按权重提出 $`j`$，再以
+
+```math
+\min\!\left(1,\frac{\sum_{\ell\ne i}w_\ell}{\sum_{\ell\ne j}w_\ell}\right)
+```
+
+接受；拒绝则保留 $`i`$。只有一个叶子时直接返回它。实现将提议和接受合并为一次分类抽样，其非对角转移概率为
+
+```math
+P(i,j)=\frac{w_j}{\max\!\left(\sum_{\ell\ne i}w_\ell,\sum_{\ell\ne j}w_\ell\right)},\qquad j\ne i.
+```
+
+对角概率补足到 1。分母关于 $`i,j`$ 对称，因此 $`w_iP(i,j)=w_jP(j,i)`$，更新保持按 $`w`$ 归一化的索引分布。
+把它替换到上节的候选树联合分布中，仍保持完整序列的目标边缘分布；$`K_m`$ 的分母保留了提前终止组与普通组的相对权重。
+从基模型生成的初始树出发，只执行一次更新得到的分布仍有有限样本误差。减少后续探索可能增大该误差，
+Metropolized 更新也没有对普通 SIR 的有限预算 TV 误差优势保证。
+
+选择规则位于公共采样层 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)，
+不依赖模型类型或推理引擎。AR 入口在一次选择后提交完整序列，直接复用它的补全和奖励：
+
+```python
+m, k = select_metropolized(candidates, seeds, "conditional_is", 0)
+candidate = candidates[m]
+completion = candidate.rollouts[k]
+generated = candidate.token_ids + completion.token_ids
+```
+
+此模式下 B 决定同组补全的分叉位置；K=1 时，候选是 M 条独立完整序列，B 不改变其理想采样分布。
+启用 `block_first` 时，后端续写种子的处理仍可能使不同 B 产生不同样本。
+`sampling_plan` 记录首轮请求的 B/M/K，运行只有一个探索步骤。CLI 与服务共享该选项，基准入口使用
+`--exploration-schedule single_pool`。同块补全复用、完成配额和超发需要后续探索或会改变候选池，因此与此模式互斥。
 
 <a id="is-two-stage"></a>
 ### 两阶段完整探索

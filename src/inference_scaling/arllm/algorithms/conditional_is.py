@@ -15,7 +15,9 @@ from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.conditional_is import ConditionalISResult, ConditionalISStep, RolloutEvaluation, select
+from inference_scaling.shared.sampling.conditional_is import (
+    ConditionalISResult, ConditionalISStep, RolloutEvaluation, select, select_metropolized,
+)
 from inference_scaling.shared.types import TokenBatchReward
 
 
@@ -54,7 +56,8 @@ class ConditionalISAdapter:
             raise ValueError("cannot advance a terminal generation state")
         candidates, forward_slots, sources = evaluate_candidates(self, state, step_index, seeds)
         carried = bool(state.token_ids)
-        selected, kept = select(candidates, seeds, "conditional_is", step_index)
+        choose = select_metropolized if self.config.exploration_schedule == "single_pool" else select
+        selected, kept = choose(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
         reused = (min(len(state.siblings), self.config.candidate_count - int(carried))
@@ -74,6 +77,10 @@ class ConditionalISAdapter:
                 order = seeds.generator("conditional_is", step_index, "siblings").permutation(len(available))
                 siblings = tuple(available[int(index)] for index in order[:count])
         updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings)
+        if self.config.exploration_schedule == "single_pool":
+            # Every candidate was completed before selection; commit the selected
+            # completion directly instead of executing a reuse-only final step.
+            updated = replace(updated, fixed=len(updated.token_ids))
         retain = getattr(self.backend, "retain_statistics", None)
         if retain is not None:
             retain(self.prompt, updated.token_ids, *(fixed + sibling.token_ids for sibling in siblings))

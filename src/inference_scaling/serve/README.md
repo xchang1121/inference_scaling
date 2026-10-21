@@ -1,6 +1,6 @@
 # 推理服务
 
-一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；每个请求只在思考段上做固定配置的条件 IS
+一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；每个请求只在思考段上按配置运行条件 IS
 （Consilience 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
 
 | 接口 | 用途 |
@@ -13,7 +13,7 @@
 ## 一个请求的处理
 
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
-2. 按推理强度选档位，使用 `ar.algorithms.is` 配置的固定块长、候选数与补全数做思考段条件 IS；
+2. 按推理强度选档位，使用 `ar.algorithms.is` 配置的探索调度、块长、候选数与补全数做思考段条件 IS；
    候选与补全写到 `</think>` 停止，按 Consilience 加权。档位设置单条输出上限，默认只按逻辑停止条件结束。
 3. 从选中的思考正常生成一次答案。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
@@ -30,6 +30,11 @@
 `scaling.exploration_schedule` 记录该选择，`scaling.sampling_plans` 按轮记录实际 `(B, M, K)`，
 `scaling.final_pool_limit` 记录容量上限（未启用时为 `null`）；末轮 M=1 表示复用已有序列、没有新生成请求。
 原理与限制见[两阶段完整探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
+
+设为 `single_pool` 时，只生成首轮 M/K/B 候选池，使用 Metropolized 索引选择后提交完整思考，再正常生成答案。
+全部首轮请求完成后才选择；省略后续探索会降低计算量，也可能增大有限预算分布误差。
+该模式同样与上述三项复用/取消选项互斥。`scaling.sampling_plans` 只有首轮计划，
+`scaling.final_pool_limit` 为 `null`。实现与权重公式见[单轮完整候选池](../../../docs/methods/ALGORITHMS.md#is-single-pool)。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。

@@ -87,7 +87,7 @@ class ConditionalISConfig:
     completion_fraction: float = 1.0
     # Race at most twice the missing completions per block, retaining the first K; length-biased.
     rollout_race: bool = False
-    # Allocate a final pool from unused groups; restrict it to an auxiliary interval around the kept length.
+    # Fixed blocks, an auxiliary final pool, or one complete pool with Metropolized selection.
     exploration_schedule: str = "fixed"
     # Fresh-suffix capacity; None retains weight-based allocation and the auxiliary length interval.
     final_pool_limit: int | None = None
@@ -99,13 +99,13 @@ class ConditionalISConfig:
             raise ValueError("sibling_replay must be a boolean")
         if type(self.rollout_race) is not bool:
             raise ValueError("rollout_race must be a boolean")
-        if self.exploration_schedule not in {"fixed", "two_stage"}:
+        if self.exploration_schedule not in {"fixed", "two_stage", "single_pool"}:
             raise ValueError("unknown IS exploration_schedule")
         if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):
             raise ValueError("final_pool_limit must be a positive integer or None")
-        if self.exploration_schedule == "two_stage" and (
+        if self.exploration_schedule != "fixed" and (
                 self.sibling_replay or self.completion_fraction != 1.0 or self.rollout_race):
-            raise ValueError("two_stage exploration requires complete trees without sibling replay or rollout races")
+            raise ValueError(f"{self.exploration_schedule} exploration requires complete trees without sibling replay or rollout races")
         require_probability("completion_fraction", self.completion_fraction, include_zero=False)
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
