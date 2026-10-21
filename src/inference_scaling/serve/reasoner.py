@@ -93,7 +93,7 @@ class Reasoner:
             scope = scope.full_fallback("reward_uses_full_sequence")
         backend = StatisticRecorder(scope.wrap(raw, prompt), confidence_statistic("consilience", self.reward_settings))
         reward = confidence_reward("consilience", self.reward_settings, backend, thinking_format)
-        config = conditional_is_config(self.ar["algorithms"]["is"], reward, total_length=maximum)
+        config = conditional_is_config(self.ar["algorithms"]["is"], reward, total_length=maximum, backend=raw)
         start = time.monotonic()
         limit = prepared.profile["max_seconds"]
         deadline = None if limit is None else start + float(limit)
@@ -115,6 +115,7 @@ class Reasoner:
             "completion_fraction": config.completion_fraction,
             "rollout_race": config.rollout_race,
             "exploration_schedule": config.exploration_schedule,
+            "final_pool_limit": config.final_pool_limit,
             "sampling_plans": [step.sampling_plan for step in result.steps],
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",

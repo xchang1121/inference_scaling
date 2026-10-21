@@ -124,6 +124,8 @@ def run_conditional_is(
         if (not steps and config.exploration_schedule == "two_stage"
                 and config.candidate_count > 1 and not adapter.is_terminal(state)):
             count = _consolidated_candidate_count(record, state.fixed, config)
+            if config.final_pool_limit is not None:
+                count = min(count, config.final_pool_limit)
             adapter = replace(adapter, config=replace(config, candidate_count=1 + count,
                               rollout_count=1, block_size=config.total_length - state.fixed))
         steps.append(record.compact())

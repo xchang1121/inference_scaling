@@ -88,16 +88,22 @@ def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, thin
     return Reward(float(settings["temperature"]), memoized(model.batch), model.describe(), model)
 
 
-def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_length: int) -> ConditionalISConfig:
+def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_length: int,
+                          backend: Any | None = None) -> ConditionalISConfig:
     """The initial exploration budget and schedule shared by CLI and service."""
 
+    schedule = str(config.get("exploration_schedule", "fixed"))
+    scheduler = getattr(backend, "scheduler_config", None)
+    if schedule != "two_stage" or not getattr(backend, "supports_streaming_generation", False):
+        scheduler = None
     return ConditionalISConfig(
         candidate_count=int(config["candidate_count"]), rollout_count=int(config["rollout_count"]),
         block_size=min(int(config["block_size"]), total_length), total_length=total_length,
         reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
         sibling_replay=bool(config["sibling_replay"]), completion_fraction=float(config["completion_fraction"]),
         rollout_race=bool(config["rollout_race"]),
-        exploration_schedule=str(config.get("exploration_schedule", "fixed")),
+        exploration_schedule=schedule,
+        final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
     )
 
 
@@ -387,8 +393,9 @@ class ARFamily:
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
+        config = conditional_is_config(self.config, reward, total_length=task.maximum, backend=self.raw)
         result = run_conditional_is(
-            task.backend, task.prompt, conditional_is_config(self.config, reward, total_length=task.maximum),
+            task.backend, task.prompt, config,
             reward.batch, SeedStream(task.seed), sampling=task.sampling,
         )
         trace = importance_trace(list(result.steps))
@@ -397,6 +404,7 @@ class ARFamily:
         trace["completion_fraction"] = self.config["completion_fraction"]
         trace["rollout_race"] = self.config["rollout_race"]
         trace["exploration_schedule"] = self.config.get("exploration_schedule", "fixed")
+        trace["final_pool_limit"] = config.final_pool_limit
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

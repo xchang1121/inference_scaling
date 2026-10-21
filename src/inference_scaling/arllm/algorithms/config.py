@@ -89,6 +89,8 @@ class ConditionalISConfig:
     rollout_race: bool = False
     # After the first complete tree, optionally spend predicted work in one final suffix pool.
     exploration_schedule: str = "fixed"
+    # Runtime capacity for fresh suffixes in that final pool; None preserves the work forecast.
+    final_pool_limit: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -99,6 +101,8 @@ class ConditionalISConfig:
             raise ValueError("rollout_race must be a boolean")
         if self.exploration_schedule not in {"fixed", "two_stage"}:
             raise ValueError("unknown IS exploration_schedule")
+        if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):
+            raise ValueError("final_pool_limit must be a positive integer or None")
         if self.exploration_schedule == "two_stage" and (
                 self.sibling_replay or self.completion_fraction != 1.0 or self.rollout_race):
             raise ValueError("two_stage exploration requires complete trees without sibling replay or rollout races")
