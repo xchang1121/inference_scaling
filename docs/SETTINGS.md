@@ -148,7 +148,8 @@
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
-| `is.exploration_schedule` | 默认 `fixed`。`single_pool` 完成首轮 M/K/B 候选池，作一次 Metropolized 索引选择后直接提交完整序列；`two_stage` 按首轮未选 rollout 的长度与权重分配末轮探索，并使用容量限制及长度区间。后两种模式与同块补全复用、完成配额、超发互斥；减少探索可能增大有限预算误差。见[单轮候选池](methods/ALGORITHMS.md#is-single-pool)与[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
+| `is.exploration_schedule` | 默认 `fixed`。`single_pool` 完成首轮 M/K/B 候选池，作一次 Metropolized 索引选择后直接提交完整序列；`two_stage` 按首轮未选 rollout 的长度与权重分配末轮探索，并使用容量限制及长度区间。后两种模式与同块补全复用、数量配额、超发互斥；单轮可另启用权重配额并使用普通 SIR。减少探索可能增大有限预算误差。见[单轮候选池](methods/ALGORITHMS.md#is-single-pool)与[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
+| `is.weighted_completion_quota` | 默认 `false`。单轮中按完整奖励和缓存前缀分数估计已完成权重比例，达到 `1-1/M` 后取消剩余请求；至少两个组有完整结果，M=1 时为一个。完整叶子按原定补全数加权作普通 SIR。需要流式后端和缓存前缀分数，与先块生成、末条筛选及其他配额/复用选项互斥。存在完成时间及前缀分数相关偏差；见[权重完成配额](methods/ALGORITHMS.md#is-weighted-completion-quota) |
 | `is.sibling_replay` | 默认 `false`。复用所选块的其他完整补全及奖励，替代下一轮部分新候选根；K=1 无额外可复用样本。见[同块补全复用](methods/ALGORITHMS.md#is-sibling-replay) |
 | `is.completion_fraction` | 默认 `1.0`，每个候选收齐所需补全。设为 `(0,1)` 后，各候选的平均完成比例达到该值即取消未完成请求；至少取得一条新结果，未完成补全权重为零，保留原定 K 分母。需要流式后端，会引入长度相关偏差。见[完成配额](methods/ALGORITHMS.md#is-completion-quota) |
 | `is.rollout_race` | 默认 `false`。每候选至多发出双份缺失补全，收齐 K 条后取消该组其余请求；已有完整补全计入 K。需要流式后端，会偏向较快完成的轨迹，额外生成量可能增加。见[候选内超发](methods/ALGORITHMS.md#is-rollout-race) |

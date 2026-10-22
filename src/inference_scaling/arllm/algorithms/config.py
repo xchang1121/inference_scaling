@@ -93,6 +93,8 @@ class ConditionalISConfig:
     final_pool_limit: int | None = None
     # A corrected continuation decision for each pool's uniquely longest rollout.
     last_rollout_filter: bool = False
+    # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
+    weighted_completion_quota: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -103,6 +105,11 @@ class ConditionalISConfig:
             raise ValueError("rollout_race must be a boolean")
         if type(self.last_rollout_filter) is not bool:
             raise ValueError("last_rollout_filter must be a boolean")
+        if type(self.weighted_completion_quota) is not bool:
+            raise ValueError("weighted_completion_quota must be a boolean")
+        if self.weighted_completion_quota and (self.exploration_schedule != "single_pool"
+                                               or self.block_first or self.last_rollout_filter):
+            raise ValueError("weighted_completion_quota requires single_pool without block_first or last_rollout_filter")
         if self.last_rollout_filter and (self.exploration_schedule == "two_stage" or self.sibling_replay
                                         or self.completion_fraction != 1.0 or self.rollout_race):
             raise ValueError("last_rollout_filter requires fixed or single_pool without sibling replay, quotas or races")

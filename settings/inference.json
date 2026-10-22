@@ -166,7 +166,8 @@
         "completion_fraction": 1.0,
         "rollout_race": false,
         "exploration_schedule": "fixed",
-        "last_rollout_filter": false
+        "last_rollout_filter": false,
+        "weighted_completion_quota": false
       }
     }
   },

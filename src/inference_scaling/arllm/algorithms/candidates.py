@@ -4,7 +4,8 @@ The original full request remains completion zero. Neither completion order nor
 runtime enters ordinary IS weights. The two-stage final pool can exclude samples
 outside an auxiliary length interval. Tail filtering uses a common
 observed token depth and inverse-continuation weights. Completion quotas and per-block
-races instead select by completion time and change the sampling law.
+races instead select by completion time and change the sampling law. A weighted
+quota estimates unfinished weights from cached prefixes, without extra scoring.
 """
 
 from __future__ import annotations
@@ -42,6 +43,9 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     config, prompt = adapter.config, adapter.prompt
     if config.last_rollout_filter and adapter.prefix_reward is None:
         raise ValueError("last_rollout_filter requires a cached prefix reward")
+    weighted = config.weighted_completion_quota
+    if weighted and adapter.prefix_reward is None:
+        raise ValueError("weighted_completion_quota requires a cached prefix reward")
     candidate_count = config.candidate_count
     rollout_count = config.rollout_count
     fixed = state.token_ids[:state.fixed]
@@ -62,6 +66,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     blocks: list[Block | None] = [None] * candidate_count
     leaves: list[dict[int, RolloutEvaluation]] = [{} for _ in blocks]
     routes: dict[str, tuple[int, int, bool]] = {}
+    leaf_requests: dict[tuple[int, int], str] = {}
     buffers: dict[str, list[int]] = {}
     submitted: dict[str, GenerationRequest] = {}
     finished: set[str] = set()
@@ -70,7 +75,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     evaluations = 0
     backup_groups: list[int] = []
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
-    partial = config.completion_fraction < 1
+    partial = config.completion_fraction < 1 or weighted
     if (partial or config.rollout_race) and not streaming:
         raise ValueError("completion quotas and rollout races require a streaming generation backend")
     session: GenerationSession = (getattr(adapter.backend, "open_generation_session")() if streaming
@@ -83,10 +88,12 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             "conditional_is", step, "candidate", index, "rollout", rollout)
         key = stem if root else stem + (":continuation" if continuation else f":rollout:{rollout}")
         routes[key] = index, rollout, root
+        if weighted:
+            leaf_requests[index, rollout] = key
         buffers[key] = []
         job = GenerationRequest(prompt + fixed + prefix, length, adapter.sampling, seed, key,
                                 uniform_offset=len(prefix) if continuation else 0,
-                                intermediate_events=config.last_rollout_filter)
+                                intermediate_events=config.last_rollout_filter or weighted)
         submitted[key] = job
         return job
 
@@ -176,6 +183,40 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         def quota_ready():
             if not partial:
                 return False
+            if weighted:
+                if sum(bool(group) for group in leaves) < min(candidate_count, 2):
+                    return False
+                logs, complete = [], []
+                for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
+                    planned = expected(block)
+                    for rollout in range(planned):
+                        done = rollout in group
+                        if done:
+                            value = group[rollout].log_weight
+                        else:
+                            key = leaf_requests.get((index, rollout))
+                            if key is not None:
+                                root = routes[key][2]
+                                sequence = (() if root else block.token_ids) + tuple(buffers[key])
+                            else:
+                                # An unreleased sibling has observed only its root block.
+                                root_key = leaf_requests[index, 0]
+                                sequence = block.token_ids if block is not None else tuple(buffers[root_key][:width])
+                            if not sequence:
+                                return False
+                            proxy = adapter.prefix_reward(prompt, fixed + sequence)
+                            if proxy is None:
+                                return False
+                            if not isfinite(proxy):
+                                raise ValueError("prefix reward must be finite or None")
+                            value = proxy / config.reward_temperature
+                        logs.append(value - log(planned))
+                        complete.append(done)
+                peak = max(logs)
+                masses = [exp(value - peak) for value in logs]
+                # Prefix scores are estimates, not bounds on the final reward.
+                return (sum(value for value, done in zip(masses, complete, strict=True) if done)
+                        / sum(masses)) >= 1 - 1 / candidate_count
             # A terminal block already has a known weight: its K empty
             # continuations coincide. Count each group's completed fraction
             # in units of 1/K, without generating duplicate empty continuations.
@@ -283,6 +324,12 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                         cancelled.add(last)
                         buffers.pop(last)
             if quota_ready():
+                if weighted:
+                    for pending_key in routes:
+                        if pending_key not in finished and pending_key not in cancelled:
+                            session.stop(pending_key)
+                            cancelled.add(pending_key)
+                            buffers.pop(pending_key, None)
                 break
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])
@@ -315,7 +362,9 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                 indices.append(index)
                 canonical_blocks.append(block)
                 if tail is None:
-                    canonical.append([group[k] for k in sorted(group)])
+                    correction = log(len(group) / expected(block)) if weighted else 0.
+                    canonical.append([replace(group[k], log_weight=group[k].log_weight + correction)
+                                      if weighted else group[k] for k in sorted(group)])
                 else:
                     # weigh()/selection divide by the kept group size. Undo
                     # that denominator and retain the originally planned K_m.
@@ -324,7 +373,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                                       - (log(tail.probability) if (index, k) == tail[:2] else 0.))
                                       for k in sorted(group)])
         result = weigh([block.token_ids for block in canonical_blocks], canonical)
-        if partial:
+        if partial and not weighted:
             # Missing leaves contribute zero; keep the planned denominator.
             result = tuple(replace(item, log_weight=item.log_weight + log(len(item.rollouts) / expected(block)))
                            for item, block in zip(result, canonical_blocks, strict=True))

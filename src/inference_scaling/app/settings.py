@@ -175,6 +175,7 @@ SCHEMA: dict[str, Any] = {
                 "rollout_race": bool,
                 "exploration_schedule": _Choices({"fixed", "two_stage", "single_pool"}),
                 "last_rollout_filter": bool,
+                "weighted_completion_quota": bool,
             },
         },
     },

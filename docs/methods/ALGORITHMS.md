@@ -597,7 +597,46 @@ generated = candidate.token_ids + completion.token_ids
 此模式下 B 决定同组补全的分叉位置；关闭末条筛选且 K=1 时，候选是 M 条独立完整序列，B 不改变其理想采样分布。
 启用 `block_first` 时，后端续写种子的处理仍可能使不同 B 产生不同样本。
 `sampling_plan` 记录首轮请求的 B/M/K，运行只有一个探索步骤。CLI 与服务共享该选项，基准入口使用
-`--exploration-schedule single_pool`。同块补全复用、完成配额和超发需要后续探索或会改变候选池，因此与此模式互斥。
+`--exploration-schedule single_pool`。同块补全复用、数量完成配额和超发与此模式互斥；
+下节的权重完成配额使用独立的停止与选择规则。
+
+<a id="is-weighted-completion-quota"></a>
+### 按已完成权重结束候选池
+
+`ar.algorithms.is.weighted_completion_quota=true` 用已完成补全的权重占比决定结束时刻。
+它适用于 `single_pool`，默认关闭，使用完整原生根请求，与 `block_first`、末条筛选、数量配额、同块复用及超发互斥。
+M、K、B 和生成前确定的种子保持原值，实际完成数量随当前轨迹变化。
+奖励对象须提供缓存前缀评分接口 `cached_prefix`；当前内在置信度奖励提供该接口。
+
+沿用每组原定补全数 $`K_m`$；在 B 内终止的组取 1。记已完成叶子集合为 $`C`$，其完整奖励为 $`r_{mk}`$。
+对未完成叶子，只读取当前已生成前缀的缓存统计，按同一奖励公式计算暂时分数 $`h_{mk}`$。
+尚未释放的子请求使用其已知候选块。至少两个候选组有完整叶子后（M=1 时为一个），计算
+
+```math
+\widehat f=
+\frac{\displaystyle\sum_{(m,k)\in C}\frac{\exp(r_{mk}/\tau)}{K_m}}
+{\displaystyle\sum_{(m,k)\in C}\frac{\exp(r_{mk}/\tau)}{K_m}
++\displaystyle\sum_{(m,k)\notin C}\frac{\exp(h_{mk}/\tau)}{K_m}}.
+```
+
+达到 $`\widehat f\ge 1-1/M`$ 时，取消剩余请求。任一所需前缀统计缺失时继续等待，全部完成后按普通 SIR 选择；调度仅读取生成缓存，
+完整奖励沿用原有评分流程。所有输出均来自已完成叶子，结束条件仍为 EOS、思考边界或原长度上限。
+
+保留叶子按 $`\exp(r_{mk}/\tau)/K_m`$ 进行普通 SIR 选择，分母保留原定补全数。
+编号 `(0, 0)` 的叶子也可能尚未完成，因此此模式使用普通 SIR，随后直接复用所选完整序列和奖励。
+实现复用 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py) 的分支释放、评分、取消和权重处理。
+CLI 与服务共用配置；基准入口增加 `--weighted-completion-quota --exploration-schedule single_pool`。
+
+该规则引入与完成时间及前缀分数相关的选择偏差。前缀统计只是完整奖励的估计，阈值用于控制等待程度，
+而非给出目标分布的误差保证。完整生成对照可测量实际被排除的权重：令 $`w_{mk}=\exp(r_{mk}/\tau)/K_m`$，
+对同一完整候选池，全部叶子 SIR 与保留叶子 SIR 在叶子编号上的 TV 距离精确等于
+
+```math
+1-\frac{\sum_{(m,k)\in C}w_{mk}}{\sum_{m,k}w_{mk}}.
+```
+
+映射到输出序列后的 TV 距离至多为该值；到理想目标的误差还包含有限候选误差。
+实际取消后的运行只观测保留叶子的完整奖励，完整生成对照用于单独审计这一取舍。
 
 <a id="is-last-rollout-filter"></a>
 ### 末条补全的继续概率与权重校正

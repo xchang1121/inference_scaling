@@ -59,7 +59,8 @@ class ConditionalISAdapter:
             raise ValueError("cannot advance a terminal generation state")
         candidates, forward_slots, sources, evaluations = evaluate_candidates(self, state, step_index, seeds)
         carried = bool(state.token_ids)
-        choose = select_metropolized if self.config.exploration_schedule == "single_pool" else select
+        choose = (select_metropolized if self.config.exploration_schedule == "single_pool"
+                  and not self.config.weighted_completion_quota else select)
         selected, kept = choose(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
