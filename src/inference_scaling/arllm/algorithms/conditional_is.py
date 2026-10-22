@@ -8,6 +8,7 @@ next step. Batch and streaming execution share the same tree and selection.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from math import ceil, exp, fsum, isfinite
 
@@ -39,6 +40,8 @@ class ConditionalISAdapter:
     config: ConditionalISConfig
     sampling: SamplingConfig
     reward: TokenBatchReward
+    # A cached prefix proxy; None means no usable observation, never a model rescore.
+    prefix_reward: Callable[[TokenSequence, TokenSequence], float | None] | None = None
 
     @property
     def initial_state(self) -> RetainedSequence:
@@ -54,17 +57,15 @@ class ConditionalISAdapter:
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        candidates, forward_slots, sources = evaluate_candidates(self, state, step_index, seeds)
+        candidates, forward_slots, sources, evaluations = evaluate_candidates(self, state, step_index, seeds)
         carried = bool(state.token_ids)
         choose = select_metropolized if self.config.exploration_schedule == "single_pool" else select
         selected, kept = choose(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
-        reused = (min(len(state.siblings), self.config.candidate_count - int(carried))
-                  if self.config.sibling_replay else 0)
         record = ConditionalISStep(
             state.fixed, candidates, selected, kept, carried,
-            sum(len(item.rollouts) for item in candidates) - int(carried) - reused, forward_slots,
+            evaluations, forward_slots,
             (self.config.block_size, self.config.candidate_count, self.config.rollout_count),
             sources,
         )
@@ -147,10 +148,11 @@ def run_conditional_is(
     *,
     sampling: SamplingConfig | None = None,
     deadline: float | None = None,
+    prefix_reward: Callable[[TokenSequence, TokenSequence], float | None] | None = None,
 ) -> ConditionalISResult:
     """CLI/service loop. A deadline is checked between steps, never within a candidate tree."""
     adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config,
-                                   sampling=sampling or SamplingConfig(), reward=reward)
+                                   sampling=sampling or SamplingConfig(), reward=reward, prefix_reward=prefix_reward)
     state = adapter.initial_state
     steps: list[ConditionalISStep] = []
     while not adapter.is_terminal(state):

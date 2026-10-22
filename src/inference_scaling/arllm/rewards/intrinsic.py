@@ -79,6 +79,26 @@ class TokenStatisticReward:
             "thinking_format": self.thinking_format.describe() if self.thinking_format is not None else None,
         }
 
+    def cached_prefix(self, prompt: TokenSequence, prefix: TokenSequence) -> float | None:
+        """A running confidence proxy for scheduling, separate from the complete-sequence reward.
+
+        Only already recorded statistics are read. Missing positions disable
+        filtering; they never trigger a scoring request. An open thinking span
+        is usable here, although the final reward still requires its completion.
+        """
+        start, end = 0, len(prefix)
+        if self.scope == "thinking":
+            assert self.thinking_format is not None
+            segments = self.thinking_format.split(prompt, prefix)
+            if segments.thinking_start is not None and segments.status in {"complete", "incomplete"}:
+                start = segments.thinking_start
+                end = segments.thinking_end if segments.thinking_end is not None else len(prefix)
+        read = getattr(self.backend, "recorded_statistics", None)
+        if read is None or start >= end:
+            return None
+        values = read(tuple(prompt), tuple(prefix[:end]), self.statistic)
+        return None if values is None else self.reduce(values[start:])
+
 
 @dataclass(frozen=True, slots=True)
 class SelfCertaintyReward(TokenStatisticReward):

@@ -88,6 +88,14 @@ class StatisticRecorder:
         scored = iter(self.backend.token_statistics(missing, statistic) if missing else ())
         return [tuple(next(scored)) if np.isnan(values).any() else tuple(values.tolist()) for _, _, values in found]
 
+    def recorded_statistics(self, prompt: TokenSequence, continuation: TokenSequence,
+                            statistic: TokenStatistic) -> tuple[float, ...] | None:
+        """Read a generated prefix without a forward pass; None if any position is unavailable."""
+        if statistic != self.statistic:
+            return None
+        values = self._recorded(prompt + continuation, len(prompt))
+        return tuple(values.tolist()) if np.isfinite(values).all() else None
+
 
 class StatisticSession:
     def __init__(self, recorder: StatisticRecorder) -> None:

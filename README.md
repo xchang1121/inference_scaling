@@ -189,5 +189,5 @@ python -m pytest
 [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告保留统一入口之前实验得到的结论与图；
 已删除方法只保留说明，其余方法给出在当前实现上复现的命令与设置。
 
-[昇腾调度验证](docs/reports/ASCEND_IS_INFRA.md)记录完整等待、同块补全复用、完成配额与候选内超发的单题对照，包含耗时回退和额外计算量。
+[昇腾调度验证](docs/reports/ASCEND_IS_INFRA.md)记录探索轮数、末条补全筛选、同块补全复用、完成配额与超发的单题对照，包含耗时回退、计算量与有限预算限制。
 入口为 `scripts/benchmark_is_gpu.py`，同时记录同后端 Base、IS 墙钟时间、长尾等待与实际执行量。

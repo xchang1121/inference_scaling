@@ -174,6 +174,7 @@ SCHEMA: dict[str, Any] = {
                 "completion_fraction": float,
                 "rollout_race": bool,
                 "exploration_schedule": _Choices({"fixed", "two_stage", "single_pool"}),
+                "last_rollout_filter": bool,
             },
         },
     },

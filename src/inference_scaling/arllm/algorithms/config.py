@@ -91,6 +91,8 @@ class ConditionalISConfig:
     exploration_schedule: str = "fixed"
     # Fresh-suffix capacity; None retains weight-based allocation and the auxiliary length interval.
     final_pool_limit: int | None = None
+    # A corrected continuation decision for each pool's uniquely longest rollout.
+    last_rollout_filter: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -99,6 +101,11 @@ class ConditionalISConfig:
             raise ValueError("sibling_replay must be a boolean")
         if type(self.rollout_race) is not bool:
             raise ValueError("rollout_race must be a boolean")
+        if type(self.last_rollout_filter) is not bool:
+            raise ValueError("last_rollout_filter must be a boolean")
+        if self.last_rollout_filter and (self.exploration_schedule == "two_stage" or self.sibling_replay
+                                        or self.completion_fraction != 1.0 or self.rollout_race):
+            raise ValueError("last_rollout_filter requires fixed or single_pool without sibling replay, quotas or races")
         if self.exploration_schedule not in {"fixed", "two_stage", "single_pool"}:
             raise ValueError("unknown IS exploration_schedule")
         if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):

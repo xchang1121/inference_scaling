@@ -165,7 +165,8 @@
         "sibling_replay": false,
         "completion_fraction": 1.0,
         "rollout_race": false,
-        "exploration_schedule": "fixed"
+        "exploration_schedule": "fixed",
+        "last_rollout_filter": false
       }
     }
   },

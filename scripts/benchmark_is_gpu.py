@@ -136,8 +136,9 @@ def settings_for(args):
                                   block_size=args.block_size, block_first=False,
                                   sibling_replay=args.sibling_replay, completion_fraction=args.completion_fraction,
                                   rollout_race=args.rollout_race,
-                                  exploration_schedule=getattr(args, "exploration_schedule", "fixed"))
-    if args.completion_fraction < 1 or args.rollout_race:
+                                  exploration_schedule=getattr(args, "exploration_schedule", "fixed"),
+                                  last_rollout_filter=getattr(args, "last_rollout_filter", False))
+    if args.completion_fraction < 1 or args.rollout_race or getattr(args, "last_rollout_filter", False):
         # Request-level counters can miss buffered work at cancellation.
         vllm["engine_kwargs"]["cudagraph_metrics"] = True
     settings["run"]["seed"] = args.seed
@@ -373,6 +374,8 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=8192)
     parser.add_argument("--block-size", type=int, default=1024)
     parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage", "single_pool"), default="fixed")
+    parser.add_argument("--last-rollout-filter", action="store_true",
+                        help="apply inverse-probability-corrected tail filtering to fixed or single_pool exploration")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -409,6 +412,9 @@ def main():
     if args.exploration_schedule != "fixed" and (
             args.sibling_replay or args.completion_fraction != 1.0 or args.rollout_race):
         parser.error(f"{args.exploration_schedule} exploration requires complete trees without sibling replay or rollout races")
+    if args.last_rollout_filter and (args.exploration_schedule == "two_stage" or args.execution != "stream"
+                                    or args.sibling_replay or args.completion_fraction != 1. or args.rollout_race):
+        parser.error("last-rollout-filter requires fixed or single_pool streaming without replay, quotas or races")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401
@@ -445,6 +451,7 @@ def main():
         row["sampling_plan"] = record.sampling_plan
         row["candidate_indices"] = record.candidate_indices
         row["rollout_race"] = args.rollout_race
+        row["last_rollout_filter"] = args.last_rollout_filter
         if args.completion_fraction < 1:
             width, count, rollouts = record.sampling_plan
             sources = record.candidate_indices or tuple(range(count))

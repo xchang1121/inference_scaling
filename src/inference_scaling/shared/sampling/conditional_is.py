@@ -21,7 +21,7 @@ from inference_scaling.shared.types import TokenSequence
 
 @dataclass(frozen=True, slots=True)
 class RolloutEvaluation:
-    """One completion of a candidate; its log weight is reward / temperature."""
+    """One completed rollout, its reward and log weight including any sampling correction."""
 
     token_ids: TokenSequence
     reward: float

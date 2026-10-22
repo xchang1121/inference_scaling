@@ -558,7 +558,8 @@ AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algo
 
 `ar.algorithms.is.exploration_schedule="single_pool"` 只生成首轮完整候选池，从中选出一条完整序列后结束探索。
 首轮仍使用配置的 M/K/B：先生成 M 个候选块，每个块有 K 条完整补全；已终止的块只有一条。
-所有请求完成后再选择，保留原采样策略、完整序列奖励和前缀计算复用。节省的计算来自省略后续探索，首轮最长请求的等待仍然存在。
+默认等待所有请求完成后再选择，保留原采样策略、完整序列奖励和前缀计算复用。节省的计算来自省略后续探索；
+首轮最长请求可另用[末条补全筛选](#is-last-rollout-filter)处理。
 
 该模式采用 Metropolized 索引更新。设第 $`m`$ 组实际有 $`K_m`$ 条补全，展平后的叶子权重为
 
@@ -593,10 +594,79 @@ completion = candidate.rollouts[k]
 generated = candidate.token_ids + completion.token_ids
 ```
 
-此模式下 B 决定同组补全的分叉位置；K=1 时，候选是 M 条独立完整序列，B 不改变其理想采样分布。
+此模式下 B 决定同组补全的分叉位置；关闭末条筛选且 K=1 时，候选是 M 条独立完整序列，B 不改变其理想采样分布。
 启用 `block_first` 时，后端续写种子的处理仍可能使不同 B 产生不同样本。
 `sampling_plan` 记录首轮请求的 B/M/K，运行只有一个探索步骤。CLI 与服务共享该选项，基准入口使用
 `--exploration-schedule single_pool`。同块补全复用、完成配额和超发需要后续探索或会改变候选池，因此与此模式互斥。
+
+<a id="is-last-rollout-filter"></a>
+### 末条补全的继续概率与权重校正
+
+`ar.algorithms.is.last_rollout_filter=true` 在一轮仅剩最后一条补全时决定是否继续等待。
+它适用于 `fixed` 和 `single_pool`；默认关闭，与两阶段、同块多补全复用、完成配额和超发互斥。
+固定块模式仍复用上一轮选中的完整序列及奖励，已经提交的前缀保持不变。
+
+设第 $`m`$ 组原定有 $`K_m`$ 条补全，终止块取 $`K_m=1`$，物理叶子数为 $`n=\sum_m K_m`$。
+当其余叶子均完成，取本轮后缀的共同 token 位置
+
+```math
+\ell=\max\!\left(B,\max_{j\ne i}|z_j,u_j|\right).
+```
+
+仅当最后一条 $`i`$ 已超过 $`\ell`$ 时进行筛选；若最长长度并列，则本轮不筛选。
+决策读取它前 $`\ell`$ 个 token 的缓存统计，并与其余叶子的完整奖励比较。
+Consilience 对这个已观测前缀应用原有统计公式，得到暂时分数 $`h_i`$；它仅用于继续概率，完整奖励仍只由完整思考段计算。
+已有固定前缀也包含在分数的输入中。令
+
+```math
+v_i=\exp\!\left(\frac{h_i-\max(h_i,\max_{j\ne i}r_j)}{\tau}\right),
+\qquad a_i=\frac{1+(n-1)v_i}{n}.
+```
+
+其余叶子的保留概率为 1。最后一条以概率 $`a_i`$ 继续，否则取消；因此暂时分数低于其余完整奖励的末条更可能被取消，
+且 $`a_i\ge 1/n`$。缺少缓存统计时取 $`a_i=1`$，不发起额外评分。
+编号为 `(0, 0)` 的参考叶子始终保留：首轮中它由事先固定的请求编号确定，后续轮中它是被复用的序列。
+参考叶子如果最长，其最终权重同样除以 $`a_i`$，不能直接豁免校正。
+
+所有保留叶子使用
+
+```math
+\widetilde w_{mk}=\frac{\exp(r(g,z_m,u_{mk})/\tau)}{K_m a_{mk}}.
+```
+
+已取消叶子的贡献为零，分母仍是原定 $`K_m`$，不改为剩余补全数。固定块模式按这些权重选择；
+单轮模式使用相同权重进行 Metropolized 索引更新。完成通知有延迟、或者参考叶子已经完整复用时，
+仍在完整候选池上应用同一逻辑位置的决策，避免执行先后改变筛选规则。提前取消只省去被排除叶子的未执行部分。
+
+**目标分布。** 沿用式 (8a) 的候选树概率 $`\lambda(T)`$。允许终止组与普通组的 $`K_m`$ 不同时，
+先均匀选择候选组、再均匀选择组内叶子，其序列边缘仍为基模型分布，所以原联合权重为
+$`\lambda(T)\exp(r_i/\tau)/K_{m(i)}`$。设 $`S`$ 是上述随机筛选保留的叶子集合，普通筛选下的概率为 $`P(S\mid T)`$。
+引入集合后的联合分布写为
+
+```math
+\overline\pi(T,S,I=i)\propto
+\lambda(T)P(S\mid T)\mathbf 1\{i\in S\}
+\frac{\exp(r_i/\tau)}{K_{m(i)}a_i}.
+```
+
+由于 $`\sum_{S:i\in S}P(S\mid T)=a_i`$，对 $`S`$ 求和后恰好恢复原联合分布。
+给定参考叶子 $`i`$，集合的条件概率是 $`P(S\mid T)\mathbf 1\{i\in S\}/a_i`$：
+参考叶子为末条时强制保留，其余情况下按原概率抽取，正是实现中的规则。
+随后按 $`\widetilde w`$ 进行条件抽样，或执行前节已经证明保持这些索引权重的 Metropolized 更新，均保持该联合分布。
+筛选使用共同 token 位置、固定的序列奖励与前缀统计，并对组及组内编号对称；据此可把参考叶子放在 `(0, 0)`。
+这复用了候选树证明，只增加一次保留集合的条件更新。对固定前缀分别应用即可得到逐块版本，不需要回退前缀。
+
+上述结论要求相同逻辑前缀得到相同分数和统计可用性；实际设备的数值波动仍按本章执行等价性说明处理。
+它是目标不变性，不是冷启动的有限预算误差不增。前缀分数低而最终奖励高的长序列可能被排除；
+CPU 四状态精确例中，一次更新的 TV 误差可由 0.1438 增至 0.2152。因此该选项属于等待时间与有限预算精度的折中，
+性能验证见[昇腾结果](../reports/ASCEND_IS_INFRA.md#last-rollout-filter)。
+
+实现位于 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)；
+[`TokenStatisticReward.cached_prefix`](../../src/inference_scaling/arllm/rewards/intrinsic.py) 区分开放思考段与完整奖励，
+[`StatisticRecorder.recorded_statistics`](../../src/inference_scaling/arllm/backends/statistics.py) 仅读取已有统计。
+批量后端可执行相同筛选，但完整生成后的排除没有取消收益；流式后端才会停止尚未完成的请求。
+CLI 与服务共用配置，基准增加 `--last-rollout-filter`。所有取消前已执行的工作仍计入成本；
+已评分后再排除的完整叶子也计入 `rollout_evaluations_performed`。
 
 <a id="is-two-stage"></a>
 ### 两阶段完整探索

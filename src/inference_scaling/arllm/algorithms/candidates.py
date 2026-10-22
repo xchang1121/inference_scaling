@@ -2,14 +2,15 @@
 
 The original full request remains completion zero. Neither completion order nor
 runtime enters ordinary IS weights. The two-stage final pool can exclude samples
-outside an auxiliary length interval. Optional completion quotas and per-block
+outside an auxiliary length interval. Tail filtering uses a common
+observed token depth and inverse-continuation weights. Completion quotas and per-block
 races instead select by completion time and change the sampling law.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-from math import ceil, floor, isfinite, log
+from math import ceil, exp, floor, isfinite, log
 from typing import TYPE_CHECKING, NamedTuple
 
 from inference_scaling.arllm.backends.scheduling import GenerationSession
@@ -27,11 +28,20 @@ class Block(NamedTuple):
     finish_reason: str
 
 
+class TailDecision(NamedTuple):
+    candidate: int
+    rollout: int
+    probability: float
+    keep: bool
+
+
 def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, step: int, seeds: SeedStream):
-    """Candidates, measured forward slots, and original indices of the surviving groups."""
+    """Candidates, measured slots, surviving original group indices, and scored completion count."""
     if not adapter.sampling.full_support:
         raise ValueError("base candidates require full support: top_p=1 and top_k=None")
     config, prompt = adapter.config, adapter.prompt
+    if config.last_rollout_filter and adapter.prefix_reward is None:
+        raise ValueError("last_rollout_filter requires a cached prefix reward")
     candidate_count = config.candidate_count
     rollout_count = config.rollout_count
     fixed = state.token_ids[:state.fixed]
@@ -56,6 +66,8 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     submitted: dict[str, GenerationRequest] = {}
     finished: set[str] = set()
     cancelled: set[str] = set()
+    tail: TailDecision | None = None
+    evaluations = 0
     backup_groups: list[int] = []
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
     partial = config.completion_fraction < 1
@@ -73,7 +85,8 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         routes[key] = index, rollout, root
         buffers[key] = []
         job = GenerationRequest(prompt + fixed + prefix, length, adapter.sampling, seed, key,
-                                uniform_offset=len(prefix) if continuation else 0, intermediate_events=False)
+                                uniform_offset=len(prefix) if continuation else 0,
+                                intermediate_events=config.last_rollout_filter)
         submitted[key] = job
         return job
 
@@ -98,12 +111,34 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         score([(index, rollout, suffix)])
 
     def score(items):
+        nonlocal evaluations
         values = tuple(adapter.reward(prompt, [fixed + blocks[index].token_ids + suffix for index, _, suffix in items]))
         if len(values) != len(items) or any(not isfinite(float(value)) for value in values):
             raise ValueError("reward must return one finite value per completion")
         for (index, rollout, suffix), value in zip(items, values, strict=True):
             value = float(value)
             leaves[index][rollout] = RolloutEvaluation(suffix, value, value / config.reward_temperature)
+        evaluations += len(items)
+
+    def decide_tail(index, rollout, sequence, frontier):
+        """The same logical decision applies whether the last stream is still cancellable or has finished."""
+        assert adapter.prefix_reward is not None
+        value = adapter.prefix_reward(prompt, fixed + sequence[:frontier])
+        if value is None:
+            return TailDecision(index, rollout, 1., True)
+        if not isfinite(value):
+            raise ValueError("prefix reward must be finite or None")
+        proxy = value / config.reward_temperature
+        other = [item.log_weight for m, group in enumerate(leaves) for k, item in group.items()
+                 if (m, k) != (index, rollout)]
+        count = sum(expected(block) for block in blocks)
+        probability = (1 + (count - 1) * exp(proxy - max(proxy, *other))) / count
+        # Force the reference through the auxiliary subset update, while still
+        # dividing its final weight by this probability. This preserves the
+        # joint target; simply exempting its weight would not.
+        keep = (index, rollout) == (0, 0) or float(
+            seeds.generator("conditional_is", step, "last_tail_keep").random()) < probability
+        return TailDecision(index, rollout, probability, keep)
 
     try:
         carried = int(bool(state.token_ids))
@@ -222,26 +257,72 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     evaluate(index, rollout, tuple(tokens[len(block.token_ids):] if root else tokens))
                 del buffers[key]
                 cancel_completed_group(index)
+            if config.last_rollout_filter and not sealed and all(block is not None for block in blocks):
+                session.seal()
+                sealed = True
+            if (config.last_rollout_filter and tail is None and sealed
+                    and all(block is not None for block in blocks)
+                    and sum(map(len, leaves)) == sum(expected(block) for block in blocks) - 1
+                    and sum(map(len, leaves)) > 0):
+                outstanding = [name for name in routes if name not in finished and name not in cancelled]
+                if len(outstanding) != 1:
+                    raise RuntimeError("invalid last-rollout accounting")
+                last = outstanding[0]
+                m, k, root = routes[last]
+                block = blocks[m]
+                assert block is not None
+                sequence = (() if root else block.token_ids) + tuple(buffers[last])
+                frontier = max(width, max(len(blocks[i].token_ids) + len(item.token_ids)
+                                         for i, group in enumerate(leaves) for item in group.values()))
+                # Strictly past the frontier excludes equal-length completions,
+                # even when their empty final event has not yet been delivered.
+                if len(sequence) > frontier:
+                    tail = decide_tail(m, k, sequence, frontier)
+                    if not tail.keep:
+                        session.stop(last)
+                        cancelled.add(last)
+                        buffers.pop(last)
             if quota_ready():
                 break
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])
             pending.clear()
+        if config.last_rollout_filter and tail is None:
+            ordered = sorted(((len(blocks[m].token_ids) + len(item.token_ids), m, k)
+                              for m, group in enumerate(leaves) for k, item in group.items()))
+            if len(ordered) > 1:
+                length, m, k = ordered[-1]
+                frontier = max(width, ordered[-2][0])
+                if length > frontier:
+                    tail = decide_tail(m, k, blocks[m].token_ids + leaves[m][k].token_ids, frontier)
+        if tail is not None and not tail.keep:
+            leaves[tail.candidate].pop(tail.rollout, None)
         if not partial and any(block is None and index not in excluded for index, block in enumerate(blocks)):
             raise RuntimeError("stream omitted a candidate prefix")
         canonical = []
         canonical_blocks = []
         indices = []
         for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
+            required = set(range(expected(block)))
+            if tail is not None and not tail.keep and tail.candidate == index:
+                required.remove(tail.rollout)
             complete = (len(group) == expected(block) if config.rollout_race
-                        else set(group) == set(range(expected(block))))
+                        else set(group) == required)
             if not partial and not complete and index not in excluded:
                 raise RuntimeError("stream omitted a required completion")
             if group:
                 assert block is not None
                 indices.append(index)
                 canonical_blocks.append(block)
-                canonical.append([group[k] for k in sorted(group)])
+                if tail is None:
+                    canonical.append([group[k] for k in sorted(group)])
+                else:
+                    # weigh()/selection divide by the kept group size. Undo
+                    # that denominator and retain the originally planned K_m.
+                    correction = log(len(group) / expected(block))
+                    canonical.append([replace(group[k], log_weight=group[k].log_weight + correction
+                                      - (log(tail.probability) if (index, k) == tail[:2] else 0.))
+                                      for k in sorted(group)])
         result = weigh([block.token_ids for block in canonical_blocks], canonical)
         if partial:
             # Missing leaves contribute zero; keep the planned denominator.
@@ -250,7 +331,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         if len(finished) != len(routes):
             measured = False
         sources = tuple(indices) if len(indices) != candidate_count else None
-        return result, (slots if measured else None), sources
+        return result, (slots if measured else None), sources, evaluations
     finally:
         session.close()
 

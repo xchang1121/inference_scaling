@@ -98,7 +98,7 @@ class Reasoner:
         limit = prepared.profile["max_seconds"]
         deadline = None if limit is None else start + float(limit)
         result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
-                                    sampling=policy, deadline=deadline)
+                                    sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix)
         tokens, info = scope.finish(raw, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
                                     seed=SeedStream(seeds).derive("final-content"))
         # An unfinished thought has no answer; it is returned as the reasoning.
@@ -116,6 +116,7 @@ class Reasoner:
             "rollout_race": config.rollout_race,
             "exploration_schedule": config.exploration_schedule,
             "final_pool_limit": config.final_pool_limit,
+            "last_rollout_filter": config.last_rollout_filter,
             "sampling_plans": [step.sampling_plan for step in result.steps],
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",
