@@ -106,6 +106,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
         last_rollout_filter=bool(config.get("last_rollout_filter", False)),
         weighted_completion_quota=bool(config.get("weighted_completion_quota", False)),
+        selection_ready=bool(config.get("selection_ready", False)),
     )
 
 
@@ -410,6 +411,7 @@ class ARFamily:
         trace["final_pool_limit"] = config.final_pool_limit
         trace["last_rollout_filter"] = config.last_rollout_filter
         trace["weighted_completion_quota"] = config.weighted_completion_quota
+        trace["selection_ready"] = config.selection_ready
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

@@ -6,6 +6,7 @@ outside an auxiliary length interval. Tail filtering uses a common
 observed token depth and inverse-continuation weights. Completion quotas and per-block
 races instead select by completion time and change the sampling law. A weighted
 quota estimates unfinished weights from cached prefixes, without extra scoring.
+Selection-ready stopping uses those estimates with one fixed categorical draw.
 """
 
 from __future__ import annotations
@@ -37,15 +38,20 @@ class TailDecision(NamedTuple):
 
 
 def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, step: int, seeds: SeedStream):
-    """Candidates, measured slots, surviving original group indices, and scored completion count."""
+    """Candidates, measured slots, source groups, score count, and optional preselected indices."""
     if not adapter.sampling.full_support:
         raise ValueError("base candidates require full support: top_p=1 and top_k=None")
     config, prompt = adapter.config, adapter.prompt
     if config.last_rollout_filter and adapter.prefix_reward is None:
         raise ValueError("last_rollout_filter requires a cached prefix reward")
-    weighted = config.weighted_completion_quota
+    weighted = config.weighted_completion_quota or config.selection_ready
     if weighted and adapter.prefix_reward is None:
-        raise ValueError("weighted_completion_quota requires a cached prefix reward")
+        raise ValueError("weight-based stopping requires a cached prefix reward")
+    if config.selection_ready and state.token_ids:
+        raise ValueError("selection_ready requires a fresh single pool")
+    chosen = None
+    uniform = (float(seeds.generator("conditional_is", step, "selection_ready").random())
+               if config.selection_ready else None)
     candidate_count = config.candidate_count
     rollout_count = config.rollout_count
     fixed = state.token_ids[:state.fixed]
@@ -181,12 +187,13 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             return rollout_count if block.finish_reason == "length" and len(block.token_ids) < remaining else 1
 
         def quota_ready():
+            nonlocal chosen
             if not partial:
                 return False
             if weighted:
                 if sum(bool(group) for group in leaves) < min(candidate_count, 2):
                     return False
-                logs, complete = [], []
+                logs, complete, keys = [], [], []
                 for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
                     planned = expected(block)
                     for rollout in range(planned):
@@ -212,8 +219,25 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                             value = proxy / config.reward_temperature
                         logs.append(value - log(planned))
                         complete.append(done)
+                        keys.append((index, rollout))
                 peak = max(logs)
                 masses = [exp(value - peak) for value in logs]
+                if config.selection_ready:
+                    # Reuse one uniform across events; redrawing would repeatedly
+                    # favor already-complete leaves. Prefix estimates still bias
+                    # the stopping rule relative to full-reward SIR.
+                    threshold = uniform * sum(masses)
+                    cumulative = 0.
+                    selected = len(masses) - 1
+                    for position, mass in enumerate(masses):
+                        cumulative += mass
+                        if threshold < cumulative:
+                            selected = position
+                            break
+                    if not complete[selected]:
+                        return False
+                    chosen = keys[selected]
+                    return True
                 # Prefix scores are estimates, not bounds on the final reward.
                 return (sum(value for value, done in zip(masses, complete, strict=True) if done)
                         / sum(masses)) >= 1 - 1 / candidate_count
@@ -380,7 +404,10 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         if len(finished) != len(routes):
             measured = False
         sources = tuple(indices) if len(indices) != candidate_count else None
-        return result, (slots if measured else None), sources, evaluations
+        if config.selection_ready and chosen is None:
+            raise RuntimeError("selection-ready pool ended without a completed selection")
+        selection = (indices.index(chosen[0]), sorted(leaves[chosen[0]]).index(chosen[1])) if chosen else None
+        return result, (slots if measured else None), sources, evaluations, selection
     finally:
         session.close()
 

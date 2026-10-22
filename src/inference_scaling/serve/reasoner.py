@@ -118,6 +118,7 @@ class Reasoner:
             "final_pool_limit": config.final_pool_limit,
             "last_rollout_filter": config.last_rollout_filter,
             "weighted_completion_quota": config.weighted_completion_quota,
+            "selection_ready": config.selection_ready,
             "sampling_plans": [step.sampling_plan for step in result.steps],
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",

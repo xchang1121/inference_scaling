@@ -138,9 +138,10 @@ def settings_for(args):
                                   rollout_race=args.rollout_race,
                                   exploration_schedule=getattr(args, "exploration_schedule", "fixed"),
                                   last_rollout_filter=getattr(args, "last_rollout_filter", False),
-                                  weighted_completion_quota=getattr(args, "weighted_completion_quota", False))
+                                  weighted_completion_quota=getattr(args, "weighted_completion_quota", False),
+                                  selection_ready=getattr(args, "selection_ready", False))
     if (args.completion_fraction < 1 or args.rollout_race or getattr(args, "last_rollout_filter", False)
-            or getattr(args, "weighted_completion_quota", False)):
+            or getattr(args, "weighted_completion_quota", False) or getattr(args, "selection_ready", False)):
         # Request-level counters can miss buffered work at cancellation.
         vllm["engine_kwargs"]["cudagraph_metrics"] = True
     settings["run"]["seed"] = args.seed
@@ -380,6 +381,8 @@ def main():
                         help="apply inverse-probability-corrected tail filtering to fixed or single_pool exploration")
     parser.add_argument("--weighted-completion-quota", action="store_true",
                         help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
+    parser.add_argument("--selection-ready", action="store_true",
+                        help="stop when one fixed prefix-weighted draw selects a completed rollout; biased")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -422,6 +425,9 @@ def main():
     if args.weighted_completion_quota and (args.exploration_schedule != "single_pool" or args.execution != "stream"
                                           or args.last_rollout_filter):
         parser.error("weighted-completion-quota requires single_pool streaming without last-rollout-filter")
+    if args.selection_ready and (args.exploration_schedule != "single_pool" or args.execution != "stream"
+                                 or args.last_rollout_filter or args.weighted_completion_quota):
+        parser.error("selection-ready requires single_pool streaming without other early-stop rules")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401
@@ -460,7 +466,8 @@ def main():
         row["rollout_race"] = args.rollout_race
         row["last_rollout_filter"] = args.last_rollout_filter
         row["weighted_completion_quota"] = args.weighted_completion_quota
-        if args.completion_fraction < 1 or args.weighted_completion_quota:
+        row["selection_ready"] = args.selection_ready
+        if args.completion_fraction < 1 or args.weighted_completion_quota or args.selection_ready:
             width, count, rollouts = record.sampling_plan
             sources = record.candidate_indices or tuple(range(count))
             expected = [1 if width >= adapter.config.total_length - state.fixed else rollouts] * count
@@ -483,6 +490,10 @@ def main():
                     fraction=1 - 1 / count, unit="estimated_completed_weight_fraction",
                     completed_count_fraction=row["completion_quota"].pop("completed_fraction"),
                     sampling_law="prefix-score and completion-time biased; incomplete leaves have zero weight")
+            elif args.selection_ready:
+                row["completion_quota"].update(
+                    fraction=None, unit="selected_completion_ready",
+                    sampling_law="one fixed draw with prefix estimates and completion-time-dependent stopping")
         row["retained_tokens"] = len(updated.token_ids)
         rounds.append(row)
         print(json.dumps({"event": "round", "label": args.label, "k": record.sampling_plan[2],

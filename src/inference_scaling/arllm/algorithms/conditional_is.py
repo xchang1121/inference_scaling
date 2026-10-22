@@ -57,11 +57,11 @@ class ConditionalISAdapter:
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        candidates, forward_slots, sources, evaluations = evaluate_candidates(self, state, step_index, seeds)
+        candidates, forward_slots, sources, evaluations, selection = evaluate_candidates(self, state, step_index, seeds)
         carried = bool(state.token_ids)
         choose = (select_metropolized if self.config.exploration_schedule == "single_pool"
                   and not self.config.weighted_completion_quota else select)
-        selected, kept = choose(candidates, seeds, "conditional_is", step_index)
+        selected, kept = selection if selection is not None else choose(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
         record = ConditionalISStep(
@@ -80,8 +80,7 @@ class ConditionalISAdapter:
                 siblings = tuple(available[int(index)] for index in order[:count])
         updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings)
         if self.config.exploration_schedule == "single_pool":
-            # Every candidate was completed before selection; commit the selected
-            # completion directly instead of executing a reuse-only final step.
+            # Commit the selected complete sequence without a reuse-only final step.
             updated = replace(updated, fixed=len(updated.token_ids))
         retain = getattr(self.backend, "retain_statistics", None)
         if retain is not None:

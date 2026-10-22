@@ -95,6 +95,8 @@ class ConditionalISConfig:
     last_rollout_filter: bool = False
     # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
     weighted_completion_quota: bool = False
+    # Fix a selection uniform, then stop when its prefix-weighted choice has completed; biased.
+    selection_ready: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -107,6 +109,11 @@ class ConditionalISConfig:
             raise ValueError("last_rollout_filter must be a boolean")
         if type(self.weighted_completion_quota) is not bool:
             raise ValueError("weighted_completion_quota must be a boolean")
+        if type(self.selection_ready) is not bool:
+            raise ValueError("selection_ready must be a boolean")
+        if self.selection_ready and (self.exploration_schedule != "single_pool" or self.block_first
+                                     or self.last_rollout_filter or self.weighted_completion_quota):
+            raise ValueError("selection_ready requires single_pool without block_first or other early-stop rules")
         if self.weighted_completion_quota and (self.exploration_schedule != "single_pool"
                                                or self.block_first or self.last_rollout_filter):
             raise ValueError("weighted_completion_quota requires single_pool without block_first or last_rollout_filter")
