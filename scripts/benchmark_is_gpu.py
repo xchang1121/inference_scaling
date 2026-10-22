@@ -382,7 +382,7 @@ def main():
     parser.add_argument("--weighted-completion-quota", action="store_true",
                         help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
     parser.add_argument("--selection-ready", action="store_true",
-                        help="defer K>1 forks until a root finishes, then stop on a completed fixed draw; biased")
+                        help="stop on a completed fixed draw in single_pool or only the two_stage final pool; biased")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -425,9 +425,9 @@ def main():
     if args.weighted_completion_quota and (args.exploration_schedule != "single_pool" or args.execution != "stream"
                                           or args.last_rollout_filter):
         parser.error("weighted-completion-quota requires single_pool streaming without last-rollout-filter")
-    if args.selection_ready and (args.exploration_schedule != "single_pool" or args.execution != "stream"
+    if args.selection_ready and (args.exploration_schedule not in {"single_pool", "two_stage"} or args.execution != "stream"
                                  or args.last_rollout_filter or args.weighted_completion_quota):
-        parser.error("selection-ready requires single_pool streaming without other early-stop rules")
+        parser.error("selection-ready requires single_pool or two_stage streaming without other early-stop rules")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401
@@ -466,8 +466,11 @@ def main():
         row["rollout_race"] = args.rollout_race
         row["last_rollout_filter"] = args.last_rollout_filter
         row["weighted_completion_quota"] = args.weighted_completion_quota
-        row["selection_ready"] = args.selection_ready
-        if args.completion_fraction < 1 or args.weighted_completion_quota or args.selection_ready:
+        ready = args.selection_ready and (args.exploration_schedule == "single_pool" or (
+            step_index == 1 and bool(state.token_ids) and adapter.config.rollout_count == 1
+            and adapter.config.block_size >= adapter.config.total_length - state.fixed))
+        row["selection_ready"] = ready
+        if args.completion_fraction < 1 or args.weighted_completion_quota or ready:
             width, count, rollouts = record.sampling_plan
             sources = record.candidate_indices or tuple(range(count))
             expected = [1 if width >= adapter.config.total_length - state.fixed else rollouts] * count
@@ -490,10 +493,11 @@ def main():
                     fraction=1 - 1 / count, unit="estimated_completed_weight_fraction",
                     completed_count_fraction=row["completion_quota"].pop("completed_fraction"),
                     sampling_law="prefix-score and completion-time biased; incomplete leaves have zero weight")
-            elif args.selection_ready:
+            elif ready:
                 row["completion_quota"].update(
                     fraction=None, unit="selected_completion_ready",
-                    sampling_law="completion-triggered branching; one fixed draw with prefix estimates and completion-time-dependent stopping")
+                    sampling_law=("completion-triggered branching; " if args.exploration_schedule == "single_pool" else "")
+                    + "one fixed draw with prefix estimates and completion-time-dependent stopping")
         row["retained_tokens"] = len(updated.token_ids)
         rounds.append(row)
         print(json.dumps({"event": "round", "label": args.label, "k": record.sampling_plan[2],

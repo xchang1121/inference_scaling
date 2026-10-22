@@ -36,9 +36,11 @@
 该模式同样与上述三项复用/取消选项互斥。`scaling.sampling_plans` 只有首轮计划，
 `scaling.final_pool_limit` 为 `null`。实现与权重公式见[单轮完整候选池](../../../docs/methods/ALGORITHMS.md#is-single-pool)。
 
-`selection_ready=true` 时，K>1 的分叉由首条根请求结束触发，实际位置为配置 B 与该请求长度的较大值；
+`single_pool` 开启 `selection_ready=true` 时，K>1 的分叉由首条根请求结束触发，实际位置为配置 B 与该请求长度的较大值；
 `scaling.sampling_plans` 记录确定后的块长，`scaling.block_size` 仍为配置下限。达到原完成选择条件后取消剩余请求。
 该选项默认关闭，有完成时间、前缀分数及自适应分叉相关偏差；K=1 的生成请求不变。
+`two_stage` 开启同一选项时，首轮仍按原 M/K/B 完整生成，仅末轮提前选择，复用原 SIR 随机数及长度区间。
+该组合也存在选择偏差；未开启时仍等待全部有效候选。两种模式均读取已有统计，不增加模型评分请求。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。

@@ -95,7 +95,8 @@ class ConditionalISConfig:
     last_rollout_filter: bool = False
     # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
     weighted_completion_quota: bool = False
-    # Defer K>1 forks to the first root finish, then stop on a completed fixed draw; biased.
+    # Approximate stopping in a single pool or only in the two-stage final pool.
+    # Single-pool K>1 forks wait for the first root finish; two-stage first trees stay complete.
     selection_ready: bool = False
 
     def __post_init__(self) -> None:
@@ -111,9 +112,9 @@ class ConditionalISConfig:
             raise ValueError("weighted_completion_quota must be a boolean")
         if type(self.selection_ready) is not bool:
             raise ValueError("selection_ready must be a boolean")
-        if self.selection_ready and (self.exploration_schedule != "single_pool" or self.block_first
+        if self.selection_ready and (self.exploration_schedule not in {"single_pool", "two_stage"} or self.block_first
                                      or self.last_rollout_filter or self.weighted_completion_quota):
-            raise ValueError("selection_ready requires single_pool without block_first or other early-stop rules")
+            raise ValueError("selection_ready requires single_pool or two_stage without block_first or other early-stop rules")
         if self.weighted_completion_quota and (self.exploration_schedule != "single_pool"
                                                or self.block_first or self.last_rollout_filter):
             raise ValueError("weighted_completion_quota requires single_pool without block_first or last_rollout_filter")

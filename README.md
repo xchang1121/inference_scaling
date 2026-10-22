@@ -61,7 +61,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
 | `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `is` | 保留完整序列的条件 IS：默认固定 M/K/B，可选[单轮候选池](docs/methods/ALGORITHMS.md#is-single-pool)、[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)；单轮支持有偏的[权重配额](docs/methods/ALGORITHMS.md#is-weighted-completion-quota)或[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready) | 逐块扩散 IS；候选与补全都来自基础模型 |
+| `is` | 保留完整序列的条件 IS：默认固定 M/K/B，可选[单轮候选池](docs/methods/ALGORITHMS.md#is-single-pool)、[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)；单轮支持有偏的[权重配额](docs/methods/ALGORITHMS.md#is-weighted-completion-quota)，单轮或两阶段末轮支持[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready)，后者同样有偏 | 逐块扩散 IS；候选与补全都来自基础模型 |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。

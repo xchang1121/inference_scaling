@@ -7,7 +7,8 @@ observed token depth and inverse-continuation weights. Completion quotas and per
 races instead select by completion time and change the sampling law. A weighted
 quota estimates unfinished weights from cached prefixes, without extra scoring.
 Selection-ready stopping uses those estimates with one fixed categorical draw;
-its K>1 siblings branch only after the first root finishes.
+single-pool K>1 siblings branch only after the first root finishes. In two-stage
+exploration the first tree stays complete and only the final pool may stop early.
 """
 
 from __future__ import annotations
@@ -45,24 +46,28 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     config, prompt = adapter.config, adapter.prompt
     if config.last_rollout_filter and adapter.prefix_reward is None:
         raise ValueError("last_rollout_filter requires a cached prefix reward")
-    weighted = config.weighted_completion_quota or config.selection_ready
-    if weighted and adapter.prefix_reward is None:
+    final_pool = (config.exploration_schedule == "two_stage" and step == 1 and bool(state.token_ids)
+                  and config.rollout_count == 1 and config.block_size >= config.total_length - state.fixed)
+    selection_ready = config.selection_ready and (config.exploration_schedule == "single_pool" or final_pool)
+    weighted = config.weighted_completion_quota or selection_ready
+    if (config.weighted_completion_quota or config.selection_ready) and adapter.prefix_reward is None:
         raise ValueError("weight-based stopping requires a cached prefix reward")
-    if config.selection_ready and state.token_ids:
-        raise ValueError("selection_ready requires a fresh single pool")
+    if selection_ready and state.token_ids and not final_pool:
+        raise ValueError("selection_ready requires a fresh single pool or the two-stage final pool")
     chosen = None
-    uniform = (float(seeds.generator("conditional_is", step, "selection_ready").random())
-               if config.selection_ready else None)
+    # Keep the ordinary final SIR draw, including when prefix statistics are
+    # unavailable and all fresh requests must resolve before selection.
+    uniform = (float(seeds.generator("conditional_is", step, "select" if final_pool else "selection_ready").random())
+               if selection_ready else None)
     candidate_count = config.candidate_count
     rollout_count = config.rollout_count
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
-    branch_open = not config.selection_ready or rollout_count == 1
+    branch_open = not selection_ready or rollout_count == 1
     minimum_length = None
     length_limit = remaining
-    if (config.exploration_schedule == "two_stage" and step == 1 and state.token_ids
-            and rollout_count == 1 and width == remaining and candidate_count > 1):
+    if final_pool and candidate_count > 1:
         # q(t | x) = 1/(t log 2) on len(x) <= t < 2 len(x). With the
         # first block fixed, this density is constant for eligible suffixes.
         # Over-limit samples have zero conditional weight, so their reward is
@@ -84,7 +89,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     backup_groups: list[int] = []
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
     partial = config.completion_fraction < 1 or weighted
-    if (partial or config.rollout_race) and not streaming:
+    if (partial or config.rollout_race or config.selection_ready) and not streaming:
         raise ValueError("completion quotas and rollout races require a streaming generation backend")
     session: GenerationSession = (getattr(adapter.backend, "open_generation_session")() if streaming
                                   else BatchGenerationSession(adapter.backend))
@@ -193,10 +198,13 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             if not partial:
                 return False
             if weighted:
-                if sum(bool(group) for group in leaves) < min(candidate_count, 2):
+                resolved = all(name in finished or name in cancelled for name in routes)
+                if not resolved and sum(bool(group) for group in leaves) < min(candidate_count, 2):
                     return False
                 logs, complete, keys = [], [], []
                 for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
+                    if index in excluded:
+                        continue
                     planned = expected(block)
                     for rollout in range(planned):
                         done = rollout in group
@@ -224,7 +232,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                         keys.append((index, rollout))
                 peak = max(logs)
                 masses = [exp(value - peak) for value in logs]
-                if config.selection_ready:
+                if selection_ready:
                     # Reuse one uniform across events; redrawing would repeatedly
                     # favor already-complete leaves. Prefix estimates still bias
                     # the stopping rule relative to full-reward SIR.
@@ -412,7 +420,12 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         if len(finished) != len(routes):
             measured = False
         sources = tuple(indices) if len(indices) != candidate_count else None
-        if config.selection_ready and chosen is None:
+        if selection_ready and chosen is None:
+            # The last event may exclude a fresh request by its length. The
+            # retained complete sequence remains eligible even if all fresh
+            # proposals were excluded, and can be selected without new work.
+            quota_ready()
+        if selection_ready and chosen is None:
             raise RuntimeError("selection-ready pool ended without a completed selection")
         selection = (indices.index(chosen[0]), sorted(leaves[chosen[0]]).index(chosen[1])) if chosen else None
         return result, (slots if measured else None), sources, evaluations, selection
