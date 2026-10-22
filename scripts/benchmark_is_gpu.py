@@ -382,7 +382,7 @@ def main():
     parser.add_argument("--weighted-completion-quota", action="store_true",
                         help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
     parser.add_argument("--selection-ready", action="store_true",
-                        help="stop when one fixed prefix-weighted draw selects a completed rollout; biased")
+                        help="defer K>1 forks until a root finishes, then stop on a completed fixed draw; biased")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -493,7 +493,7 @@ def main():
             elif args.selection_ready:
                 row["completion_quota"].update(
                     fraction=None, unit="selected_completion_ready",
-                    sampling_law="one fixed draw with prefix estimates and completion-time-dependent stopping")
+                    sampling_law="completion-triggered branching; one fixed draw with prefix estimates and completion-time-dependent stopping")
         row["retained_tokens"] = len(updated.token_ids)
         rounds.append(row)
         print(json.dumps({"event": "round", "label": args.label, "k": record.sampling_plan[2],

@@ -95,7 +95,7 @@ class ConditionalISConfig:
     last_rollout_filter: bool = False
     # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
     weighted_completion_quota: bool = False
-    # Fix a selection uniform, then stop when its prefix-weighted choice has completed; biased.
+    # Defer K>1 forks to the first root finish, then stop on a completed fixed draw; biased.
     selection_ready: bool = False
 
     def __post_init__(self) -> None:

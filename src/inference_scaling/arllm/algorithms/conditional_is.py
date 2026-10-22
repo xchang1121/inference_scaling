@@ -64,10 +64,12 @@ class ConditionalISAdapter:
         selected, kept = selection if selection is not None else choose(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
+        width = (max(self.config.block_size, *(len(item.token_ids) for item in candidates))
+                 if self.config.selection_ready else self.config.block_size)
         record = ConditionalISStep(
             state.fixed, candidates, selected, kept, carried,
             evaluations, forward_slots,
-            (self.config.block_size, self.config.candidate_count, self.config.rollout_count),
+            (width, self.config.candidate_count, self.config.rollout_count),
             sources,
         )
         fixed = state.token_ids[:state.fixed] + candidate.token_ids

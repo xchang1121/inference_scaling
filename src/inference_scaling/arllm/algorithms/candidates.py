@@ -6,7 +6,8 @@ outside an auxiliary length interval. Tail filtering uses a common
 observed token depth and inverse-continuation weights. Completion quotas and per-block
 races instead select by completion time and change the sampling law. A weighted
 quota estimates unfinished weights from cached prefixes, without extra scoring.
-Selection-ready stopping uses those estimates with one fixed categorical draw.
+Selection-ready stopping uses those estimates with one fixed categorical draw;
+its K>1 siblings branch only after the first root finishes.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
+    branch_open = not config.selection_ready or rollout_count == 1
     minimum_length = None
     length_limit = remaining
     if (config.exploration_schedule == "two_stage" and step == 1 and state.token_ids
@@ -310,7 +312,13 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                         branch(index, continuation=continuing)
                         if not continuing:
                             evaluate(index, 0, ())
-                elif len(tokens) >= width or event.finished:
+                elif (branch_open and len(tokens) >= width) or event.finished:
+                    if not branch_open:
+                        # All roots stay live. The first completed root sets a
+                        # common minimum fork depth; existing seeds are reused
+                        # for siblings of roots that continue beyond that depth.
+                        width = max(width, len(tokens))
+                        branch_open = True
                     # A stopped sequence of exactly B tokens has one empty leaf.
                     terminal = event.finished and len(tokens) <= width
                     blocks[index] = Block(tuple(tokens[:width]), "stop" if terminal else "length")
