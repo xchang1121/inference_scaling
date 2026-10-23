@@ -199,7 +199,10 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                 return False
             if weighted:
                 resolved = all(name in finished or name in cancelled for name in routes)
-                if not resolved and sum(bool(group) for group in leaves) < min(candidate_count, 2):
+                # Final selection already has a complete reference. A fresh
+                # completion is not required when the same draw retains it.
+                if (not resolved and not (final_pool and selection_ready)
+                        and sum(bool(group) for group in leaves) < min(candidate_count, 2)):
                     return False
                 logs, complete, keys = [], [], []
                 for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
