@@ -31,6 +31,8 @@ class RetainedSequence:
     fixed: int = 0
     # Suffixes relative to token_ids[:fixed], in uniformly random order.
     siblings: tuple[RolloutEvaluation, ...] = ()
+    # An early first pool forecasts from observed prefixes, then discards them.
+    next_candidate_count: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -57,7 +59,8 @@ class ConditionalISAdapter:
 
         if self.is_terminal(state):
             raise ValueError("cannot advance a terminal generation state")
-        candidates, forward_slots, sources, evaluations, selection = evaluate_candidates(self, state, step_index, seeds)
+        candidates, forward_slots, sources, evaluations, selection, forecast = evaluate_candidates(
+            self, state, step_index, seeds)
         carried = bool(state.token_ids)
         choose = (select_metropolized if self.config.exploration_schedule == "single_pool"
                   and not self.config.weighted_completion_quota else select)
@@ -80,7 +83,7 @@ class ConditionalISAdapter:
             if count:
                 order = seeds.generator("conditional_is", step_index, "siblings").permutation(len(available))
                 siblings = tuple(available[int(index)] for index in order[:count])
-        updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings)
+        updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings, forecast)
         if self.config.exploration_schedule == "single_pool":
             # Commit the selected complete sequence without a reuse-only final step.
             updated = replace(updated, fixed=len(updated.token_ids))
@@ -90,29 +93,6 @@ class ConditionalISAdapter:
         return record, updated
 
 
-def _consolidated_candidate_count(record: ConditionalISStep, fixed: int, config: ConditionalISConfig) -> int:
-    """Fresh suffixes affordable under the unselected groups' fixed-block work forecast.
-
-    Groups have equal mass, including terminal groups with a single leaf. The
-    forecast uses no information from the selected group or the next pool.
-    It predicts generated tokens, not a hard token/FLOPs or concurrency limit.
-    """
-    length_sum = work_sum = 0
-    for index, candidate in enumerate(record.candidates):
-        if index == record.selected_index:
-            continue
-        multiplicity = config.rollout_count // len(candidate.rollouts)
-        for leaf in candidate.rollouts:
-            length = max(0, record.generated_length_before + len(candidate.token_ids) + len(leaf.token_ids) - fixed)
-            rounds = (length + config.block_size - 1) // config.block_size
-            suffix_sum = rounds * length - config.block_size * rounds * (rounds - 1) // 2
-            work = ((config.candidate_count - 1) * suffix_sum
-                    + config.candidate_count * (config.rollout_count - 1) * (suffix_sum - length))
-            length_sum += multiplicity * length
-            work_sum += multiplicity * work
-    return work_sum // length_sum if length_sum else 0
-
-
 def _final_candidate_count(record: ConditionalISStep, fixed: int, config: ConditionalISConfig,
                            seeds: SeedStream) -> int:
     """Allocate a complete final pool or reuse the retained sequence without new samples.
@@ -120,20 +100,47 @@ def _final_candidate_count(record: ConditionalISStep, fixed: int, config: Condit
     The decision uses only unused first-tree groups and an independent random draw.
     It changes finite-budget exploration, not the reward or completion-time policy.
     """
-    full = _consolidated_candidate_count(record, fixed, config)
+    observations = tuple(
+        (index, len(candidate.rollouts),
+         record.generated_length_before + len(candidate.token_ids) + len(leaf.token_ids), leaf.log_weight)
+        for index, candidate in enumerate(record.candidates) if index != record.selected_index
+        for leaf in candidate.rollouts)
+    return forecast_candidate_count(observations, fixed, config, seeds)
+
+
+def forecast_candidate_count(observations: tuple[tuple[int, int, int, float], ...], fixed: int,
+                             config: ConditionalISConfig, seeds: SeedStream) -> int:
+    """Forecast from unused (group, planned K, observed length, log weight) rows.
+
+    Complete and early first pools share the same allocation. Each planned
+    leaf has one row; unfinished leaves supply only their observed prefix.
+    Terminal one-leaf groups retain equal group mass. The result predicts
+    generated work, not a hard token/FLOPs budget or an error guarantee.
+    """
+    length_sum = work_sum = 0
+    groups: dict[int, list[float]] = {}
+    for index, planned, observed_length, log_weight in observations:
+        groups.setdefault(index, []).append(log_weight)
+        multiplicity = config.rollout_count // planned
+        length = max(0, observed_length - fixed)
+        rounds = (length + config.block_size - 1) // config.block_size
+        suffix_sum = rounds * length - config.block_size * rounds * (rounds - 1) // 2
+        work = ((config.candidate_count - 1) * suffix_sum
+                + config.candidate_count * (config.rollout_count - 1) * (suffix_sum - length))
+        length_sum += multiplicity * length
+        work_sum += multiplicity * work
+    full = work_sum // length_sum if length_sum else 0
     if config.final_pool_limit is not None:
         full = min(full, config.final_pool_limit)
-    unused = [group for index, group in enumerate(record.candidates) if index != record.selected_index]
+    unused = list(groups.values())
     if not full or len(unused) < 2:
         # A single auxiliary group cannot estimate variation between prefixes.
         return full
-    peak = max(leaf.log_weight for group in unused for leaf in group.rollouts)
+    peak = max(value for group in unused for value in group)
     if not isfinite(peak):
         return full
-    means = [fsum(exp(leaf.log_weight - peak) for leaf in group.rollouts) / len(group.rollouts)
-             for group in unused]
-    seconds = [fsum(exp(2 * (leaf.log_weight - peak)) for leaf in group.rollouts) / len(group.rollouts)
-               for group in unused]
+    means = [fsum(exp(value - peak) for value in group) / len(group) for group in unused]
+    seconds = [fsum(exp(2 * (value - peak)) for value in group) / len(group) for group in unused]
     mean, second = fsum(means) / len(unused), fsum(seconds) / len(unused)
     dispersion = max(0., min(1., 1 - mean * mean / second))
     minimum = min(full, config.candidate_count - 1)
@@ -163,7 +170,8 @@ def run_conditional_is(
         record, state = adapter.step(state, len(steps), seeds)
         if (not steps and config.exploration_schedule == "two_stage"
                 and config.candidate_count > 1 and not adapter.is_terminal(state)):
-            count = _final_candidate_count(record, state.fixed, config, seeds)
+            count = (state.next_candidate_count if state.next_candidate_count is not None
+                     else _final_candidate_count(record, state.fixed, config, seeds))
             adapter = replace(adapter, config=replace(config, candidate_count=1 + count,
                               rollout_count=1, block_size=config.total_length - state.fixed))
         steps.append(record.compact())

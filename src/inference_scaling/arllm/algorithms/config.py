@@ -95,8 +95,8 @@ class ConditionalISConfig:
     last_rollout_filter: bool = False
     # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
     weighted_completion_quota: bool = False
-    # Approximate stopping in a single pool or only in the two-stage final pool.
-    # Single-pool K>1 forks wait for the first root finish; two-stage first trees stay complete.
+    # Approximate stopping in a single pool or both pools of two-stage exploration.
+    # Two-stage cold groups use fixed random priorities; the retained final pool uses SIR.
     selection_ready: bool = False
 
     def __post_init__(self) -> None:

@@ -382,7 +382,7 @@ def main():
     parser.add_argument("--weighted-completion-quota", action="store_true",
                         help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
     parser.add_argument("--selection-ready", action="store_true",
-                        help="stop on a completed fixed draw in single_pool or only the two_stage final pool; biased")
+                        help="stop on a complete selection in single_pool or both two_stage pools; biased")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--temperature", type=float, default=0.6)
@@ -466,7 +466,9 @@ def main():
         row["rollout_race"] = args.rollout_race
         row["last_rollout_filter"] = args.last_rollout_filter
         row["weighted_completion_quota"] = args.weighted_completion_quota
-        ready = args.selection_ready and (args.exploration_schedule == "single_pool" or (
+        cold_pool = (args.exploration_schedule == "two_stage" and step_index == 0 and not state.token_ids
+                     and adapter.config.candidate_count > 1)
+        ready = args.selection_ready and (args.exploration_schedule == "single_pool" or cold_pool or (
             step_index == 1 and bool(state.token_ids) and adapter.config.rollout_count == 1
             and adapter.config.block_size >= adapter.config.total_length - state.fixed))
         row["selection_ready"] = ready
@@ -495,9 +497,11 @@ def main():
                     sampling_law="prefix-score and completion-time biased; incomplete leaves have zero weight")
             elif ready:
                 row["completion_quota"].update(
-                    fraction=None, unit="selected_completion_ready",
-                    sampling_law=("completion-triggered branching; " if args.exploration_schedule == "single_pool" else "")
-                    + "one fixed draw with prefix estimates and completion-time-dependent stopping")
+                    fraction=None, unit="complete_priority_group_ready" if cold_pool else "selected_completion_ready",
+                    sampling_law=("fixed group uniform priorities with empirical prefix estimates and completion-time-dependent stopping"
+                                  if cold_pool else
+                                  ("completion-triggered branching; " if args.exploration_schedule == "single_pool" else "")
+                                  + "one fixed draw with prefix estimates and completion-time-dependent stopping"))
         row["retained_tokens"] = len(updated.token_ids)
         rounds.append(row)
         print(json.dumps({"event": "round", "label": args.label, "k": record.sampling_plan[2],

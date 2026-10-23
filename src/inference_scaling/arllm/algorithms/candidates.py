@@ -6,9 +6,12 @@ outside an auxiliary length interval. Tail filtering uses a common
 observed token depth and inverse-continuation weights. Completion quotas and per-block
 races instead select by completion time and change the sampling law. A weighted
 quota estimates unfinished weights from cached prefixes, without extra scoring.
-Selection-ready stopping uses those estimates with one fixed categorical draw;
-single-pool K>1 siblings branch only after the first root finishes. In two-stage
-exploration the first tree stays complete and only the final pool may stop early.
+Selection-ready stopping uses fixed random draws. A two-stage cold pool uses
+group weight divided by an independent uniform, selecting only a fully complete
+group. Pending weights are protected by the largest observed complete weight;
+this is an empirical estimate, not a valid bound or an invariant-target shortcut.
+Single-pool K>1 siblings branch after the first root finishes; two-stage siblings
+keep the preset B checkpoint, and the retained final pool keeps ordinary SIR.
 """
 
 from __future__ import annotations
@@ -22,6 +25,9 @@ from inference_scaling.arllm.backends.streaming import BatchGenerationSession
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import RolloutEvaluation, weigh
+from inference_scaling.shared.sampling.importance import (
+    categorical_index_from_uniform, logmeanexp, normalize_log_weights,
+)
 
 if TYPE_CHECKING:
     from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter, RetainedSequence
@@ -39,8 +45,32 @@ class TailDecision(NamedTuple):
     keep: bool
 
 
+def _complete_priority_group(logs, complete, keys, planned, lengths, priorities, uniforms, width):
+    """A complete cold group outranking empirical pending weights, or None."""
+    groups = sorted({group for group, _ in keys})
+    positions = [[i for i, key in enumerate(keys) if key[0] == group] for group in groups]
+    done = [len(ids) == planned[group] and all(complete[i] for i in ids)
+            for group, ids in zip(groups, positions, strict=True)]
+    if sum(done) < min(2, len(groups)):
+        return None
+    if any(not ended and any(lengths[i] < width for i in ids)
+           for ended, ids in zip(done, positions, strict=True)):
+        return None
+    raw = [value + log(planned[group]) for value, (group, _) in zip(logs, keys, strict=True)]
+    maximum = max(value for value, ended in zip(raw, complete, strict=True) if ended)
+    protected = [value if ended else max(value, maximum) for value, ended in zip(raw, complete, strict=True)]
+    # Normalize each group's mean locally, avoiding underflow across groups.
+    winner = max(range(len(groups)), key=lambda i: logmeanexp([protected[j] for j in positions[i]])
+                 + priorities[groups[i]])
+    if not done[winner]:
+        return None
+    group, ids = groups[winner], positions[winner]
+    leaf = categorical_index_from_uniform(normalize_log_weights([raw[i] for i in ids]), uniforms[group])
+    return keys[ids[leaf]]
+
+
 def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, step: int, seeds: SeedStream):
-    """Candidates, measured slots, source groups, score count, and optional preselected indices."""
+    """Candidates, slots, sources, score count, preselection, and next-pool forecast."""
     if not adapter.sampling.full_support:
         raise ValueError("base candidates require full support: top_p=1 and top_k=None")
     config, prompt = adapter.config, adapter.prompt
@@ -48,23 +78,31 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         raise ValueError("last_rollout_filter requires a cached prefix reward")
     final_pool = (config.exploration_schedule == "two_stage" and step == 1 and bool(state.token_ids)
                   and config.rollout_count == 1 and config.block_size >= config.total_length - state.fixed)
-    selection_ready = config.selection_ready and (config.exploration_schedule == "single_pool" or final_pool)
+    first_pool = (config.exploration_schedule == "two_stage" and step == 0 and not state.token_ids
+                  and config.candidate_count > 1)
+    cold_priority = first_pool and config.selection_ready
+    selection_ready = config.selection_ready and (config.exploration_schedule == "single_pool" or first_pool or final_pool)
     weighted = config.weighted_completion_quota or selection_ready
     if (config.weighted_completion_quota or config.selection_ready) and adapter.prefix_reward is None:
         raise ValueError("weight-based stopping requires a cached prefix reward")
     if selection_ready and state.token_ids and not final_pool:
         raise ValueError("selection_ready requires a fresh single pool or the two-stage final pool")
     chosen = None
+    forecast = None
     # Keep the ordinary final SIR draw, including when prefix statistics are
     # unavailable and all fresh requests must resolve before selection.
     uniform = (float(seeds.generator("conditional_is", step, "select" if final_pool else "selection_ready").random())
                if selection_ready else None)
     candidate_count = config.candidate_count
     rollout_count = config.rollout_count
+    priorities = tuple(-log(max(float(seeds.generator("conditional_is", step, "uniform_race", group).random()), 1e-300))
+                       for group in range(candidate_count)) if cold_priority else ()
+    completion_uniforms = tuple(float(seeds.generator("conditional_is", step, "candidate", group, "completion").random())
+                                for group in range(candidate_count)) if cold_priority else ()
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
-    branch_open = not selection_ready or rollout_count == 1
+    branch_open = cold_priority or not selection_ready or rollout_count == 1
     minimum_length = None
     length_limit = remaining
     if final_pool and candidate_count > 1:
@@ -194,7 +232,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             return rollout_count if block.finish_reason == "length" and len(block.token_ids) < remaining else 1
 
         def quota_ready():
-            nonlocal chosen
+            nonlocal chosen, forecast
             if not partial:
                 return False
             if weighted:
@@ -204,7 +242,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                 if (not resolved and not (final_pool and selection_ready)
                         and sum(bool(group) for group in leaves) < min(candidate_count, 2)):
                     return False
-                logs, complete, keys = [], [], []
+                logs, complete, keys, observed_lengths = [], [], [], []
                 for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
                     if index in excluded:
                         continue
@@ -213,6 +251,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                         done = rollout in group
                         if done:
                             value = group[rollout].log_weight
+                            observed_length = len(block.token_ids) + len(group[rollout].token_ids)
                         else:
                             key = leaf_requests.get((index, rollout))
                             if key is not None:
@@ -230,9 +269,26 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                             if not isfinite(proxy):
                                 raise ValueError("prefix reward must be finite or None")
                             value = proxy / config.reward_temperature
+                            observed_length = len(sequence)
                         logs.append(value - log(planned))
                         complete.append(done)
                         keys.append((index, rollout))
+                        observed_lengths.append(observed_length)
+                if cold_priority:
+                    planned = [expected(block) for block in blocks]
+                    chosen = _complete_priority_group(logs, complete, keys, planned, observed_lengths,
+                                                      priorities, completion_uniforms, width)
+                    if chosen is None:
+                        return False
+                    from inference_scaling.arllm.algorithms.conditional_is import forecast_candidate_count
+
+                    observations = tuple(
+                        (key[0], planned[key[0]], state.fixed + length, value + log(planned[key[0]]))
+                        for key, length, value in zip(keys, observed_lengths, logs, strict=True)
+                        if key[0] != chosen[0])
+                    forecast = forecast_candidate_count(
+                        observations, state.fixed + len(blocks[chosen[0]].token_ids), config, seeds)
+                    return True
                 peak = max(logs)
                 masses = [exp(value - peak) for value in logs]
                 if selection_ready:
@@ -431,7 +487,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         if selection_ready and chosen is None:
             raise RuntimeError("selection-ready pool ended without a completed selection")
         selection = (indices.index(chosen[0]), sorted(leaves[chosen[0]]).index(chosen[1])) if chosen else None
-        return result, (slots if measured else None), sources, evaluations, selection
+        return result, (slots if measured else None), sources, evaluations, selection, forecast
     finally:
         session.close()
 
