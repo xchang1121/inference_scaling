@@ -138,6 +138,11 @@ def suffix_length_probabilities(
         values = np.ones(stage_length, dtype=np.float64)
     elif schedule == "inverse_length":
         values = 1.0 / np.arange(1, stage_length + 1, dtype=np.float64)
+    elif schedule == "log_uniform":
+        # Equal mass per dyadic length interval, then uniform within it.
+        levels = np.floor(np.log2(np.arange(1, stage_length + 1))).astype(int)
+        counts = np.bincount(levels)
+        values = 0.1 / stage_length + 0.9 / len(counts) / counts[levels]
     elif schedule == "multiscale":
         # Ten percent uniform mass keeps every suffix length reachable.  The
         # remaining mass is uniform over unique powers of two and the full

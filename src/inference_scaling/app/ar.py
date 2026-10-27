@@ -25,6 +25,7 @@ from inference_scaling.app.records import (
 from inference_scaling.app.rewards import Reward, best_of_n, memoized, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.ensemble_mh import run_ensemble_mh
 from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
@@ -128,6 +129,13 @@ class ARFamily:
         sampling = self.ar["sampling"]
         if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
+        if choices.algorithm == "mh":
+            size = self.config.get("ensemble_size", 1)
+            if type(size) is not int or size < 1:
+                raise ValueError("ar.algorithms.mh.ensemble_size must be a positive integer")
+            if size > 1 and (self.config["iterations"] is None or self.config["proposal"] != "base"
+                             or self.config["suffix_replay"]):
+                raise ValueError("ensemble MH requires explicit iterations, proposal=base and suffix_replay=false")
         engine = self.ar["engine"]
         for option in ("suffix_replay", "early_rejection"):
             if engine["backend"] == "vllm" and self.config.get(option):
@@ -377,6 +385,12 @@ class ARFamily:
     def _mh(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
         config = self.config
+        if config.get("ensemble_size", 1) > 1:
+            ensemble = run_ensemble_mh(
+                task.backend, task.prompt,
+                self._mh_config(task, alpha=1.0, reward_temperature=reward.temperature, early_rejection=False),
+                SeedStream(task.seed), candidate_count=config["ensemble_size"], sampling=task.sampling, reward=reward.batch)
+            return ensemble.token_ids, ensemble.trace, ensemble.reward
         history = config["frozen_history"]
         frozen = config["proposal"] == "frozen_history"
         samples = task.backend.sample_batch([

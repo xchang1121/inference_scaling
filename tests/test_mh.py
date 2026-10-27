@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from inference_scaling.arllm.algorithms.config import MHConfig
+from inference_scaling.arllm.algorithms.ensemble_mh import run_ensemble_mh
 from inference_scaling.arllm.algorithms.mh import run_mh_chain, suffix_length_probabilities
 from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
@@ -50,7 +51,7 @@ def test_a_power_chain_grows_in_stages_and_reaches_every_suffix_start() -> None:
     assert 0 <= result.acceptance_rate <= 1
 
 
-@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale"])
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale", "log_uniform"])
 def test_suffix_length_schedules_have_normalized_full_support(schedule: str) -> None:
     probabilities = suffix_length_probabilities(16, schedule)
     assert len(probabilities) == 16
@@ -64,6 +65,40 @@ def test_nonuniform_schedules_reduce_the_expected_proposed_suffix_length() -> No
             range(1, 17), suffix_length_probabilities(16, schedule), strict=True))
 
     assert expectation("inverse_length") < expectation("uniform") and expectation("multiscale") < expectation("uniform")
+
+
+@pytest.mark.parametrize("schedule", ["uniform", "inverse_length", "multiscale", "log_uniform"])
+def test_ensemble_updates_correct_pool_mass_and_actual_length_cuts(schedule):
+    from inference_scaling.arllm.backends.statistics import StatisticRecorder
+    from inference_scaling.arllm.types import TokenStatistic
+
+    backend = TabularAutoregressiveBackend({(): [.6, .3, .1], (1,): [.1, .1, .8]}, fallback=[.45, .45, .1])
+    sampling = SamplingConfig(eos_token_id=2)
+    statistic = TokenStatistic(sampling, 3)
+    recorder = StatisticRecorder(backend, statistic)
+    observed = []
+    def reward(prompt, sequences):
+        assert all(recorder.recorded_statistics(prompt, tokens, statistic) is not None for tokens in sequences)
+        values = [float(tokens.count(1) - len(tokens) / 2) for tokens in sequences]
+        observed.append(values)
+        return values
+    result = run_ensemble_mh(recorder, (), _config(alpha=1., reward_temperature=2., total_length=12,
+        iterations=3, suffix_schedule=schedule), SeedStream(19), candidate_count=3, sampling=sampling, reward=reward)
+    assert len(observed) == 4 and result.trace['updates'] == 9
+    weights = [exp(value / 2) for value in observed[0]]
+    for step in result.trace['steps']:
+        slot, cut = step['slot'], step['cut']
+        proposed = exp(observed[step['round']][slot] / 2)
+        forward = suffix_length_probabilities(step['previous_length'], schedule)[::-1][cut]
+        reverse = suffix_length_probabilities(step['proposed_length'], schedule)[::-1][cut]
+        expected = min(0., log((sum(weights) - weights[slot] + proposed) / sum(weights)) + log(reverse / forward))
+        assert step['log_acceptance'] == pytest.approx(expected)
+        assert step['generated_tokens'] == step['proposed_length'] - cut > 0
+        if step['accepted']:
+            weights[slot] = proposed
+    assert exp(result.reward / 2) == pytest.approx(weights[result.trace['selected_index']])
+    assert sum(len(records) for outputs in recorder._outputs.values() for records in outputs.values()) == 1
+    assert not recorder._streams
 
 
 @pytest.mark.parametrize("mode,temperature,eos", [("power", 1.0, None), ("power", .6, None),

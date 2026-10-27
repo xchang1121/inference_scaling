@@ -59,7 +59,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `greedy` | 贪心解码 | 温度 0 的分块解码 |
 | `beam` | token 级 beam search | 按轨迹概率保留的分块 beam |
 | `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
-| `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；proposal 为基础策略或冻结历史混合 | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
+| `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；可选[完整候选池更新](docs/methods/ALGORITHMS.md#ensemble-mh)或冻结历史 proposal | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
 | `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
 | `is` | 保留完整序列的条件 IS：默认固定 M/K/B，可选[单轮候选池](docs/methods/ALGORITHMS.md#is-single-pool)、[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)；单轮支持[权重配额](docs/methods/ALGORITHMS.md#is-weighted-completion-quota)，单轮与两阶段支持[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready)。提前结束均使用前缀估计，存在选择偏差 | 逐块扩散 IS；候选与补全都来自基础模型 |
 
@@ -117,6 +117,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | vLLM 引擎、前缀缓存、融合概率（MH 的基础概率与 Self-Certainty 在采样同一步读出） | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
+| 完整候选池后缀更新 | `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、`suffix_schedule = "log_uniform"`；使用基础 proposal，关闭 `suffix_replay`。初始生成加一轮更新，共两阶段，最后按权重抽样 |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。

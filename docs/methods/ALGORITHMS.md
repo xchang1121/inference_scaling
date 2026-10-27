@@ -462,6 +462,65 @@ proposal 中抵消，因此共享核只接收 $`r(y)/\tau`$ 与 $`r(y')/\tau`$�
 完成整段后缀并调用一次奖励。多尺度后缀分布缩短平均 proposal 长度，[冻结历史混合 proposal](#alg-replay-mh)
 以并行评分替代部分后缀生成。
 
+<a id="ensemble-mh"></a>
+### 5.1 完整候选池的后缀更新
+
+该路径保留多个前缀参与后续探索。先从基础策略生成 $`M`$ 条完整序列；每轮为每条序列选一个切点，保留其前缀并
+重新生成后缀，随后依次接受或拒绝更新；完成指定轮数后，按奖励权重抽取最终序列。候选池的构造采用
+[ensemble MCMC 的扩展状态思路](https://arxiv.org/abs/1101.0387)，后缀生成与接受修正由本仓库实现。
+
+令 $`w_i=\exp\{r(y_i)/\tau\}`$、$`W=\sum_i w_i`$、$`Z=\mathbb E_p[w(Y)]`$。整个候选池的目标为
+
+```math
+\Pi(y_1,\ldots,y_M\mid x)
+=\left[\prod_{i=1}^M p(y_i\mid x)\right]\frac{W}{MZ}.
+```
+
+在候选 $`i`$ 的实际长度范围内抽切点 $`s\sim h(\cdot\mid y_i)`$，其中 $`0\leq s\lt |y_i|`$。
+新后缀从 $`p(\cdot\mid x,y_{i,1:s})`$ 生成至 EOS、思考结束标记或同一长度上限，得到 $`y_i'`$。
+接受概率为
+
+```math
+A_i=\min\left\{1,
+\frac{W-w_i+w_i'}{W}
+\frac{h(s\mid y_i')}{h(s\mid y_i)}\right\}.
+```
+
+基础模型的后缀概率与正反 proposal 概率抵消，候选池总权重比保留下来。正反切点都取同一位置 $`s`$；序列长度改变
+时切点概率也会改变，例如均匀切点的修正为 $`|y_i|/|y_i'|`$。每个切点对应的转移满足细致平衡，混合所有切点后仍
+保持 $`\Pi`$。候选按固定序号接受，前面已接受的更新会进入后续候选的 $`W`$。
+
+最后以 $`w_i/W`$ 选择索引 $`i`$。把联合概率乘以该选择概率，并对其他候选求和，得到
+
+```math
+\sum_{i=1}^M\sum_{y_{-i}}\Pi(y_1,\ldots,y_M\mid x)\frac{w_i}{W}
+\mathbf 1[y_i=y]=\frac{p(y\mid x)w(y)}{Z}.
+```
+
+因此平稳时最终输出服从式 (1)。每个池内候选的边缘分布则为
+$`\pi_r/M+(1-1/M)p`$，保留了基模探索成分。独立基模样本组成的初始池尚未服从 $`\Pi`$，有限轮数仍有误差。
+固定有限长度、有限词表及有限奖励下，整段重生成有正概率，接受概率为正；逐个更新所有槽位可以到达任意有效候选池，
+也有原地保持的正概率，故随更新轮数增加收敛到唯一的 $`\Pi`$。这些性质保证目标与可达性，同预算误差与质量仍由实验评价。
+
+四种切点策略共用 [`suffix_length_probabilities`](../../src/inference_scaling/arllm/algorithms/mh.py)：
+
+| `suffix_schedule` | 在长度 $`L`$ 内分配后缀长度概率 | 探索倾向 |
+| --- | --- | --- |
+| `uniform` | 所有长度等概率 | 较多中长后缀更新 |
+| `inverse_length` | 与后缀长度的倒数成比例 | 较多局部更新 |
+| `multiscale` | 10% 均匀，90% 分给不同的 2 的幂长度及完整长度 | 局部更新与整段更新混合 |
+| `log_uniform` | 10% 均匀，90% 在 $`[1,2),[2,4),\ldots`$ 的非空整数区间等分，再在区间内均匀抽样 | 覆盖多个探索尺度 |
+
+在 `settings/inference.json` 中设置 `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、
+`suffix_schedule = "log_uniform"`、`proposal = "base"`、`suffix_replay = false`，运行
+`python -m inference_scaling --algorithm mh --model ar --reward consilience`，即初始 4 条完整序列加一轮后缀更新。
+`iterations = 2` 对应三阶段。默认 `ensemble_size = 1` 保持原单链算法；IS 的默认设置也保持不变。
+
+[`run_ensemble_mh`](../../src/inference_scaling/arllm/algorithms/ensemble_mh.py) 每阶段批量生成候选，复用基础生成返回的
+奖励统计量，随后按序提交接受决策。每轮结束仅保留当前候选池的统计量，历史记录只保存长度、奖励、切点和接受结果。
+生成后按最大分数选择属于不同的输出规则；本实现使用加权抽样以保持上述目标。批次组成可能改变设备浮点计算与
+采样轨迹，执行对照需同时核对实际 token、前向计算量和输出。
+
 <a id="alg-conditional-is"></a>
 ## 6. 条件 IS
 

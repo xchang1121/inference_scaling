@@ -141,8 +141,9 @@
 | `mh_power.alpha` | 幂目标 $`p^\alpha`$ 的指数 |
 | `mh_power.proposal_temperature` | 后缀 proposal 相对基础策略的温度（常用 $`1/\alpha`$） |
 | `mh_power.block_size` / `steps_per_block` / `iterations` | 分段延长的块长与每段更新数；`iterations` 非空时在完整长度上做固定次数更新 |
-| `mh_power.suffix_schedule` | `uniform` \| `inverse_length` \| `multiscale`（后缀长度分布） |
+| `mh_power.suffix_schedule` | `uniform` \| `inverse_length` \| `multiscale` \| `log_uniform`；分别为均匀、长度倒数、偏向 2 的幂长度、按 2 的幂区间等量分配概率 |
 | `mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
+| `mh.ensemble_size` | 默认 `1`，保持单链 MH。大于 `1` 时保留该数量的完整序列，每轮更新全部候选的后缀，最后按权重抽样；要求显式设置 `iterations`、`proposal = "base"`、`suffix_replay = false`。`iterations` 是整池更新轮数，总生成阶段数为 `1 + iterations`，此时 `block_size` 与 `steps_per_block` 不分配更新预算。见[完整候选池](methods/ALGORITHMS.md#ensemble-mh) |
 | `mh.proposal` | `base`（基础策略后缀）或 `frozen_history`（冻结历史混合 proposal） |
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |

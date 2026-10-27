@@ -49,7 +49,7 @@ class MHConfig:
             require_positive(name, getattr(self, name))
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")
-        if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale"}:
+        if self.suffix_schedule not in {"uniform", "inverse_length", "multiscale", "log_uniform"}:
             raise ValueError("unknown MH suffix_schedule")
         if self.iterations is not None:
             require_positive("iterations", self.iterations)
