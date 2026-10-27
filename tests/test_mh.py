@@ -102,12 +102,23 @@ def test_ensemble_updates_correct_pool_mass_and_actual_length_cuts(schedule):
     assert not recorder._streams
 
 
-def test_persistent_strata_correct_cuts_and_release_each_refresh():
+@pytest.mark.parametrize("nonself", [False, True])
+def test_complete_pool_constraints_correct_cuts_and_release_each_refresh(nonself):
+    from inference_scaling.shared.sampling.nonself import FirstTokenExclusions
     from inference_scaling.shared.sampling.stratified import InitialStrata
 
     class StratifiedBackend(TabularAutoregressiveBackend):
         registry = InitialStrata()
+        excluded = FirstTokenExclusions()
         registrations = []
+
+        @contextmanager
+        def first_token_exclusion(self, entries):
+            self.excluded.add(entries)
+            try:
+                yield {}
+            finally:
+                self.excluded.remove(seed for seed, _ in entries)
 
         @contextmanager
         def stratified_initialization(self, entries):
@@ -128,7 +139,8 @@ def test_persistent_strata_correct_cuts_and_release_each_refresh():
                 rng = np.random.default_rng(request.seed)
                 for _ in range(request.max_new_tokens):
                     probs = self.probabilities(request.prefix + tuple(tokens), request.sampling)
-                    token = (self.registry.sample(request.seed, probs) if self.registry.active(request.seed)
+                    token = (self.excluded.sample(request.seed, np.log(probs)) if self.excluded.active(request.seed)
+                             else self.registry.sample(request.seed, probs) if self.registry.active(request.seed)
                              else int(rng.choice(len(probs), p=probs)))
                     tokens.append(token)
                     logs.append(log(probs[token]))
@@ -142,10 +154,14 @@ def test_persistent_strata_correct_cuts_and_release_each_refresh():
     result = run_ensemble_mh(backend, (), _config(alpha=1., reward_temperature=1., total_length=12,
         iterations=20, suffix_schedule='log_uniform'), SeedStream(19), candidate_count=3,
         sampling=SamplingConfig(eos_token_id=2), reward=pointwise(lambda _, tokens: tokens.count(1)),
-        initialization='stratified', stratified_updates=True)
-    positions = result.trace['interval_statistics'][0]['resolved_at'].copy()
+        initialization='stratified', stratified_updates=not nonself, nonself_updates=nonself)
+    positions = result.trace['interval_statistics'][0]['resolved_at'].copy() if not nonself else []
     for step in result.trace['steps']:
         slot, cut = step['slot'], step['cut']
+        if nonself:
+            assert step['divergence'] >= cut and step['generated_tokens'] == step['proposed_length'] - step['divergence']
+            assert 0 < step['forward_change_mass'] <= 1 and 0 < step['reverse_change_mass'] <= 1
+            continue
         assert positions[slot] == step['previous_resolved_at']
         assert cut == 0 or positions[slot] is not None and cut >= positions[slot]
         for direction, prefix in (('forward', 'previous'), ('reverse', 'proposed')):
@@ -156,8 +172,11 @@ def test_persistent_strata_correct_cuts_and_release_each_refresh():
         if step['accepted']:
             positions[slot] = step['proposed_resolved_at']
     assert any(step['cut'] == 0 for step in result.trace['steps']) and any(step['cut'] > 0 for step in result.trace['steps'])
-    assert 0 < min(backend.registrations) < max(backend.registrations) == 3
+    assert 0 < min(backend.registrations) <= max(backend.registrations) == 3
+    if not nonself:
+        assert min(backend.registrations) < max(backend.registrations)
     assert not backend.registry.aliases and not backend.registry.intervals
+    assert not backend.excluded.aliases and not backend.excluded.entries
 
 
 @pytest.mark.parametrize("mode,temperature,eos", [("power", 1.0, None), ("power", .6, None),

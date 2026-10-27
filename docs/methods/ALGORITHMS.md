@@ -588,7 +588,7 @@ token 直接用原生采样器生成。每步重新抽数，避免反复展开�
 标量计数。设备到 CPU 的概率传输仅发生在区间尚未解除时，会增加采样开销，也可能因覆盖长序列区域而增加最长等待。
 
 - [`InitialStrata`](../../src/inference_scaling/shared/sampling/stratified.py)：区间更新、续接种子别名和独立候选池的状态隔离。
-- [`InitialStrataWorker`](../../src/inference_scaling/arllm/backends/vllm_stratified.py)：替换已注册请求的采样 token；保留原生处理后概率载荷，随后按实际 token 提取 logprob。
+- [`SamplingConstraintsWorker`](../../src/inference_scaling/arllm/backends/vllm_sampling.py)：替换已注册请求的采样 token；保留原生处理后概率载荷，随后按实际 token 提取 logprob。
 - [`stratified_initialization`](../../src/inference_scaling/arllm/backends/vllm_backend.py)：覆盖首轮生成及思考段续接，正常或异常退出均清理状态；后缀更新恢复原生采样。
 
 `trace.initialization_statistics` 记录参与候选数、受限 token 数、结束时未解除的区间数和累计概率舍入误差。
@@ -649,6 +649,77 @@ A_j=\min\left\{1,
 分层依据是基础概率区间，与语义类别并不等同；同一高概率序列也可能横跨多个区间。保持各层有候选有助于减少候选聚集，
 但 5.2 节独立分层的方差界不能直接用于经过 MH 更新的池。有限预算的 TV 与不同序列数改善来自
 [精确枚举比较](../reports/ASCEND_IS_INFRA.md#persistent-strata)，存在反例；真实模型上的准确率和耗时仍需分别评价。
+
+<a id="ensemble-nonself"></a>
+### 5.4 排除原轨迹的后缀更新
+
+短后缀或高概率路径容易生成与当前序列完全相同的 proposal。这类更新消耗生成预算，却没有改变候选。
+`ar.algorithms.mh.nonself_updates = true` 将 5.1 节的 proposal 条件化为“序列发生变化”，仍使用同一候选池目标。
+它与首轮分层兼容，与持续分层互斥；后者需要另算各层条件概率。默认关闭，当前采样适配由 vLLM Ascend 提供。
+
+令 $`a(y)`$ 表示原 proposal 改变当前序列的概率：
+
+```math
+a(y)=\sum_{s=0}^{|y|-1}h(s\mid y)
+\left[1-p(y_{s+1:}\mid x,y_{1:s})\right].
+```
+
+先按上式各项归一化后的概率抽切点，再从该前缀的基础条件分布生成不同于原后缀的序列。对 $`y'\ne y`$，
+切点与序列的联合 proposal 为
+
+```math
+q(s,y'\mid y)=\frac{h(s\mid y)p(y'_{s+1:}\mid x,y_{1:s})}{a(y)}.
+```
+
+因此只需在 5.1 节的接受比中补上正反归一化常数：
+
+```math
+A_i=\min\left\{1,
+\frac{W-w(y_i)+w(y_i')}{W}
+\frac{h(s\mid y_i')}{h(s\mid y_i)}
+\frac{a(y_i)}{a(y_i')}\right\}.
+```
+
+基础后缀概率仍然抵消；细致平衡与最终加权选择的论证直接复用 5.1 节。若 $`a(y)=0`$，该候选没有其他可达序列，
+本次更新跳过。有限轮数仍是目标分布的近似。排除自返 proposal 后，非周期性需单独检查：两状态且总接受的例子会交替访问，
+不能仅凭目标不变就声称逐轮收敛。LLM 的有限长度完整支持空间包含至少三个序列时，全局切点允许任意不同序列间转移。
+任意两个候选池之间，每个槽位都能经过一条与其起点、终点不同的中间序列；两轮转移概率因此处处为正，
+得到不可约、非周期的有限状态链及目标分布收敛。
+
+**直接抽取第一次分歧。** 当前序列已经记录了 $`p_t=p(y_t\mid x,y_{\lt t})`$，无需重新评分。
+给定切点 $`s`$，第一次不同 token 的位置 $`d\in\{s+1,\ldots,|y|\}`$ 满足
+
+```math
+\Pr(d\mid s,y,\mathrm{changed})=
+\frac{\left(\prod_{t=s+1}^{d-1}p_t\right)(1-p_d)}
+{1-\prod_{t=s+1}^{|y|}p_t}.
+```
+
+复制到 $`d-1`$，在 $`d`$ 处按基础 token 分布排除旧 token 后重新归一化采样，其后照常生成。
+这与条件后缀 proposal 等价，免去复制段的逐 token 解码；设备仍可能为未命中缓存的前缀执行预填充。
+模型不变、没有辅助模型。首 token 的采样被约束，但返回的 logprob 和 Consilience 统计仍属于基础策略，
+修正由上面的接受比承担。
+
+```python
+plan = plan_nonself(current_logprobs, cut_probabilities, rng)
+if plan is not None:
+    request = GenerationRequest(
+        prompt + current_tokens[:plan.divergence], total_length - plan.divergence,
+        sampling, seed, "suffix-update")
+    with backend.first_token_exclusion([(seed, current_tokens[plan.divergence])]):
+        sample = backend.sample_batch([request])[0]
+# 组合复制前缀与 sample.token_ids，再执行上述候选池接受步骤。
+```
+
+共享计算在 [`sampling/nonself.py`](../../src/inference_scaling/shared/sampling/nonself.py)，候选池更新复用
+[`run_ensemble_mh`](../../src/inference_scaling/arllm/algorithms/ensemble_mh.py)。与分层采样共用 worker 注册、
+续写 seed 绑定和异常清理；不同题目可同时使用两类约束。同一请求的首 token 约束只生效一次。只保留当前池的 token
+概率，记录中保存切点、分歧位置、免解码 token 数及正反 $`a`$，不保存完整历史 token。
+
+**收益范围。** 固定其他候选时，每个槽位的非对角转移概率不小于原更新：对应正反流量分别除以
+$`a(y)\leq1`$ 和 $`a(y')\leq1`$，二者的最小值也不会减小。这减少无变化更新，但不能推出有序整轮的所有有限步 TV
+都更小，也不保证相同墙钟成本或更多不同序列。固定期望 token 预算的分布误差和真机成本分别见
+[后缀更新比较](../reports/ASCEND_IS_INFRA.md#nonself-suffix)。
 
 <a id="alg-conditional-is"></a>
 ## 6. 条件 IS

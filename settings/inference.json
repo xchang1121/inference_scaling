@@ -142,6 +142,7 @@
         "ensemble_size": 1,
         "initialization": "iid",
         "stratified_updates": false,
+          "nonself_updates": false,
         "block_size": 1024,
         "steps_per_block": 3,
         "iterations": null,

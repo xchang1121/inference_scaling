@@ -144,7 +144,7 @@ class _SamplingParams:
 
 def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
     import torch
-    from inference_scaling.arllm.backends.vllm_stratified import InitialStrataWorker
+    from inference_scaling.arllm.backends.vllm_sampling import SamplingConstraintsWorker
     from inference_scaling.shared.sampling.stratified import InitialStrata
 
     registry = InitialStrata()
@@ -168,7 +168,7 @@ def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
     def native(logits, generators, k, p):
         return torch.zeros(len(logits), dtype=torch.int64), payload
     sampler = SimpleNamespace(forward=native)
-    worker = InitialStrataWorker()
+    worker = SamplingConstraintsWorker()
     worker.model_runner = SimpleNamespace(sampler=SimpleNamespace(topk_topp_sampler=sampler))
     worker.begin_initial_strata(entries)
     unrelated = {0: torch.Generator().manual_seed(90), 1: torch.Generator().manual_seed(91)}
@@ -198,10 +198,10 @@ def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
         assert worker._initial_strata.active(10) and not worker._initial_strata.active(20)
         request = GenerationRequest((1,), 2, SamplingConfig(), 10, "continued", uniform_offset=3)
         params = backend._sampling_params(request)
-        backend._bind_initial_strata([request], [params])
+        backend._bind_sampling_constraints([request], [params])
         assert worker._initial_strata.active(params.seed)
     assert first["registered"] == 2 and not worker._initial_strata.aliases
-    assert not backend._initial_strata_seeds and sampler.forward is native
+    assert not any(backend._sampling_constraint_seeds.values()) and sampler.forward is native
     assert [method for method, _ in calls].count("begin_initial_strata") == 2
     assert first["resolved_after"] == {}
     # A whole-trajectory refresh can register a strict subset of a partition.
@@ -221,7 +221,26 @@ def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
     mismatch = True
     with pytest.raises(RuntimeError, match="disagree"), backend.stratified_initialization([(30, 1, 4)]):
         sampler.forward(logits[:1], {0: torch.Generator().manual_seed(30)}, None, None)
-    assert not backend._initial_strata_seeds and not worker._initial_strata.aliases and sampler.forward is native
+    assert not any(backend._sampling_constraint_seeds.values()) and not worker._initial_strata.aliases and sampler.forward is native
+
+    backend._engine.collective_rpc = rpc
+    with backend.stratified_initialization([(40, 0, 2)]):
+        with pytest.raises(ValueError, match="already in use"), backend.first_token_exclusion([(40, 0)]):
+            pass
+        with pytest.raises(RuntimeError, match="reward failed"):
+            with backend.first_token_exclusion([(50, 0)]) as excluded:
+                request = GenerationRequest((1,), 2, SamplingConfig(), 50, "resumed", uniform_offset=3)
+                params = backend._sampling_params(request)
+                backend._bind_sampling_constraints([request], [params])
+                generators = {0: torch.Generator().manual_seed(40), 1: torch.Generator().manual_seed(params.seed)}
+                tokens, actual_payload = sampler.forward(logits, generators, None, None)
+                assert tokens[0] < 2 and tokens[1] != 0 and actual_payload is payload
+                tokens, _ = sampler.forward(logits, generators, None, None)
+                assert tokens.tolist() == [0, 0]  # Both constraints have resolved.
+                raise RuntimeError("reward failed")
+        assert excluded["touched"] == 1 and excluded["unresolved"] == 0
+        assert worker._initial_strata.aliases and not worker._first_token_exclusion.aliases
+    assert not any(backend._sampling_constraint_seeds.values()) and sampler.forward is native
 
 
 class _BeamParams(_SamplingParams):

@@ -119,6 +119,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
 | 完整候选池后缀更新 | `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、`suffix_schedule = "log_uniform"`；使用基础 proposal，关闭 `suffix_replay`。初始生成加一轮更新，共两阶段，最后按权重抽样 |
 | 分层候选池 | 上述完整候选池可设 `ar.algorithms.mh.initialization = "stratified"`，在 vLLM Ascend 上分层生成首轮候选；再设 `stratified_updates = true` 可在后续更新中保留各层。分别改善初始化覆盖、维持探索范围，默认均关闭；[初始化](docs/methods/ALGORITHMS.md#ensemble-initial-strata)、[持续分层](docs/methods/ALGORITHMS.md#ensemble-persistent-strata) |
+| 排除原轨迹的后缀更新 | 完整候选池可设 `ar.algorithms.mh.nonself_updates = true`，避免提议相同序列；按第一次分歧复用前缀，以接受率修正保持目标。默认关闭，可与首轮分层结合，与持续分层互斥；[算法与适用范围](docs/methods/ALGORITHMS.md#ensemble-nonself) |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。

@@ -374,8 +374,8 @@ class VLLMBackend:
         self._delegated_score_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
         self._initial_strata_supported = bool(initial_strata)
-        self._initial_strata_lock = threading.RLock()
-        self._initial_strata_seeds: set[int] = set()
+        self._sampling_constraint_lock = threading.RLock()
+        self._sampling_constraint_seeds: dict[str, set[int]] = {"initial_strata": set(), "first_token_exclusion": set()}
         self._closed = False
         self._active_engine_requests = 0
         for name in VLLMBackendSnapshot.__dataclass_fields__:
@@ -477,7 +477,6 @@ class VLLMBackend:
         with self._engine_lock:
             return self._engine.collective_rpc(method, args=(entries,))
 
-    @contextmanager
     def stratified_initialization(self, entries):
         """Stratify newly started trajectories; independent requests may overlap.
 
@@ -487,30 +486,45 @@ class VLLMBackend:
         On exit, ``resolved_after`` maps sampled seeds to the first unrestricted
         prefix length, or None if the interval never became unrestricted.
         """
+        return self._sampling_constraint("initial_strata", entries)
+
+    def first_token_exclusion(self, entries):
+        """Exclude one token at each request's first draw; return base probabilities.
+
+        The algorithm must include the conditional proposal's normalizer in
+        its acceptance ratio. Independent pools may overlap with strata.
+        """
+        return self._sampling_constraint("first_token_exclusion", entries)
+
+    @contextmanager
+    def _sampling_constraint(self, kind, entries):
         if not self._initial_strata_supported:
-            raise ValueError("stratified initialization requires the vLLM Ascend sampling adapter")
+            raise ValueError("sampling constraints require the vLLM Ascend sampling adapter")
+        from inference_scaling.shared.sampling.nonself import FirstTokenExclusions
         from inference_scaling.shared.sampling.stratified import InitialStrata
 
         entries = tuple(entries)
-        InitialStrata().add(entries)  # Validate before any worker is changed.
-        seeds = {seed for seed, _, _ in entries}
-        with self._initial_strata_lock:
-            if self._initial_strata_seeds & seeds:
-                raise ValueError("an initial-stratum seed is already in use")
-            self._initial_strata_seeds.update(seeds)
+        validator = InitialStrata() if kind == "initial_strata" else FirstTokenExclusions()
+        validator.add(entries)  # Validate before any worker is changed.
+        seeds = {entry[0] for entry in entries}
+        registered = self._sampling_constraint_seeds[kind]
+        with self._sampling_constraint_lock:
+            if any(current & seeds for current in self._sampling_constraint_seeds.values()):
+                raise ValueError("a sampling-constraint seed is already in use")
+            registered.update(seeds)
             try:
-                self._initial_strata_rpc("begin_initial_strata", entries)
+                self._initial_strata_rpc(f"begin_{kind}", entries)
             except BaseException:
-                self._initial_strata_seeds.difference_update(seeds)
-                self._initial_strata_rpc("end_initial_strata", tuple(seeds))
+                registered.difference_update(seeds)
+                self._initial_strata_rpc(f"end_{kind}", tuple(seeds))
                 raise
-        summary = {}
+        summary: dict[str, Any] = {}
         try:
             yield summary
         finally:
-            with self._initial_strata_lock:
+            with self._sampling_constraint_lock:
                 try:
-                    rows = self._initial_strata_rpc("end_initial_strata", tuple(seeds))
+                    rows = self._initial_strata_rpc(f"end_{kind}", tuple(seeds))
                     summary.update({key: max(row[key] for row in rows) for key in
                                     ("registered", "touched", "constrained_tokens", "unresolved", "maximum_cdf_error")})
                     resolved = {}
@@ -519,22 +533,22 @@ class VLLMBackend:
                                   if row["trajectories"].get(str(seed), {}).get("tokens", 0) > 0]
                         if states:
                             if any(state != states[0] for state in states):
-                                raise RuntimeError("sampling workers disagree on stratum resolution")
+                                raise RuntimeError("sampling workers disagree on constrained draws")
                             resolved[seed] = states[0]["tokens"] if states[0]["resolved"] else None
                     summary["resolved_after"] = resolved
                 finally:
-                    self._initial_strata_seeds.difference_update(seeds)
+                    registered.difference_update(seeds)
 
-    def _bind_initial_strata(self, requests: Sequence[GenerationRequest], params: Sequence[Any]) -> None:
-        with self._initial_strata_lock:
-            entries = [(request.seed, int(policy.seed)) for request, policy in zip(requests, params, strict=True)
-                       if request.seed in self._initial_strata_seeds]
-            if not entries:
-                return
-            if any(not request.sampling.full_support for request in requests
-                   if request.seed in self._initial_strata_seeds):
-                raise ValueError("initial strata require full-support sampling")
-            self._initial_strata_rpc("bind_initial_strata", entries)
+    def _bind_sampling_constraints(self, requests: Sequence[GenerationRequest], params: Sequence[Any]) -> None:
+        with self._sampling_constraint_lock:
+            for kind, seeds in self._sampling_constraint_seeds.items():
+                entries = [(request.seed, int(policy.seed)) for request, policy in zip(requests, params, strict=True)
+                           if request.seed in seeds]
+                if not entries:
+                    continue
+                if any(not request.sampling.full_support for request in requests if request.seed in seeds):
+                    raise ValueError("sampling constraints require full-support sampling")
+                self._initial_strata_rpc(f"bind_{kind}", entries)
 
     @property
     def model_id(self) -> str:
@@ -707,7 +721,7 @@ class VLLMBackend:
             return []
         fused: dict[str, FusedValues] = {}
         params = [self._sampling_params(request) for request in requests]
-        self._bind_initial_strata(requests, params)
+        self._bind_sampling_constraints(requests, params)
         outputs = self._generate([self._prompt(request.prefix) for request in requests],
                                  params, fused)
         if len(outputs) != len(requests):
