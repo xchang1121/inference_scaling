@@ -44,6 +44,7 @@ def run_ensemble_mh(
     candidate_count: int,
     sampling: SamplingConfig,
     reward: TokenBatchReward,
+    initialization: str = "iid",
 ) -> EnsembleResult:
     """M complete base trajectories followed by ``iterations`` full-pool rounds.
 
@@ -59,6 +60,8 @@ def run_ensemble_mh(
         raise ValueError("ensemble MH requires an explicit iteration count, alpha=1, a reward, and base proposals")
     if not sampling.full_support:
         raise ValueError("ensemble MH requires the full-support base policy")
+    if initialization not in {"iid", "stratified"}:
+        raise ValueError("ensemble initialization must be iid or stratified")
     temperature = config.reward_temperature
 
     def generate(prefixes: list[TokenSequence], stage: int) -> list[RolloutEvaluation]:
@@ -87,7 +90,18 @@ def run_ensemble_mh(
         if keep is not None:
             keep(prompt, *(item.token_ids for item in pool))
 
-    pool = generate([()] * candidate_count, 0)
+    initialization_statistics = {}
+    if initialization == "stratified":
+        context = getattr(backend, "stratified_initialization", None)
+        if context is None:
+            raise ValueError("the backend does not support stratified initialization")
+        strata = seeds.generator("initial-pool", "permutation").permutation(candidate_count)
+        entries = [(seeds.derive("conditional_is", 0, "candidate", slot), int(strata[slot]), candidate_count)
+                   for slot in range(candidate_count)]
+        with context(entries) as initialization_statistics:
+            pool = generate([()] * candidate_count, 0)
+    else:
+        pool = generate([()] * candidate_count, 0)
     initial_unique = len({item.token_ids for item in pool})
     retain(pool)
     steps: list[dict[str, Any]] = []
@@ -125,6 +139,7 @@ def run_ensemble_mh(
     retain([result])
     return EnsembleResult(result.token_ids, result.reward, {
         'method': 'ensemble_mh', 'ensemble_size': candidate_count, 'rounds': config.iterations,
+        'initialization': initialization, 'initialization_statistics': initialization_statistics,
         'updates': len(steps), 'accepted': sum(step['accepted'] for step in steps),
         'suffix_schedule': config.suffix_schedule, 'selected_index': selected,
         'initial_unique_sequences': initial_unique, 'final_unique_sequences': len({item.token_ids for item in pool}),

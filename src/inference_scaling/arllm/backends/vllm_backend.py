@@ -350,7 +350,8 @@ class VLLMBackend:
                  beam_search_params_factory: Callable[..., Any] | None = None,
                  scoring_backend: AutoregressiveBackend | None = None, lora_request: Any | None = None,
                  fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
-                 metrics: Callable[[], Sequence[Any]] | None = None, flat_logprobs: bool = True) -> None:
+                 metrics: Callable[[], Sequence[Any]] | None = None, flat_logprobs: bool = True,
+                 initial_strata: bool = False) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
         # A token penalty makes the penalized model the model, so it is part of the identity.
@@ -372,6 +373,9 @@ class VLLMBackend:
         self._engine_lock = threading.RLock()
         self._delegated_score_lock = threading.RLock()
         self._statistics_lock = threading.Lock()
+        self._initial_strata_supported = bool(initial_strata)
+        self._initial_strata_lock = threading.RLock()
+        self._initial_strata_seeds: set[int] = set()
         self._closed = False
         self._active_engine_requests = 0
         for name in VLLMBackendSnapshot.__dataclass_fields__:
@@ -466,7 +470,60 @@ class VLLMBackend:
 
         with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             engine = LLM(**arguments)
-        return cls(engine, tokenizer, fused_logprobs=fused_logprobs, **options)
+        return cls(engine, tokenizer, fused_logprobs=fused_logprobs,
+                   initial_strata=arguments.get("worker_cls") == _ASCEND_WORKER, **options)
+
+    def _initial_strata_rpc(self, method: str, entries: Any) -> Any:
+        with self._engine_lock:
+            return self._engine.collective_rpc(method, args=(entries,))
+
+    @contextmanager
+    def stratified_initialization(self, entries):
+        """Stratify these initial trajectories; independent requests may overlap.
+
+        The context spans all backend calls, including continuation after an
+        incomplete thinking marker. Only scalar interval state crosses calls.
+        No subsequent suffix proposal is registered by the ensemble algorithm.
+        """
+        if not self._initial_strata_supported:
+            raise ValueError("stratified initialization requires the vLLM Ascend sampling adapter")
+        from inference_scaling.shared.sampling.stratified import InitialStrata
+
+        entries = tuple(entries)
+        InitialStrata().add(entries)  # Validate before any worker is changed.
+        seeds = {seed for seed, _, _ in entries}
+        with self._initial_strata_lock:
+            if self._initial_strata_seeds & seeds:
+                raise ValueError("an initial-stratum seed is already in use")
+            self._initial_strata_seeds.update(seeds)
+            try:
+                self._initial_strata_rpc("begin_initial_strata", entries)
+            except BaseException:
+                self._initial_strata_seeds.difference_update(seeds)
+                self._initial_strata_rpc("end_initial_strata", tuple(seeds))
+                raise
+        summary = {}
+        try:
+            yield summary
+        finally:
+            with self._initial_strata_lock:
+                try:
+                    rows = self._initial_strata_rpc("end_initial_strata", tuple(seeds))
+                    summary.update({key: max(row[key] for row in rows) for key in
+                                    ("registered", "touched", "constrained_tokens", "unresolved", "maximum_cdf_error")})
+                finally:
+                    self._initial_strata_seeds.difference_update(seeds)
+
+    def _bind_initial_strata(self, requests: Sequence[GenerationRequest], params: Sequence[Any]) -> None:
+        with self._initial_strata_lock:
+            entries = [(request.seed, int(policy.seed)) for request, policy in zip(requests, params, strict=True)
+                       if request.seed in self._initial_strata_seeds]
+            if not entries:
+                return
+            if any(not request.sampling.full_support for request in requests
+                   if request.seed in self._initial_strata_seeds):
+                raise ValueError("initial strata require full-support sampling")
+            self._initial_strata_rpc("bind_initial_strata", entries)
 
     @property
     def model_id(self) -> str:
@@ -638,8 +695,10 @@ class VLLMBackend:
         if not requests:
             return []
         fused: dict[str, FusedValues] = {}
+        params = [self._sampling_params(request) for request in requests]
+        self._bind_initial_strata(requests, params)
         outputs = self._generate([self._prompt(request.prefix) for request in requests],
-                                 [self._sampling_params(request) for request in requests], fused)
+                                 params, fused)
         if len(outputs) != len(requests):
             raise RuntimeError("vLLM returned an invalid number of request outputs")
         parsed = [self._sample_from_output(request, output, fused.get(str(getattr(output, "request_id", None))))
@@ -999,7 +1058,13 @@ class AsyncVLLMBackend(VLLMBackend):
         # The engine core process starts, and reads the model-runner environment, while the backend is constructed.
         with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**arguments)),
-                       fused_logprobs=fused_logprobs, streaming_output_kind=RequestOutputKind.DELTA, **options)
+                       fused_logprobs=fused_logprobs, streaming_output_kind=RequestOutputKind.DELTA,
+                       initial_strata=arguments.get("worker_cls") == _ASCEND_WORKER, **options)
+
+    def _initial_strata_rpc(self, method: str, entries: Any) -> Any:
+        async def call():
+            return await self._engine.collective_rpc(method, args=(entries,))
+        return self._runner.run(call())
 
     def _next_request_id(self) -> str:
         with self._request_counter_lock:

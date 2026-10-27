@@ -118,6 +118,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
 | 完整候选池后缀更新 | `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、`suffix_schedule = "log_uniform"`；使用基础 proposal，关闭 `suffix_replay`。初始生成加一轮更新，共两阶段，最后按权重抽样 |
+| 分层初始化 | 上述完整候选池可设 `ar.algorithms.mh.initialization = "stratified"`；vLLM Ascend 上按不同累计概率区间生成首轮候选，后续 MH 不变。默认 `iid`，原理与适用边界见[算法说明](docs/methods/ALGORITHMS.md#ensemble-initial-strata) |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。

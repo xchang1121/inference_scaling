@@ -521,6 +521,80 @@ $`\pi_r/M+(1-1/M)p`$，保留了基模探索成分。独立基模样本组成的
 生成后按最大分数选择属于不同的输出规则；本实现使用加权抽样以保持上述目标。批次组成可能改变设备浮点计算与
 采样轨迹，执行对照需同时核对实际 token、前向计算量和输出。
 
+<a id="ensemble-initial-strata"></a>
+### 5.2 完整候选池的分层初始化
+
+独立采样可能把多个候选分配到相近的序列区域。`mh.initialization = "stratified"` 仅改变上一节的首轮候选池：
+把基础分布对应的累计概率区间分成 $`M`$ 等份，各取一条完整序列，并随机排列到候选槽位。后续后缀 proposal、
+接受率与最终加权选择保持不变。序列累计概率的解码思路与
+[Quasi-random Multi-Sample Inference](https://arxiv.org/abs/2411.06251)相关；此处使用每个区间内独立随机采样，
+分析的是初始化方差和后续候选池 MH，而非该论文的准随机点集。
+
+**逐 token 实现。** 按 token ID 固定排列词表。候选的初始区间为
+$`[a,b)=[j/M,(j+1)/M)`$。当前前缀下，token $`v`$ 的累计概率区间记作 $`[F_{v-1},F_v)`$。
+每步从 $`[a,b)`$ 独立抽均匀数，选择包含该数的 token，再更新
+
+```math
+[a,b)\leftarrow
+\left[
+\frac{\max(a,F_{v-1})-F_{v-1}}{F_v-F_{v-1}},
+\frac{\min(b,F_v)-F_{v-1}}{F_v-F_{v-1}}
+\right).
+```
+
+这是已选前缀下剩余累计概率的条件区间，因而等价于从最初指定的序列区间采样。区间变为 $`[0,1)`$ 后，余下
+token 直接用原生采样器生成。每步重新抽数，避免反复展开同一个有限精度随机数；各请求独立推进，无需同时入队或
+增加候选间的同步。EOS、思考结束标记与长度上限沿用原有规则。
+
+**方差与目标。** 设 $`Y=G(U)`$ 是上述序列解码，$`U\sim\mathrm{Unif}[0,1)`$；令 $`J=\lfloor MU\rfloor`$。
+每层独立抽样、随机排列后，每个槽位的边缘分布仍为 $`p`$，候选之间不独立。对任意具有有限方差的序列函数 $`f`$，
+利用条件方差分解可得
+
+```math
+\mathrm{Var}\!\left[\frac1M\sum_{i=1}^M f(Y_i)\right]
+=\frac{1}{M^2}\sum_{j=0}^{M-1}\mathrm{Var}(f(Y)\mid J=j)
+=\frac{\mathrm{Var}_p(f)-\mathrm{Var}(\mathbb E[f(Y)\mid J])}{M}
+\leq\frac{\mathrm{Var}_p(f)}{M}.
+```
+
+对任意预先固定的序列集合 $`A`$，各层独立，且各层条件概率的平均值为 $`p(A)`$。由几何平均不大于算术平均，
+
+```math
+\Pr(Y_1\notin A,\ldots,Y_M\notin A)
+=\prod_{j=0}^{M-1}\bigl(1-\Pr_p(Y\in A\mid J=j)\bigr)
+\leq\bigl(1-p(A)\bigr)^M.
+```
+
+因此首轮覆盖该集合的概率不低于独立采样。分别取每个单序列集合再求和，还得到不同序列数的期望不降低；
+固定语义分类下，访问类别数的期望同样不降低。这是候选覆盖保证，不决定最终加权选择的正确率。
+
+取 $`f=w=\exp(r/\tau)`$，首轮归一化常数估计 $`\widehat Z=M^{-1}\sum_i w(Y_i)`$ 的方差不增。
+记仅在初始池中按权重抽样的输出分布为 $`q`$，则
+
+```math
+\|q-\pi_r\|_{\mathrm{TV}}
+\leq\frac{\mathbb E|\widehat Z-Z|}{2Z}
+\leq\frac{\sqrt{\mathrm{Var}(\widehat Z)}}{2Z}.
+```
+
+第一步不等式来自：经验加权质量 $`M^{-1}\sum_i w(Y_i)\mathbf1[Y_i=y]`$ 的期望是 $`p(y)w(y)`$；
+将其分别除以 $`\widehat Z`$ 和 $`Z`$，对所有 $`y`$ 的绝对差求和后取期望。
+分层改善这个方差型上界，但不推出实际 TV 误差逐例更小或最终输出的正确率提高。
+后续仍使用 5.1 节的独立后缀更新，任意初始池都收敛到同一 $`\Pi`$；无需修改接受率。
+相关候选仅用于初始化，不能直接替换条件 IS 中的独立 proposal 并沿用其原有正确性论证。
+
+**配置与实现。** 默认 `initialization = "iid"`；分层要求 `ensemble_size > 1`、完整支持集和 vLLM Ascend 后端。
+其他后端显式拒绝该选项。累计概率采用 CPU 双精度、固定 token 顺序，无词表排序；只保存每条候选的区间、随机状态和
+标量计数。设备到 CPU 的概率传输仅发生在区间尚未解除时，会增加采样开销，也可能因覆盖长序列区域而增加最长等待。
+
+- [`InitialStrata`](../../src/inference_scaling/shared/sampling/stratified.py)：区间更新、续接种子别名和独立候选池的状态隔离。
+- [`InitialStrataWorker`](../../src/inference_scaling/arllm/backends/vllm_stratified.py)：替换已注册请求的采样 token；保留原生处理后概率载荷，随后按实际 token 提取 logprob。
+- [`stratified_initialization`](../../src/inference_scaling/arllm/backends/vllm_backend.py)：覆盖首轮生成及思考段续接，正常或异常退出均清理状态；后缀更新恢复原生采样。
+
+`trace.initialization_statistics` 记录参与候选数、受限 token 数、结束时未解除的区间数和累计概率舍入误差。
+自然结束时区间可以尚未解除，其状态仍会清理。有限分布审计与单卡/双卡检查见
+[初始化比较](../reports/ASCEND_IS_INFRA.md#stratified-initialization)。
+
 <a id="alg-conditional-is"></a>
 ## 6. 条件 IS
 

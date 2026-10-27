@@ -148,6 +148,7 @@ SCHEMA: dict[str, Any] = {
             "best_of_n": {"samples": int},
             "mh": {
                 "ensemble_size": int,
+                "initialization": _Choices({"iid", "stratified"}),
                 "block_size": int,
                 "steps_per_block": int,
                 "iterations": _NULLABLE_INT,

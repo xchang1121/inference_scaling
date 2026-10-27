@@ -142,6 +142,68 @@ class _SamplingParams:
         self.__dict__.update(kwargs)
 
 
+def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
+    import torch
+    from inference_scaling.arllm.backends.vllm_stratified import InitialStrataWorker
+    from inference_scaling.shared.sampling.stratified import InitialStrata
+
+    registry = InitialStrata()
+    with pytest.raises(ValueError, match="exactly one"):
+        registry.add([(10, 0, 2), (11, 0, 2)])
+    entries = [(10, 0, 2), (11, 1, 2)]
+    registry.add(entries)
+    registry.bind([(10, 100)])
+    with pytest.raises(ValueError, match="colliding"):
+        registry.bind([(11, 100)])
+    reference = InitialStrata()
+    reference.add(entries)
+    for probabilities in ([.95, .05], [.9, .1], [.2, .8]):
+        assert registry.sample(100, numpy.array(probabilities)) == reference.sample(10, numpy.array(probabilities))
+    registry.add([(20, 0, 2), (21, 1, 2)])
+    registry.remove([10, 11])
+    assert not registry.active(100) and registry.active(20)
+    assert registry.remove([10, 11])["registered"] == 0
+
+    payload = torch.arange(8).reshape(2, 4).float()
+    def native(logits, generators, k, p):
+        return torch.zeros(len(logits), dtype=torch.int64), payload
+    sampler = SimpleNamespace(forward=native)
+    worker = InitialStrataWorker()
+    worker.model_runner = SimpleNamespace(sampler=SimpleNamespace(topk_topp_sampler=sampler))
+    worker.begin_initial_strata(entries)
+    unrelated = {0: torch.Generator().manual_seed(90), 1: torch.Generator().manual_seed(91)}
+    logits = torch.zeros(2, 4)
+    tokens, actual_payload = sampler.forward(logits, unrelated, None, None)
+    assert tokens.tolist() == [0, 0] and actual_payload is payload
+    generators = {row: torch.Generator().manual_seed(seed) for row, seed in enumerate((10, 11))}
+    tokens, actual_payload = sampler.forward(logits, generators, None, None)
+    assert tokens[0] < 2 <= tokens[1] and actual_payload is payload
+    assert sampler.forward is native
+    summary = worker.end_initial_strata([10, 11])
+    assert summary["touched"] == 2 and summary["constrained_tokens"] == 2
+
+    calls = []
+    def rpc(method, *, args):
+        calls.append((method, args))
+        return [getattr(worker, method)(*args)]
+    backend = VLLMBackend(SimpleNamespace(collective_rpc=rpc), _Tokenizer(), model_id="test", parameter_count=1,
+                          sampling_params_factory=_SamplingParams, initial_strata=True)
+    with backend.stratified_initialization(entries) as first:
+        with pytest.raises(ValueError, match="already in use"), backend.stratified_initialization(entries):
+            pass
+        with pytest.raises(RuntimeError, match="reward failed"):
+            with backend.stratified_initialization([(20, 0, 2), (21, 1, 2)]):
+                raise RuntimeError("reward failed")
+        assert worker._initial_strata.active(10) and not worker._initial_strata.active(20)
+        request = GenerationRequest((1,), 2, SamplingConfig(), 10, "continued", uniform_offset=3)
+        params = backend._sampling_params(request)
+        backend._bind_initial_strata([request], [params])
+        assert worker._initial_strata.active(params.seed)
+    assert first["registered"] == 2 and not worker._initial_strata.aliases
+    assert not backend._initial_strata_seeds and sampler.forward is native
+    assert [method for method, _ in calls].count("begin_initial_strata") == 2
+
+
 class _BeamParams(_SamplingParams):
     pass
 

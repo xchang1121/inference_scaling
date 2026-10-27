@@ -46,6 +46,12 @@ class StoppedSequenceBackend:
     def tokenizer(self):
         return getattr(self.backend, "tokenizer")
 
+    def stratified_initialization(self, entries):
+        context = getattr(self.backend, "stratified_initialization", None)
+        if context is None:
+            raise ValueError("the backend does not support stratified initialization")
+        return context(entries)
+
     @property
     def supports_streaming_generation(self) -> bool:
         return bool(getattr(self.backend, "supports_streaming_generation", False))

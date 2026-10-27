@@ -9,8 +9,10 @@ remain unchanged; worker extensions remain available to the caller.
 from vllm_ascend.sample.sampler import AscendSampler, AscendTopKTopPSampler
 from vllm_ascend.worker.worker import NPUWorker
 
+from inference_scaling.arllm.backends.vllm_stratified import InitialStrataWorker
 
-class AscendLogprobWorker(NPUWorker):
+
+class AscendLogprobWorker(InitialStrataWorker, NPUWorker):
     def init_device(self):
         super().init_device()
         runner = self.model_runner
