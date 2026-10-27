@@ -181,6 +181,7 @@ def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
     assert sampler.forward is native
     summary = worker.end_initial_strata([10, 11])
     assert summary["touched"] == 2 and summary["constrained_tokens"] == 2
+    assert summary["trajectories"] == {"10": {"tokens": 1, "resolved": True}, "11": {"tokens": 1, "resolved": True}}
 
     calls = []
     def rpc(method, *, args):
@@ -202,6 +203,25 @@ def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
     assert first["registered"] == 2 and not worker._initial_strata.aliases
     assert not backend._initial_strata_seeds and sampler.forward is native
     assert [method for method, _ in calls].count("begin_initial_strata") == 2
+    assert first["resolved_after"] == {}
+    # A whole-trajectory refresh can register a strict subset of a partition.
+    # Untouched TP ranks contribute no resolution; disagreeing sampled ranks fail.
+    mismatch = False
+    def ranked_rpc(method, *, args):
+        row = getattr(worker, method)(*args)
+        if method == "end_initial_strata":
+            if mismatch:
+                return [row, {**row, "trajectories": {"30": {"tokens": 999, "resolved": True}}}]
+            return [row, {**row, "trajectories": {}}]
+        return [row]
+    backend._engine.collective_rpc = ranked_rpc
+    with backend.stratified_initialization([(30, 1, 4)]) as refreshed:
+        sampler.forward(logits[:1], {0: torch.Generator().manual_seed(30)}, None, None)
+    assert refreshed["resolved_after"] == {30: 1}
+    mismatch = True
+    with pytest.raises(RuntimeError, match="disagree"), backend.stratified_initialization([(30, 1, 4)]):
+        sampler.forward(logits[:1], {0: torch.Generator().manual_seed(30)}, None, None)
+    assert not backend._initial_strata_seeds and not worker._initial_strata.aliases and sampler.forward is native
 
 
 class _BeamParams(_SamplingParams):

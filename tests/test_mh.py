@@ -1,4 +1,5 @@
 from dataclasses import replace
+from contextlib import contextmanager
 from itertools import product
 from math import exp, log
 from types import SimpleNamespace
@@ -99,6 +100,64 @@ def test_ensemble_updates_correct_pool_mass_and_actual_length_cuts(schedule):
     assert exp(result.reward / 2) == pytest.approx(weights[result.trace['selected_index']])
     assert sum(len(records) for outputs in recorder._outputs.values() for records in outputs.values()) == 1
     assert not recorder._streams
+
+
+def test_persistent_strata_correct_cuts_and_release_each_refresh():
+    from inference_scaling.shared.sampling.stratified import InitialStrata
+
+    class StratifiedBackend(TabularAutoregressiveBackend):
+        registry = InitialStrata()
+        registrations = []
+
+        @contextmanager
+        def stratified_initialization(self, entries):
+            self.registry.add(entries)
+            self.registrations.append(len(entries))
+            summary = {}
+            try:
+                yield summary
+            finally:
+                summary.update(self.registry.remove(seed for seed, _, _ in entries))
+                summary['resolved_after'] = {int(seed): state['tokens'] if state['resolved'] else None
+                    for seed, state in summary.pop('trajectories').items() if state['tokens']}
+
+        def sample_batch(self, requests):
+            samples = []
+            for request in requests:
+                tokens, logs = [], []
+                rng = np.random.default_rng(request.seed)
+                for _ in range(request.max_new_tokens):
+                    probs = self.probabilities(request.prefix + tuple(tokens), request.sampling)
+                    token = (self.registry.sample(request.seed, probs) if self.registry.active(request.seed)
+                             else int(rng.choice(len(probs), p=probs)))
+                    tokens.append(token)
+                    logs.append(log(probs[token]))
+                    if token == request.sampling.eos_token_id:
+                        break
+                samples.append(SequenceSample(request.prefix, tuple(tokens), tuple(logs), request.sampling.policy_id,
+                                              self.model_id, request.request_id))
+            return samples
+
+    backend = StratifiedBackend({}, fallback=[.6, .3, .1])
+    result = run_ensemble_mh(backend, (), _config(alpha=1., reward_temperature=1., total_length=12,
+        iterations=20, suffix_schedule='log_uniform'), SeedStream(19), candidate_count=3,
+        sampling=SamplingConfig(eos_token_id=2), reward=pointwise(lambda _, tokens: tokens.count(1)),
+        initialization='stratified', stratified_updates=True)
+    positions = result.trace['interval_statistics'][0]['resolved_at'].copy()
+    for step in result.trace['steps']:
+        slot, cut = step['slot'], step['cut']
+        assert positions[slot] == step['previous_resolved_at']
+        assert cut == 0 or positions[slot] is not None and cut >= positions[slot]
+        for direction, prefix in (('forward', 'previous'), ('reverse', 'proposed')):
+            length, resolved = step[f'{prefix}_length'], step[f'{prefix}_resolved_at']
+            original = suffix_length_probabilities(length, 'log_uniform')[::-1]
+            total = original[0] + sum(original[length if resolved is None else resolved:])
+            assert step[f'{direction}_cut_probability'] == pytest.approx(original[cut] / total)
+        if step['accepted']:
+            positions[slot] = step['proposed_resolved_at']
+    assert any(step['cut'] == 0 for step in result.trace['steps']) and any(step['cut'] > 0 for step in result.trace['steps'])
+    assert 0 < min(backend.registrations) < max(backend.registrations) == 3
+    assert not backend.registry.aliases and not backend.registry.intervals
 
 
 @pytest.mark.parametrize("mode,temperature,eos", [("power", 1.0, None), ("power", .6, None),

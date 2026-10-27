@@ -1,4 +1,4 @@
-"""Independent arithmetic strata for an initial pool of complete trajectories.
+"""Independent arithmetic strata for complete trajectories.
 
 One randomly assigned stratum per trajectory preserves each base marginal.
 Conditional intervals are updated after each token and released as soon as
@@ -7,7 +7,7 @@ the whole remaining code interval is available. No prefix history is stored.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -40,8 +40,8 @@ class InitialStrata:
                 or type(index) is not int or type(size) is not int or not 0 <= index < size
                 for seed, index, size in entries)):
             raise ValueError("initial strata require distinct nonnegative seeds and valid strata")
-        if any(size != len(entries) for _, _, size in entries) or {index for _, index, _ in entries} != set(range(len(entries))):
-            raise ValueError("an initial pool must contain exactly one trajectory per stratum")
+        if len({size for _, _, size in entries}) != 1 or len({index for _, index, _ in entries}) != len(entries):
+            raise ValueError("register exactly one trajectory per selected stratum of the same partition")
         if any(seed in self.aliases for seed in seeds):
             raise ValueError("an initial-stratum seed is already registered")
         for seed, index, size in entries:
@@ -92,11 +92,13 @@ class InitialStrata:
         interval.maximum_cdf_error = max(interval.maximum_cdf_error, error)
         return token
 
-    def remove(self, seeds: Iterable[int]) -> dict[str, int | float]:
+    def remove(self, seeds: Iterable[int]) -> dict[str, Any]:
         seeds = set(seeds)
-        removed = [self.intervals.pop(seed) for seed in seeds if seed in self.intervals]
+        removed = {seed: self.intervals.pop(seed) for seed in seeds if seed in self.intervals}
         self.aliases = {alias: original for alias, original in self.aliases.items() if original not in seeds}
-        return {"registered": len(removed), "touched": sum(interval.tokens > 0 for interval in removed),
-                "constrained_tokens": sum(interval.tokens for interval in removed),
-                "unresolved": sum(not self._resolved(interval) for interval in removed),
-                "maximum_cdf_error": max((interval.maximum_cdf_error for interval in removed), default=0.)}
+        return {"registered": len(removed), "touched": sum(interval.tokens > 0 for interval in removed.values()),
+                "constrained_tokens": sum(interval.tokens for interval in removed.values()),
+                "unresolved": sum(not self._resolved(interval) for interval in removed.values()),
+                "maximum_cdf_error": max((interval.maximum_cdf_error for interval in removed.values()), default=0.),
+                "trajectories": {str(seed): {"tokens": interval.tokens, "resolved": self._resolved(interval)}
+                                 for seed, interval in removed.items()}}

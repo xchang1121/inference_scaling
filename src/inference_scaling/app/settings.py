@@ -149,6 +149,7 @@ SCHEMA: dict[str, Any] = {
             "mh": {
                 "ensemble_size": int,
                 "initialization": _Choices({"iid", "stratified"}),
+                "stratified_updates": bool,
                 "block_size": int,
                 "steps_per_block": int,
                 "iterations": _NULLABLE_INT,

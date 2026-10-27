@@ -138,6 +138,8 @@ class ARFamily:
                 raise ValueError("ensemble MH requires explicit iterations, proposal=base and suffix_replay=false")
             if size == 1 and self.config.get("initialization", "iid") != "iid":
                 raise ValueError("stratified initialization requires mh.ensemble_size > 1")
+            if self.config.get("stratified_updates", False) and (size <= 1 or self.config.get("initialization") != "stratified"):
+                raise ValueError("stratified updates require mh.ensemble_size > 1 and initialization=stratified")
         engine = self.ar["engine"]
         for option in ("suffix_replay", "early_rejection"):
             if engine["backend"] == "vllm" and self.config.get(option):
@@ -392,7 +394,8 @@ class ARFamily:
                 task.backend, task.prompt,
                 self._mh_config(task, alpha=1.0, reward_temperature=reward.temperature, early_rejection=False),
                 SeedStream(task.seed), candidate_count=config["ensemble_size"], sampling=task.sampling, reward=reward.batch,
-                initialization=config.get("initialization", "iid"))
+                initialization=config.get("initialization", "iid"),
+                stratified_updates=config.get("stratified_updates", False))
             return ensemble.token_ids, ensemble.trace, ensemble.reward
         history = config["frozen_history"]
         frozen = config["proposal"] == "frozen_history"

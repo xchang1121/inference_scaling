@@ -2,7 +2,7 @@
 
 The native sampler still computes the original processed probability payload;
 only registered tokens are replaced before the enclosing sampler gathers their
-log-probabilities. Later suffix proposals and unregistered requests stay native.
+log-probabilities. Unregistered requests and resolved prefixes stay native.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class InitialStrataWorker:
         state = getattr(self, "_initial_strata", None)
         if state is None:
             return {"registered": 0, "touched": 0, "constrained_tokens": 0,
-                    "unresolved": 0, "maximum_cdf_error": 0.}
+                    "unresolved": 0, "maximum_cdf_error": 0., "trajectories": {}}
         result = state.remove(seeds)
         self._restore_initial_strata()
         return result

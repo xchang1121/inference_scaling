@@ -479,11 +479,13 @@ class VLLMBackend:
 
     @contextmanager
     def stratified_initialization(self, entries):
-        """Stratify these initial trajectories; independent requests may overlap.
+        """Stratify newly started trajectories; independent requests may overlap.
 
         The context spans all backend calls, including continuation after an
         incomplete thinking marker. Only scalar interval state crosses calls.
-        No subsequent suffix proposal is registered by the ensemble algorithm.
+        A later whole-trajectory refresh may register a subset of the strata.
+        On exit, ``resolved_after`` maps sampled seeds to the first unrestricted
+        prefix length, or None if the interval never became unrestricted.
         """
         if not self._initial_strata_supported:
             raise ValueError("stratified initialization requires the vLLM Ascend sampling adapter")
@@ -511,6 +513,15 @@ class VLLMBackend:
                     rows = self._initial_strata_rpc("end_initial_strata", tuple(seeds))
                     summary.update({key: max(row[key] for row in rows) for key in
                                     ("registered", "touched", "constrained_tokens", "unresolved", "maximum_cdf_error")})
+                    resolved = {}
+                    for seed in seeds:
+                        states = [row["trajectories"][str(seed)] for row in rows
+                                  if row["trajectories"].get(str(seed), {}).get("tokens", 0) > 0]
+                        if states:
+                            if any(state != states[0] for state in states):
+                                raise RuntimeError("sampling workers disagree on stratum resolution")
+                            resolved[seed] = states[0]["tokens"] if states[0]["resolved"] else None
+                    summary["resolved_after"] = resolved
                 finally:
                     self._initial_strata_seeds.difference_update(seeds)
 

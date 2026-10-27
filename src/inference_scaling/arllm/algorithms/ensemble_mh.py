@@ -7,15 +7,23 @@ therefore has marginal p(y) exp(r(y)/tau) / Z at stationarity. Initializing
 from p**M gives ordinary finite-pool SIR before any updates; finite rounds
 remain approximate. The proposal and target use the same base policy.
 
-Every round generates its M proposals together and commits them in slot
-order. A round ends before the next starts, allowing statistics to be pruned
-to the current pool. Only scalar step summaries survive completed rounds.
+Optional persistent strata replace each slot's base law with one fixed
+conditional base law whose average is p. Local cuts are restricted to prefixes
+where that condition has resolved; whole-trajectory refreshes stay stratified.
+The same pool-weight acceptance formula then preserves the output target.
+
+Every round generates its M proposals together and commits them sequentially.
+A round ends before the next starts, allowing statistics to be pruned to the
+current pool. Only scalar step summaries survive completed rounds.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from math import isfinite, log
 from typing import Any
+
+import numpy as np
 
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.algorithms.mh import suffix_length_probabilities
@@ -45,6 +53,7 @@ def run_ensemble_mh(
     sampling: SamplingConfig,
     reward: TokenBatchReward,
     initialization: str = "iid",
+    stratified_updates: bool = False,
 ) -> EnsembleResult:
     """M complete base trajectories followed by ``iterations`` full-pool rounds.
 
@@ -62,60 +71,88 @@ def run_ensemble_mh(
         raise ValueError("ensemble MH requires the full-support base policy")
     if initialization not in {"iid", "stratified"}:
         raise ValueError("ensemble initialization must be iid or stratified")
+    if stratified_updates and (initialization != "stratified" or candidate_count <= 1):
+        raise ValueError("stratified updates require stratified initialization and candidate_count > 1")
     temperature = config.reward_temperature
+    context: Any = getattr(backend, "stratified_initialization", None)
+    if initialization == "stratified" and context is None:
+        raise ValueError("the backend does not support stratified initialization")
+    strata = seeds.generator("initial-pool", "permutation").permutation(candidate_count)
 
-    def generate(prefixes: list[TokenSequence], stage: int) -> list[RolloutEvaluation]:
-        samples = backend.sample_batch([
-            GenerationRequest(prompt + prefix, config.total_length - len(prefix), sampling,
-                seeds.derive('ensemble', 'generate', stage, slot) if stage
-                else seeds.derive('conditional_is', 0, 'candidate', slot),
-                f'ensemble:{stage}:{slot}')
-            for slot, prefix in enumerate(prefixes)])
-        if len(samples) != candidate_count:
-            raise RuntimeError("ensemble generation returned an invalid number of samples")
-        sequences = []
-        for prefix, sample in zip(prefixes, samples, strict=True):
-            if (sample.prefix != prompt + prefix or not sample.token_ids
-                    or len(sample.token_ids) > config.total_length - len(prefix)):
-                raise RuntimeError("ensemble generation returned an invalid complete suffix")
-            sequences.append(prefix + sample.token_ids)
-        values = reward(prompt, sequences)
-        if len(values) != candidate_count or any(not isfinite(float(value) / temperature) for value in values):
-            raise ValueError("ensemble MH requires one finite fixed reward per sequence")
-        return [RolloutEvaluation(tokens, float(value), float(value) / temperature)
-                for tokens, value in zip(sequences, values, strict=True)]
+    def cut_probabilities(length: int, resolved_after: int | None):
+        chances = np.array(suffix_length_probabilities(length, config.suffix_schedule)[::-1])
+        if stratified_updates:
+            # Before resolution the native suffix law need not equal the
+            # stratum-conditional law. Refresh from the start or keep a resolved prefix.
+            chances[1:length if resolved_after is None else resolved_after] = 0.
+            chances /= chances.sum()
+        return chances
+
+    interval_statistics = []
+
+    def generate(prefixes: list[TokenSequence], stage: int, positions: list[int | None]):
+        requests = [GenerationRequest(prompt + prefix, config.total_length - len(prefix), sampling,
+                    seeds.derive('ensemble', 'generate', stage, slot) if stage
+                    else seeds.derive('conditional_is', 0, 'candidate', slot), f'ensemble:{stage}:{slot}')
+                    for slot, prefix in enumerate(prefixes)]
+        global_slots = [slot for slot, prefix in enumerate(prefixes) if not prefix
+                        and (stratified_updates or stage == 0 and initialization == "stratified")]
+        entries = [(requests[slot].seed, int(strata[slot]), candidate_count) for slot in global_slots]
+        with context(entries) if entries else nullcontext({}) as statistics:
+            samples = backend.sample_batch(requests)
+            if len(samples) != candidate_count:
+                raise RuntimeError("ensemble generation returned an invalid number of samples")
+            sequences = []
+            for prefix, sample in zip(prefixes, samples, strict=True):
+                if (sample.prefix != prompt + prefix or not sample.token_ids
+                        or len(sample.token_ids) > config.total_length - len(prefix)):
+                    raise RuntimeError("ensemble generation returned an invalid complete suffix")
+                sequences.append(prefix + sample.token_ids)
+            values = reward(prompt, sequences)
+            if len(values) != candidate_count or any(not isfinite(float(value) / temperature) for value in values):
+                raise ValueError("ensemble MH requires one finite fixed reward per sequence")
+        positions = positions.copy()
+        statistics = dict(statistics)
+        resolutions = statistics.pop("resolved_after", {})
+        if stratified_updates:
+            for slot in global_slots:
+                if requests[slot].seed not in resolutions:
+                    raise RuntimeError("stratified updates require a resolution status for every refreshed trajectory")
+                position = resolutions[requests[slot].seed]
+                # Generation can run past a subsequently trimmed thinking boundary.
+                # Resolution after the visible sequence permits only a whole refresh.
+                positions[slot] = position if position is not None and position <= len(sequences[slot]) else None
+            interval_statistics.append({'round': stage, 'global_slots': global_slots,
+                                        'resolved_at': positions.copy(), **statistics})
+        evaluated = [RolloutEvaluation(tokens, float(value), float(value) / temperature)
+                     for tokens, value in zip(sequences, values, strict=True)]
+        return evaluated, positions, statistics
 
     def retain(pool: list[RolloutEvaluation]) -> None:
         keep = getattr(backend, 'retain_statistics', None)
         if keep is not None:
             keep(prompt, *(item.token_ids for item in pool))
 
-    initialization_statistics = {}
-    if initialization == "stratified":
-        context = getattr(backend, "stratified_initialization", None)
-        if context is None:
-            raise ValueError("the backend does not support stratified initialization")
-        strata = seeds.generator("initial-pool", "permutation").permutation(candidate_count)
-        entries = [(seeds.derive("conditional_is", 0, "candidate", slot), int(strata[slot]), candidate_count)
-                   for slot in range(candidate_count)]
-        with context(entries) as initialization_statistics:
-            pool = generate([()] * candidate_count, 0)
-    else:
-        pool = generate([()] * candidate_count, 0)
+    pool, resolved, initialization_statistics = generate([()] * candidate_count, 0, [None] * candidate_count)
     initial_unique = len({item.token_ids for item in pool})
     retain(pool)
     steps: list[dict[str, Any]] = []
     for stage in range(1, config.iterations + 1):
-        probabilities = [suffix_length_probabilities(len(item.token_ids), config.suffix_schedule)[::-1]
-                         for item in pool]
+        probabilities = [cut_probabilities(len(item.token_ids), position)
+                         for item, position in zip(pool, resolved, strict=True)]
         cuts = [int(seeds.generator('ensemble', 'cut', stage, slot).choice(len(chances), p=chances))
                 for slot, chances in enumerate(probabilities)]
-        proposed = generate([item.token_ids[:cut] for item, cut in zip(pool, cuts, strict=True)], stage)
+        proposed, proposed_positions, _ = generate(
+            [item.token_ids[:cut] for item, cut in zip(pool, cuts, strict=True)], stage, resolved)
         logs = [item.log_weight for item in pool]
-        for slot, (candidate, cut) in enumerate(zip(proposed, cuts, strict=True)):
+        order = seeds.generator('ensemble', 'order', stage).permutation(candidate_count) if stratified_updates else range(candidate_count)
+        for slot in order:
+            slot = int(slot)
+            candidate, cut = proposed[slot], cuts[slot]
             previous = pool[slot]
+            previous_position = resolved[slot]
             forward = probabilities[slot][cut]
-            reverse = suffix_length_probabilities(len(candidate.token_ids), config.suffix_schedule)[::-1][cut]
+            reverse = cut_probabilities(len(candidate.token_ids), proposed_positions[slot])[cut]
             current_sum = logmeanexp(logs)
             logs[slot] = candidate.log_weight
             decision = decide_metropolis_hastings(
@@ -124,6 +161,7 @@ def run_ensemble_mh(
                 uniform=float(seeds.generator('ensemble', 'accept', stage, slot).random()))
             if decision.accepted:
                 pool[slot] = candidate
+                resolved[slot] = proposed_positions[slot]
             else:
                 logs[slot] = previous.log_weight
             steps.append({'round': stage, 'slot': slot, 'cut': cut,
@@ -132,6 +170,9 @@ def run_ensemble_mh(
                           'previous_reward': previous.reward, 'proposed_reward': candidate.reward,
                           'forward_cut_probability': forward, 'reverse_cut_probability': reverse,
                           'log_acceptance': decision.log_acceptance, 'accepted': decision.accepted})
+            if stratified_updates:
+                steps[-1].update(stratum=int(strata[slot]), previous_resolved_at=previous_position,
+                                 proposed_resolved_at=proposed_positions[slot])
         retain(pool)
     weights = normalize_log_weights([item.log_weight for item in pool])
     selected = categorical_index_from_uniform(weights, float(seeds.generator('ensemble', 'select').random()))
@@ -140,6 +181,7 @@ def run_ensemble_mh(
     return EnsembleResult(result.token_ids, result.reward, {
         'method': 'ensemble_mh', 'ensemble_size': candidate_count, 'rounds': config.iterations,
         'initialization': initialization, 'initialization_statistics': initialization_statistics,
+        'stratified_updates': stratified_updates, 'interval_statistics': interval_statistics,
         'updates': len(steps), 'accepted': sum(step['accepted'] for step in steps),
         'suffix_schedule': config.suffix_schedule, 'selected_index': selected,
         'initial_unique_sequences': initial_unique, 'final_unique_sequences': len({item.token_ids for item in pool}),
