@@ -158,6 +158,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
 | `is.exploration_schedule` | 默认 `fixed`。`single_pool` 完成首轮 M/K/B 候选池，作一次 Metropolized 索引选择后直接提交完整序列；`two_stage` 按首轮未选 rollout 的长度与权重分配末轮探索，并使用容量限制及长度区间。后两种模式与同块补全复用、数量配额、超发互斥；单轮可另启用权重配额并使用普通 SIR。减少探索可能增大有限预算误差。见[单轮候选池](methods/ALGORITHMS.md#is-single-pool)与[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
+| `is.metropolized_blocks` | 默认 `false`。在完整池中合并 token 块相同的候选，先更新块索引，再按原权重抽取补全。支持 `fixed`、`two_stage`、`single_pool`，与兄弟复用、数量/权重配额、提前选择、末条筛选和超发互斥。不增加当前候选池的生成或评分，保持原平稳目标；后续生成量和有限预算误差可能增减。见[按候选块选择](methods/ALGORITHMS.md#is-block-selection)；基准入口对应 `--metropolized-blocks` |
 | `is.weighted_completion_quota` | 默认 `false`。单轮中按完整奖励和缓存前缀分数估计已完成权重比例，达到 `1-1/M` 后取消剩余请求；至少两个组有完整结果，M=1 时为一个。完整叶子按原定补全数加权作普通 SIR。需要流式后端和缓存前缀分数，与先块生成、末条筛选及其他配额/复用选项互斥。存在完成时间及前缀分数相关偏差；见[权重完成配额](methods/ALGORITHMS.md#is-weighted-completion-quota) |
 | `is.selection_ready` | 默认 `false`。`single_pool` 固定一次抽样随机数，在所选叶子完整时结束；K>1 分叉由首条根请求结束触发。`two_stage` 首轮保持预设 B，以组权重除以固定独立均匀随机数确定优先级，只允许收齐原定补全的组入选；末轮沿用原 SIR 随机数和长度区间。未完成权重使用缓存前缀估计，存在选择偏差。需要流式后端，与其他早停、先块生成及复用选项互斥。完成条件及回退见[算法说明](methods/ALGORITHMS.md#is-selection-ready) |
 | `is.sibling_replay` | 默认 `false`。复用所选块的其他完整补全及奖励，替代下一轮部分新候选根；K=1 无额外可复用样本。见[同块补全复用](methods/ALGORITHMS.md#is-sibling-replay) |

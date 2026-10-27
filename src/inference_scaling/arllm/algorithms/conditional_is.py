@@ -62,9 +62,14 @@ class ConditionalISAdapter:
         candidates, forward_slots, sources, evaluations, selection, forecast = evaluate_candidates(
             self, state, step_index, seeds)
         carried = bool(state.token_ids)
-        choose = (select_metropolized if self.config.exploration_schedule == "single_pool"
-                  and not self.config.weighted_completion_quota else select)
-        selected, kept = selection if selection is not None else choose(candidates, seeds, "conditional_is", step_index)
+        if selection is not None:
+            selected, kept = selection
+        elif self.config.metropolized_blocks or (self.config.exploration_schedule == "single_pool"
+                                                 and not self.config.weighted_completion_quota):
+            selected, kept = select_metropolized(candidates, seeds, "conditional_is", step_index,
+                                                 group_blocks=self.config.metropolized_blocks)
+        else:
+            selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
         completion = candidate.rollouts[kept]
         width = (max(self.config.block_size, *(len(item.token_ids) for item in candidates))

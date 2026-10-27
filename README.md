@@ -120,6 +120,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | 完整候选池后缀更新 | `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、`suffix_schedule = "log_uniform"`；使用基础 proposal，关闭 `suffix_replay`。初始生成加一轮更新，共两阶段，最后按权重抽样 |
 | 分层候选池 | 上述完整候选池可设 `ar.algorithms.mh.initialization = "stratified"`，在 vLLM Ascend 上分层生成首轮候选；再设 `stratified_updates = true` 可在后续更新中保留各层。分别改善初始化覆盖、维持探索范围，默认均关闭；[初始化](docs/methods/ALGORITHMS.md#ensemble-initial-strata)、[持续分层](docs/methods/ALGORITHMS.md#ensemble-persistent-strata) |
 | 排除原轨迹的后缀更新 | 完整候选池可设 `ar.algorithms.mh.nonself_updates = true`，避免提议相同序列；按第一次分歧复用前缀，以接受率修正保持目标。默认关闭，可与首轮分层结合，与持续分层互斥；[算法与适用范围](docs/methods/ALGORITHMS.md#ensemble-nonself) |
+| 按候选块选择 | `ar.algorithms.is.metropolized_blocks = true`：合并相同 token 块，先在不同块之间作 Metropolized 选择，再选择组内补全。复用完整候选池与原奖励；默认关闭，需关闭提前选择、配额、超发及兄弟复用。[选择规则与边界](docs/methods/ALGORITHMS.md#is-block-selection) |
 | 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。

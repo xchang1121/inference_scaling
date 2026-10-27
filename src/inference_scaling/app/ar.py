@@ -108,6 +108,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         last_rollout_filter=bool(config.get("last_rollout_filter", False)),
         weighted_completion_quota=bool(config.get("weighted_completion_quota", False)),
         selection_ready=bool(config.get("selection_ready", False)),
+        metropolized_blocks=bool(config.get("metropolized_blocks", False)),
     )
 
 
@@ -435,6 +436,7 @@ class ARFamily:
         trace["last_rollout_filter"] = config.last_rollout_filter
         trace["weighted_completion_quota"] = config.weighted_completion_quota
         trace["selection_ready"] = config.selection_ready
+        trace["metropolized_blocks"] = config.metropolized_blocks
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

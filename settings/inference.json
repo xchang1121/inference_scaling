@@ -172,7 +172,8 @@
         "exploration_schedule": "fixed",
         "last_rollout_filter": false,
         "weighted_completion_quota": false,
-        "selection_ready": false
+        "selection_ready": false,
+        "metropolized_blocks": false
       }
     }
   },

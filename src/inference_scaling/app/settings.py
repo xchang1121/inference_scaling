@@ -181,6 +181,7 @@ SCHEMA: dict[str, Any] = {
                 "last_rollout_filter": bool,
                 "weighted_completion_quota": bool,
                 "selection_ready": bool,
+                "metropolized_blocks": bool,
             },
         },
     },

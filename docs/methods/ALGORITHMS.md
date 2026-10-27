@@ -857,7 +857,49 @@ generated = candidate.token_ids + completion.token_ids
 启用 `block_first` 时，后端续写种子的处理仍可能使不同 B 产生不同样本。
 `sampling_plan` 记录首轮请求的 B/M/K，运行只有一个探索步骤。CLI 与服务共享该选项，基准入口使用
 `--exploration-schedule single_pool`。同块补全复用、数量完成配额和超发与此模式互斥；
-下节的权重完成配额使用独立的停止与选择规则。
+[权重完成配额](#is-weighted-completion-quota)使用独立的停止与选择规则。
+
+<a id="is-block-selection"></a>
+### 按候选块进行 Metropolized 选择
+
+`ar.algorithms.is.metropolized_blocks = true` 在完整候选池上先选择下一块，再选择补全。
+同一块下的多条补全，以及不同候选位置生成的相同 token 块，合并为一个选择组。其作用是增加更新下一块内容的概率；
+当前候选池的生成请求、完整奖励和已有 rollout 的复用方式不变。
+
+沿用上一节的叶子权重 $`a_i=\exp(r_i/\tau)/K_m`$。设 $`G_g`$ 是 token 块相同的叶子集合，
+$`A_g=\sum_{i\in G_g}a_i`$，$`A=\sum_g A_g`$。以原第 0 组第 0 条补全所在的块 $`g`$ 为起点，使用
+
+```math
+P(g,h)=\frac{A_h}{\max(A-A_g,A-A_h)},\qquad h\ne g,
+\qquad P(g,g)=1-\sum_{h\ne g}P(g,h).
+```
+
+选定块 $`h`$ 后，以 $`a_j/A_h`$ 的概率选择其中的叶子 $`j`$。只有一个不同的块时，直接按叶子权重选择补全。
+原 $`K_m`$ 分母始终保留，合并相同块后不重新平均，也不删除重复出现的样本质量。
+
+对于不同块中的叶子 $`i,j`$，完整选择的概率流为
+
+```math
+a_i P(i,j)=\frac{a_i a_j}{\max(A-A_{g(i)},A-A_{g(j)})}.
+```
+
+右侧关于 $`i,j`$ 对称；同块内的概率流为 $`P(g,g)a_i a_j/A_g`$，同样对称。因此选择保持原叶子权重分布。
+代入式 (8a) 的条件树构造，仍保持完整序列目标；逐块固定前缀、保留已选补全和两阶段末轮继续使用原流程。
+
+由于 $`A_{g(i)}\ge a_i`$，跨不同块的每个转移概率均不低于上一节的叶子 Metropolized 选择。
+同块内的转移概率可能下降，所以该性质不推出有限轮数 TV 误差或同预算准确率的普遍优势。
+K=1 且候选块各不相同时，两种选择相同；K>1 时，即使各候选位置的块都不同，同组补全的合并仍会改变选择。
+
+实现复用 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)：
+
+```python
+m, k = select_metropolized(candidates, seeds, "conditional_is", step,
+                           group_blocks=True)
+```
+
+此选项默认关闭，适用于 `fixed`、`two_stage` 和 `single_pool` 的完整池，不与提前选择、末条筛选、配额、超发或兄弟复用组合。
+它不减少当前池的最长请求等待；后续选中的前缀、末轮预算和正文长度可能改变，因此整题耗时差异需与实际生成量一起比较。
+有限模型的同预算误差与 Ascend 执行成本见[实验结果](../reports/ASCEND_IS_INFRA.md#block-metropolized)。
 
 <a id="is-weighted-completion-quota"></a>
 ### 按已完成权重结束候选池

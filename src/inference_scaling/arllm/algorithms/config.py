@@ -98,6 +98,8 @@ class ConditionalISConfig:
     # Approximate stopping in a single pool or both pools of two-stage exploration.
     # Two-stage cold groups use fixed random priorities; the retained final pool uses SIR.
     selection_ready: bool = False
+    # On complete trees, update the next token block before selecting its completion.
+    metropolized_blocks: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -112,6 +114,12 @@ class ConditionalISConfig:
             raise ValueError("weighted_completion_quota must be a boolean")
         if type(self.selection_ready) is not bool:
             raise ValueError("selection_ready must be a boolean")
+        if type(self.metropolized_blocks) is not bool:
+            raise ValueError("metropolized_blocks must be a boolean")
+        if self.metropolized_blocks and (self.selection_ready or self.weighted_completion_quota
+                                        or self.last_rollout_filter or self.sibling_replay
+                                        or self.completion_fraction != 1.0 or self.rollout_race):
+            raise ValueError("metropolized_blocks requires complete pools without replay, early stopping or races")
         if self.selection_ready and (self.exploration_schedule not in {"single_pool", "two_stage"} or self.block_first
                                      or self.last_rollout_filter or self.weighted_completion_quota):
             raise ValueError("selection_ready requires single_pool or two_stage without block_first or other early-stop rules")

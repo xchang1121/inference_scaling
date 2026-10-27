@@ -139,7 +139,8 @@ def settings_for(args):
                                   exploration_schedule=getattr(args, "exploration_schedule", "fixed"),
                                   last_rollout_filter=getattr(args, "last_rollout_filter", False),
                                   weighted_completion_quota=getattr(args, "weighted_completion_quota", False),
-                                  selection_ready=getattr(args, "selection_ready", False))
+                                  selection_ready=getattr(args, "selection_ready", False),
+                                  metropolized_blocks=getattr(args, "metropolized_blocks", False))
     if (args.completion_fraction < 1 or args.rollout_race or getattr(args, "last_rollout_filter", False)
             or getattr(args, "weighted_completion_quota", False) or getattr(args, "selection_ready", False)):
         # Request-level counters can miss buffered work at cancellation.
@@ -377,6 +378,8 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=8192)
     parser.add_argument("--block-size", type=int, default=1024)
     parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage", "single_pool"), default="fixed")
+    parser.add_argument("--metropolized-blocks", action="store_true",
+                        help="select between distinct complete candidate blocks, then select a completion")
     parser.add_argument("--last-rollout-filter", action="store_true",
                         help="apply inverse-probability-corrected tail filtering to fixed or single_pool exploration")
     parser.add_argument("--weighted-completion-quota", action="store_true",
@@ -428,6 +431,9 @@ def main():
     if args.selection_ready and (args.exploration_schedule not in {"single_pool", "two_stage"} or args.execution != "stream"
                                  or args.last_rollout_filter or args.weighted_completion_quota):
         parser.error("selection-ready requires single_pool or two_stage streaming without other early-stop rules")
+    if args.metropolized_blocks and (args.selection_ready or args.weighted_completion_quota or args.last_rollout_filter
+                                    or args.sibling_replay or args.completion_fraction != 1.0 or args.rollout_race):
+        parser.error("metropolized-blocks requires complete pools without replay, early stopping or races")
     import torch
     if args.device == "npu":
         import torch_npu  # noqa: F401

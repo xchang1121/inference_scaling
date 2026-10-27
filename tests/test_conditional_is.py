@@ -151,8 +151,10 @@ def test_kept_completion_is_reused_without_rescoring(sibling_replay) -> None:
 
 def test_block_first_candidates_leave_every_step_unchanged() -> None:
     backend = TabularAutoregressiveBackend({(): [0.3, 0.3, 0.4], (0,): [0.5, 0.2, 0.3]}, fallback=[0.4, 0.4, 0.2])
-    runs = [run_conditional_is(backend, (), ConditionalISConfig(
-        block_first=block_first, candidate_count=3, rollout_count=2, block_size=2, total_length=7, reward_temperature=0.5),
-        pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(5), sampling=SamplingConfig(eos_token_id=2))
-        for block_first in (False, True)]
-    assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps
+    for metropolized_blocks in (False, True):
+        runs = [run_conditional_is(backend, (), ConditionalISConfig(
+            block_first=block_first, candidate_count=3, rollout_count=2, block_size=2, total_length=7,
+            reward_temperature=0.5, metropolized_blocks=metropolized_blocks),
+            pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(5), sampling=SamplingConfig(eos_token_id=2))
+            for block_first in (False, True)]
+        assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps
