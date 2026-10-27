@@ -105,7 +105,7 @@
 | `vllm.flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
-| `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。两种引擎都可用；需要 vLLM 0.26.x，关闭 vLLM 的异步调度，不能与 `token_penalty` 同用 |
+| `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
@@ -118,6 +118,11 @@
 | `rollout_scheduler.policy` | `fair_lpt` \| `fifo` | 默认 `fair_lpt`：优先等待过久的任务，否则先平衡各题活动请求数、再推进候选前缀，再按预计剩余长度从长到短准入；预测只使用长度上限与已完成请求的长度历史 |
 | `rollout_scheduler.aging_seconds` | 正数 | 默认 `2.0`；等待超过此时间后按等待先后准入，并允许突破长尾预填充保护；不突破并发上限或丢弃样本 |
 | `rollout_scheduler.tail_prefill_tokens` | 正整数 | 默认 `4096`；一轮已释放所有分支、没有待准入请求且仅余至多两条活动请求时，暂缓其他题超过此提示长度的新预填充，直到尾部完成或待办老化 |
+
+生成概率固定使用 `processed_logprobs`，包含采样温度、词表惩罚及 top-k/top-p 的处理。
+Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，保留原生生成路径和自定义 `worker_extension_cls`。
+该适配要求 V1 `AscendSampler` 且 `enable_reduce_sample=false`；不兼容的配置显式报错。
+提示词概率仍为原始模型概率，其他策略的精确重评分沿用 `exact_scoring` 设置。
 
 ### `ar.prompt`、`ar.output`、`ar.sampling`
 

@@ -1,23 +1,77 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import threading
 import types
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy
 import pytest
 
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.vllm_backend import (AsyncVLLMBackend, VLLMBackend, _checkpoint_parameter_count,
-                                                        _generated_logprobs, _load_vllm_sampling_api)
+                                                        _engine_worker, _generated_logprobs, _load_vllm_sampling_api)
 from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.types import Draft, GenerationRequest, LogWeightStop, ScoreRequest, TokenStatistic
 from inference_scaling.shared.rng import SeedStream
+
+
+def test_ascend_worker_mode_and_platform_selection(monkeypatch) -> None:
+    platform = SimpleNamespace(device_type="cuda")
+    monkeypatch.setitem(sys.modules, "vllm.platforms", SimpleNamespace(current_platform=platform))
+    arguments = {"logprobs_mode": "processed_logprobs", "worker_extension_cls": "custom.Extension"}
+    with _engine_worker(arguments, False) as selected:
+        assert selected is arguments
+    platform.device_type = "npu"
+    with _engine_worker(arguments, False) as selected:
+        assert selected == {**arguments, "worker_cls":
+            "inference_scaling.arllm.backends.vllm_ascend_worker.AscendLogprobWorker"}
+    with pytest.raises(ValueError, match="unsupported on Ascend"), _engine_worker(arguments, True):
+        pass
+    assert "worker_cls" not in arguments
+
+    class TopSampler:
+        logprobs_mode = "raw_logprobs"
+
+    class Sampler:
+        logprobs_mode = "raw_logprobs"
+
+        def __init__(self):
+            self.topk_topp_sampler = TopSampler()
+
+    sampler = Sampler()
+    runner = SimpleNamespace(sampler=sampler, ascend_config=SimpleNamespace(enable_reduce_sample=False))
+
+    class Worker:
+        model_config = SimpleNamespace(logprobs_mode="processed_logprobs")
+
+        def init_device(self):
+            self.model_runner = runner
+
+    monkeypatch.setitem(sys.modules, "vllm_ascend.sample.sampler",
+                        SimpleNamespace(AscendSampler=Sampler, AscendTopKTopPSampler=TopSampler))
+    monkeypatch.setitem(sys.modules, "vllm_ascend.worker.worker", SimpleNamespace(NPUWorker=Worker))
+    source = Path(__file__).resolve().parents[1] / "src/inference_scaling/arllm/backends/vllm_ascend_worker.py"
+    spec = importlib.util.spec_from_file_location("ascend_contract_test", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for _ in range(2):  # Also safe when upstream already implements the configured mode.
+        module.AscendLogprobWorker().init_device()
+        assert sampler.logprobs_mode == sampler.topk_topp_sampler.logprobs_mode == "processed_logprobs"
+        assert runner.sampler is sampler
+    runner.ascend_config.enable_reduce_sample = True
+    with pytest.raises(ValueError, match="enable_reduce_sample=false"):
+        module.AscendLogprobWorker().init_device()
+    runner.ascend_config.enable_reduce_sample = False
+    runner.sampler = None
+    with pytest.raises(RuntimeError, match="V1 AscendSampler"):
+        module.AscendLogprobWorker().init_device()
 
 
 @dataclass

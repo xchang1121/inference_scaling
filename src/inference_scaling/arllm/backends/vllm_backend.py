@@ -22,7 +22,7 @@ import importlib.metadata
 import inspect
 import json
 import itertools
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from copy import copy
 from functools import partial
 import os
@@ -53,6 +53,7 @@ _PROTECTED_ENGINE_KWARGS = frozenset({
 })
 
 _FUSED_WORKER = "inference_scaling.arllm.backends.vllm_fused_worker.FusedLogprobWorker"
+_ASCEND_WORKER = "inference_scaling.arllm.backends.vllm_ascend_worker.AscendLogprobWorker"
 # Per request, the fused worker's base log-probabilities and Self-Certainty of the generated tokens.
 FusedValues = tuple[tuple[float, ...], tuple[float, ...]]
 # Token-only generation without speculative decoding runs neither a vision tower nor a multi-token-prediction head.
@@ -60,14 +61,24 @@ _UNUSED_TENSOR = re.compile(r"(?:^|\.)(?:visual|vision_tower|vision_model|mtp)\.
 
 
 @contextmanager
-def _fused_engine(engine_arguments: dict[str, Any]):
-    """Engine arguments that install the fused worker, under the V1 model runner that it adapts.
+def _engine_worker(engine_arguments: dict[str, Any], fused: bool):
+    """Select the sampling adapter before workers and graphs are initialized.
 
-    Sampling stays synchronous inside the engine, so each value belongs to the
-    request step that sampled the token. The version check fails before a
-    model is allocated.
+    Ascend's V1 runner may ignore the requested log-probability mode. The
+    adapter sets both samplers without changing the native generation path.
+    The optional fused GPU worker requires synchronous internal sampling.
     """
 
+    from vllm.platforms import current_platform
+
+    if current_platform.device_type == "npu":
+        if fused:
+            raise ValueError("fused log-probabilities are unsupported on Ascend")
+        yield {**engine_arguments, "worker_cls": _ASCEND_WORKER}
+        return
+    if not fused:
+        yield engine_arguments
+        return
     installed = Version(importlib.metadata.version("vllm"))
     if not Version("0.26") <= installed < Version("0.27"):
         raise RuntimeError(f"fused log-probabilities require vLLM >=0.26,<0.27; found {installed}")
@@ -453,7 +464,7 @@ class VLLMBackend:
                 **options: Any) -> "VLLMBackend":
         from vllm import LLM
 
-        with _fused_engine(engine_arguments) if fused_logprobs else nullcontext(engine_arguments) as arguments:
+        with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             engine = LLM(**arguments)
         return cls(engine, tokenizer, fused_logprobs=fused_logprobs, **options)
 
@@ -986,7 +997,7 @@ class AsyncVLLMBackend(VLLMBackend):
         options["sampling_params_factory"] = partial(options["sampling_params_factory"],
                                                      output_kind=RequestOutputKind.FINAL_ONLY)
         # The engine core process starts, and reads the model-runner environment, while the backend is constructed.
-        with _fused_engine(engine_arguments) if fused_logprobs else nullcontext(engine_arguments) as arguments:
+        with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**arguments)),
                        fused_logprobs=fused_logprobs, streaming_output_kind=RequestOutputKind.DELTA, **options)
 
