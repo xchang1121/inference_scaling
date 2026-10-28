@@ -189,6 +189,8 @@ python -m pytest
 
 ## 历史结果
 
+[IS 加速研究总结](docs/reports/ASCEND_RESEARCH_SUMMARY.md)汇总2026年10月18日至28日的尝试、已合入收益、负收益方案及证据范围。
+
 [GSM8K 算法与准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、
 [Qwen3 / MATH-500 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)与
 [推理成本与执行效率](docs/reports/RTX3090_ROLLOUT_INFRA.md)三份报告保留统一入口之前实验得到的结论与图；
