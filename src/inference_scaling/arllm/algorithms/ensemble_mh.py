@@ -12,9 +12,10 @@ conditional base law whose average is p. Local cuts are restricted to prefixes
 where that condition has resolved; whole-trajectory refreshes stay stratified.
 The same pool-weight acceptance formula then preserves the output target.
 
-Every round generates its M proposals together and commits them sequentially.
-A round ends before the next starts, allowing statistics to be pruned to the
-current pool. Only scalar step summaries survive completed rounds.
+Batch execution generates each round together, then prunes its statistics.
+Pipeline execution overlaps iid base updates whose source states are known,
+while preserving the same logical decisions. Only scalar step summaries survive
+completed rounds; live requests retain their needed prefix statistics.
 """
 from __future__ import annotations
 
@@ -56,6 +57,7 @@ def run_ensemble_mh(
     initialization: str = "iid",
     stratified_updates: bool = False,
     nonself_updates: bool = False,
+    execution: str = "batch",
 ) -> EnsembleResult:
     """M complete base trajectories followed by ``iterations`` full-pool rounds.
 
@@ -77,6 +79,16 @@ def run_ensemble_mh(
         raise ValueError("stratified updates require stratified initialization and candidate_count > 1")
     if nonself_updates and stratified_updates:
         raise ValueError("nonself updates require the base suffix law, not persistent strata")
+    if execution not in {"batch", "pipeline"}:
+        raise ValueError("ensemble execution must be batch or pipeline")
+    if execution == "pipeline":
+        if initialization != "iid" or stratified_updates or nonself_updates:
+            raise ValueError("pipeline execution requires iid initialization and ordinary base suffix proposals")
+        if getattr(backend, 'supports_streaming_generation', False):
+            from inference_scaling.arllm.algorithms.ensemble_schedule import run_pipeline
+
+            return EnsembleResult(*run_pipeline(backend, prompt, config, seeds, candidate_count=candidate_count,
+                                                sampling=sampling, reward=reward))
     temperature = config.reward_temperature
     context: Any = getattr(backend, "stratified_initialization", None)
     if initialization == "stratified" and context is None:
@@ -231,7 +243,7 @@ def run_ensemble_mh(
     result = pool[selected]
     retain([result])
     return EnsembleResult(result.token_ids, result.reward, {
-        'method': 'ensemble_mh', 'ensemble_size': candidate_count, 'rounds': config.iterations,
+        'method': 'ensemble_mh', 'ensemble_size': candidate_count, 'rounds': config.iterations, 'execution': 'batch',
         'initialization': initialization, 'initialization_statistics': initialization_statistics,
         'stratified_updates': stratified_updates, 'interval_statistics': interval_statistics,
         'nonself_updates': nonself_updates,

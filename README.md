@@ -118,6 +118,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
 | 完整候选池后缀更新 | `ar.algorithms.mh.ensemble_size = 4`、`iterations = 1`、`suffix_schedule = "log_uniform"`；使用基础 proposal，关闭 `suffix_replay`。初始生成加一轮更新，共两阶段，最后按权重抽样 |
+| 候选池流水线 | 完整候选池设置 `ar.algorithms.mh.execution = "pipeline"`；完整奖励足以确定接受结果时，提前开始该槽位的下一轮。保持原请求和逻辑更新顺序，默认 `batch`；要求独立初始化和普通基础 proposal，详见[跨轮执行](docs/methods/ALGORITHMS.md#ensemble-pipeline) |
 | 分层候选池 | 上述完整候选池可设 `ar.algorithms.mh.initialization = "stratified"`，在 vLLM Ascend 上分层生成首轮候选；再设 `stratified_updates = true` 可在后续更新中保留各层。分别改善初始化覆盖、维持探索范围，默认均关闭；[初始化](docs/methods/ALGORITHMS.md#ensemble-initial-strata)、[持续分层](docs/methods/ALGORITHMS.md#ensemble-persistent-strata) |
 | 排除原轨迹的后缀更新 | 完整候选池可设 `ar.algorithms.mh.nonself_updates = true`，避免提议相同序列；按第一次分歧复用前缀，以接受率修正保持目标。默认关闭，可与首轮分层结合，与持续分层互斥；[算法与适用范围](docs/methods/ALGORITHMS.md#ensemble-nonself) |
 | 按候选块选择 | `ar.algorithms.is.metropolized_blocks = true`：合并相同 token 块，先在不同块之间作 Metropolized 选择，再选择组内补全。复用完整候选池与原奖励；默认关闭，需关闭提前选择、配额、超发及兄弟复用。[选择规则与边界](docs/methods/ALGORITHMS.md#is-block-selection) |

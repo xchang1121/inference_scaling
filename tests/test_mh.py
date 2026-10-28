@@ -101,6 +101,25 @@ def test_ensemble_updates_correct_pool_mass_and_actual_length_cuts(schedule):
     assert sum(len(records) for outputs in recorder._outputs.values() for records in outputs.values()) == 1
     assert not recorder._streams
 
+    # The asynchronous schedule must execute the same logical updates, including
+    # out-of-order completions and early decisions, without another reward pass.
+    from inference_scaling.arllm.backends.scheduling import SchedulerConfig
+    from tests.simulation import SimulatedBackend
+
+    observed.clear()
+    simulation = SimulatedBackend(backend, SchedulerConfig(max_in_flight=4),
+        token_seconds=lambda request, index, sample: .001 * (1 + request.seed % 4))
+    recorder = StatisticRecorder(simulation, statistic)
+    pipelined = run_ensemble_mh(recorder, (), _config(alpha=1., reward_temperature=2., total_length=12,
+        iterations=3, suffix_schedule=schedule), SeedStream(19), candidate_count=3, sampling=sampling,
+        reward=reward, execution='pipeline')
+    assert (pipelined.token_ids, pipelined.reward) == (result.token_ids, result.reward)
+    assert sum(map(len, observed)) == 12
+    assert [{key: value for key, value in step.items() if key != 'early_resolved'}
+            for step in pipelined.trace['steps']] == result.trace['steps']
+    assert not recorder._streams
+    assert not simulation.jobs and not simulation.queue.active and not simulation.queue.pending
+
 
 @pytest.mark.parametrize("nonself", [False, True])
 def test_complete_pool_constraints_correct_cuts_and_release_each_refresh(nonself):

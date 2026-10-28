@@ -149,6 +149,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh_power.suffix_schedule` | `uniform` \| `inverse_length` \| `multiscale` \| `log_uniform`；分别为均匀、长度倒数、偏向 2 的幂长度、按 2 的幂区间等量分配概率 |
 | `mh.block_size` / `steps_per_block` / `iterations` / `suffix_schedule` | 同上，目标为 $`p\exp\{r/\tau\}`$ |
 | `mh.ensemble_size` | 默认 `1`，保持单链 MH。大于 `1` 时保留该数量的完整序列，每轮更新全部候选的后缀，最后按权重抽样；要求显式设置 `iterations`、`proposal = "base"`、`suffix_replay = false`。`iterations` 是整池更新轮数，总生成阶段数为 `1 + iterations`，此时 `block_size` 与 `steps_per_block` 不分配更新预算。见[完整候选池](methods/ALGORITHMS.md#ensemble-mh) |
+| `mh.execution` | 默认 `batch`，逐轮批量生成。`pipeline` 在流式后端中重叠已确定源状态的跨轮请求，保持相同逻辑更新；要求 `ensemble_size > 1`、`initialization = "iid"`，关闭 `stratified_updates` 和 `nonself_updates`。非流式后端继续使用 `batch`，实际方式写入 trace；[调度条件与收益来源](methods/ALGORITHMS.md#ensemble-pipeline) |
 | `mh.initialization` | 默认 `iid`，首轮候选独立采样。`stratified` 将序列累计概率区间等分，每层独立生成一条，再随机排列槽位；后续 MH 不变。要求 `ensemble_size > 1` 和 vLLM Ascend 后端，其他后端显式拒绝；样本均值方差不增、候选覆盖概率不降，不保证每例输出误差或耗时更低。见[分层初始化](methods/ALGORITHMS.md#ensemble-initial-strata) |
 | `mh.stratified_updates` | 默认 `false`。要求 `initialization = "stratified"` 和 `ensemble_size > 1`；每层固定一个槽位，后续从同层整条重生成，或从区间约束已解除的前缀开始局部更新，使用修正后的切点概率。最终输出的平稳目标不变，有限预算误差与耗时可能增减。见[持续分层](methods/ALGORITHMS.md#ensemble-persistent-strata) |
 | `mh.nonself_updates` | 默认 `false`。要求 `ensemble_size > 1`、`stratified_updates = false` 及 vLLM Ascend 采样适配；后缀 proposal 排除原序列，直接抽取第一次分歧，使用正反条件概率修正接受率。可与首轮分层结合，保持同一平稳目标；[算法及有限预算边界](methods/ALGORITHMS.md#ensemble-nonself) |

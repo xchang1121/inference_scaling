@@ -112,7 +112,7 @@ AR_RUNS = [
     ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
     ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
     ("mh", "self_certainty", {"sampling_scope": "full"}), ("mh", "consilience", {}),
-    ("mh", "consilience", {"ensemble_size": 3, "iterations": 2, "suffix_schedule": "log_uniform"}),
+    ("mh", "consilience", {"ensemble_size": 3, "iterations": 2, "suffix_schedule": "log_uniform", "execution": "pipeline"}),
     ("is", "verifier", {"source": "vote"}), ("is", "verifier", {}),
     ("is", "self_certainty", {"block_first": True}),
     ("is", "consilience", {"sampling_scope": "full"}),
@@ -126,7 +126,7 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         ar["output"]["sampling_scope"] = options["sampling_scope"]
     if "proposal" in options:
         ar["algorithms"]["mh"]["proposal"] = options["proposal"]
-    for key in ("ensemble_size", "iterations", "suffix_schedule"):
+    for key in ("ensemble_size", "iterations", "suffix_schedule", "execution"):
         if key in options:
             ar["algorithms"]["mh"][key] = options[key]
     if "block_first" in options:
@@ -145,6 +145,8 @@ def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_p
         assert record["output"]["content"] == "#### 7" and record["correct"] and record["answer"] == "7"
         assert record["cost"]["forward_token_slots"] > 0
         assert (record["reward"] is None) == (reward is None)
+        if options.get("execution") == "pipeline":
+            assert record["trace"]["execution"] == "batch"  # This fixture has no streaming capability.
     assert summary["accuracy"] == 1.0 and summary["records"] == 2
     execution = summary["execution_totals"]
     assert execution["cost_total"]["forward_token_slots"] == summary["cost_total"]["forward_token_slots"]

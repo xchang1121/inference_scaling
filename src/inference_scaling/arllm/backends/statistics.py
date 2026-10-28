@@ -59,6 +59,31 @@ class StatisticRecorder:
         if records:
             self._outputs[len(prompt)] = {prompt: records}
 
+    def compact_generation_statistics(self, prompt: TokenSequence, *completed: TokenSequence) -> None:
+        """Prune completed history while keeping all live request prefixes.
+
+        A submitted request needs its prefix even before its first event. Active
+        deltas remain in the session; this only replaces completed output records.
+        Rebuilding is useful only when fewer statistic positions would be stored.
+        """
+        paths = dict.fromkeys(completed)
+        for session in self._streams.values():
+            for prefix, _, _ in session.values():
+                if prefix[:len(prompt)] != prompt:
+                    raise ValueError("retained requests must share the declared prompt")
+                paths.setdefault(prefix[len(prompt):], None)
+        retained: list[TokenSequence] = []
+        for tokens in sorted(paths, key=len, reverse=True):
+            if not any(existing[:len(tokens)] == tokens for existing in retained):
+                retained.append(tokens)
+        stored = sum(len(tokens) for outputs in self._outputs.values()
+                     for records in outputs.values() for tokens, _ in records)
+        if sum(map(len, retained)) >= stored:
+            return
+        records = [(np.asarray(tokens), self._recorded(prompt + tokens, len(prompt))) for tokens in retained]
+        records = [(tokens, values) for tokens, values in records if len(values) and not np.isnan(values).all()]
+        self._outputs = {len(prompt): {prompt: records}} if records else {}
+
     def _recorded(self, sequence: TokenSequence, start: int) -> np.ndarray:
         """Statistics of ``sequence[start:]`` from outputs generated inside it; NaN where there is none."""
 
@@ -104,6 +129,11 @@ class StatisticSession:
         recorder._streams[self] = {}
 
     def submit(self, requests, *, phase="rollout", checkpoint=None) -> None:
+        records = self.recorder._streams[self]
+        for request in requests:
+            if request.request_id in records:
+                raise ValueError("duplicate pending request")
+            records[request.request_id] = (request.prefix, [], [])
         self.inner.submit([replace(request, statistic=self.recorder.statistic) for request in requests],
                           phase=phase, checkpoint=checkpoint)
 

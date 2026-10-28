@@ -143,6 +143,10 @@ class ARFamily:
                 raise ValueError("stratified updates require mh.ensemble_size > 1 and initialization=stratified")
             if self.config.get("nonself_updates", False) and (size <= 1 or self.config.get("stratified_updates", False)):
                 raise ValueError("nonself updates require mh.ensemble_size > 1 and stratified_updates=false")
+            if self.config.get("execution", "batch") == "pipeline" and (
+                    size <= 1 or self.config.get("initialization", "iid") != "iid"
+                    or self.config.get("stratified_updates", False) or self.config.get("nonself_updates", False)):
+                raise ValueError("pipeline execution requires ensemble_size > 1, iid initialization and ordinary base proposals")
         engine = self.ar["engine"]
         for option in ("suffix_replay", "early_rejection"):
             if engine["backend"] == "vllm" and self.config.get(option):
@@ -399,7 +403,8 @@ class ARFamily:
                 SeedStream(task.seed), candidate_count=config["ensemble_size"], sampling=task.sampling, reward=reward.batch,
                 initialization=config.get("initialization", "iid"),
                 stratified_updates=config.get("stratified_updates", False),
-                nonself_updates=config.get("nonself_updates", False))
+                nonself_updates=config.get("nonself_updates", False),
+                execution=config.get("execution", "batch"))
             return ensemble.token_ids, ensemble.trace, ensemble.reward
         history = config["frozen_history"]
         frozen = config["proposal"] == "frozen_history"
