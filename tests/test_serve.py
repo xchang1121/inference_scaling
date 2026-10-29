@@ -36,13 +36,17 @@ def test_openai_requests_become_template_messages() -> None:
         {"role": "assistant", "content": None, "reasoning_content": "look first",
          "tool_calls": [{"id": "c", "type": "function", "function": {"name": "edit", "arguments": "{\"line\": 7}"}}]},
         {"role": "tool", "tool_call_id": "c", "content": "done"}],
-        "tools": TOOLS, "reasoning_effort": "high", "max_tokens": 99, "stream": True})
+        "tools": TOOLS, "reasoning_effort": "high", "max_tokens": 99, "stream": True, "seed": 17})
     assert conversation.messages == [
         {"role": "system", "content": "Be brief.\n\nCode."}, {"role": "user", "content": "fix it"},
         {"role": "assistant", "content": "", "reasoning_content": "look first",
          "tool_calls": [{"function": {"name": "edit", "arguments": {"line": 7}}}]},
         {"role": "tool", "content": "done"}]
     assert (conversation.tools, conversation.effort, conversation.max_tokens, conversation.stream) == (TOOLS, "high", 99, True)
+    assert conversation.seed == 17
+    for invalid_seed in (-1, 2**63, True, "17", 1.5):
+        with pytest.raises(ProtocolError, match="seed"):
+            openai_conversation({"messages": [], "seed": invalid_seed})
     assert openai_conversation({"messages": [], "tools": TOOLS, "tool_choice": "none"}).tools is None
     with pytest.raises(ProtocolError, match="text"):
         openai_conversation({"messages": [{"role": "user", "content": [{"type": "image_url"}]}]})
@@ -56,7 +60,7 @@ def test_anthropic_requests_become_template_messages() -> None:
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "done"},
                                      {"type": "text", "text": "thanks"}]}],
         "tools": [{"name": "edit", "description": "Edit.", "input_schema": {"type": "object"}}],
-        "output_config": {"effort": "low"}})
+        "output_config": {"effort": "low"}, "seed": 17})
     assert conversation.messages == [
         {"role": "system", "content": "Code."}, {"role": "user", "content": "fix it"},
         {"role": "assistant", "content": "", "reasoning_content": "look",
@@ -65,6 +69,7 @@ def test_anthropic_requests_become_template_messages() -> None:
     assert conversation.tools == [{"type": "function", "function": {
         "name": "edit", "description": "Edit.", "parameters": {"type": "object"}}}]
     assert (conversation.effort, conversation.max_tokens) == ("low", 50)
+    assert conversation.seed == 17
 
 
 class _ChatTokenizer(ThinkingTokenizer):
@@ -107,6 +112,15 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     assert (reply.thinking, reply.content, reply.finish, reply.tool_calls) == ("#### 7", "#### 7", "stop", ())
     assert reply.scaling["effort"] == "low" and reply.scaling["steps"] >= 1 and reply.scaling["sampling_scope"] == "thinking"
     assert reply.scaling["stopping_reason"] == "stop"
+    seeded = replace(prepared, seed=17)
+    offset = len(backend.batches)
+    first = reasoner.generate(seeded)
+    first_requests = backend.batches[offset:]
+    offset = len(backend.batches)
+    second = reasoner.generate(seeded, on_thinking=lambda _text: None, on_content=lambda _text: None)
+    assert first.scaling["sampling_seed"] == second.scaling["sampling_seed"] == 17
+    assert backend.batches[offset:] == first_requests
+    assert (first.thinking, first.content) == (second.thinking, second.content)
     with pytest.raises(ProtocolError, match="effort"):
         reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "huge"}))
     for alias, effort, limit in [("none", None, 0), ("minimal", "low", 4096), ("low", "low", 4096),
@@ -301,7 +315,7 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
         def prepare(self, conversation):
             return SimpleNamespace(prompt=(1,))
 
-        def generate(self, prepared):
+        def generate(self, prepared, *, on_thinking=None, on_content=None):
             with self.lock:
                 self.calls += 1
                 index = self.calls
@@ -309,17 +323,22 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
                 self.maximum = max(self.maximum, self.active)
             try:
                 self.started.set()
+                if on_thinking is not None:
+                    on_thinking("ready")
                 assert self.release.wait(3)
                 if index == 1:
                     raise RuntimeError("detached request failed")
-                return Reply("", "ok", (), "stop", 1, 1, {})
+                return Reply("ready" if on_thinking is not None else "", "ok", (), "stop", 1, 1, {})
             finally:
                 with self.lock:
                     self.active -= 1
 
     class Request:
+        def __init__(self, stream=False):
+            self.stream = stream
+
         async def json(self):
-            return {"messages": [{"role": "user", "content": "q"}]}
+            return {"messages": [{"role": "user", "content": "q"}], "stream": self.stream}
 
     async def check():
         reasoner = BlockingReasoner()
@@ -342,6 +361,16 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
                 reasoner.release.set()
                 await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
             assert second is not None and second.result()
-        assert reasoner.maximum == 1 and reasoner.active == 0 and reasoner.calls == 2 and reasoner.closed
+            reasoner.release.clear()
+            response = await endpoint(Request(stream=True))
+            try:
+                await anext(response.body_iterator)  # role event
+                delta = await asyncio.wait_for(anext(response.body_iterator), timeout=1)
+                assert '"reasoning_content": "ready"' in delta
+                assert not reasoner.release.is_set()  # before completion or the 10-second keepalive
+            finally:
+                reasoner.release.set()
+                await response.body_iterator.aclose()
+        assert reasoner.maximum == 1 and reasoner.active == 0 and reasoner.calls == 3 and reasoner.closed
 
     asyncio.run(check())

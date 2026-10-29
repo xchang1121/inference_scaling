@@ -110,7 +110,7 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
             yield start
             while True:
                 waiters: set[asyncio.Future[Any]] = {task, pending}
-                ready, _ = await asyncio.wait(waiters, timeout=keepalive)
+                ready, _ = await asyncio.wait(waiters, timeout=keepalive, return_when=asyncio.FIRST_COMPLETED)
                 if pending in ready:
                     for event in events(pending.result()):
                         yield event

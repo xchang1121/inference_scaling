@@ -31,6 +31,7 @@ class Conversation:
     stream: bool
     thinking_budget: int | None = None
     enable_thinking: bool | None = None
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_tokens is not None and (type(self.max_tokens) is not int or self.max_tokens <= 0):
@@ -43,6 +44,8 @@ class Conversation:
             raise ProtocolError("enable_thinking must be boolean")
         if self.effort is not None and self.thinking_budget is not None:
             raise ProtocolError("reasoning_effort and thinking_budget cannot be set together")
+        if self.seed is not None and (type(self.seed) is not int or not 0 <= self.seed < 2**63):
+            raise ProtocolError("seed must be an integer in [0, 2**63)")
 
 
 @dataclass(frozen=True)
@@ -127,7 +130,7 @@ def openai_conversation(body: Mapping[str, Any]) -> Conversation:
         raise ProtocolError("max_tokens and max_completion_tokens must agree when both are supplied")
     return Conversation(_with_system(system, messages), tools if tools and choice != "none" else None,
                         body.get("reasoning_effort"), body.get("max_tokens") if maximum is None else maximum,
-                        bool(body.get("stream")), body.get("thinking_budget"), body.get("enable_thinking"))
+                        bool(body.get("stream")), body.get("thinking_budget"), body.get("enable_thinking"), body.get("seed"))
 
 
 def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
@@ -179,7 +182,8 @@ def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
     return Conversation(_with_system([_text(system)] if system else [], messages),
                         tools if tools and choice.get("type") != "none" else None, effort, body.get("max_tokens"),
                         bool(body.get("stream")), thinking_options.get("budget_tokens"),
-                        False if thinking_type == "disabled" else True if thinking_type == "enabled" else None)
+                        False if thinking_type == "disabled" else True if thinking_type == "enabled" else None,
+                        body.get("seed"))
 
 
 _TOOL_CALL = re.compile(r"<tool_call>\s*<function=([^>\n]+)>(.*?)</function>\s*</tool_call>", re.S)

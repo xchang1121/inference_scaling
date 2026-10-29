@@ -42,6 +42,7 @@ class Prepared:
     maximum: int
     tools: list[dict[str, Any]] | None
     ar: Mapping[str, Any]
+    seed: int | None = None
 
 
 class _TextPublisher:
@@ -146,12 +147,14 @@ class Reasoner:
             budgeted_backend(self.raw, prompt, thinking_format_from_backend(self.raw, output_settings_from_config(ar)), budget)
         except ValueError as error:
             raise ProtocolError(str(error)) from error
-        return Prepared(prompt, thinking["reasoning_effort"], budget, maximum, conversation.tools, ar)
+        return Prepared(prompt, thinking["reasoning_effort"], budget, maximum, conversation.tools, ar, conversation.seed)
 
     def generate(self, prepared: Prepared, *, on_thinking: Callable[[str], None] | None = None,
                  on_content: Callable[[str], None] | None = None) -> Reply:
-        with self._seed_lock:
-            seeds = SeedStream(self.seed).derive("request", next(self._seeds))
+        seeds = prepared.seed
+        if seeds is None:
+            with self._seed_lock:
+                seeds = SeedStream(self.seed).derive("request", next(self._seeds))
         prompt, maximum, raw, ar = prepared.prompt, prepared.maximum, self.raw, prepared.ar
         sampling = ar["sampling"]
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),

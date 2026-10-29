@@ -135,6 +135,8 @@ python scripts/benchmark_is_service.py --urls http://127.0.0.1:8000 \
 
 这是显式 4096 思考预算、8192 总长的短负载示例；省略 `--effort` 和 `--max-tokens` 则继承服务配置。
 对照实验固定题目、种子、M/K/B、奖励和长度，仅改变执行配置；跨卡数浮点误差可能改变轨迹，需要同时比较准确率和生成量。
+客户端按 `run.seed`、题目 ID 和重复编号派生请求的 `seed`，预热使用独立种子，保持不同并发度和副本数下的种子对应。
+服务返回实际 `sampling_seed`，不一致时测量标记失败。固定种子不保证不同批处理顺序、卡数下的浮点结果逐字相同。
 `--urls` 可列出多个独立副本，`--cards` 填总卡数；两个 TP=2 副本的吞吐与单个 TP=4 实例分别报告。
 `--deadline` 是客户端截止时间，超时后服务中的请求仍会继续，必须等待其结束或停止所属实验服务再启动下一组。
 
@@ -158,6 +160,7 @@ python scripts/benchmark_is_service.py --urls http://127.0.0.1:8000 \
 - 工具选择支持 OpenAI 的 `auto`、`none` 和 Anthropic 的 `{type: auto}`、`{type: none}`。
   强制调用（`required`、`any`、指定工具）及额外工具选择选项返回 HTTP 400。
 - 请求的 `temperature`、`top_p` 不生效：IS 在完整分布上采样，策略取自 `ar.sampling`。
+- `seed` 可指定请求的非负 63 位整数种子（Anthropic 接口为本服务扩展）；省略时继续从 `run.seed` 和请求计数派生。
 - 只支持文本内容，`n` 只能为 1。
 - `thinking.budget_tokens` 设置独立思考上限；`max_tokens` 限制思考与最终内容的合计长度。预算与 effort 同时指定时返回 HTTP 400。
 - 未写完的思考没有答案，作为思考返回，`finish_reason` 为 `length`（Anthropic 为 `max_tokens`）。

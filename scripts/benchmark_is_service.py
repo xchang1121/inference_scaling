@@ -19,6 +19,7 @@ import numpy as np
 from inference_scaling.app.settings import load_settings
 from inference_scaling.datasets.gsm8k import GSM8K
 from inference_scaling.datasets.math500 import MATH500
+from inference_scaling.shared.rng import SeedStream
 
 
 def read_stream(lines, started, deadline, clock=time.perf_counter):
@@ -142,9 +143,11 @@ def main():
     problems = dataset.problems
     if not problems:
         parser.error("empty workload")
-    def payload(problem):
+    def payload(problem, repeat=0, *, warmup=False):
         body = {"model": settings["serve"]["server"]["served_model_name"],
-                "messages": [{"role": "user", "content": dataset.prompt(problem)}]}
+                "messages": [{"role": "user", "content": dataset.prompt(problem)}],
+                "seed": SeedStream(settings["run"]["seed"]).derive(
+                    "service-benchmark", "warmup" if warmup else "measurement", problem.id, repeat)}
         for key, value in (("reasoning_effort", args.effort), ("thinking_budget", args.thinking_budget),
                            ("max_tokens", args.max_tokens)):
             if value is not None:
@@ -161,8 +164,8 @@ def main():
                    "dataset": dataset.describe(), "request": payload(problems[0]),
                    "accounting": "client wall time; nonempty deltas; all selected and unselected generation from request-local counters"})
             for url in args.urls:
-                for _ in range(args.warmup):
-                    row = request_one(url, payload(problems[0]), args.deadline)
+                for repeat in range(args.warmup):
+                    row = request_one(url, payload(problems[0], repeat, warmup=True), args.deadline)
                     if row["status"] != "complete":
                         write({"kind": "warmup_failure", **row})
                         raise RuntimeError(row["error"])
@@ -170,12 +173,15 @@ def main():
             rows = []
             started = time.perf_counter()
             with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-                futures = {pool.submit(request_one, args.urls[index % len(args.urls)], payload(problem), args.deadline):
+                futures = {pool.submit(request_one, args.urls[index % len(args.urls)], payload(problem, repeat), args.deadline):
                            (index, repeat, problem) for index, (repeat, problem) in enumerate(jobs)}
                 for future in as_completed(futures):
                     index, repeat, problem = futures[future]
                     row = {"kind": "measurement", "index": index, "repeat": repeat, "problem_id": problem.id,
-                           "replica": index % len(args.urls), **future.result()}
+                           "replica": index % len(args.urls), "requested_seed": payload(problem, repeat)["seed"],
+                           **future.result()}
+                    if row["status"] == "complete" and row["scaling"].get("sampling_seed") != row["requested_seed"]:
+                        row.update(status="failed", error="service did not confirm the requested sampling seed")
                     rows.append(row)
                     write(row)
                     print(json.dumps({key: row.get(key) for key in
