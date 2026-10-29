@@ -41,7 +41,6 @@ SCHEMA: dict[str, Any] = {
             "source": {"url": str, "sha256": str, "rows": int},
             "selection": {"count": _NULLABLE_INT, "seed": int},
             "prompt_template": str,
-            "max_new_tokens": int,
         },
         "math500": {
             "path": str,
@@ -50,7 +49,6 @@ SCHEMA: dict[str, Any] = {
             "selection": {"seed": int, "minimum_level": int, "excluded_ids": [str], "skip": int, "count": int},
             "prompt_template": str,
             "judge_timeout_seconds": float,
-            "max_new_tokens": int,
         },
     },
     "rewards": {
@@ -68,6 +66,7 @@ SCHEMA: dict[str, Any] = {
         },
     },
     "ar": {
+        "max_new_tokens": int,
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
@@ -104,7 +103,6 @@ SCHEMA: dict[str, Any] = {
                 "tensor_parallel_size": int,
                 "data_parallel_size": int,
                 "gpu_memory_utilization": float,
-                "max_model_len": _NULLABLE_INT,
                 "max_num_seqs": _NULLABLE_INT,
                 "max_num_batched_tokens": _NULLABLE_INT,
                 "quantization": _NULLABLE_STR,
@@ -185,6 +183,12 @@ SCHEMA: dict[str, Any] = {
                 "metropolized_blocks": bool,
             },
         },
+    },
+    "serve": {
+        "server": {"host": str, "port": int, "served_model_name": str, "max_concurrent_requests": int,
+                   "keepalive_seconds": float},
+        "max_seconds": (float, None),
+        "effort_aliases": dict,
     },
     "dllm": {
         "model": {
@@ -290,8 +294,33 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
     if not path.is_file():
         raise SettingsError(f"{path} does not exist; run from the repository root")
     settings = json.loads(path.read_text(encoding="utf-8"))
-    check(settings, SCHEMA, "settings")
+    validate_settings(settings)
     return settings
 
 
-__all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings"]
+def validate_settings(settings: dict[str, Any]) -> None:
+    """Reject conflicting limits before any model is loaded, including benchmark overrides."""
+
+    check(settings, SCHEMA, "settings")
+    for family in ("ar", "dllm"):
+        if settings[family]["max_new_tokens"] <= 0:
+            raise SettingsError(f"{family}.max_new_tokens must be positive")
+    ar = settings["ar"]
+    context = ar["engine"]["context_window"]
+    if context is not None and context <= 0:
+        raise SettingsError("ar.engine.context_window must be positive or null")
+    if context is not None and ar["max_new_tokens"] >= context:
+        raise SettingsError("ar.engine.context_window must exceed ar.max_new_tokens to leave room for the prompt")
+    if "max_model_len" in ar["engine"]["vllm"]["engine_kwargs"]:
+        raise SettingsError("set ar.engine.context_window, not vllm.engine_kwargs.max_model_len")
+    serve = settings["serve"]
+    if serve["max_seconds"] is not None and serve["max_seconds"] <= 0:
+        raise SettingsError("serve.max_seconds must be positive or null")
+    if serve["server"]["max_concurrent_requests"] <= 0 or serve["server"]["keepalive_seconds"] <= 0:
+        raise SettingsError("serve.server needs positive concurrency and keepalive")
+    if any(not isinstance(name, str) or not name or not isinstance(target, str) or not target
+           for name, target in serve["effort_aliases"].items()):
+        raise SettingsError("serve.effort_aliases must map nonempty names to template reasoning efforts")
+
+
+__all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]

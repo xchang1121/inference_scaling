@@ -13,7 +13,8 @@ def _family(tmp_path, model_path, **model):
     settings = copy.deepcopy(load_settings())
     settings["run"]["hash_cache_dir"] = str(tmp_path / "hashes")
     settings["ar"]["model"].update({"path": str(model_path), "revision": None, "weight_sha256": None, **model})
-    return ARFamily(settings, Choices("sample", "ar", None, "gsm8k"), dataset=type("D", (), {"settings": {"max_new_tokens": 8}})())
+    settings["ar"]["max_new_tokens"] = 8
+    return ARFamily(settings, Choices("sample", "ar", None, "gsm8k"), dataset=None)
 
 
 def test_sharded_weights_are_hashed_and_a_pin_is_enforced(tmp_path):

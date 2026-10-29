@@ -134,8 +134,8 @@ python -m inference_scaling --algorithm is --model ar --reward consilience --dat
 字段在加载模型前报错。每个（题目，重复）按以下顺序执行：
 
 1. **提示与长度**：数据集按 `datasets.<name>.selection` 固定抽题，并用 `prompt_template` 生成提示；AR 再套用
-   chat template（`ar.prompt`）。生成上限取 `datasets.<name>.max_new_tokens` 与模型剩余上下文（含可选的
-   `ar.engine.context_window`）的较小值；dLLM 先与 `dllm.max_new_tokens` 取较小值，再取不超过它的
+   chat template（`ar.prompt`）。生成上限取 `ar.max_new_tokens` 与模型剩余上下文（含统一的
+   `ar.engine.context_window`）的较小值；dLLM 使用 `dllm.max_new_tokens`，取不超过它的
    `dllm.sampling.block_length` 最大整数倍。
 2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`mh_power` 与 `is` 只对思考段采样，
    最终内容随后由基础模型生成。`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
@@ -242,7 +242,7 @@ flowchart LR
 
 | 符号 | 设置键 | 作用 | 增大后的主要影响 |
 | --- | --- | --- | --- |
-| $`L`$ | `datasets.<name>.max_new_tokens` | 最大生成长度，受模型上下文限制 | 增加生成、评分和 KV 成本 |
+| $`L`$ | `ar.max_new_tokens` / `dllm.max_new_tokens` | 各模型族的最大生成长度，AR 受模型上下文限制 | 增加生成、评分和 KV 成本 |
 | $`B`$ | `ar.algorithms.mh_power.block_size`、`ar.algorithms.mh.block_size`、`ar.algorithms.is.block_size`；dLLM `beam`、`mh_power`、`is` 的 `decision_block_size` | 每个阶段提交的生成块长度 | 选择步骤减少，每次候选或后缀更长 |
 | $`n`$ | `ar.algorithms.mh_power.steps_per_block` / `iterations`（`mh` 同名）；`dllm.algorithms.mh_power.updates_per_stage`、`dllm.algorithms.mh.updates` | MH 更新数 | 减小有限链误差，增加 proposal 与奖励调用 |
 | $`\alpha`$ | `ar.algorithms.mh_power.alpha`、`dllm.algorithms.mh_power.alpha` | 幂目标指数 | 更偏向高基础概率序列，可能降低接受率 |
@@ -1820,9 +1820,11 @@ Transformers 的注意力实现、设备映射与模型加载附加参数位于 
 选项位于 `ar.engine.vllm`。模型须满足所选后端的因果生成及 KV 缓存接口。概率校正所需的 tokenizer 词表、概率
 支持集与采样策略检查仍然生效。
 
-最大生成长度由 `datasets.<name>.max_new_tokens` 给出，思考与最终内容共享该上限；EOS 可提前结束。
-`generation_budget` 根据提示长度、模型的上下文限制和可选的 `ar.engine.context_window` 计算实际上限，
-记录中的 `trace.generation_budget` 保存请求与实际上限。
+AR 最大生成长度由 `ar.max_new_tokens` 给出，思考与最终内容共享该上限；EOS 可提前结束。
+`ar.engine.context_window` 同时用于 vLLM 的 `max_model_len` 和请求长度检查，避免两处配置不同。
+`generation_budget` 根据提示长度、模型上下文和该配置计算实际上限，评测的 `trace.generation_budget`
+与服务的 `scaling.generation_budget` 保存请求与实际上限。服务默认继承同一推理强度与生成上限，
+仅客户端显式传入的长度参数可以进一步调低上限。
 
 长序列使用 `causal_scoring.py` 分块预填充与评分。设分块长度为 $`C`$，每块通过 KV 缓存读取全部先前上下文，
 只保留当前块所需的词表 logits。单条长序列的 logits 存储从 $`O(T|\mathcal V|)`$ 降至

@@ -174,7 +174,7 @@ P95 长尾时延需要在部署机器测量。算法仍等待全部规定的完�
 | 机制 | 命令 | 设置改动 |
 | --- | --- | --- |
 | 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`，加 `--reward verifier`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"` |
-| 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`datasets.gsm8k.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
+| 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`ar.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
 | 冻结历史 proposal | `--algorithm mh --reward verifier` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
 | 训练成本 | `python -m training` | `stages = ["grpo"]`；训练成本写入 `grpo.output` 下的 `training_cost.json` |
 

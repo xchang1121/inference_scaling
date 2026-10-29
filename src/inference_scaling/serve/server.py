@@ -131,10 +131,9 @@ def main() -> None:
 
     from inference_scaling.app.settings import load_settings
     from inference_scaling.serve.reasoner import Reasoner
-    from inference_scaling.serve.settings import load_serve_settings
-
-    serve = load_serve_settings()
-    reasoner = Reasoner(load_settings(), serve)
+    settings = load_settings()
+    serve = settings["serve"]
+    reasoner = Reasoner(settings)
     reasoner.load()
     try:
         uvicorn.run(create_app(reasoner, serve), host=serve["server"]["host"], port=int(serve["server"]["port"]))

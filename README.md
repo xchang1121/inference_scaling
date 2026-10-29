@@ -1,7 +1,7 @@
 # inference_scaling
 
-本仓库实现自回归语言模型（AR-LLM）与掩码扩散语言模型（dLLM）的推理扩展与训练对照。推理只有一个入口：
-命令行选择算法、模型族、奖励和数据集，其余参数全部写在 [`settings/inference.json`](settings/inference.json)。
+本仓库实现自回归语言模型（AR-LLM）与掩码扩散语言模型（dLLM）的推理扩展与训练对照。
+批量评测与 HTTP 服务共用 [`settings/inference.json`](settings/inference.json)；评测命令行选择算法、模型族、奖励和数据集。
 训练（GRPO、VRPO、数据与权重下载）是独立的一套入口，读取 [`settings/training.json`](settings/training.json)。
 
 ## 目标分布
@@ -50,6 +50,21 @@ python -m inference_scaling --algorithm is --model dllm --output results
 报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认的 AR 设置在单张 H100 级 GPU 上用 vLLM 以 BF16 运行
 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) 的思考模式，各项取值的依据见
 [SETTINGS.md](docs/SETTINGS.md#ar-defaults)。
+
+### 长度与采样配置
+
+| 配置位置 | 含义 | 当前值 |
+| --- | --- | --- |
+| `ar.max_new_tokens` | Base、IS、MH 及服务共用的单条输出上限；思考与最终内容共享 | 131072 |
+| `ar.engine.context_window` | 输入与输出合计的上下文上限；同时传给 vLLM 的 `max_model_len` | 133120 |
+| `ar.prompt.chat_template_kwargs.reasoning_effort` | 评测与服务默认使用的模板推理强度 | `xhigh` |
+| `ar.sampling` / `ar.model.token_penalty` | 共用采样策略与词表惩罚 | 温度 1、完整词表；8 词、强度 1 |
+| `dllm.max_new_tokens` | 扩散模型的输出画布上限，按扩散块长向下取整 | 512 |
+
+数据集只配置题目、提示与判定，不设置生成长度。模型实际上下文不足时，剩余空间会进一步限制输出；
+评测的 `trace.generation_budget` 和服务的 `scaling.generation_budget` 记录请求上限、生效上限及限制原因。
+服务请求的 `max_tokens` / `max_completion_tokens` 可显式调低单条上限，`reasoning_effort` 只改变模板强度。
+上述上限均不代表 IS 全部候选的总 token 预算。性能测量脚本也继承同一配置，显式参数和生效配置随结果保存。
 
 ## 算法
 

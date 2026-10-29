@@ -9,7 +9,7 @@ import pytest
 
 from inference_scaling.app.cli import parse
 from inference_scaling.app.run import Choices, run
-from inference_scaling.app.settings import SCHEMA, SettingsError, check, load_settings
+from inference_scaling.app.settings import SCHEMA, SettingsError, check, load_settings, validate_settings
 from tests.tabular import TabularAutoregressiveBackend
 
 
@@ -41,6 +41,18 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
     broken["ar"]["algorithms"]["mh"]["proposal"] = "sometimes"
     with pytest.raises(SettingsError, match="must be one of"):
         check(broken, SCHEMA, "settings")
+    broken = copy.deepcopy(settings)
+    broken["datasets"]["gsm8k"]["max_new_tokens"] = 32768
+    with pytest.raises(SettingsError, match="unknown keys"):
+        validate_settings(broken)
+    broken = copy.deepcopy(settings)
+    broken["ar"]["engine"]["context_window"] = broken["ar"]["max_new_tokens"]
+    with pytest.raises(SettingsError, match="leave room for the prompt"):
+        validate_settings(broken)
+    broken = copy.deepcopy(settings)
+    broken["ar"]["engine"]["vllm"]["engine_kwargs"]["max_model_len"] = 32768
+    with pytest.raises(SettingsError, match="set ar.engine.context_window"):
+        validate_settings(broken)
 
 
 class ThinkingTokenizer:

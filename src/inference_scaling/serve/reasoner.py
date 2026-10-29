@@ -1,8 +1,8 @@
 """Think-only conditional IS for one request, then one ordinary answer from the chosen thought.
 
 The model, engine, base sampling policy, fixed IS parameters and the
-Consilience reward are those of ``settings/inference.json``; the request's
-effort profile sets the template's reasoning effort and output limit. An optional
+Consilience reward and output limit are those of ``settings/inference.json``.
+An explicit request can change the template's reasoning effort or lower the output limit. An optional
 wall-clock limit is checked only between complete IS steps; the default uses
 logical stopping so execution speed cannot change the number of IS moves.
 """
@@ -25,6 +25,7 @@ from inference_scaling.arllm.output import output_settings_from_config, thinking
 from inference_scaling.arllm.scope import SamplingScope
 from inference_scaling.serve.protocol import Conversation, ProtocolError, Reply, parse_tool_calls
 from inference_scaling.shared.model.generation import generation_budget
+from inference_scaling.shared.model.prompting import render_prompt
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
@@ -32,31 +33,34 @@ from inference_scaling.shared.types import TokenSequence
 @dataclass(frozen=True)
 class Prepared:
     prompt: TokenSequence
-    effort: str
-    profile: Mapping[str, Any]
+    effort: str | None
+    budget: Mapping[str, Any]
     maximum: int
     tools: list[dict[str, Any]] | None
 
 
 class Reasoner:
-    def __init__(self, settings: Mapping[str, Any], serve: Mapping[str, Any], backend: Any | None = None) -> None:
-        self.ar, self.reward_settings, self.serve = settings["ar"], settings["rewards"]["consilience"], serve
+    def __init__(self, settings: Mapping[str, Any], backend: Any | None = None) -> None:
+        self.ar, self.reward_settings, self.serve = settings["ar"], settings["rewards"]["consilience"], settings["serve"]
+        self.seed = int(settings["run"]["seed"])
         self.raw: Any = backend
         self._seeds = itertools.count()
         self._seed_lock = threading.Lock()
 
     def load(self) -> None:
         if self.raw is None:
-            self.raw = load_backend(self.ar["model"], self.ar["engine"], seed=int(self.serve["server"]["seed"]), logprobs=0)
+            self.raw = load_backend(self.ar["model"], self.ar["engine"], seed=self.seed, logprobs=0)
 
     def close(self) -> None:
         close_backend(self.raw)
         self.raw = None
 
-    def effort(self, requested: str | None) -> str:
-        name = requested or self.serve["default_effort"]
-        name = self.serve["effort_aliases"].get(name, name)
-        if name not in self.serve["efforts"]:
+    def effort(self, requested: str | None) -> str | None:
+        if requested is None:
+            return self.ar["prompt"]["chat_template_kwargs"].get("reasoning_effort")
+        aliases = self.serve["effort_aliases"]
+        name = aliases.get(requested, requested)
+        if name not in aliases.values():
             raise ProtocolError(f"unknown reasoning effort {requested!r}")
         return name
 
@@ -64,25 +68,31 @@ class Reasoner:
         """The rendered prompt and the output limit; cheap enough to answer before reasoning."""
 
         effort = self.effort(conversation.effort)
-        profile = self.serve["efforts"][effort]
-        options = {**self.ar["prompt"]["chat_template_kwargs"], "enable_thinking": True,
-                   "reasoning_effort": profile["reasoning_effort"]}
+        options = dict(self.ar["prompt"]["chat_template_kwargs"])
+        if effort is not None:
+            options["reasoning_effort"] = effort
         if conversation.tools:
             options["tools"] = conversation.tools
         try:
-            rendered = self.raw.tokenizer.apply_chat_template(conversation.messages, tokenize=False,
-                                                              add_generation_prompt=True, **options)
+            messages = list(conversation.messages)
+            if self.ar["prompt"]["system"] and not any(message["role"] == "system" for message in messages):
+                messages.insert(0, {"role": "system", "content": self.ar["prompt"]["system"]})
+            rendered = render_prompt(self.raw.tokenizer, messages,
+                                     {**self.ar, "prompt": {**self.ar["prompt"], "chat_template_kwargs": options}})
             prompt = tuple(self.raw.encode(rendered, add_special_tokens=False))
-            requested = min(int(profile["max_new_tokens"]), int(conversation.max_tokens or profile["max_new_tokens"]))
-            maximum = int(generation_budget(requested, len(prompt), [self.raw],
-                                            context_window=self.ar["engine"]["context_window"])["effective_max_new_tokens"])
+            configured = int(self.ar["max_new_tokens"])
+            requested = min(configured, conversation.max_tokens) if conversation.max_tokens is not None else configured
+            budget = generation_budget(requested, len(prompt), [self.raw],
+                                       context_window=self.ar["engine"]["context_window"])
+            budget.update(configured_max_new_tokens=configured, client_max_tokens=conversation.max_tokens)
+            maximum = int(budget["effective_max_new_tokens"])
         except ValueError as error:
             raise ProtocolError(str(error)) from error
-        return Prepared(prompt, effort, profile, maximum, conversation.tools)
+        return Prepared(prompt, effort, budget, maximum, conversation.tools)
 
     def generate(self, prepared: Prepared) -> Reply:
         with self._seed_lock:
-            seeds = SeedStream(int(self.serve["server"]["seed"])).derive("request", next(self._seeds))
+            seeds = SeedStream(self.seed).derive("request", next(self._seeds))
         prompt, maximum, raw = prepared.prompt, prepared.maximum, self.raw
         sampling = self.ar["sampling"]
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
@@ -95,20 +105,22 @@ class Reasoner:
         reward = confidence_reward("consilience", self.reward_settings, backend, thinking_format)
         config = conditional_is_config(self.ar["algorithms"]["is"], reward, total_length=maximum, backend=raw)
         start = time.monotonic()
-        limit = prepared.profile["max_seconds"]
+        limit = self.serve["max_seconds"]
         deadline = None if limit is None else start + float(limit)
         result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
                                     sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix)
         tokens, info = scope.finish(raw, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
                                     seed=SeedStream(seeds).derive("final-content"))
         # An unfinished thought has no answer; it is returned as the reasoning.
-        complete = info["thinking_status"] == "complete"
-        thinking, content = (info["thinking_text"], info["content_text"]) if complete else (info["content_text"], "")
+        thinking, content = info["thinking_text"], info["content_text"]
+        if info["thinking_status"] == "incomplete":
+            thinking, content = content, ""
         content, calls = parse_tool_calls(content, prepared.tools) if prepared.tools else (content.strip(), ())
         finish: Literal["stop", "tool_calls", "length"] = (
             "length" if not info["ended_by_eos"] else "tool_calls" if calls else "stop")
         return Reply(thinking.strip(), content, calls, finish, len(prompt), len(tokens), {
             "effort": prepared.effort, "steps": len(result.steps), "stopping_reason": result.stopping_reason,
+            "generation_budget": dict(prepared.budget), "max_seconds": limit,
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,
             "sibling_replay": config.sibling_replay,

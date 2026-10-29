@@ -83,6 +83,7 @@ def test_async_vllm_uses_its_public_signature_and_shares_files_with_the_exact_sc
     (_, scorer_model, _), (_, engine_model, kwargs) = calls
     assert scorer_model == engine_model == str(tmp_path)
     assert kwargs["seed"] == 5
+    assert kwargs["max_model_len"] == engine["context_window"]
     assert kwargs["engine_kwargs"] == {**engine["vllm"]["engine_kwargs"], "max_logprobs": 16}
     assert kwargs["enable_fused_logprobs"] is False
     assert kwargs["flat_logprobs"] is True and kwargs["stream_interval"] == 32

@@ -30,6 +30,12 @@ class Conversation:
     max_tokens: int | None
     stream: bool
 
+    def __post_init__(self) -> None:
+        if self.max_tokens is not None and (type(self.max_tokens) is not int or self.max_tokens <= 0):
+            raise ProtocolError("max_tokens must be a positive integer")
+        if self.effort is not None and (not isinstance(self.effort, str) or not self.effort):
+            raise ProtocolError("reasoning_effort must be a nonempty string")
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -108,12 +114,20 @@ def openai_conversation(body: Mapping[str, Any]) -> Conversation:
         else:
             raise ProtocolError(f"unsupported message role {role!r}")
     tools = [tool for tool in body.get("tools") or [] if tool.get("type", "function") == "function"]
+    maximum = body.get("max_completion_tokens")
+    if maximum is not None and body.get("max_tokens") is not None and maximum != body["max_tokens"]:
+        raise ProtocolError("max_tokens and max_completion_tokens must agree when both are supplied")
     return Conversation(_with_system(system, messages), tools if tools and choice != "none" else None,
-                        body.get("reasoning_effort"), body.get("max_completion_tokens") or body.get("max_tokens"),
+                        body.get("reasoning_effort"), body.get("max_tokens") if maximum is None else maximum,
                         bool(body.get("stream")))
 
 
 def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
+    thinking = body.get("thinking") or {}
+    if not isinstance(thinking, Mapping):
+        raise ProtocolError("thinking must be an object")
+    if "budget_tokens" in thinking:
+        raise ProtocolError("separate thinking.budget_tokens is not supported; max_tokens limits thinking and content together")
     choice = body.get("tool_choice")
     if choice is not None and (not isinstance(choice, Mapping) or choice.get("type") not in ("auto", "none")
                                or set(choice) != {"type"}):

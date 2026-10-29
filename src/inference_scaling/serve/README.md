@@ -13,13 +13,14 @@
 ## 一个请求的处理
 
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
-2. 按推理强度选档位，使用 `ar.algorithms.is` 配置的探索调度、块长、候选数与补全数做思考段条件 IS；
-   候选与补全写到 `</think>` 停止，按 Consilience 加权。档位设置单条输出上限，默认只按逻辑停止条件结束。
+2. 使用 `ar.algorithms.is` 配置的探索调度、块长、候选数与补全数做思考段条件 IS；
+   候选与补全写到 `</think>` 停止，按 Consilience 加权。单条输出上限和默认推理强度与批量评测共用。
 3. 从选中的思考正常生成一次答案。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
    schema 取类型。
 
-返回里额外带 `scaling`：档位、固定的候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
+返回里额外带 `scaling`：生效推理强度、候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
+`scaling.generation_budget` 记录配置上限、客户端上限、剩余上下文和实际生成上限。
 
 `sibling_replay`、`completion_fraction` 与 `rollout_race` 分别记录同块补全复用、整轮完成配额和候选内超发的设置。超发最多将缺失补全数翻倍，每候选收齐 K 条后取消其余请求；完成时间筛选会引入偏差，默认关闭。配置为 `ar.algorithms.is.rollout_race`，需要流式后端。
 默认 `sibling_replay=false`、`completion_fraction=1.0`、`rollout_race=false`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
@@ -60,8 +61,9 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 
 ## 2. 配置
 
-服务读取 `settings/inference.json` 的 `ar`（模型、引擎、采样、固定 IS 参数）和 `rewards.consilience`，以及
-`settings/serve.json`。字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#settingsservejson)。
+服务只读取 `settings/inference.json`：`ar` 提供模型、长度、模板、引擎、采样与 IS 参数，
+`rewards.consilience` 提供奖励，`run.seed` 提供根种子，`serve` 提供 HTTP 参数。
+字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#serve)。
 
 `settings/inference.json` 需要按机器改的项：
 
@@ -73,21 +75,20 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | `ar.engine.vllm.fused_logprobs` | `false` | 融合 worker 只适配 GPU；Consilience 不需要它 |
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
 | `ar.engine.vllm.enable_prefix_caching` | 先 `true` | 混合模型的前缀缓存出错或输出异常时改 `false`，只影响速度 |
-| `ar.algorithms.is` | `candidate_count = 4`、`rollout_count = 1`、`block_size = 1024`、`block_first = false` | 所有档位共用；候选数、补全数与块长固定，块长在输出上限处截短 |
+| `ar.algorithms.is` | `candidate_count = 4`、`rollout_count = 1`、`block_size = 1024`、`block_first = false` | 评测与服务共用；候选数、补全数与块长固定，块长在输出上限处截短 |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
-`settings/serve.json` 的推理强度档位（请求的 `reasoning_effort` 或 `output_config.effort` 选择，默认 `medium`；
-`none`、`minimal` 映射到 `low`，`xhigh`、`max` 映射到 `high`）：
+长度只在 `ar.max_new_tokens` 设置，当前为 131072；思考与最终内容共用该上限。
+`ar.engine.context_window` 当前为 133120，同时控制 vLLM 的 `max_model_len` 与每个请求的剩余上下文检查。
+客户端显式设置 `max_tokens` / `max_completion_tokens` 可调低上限；同时传入时须相等，非法值返回 HTTP 400。
 
-| 档位 | 模板推理强度 | 单条输出上限 | 时长上限 |
-| --- | --- | ---: | ---: |
-| `low` | low | 8,192 | `null` |
-| `medium` | medium | 32,768 | `null` |
-| `high` | xhigh | 65,536 | `null` |
+默认推理强度取 `ar.prompt.chat_template_kwargs.reasoning_effort`，当前为 `xhigh`。
+客户端 `reasoning_effort` / `output_config.effort` 只改变模板强度，不再附带另一套长度上限：
+`low`、`medium` 直接映射，`high` / `max` 映射到 `xhigh`，`none` / `minimal` 映射到 `low`。
+映射位于 `serve.effort_aliases`；`none` 是强度别名，不关闭思考。思考模式由 `ar.output.thinking_mode` 统一设置。
 
-- 单条输出上限再受上下文（`max_model_len` 减提示）限制；请求的 `max_tokens` 只能调低它。
-- 默认不设墙钟停止条件，使调度快慢不改变 IS 步数。显式设置 `max_seconds` 后，到时不再开始新的 IS 步；至少完成第一步，进行中的一步与答案仍完成，但不再保证调度前后的有限步输出分布相同。
-- 这些是初值；上线后按返回的 `scaling.seconds` 与 `steps` 调整。
+`serve.max_seconds` 默认 `null`。显式设定后，到时不再开始新的 IS 步；至少完成第一步，进行中的一步与答案仍完成。
+它不是整题总时长硬限，启用后可能改变有限步输出分布。单条长度上限同样不限制全部候选的总计算量。
 
 ## 3. 启动与验证
 
@@ -114,11 +115,11 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
 ## 4. 接入网关与客户端
 
 - 网关上游设为 `http://<机器>:8000`；鉴权、限流、计费由网关负责，服务不校验请求里的模型名。
-- `max_seconds` 默认 `null`；显式启用后只在完整 IS 步之间检查。网关与客户端超时需覆盖推理、答案生成及排队时间。
+- `serve.max_seconds` 默认 `null`；显式启用后只在完整 IS 步之间检查。网关与客户端超时需覆盖推理、答案生成及排队时间。
 - 建议用流式：搜索期间每 `keepalive_seconds`（默认 10 s）发一次 keep-alive，网关空闲超时需大于该值。
 - OpenAI SDK 与 agent 框架：`base_url = "https://<网关>/v1"`，`model = "qwen3.8-27b-is"`。
 - Claude Code 等 Anthropic 客户端：`ANTHROPIC_BASE_URL=https://<网关>`，`ANTHROPIC_MODEL=qwen3.8-27b-is`，
-  `ANTHROPIC_AUTH_TOKEN` 按网关要求填写；每轮都要等 IS 选完，交互式写代码宜用 `low`。
+  `ANTHROPIC_AUTH_TOKEN` 按网关要求填写；每轮都要等 IS 选完，交互式写代码可显式设置 `low` 和较小的 `max_tokens`。
 - 扩容：一个进程占一组卡，多实例挂在网关后面，各用不同的 `ASCEND_RT_VISIBLE_DEVICES`；
   `server.max_concurrent_requests` 控制单实例同时推理的请求数，其余排队。
 
@@ -130,4 +131,5 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
   强制调用（`required`、`any`、指定工具）及额外工具选择选项返回 HTTP 400。
 - 请求的 `temperature`、`top_p` 不生效：IS 在完整分布上采样，策略取自 `ar.sampling`。
 - 只支持文本内容，`n` 只能为 1。
+- 独立的 Anthropic `thinking.budget_tokens` 返回 HTTP 400；用 `max_tokens` 限制思考与最终内容的合计长度。
 - 未写完的思考没有答案，作为思考返回，`finish_reason` 为 `length`（Anthropic 为 `max_tokens`）。

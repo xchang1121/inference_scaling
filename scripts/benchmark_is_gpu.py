@@ -15,6 +15,7 @@ import os
 import platform
 import statistics
 import struct
+import sys
 import time
 from collections import Counter
 from dataclasses import asdict, replace
@@ -23,6 +24,7 @@ from types import SimpleNamespace
 
 from inference_scaling.app.ar import ARFamily
 from inference_scaling.app import ar as ar_app
+from inference_scaling.app.settings import load_settings, validate_settings
 from inference_scaling.arllm.algorithms import candidates
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter
 from inference_scaling.datasets.math500 import MATH500
@@ -115,45 +117,48 @@ def single_request_seconds(requests):
 
 
 def settings_for(args):
-    settings = json.loads(Path(args.settings).read_text(encoding="utf-8"))
+    """Inherit production settings; only explicitly supplied benchmark options override them."""
+    settings = load_settings(Path(args.settings))
     ar = settings["ar"]
-    ar["model"].update(path=args.model, revision=None, weight_sha256=None, adapter=None, tokenizer=None,
-                       tokenizer_revision=None, local_files_only=True, token_penalty=None)
-    ar["prompt"]["chat_template_kwargs"] = {}
-    ar["output"].update(thinking_mode="enabled", sampling_scope="thinking")
-    ar["sampling"].update(temperature=args.temperature, top_p=1.0, top_k=None)
-    ar["engine"].update(backend="vllm", dtype="bfloat16", device=args.device, context_window=args.max_new_tokens + 1024)
-    ar["engine"]["continuous_batching"]["workers"] = 1
+    if args.model is not None and args.model != ar["model"]["path"]:
+        ar["model"].update(path=args.model, revision=None, weight_sha256=None, adapter=None, tokenizer=None,
+                           tokenizer_revision=None)
+    args.model = ar["model"]["path"]
     vllm = ar["engine"]["vllm"]
-    vllm.update(asynchronous=True, max_model_len=args.max_new_tokens + 1024, max_num_seqs=16,
-                max_num_batched_tokens=2048, gpu_memory_utilization=args.memory_utilization, enforce_eager=args.eager,
-                enable_prefix_caching=True, fused_logprobs=False, exact_scoring="none", parameter_count=args.parameter_count,
-                tensor_parallel_size=args.tensor_parallel_size, data_parallel_size=args.data_parallel_size,
-                async_scheduling=args.async_scheduling, quantization=None,
-                engine_kwargs={"enable_chunked_prefill": True, **json.loads(args.engine_kwargs)})
-    ar["engine"]["rollout_scheduler"].update(enabled=args.execution == "stream", max_in_flight=16)
-    ar["algorithms"]["is"].update(candidate_count=args.candidate_count,
-                                  block_size=args.block_size, block_first=False,
-                                  sibling_replay=args.sibling_replay, completion_fraction=args.completion_fraction,
-                                  rollout_race=args.rollout_race,
-                                  exploration_schedule=getattr(args, "exploration_schedule", "fixed"),
-                                  last_rollout_filter=getattr(args, "last_rollout_filter", False),
-                                  weighted_completion_quota=getattr(args, "weighted_completion_quota", False),
-                                  selection_ready=getattr(args, "selection_ready", False),
-                                  metropolized_blocks=getattr(args, "metropolized_blocks", False))
+    config = ar["algorithms"]["is"]
+    ds = settings["datasets"][args.dataset]
+    fields = [
+        (ar, "max_new_tokens", "max_new_tokens"),
+        (ar["engine"], "context_window", "context_window"), (ar["engine"], "device", "device"),
+        (ar["sampling"], "temperature", "temperature"), (settings["run"], "seed", "seed"),
+        (settings["run"], "draws", "repeats"), (ds["selection"], "count", "questions"),
+        (vllm, "gpu_memory_utilization", "memory_utilization"), (vllm, "enforce_eager", "eager"),
+        *((vllm, name, name) for name in ("tensor_parallel_size", "data_parallel_size", "async_scheduling", "parameter_count")),
+        *((config, name, name) for name in ("candidate_count", "block_size", "sibling_replay", "completion_fraction",
+            "rollout_race", "exploration_schedule", "last_rollout_filter", "weighted_completion_quota",
+            "selection_ready", "metropolized_blocks")),
+    ]
+    for section, key, option in fields:
+        value = getattr(args, option, None)
+        if value is not None:
+            section[key] = value
+        setattr(args, option, section[key])
+    args.k = args.k if args.k is not None else [config["rollout_count"]]
+    if args.execution is None:
+        args.execution = "stream" if vllm["asynchronous"] else "batch"
+    if ar["engine"]["backend"] != "vllm" or not vllm["asynchronous"]:
+        raise ValueError("this benchmark requires ar.engine.backend=vllm and vllm.asynchronous=true")
+    if ar["engine"]["continuous_batching"]["workers"] != 1:
+        raise ValueError("single-question measurements require continuous_batching.workers=1")
+    if args.engine_kwargs is not None:
+        vllm["engine_kwargs"].update(json.loads(args.engine_kwargs))
     if (args.completion_fraction < 1 or args.rollout_race or getattr(args, "last_rollout_filter", False)
             or getattr(args, "weighted_completion_quota", False) or getattr(args, "selection_ready", False)):
         # Request-level counters can miss buffered work at cancellation.
         vllm["engine_kwargs"]["cudagraph_metrics"] = True
-    settings["run"]["seed"] = args.seed
-    ds = settings["datasets"][args.dataset]
-    ds["max_new_tokens"] = args.max_new_tokens
-    ds["selection"]["count"] = args.questions
     if args.selection_skip is not None:
         ds["selection"]["skip"] = args.selection_skip
-    settings["rewards"]["consilience"].update(temperature=2.0, score_temperature=args.temperature, scope="thinking",
-                                               top_k=5, window_fraction=0.2, window_tokens=None,
-                                               skip_fraction=0.05, initial_penalty=3.0)
+    validate_settings(settings)
     return settings
 
 
@@ -331,6 +336,19 @@ def compare_runs(paths):
     for name in ("model", "sampling", "prompt", "output", "algorithms"):
         if left_meta["settings"]["ar"][name] != right_meta["settings"]["ar"][name]:
             raise ValueError(f"comparison changed ar.{name}")
+
+    def limits(meta):
+        # Historical measurements keep their original schema; this is not a runtime configuration fallback.
+        ar = meta["settings"]["ar"]
+        maximum = ar.get("max_new_tokens")
+        if maximum is None:
+            maximum = meta["settings"]["datasets"][meta["arguments"]["dataset"]]["max_new_tokens"]
+        engine_limits = [ar["engine"]["context_window"], ar["engine"]["vllm"].get("max_model_len")]
+        finite = [value for value in engine_limits if value is not None]
+        return maximum, min(finite) if finite else None
+
+    if limits(left_meta) != limits(right_meta):
+        raise ValueError("comparison changed generation or context limits")
     if left_meta["settings"]["rewards"]["consilience"] != right_meta["settings"]["rewards"]["consilience"]:
         raise ValueError("comparison changed the reward")
     if left_meta["dataset"] != right_meta["dataset"]:
@@ -365,50 +383,56 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"),
                         help="compare existing measurements on CPU; no model is loaded")
-    parser.add_argument("--questions", type=int, default=3)
+    parser.add_argument("--questions", type=int)
     parser.add_argument("--dataset", choices=("gsm8k", "math500"), default="gsm8k")
     parser.add_argument("--selection-skip", type=int, default=None, help="MATH-500 selection offset")
-    parser.add_argument("--k", type=int, nargs="+", default=[1, 2, 4])
-    parser.add_argument("--candidate-count", type=int, default=4)
-    parser.add_argument("--completion-fraction", type=float, default=1.0,
+    parser.add_argument("--k", type=int, nargs="+")
+    parser.add_argument("--candidate-count", type=int)
+    parser.add_argument("--completion-fraction", type=float,
                         help="stop at this mean completed fraction of candidate groups; below 1 is length-biased")
-    parser.add_argument("--sibling-replay", action="store_true", help="reuse the selected block's other complete rollouts")
-    parser.add_argument("--rollout-race", action="store_true",
+    parser.add_argument("--sibling-replay", action=argparse.BooleanOptionalAction, help="reuse the selected block's other complete rollouts")
+    parser.add_argument("--rollout-race", action=argparse.BooleanOptionalAction,
                         help="race up to twice the missing completions per candidate and keep the first K; length-biased")
-    parser.add_argument("--max-new-tokens", type=int, default=8192)
-    parser.add_argument("--block-size", type=int, default=1024)
-    parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage", "single_pool"), default="fixed")
-    parser.add_argument("--metropolized-blocks", action="store_true",
+    parser.add_argument("--max-new-tokens", type=int, help="override ar.max_new_tokens; otherwise inherit settings")
+    parser.add_argument("--context-window", type=int, help="override the shared engine context limit")
+    parser.add_argument("--block-size", type=int)
+    parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage", "single_pool"))
+    parser.add_argument("--metropolized-blocks", action=argparse.BooleanOptionalAction,
                         help="select between distinct complete candidate blocks, then select a completion")
-    parser.add_argument("--last-rollout-filter", action="store_true",
+    parser.add_argument("--last-rollout-filter", action=argparse.BooleanOptionalAction,
                         help="apply inverse-probability-corrected tail filtering to fixed or single_pool exploration")
-    parser.add_argument("--weighted-completion-quota", action="store_true",
+    parser.add_argument("--weighted-completion-quota", action=argparse.BooleanOptionalAction,
                         help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
-    parser.add_argument("--selection-ready", action="store_true",
+    parser.add_argument("--selection-ready", action=argparse.BooleanOptionalAction,
                         help="stop on a complete selection in single_pool or both two_stage pools; biased")
-    parser.add_argument("--repeats", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=20261018)
-    parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--eager", action="store_true")
-    parser.add_argument("--device", choices=("cuda", "npu"), default="cuda")
-    parser.add_argument("--tensor-parallel-size", type=int, default=1)
-    parser.add_argument("--data-parallel-size", type=int, default=1)
-    parser.add_argument("--memory-utilization", type=float, default=0.85)
+    parser.add_argument("--repeats", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--temperature", type=float)
+    parser.add_argument("--eager", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--device", choices=("cuda", "npu"))
+    parser.add_argument("--tensor-parallel-size", type=int)
+    parser.add_argument("--data-parallel-size", type=int)
+    parser.add_argument("--memory-utilization", type=float)
     parser.add_argument("--async-scheduling", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--with-base", action="store_true",
                         help="measure ordinary thinking-mode sampling once per question/repeat, without reward statistics")
-    parser.add_argument("--execution", choices=("stream", "batch"), default="stream")
-    parser.add_argument("--engine-kwargs", default="{}", help="JSON engine options applied equally to both profiles")
+    parser.add_argument("--execution", choices=("stream", "batch"))
+    parser.add_argument("--engine-kwargs", help="explicit JSON overrides merged into the configured engine options")
     args = parser.parse_args()
     if args.compare:
         compare_runs(args.compare)
         return
-    if not all((args.model, args.label, args.output)):
-        parser.error("--model, --label and --output are required for an accelerator run")
+    if not all((args.label, args.output)):
+        parser.error("--label and --output are required for an accelerator run")
+    try:
+        settings = settings_for(args)
+    except ValueError as error:
+        parser.error(str(error))
     if min(args.tensor_parallel_size, args.data_parallel_size) < 1 or not 0 < args.memory_utilization < 1:
         parser.error("parallel sizes must be positive and memory utilization must be between 0 and 1")
     rollout_counts = args.k
-    if (min(args.questions, args.repeats, args.max_new_tokens, args.block_size, *rollout_counts, args.candidate_count) < 1
+    if (min(args.repeats, args.max_new_tokens, args.block_size, *rollout_counts, args.candidate_count) < 1
+            or (args.questions is not None and args.questions < 1)
             or max(rollout_counts) > 4 or args.temperature <= 0):
         parser.error("positive budgets and K <= 4 are required")
     if args.output.exists():
@@ -440,7 +464,6 @@ def main():
     accelerator = getattr(torch, args.device, None)
     if accelerator is None or not accelerator.is_available():
         raise RuntimeError(f"this benchmark requires an available {args.device} accelerator")
-    settings = settings_for(args)
     dataset = (GSM8K if args.dataset == "gsm8k" else MATH500)(settings["datasets"][args.dataset])
     family = ARFamily(settings, SimpleNamespace(algorithm="is", reward="consilience"), dataset)
     rounds = []
@@ -549,6 +572,7 @@ def main():
             raise RuntimeError("a streaming vLLM backend is required")
         metadata = {"kind": "metadata", "mode": "is",
                     "label": args.label, "arguments": vars(args) | {"output": str(args.output)},
+                    "command_line": sys.argv[1:],
                     "settings": settings, "dataset": dataset.describe(), "engine": engine_settings(family.raw),
                     "parameter_count": family.raw.parameter_count, "gpu": accelerator.get_device_name(),
                     "device": args.device,

@@ -19,7 +19,8 @@ def base_settings(tmp_path):
     data.write_text("".join(json.dumps({"question": f"q{index}", "answer": "#### 7"}) + "\n" for index in range(2)),
                     encoding="utf-8")
     gsm8k = settings["datasets"]["gsm8k"]
-    gsm8k.update(path=str(data), download=False, max_new_tokens=6)
+    gsm8k.update(path=str(data), download=False)
+    settings["ar"]["max_new_tokens"] = 6
     gsm8k["source"].update(sha256=hashlib.sha256(data.read_bytes()).hexdigest(), rows=2)
     gsm8k["selection"]["count"] = None
     return settings

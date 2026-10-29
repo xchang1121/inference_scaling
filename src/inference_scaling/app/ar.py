@@ -123,7 +123,7 @@ class ARFamily:
         self.cache_dir = Path(str(settings["run"]["hash_cache_dir"]))
         self.reward_settings: Any = None if choices.reward is None else settings["rewards"][choices.reward]
         self.config = self.ar["algorithms"][choices.algorithm]
-        self.max_new_tokens = int(dataset.settings["max_new_tokens"])
+        self.max_new_tokens = int(self.ar["max_new_tokens"])
         self.workers = int(self.ar["engine"]["continuous_batching"]["workers"])
         if self.workers < 1:
             raise ValueError("ar.engine.continuous_batching.workers must be positive")

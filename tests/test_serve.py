@@ -13,7 +13,6 @@ from inference_scaling.app.settings import load_settings
 from inference_scaling.serve.protocol import (ProtocolError, Reply, ToolCall, anthropic_conversation, openai_conversation,
                                               parse_tool_calls)
 from inference_scaling.serve.reasoner import Reasoner
-from inference_scaling.serve.settings import load_serve_settings
 from test_app import ThinkingBackend, ThinkingTokenizer
 
 TOOLS = [{"type": "function", "function": {"name": "edit", "parameters": {"properties": {
@@ -89,10 +88,15 @@ class _ChatBackend(ThinkingBackend):
 
 def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     backend = _ChatBackend()
-    reasoner = Reasoner(load_settings(), load_serve_settings(), backend)
+    settings = load_settings()
+    reasoner = Reasoner(settings, backend)
     conversation = openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "minimal"})
     prepared = reasoner.prepare(conversation)
     assert prepared.effort == "low" and backend.tokenizer.options[0]["reasoning_effort"] == "low"
+    assert prepared.maximum == settings["ar"]["max_new_tokens"]
+    default = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    assert default.effort == settings["ar"]["prompt"]["chat_template_kwargs"]["reasoning_effort"]
+    assert default.maximum == prepared.maximum
     reply = reasoner.generate(prepared)
     # The model thinks "7", closes the thought and answers "7".
     assert (reply.thinking, reply.content, reply.finish, reply.tool_calls) == ("#### 7", "#### 7", "stop", ())
@@ -107,7 +111,7 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
     settings = load_settings()
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, block_first=block_first)
     backend = _ChatBackend()
-    reasoner = Reasoner(settings, load_serve_settings(), backend)
+    reasoner = Reasoner(settings, backend)
     reply = reasoner.generate(reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]})))
     assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
     assert (reply.scaling["steps"], reply.scaling["candidate_count"], reply.scaling["rollout_count"],
@@ -117,11 +121,11 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
 
 
 def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monkeypatch) -> None:
-    settings, serve = load_settings(), load_serve_settings()
+    settings = load_settings()
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
-    serve["efforts"]["medium"]["max_seconds"] = 0.5
+    settings["serve"]["max_seconds"] = 0.5
     backend = _ChatBackend()
-    reasoner = Reasoner(settings, serve, backend)
+    reasoner = Reasoner(settings, backend)
     prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
     clock = iter([0.0, 1.0, 1.0])
     monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
@@ -132,10 +136,10 @@ def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monke
 
 
 def test_reasoner_default_uses_logical_stopping_even_when_time_passes(monkeypatch) -> None:
-    settings, serve = load_settings(), load_serve_settings()
+    settings = load_settings()
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
-    assert serve["efforts"]["medium"]["max_seconds"] is None
-    reasoner = Reasoner(settings, serve, _ChatBackend())
+    assert settings["serve"]["max_seconds"] is None
+    reasoner = Reasoner(settings, _ChatBackend())
     prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
     clock = iter([0.0, 10000.0])
     monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
@@ -146,11 +150,18 @@ def test_reasoner_default_uses_logical_stopping_even_when_time_passes(monkeypatc
 
 def test_reasoner_clamps_the_fixed_block_to_the_requested_output_limit() -> None:
     backend = _ChatBackend()
-    reasoner = Reasoner(load_settings(), load_serve_settings(), backend)
+    reasoner = Reasoner(load_settings(), backend)
     prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 1}))
     reply = reasoner.generate(prepared)
     assert reply.scaling["block_size"] == 1 and reply.scaling["stopping_reason"] == "length"
     assert reply.completion_tokens == 1 and reply.finish == "length" and not reply.content
+    assert reply.scaling["generation_budget"]["client_max_tokens"] == 1
+    assert reply.scaling["generation_budget"]["effective_max_new_tokens"] == 1
+    for value in (0, -1, True, "10", 1.5):
+        with pytest.raises(ProtocolError, match="positive integer"):
+            openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_completion_tokens": value})
+    with pytest.raises(ProtocolError, match="must agree"):
+        openai_conversation({"max_tokens": 10, "max_completion_tokens": 20})
 
 
 class _StubReasoner:
@@ -167,7 +178,7 @@ def client():
     testclient = pytest.importorskip("fastapi.testclient")
     from inference_scaling.serve.server import create_app
 
-    serve = copy.deepcopy(load_serve_settings())
+    serve = copy.deepcopy(load_settings()["serve"])
     serve["server"]["keepalive_seconds"] = 0.01
     return testclient.TestClient(create_app(_StubReasoner(), serve))
 
@@ -193,7 +204,7 @@ def test_openai_chat_completions_answer_and_stream(client) -> None:
 
 def test_anthropic_messages_answer_and_stream(client) -> None:
     body = {"model": "any", "max_tokens": 64, "messages": [{"role": "user", "content": "q"}],
-            "thinking": {"type": "enabled", "budget_tokens": 32}}
+            "thinking": {"type": "enabled"}}
     reply = client.post("/v1/messages", json=body).json()
     assert [block["type"] for block in reply["content"]] == ["thinking", "text", "tool_use"]
     assert reply["content"][2]["input"] == {"line": 7} and reply["stop_reason"] == "tool_use"
@@ -202,6 +213,8 @@ def test_anthropic_messages_answer_and_stream(client) -> None:
     assert events[0] == "message_start" and "ping" in events and events[-2:] == ["message_delta", "message_stop"]
     assert events.count("content_block_start") == 3
     assert client.post("/v1/messages/count_tokens", json=body).json() == {"input_tokens": 3}
+    error = client.post("/v1/messages", json=body | {"thinking": {"type": "enabled", "budget_tokens": 32}})
+    assert error.status_code == 400 and "budget_tokens" in error.json()["error"]["message"]
     error = client.post("/v1/messages", json=body | {"messages": [{"role": "user", "content": [{"type": "image"}]}]})
     assert error.status_code == 400
     for choice in ({"type": "any"}, {"type": "tool", "name": "edit"}):
@@ -244,7 +257,7 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
 
     async def check():
         reasoner = BlockingReasoner()
-        serve = load_serve_settings()
+        serve = load_settings()["serve"]
         serve["server"]["max_concurrent_requests"] = 1
         app = create_app(reasoner, serve)
         endpoint = next(route.endpoint for route in app.routes if route.path == "/v1/chat/completions")

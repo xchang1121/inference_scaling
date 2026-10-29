@@ -43,7 +43,7 @@ def _tiny_backend():
 @pytest.fixture
 def dllm_settings(base_settings, tmp_path, monkeypatch):
     settings = base_settings
-    settings["datasets"]["gsm8k"]["max_new_tokens"] = 5
+    settings["dllm"]["max_new_tokens"] = 5
     model = tmp_path / "llada"
     model.mkdir()
     (model / "model.safetensors").write_bytes(b"w")

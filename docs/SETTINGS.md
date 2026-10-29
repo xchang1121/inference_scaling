@@ -4,14 +4,22 @@
 
 | 文件 | 读取者 |
 | --- | --- |
-| `settings/inference.json` | `python -m inference_scaling`（命令行只选择算法、模型族、奖励和数据集） |
+| `settings/inference.json` | `python -m inference_scaling` 与 `python -m inference_scaling.serve`；性能测量脚本也从此文件继承参数 |
 | `settings/training.json` | `python -m training`（没有命令行参数） |
-| `settings/serve.json` | `python -m inference_scaling.serve`（另读 `settings/inference.json` 的 `ar` 与 `rewards.consilience`） |
 
 两个文件都按代码中的 schema 严格校验（[`app/settings.py`](../src/inference_scaling/app/settings.py)、
 [`training/settings.py`](../training/settings.py)）：缺少字段、多出字段或类型不符都会在加载模型前报错。
 所有行为参数都写在文件里，代码中不再有隐藏的默认值；标注为“对象”的字段原样传给对应库（如 vLLM、TRL）。
 下表中的数值是仓库提供的文件中的取值。
+
+单条 AR 输出上限只在 `ar.max_new_tokens` 定义；上下文上限只在 `ar.engine.context_window` 定义，
+同时用于 vLLM 引擎初始化和每次请求的剩余空间计算。服务与评测默认使用同一模板强度、采样设置和根种子。
+独立的服务配置文件、服务档位长度与数据集长度已移除，旧字段会报错。dLLM 画布上限仍独立定义在
+`dllm.max_new_tokens`。训练长度由训练设置中的 GRPO/VRPO 参数决定，不覆盖推理设置。
+
+`scripts/benchmark_is_gpu.py` 的采样、长度、奖励和引擎默认值均继承该文件。显式 CLI 参数覆盖对应字段，
+例如 `--max-new-tokens 4096 --context-window 6144 --k 1 2 4`；它们和完整生效设置写入结果元数据。
+性能测量要求异步 vLLM 和单题执行。预热仍使用独立的 64 token 小请求，不计入测量。
 
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
 `<模型族>` 中除 `algorithms` 外的全部字段，以及 `<模型族>.algorithms.<算法>`。这些“有效设置”连同模型与数据的
@@ -38,7 +46,6 @@
 | `selection.count` | 整数或 `null` | 在推理前按种子抽取的题数（保持数据集顺序）；`null` 为全部 |
 | `selection.seed` | 整数 | 抽题种子 |
 | `prompt_template` | 字符串 | 用户消息模板，`{question}` 恰好出现一次；其余字符（包括 LaTeX 花括号）原样保留 |
-| `max_new_tokens` | 整数 | 每条输出的生成上限（AR 还受上下文长度约束；dLLM 还受 `dllm.max_new_tokens` 约束并取块长整数倍） |
 
 评测取最终答案文本中的数值（`####`、`\boxed{}`、“answer is”，否则最后一个数），与参考值按分数比较。
 
@@ -52,7 +59,7 @@
 | `selection.minimum_level` | 整数 | 只保留不低于该难度的题 |
 | `selection.excluded_ids` | 字符串数组 | 事先排除的题目 ID（如开发时看过的题） |
 | `selection.skip` / `selection.count` | 整数 | 跳过顺序中的前 `skip` 题（留作开发），评测随后的 `count` 题 |
-| `prompt_template` / `max_new_tokens` | 字符串 / 整数 | 同 GSM8K |
+| `prompt_template` | 字符串 | 同 GSM8K |
 | `judge_timeout_seconds` | 数 | Math-Verify 工作进程单次判定的超时 |
 
 载入时会检查每道题的参考答案能被判定器识别。
@@ -92,7 +99,7 @@
 | --- | --- | --- |
 | `backend` | `transformers` \| `vllm` | 执行引擎 |
 | `device` / `dtype` | 字符串 | Transformers 设备与精度；vLLM 使用 `dtype`，精确评分后端同时使用两者 |
-| `context_window` | 整数或 `null` | 额外的上下文上限；实际生成上限取它、模型上下文与 `max_new_tokens` 的最小值 |
+| `context_window` | 整数或 `null` | 输入与输出合计的上下文上限，同时用作 vLLM 的 `max_model_len`；`null` 使用引擎/模型声明值。显式值须大于 `ar.max_new_tokens`，为提示保留空间；每个请求还受模型实际上下文限制 |
 | `transformers.attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
 | `transformers.max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
 | `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
@@ -103,7 +110,7 @@
 | `vllm.async_scheduling` | 布尔或 `null` | 引擎内部的 CPU/GPU 异步调度，与 `asynchronous` 接口选项分开；默认 `null`，由 vLLM 按模型和设备决定。融合统计模式要求 `false` 或 `null`，实际生效值记录在 `engine_execution` |
 | `vllm.stream_interval` | 正整数 | 默认 `32`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付，减少 Python 输出开销。K>1 的前缀通知因分批最多额外等待 `stream_interval−1` 个 token（队列等待另计）；较短的块可设为 `1`。多 token 停止标记仍由外层增量检测，可能产生边界后的额外解码 |
 | `vllm.flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
-| `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_model_len` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数 |
+| `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数；上下文统一使用 `ar.engine.context_window` |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
@@ -181,14 +188,14 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
-| `vllm.max_model_len` / `max_num_batched_tokens` | 133120 / 16384 | 131,072 token 的输出上限加 2,048 token 的提示余量，一条满长序列的 KV 约 8 GiB；预填充批取 vLLM 在 H100 级 GPU 上的默认值（A100 上宜取 8192） |
+| `engine.context_window` / `engine.vllm.max_num_batched_tokens` | 133120 / 16384 | 上下文为 131,072 token 输出加 2,048 token 提示余量；更长提示会压缩可生成空间。批处理 token 上限控制每次调度的计算量，不是单条输出上限 |
 | `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
 | `prompt.chat_template_kwargs` | `{"reasoning_effort": "xhigh"}` | 模板默认值，思考最充分；IS 的每个候选与补全都要生成到思考结束，要降成本可改 `medium` 或 `low` |
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
 | `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
-| `datasets.<name>.max_new_tokens` | 131072 | 思考段与答案共用，给 `xhigh` 的长思考留足长度 |
+| `max_new_tokens` | 131072 | 评测与服务共用；思考段与答案合计的单条输出上限，不是 IS 所有候选的总预算，也不保证轨迹在此长度内结束 |
 | `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 每一步使用相同的候选数、补全数与块长；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
@@ -203,7 +210,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
 | `engine.block_logits_only` | 布尔 | 输出投影只计算当前块的位置（模型仍读取整张画布）；logits 与轨迹不变，省去其余位置的 LM head 计算，计算量按实际投影的位置统计 |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
-| `max_new_tokens` | 整数 | dLLM 输出上限，与数据集的 `max_new_tokens` 取较小值 |
+| `max_new_tokens` | 整数 | dLLM 输出画布上限，取不超过它的扩散块长整数倍；与 AR 及数据集设置独立 |
 | `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`remasking`（`low_confidence` \| `random`） |
 | `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
 | `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
@@ -215,18 +222,22 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `algorithms.is.candidate_canvas` | `block` \| `full` | `block`：候选单独请求，画布止于该块；`full`：从到输出上限的完整输出切出，其余部分作为第一条补全，与补全同一策略（见[算法说明](methods/ALGORITHMS.md#alg-dllm-is)） |
 | `algorithms.is.kept_sequence` | 布尔 | 保留一条完整序列的条件 IS（同 AR）；需要 `candidate_canvas = "full"` |
 
-## `settings/serve.json`
+### `serve`
+
+位于同一个 `settings/inference.json`；只配置 HTTP 服务行为。生成参数继承 `ar` 与 `rewards.consilience`，
+随机流使用 `run.seed`。未给推理强度的请求沿用 `ar.prompt.chat_template_kwargs`，没有服务专用默认档位。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `server.host` / `port` / `served_model_name` | 字符串 / 整数 / 字符串 | 监听地址与 `/v1/models` 报告的模型名（请求里的模型名不做校验） |
 | `server.max_concurrent_requests` | 整数 | 同时推理的请求数；各请求共用一个引擎的连续批处理，超出的请求排队 |
 | `server.keepalive_seconds` | 数 | 流式请求在搜索期间发送 keep-alive 的间隔 |
-| `server.seed` | 整数 | 各请求随机流的根种子，按请求序号派生 |
-| `default_effort` / `effort_aliases` | 字符串 / 对象 | 请求未给推理强度时的档位；其他强度名到档位名的映射（如 `minimal` → `low`） |
-| `efforts.<名>.reasoning_effort` | `low` \| `medium` \| `xhigh` | chat template 的推理强度 |
-| `efforts.<名>.max_new_tokens` | 整数 | 单条序列（思考与答案共用）的输出上限；再受上下文（`ar.engine.vllm.max_model_len` 减提示）限制，请求的 `max_tokens` 只能调低它 |
-| `efforts.<名>.max_seconds` | 正数或 `null` | 默认 `null`，只按逻辑长度、EOS/思考边界完成，保持执行调度不影响输出分布。设为数值后，超时不再开始新的 IS 步，至少完成第一步，进行中的一步与答案仍完成；这不是请求总时长硬限，且不再保证调度前后的有限步输出分布相同 |
+| `effort_aliases` | 对象 | 客户端强度名到模板 `reasoning_effort` 的映射，如 `high` → `xhigh`；只改变强度，不改变长度、M/K/B 或奖励 |
+| `max_seconds` | 正数或 `null` | 默认 `null`，只按逻辑长度、EOS/思考边界完成。设为数值后，超时不再开始新的 IS 步，至少完成第一步，进行中的一步与答案仍完成；不是请求总时长硬限，启用后可能改变有限步输出分布 |
+
+请求的 `max_tokens` 或 `max_completion_tokens` 只能降低 `ar.max_new_tokens`。两者同时传入时须相等；
+非正整数返回 HTTP 400。单独的 `thinking.budget_tokens` 尚无独立的停止语义，返回 HTTP 400，使用
+`max_tokens` 限制思考与内容的合计长度。响应的 `scaling.generation_budget` 给出配置、客户端和实际生效的上限。
 
 ## `settings/training.json`
 

@@ -99,7 +99,7 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
             tensor_parallel_size=int(vllm["tensor_parallel_size"]),
             data_parallel_size=int(vllm["data_parallel_size"]),
             gpu_memory_utilization=float(vllm["gpu_memory_utilization"]),
-            max_model_len=vllm["max_model_len"],
+            max_model_len=engine["context_window"],
             max_num_seqs=vllm["max_num_seqs"],
             max_num_batched_tokens=vllm["max_num_batched_tokens"],
             quantization=vllm["quantization"],

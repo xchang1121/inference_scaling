@@ -57,8 +57,7 @@ class DLLMFamily:
         self.config = self.dllm["algorithms"][choices.algorithm]
         self.sampling = sampling_from_settings(self.dllm["sampling"])
         self.exact = sampling_from_settings(self.dllm["exact_sampling"])
-        # The dataset limit is sized for autoregressive reasoning models; dLLM canvases have their own cap.
-        maximum = min(int(dataset.settings["max_new_tokens"]), int(self.dllm["max_new_tokens"]))
+        maximum = int(self.dllm["max_new_tokens"])
         # Diffusion decodes whole blocks: the output length is the largest multiple that fits.
         self.length = maximum - maximum % self.sampling.block_length
         if self.length <= 0:

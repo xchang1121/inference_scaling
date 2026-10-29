@@ -44,7 +44,7 @@
 
 | 方法 | 命令 | 设置改动 |
 | --- | --- | --- |
-| 普通采样、思考模式单次采样 | `python -m inference_scaling --algorithm sample --dataset math500` | 见上；单条长度改 `datasets.math500.max_new_tokens` |
+| 普通采样、思考模式单次采样 | `python -m inference_scaling --algorithm sample --dataset math500` | 见上；当前入口的单条长度改 `ar.max_new_tokens` |
 | 多数投票 | `--algorithm best_of_n --dataset math500 --reward verifier` | `rewards.verifier.source = "vote"`，`best_of_n.samples = 2 / 4` |
 | IS | `--algorithm is --dataset math500 --reward verifier`（或 `consilience`） | `candidate_count = 2 / 4`，`rollout_count = 1`，`block_size` 不小于单条长度（对完整序列一次重采样）；`max_new_tokens = 8192 / 16384` |
 | MH | `--algorithm mh --dataset math500 --reward verifier`（或 `consilience`） | `iterations = 1 / 3`，`suffix_schedule = "uniform"` |

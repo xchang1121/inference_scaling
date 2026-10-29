@@ -14,8 +14,7 @@
         "rows": 1319
       },
       "selection": {"count": 32, "seed": 20260808},
-      "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer.",
-      "max_new_tokens": 131072
+      "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer."
     },
     "math500": {
       "path": "data/math500/test.jsonl",
@@ -38,8 +37,7 @@
         "count": 64
       },
       "prompt_template": "{question}\nPlease reason step by step, and put your final answer within \\boxed{}.",
-      "judge_timeout_seconds": 20,
-      "max_new_tokens": 131072
+      "judge_timeout_seconds": 20
     }
   },
   "rewards": {
@@ -57,6 +55,7 @@
     }
   },
   "ar": {
+    "max_new_tokens": 131072,
     "model": {
       "path": "Qwen/Qwen3.8-27B",
       "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
@@ -77,7 +76,7 @@
       "backend": "vllm",
       "device": "cuda",
       "dtype": "bfloat16",
-      "context_window": null,
+      "context_window": 133120,
       "transformers": {
         "attn_implementation": "sdpa",
         "device_map": null,
@@ -96,7 +95,6 @@
         "tensor_parallel_size": 1,
         "data_parallel_size": 1,
         "gpu_memory_utilization": 0.92,
-        "max_model_len": 133120,
         "max_num_seqs": 32,
         "max_num_batched_tokens": 16384,
         "quantization": null,
@@ -176,6 +174,20 @@
         "selection_ready": false,
         "metropolized_blocks": false
       }
+    }
+  },
+  "serve": {
+    "server": {
+      "host": "0.0.0.0",
+      "port": 8000,
+      "served_model_name": "qwen3.8-27b-is",
+      "max_concurrent_requests": 4,
+      "keepalive_seconds": 10.0
+    },
+    "max_seconds": null,
+    "effort_aliases": {
+      "none": "low", "minimal": "low", "low": "low", "medium": "medium",
+      "high": "xhigh", "xhigh": "xhigh", "max": "xhigh"
     }
   },
   "dllm": {
