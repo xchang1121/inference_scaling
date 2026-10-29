@@ -15,12 +15,15 @@
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
 2. 使用 `ar.algorithms.is` 配置的探索调度、块长、候选数与补全数做思考段条件 IS；
    候选与补全写到 `</think>` 停止，按 Consilience 加权。单条输出上限和默认推理强度与批量评测共用。
-3. 从选中的思考正常生成一次答案。
+3. 每轮选择后，向流式客户端交付已经固定的思考前缀；从最终选中的完整思考正常生成一次答案。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
    schema 取类型。
 
 返回里额外带 `scaling`：生效推理强度、候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 `scaling.generation_budget` 记录配置上限、客户端上限、剩余上下文和实际生成上限。
+`first_commit_seconds` 是首次固定非空前缀的时间，`first_thinking_publish_seconds` 是首次向服务交付思考文本的时间，
+`thought_ready_seconds` 是完整思考就绪时间，均从请求开始推理起计。排队及网络延迟由客户端测量；
+keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT。
 
 `sibling_replay`、`completion_fraction` 与 `rollout_race` 分别记录同块补全复用、整轮完成配额和候选内超发的设置。超发最多将缺失补全数翻倍，每候选收齐 K 条后取消其余请求；完成时间筛选会引入偏差，默认关闭。配置为 `ar.algorithms.is.rollout_race`，需要流式后端。
 默认 `sibling_replay=false`、`completion_fraction=1.0`、`rollout_race=false`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
@@ -118,16 +121,18 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
 
 - 网关上游设为 `http://<机器>:8000`；鉴权、限流、计费由网关负责，服务不校验请求里的模型名。
 - `serve.max_seconds` 默认 `null`；显式启用后只在完整 IS 步之间检查。网关与客户端超时需覆盖推理、答案生成及排队时间。
-- 建议用流式：搜索期间每 `keepalive_seconds`（默认 10 s）发一次 keep-alive，网关空闲超时需大于该值。
+- 流式请求按 IS 轮次交付已固定思考。两次交付之间每 `keepalive_seconds`（默认 10 s）发送 keep-alive，网关空闲超时需大于该值。
 - OpenAI SDK 与 agent 框架：`base_url = "https://<网关>/v1"`，`model = "qwen3.8-27b-is"`。
 - Claude Code 等 Anthropic 客户端：`ANTHROPIC_BASE_URL=https://<网关>`，`ANTHROPIC_MODEL=qwen3.8-27b-is`，
-  `ANTHROPIC_AUTH_TOKEN` 按网关要求填写；每轮都要等 IS 选完，交互式写代码可显式设置 `low` 和较小的 `max_tokens`。
+  `ANTHROPIC_AUTH_TOKEN` 按网关要求填写；启用 `thinking` 后可收到逐轮固定的思考，工具调用在答案生成完成后交付。
 - 扩容：一个进程占一组卡，多实例挂在网关后面，各用不同的 `ASCEND_RT_VISIBLE_DEVICES`；
   `server.max_concurrent_requests` 控制单实例同时推理的请求数，其余排队。
 
 ## 限制
 
-- 思考要选定后才能发出：流式请求先收到开头事件，搜索期间收到 keep-alive，选定后一次收到思考、答案与工具调用。
+- 思考前缀在本轮全部必要补全完成、选择确定后交付，尚未选中的候选保持内部可见。此改动保持采样、权重、随机种子与计算量不变；首轮仍有完整 rollout 的等待。
+- Qwen 预填充的思考通道支持增量交付；未知或非预填充格式缓冲到完整思考选定。预填充通道中格式异常的文本仍作为思考返回，奖励的全序列回退规则不变。
+- 答案与工具调用目前在最终生成完成后交付。思考 TTFT 的降低不代表答案 TTFT 或整体 TPS 同幅改善。
 - 客户端断开或取消等待后，已启动的推理继续执行，并在实际结束后释放并发名额；服务正常关闭时等待这些请求完成。
 - 工具选择支持 OpenAI 的 `auto`、`none` 和 Anthropic 的 `{type: auto}`、`{type: none}`。
   强制调用（`required`、`any`、指定工具）及额外工具选择选项返回 HTTP 400。

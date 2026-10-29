@@ -1,14 +1,15 @@
 """The HTTP endpoints: ``/v1/chat/completions``, ``/v1/messages``, ``/v1/models`` and ``/health``.
 
 A request reasons in a worker thread, at most ``max_concurrent_requests`` at a
-time, all sharing one engine. The thought is chosen before any of it can be
-sent, so a stream sends its opening event, keep-alives while the search runs,
-then the reply. Authentication and rate limits belong to the gateway.
+time, all sharing one engine. Streaming sends irrevocable thinking prefixes
+after each IS selection; unfinished/unselected rollouts never reach clients.
+Authentication and rate limits belong to the gateway.
 
 FastAPI reads the handlers' annotations at runtime, so they are not postponed.
 """
 
 import asyncio
+import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
@@ -24,10 +25,12 @@ from inference_scaling.serve.protocol import (
     anthropic_response,
     anthropic_stream_body,
     anthropic_stream_start,
+    anthropic_thinking_delta,
     openai_conversation,
     openai_response,
     openai_stream_body,
     openai_stream_start,
+    openai_thinking_delta,
 )
 
 
@@ -55,14 +58,20 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     async def invalid(_request: Request, error: ProtocolError) -> JSONResponse:
         return JSONResponse({"type": "error", "error": {"type": "invalid_request_error", "message": str(error)}}, 400)
 
-    async def reason(conversation: Conversation) -> tuple[Any, "asyncio.Future[Reply]"]:
+    async def reason(conversation: Conversation, updates: "asyncio.Queue[str] | None" = None,
+                     disconnected: threading.Event | None = None) -> tuple[Any, "asyncio.Future[Reply]"]:
         prepared = reasoner.prepare(conversation)
         await slots.acquire()
         loop = asyncio.get_running_loop()
 
+        def publish(text: str) -> None:
+            if updates is not None and (disconnected is None or not disconnected.is_set()):
+                loop.call_soon_threadsafe(updates.put_nowait, text)
+
         def generate() -> Reply:
             try:
-                return reasoner.generate(prepared)
+                return (reasoner.generate(prepared, on_thinking=publish) if updates is not None
+                        else reasoner.generate(prepared))
             finally:
                 # Cancelling an asyncio waiter cannot stop a running thread.
                 loop.call_soon_threadsafe(slots.release)
@@ -77,15 +86,41 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         task.add_done_callback(finished)
         return prepared, task
 
-    async def stream(start: str, task: "asyncio.Future[Reply]", ping: str, body: Callable[[Reply], Iterator[str]]
-                     ) -> AsyncIterator[str]:
-        yield start
-        while not task.done():
-            await asyncio.wait({task}, timeout=keepalive)
-            if not task.done():
-                yield ping
-        for event in body(task.result()):
-            yield event
+    async def stream(start: str, task: "asyncio.Future[Reply]", ping: str,
+                     body: Callable[[Reply, str], Iterator[str]], updates: "asyncio.Queue[str]",
+                     delta: Callable[..., Iterator[str]], disconnected: threading.Event) -> AsyncIterator[str]:
+        chunks: list[str] = []
+        pending = asyncio.create_task(updates.get())
+        try:
+            yield start
+            while True:
+                waiters: set[asyncio.Future[Any]] = {task, pending}
+                ready, _ = await asyncio.wait(waiters, timeout=keepalive)
+                if pending in ready:
+                    text = pending.result()
+                    for event in delta(text, first=not chunks):
+                        yield event
+                    chunks.append(text)
+                    pending = asyncio.create_task(updates.get())
+                if task in ready:
+                    # All worker callbacks precede task completion. Drain the
+                    # last queued update before closing the thinking block.
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                    while not updates.empty():
+                        text = updates.get_nowait()
+                        for event in delta(text, first=not chunks):
+                            yield event
+                        chunks.append(text)
+                    break
+                if not ready:
+                    yield ping
+            for event in body(task.result(), "".join(chunks)):
+                yield event
+        finally:
+            disconnected.set()
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -99,11 +134,14 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     async def chat(request: Request) -> Any:
         conversation = openai_conversation(await request.json())
         request_id = "chatcmpl-" + uuid.uuid4().hex
-        _, task = await reason(conversation)
+        updates: asyncio.Queue[str] = asyncio.Queue()
+        disconnected = threading.Event()
+        _, task = await reason(conversation, updates if conversation.stream else None, disconnected)
         if not conversation.stream:
             return openai_response(await asyncio.shield(task), model, request_id)
         return StreamingResponse(stream(openai_stream_start(model, request_id), task, OPENAI_KEEPALIVE,
-                                        lambda reply: openai_stream_body(reply, model, request_id)),
+                                        lambda reply, prefix: openai_stream_body(reply, model, request_id, prefix),
+                                        updates, lambda text, **kw: openai_thinking_delta(text, model, request_id, **kw), disconnected),
                                  media_type="text/event-stream")
 
     @app.post("/v1/messages")
@@ -112,11 +150,14 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         conversation, request_id = anthropic_conversation(body), "msg_" + uuid.uuid4().hex
         # Anthropic clients see the thought when they enable thinking.
         thinking = (body.get("thinking") or {}).get("type") == "enabled"
-        prepared, task = await reason(conversation)
+        updates: asyncio.Queue[str] = asyncio.Queue()
+        disconnected = threading.Event()
+        prepared, task = await reason(conversation, updates if conversation.stream and thinking else None, disconnected)
         if not conversation.stream:
             return anthropic_response(await asyncio.shield(task), model, request_id, thinking)
         return StreamingResponse(stream(anthropic_stream_start(model, request_id, len(prepared.prompt)), task,
-                                        ANTHROPIC_KEEPALIVE, lambda reply: anthropic_stream_body(reply, thinking)),
+                                        ANTHROPIC_KEEPALIVE, lambda reply, prefix: anthropic_stream_body(reply, thinking, prefix),
+                                        updates, anthropic_thinking_delta, disconnected),
                                  media_type="text/event-stream")
 
     @app.post("/v1/messages/count_tokens")

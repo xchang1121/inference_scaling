@@ -245,9 +245,15 @@ def openai_stream_start(model: str, request_id: str) -> str:
     return _openai_chunk(model, request_id, {"role": "assistant", "content": ""})
 
 
-def openai_stream_body(reply: Reply, model: str, request_id: str) -> Iterator[str]:
-    if reply.thinking:
-        yield _openai_chunk(model, request_id, {"reasoning_content": reply.thinking})
+def openai_thinking_delta(text: str, model: str, request_id: str, *, first: bool = False) -> Iterator[str]:
+    yield _openai_chunk(model, request_id, {"reasoning_content": text})
+
+
+def openai_stream_body(reply: Reply, model: str, request_id: str, thinking_prefix: str = "") -> Iterator[str]:
+    if not reply.thinking.startswith(thinking_prefix):
+        raise RuntimeError("streamed thinking differs from the final reply")
+    if remaining := reply.thinking[len(thinking_prefix):]:
+        yield _openai_chunk(model, request_id, {"reasoning_content": remaining})
     if reply.content:
         yield _openai_chunk(model, request_id, {"content": reply.content})
     if reply.tool_calls:
@@ -282,12 +288,26 @@ def anthropic_stream_start(model: str, request_id: str, prompt_tokens: int) -> s
         "stop_sequence": None, "usage": {"input_tokens": prompt_tokens, "output_tokens": 0}}}, "message_start")
 
 
-def anthropic_stream_body(reply: Reply, thinking: bool) -> Iterator[str]:
+def anthropic_thinking_delta(text: str, *, first: bool = False) -> Iterator[str]:
+    if first:
+        yield _sse({"type": "content_block_start", "index": 0,
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""}}, "content_block_start")
+    yield _sse({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": text}}, "content_block_delta")
+
+
+def anthropic_stream_body(reply: Reply, thinking: bool, thinking_prefix: str = "") -> Iterator[str]:
+    if not reply.thinking.startswith(thinking_prefix):
+        raise RuntimeError("streamed thinking differs from the final reply")
+    if thinking_prefix:
+        if remaining := reply.thinking[len(thinking_prefix):]:
+            yield from anthropic_thinking_delta(remaining)
+        yield _sse({"type": "content_block_stop", "index": 0}, "content_block_stop")
     # Each block opens empty and receives its whole value in one delta.
     empty: dict[str, dict[str, Any]] = {"thinking": {"thinking": ""}, "text": {"text": ""}, "tool_use": {"input": {}}}
     deltas = {"thinking": ("thinking_delta", "thinking"), "text": ("text_delta", "text"),
               "tool_use": ("input_json_delta", "partial_json")}
-    for index, block in enumerate(_anthropic_blocks(reply, thinking)):
+    for index, block in enumerate(_anthropic_blocks(reply, thinking and not thinking_prefix), start=int(bool(thinking_prefix))):
         yield _sse({"type": "content_block_start", "index": index, "content_block": {**block, **empty[block["type"]]}},
                    "content_block_start")
         kind, key = deltas[block["type"]]
@@ -301,5 +321,5 @@ def anthropic_stream_body(reply: Reply, thinking: bool) -> Iterator[str]:
 
 
 __all__ = ["ANTHROPIC_KEEPALIVE", "OPENAI_KEEPALIVE", "Conversation", "ProtocolError", "Reply", "ToolCall",
-           "anthropic_conversation", "anthropic_response", "anthropic_stream_body", "anthropic_stream_start",
-           "openai_conversation", "openai_response", "openai_stream_body", "openai_stream_start", "parse_tool_calls"]
+           "anthropic_conversation", "anthropic_response", "anthropic_stream_body", "anthropic_stream_start", "anthropic_thinking_delta",
+           "openai_conversation", "openai_response", "openai_stream_body", "openai_stream_start", "openai_thinking_delta", "parse_tool_calls"]

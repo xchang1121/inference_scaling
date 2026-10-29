@@ -17,7 +17,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import (
-    ConditionalISResult, ConditionalISStep, RolloutEvaluation, select, select_metropolized,
+    CandidateSummary, ConditionalISResult, ConditionalISStep, RolloutEvaluation, RolloutSummary, select, select_metropolized,
 )
 from inference_scaling.shared.types import TokenBatchReward
 
@@ -107,7 +107,9 @@ def _final_candidate_count(record: ConditionalISStep, fixed: int, config: Condit
     """
     observations = tuple(
         (index, len(candidate.rollouts),
-         record.generated_length_before + len(candidate.token_ids) + len(leaf.token_ids), leaf.log_weight)
+         record.generated_length_before
+         + (candidate.token_count if isinstance(candidate, CandidateSummary) else len(candidate.token_ids))
+         + (leaf.token_count if isinstance(leaf, RolloutSummary) else len(leaf.token_ids)), leaf.log_weight)
         for index, candidate in enumerate(record.candidates) if index != record.selected_index
         for leaf in candidate.rollouts)
     return forecast_candidate_count(observations, fixed, config, seeds)
@@ -163,8 +165,13 @@ def run_conditional_is(
     sampling: SamplingConfig | None = None,
     deadline: float | None = None,
     prefix_reward: Callable[[TokenSequence, TokenSequence], float | None] | None = None,
+    on_commit: Callable[[TokenSequence], None] | None = None,
 ) -> ConditionalISResult:
-    """CLI/service loop. A deadline is checked between steps, never within a candidate tree."""
+    """Report only irrevocable prefixes; observation cannot select a candidate.
+
+    A deadline is checked between steps, never within a candidate tree.
+    The callback receives cumulative committed tokens, without retaining history.
+    """
     adapter = ConditionalISAdapter(backend=backend, prompt=prompt, config=config,
                                    sampling=sampling or SamplingConfig(), reward=reward, prefix_reward=prefix_reward)
     state = adapter.initial_state
@@ -173,6 +180,8 @@ def run_conditional_is(
         if steps and deadline is not None and time.monotonic() >= deadline:
             break
         record, state = adapter.step(state, len(steps), seeds)
+        if on_commit is not None:
+            on_commit(state.token_ids[:state.fixed])
         if (not steps and config.exploration_schedule == "two_stage"
                 and config.candidate_count > 1 and not adapter.is_terminal(state)):
             count = (state.next_candidate_count if state.next_candidate_count is not None
@@ -181,6 +190,9 @@ def run_conditional_is(
                               rollout_count=1, block_size=config.total_length - state.fixed))
         steps.append(record.compact())
         del record
+    if on_commit is not None and state.fixed < len(state.token_ids):
+        # A deadline returns the selected complete rollout, including its suffix.
+        on_commit(state.token_ids)
     forward_slots = None if any(step.forward_token_slots is None for step in steps) else sum(
         step.forward_token_slots or 0 for step in steps)
     reason = ("deadline" if not adapter.is_terminal(state)

@@ -56,10 +56,23 @@ def test_early_eos_candidate_does_not_lengthen_other_completions(total_length) -
 
 def test_conditional_is_returns_a_complete_sequence_within_total_length() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=[0.5, 0.5])
+    committed = []
+    config = ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=2, total_length=5,
+                                 reward_temperature=1.0)
+    reward = pointwise(lambda _prompt, generated: float(sum(generated)))
     result = run_conditional_is(
-        backend, (), ConditionalISConfig(block_first=False, candidate_count=2, rollout_count=2, block_size=2, total_length=5,
-                                         reward_temperature=1.0),
-        pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(17))
+        backend, (), config, reward, SeedStream(17), on_commit=committed.append)
+    assert committed == [result.token_ids[:n] for n in (2, 4, 5)]
+    assert run_conditional_is(backend, (), config, reward, SeedStream(17)) == result
+    for schedule in ("two_stage", "single_pool"):
+        committed.clear()
+        selected = run_conditional_is(backend, (), replace(config, exploration_schedule=schedule), reward,
+                                      SeedStream(17), on_commit=committed.append)
+        assert committed[-1] == selected.token_ids
+        assert all(selected.token_ids[:len(prefix)] == prefix for prefix in committed)
+    committed.clear()
+    stopped = run_conditional_is(backend, (), config, reward, SeedStream(17), deadline=0, on_commit=committed.append)
+    assert stopped.stopping_reason == "deadline" and committed == [stopped.token_ids[:2], stopped.token_ids]
     assert len(result.token_ids) == 5
     assert [step.generated_length_before for step in result.steps] == [0, 2, 4]
     assert [step.selected.token_count for step in result.steps] == [2, 2, 1]

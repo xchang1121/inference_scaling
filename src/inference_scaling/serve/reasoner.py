@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -41,6 +41,52 @@ class Prepared:
     maximum: int
     tools: list[dict[str, Any]] | None
     ar: Mapping[str, Any]
+
+
+class _ThoughtPublisher:
+    """Decode committed thinking only; incomplete byte/marker suffixes wait.
+
+    A prefilled thinking channel remains reasoning on a malformed/incomplete
+    block. Reward segmentation and its full-sequence fallback stay unchanged.
+    Unknown/non-prefilled formats are buffered until the selected thought ends.
+    """
+
+    def __init__(self, raw, prompt, parser, enabled, callback):
+        self.raw, self.prompt, self.parser, self.callback = raw, prompt, parser, callback
+        formats: tuple[Any, ...] = getattr(parser, "formats", ())
+        self.prefilled = enabled and len(formats) == 1 and formats[0].prompt_is_thinking(prompt)
+        self.marker = formats[0].end_token_ids if self.prefilled else ()
+        self.sent = ""
+
+    def text(self, tokens, *, final=False):
+        segments = self.parser.split(self.prompt, tokens, eos_token_id=self.raw.tokenizer.eos_token_id)
+        if segments.has_complete_thinking:
+            span = segments.thinking_token_ids
+        elif self.prefilled and segments.status in {"incomplete", "malformed"}:
+            span = tokens[:tokens.index(self.raw.tokenizer.eos_token_id)] if self.raw.tokenizer.eos_token_id in tokens else tokens
+            if not final:
+                for count in range(min(len(span), len(self.marker) - 1), 0, -1):
+                    if span[-count:] == self.marker[:count]:
+                        span = span[:-count]
+                        break
+        else:
+            return ""
+        text = self.raw.decode(span).strip()
+        # An incomplete UTF-8 byte sequence can be replaced by the next token.
+        if not final:
+            text = text.rstrip("\ufffd").rstrip()
+        return text
+
+    def publish(self, tokens, *, final=False):
+        if self.callback is None or (not self.prefilled and not final):
+            return
+        text = self.text(tokens, final=final)
+        if not text.startswith(self.sent):
+            raise RuntimeError("committed thinking text changed during incremental decoding")
+        delta = text[len(self.sent):]
+        if delta:
+            self.sent = text
+            self.callback(delta)
 
 
 class Reasoner:
@@ -87,7 +133,7 @@ class Reasoner:
             raise ProtocolError(str(error)) from error
         return Prepared(prompt, thinking["reasoning_effort"], budget, maximum, conversation.tools, ar)
 
-    def generate(self, prepared: Prepared) -> Reply:
+    def generate(self, prepared: Prepared, *, on_thinking: Callable[[str], None] | None = None) -> Reply:
         with self._seed_lock:
             seeds = SeedStream(self.seed).derive("request", next(self._seeds))
         prompt, maximum, raw, ar = prepared.prompt, prepared.maximum, self.raw, prepared.ar
@@ -103,22 +149,49 @@ class Reasoner:
         reward = confidence_reward("consilience", self.reward_settings, backend, thinking_format)
         config = conditional_is_config(ar["algorithms"]["is"], reward, total_length=maximum, backend=raw)
         start = time.monotonic()
+        clock_start = time.perf_counter()
+        first_commit = first_publish = None
+
+        def emit(text):
+            nonlocal first_publish
+            if first_publish is None:
+                first_publish = time.perf_counter() - clock_start
+            assert on_thinking is not None
+            on_thinking(text)
+
+        publisher = _ThoughtPublisher(raw, prompt, thinking_format, scope.scope == "thinking",
+                                      emit if on_thinking is not None else None)
+
+        def committed(tokens):
+            nonlocal first_commit
+            if tokens and first_commit is None:
+                first_commit = time.perf_counter() - clock_start
+            publisher.publish(tokens)
+
         limit = self.serve["max_seconds"]
         deadline = None if limit is None else start + float(limit)
         result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
-                                    sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix)
+                                    sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix,
+                                    on_commit=committed)
+        publisher.publish(result.token_ids, final=True)
+        thought_ready = time.perf_counter() - clock_start
         tokens, info = scope.finish(bounded, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
                                     seed=SeedStream(seeds).derive("final-content"))
         # An unfinished thought has no answer; it is returned as the reasoning.
         thinking, content = info["thinking_text"], info["content_text"]
         if info["thinking_status"] == "incomplete":
             thinking, content = content, ""
+        elif publisher.prefilled and info["thinking_status"] == "malformed":
+            thinking, content = publisher.text(result.token_ids, final=True), ""
         content, calls = parse_tool_calls(content, prepared.tools) if prepared.tools else (content.strip(), ())
         finish: Literal["stop", "tool_calls", "length"] = (
             "length" if not info["ended_by_eos"] else "tool_calls" if calls else "stop")
         return Reply(thinking.strip(), content, calls, finish, len(prompt), len(tokens), {
             "effort": prepared.effort, "steps": len(result.steps), "stopping_reason": result.stopping_reason,
             "generation_budget": dict(prepared.budget), "max_seconds": limit,
+            "first_commit_seconds": first_commit, "thought_ready_seconds": thought_ready,
+            "first_thinking_publish_seconds": first_publish,
+            "tensor_parallel_size": ar["engine"]["vllm"]["tensor_parallel_size"],
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,
             "sibling_replay": config.sibling_replay,
@@ -133,7 +206,7 @@ class Reasoner:
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": "streaming" if getattr(backend, "supports_streaming_generation", False) else "batch",
             "engine_execution": getattr(raw, "execution_config", lambda: {})(),
-            "sampling_scope": info["sampling_scope"], "seconds": round(time.monotonic() - start, 3)})
+            "sampling_scope": info["sampling_scope"], "seconds": time.perf_counter() - clock_start})
 
 
 __all__ = ["Prepared", "Reasoner"]

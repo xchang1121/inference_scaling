@@ -138,12 +138,18 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, block_first=block_first)
     backend = _ChatBackend()
     reasoner = Reasoner(settings, backend)
-    reply = reasoner.generate(reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]})))
+    published = []
+    reply = reasoner.generate(reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]})),
+                              on_thinking=lambda text: published.append((text, len(backend.batches))))
     assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
     assert (reply.scaling["steps"], reply.scaling["candidate_count"], reply.scaling["rollout_count"],
             reply.scaling["block_size"]) == (2, 3, 2, 1)
     # Candidate generation, completions, the two fresh terminal candidates, and one final answer.
     assert [len(batch) for batch in backend.batches] == [3, 6 if block_first else 3, 2, 1]
+    assert "".join(text for text, _ in published) == reply.thinking
+    assert published[0][1] < len(backend.batches)
+    assert reply.scaling["first_commit_seconds"] <= reply.scaling["thought_ready_seconds"]
+    assert reply.scaling["first_thinking_publish_seconds"] < reply.scaling["seconds"]
 
 
 def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monkeypatch) -> None:
@@ -194,8 +200,12 @@ class _StubReasoner:
     def prepare(self, conversation):
         return SimpleNamespace(prompt=(1, 2, 3), conversation=conversation)
 
-    def generate(self, prepared):
+    def generate(self, prepared, *, on_thinking=None):
+        if on_thinking is not None:
+            on_thinking("thi")
         time.sleep(0.05)
+        if on_thinking is not None:
+            on_thinking("nk")
         return Reply("think", "Editing.", (ToolCall("edit", {"line": 7}, "call_1"),), "tool_calls", 3, 5, {"effort": "medium"})
 
 
@@ -221,6 +231,7 @@ def test_openai_chat_completions_answer_and_stream(client) -> None:
         text = "".join(response.iter_text())
     assert ": keep-alive" in text and text.endswith("data: [DONE]\n\n")
     chunks = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: {")]
+    assert "".join(chunk["choices"][0]["delta"].get("reasoning_content", "") for chunk in chunks) == "think"
     assert [chunk["choices"][0]["finish_reason"] for chunk in chunks][-1] == "tool_calls"
     assert client.get("/v1/models").json()["data"][0]["id"] == "qwen3.8-27b-is"
     for choice in ("required", {"type": "function", "function": {"name": "edit"}}):
@@ -235,7 +246,10 @@ def test_anthropic_messages_answer_and_stream(client) -> None:
     assert [block["type"] for block in reply["content"]] == ["thinking", "text", "tool_use"]
     assert reply["content"][2]["input"] == {"line": 7} and reply["stop_reason"] == "tool_use"
     with client.stream("POST", "/v1/messages", json=body | {"stream": True}) as response:
-        events = [line[7:] for line in "".join(response.iter_text()).splitlines() if line.startswith("event: ")]
+        text = "".join(response.iter_text())
+        events = [line[7:] for line in text.splitlines() if line.startswith("event: ")]
+    chunks = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: {")]
+    assert "".join(chunk.get("delta", {}).get("thinking", "") for chunk in chunks) == "think"
     assert events[0] == "message_start" and "ping" in events and events[-2:] == ["message_delta", "message_stop"]
     assert events.count("content_block_start") == 3
     assert client.post("/v1/messages/count_tokens", json=body).json() == {"input_tokens": 3}
