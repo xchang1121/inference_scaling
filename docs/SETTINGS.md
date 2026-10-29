@@ -216,9 +216,9 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
 
-仓库提供的 `ar` 设置面向 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)（Gated DeltaNet 与门控注意力 3:1 混合的
-64 层模型）在单张 H100 级（80 GB 及以上）GPU 上运行 `is` + `consilience`。显存更大时同一比例自动得到更多缓存；
-多卡时调 `tensor_parallel_size` 或 `data_parallel_size`。下表中 `ar` 下的字段省略前缀 `ar.`。
+仓库提供的 `ar` 设置仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，使用 BF16、`is` 和 `consilience`。
+`tensor_parallel_size` 控制每个副本的模型切分，`data_parallel_size` 控制副本数。部署时同时验证权重、缓存、
+原生上下文与并发容量；显存占用比例相同也可能具有不同的可用并发。下表中 `ar` 下的字段省略前缀 `ar.`。
 
 | 设置 | 取值 | 依据 |
 | --- | --- | --- |
@@ -226,7 +226,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `model.token_penalty` | 8 个词，`strength = 1.0` | wait、hmm、alternatively、actually、however、but、maybe、perhaps；覆盖 thinking 与正文，改变基础分布；该模型上的质量与速度收益尚未验证，设为 `null` 可关闭 |
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
-| `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
+| `engine.continuous_batching.workers` | 1 | 批量评测的题目并发度。串行使用引擎总计数，并发使用请求级计数；缺失或存在未计入工作时成本标为 `null` |
 | `engine.context_window` / `engine.vllm.max_num_batched_tokens` | `null` / 16384 | 上下文读取模型/引擎配置，当前模型原生容量 262144；批处理 token 上限只控制每次调度的计算量 |
 | `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
 | `prompt.chat_template_kwargs` / `thinking` | `{}` / 官方档位配置 | 模板强度由 `ar.thinking` 统一解析；未指定档位/预算时为 `xhigh`、131072 thinking tokens |

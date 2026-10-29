@@ -206,6 +206,11 @@ python -m pytest
 
 [`tests/test_repository_layout.py`](tests/test_repository_layout.py) 检查分层：底层不依赖上层，两个模型族互不依赖。
 
+## 性能结果
+
+[Qwen3.8-27B IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md)记录当前模型的卡数容量、思考与内容 TTFT、
+输出吞吐和实际生成量；区分已测结果、交付延迟改善与尚未验证的吞吐收益。
+
 ## 历史结果
 
 [IS 加速研究总结](docs/reports/ASCEND_RESEARCH_SUMMARY.md)汇总2026年10月18日至28日的尝试、已合入收益、负收益方案及证据范围。
