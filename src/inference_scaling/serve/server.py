@@ -49,8 +49,14 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
             yield
         finally:
             # The engine must stay alive until detached requests finish too.
-            if active:
-                await asyncio.gather(*active, return_exceptions=True)
+            try:
+                if active:
+                    await asyncio.gather(*active, return_exceptions=True)
+            finally:
+                # Close before uvicorn restores/re-raises SIGTERM. A finally
+                # around uvicorn.run alone may never execute on that signal.
+                if close := getattr(reasoner, "close", None):
+                    await asyncio.to_thread(close)
 
     app = FastAPI(title="inference-scaling", lifespan=lifespan)
 

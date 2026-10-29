@@ -292,6 +292,11 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
             self.started, self.release = threading.Event(), threading.Event()
             self.calls = self.active = self.maximum = 0
             self.lock = threading.Lock()
+            self.closed = False
+
+        def close(self):
+            assert self.active == 0
+            self.closed = True
 
         def prepare(self, conversation):
             return SimpleNamespace(prompt=(1,))
@@ -337,6 +342,6 @@ def test_cancelled_response_holds_slot_until_worker_finishes():
                 reasoner.release.set()
                 await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
             assert second is not None and second.result()
-        assert reasoner.maximum == 1 and reasoner.active == 0 and reasoner.calls == 2
+        assert reasoner.maximum == 1 and reasoner.active == 0 and reasoner.calls == 2 and reasoner.closed
 
     asyncio.run(check())
