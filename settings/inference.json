@@ -194,53 +194,5 @@
     },
     "max_seconds": null
   },
-  "dllm": {
-    "model": {
-      "path": "models/LLaDA-MoE-7B-A1B-Instruct-783d3467",
-      "revision": "783d3467f108d28ac0a78d3e41af16ab05cabd8d",
-      "weight_sha256": {
-        "model-00001-of-00003.safetensors": "84a7f34af2f3f14d767b0106b8fa7f0d7f9b95a0eeac74f2ab3f21bd69a03908",
-        "model-00002-of-00003.safetensors": "2ddb9174a03003263250c789942372382e2ce97f115377e28cb749c082f0b2d7",
-        "model-00003-of-00003.safetensors": "b1998424a021938681487ece097838f7131324eb4f776b8b0ce0c515526b31f4"
-      },
-      "mask_token_id": 156895,
-      "trust_remote_code": true,
-      "adapter": null
-    },
-    "engine": {"device": "cuda", "dtype": "bfloat16", "attn_implementation": "sdpa", "max_batch_size": 8,
-               "block_logits_only": true},
-    "prompt": {"system": "You are a helpful AI assistant."},
-    "max_new_tokens": 512,
-    "sampling": {
-      "block_length": 48,
-      "steps_per_block": 12,
-      "temperature": 1.0,
-      "top_k": 0,
-      "top_p": 1.0,
-      "remasking": "low_confidence"
-    },
-    "exact_sampling": {
-      "block_length": 48,
-      "steps_per_block": 12,
-      "temperature": 1.0,
-      "top_k": 0,
-      "top_p": 1.0,
-      "remasking": "random"
-    },
-    "algorithms": {
-      "sample": {},
-      "greedy": {},
-      "beam": {"decision_block_size": 48, "width": 8, "branching_factor": 2},
-      "best_of_n": {"samples": 8},
-      "mh": {"updates": 48, "proposal": "base", "frozen_history": {"samples": 8, "mixture": 0.25}},
-      "mh_power": {"alpha": 4.0, "decision_block_size": 48, "updates_per_stage": 12},
-      "is": {
-        "candidate_count": 8,
-        "rollout_count": 3,
-        "decision_block_size": 48,
-        "candidate_canvas": "block",
-        "kept_sequence": false
-      }
-    }
-  }
+  "dllm": null
 }

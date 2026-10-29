@@ -235,10 +235,12 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
 | `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
 | `max_new_tokens` | `null` | 评测与服务共用，默认使用剩余上下文；显式整数限制 thinking 与最终内容合计的生成长度 |
-| `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 每一步使用相同的候选数、补全数与块长；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
+| `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 当前固定的探索预算；K=1 时候选连同第一条补全由一次请求生成。不同卡数的执行性能比较保持这些参数、采样和奖励相同 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `dllm`
+
+默认 `null`，没有其他模型的权重、采样或设备调优预设。通用接口保留；显式配置时使用下表字段。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -277,6 +279,9 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 两者同时传入时须相等，非正整数返回 HTTP 400。独立思考预算与别名见 [`ar.thinking`](#arthinking)。
 
 ## `settings/training.json`
+
+默认 `stages=[]`、`download.models=[]`、`grpo=null`、`vrpo=null`，不下载旧模型或启动训练。
+启用训练阶段前必须显式提供对应完整配置；以下为接口字段。
 
 GRPO 的奖励与 VRPO 的偏好对都取数据集判定的正确性（正确为 1，否则为 0），即推理 verifier 的 oracle。
 

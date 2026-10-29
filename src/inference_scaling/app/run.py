@@ -30,7 +30,7 @@ from inference_scaling.app.records import (
     write_json_atomic,
 )
 from inference_scaling.datasets import load_dataset
-from inference_scaling.app.settings import validate_settings
+from inference_scaling.app.settings import SettingsError, validate_settings
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.rng import SeedStream
 
@@ -97,6 +97,8 @@ def _solve(family: Any, dataset: Dataset, problem: Problem, draw: int, seed: int
 
 def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str, Any]:
     validate_settings(dict(settings))
+    if settings.get(choices.model) is None:
+        raise SettingsError(f"{choices.model} is not configured; the supplied settings target Qwen3.8-27B (ar)")
     draws, seed = int(settings["run"]["draws"]), int(settings["run"]["seed"])
     if draws < 1:
         raise ValueError("run.draws must be positive")

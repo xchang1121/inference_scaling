@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from inference_scaling.app.settings import SCHEMA as INFERENCE_SCHEMA
-from inference_scaling.app.settings import SettingsError, check
+from inference_scaling.app.settings import DLLM_SCHEMA, SettingsError, check
 
 SETTINGS_PATH = Path("settings/training.json")
 STAGES = ("download", "grpo", "vrpo_preferences", "vrpo")
@@ -36,7 +36,7 @@ SCHEMA: dict[str, Any] = {
             "weight_sha256": (dict, None),
         }],
     },
-    "grpo": {
+    "grpo": (None, {
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
@@ -55,13 +55,13 @@ SCHEMA: dict[str, Any] = {
         # Passed to trl.GRPOConfig unchanged; TRL validates the names.
         "trainer": dict,
         "power_sample_seconds": float,
-    },
-    "vrpo": {
-        "model": {key: value for key, value in INFERENCE_SCHEMA["dllm"]["model"].items()
+    }),
+    "vrpo": (None, {
+        "model": {key: value for key, value in DLLM_SCHEMA["model"].items()
                   if key not in {"revision", "adapter"}},
-        "engine": INFERENCE_SCHEMA["dllm"]["engine"],
-        "prompt": INFERENCE_SCHEMA["dllm"]["prompt"],
-        "sampling": INFERENCE_SCHEMA["dllm"]["sampling"],
+        "engine": DLLM_SCHEMA["engine"],
+        "prompt": DLLM_SCHEMA["prompt"],
+        "sampling": DLLM_SCHEMA["sampling"],
         "max_new_tokens": int,
         "preferences": {
             "data": str,
@@ -88,7 +88,7 @@ SCHEMA: dict[str, Any] = {
             "gradient_checkpointing": bool,
         },
         "lora": _LORA,
-    },
+    }),
 }
 
 
@@ -97,6 +97,10 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
         raise SettingsError(f"{path} does not exist; run from the repository root")
     settings = json.loads(path.read_text(encoding="utf-8"))
     check(settings, SCHEMA, "training")
+    for stage in settings["stages"]:
+        section = "vrpo" if stage == "vrpo_preferences" else stage
+        if settings[section] is None:
+            raise SettingsError(f"training.{section} must be configured before enabling stage {stage}")
     return settings
 
 

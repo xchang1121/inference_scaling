@@ -5,6 +5,8 @@ from training.settings import load_settings
 # Tokenizers fork-parallelism deadlocks under the trainers' worker processes.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 settings = load_settings()
+if not settings["stages"]:
+    raise SystemExit("No training stages configured. The supplied configuration targets training-free Qwen3.8-27B inference.")
 for stage in settings["stages"]:
     print(f"== {stage}", flush=True)
     if stage == "download":

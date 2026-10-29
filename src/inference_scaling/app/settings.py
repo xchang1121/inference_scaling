@@ -232,6 +232,11 @@ SCHEMA: dict[str, Any] = {
 }
 
 
+# Optional families retain their schema without shipping other model presets.
+DLLM_SCHEMA = SCHEMA["dllm"]
+SCHEMA["dllm"] = (None, DLLM_SCHEMA)
+
+
 class SettingsError(ValueError):
     """The settings file does not match the schema."""
 
@@ -307,6 +312,8 @@ def validate_settings(settings: dict[str, Any]) -> None:
 
     check(settings, SCHEMA, "settings")
     for family in ("ar", "dllm"):
+        if settings[family] is None:
+            continue
         if settings[family]["max_new_tokens"] is not None and settings[family]["max_new_tokens"] <= 0:
             raise SettingsError(f"{family}.max_new_tokens must be positive")
     ar = settings["ar"]
@@ -343,4 +350,4 @@ def validate_settings(settings: dict[str, Any]) -> None:
             raise SettingsError(str(error)) from error
 
 
-__all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]
+__all__ = ["DLLM_SCHEMA", "SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]

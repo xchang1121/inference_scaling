@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -10,17 +11,24 @@ from training.grpo import VerifierReward, _combine, _latest_checkpoint, _text
 from training.settings import SCHEMA, load_settings
 
 
-def test_training_settings_validate_and_list_known_stages() -> None:
+def test_training_settings_validate_and_list_known_stages(tmp_path) -> None:
     settings = load_settings()
-    assert settings["stages"] == ["download", "grpo", "vrpo_preferences", "vrpo"]
+    assert settings["stages"] == [] and settings["download"]["models"] == []
+    assert settings["grpo"] is settings["vrpo"] is None
     broken = copy.deepcopy(settings)
     broken["stages"] = ["download", "evaluate"]
     with pytest.raises(SettingsError, match="must be one of"):
         check(broken, SCHEMA, "training")
     broken = copy.deepcopy(settings)
-    del broken["vrpo"]["training"]["beta"]
-    with pytest.raises(SettingsError, match="missing keys \\['beta'\\]"):
+    broken["vrpo"] = {}
+    with pytest.raises(SettingsError, match="missing keys"):
         check(broken, SCHEMA, "training")
+    for stage in ("grpo", "vrpo_preferences", "vrpo"):
+        settings["stages"] = [stage]
+        path = tmp_path / "training.json"
+        path.write_text(json.dumps(settings), encoding="utf-8")
+        with pytest.raises(SettingsError, match="must be configured"):
+            load_settings(path)
 
 
 def test_grpo_reward_grades_each_completion_against_its_row_reference(base_settings) -> None:

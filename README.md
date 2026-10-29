@@ -144,13 +144,16 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。
 
-## 训练
+## 训练与其他模型族接口
 
 ```bash
 python -m training
 ```
 
-按 `settings/training.json` 的 `stages` 依次运行，没有命令行参数，各阶段可续跑：
+当前配置仅启用 Qwen3.8-27B 的 training-free 推理。旧模型的下载、训练与扩散采样预设已移除：
+`dllm=null`，训练的 `stages=[]`、`download.models=[]`、`grpo=null`、`vrpo=null`。
+算法和后端接口保留，调用未配置的模型族或训练阶段会在加载模型前报错。
+另行配置训练时，入口按 `settings/training.json` 的 `stages` 依次执行，各阶段可续跑：
 
 | 阶段 | 内容 | 代码 |
 | --- | --- | --- |
@@ -159,8 +162,7 @@ python -m training
 | `vrpo_preferences` | 用 LLaDA 生成候选并按数据集判定的正确性选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
 | `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |
 
-训练得到的适配器填入推理设置的 `ar.model.adapter` 或 `dllm.model.adapter` 即可评测；GRPO 适配器还要把 `ar.model`
-改回训练所用的 Qwen2.5-1.5B-Instruct。
+训练适配器须与基模型匹配，填入对应模型族的 `model.adapter` 后评测。
 
 ## 推理服务
 
@@ -174,13 +176,12 @@ OpenAI 与 Anthropic 兼容的接口；每个请求按配置在思考段上做�
 
 ## 安装
 
-AR-LLM 与官方 LLaDA-MoE 需要不同的 Transformers 版本，两个模型族分别安装到各自的 Python 环境：
+当前 Qwen3.8-27B 推理环境：
 
 ```bash
 python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
-python -m pip install -e ".[dev,gpu,training,evaluation]"      # AR-LLM
-python -m pip install -e ".[dev,dllm,dllm-training,evaluation]" # LLaDA-MoE 与 VRPO（另一个环境）
-python -m pip install -e ".[dev,vllm]"                          # vLLM（Linux 或 WSL2 的独立环境）
+python -m pip install -e ".[dev,gpu,evaluation]" # Transformers 后端
+python -m pip install -e ".[dev,vllm,serve,evaluation]" # vLLM（Linux 或 WSL2）
 ```
 
 ## 测试与目录

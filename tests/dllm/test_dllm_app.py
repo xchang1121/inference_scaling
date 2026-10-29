@@ -41,23 +41,14 @@ def _tiny_backend():
 
 
 @pytest.fixture
-def dllm_settings(base_settings, tmp_path, monkeypatch):
+def dllm_settings(base_settings, tiny_dllm_settings, tmp_path, monkeypatch):
     settings = base_settings
-    settings["dllm"]["max_new_tokens"] = 5
+    settings["dllm"] = tiny_dllm_settings
     model = tmp_path / "llada"
     model.mkdir()
     (model / "model.safetensors").write_bytes(b"w")
     settings["dllm"]["model"].update(path=str(model), weight_sha256={"model.safetensors": hashlib.sha256(b"w").hexdigest()},
                                      mask_token_id=3)
-    for section in ("sampling", "exact_sampling"):
-        settings["dllm"][section].update(block_length=2, steps_per_block=2)
-    algorithms = settings["dllm"]["algorithms"]
-    algorithms["beam"].update(decision_block_size=2, width=2, branching_factor=2)
-    algorithms["best_of_n"]["samples"] = 3
-    algorithms["mh_power"].update(decision_block_size=2, updates_per_stage=2)
-    algorithms["mh"].update(updates=3)
-    algorithms["mh"]["frozen_history"]["samples"] = 2
-    algorithms["is"].update(candidate_count=2, rollout_count=2, decision_block_size=2)
     settings["rewards"]["verifier"]["pool_size"] = 2
     monkeypatch.setattr("inference_scaling.app.dllm.load_llada_backend", lambda model, engine: _tiny_backend())
     return settings
