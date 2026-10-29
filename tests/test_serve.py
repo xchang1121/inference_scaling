@@ -205,12 +205,15 @@ class _StubReasoner:
     def prepare(self, conversation):
         return SimpleNamespace(prompt=(1, 2, 3), conversation=conversation)
 
-    def generate(self, prepared, *, on_thinking=None):
+    def generate(self, prepared, *, on_thinking=None, on_content=None):
         if on_thinking is not None:
             on_thinking("thi")
         time.sleep(0.05)
         if on_thinking is not None:
             on_thinking("nk")
+        if on_content is not None:
+            on_content("Edit")
+            on_content("ing.")
         return Reply("think", "Editing.", (ToolCall("edit", {"line": 7}, "call_1"),), "tool_calls", 3, 5, {"effort": "medium"})
 
 

@@ -25,12 +25,12 @@ from inference_scaling.serve.protocol import (
     anthropic_response,
     anthropic_stream_body,
     anthropic_stream_start,
-    anthropic_thinking_delta,
+    anthropic_text_delta,
     openai_conversation,
     openai_response,
     openai_stream_body,
     openai_stream_start,
-    openai_thinking_delta,
+    openai_text_delta,
 )
 
 
@@ -58,19 +58,22 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     async def invalid(_request: Request, error: ProtocolError) -> JSONResponse:
         return JSONResponse({"type": "error", "error": {"type": "invalid_request_error", "message": str(error)}}, 400)
 
-    async def reason(conversation: Conversation, updates: "asyncio.Queue[str] | None" = None,
-                     disconnected: threading.Event | None = None) -> tuple[Any, "asyncio.Future[Reply]"]:
+    async def reason(conversation: Conversation, updates: "asyncio.Queue[tuple[str, str]] | None" = None,
+                     disconnected: threading.Event | None = None, include_thinking: bool = True
+                     ) -> tuple[Any, "asyncio.Future[Reply]"]:
         prepared = reasoner.prepare(conversation)
         await slots.acquire()
         loop = asyncio.get_running_loop()
 
-        def publish(text: str) -> None:
+        def publish(kind: str, text: str) -> None:
             if updates is not None and (disconnected is None or not disconnected.is_set()):
-                loop.call_soon_threadsafe(updates.put_nowait, text)
+                loop.call_soon_threadsafe(updates.put_nowait, (kind, text))
 
         def generate() -> Reply:
             try:
-                return (reasoner.generate(prepared, on_thinking=publish) if updates is not None
+                return (reasoner.generate(prepared,
+                                          on_thinking=(lambda text: publish("thinking", text)) if include_thinking else None,
+                                          on_content=lambda text: publish("content", text)) if updates is not None
                         else reasoner.generate(prepared))
             finally:
                 # Cancelling an asyncio waiter cannot stop a running thread.
@@ -87,9 +90,15 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         return prepared, task
 
     async def stream(start: str, task: "asyncio.Future[Reply]", ping: str,
-                     body: Callable[[Reply, str], Iterator[str]], updates: "asyncio.Queue[str]",
+                     body: Callable[[Reply, str, str], Iterator[str]], updates: "asyncio.Queue[tuple[str, str]]",
                      delta: Callable[..., Iterator[str]], disconnected: threading.Event) -> AsyncIterator[str]:
-        chunks: list[str] = []
+        chunks: dict[str, list[str]] = {"thinking": [], "content": []}
+
+        def events(item):
+            kind, text = item
+            yield from delta(kind, text, first=not chunks[kind], thinking_started=bool(chunks["thinking"]))
+            chunks[kind].append(text)
+
         pending = asyncio.create_task(updates.get())
         try:
             yield start
@@ -97,10 +106,8 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
                 waiters: set[asyncio.Future[Any]] = {task, pending}
                 ready, _ = await asyncio.wait(waiters, timeout=keepalive)
                 if pending in ready:
-                    text = pending.result()
-                    for event in delta(text, first=not chunks):
+                    for event in events(pending.result()):
                         yield event
-                    chunks.append(text)
                     pending = asyncio.create_task(updates.get())
                 if task in ready:
                     # All worker callbacks precede task completion. Drain the
@@ -108,14 +115,12 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
                     while not updates.empty():
-                        text = updates.get_nowait()
-                        for event in delta(text, first=not chunks):
+                        for event in events(updates.get_nowait()):
                             yield event
-                        chunks.append(text)
                     break
                 if not ready:
                     yield ping
-            for event in body(task.result(), "".join(chunks)):
+            for event in body(task.result(), "".join(chunks["thinking"]), "".join(chunks["content"])):
                 yield event
         finally:
             disconnected.set()
@@ -134,14 +139,14 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     async def chat(request: Request) -> Any:
         conversation = openai_conversation(await request.json())
         request_id = "chatcmpl-" + uuid.uuid4().hex
-        updates: asyncio.Queue[str] = asyncio.Queue()
+        updates: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         disconnected = threading.Event()
         _, task = await reason(conversation, updates if conversation.stream else None, disconnected)
         if not conversation.stream:
             return openai_response(await asyncio.shield(task), model, request_id)
         return StreamingResponse(stream(openai_stream_start(model, request_id), task, OPENAI_KEEPALIVE,
-                                        lambda reply, prefix: openai_stream_body(reply, model, request_id, prefix),
-                                        updates, lambda text, **kw: openai_thinking_delta(text, model, request_id, **kw), disconnected),
+                                        lambda reply, thought, content: openai_stream_body(reply, model, request_id, thought, content),
+                                        updates, lambda kind, text, **kw: openai_text_delta(kind, text, model, request_id, **kw), disconnected),
                                  media_type="text/event-stream")
 
     @app.post("/v1/messages")
@@ -150,14 +155,14 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
         conversation, request_id = anthropic_conversation(body), "msg_" + uuid.uuid4().hex
         # Anthropic clients see the thought when they enable thinking.
         thinking = (body.get("thinking") or {}).get("type") == "enabled"
-        updates: asyncio.Queue[str] = asyncio.Queue()
+        updates: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         disconnected = threading.Event()
-        prepared, task = await reason(conversation, updates if conversation.stream and thinking else None, disconnected)
+        prepared, task = await reason(conversation, updates if conversation.stream else None, disconnected, thinking)
         if not conversation.stream:
             return anthropic_response(await asyncio.shield(task), model, request_id, thinking)
         return StreamingResponse(stream(anthropic_stream_start(model, request_id, len(prepared.prompt)), task,
-                                        ANTHROPIC_KEEPALIVE, lambda reply, prefix: anthropic_stream_body(reply, thinking, prefix),
-                                        updates, anthropic_thinking_delta, disconnected),
+                                        ANTHROPIC_KEEPALIVE, lambda reply, thought, content: anthropic_stream_body(reply, thinking, thought, content),
+                                        updates, anthropic_text_delta, disconnected),
                                  media_type="text/event-stream")
 
     @app.post("/v1/messages/count_tokens")

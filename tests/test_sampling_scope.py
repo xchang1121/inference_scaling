@@ -44,3 +44,14 @@ def test_scope_finishes_content_from_original_backend_with_remaining_budget():
     assert info["content_token_ids"] == (0,)
     assert info["final_content_generated_tokens"] == 2
     assert info["thinking_status"] == "complete"
+    from inference_scaling.arllm.backends.scheduling import SchedulerConfig
+    from tests.simulation import SimulatedBackend
+    streamed = SimulatedBackend(_Backend(), SchedulerConfig())
+    emitted = []
+    result = scope.finish(streamed, (3,), thinking.token_ids, max_new_tokens=6,
+                          sampling=SamplingConfig(eos_token_id=2), seed=1,
+                          on_content=lambda tokens: emitted.append((tokens, streamed.now)))
+    assert result == (tokens, info)
+    assert [tokens for tokens, _ in emitted] == [(0,), (0, 2)]
+    assert emitted[0][1] < emitted[-1][1]
+    assert not streamed.jobs and not streamed.queue.active

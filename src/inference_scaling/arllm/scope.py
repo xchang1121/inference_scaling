@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
+from inference_scaling.arllm.backends.scheduling import SampleBuffer
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import thinking_format_from_backend, output_settings_from_config
 from inference_scaling.arllm.types import GenerationRequest
@@ -73,6 +74,7 @@ class SamplingScope:
     def finish(
         self, backend: Any, prompt: TokenSequence, tokens: TokenSequence, *,
         max_new_tokens: int, sampling: SamplingConfig, seed: int,
+        on_content: Callable[[TokenSequence], None] | None = None,
     ) -> tuple[TokenSequence, dict[str, Any]]:
         sequence = tuple(tokens)
         final_generated = 0
@@ -84,10 +86,28 @@ class SamplingScope:
                 sequence = sequence[:segments.boundary_end]
                 remaining = max_new_tokens - len(sequence)
                 if remaining > 0:
-                    sample = backend.sample_batch([GenerationRequest(
+                    request = GenerationRequest(
                         prefix=prompt + sequence, max_new_tokens=remaining, sampling=sampling,
                         seed=seed, request_id="scope:final-content",
-                    )])[0]
+                    )
+                    if on_content is not None and getattr(backend, "supports_streaming_generation", False):
+                        session, buffer = backend.open_generation_session(), SampleBuffer()
+                        try:
+                            session.submit([request], phase="content", checkpoint=1)
+                            session.seal()
+                            while True:
+                                event = session.next_event()
+                                buffer.append(event.delta)
+                                on_content(tuple(buffer.tokens))
+                                if event.finished:
+                                    break
+                            sample = buffer.sample()
+                        finally:
+                            session.close()
+                    else:
+                        sample = backend.sample_batch([request])[0]
+                        if on_content is not None:
+                            on_content(sample.token_ids)
                     final_generated = len(sample.token_ids)
                     final_slots = sample.forward_token_slots
                     sequence += sample.token_ids

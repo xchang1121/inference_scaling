@@ -44,7 +44,27 @@ class Prepared:
     ar: Mapping[str, Any]
 
 
-class _ThoughtPublisher:
+class _TextPublisher:
+    def __init__(self, raw, callback):
+        self.raw, self.callback, self.sent = raw, callback, ""
+
+    def text(self, tokens, *, final=False):
+        text = self.raw.decode(tokens).strip()
+        return text if final else text.rstrip("\ufffd").rstrip()
+
+    def publish(self, tokens, *, final=False):
+        if self.callback is None:
+            return
+        text = self.text(tokens, final=final)
+        if not text.startswith(self.sent):
+            raise RuntimeError("committed text changed during incremental decoding")
+        delta = text[len(self.sent):]
+        if delta:
+            self.sent = text
+            self.callback(delta)
+
+
+class _ThoughtPublisher(_TextPublisher):
     """Decode committed thinking only; incomplete byte/marker suffixes wait.
 
     A prefilled thinking channel remains reasoning on a malformed/incomplete
@@ -53,11 +73,11 @@ class _ThoughtPublisher:
     """
 
     def __init__(self, raw, prompt, parser, enabled, callback):
-        self.raw, self.prompt, self.parser, self.callback = raw, prompt, parser, callback
+        super().__init__(raw, callback)
+        self.prompt, self.parser = prompt, parser
         formats: tuple[Any, ...] = getattr(parser, "formats", ())
         self.prefilled = enabled and len(formats) == 1 and formats[0].prompt_is_thinking(prompt)
         self.marker = formats[0].end_token_ids if self.prefilled else ()
-        self.sent = ""
 
     def text(self, tokens, *, final=False):
         segments = self.parser.split(self.prompt, tokens, eos_token_id=self.raw.tokenizer.eos_token_id)
@@ -79,15 +99,9 @@ class _ThoughtPublisher:
         return text
 
     def publish(self, tokens, *, final=False):
-        if self.callback is None or (not self.prefilled and not final):
+        if not self.prefilled and not final:
             return
-        text = self.text(tokens, final=final)
-        if not text.startswith(self.sent):
-            raise RuntimeError("committed thinking text changed during incremental decoding")
-        delta = text[len(self.sent):]
-        if delta:
-            self.sent = text
-            self.callback(delta)
+        super().publish(tokens, final=final)
 
 
 class Reasoner:
@@ -134,7 +148,8 @@ class Reasoner:
             raise ProtocolError(str(error)) from error
         return Prepared(prompt, thinking["reasoning_effort"], budget, maximum, conversation.tools, ar)
 
-    def generate(self, prepared: Prepared, *, on_thinking: Callable[[str], None] | None = None) -> Reply:
+    def generate(self, prepared: Prepared, *, on_thinking: Callable[[str], None] | None = None,
+                 on_content: Callable[[str], None] | None = None) -> Reply:
         with self._seed_lock:
             seeds = SeedStream(self.seed).derive("request", next(self._seeds))
         prompt, maximum, raw, ar = prepared.prompt, prepared.maximum, self.raw, prepared.ar
@@ -155,7 +170,7 @@ class Reasoner:
         clock_start = time.perf_counter()
         snapshot = getattr(raw, "snapshot", lambda: None)
         preemptions = getattr(snapshot(), "preemptions", 0)
-        first_commit = first_publish = None
+        first_commit = first_publish = first_content = None
 
         def emit(text):
             nonlocal first_publish
@@ -166,6 +181,16 @@ class Reasoner:
 
         publisher = _ThoughtPublisher(raw, prompt, thinking_format, scope.scope == "thinking",
                                       emit if on_thinking is not None else None)
+
+        def emit_content(text):
+            nonlocal first_content
+            if first_content is None:
+                first_content = time.perf_counter() - clock_start
+            assert on_content is not None
+            on_content(text)
+
+        stream_content = on_content is not None and not prepared.tools and scope.scope == "thinking"
+        content_publisher = _TextPublisher(raw, emit_content if stream_content else None)
 
         def committed(tokens):
             nonlocal first_commit
@@ -183,7 +208,10 @@ class Reasoner:
         thought_ready = time.perf_counter() - clock_start
         with meter.phase("finish"):
             tokens, info = scope.finish(bounded, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
-                                        seed=SeedStream(seeds).derive("final-content"))
+                                        seed=SeedStream(seeds).derive("final-content"),
+                                        on_content=content_publisher.publish if stream_content else None)
+        if info["thinking_status"] == "complete":
+            content_publisher.publish(info["content_token_ids"], final=True)
         # Recomputed preempted tokens are not attributable to an individual
         # client. Conservatively suppress its cost if any preemption overlapped.
         if getattr(snapshot(), "preemptions", 0) != preemptions:
@@ -206,6 +234,7 @@ class Reasoner:
             "generation_budget": dict(prepared.budget), "max_seconds": limit,
             "first_commit_seconds": first_commit, "thought_ready_seconds": thought_ready,
             "first_thinking_publish_seconds": first_publish,
+            "first_content_publish_seconds": first_content,
             "sampling_seed": seeds, "cost": cost,
             "thinking_status": info["thinking_status"],
             "thinking_tokens": len(info["thinking_token_ids"]),
