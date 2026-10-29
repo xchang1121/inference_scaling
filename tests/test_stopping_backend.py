@@ -1,6 +1,7 @@
 from dataclasses import replace
 from itertools import product
 from math import exp, log
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,9 @@ from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
 from inference_scaling.arllm.algorithms.mh import run_mh_chain
 from inference_scaling.arllm.backends.stopping import StoppedSequenceBackend
+from inference_scaling.arllm.backends.thinking_budget import ThinkingBudgetBackend
+from inference_scaling.arllm.backends.streaming import BatchGenerationSession
+from inference_scaling.arllm.backends.scheduling import GenerationEvent, SampleBuffer
 from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, ScoreRequest
@@ -163,3 +167,67 @@ def test_block_first_through_the_thinking_scope_leaves_conditional_is_unchanged(
         pointwise(lambda prompt, sequence: float(sequence.count(0))), SeedStream(7), sampling=SamplingConfig(eos_token_id=2))
         for block_first in (False, True)]
     assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps
+
+
+@pytest.mark.parametrize("marker", [(1,), (1, 4)])
+def test_thinking_budget_preserves_sample_score_and_stream_laws(marker):
+    raw = TabularAutoregressiveBackend({}, fallback=(0.6, 0.2, 0.2, 0.0, 0.0))
+    raw.tokenizer = SimpleNamespace(eos_token_id=2)
+    parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
+    bounded = ThinkingBudgetBackend(raw, (3,), parser, 2, marker)
+    horizon = 3 + len(marker)
+    outputs = [tokens for size in range(1, horizon + 1) for tokens in product((0, 1, 2, 4), repeat=size)
+               if (2 in tokens and tokens.index(2) == size - 1) or (2 not in tokens and size == horizon)]
+    scores = bounded.score_batch([ScoreRequest((3,), tuple(outputs))])
+    assert sum(exp(sum(row)) for row in scores) == pytest.approx(1.0)
+
+    class ChunkedSession(BatchGenerationSession):
+        def next_event(self):
+            event = super().next_event()
+            sample = event.delta
+            if len(sample.token_ids) <= 1:
+                return event
+            self.events.appendleft(GenerationEvent(replace(sample, token_ids=sample.token_ids[1:],
+                token_logprobs=sample.token_logprobs[1:], reference_token_logprobs=sample.reference_token_logprobs[1:],
+                token_cdf_bounds=sample.token_cdf_bounds[1:]), event.finished))
+            return GenerationEvent(replace(sample, token_ids=sample.token_ids[:1],
+                token_logprobs=sample.token_logprobs[:1], reference_token_logprobs=sample.reference_token_logprobs[:1],
+                token_cdf_bounds=sample.token_cdf_bounds[:1], forward_token_slots=None), False)
+
+    raw.open_generation_session = lambda: ChunkedSession(raw)
+    requests = [GenerationRequest((3,), horizon, SamplingConfig(eos_token_id=2), seed, str(seed)) for seed in range(8)]
+    samples = bounded.sample_batch(requests)
+    assert bounded.score_batch([ScoreRequest((3,), tuple(sample.token_ids for sample in samples))]) == [
+        sample.token_logprobs for sample in samples]
+    session = bounded.open_generation_session()
+    buffers = {request.request_id: SampleBuffer() for request in requests}
+    finished = set()
+    try:
+        session.submit(requests)
+        session.seal()
+        while len(finished) < len(requests):
+            event = session.next_event()
+            buffers[event.delta.request_id].append(event.delta)
+            if event.finished:
+                finished.add(event.delta.request_id)
+        assert [buffers[request.request_id].sample() for request in requests] == samples
+    finally:
+        session.close()
+    # A candidate prefix consumes the same global budget; forced delimiter
+    # fragments also remain consistent across a block boundary.
+    for offset in range(len(marker)):
+        prefix = (3, 0, 0) + marker[:offset]
+        sample = bounded.sample_batch([GenerationRequest(prefix, len(marker) - offset,
+                                                        SamplingConfig(eos_token_id=2), 3, "suffix")])[0]
+        assert sample.token_ids == marker[offset:] and sample.logprob == 0
+        assert bounded.score_batch([ScoreRequest(prefix, (sample.token_ids,))])[0] == sample.token_logprobs
+    scoped = _backend(parser=parser, raw=bounded)
+    result = run_conditional_is(scoped, (3,), ConditionalISConfig(
+        block_first=False, total_length=horizon, block_size=1, candidate_count=2, rollout_count=2, reward_temperature=1),
+        pointwise(lambda prompt, sequence: 0.0), SeedStream(7), sampling=SamplingConfig(eos_token_id=2))
+    mh = run_mh_chain(scoped, (3,), MHConfig(
+        reward_temperature=None, early_rejection=False, suffix_replay=False, total_length=horizon,
+        block_size=1, steps_per_block=2, alpha=2, suffix_schedule="uniform", iterations=None), SeedStream(8),
+        base=SamplingConfig(eos_token_id=2), proposal=SamplingConfig(temperature=0.5, eos_token_id=2))
+    for tokens in (result.token_ids, mh.token_ids):
+        assert exp(sum(scoped.score_batch([ScoreRequest((3,), (tokens,))])[0])) > 0

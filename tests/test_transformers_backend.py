@@ -222,6 +222,10 @@ def test_token_penalty_steers_native_greedy_and_beam_generation() -> None:
         penalized = TransformersBackend(model, tokenizer, device="cpu", max_score_batch_size=8, score_chunk_size=8,
                                         token_penalty=TokenPenalty(chosen, 30.0))
         assert not set(penalized.direct_generate((1, 4), max_new_tokens=4, num_beams=beams)) & set(chosen)
+        # The native beam state is retained while forced tokens have logprob 0.
+        forced = plain.direct_generate((1, 4), max_new_tokens=3, num_beams=beams,
+                                       token_constraint=lambda tokens: 5 if len(tokens) < 4 else 2)
+        assert forced == (5, 5, 2)
 
 
 def test_token_penalty_words_take_their_single_token_forms() -> None:

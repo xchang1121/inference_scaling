@@ -1166,7 +1166,8 @@ class AsyncVLLMBackend(VLLMBackend):
             length -= 1
         return cumulative_logprob / max(1, length)
 
-    async def _beam_search_async(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int) -> TokenSequence:
+    async def _beam_search_async(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int,
+                                 token_constraint=None) -> TokenSequence:
         params = self._sampling_params_factory(
             max_tokens=1, temperature=0.0, top_p=1.0, top_k=0, seed=0, logprobs=2 * int(num_beams), flat_logprobs=False,
             logit_bias=self._logit_bias(), ignore_eos=True, detokenize=False, skip_special_tokens=False,
@@ -1177,13 +1178,20 @@ class AsyncVLLMBackend(VLLMBackend):
         completed: list[tuple[TokenSequence, float]] = []
         eos = getattr(self.tokenizer, "eos_token_id", None)
         for _ in range(max_new_tokens):
-            outputs = await asyncio.gather(*(self._generate_one(self._prompt(tokens), params) for tokens, _ in active))
+            forced = [None if token_constraint is None else token_constraint(
+                prefix + tokens[len(model_prefix):]) for tokens, _ in active]
+            outputs = iter(await asyncio.gather(*(self._generate_one(self._prompt(tokens), params)
+                                                  for (tokens, _), token in zip(active, forced) if token is None)))
             candidates: list[tuple[TokenSequence, float]] = []
-            for (tokens, cumulative), output in zip(active, outputs, strict=True):
-                positions = self._completion(output).logprobs
-                if positions is None or len(positions) != 1:
-                    raise RuntimeError("vLLM beam expansion omitted next-token log-probabilities")
-                for token, value in positions[0].items():
+            for (tokens, cumulative), forced_token in zip(active, forced, strict=True):
+                if forced_token is None:
+                    positions = self._completion(next(outputs)).logprobs
+                    if positions is None or len(positions) != 1:
+                        raise RuntimeError("vLLM beam expansion omitted next-token log-probabilities")
+                    choices = positions[0]
+                else:
+                    choices = {forced_token: 0.0}
+                for token, value in choices.items():
                     expanded = tokens + (int(token),)
                     scored = cumulative + float(getattr(value, "logprob", value))
                     (completed if eos is not None and int(token) == int(eos) else candidates).append((expanded, scored))
@@ -1198,12 +1206,16 @@ class AsyncVLLMBackend(VLLMBackend):
             raise RuntimeError("vLLM beam-search output did not preserve the prompt")
         return full_tokens[len(model_prefix) :]
 
-    def direct_generate(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int = 1) -> TokenSequence:
-        if num_beams == 1:
+    supports_constrained_beam_search = True
+
+    def direct_generate(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int = 1,
+                        token_constraint=None) -> TokenSequence:
+        if num_beams == 1 and token_constraint is None:
             return super().direct_generate(prefix, max_new_tokens=max_new_tokens, num_beams=num_beams)
         if max_new_tokens <= 0 or num_beams <= 0:
             raise ValueError("generation length and beam count must be positive")
-        return self._runner.run(self._beam_search_async(prefix, max_new_tokens=max_new_tokens, num_beams=num_beams))
+        return self._runner.run(self._beam_search_async(prefix, max_new_tokens=max_new_tokens, num_beams=num_beams,
+                                                       token_constraint=token_constraint))
 
     def close(self) -> None:
         if self._closed:

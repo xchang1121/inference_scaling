@@ -46,8 +46,8 @@ def test_settings_reject_missing_unknown_and_mistyped_keys() -> None:
     with pytest.raises(SettingsError, match="unknown keys"):
         validate_settings(broken)
     broken = copy.deepcopy(settings)
-    broken["ar"]["engine"]["context_window"] = broken["ar"]["max_new_tokens"]
-    with pytest.raises(SettingsError, match="leave room for the prompt"):
+    broken["ar"]["engine"]["context_window"] = 0
+    with pytest.raises(SettingsError, match="positive or null"):
         validate_settings(broken)
     broken = copy.deepcopy(settings)
     broken["ar"]["engine"]["vllm"]["engine_kwargs"]["max_model_len"] = 32768

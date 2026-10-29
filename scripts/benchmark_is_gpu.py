@@ -336,12 +336,14 @@ def compare_runs(paths):
     for name in ("model", "sampling", "prompt", "output", "algorithms"):
         if left_meta["settings"]["ar"][name] != right_meta["settings"]["ar"][name]:
             raise ValueError(f"comparison changed ar.{name}")
+    if left_meta["settings"]["ar"].get("thinking") != right_meta["settings"]["ar"].get("thinking"):
+        raise ValueError("comparison changed ar.thinking")
 
     def limits(meta):
         # Historical measurements keep their original schema; this is not a runtime configuration fallback.
         ar = meta["settings"]["ar"]
         maximum = ar.get("max_new_tokens")
-        if maximum is None:
+        if "max_new_tokens" not in ar:
             maximum = meta["settings"]["datasets"][meta["arguments"]["dataset"]]["max_new_tokens"]
         engine_limits = [ar["engine"]["context_window"], ar["engine"]["vllm"].get("max_model_len")]
         finite = [value for value in engine_limits if value is not None]
@@ -431,7 +433,8 @@ def main():
     if min(args.tensor_parallel_size, args.data_parallel_size) < 1 or not 0 < args.memory_utilization < 1:
         parser.error("parallel sizes must be positive and memory utilization must be between 0 and 1")
     rollout_counts = args.k
-    if (min(args.repeats, args.max_new_tokens, args.block_size, *rollout_counts, args.candidate_count) < 1
+    if (min(args.repeats, args.block_size, *rollout_counts, args.candidate_count) < 1
+            or (args.max_new_tokens is not None and args.max_new_tokens < 1)
             or (args.questions is not None and args.questions < 1)
             or max(rollout_counts) > 4 or args.temperature <= 0):
         parser.error("positive budgets and K <= 4 are required")

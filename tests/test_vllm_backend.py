@@ -614,5 +614,7 @@ def test_async_vllm_overlaps_requests_from_independent_callers() -> None:
     assert engine.maximum_active == 2
     assert backend.snapshot().maximum_in_flight_requests == 2
     assert backend.direct_generate((1,), max_new_tokens=2, num_beams=2) == (3, 3)
+    assert backend.direct_generate((1,), max_new_tokens=2, num_beams=2,
+                                   token_constraint=lambda tokens: 4 if len(tokens) == 2 else None) == (3, 4)
     backend.close()
     assert engine.closed

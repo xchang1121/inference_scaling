@@ -55,15 +55,18 @@ python -m inference_scaling --algorithm is --model dllm --output results
 
 | 配置位置 | 含义 | 当前值 |
 | --- | --- | --- |
-| `ar.max_new_tokens` | Base、IS、MH 及服务共用的单条输出上限；思考与最终内容共享 | 131072 |
-| `ar.engine.context_window` | 输入与输出合计的上下文上限；同时传给 vLLM 的 `max_model_len` | 133120 |
-| `ar.prompt.chat_template_kwargs.reasoning_effort` | 评测与服务默认使用的模板推理强度 | `xhigh` |
+| `ar.max_new_tokens` | 单条生成总长（thinking + 最终内容）；`null` 按实际剩余上下文计算 | `null` |
+| `ar.engine.context_window` | 输入与输出合计的容量；`null` 读取模型/引擎配置，Qwen3.8-27B 原生为 262144 | `null` |
+| `ar.thinking` | 共用的思考档位、预算和别名；两项选择均为 `null` 时用官方默认 | `xhigh`，thinking 上限 131072 |
 | `ar.sampling` / `ar.model.token_penalty` | 共用采样策略与词表惩罚 | 温度 1、完整词表；8 词、强度 1 |
 | `dllm.max_new_tokens` | 扩散模型的输出画布上限，按扩散块长向下取整 | 512 |
 
 数据集只配置题目、提示与判定，不设置生成长度。模型实际上下文不足时，剩余空间会进一步限制输出；
 评测的 `trace.generation_budget` 和服务的 `scaling.generation_budget` 记录请求上限、生效上限及限制原因。
-服务请求的 `max_tokens` / `max_completion_tokens` 可显式调低单条上限，`reasoning_effort` 只改变模板强度。
+服务请求的 `max_tokens` / `max_completion_tokens` 限制生成总长；`reasoning_effort` 同时选择模板强度和 thinking 预算：
+`low` 为 4096，`medium` 为 16384，显式 `xhigh` 为 262144，`none` 关闭思考。
+`thinking_budget` 可单独指定思考上限，与 `reasoning_effort` 互斥。思考预算耗尽后关闭思考段并继续最终内容，生成总长仍优先。
+完整映射和实现边界见 [思考预算](docs/SETTINGS.md#arthinking)。
 上述上限均不代表 IS 全部候选的总 token 预算。性能测量脚本也继承同一配置，显式参数和生效配置随结果保存。
 
 ## 算法

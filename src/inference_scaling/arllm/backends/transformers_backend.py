@@ -529,7 +529,10 @@ class TransformersBackend:
     def decode(self, tokens: TokenSequence, *, skip_special_tokens: bool = True) -> str:
         return str(self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens))
 
-    def direct_generate(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int = 1) -> TokenSequence:
+    supports_constrained_beam_search = True
+
+    def direct_generate(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int = 1,
+                        token_constraint=None) -> TokenSequence:
         """Greedy/beam baseline using Transformers' native generation path."""
 
         if max_new_tokens <= 0 or num_beams <= 0:
@@ -538,10 +541,19 @@ class TransformersBackend:
         input_ids = torch_module.tensor([prefix], dtype=torch_module.long, device=self.device)
         attention_mask = torch_module.ones_like(input_ids)
         # Beam search adds up the processed scores, so they are the penalized model's normalized log-probabilities.
-        penalized = None if self._penalty is None else [lambda _ids, scores: self._policy_log_probs(scores, None)]
+        penalized = [] if self._penalty is None else [lambda _ids, scores: self._policy_log_probs(scores, None)]
+        if token_constraint is not None:
+            def constrain(ids, scores):
+                for row, tokens in enumerate(ids.tolist()):
+                    token = token_constraint(tuple(tokens))
+                    if token is not None:
+                        scores[row].fill_(float("-inf"))
+                        scores[row, token] = 0.0
+                return scores
+            penalized.append(constrain)
         with self._model_lock, torch_module.inference_mode():
             output = self.model.generate(
                 input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens, do_sample=False,
                 num_beams=num_beams, use_cache=True, pad_token_id=self.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id, logits_processor=penalized)
+                eos_token_id=self.tokenizer.eos_token_id, logits_processor=penalized or None)
         return tuple(int(token) for token in output[0, input_ids.shape[1] :].tolist())

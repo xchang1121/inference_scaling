@@ -67,6 +67,11 @@ def test_context_budget_caps_the_requested_length():
     backend = SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace(max_position_embeddings=1024)),
                               tokenizer=SimpleNamespace(model_max_length=10**30))
     budget = generation_budget(32768, 1000, [backend], context_window=None)
+    automatic = generation_budget(None, 1000, [backend], context_window=None)
+    assert automatic["effective_max_new_tokens"] == budget["effective_max_new_tokens"]
+    assert automatic["requested_max_new_tokens"] is None
+    with pytest.raises(ValueError, match="automatic output length requires"):
+        generation_budget(None, 1, [], context_window=None)
     assert budget["effective_max_new_tokens"] == 24
     assert budget["requested_max_new_tokens"] == 32768
     with pytest.raises(ValueError, match="fills"):

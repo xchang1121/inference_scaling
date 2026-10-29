@@ -1,6 +1,6 @@
 # 推理服务
 
-一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；每个请求只在思考段上按配置运行条件 IS
+一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；默认在思考段上按配置运行条件 IS
 （Consilience 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
 
 | 接口 | 用途 |
@@ -78,14 +78,16 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | `ar.algorithms.is` | `candidate_count = 4`、`rollout_count = 1`、`block_size = 1024`、`block_first = false` | 评测与服务共用；候选数、补全数与块长固定，块长在输出上限处截短 |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
-长度只在 `ar.max_new_tokens` 设置，当前为 131072；思考与最终内容共用该上限。
-`ar.engine.context_window` 当前为 133120，同时控制 vLLM 的 `max_model_len` 与每个请求的剩余上下文检查。
-客户端显式设置 `max_tokens` / `max_completion_tokens` 可调低上限；同时传入时须相等，非法值返回 HTTP 400。
+`ar.max_new_tokens=null` 使用剩余上下文作为生成总长，`ar.engine.context_window=null` 读取模型/引擎配置；
+Qwen3.8-27B 的原生上下文容量为 262144，不启用扩展。客户端 `max_tokens` / `max_completion_tokens` 限制
+thinking 与最终内容的合计长度；同时传入时须相等，非法值返回 HTTP 400。
 
-默认推理强度取 `ar.prompt.chat_template_kwargs.reasoning_effort`，当前为 `xhigh`。
-客户端 `reasoning_effort` / `output_config.effort` 只改变模板强度，不再附带另一套长度上限：
-`low`、`medium` 直接映射，`high` / `max` 映射到 `xhigh`，`none` / `minimal` 映射到 `low`。
-映射位于 `serve.effort_aliases`；`none` 是强度别名，不关闭思考。思考模式由 `ar.output.thinking_mode` 统一设置。
+思考强度、预算及别名统一配置在 `ar.thinking`，按[官方规则](../../../docs/SETTINGS.md#arthinking)解析：
+`low/minimal → 4096`、`medium → 16384`、`xhigh/high/max → 262144`；`none` 关闭思考。
+档位与预算均未指定时为 `xhigh`、131072 thinking tokens。关闭思考时使用已有的全序列采样/评分回退，并在响应中记录。
+也可传 `thinking_budget`（Anthropic 为 `thinking.budget_tokens`）直接设置思考预算，与显式 effort 互斥。
+达到思考预算后结束思考段并继续生成内容；总长先耗尽时返回 `length`。原始预算与有效预算均写入
+`scaling.generation_budget`，M/K/B、奖励和词表惩罚保持配置值。
 
 `serve.max_seconds` 默认 `null`。显式设定后，到时不再开始新的 IS 步；至少完成第一步，进行中的一步与答案仍完成。
 它不是整题总时长硬限，启用后可能改变有限步输出分布。单条长度上限同样不限制全部候选的总计算量。
@@ -131,5 +133,5 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
   强制调用（`required`、`any`、指定工具）及额外工具选择选项返回 HTTP 400。
 - 请求的 `temperature`、`top_p` 不生效：IS 在完整分布上采样，策略取自 `ar.sampling`。
 - 只支持文本内容，`n` 只能为 1。
-- 独立的 Anthropic `thinking.budget_tokens` 返回 HTTP 400；用 `max_tokens` 限制思考与最终内容的合计长度。
+- `thinking.budget_tokens` 设置独立思考上限；`max_tokens` 限制思考与最终内容的合计长度。预算与 effort 同时指定时返回 HTTP 400。
 - 未写完的思考没有答案，作为思考返回，`finish_reason` 为 `length`（Anthropic 为 `max_tokens`）。

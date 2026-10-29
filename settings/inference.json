@@ -55,7 +55,15 @@
     }
   },
   "ar": {
-    "max_new_tokens": 131072,
+    "max_new_tokens": null,
+    "thinking": {
+      "reasoning_effort": null,
+      "budget_tokens": null,
+      "default_effort": "xhigh",
+      "default_budget_tokens": 131072,
+      "effort_budgets": {"low": 4096, "medium": 16384, "xhigh": 262144},
+      "effort_aliases": {"none": null, "minimal": "low", "high": "xhigh", "max": "xhigh"}
+    },
     "model": {
       "path": "Qwen/Qwen3.8-27B",
       "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
@@ -76,7 +84,7 @@
       "backend": "vllm",
       "device": "cuda",
       "dtype": "bfloat16",
-      "context_window": 133120,
+      "context_window": null,
       "transformers": {
         "attn_implementation": "sdpa",
         "device_map": null,
@@ -122,7 +130,7 @@
         "policy": "fair_lpt"
       }
     },
-    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {"reasoning_effort": "xhigh"}},
+    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {}},
     "output": {
       "thinking_mode": "enabled",
       "thinking_start_text": null,
@@ -184,11 +192,7 @@
       "max_concurrent_requests": 4,
       "keepalive_seconds": 10.0
     },
-    "max_seconds": null,
-    "effort_aliases": {
-      "none": "low", "minimal": "low", "low": "low", "medium": "medium",
-      "high": "xhigh", "xhigh": "xhigh", "max": "xhigh"
-    }
+    "max_seconds": null
   },
   "dllm": {
     "model": {

@@ -76,6 +76,7 @@ class _ChatTokenizer(ThinkingTokenizer):
 
 
 class _ChatBackend(ThinkingBackend):
+    config = SimpleNamespace(max_position_embeddings=262144)
     def __init__(self) -> None:
         super().__init__()
         self.tokenizer = _ChatTokenizer()
@@ -93,9 +94,11 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     conversation = openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "minimal"})
     prepared = reasoner.prepare(conversation)
     assert prepared.effort == "low" and backend.tokenizer.options[0]["reasoning_effort"] == "low"
-    assert prepared.maximum == settings["ar"]["max_new_tokens"]
+    assert settings["ar"]["max_new_tokens"] is None
+    assert prepared.maximum == 262144 - len(prepared.prompt)
+    assert prepared.budget["requested_thinking_budget"] == 4096
     default = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
-    assert default.effort == settings["ar"]["prompt"]["chat_template_kwargs"]["reasoning_effort"]
+    assert default.effort == "xhigh" and default.budget["requested_thinking_budget"] == 131072
     assert default.maximum == prepared.maximum
     reply = reasoner.generate(prepared)
     # The model thinks "7", closes the thought and answers "7".
@@ -104,6 +107,29 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     assert reply.scaling["stopping_reason"] == "stop"
     with pytest.raises(ProtocolError, match="effort"):
         reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "reasoning_effort": "huge"}))
+    for alias, effort, limit in [("none", None, 0), ("minimal", "low", 4096), ("low", "low", 4096),
+                                 ("medium", "medium", 16384), ("high", "xhigh", 262144),
+                                 ("xhigh", "xhigh", 262144), ("max", "xhigh", 262144)]:
+        item = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}],
+                                                    "reasoning_effort": alias}))
+        assert (item.effort, item.budget["requested_thinking_budget"]) == (effort, limit)
+        assert item.budget["effective_thinking_budget"] == min(limit, item.maximum)
+        assert backend.tokenizer.options[-1]["enable_thinking"] == (alias != "none")
+    for limit, effort in [(0, "low"), (4096, "low"), (4097, "medium"), (16384, "medium"), (16385, "xhigh")]:
+        item = reasoner.prepare(openai_conversation({"messages": [], "thinking_budget": limit}))
+        assert item.effort == effort and item.budget["requested_thinking_budget"] == limit
+    for body in ({"thinking_budget": -1}, {"thinking_budget": True}, {"thinking_budget": 262145},
+                 {"reasoning_effort": "medium", "thinking_budget": 10},
+                 {"reasoning_effort": "none", "enable_thinking": True}):
+        with pytest.raises(ProtocolError):
+            reasoner.prepare(openai_conversation(body))
+    # The base model would keep thinking; the budget supplies the delimiter,
+    # then the selected thought still gets an ordinary final answer.
+    backend._probabilities[(3, 0)] = backend._probabilities[(3,)]
+    short = reasoner.prepare(openai_conversation({"messages": [], "thinking_budget": 1, "max_completion_tokens": 6}))
+    reply = reasoner.generate(short)
+    assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
+    assert reply.scaling["generation_budget"]["thinking_budget_enforcement"] == "close_then_content"
 
 
 @pytest.mark.parametrize("block_first", [False, True])
@@ -213,8 +239,9 @@ def test_anthropic_messages_answer_and_stream(client) -> None:
     assert events[0] == "message_start" and "ping" in events and events[-2:] == ["message_delta", "message_stop"]
     assert events.count("content_block_start") == 3
     assert client.post("/v1/messages/count_tokens", json=body).json() == {"input_tokens": 3}
-    error = client.post("/v1/messages", json=body | {"thinking": {"type": "enabled", "budget_tokens": 32}})
-    assert error.status_code == 400 and "budget_tokens" in error.json()["error"]["message"]
+    configured = anthropic_conversation(body | {"thinking": {"type": "enabled", "budget_tokens": 32}})
+    assert configured.thinking_budget == 32 and configured.enable_thinking is True
+    assert client.post("/v1/messages", json=body | {"thinking": {"type": "enabled", "budget_tokens": 32}}).status_code == 200
     error = client.post("/v1/messages", json=body | {"messages": [{"role": "user", "content": [{"type": "image"}]}]})
     assert error.status_code == 400
     for choice in ({"type": "any"}, {"type": "tool", "name": "edit"}):

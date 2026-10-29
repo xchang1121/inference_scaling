@@ -30,6 +30,7 @@ from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
+from inference_scaling.arllm.backends.thinking_budget import budgeted_backend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
 from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward, TokenStatisticReward
@@ -43,6 +44,7 @@ from inference_scaling.shared.model.loading import (
     synchronize_accelerator,
 )
 from inference_scaling.shared.model.prompting import render_prompt
+from inference_scaling.shared.model.thinking import resolve_thinking
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.types import TokenSequence
 
@@ -116,14 +118,14 @@ class ARFamily:
     name = "ar"
 
     def __init__(self, settings: Mapping[str, Any], choices: Any, dataset: Dataset) -> None:
-        self.ar = settings["ar"]
+        self.ar, self.thinking = resolve_thinking(settings["ar"])
         self.choices = choices
         self.dataset = dataset
         self.seed = int(settings["run"]["seed"])
         self.cache_dir = Path(str(settings["run"]["hash_cache_dir"]))
         self.reward_settings: Any = None if choices.reward is None else settings["rewards"][choices.reward]
         self.config = self.ar["algorithms"][choices.algorithm]
-        self.max_new_tokens = int(self.ar["max_new_tokens"])
+        self.max_new_tokens = self.ar["max_new_tokens"]
         self.workers = int(self.ar["engine"]["continuous_batching"]["workers"])
         if self.workers < 1:
             raise ValueError("ar.engine.continuous_batching.workers must be positive")
@@ -280,7 +282,7 @@ class ARFamily:
         rendered = render_prompt(self.raw.tokenizer, messages, self.ar)
         prompt = tuple(self.raw.encode(rendered, add_special_tokens=False))
         budget = generation_budget(self.max_new_tokens, len(prompt), [self.raw],
-                                   context_window=self.ar["engine"]["context_window"])
+                                   context_window=self.ar["engine"]["context_window"], thinking=self.thinking)
         maximum = int(budget["effective_max_new_tokens"])
         sampling = self.ar["sampling"]
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
@@ -288,17 +290,18 @@ class ARFamily:
         scope = self._scope(prompt)
         meter = Meter({"base": self.raw} if self.workers == 1 else {})
         measured = RequestMeter(self.backend, meter, self.raw.parameter_count)
-        backend = scope.wrap(measured, prompt)
+        bounded = budgeted_backend(measured, prompt, self.thinking_format, budget)
+        backend = scope.wrap(bounded, prompt)
         if self.choices.reward in CONFIDENCE_REWARDS:
             # A confidence reward reads a token statistic of the generated tokens, which generation records.
             backend = StatisticRecorder(backend, confidence_statistic(self.choices.reward, self.reward_settings))
-        task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend, measured)
+        task = _Task(problem, prompt, maximum, policy, seeds.derive(algorithm, problem.id), seeds, backend, bounded)
         with meter.phase("reward"):
             reward = self._reward(task)
         with meter.phase("search"):
             tokens, trace, value = getattr(self, "_" + algorithm)(task, reward, meter)
         with meter.phase("finish"):
-            tokens, info = scope.finish(measured, prompt, tokens, max_new_tokens=maximum, sampling=policy,
+            tokens, info = scope.finish(bounded, prompt, tokens, max_new_tokens=maximum, sampling=policy,
                                         seed=seeds.derive(algorithm, problem.id, "final-content"))
         fallbacks = [info["sampling_fallback_reason"]] if info["sampling_fallback_reason"] else []
         confidence = getattr(reward, "model", None)
@@ -341,7 +344,7 @@ class ARFamily:
         # Native generate() may pad finished beams after EOS.
         tokens = tokens[: tokens.index(self.eos) + 1] if self.eos in tokens else tokens
         # Native generate() bypasses the backend counters: charge every beam every step.
-        slots = beams * (len(task.prompt) + max(0, len(tokens) - 1))
+        slots = getattr(task.backend, "direct_forward_token_slots", beams * (len(task.prompt) + max(0, len(tokens) - 1)))
         with self._cost_lock:
             self._direct_slots += slots
         meter.add({"generation_forward_token_slots": slots,

@@ -66,7 +66,12 @@ SCHEMA: dict[str, Any] = {
         },
     },
     "ar": {
-        "max_new_tokens": int,
+        "max_new_tokens": _NULLABLE_INT,
+        "thinking": (None, {
+            "reasoning_effort": _NULLABLE_STR, "budget_tokens": _NULLABLE_INT,
+            "default_effort": str, "default_budget_tokens": int,
+            "effort_budgets": dict, "effort_aliases": dict,
+        }),
         "model": {
             "path": str,
             "revision": _NULLABLE_STR,
@@ -188,7 +193,6 @@ SCHEMA: dict[str, Any] = {
         "server": {"host": str, "port": int, "served_model_name": str, "max_concurrent_requests": int,
                    "keepalive_seconds": float},
         "max_seconds": (float, None),
-        "effort_aliases": dict,
     },
     "dllm": {
         "model": {
@@ -303,14 +307,12 @@ def validate_settings(settings: dict[str, Any]) -> None:
 
     check(settings, SCHEMA, "settings")
     for family in ("ar", "dllm"):
-        if settings[family]["max_new_tokens"] <= 0:
+        if settings[family]["max_new_tokens"] is not None and settings[family]["max_new_tokens"] <= 0:
             raise SettingsError(f"{family}.max_new_tokens must be positive")
     ar = settings["ar"]
     context = ar["engine"]["context_window"]
     if context is not None and context <= 0:
         raise SettingsError("ar.engine.context_window must be positive or null")
-    if context is not None and ar["max_new_tokens"] >= context:
-        raise SettingsError("ar.engine.context_window must exceed ar.max_new_tokens to leave room for the prompt")
     if "max_model_len" in ar["engine"]["vllm"]["engine_kwargs"]:
         raise SettingsError("set ar.engine.context_window, not vllm.engine_kwargs.max_model_len")
     serve = settings["serve"]
@@ -318,9 +320,27 @@ def validate_settings(settings: dict[str, Any]) -> None:
         raise SettingsError("serve.max_seconds must be positive or null")
     if serve["server"]["max_concurrent_requests"] <= 0 or serve["server"]["keepalive_seconds"] <= 0:
         raise SettingsError("serve.server needs positive concurrency and keepalive")
-    if any(not isinstance(name, str) or not name or not isinstance(target, str) or not target
-           for name, target in serve["effort_aliases"].items()):
-        raise SettingsError("serve.effort_aliases must map nonempty names to template reasoning efforts")
+    profile = ar["thinking"]
+    if profile is not None:
+        limits = profile["effort_budgets"]
+        if not limits or any(not isinstance(name, str) or not name or type(value) is not int or value <= 0
+                             for name, value in limits.items()) or len(set(limits.values())) != len(limits):
+            raise SettingsError("ar.thinking.effort_budgets needs distinct positive integer limits")
+        if profile["default_effort"] not in limits or not 0 <= profile["default_budget_tokens"] <= max(limits.values()):
+            raise SettingsError("ar.thinking defaults must use a supported effort and budget")
+        if any(not isinstance(name, str) or not name or name in limits or
+               target is not None and (not isinstance(target, str) or target not in limits)
+               for name, target in profile["effort_aliases"].items()):
+            raise SettingsError("ar.thinking.effort_aliases must reference supported efforts or null (disabled)")
+        if {"reasoning_effort", "thinking_budget", "enable_thinking"} & ar["prompt"]["chat_template_kwargs"].keys():
+            raise SettingsError("set effort/budget in ar.thinking and mode in ar.output, not chat_template_kwargs")
+        if profile["reasoning_effort"] is not None and profile["budget_tokens"] is not None:
+            raise SettingsError("ar.thinking.reasoning_effort and budget_tokens cannot be set together")
+        from inference_scaling.shared.model.thinking import resolve_thinking
+        try:
+            resolve_thinking(ar)
+        except ValueError as error:
+            raise SettingsError(str(error)) from error
 
 
 __all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]

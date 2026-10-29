@@ -29,12 +29,20 @@ class Conversation:
     effort: str | None
     max_tokens: int | None
     stream: bool
+    thinking_budget: int | None = None
+    enable_thinking: bool | None = None
 
     def __post_init__(self) -> None:
         if self.max_tokens is not None and (type(self.max_tokens) is not int or self.max_tokens <= 0):
             raise ProtocolError("max_tokens must be a positive integer")
         if self.effort is not None and (not isinstance(self.effort, str) or not self.effort):
             raise ProtocolError("reasoning_effort must be a nonempty string")
+        if self.thinking_budget is not None and (type(self.thinking_budget) is not int or self.thinking_budget < 0):
+            raise ProtocolError("thinking_budget must be a non-negative integer")
+        if self.enable_thinking is not None and type(self.enable_thinking) is not bool:
+            raise ProtocolError("enable_thinking must be boolean")
+        if self.effort is not None and self.thinking_budget is not None:
+            raise ProtocolError("reasoning_effort and thinking_budget cannot be set together")
 
 
 @dataclass(frozen=True)
@@ -119,15 +127,16 @@ def openai_conversation(body: Mapping[str, Any]) -> Conversation:
         raise ProtocolError("max_tokens and max_completion_tokens must agree when both are supplied")
     return Conversation(_with_system(system, messages), tools if tools and choice != "none" else None,
                         body.get("reasoning_effort"), body.get("max_tokens") if maximum is None else maximum,
-                        bool(body.get("stream")))
+                        bool(body.get("stream")), body.get("thinking_budget"), body.get("enable_thinking"))
 
 
 def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
-    thinking = body.get("thinking") or {}
-    if not isinstance(thinking, Mapping):
+    thinking_options = body.get("thinking") or {}
+    if not isinstance(thinking_options, Mapping):
         raise ProtocolError("thinking must be an object")
-    if "budget_tokens" in thinking:
-        raise ProtocolError("separate thinking.budget_tokens is not supported; max_tokens limits thinking and content together")
+    thinking_type = thinking_options.get("type")
+    if thinking_type not in (None, "enabled", "disabled", "adaptive"):
+        raise ProtocolError("thinking.type must be enabled, disabled or adaptive")
     choice = body.get("tool_choice")
     if choice is not None and (not isinstance(choice, Mapping) or choice.get("type") not in ("auto", "none")
                                or set(choice) != {"type"}):
@@ -169,7 +178,8 @@ def anthropic_conversation(body: Mapping[str, Any]) -> Conversation:
     effort = (body.get("output_config") or {}).get("effort") or body.get("reasoning_effort")
     return Conversation(_with_system([_text(system)] if system else [], messages),
                         tools if tools and choice.get("type") != "none" else None, effort, body.get("max_tokens"),
-                        bool(body.get("stream")))
+                        bool(body.get("stream")), thinking_options.get("budget_tokens"),
+                        False if thinking_type == "disabled" else True if thinking_type == "enabled" else None)
 
 
 _TOOL_CALL = re.compile(r"<tool_call>\s*<function=([^>\n]+)>(.*?)</function>\s*</tool_call>", re.S)

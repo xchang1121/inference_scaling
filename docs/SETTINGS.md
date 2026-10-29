@@ -12,9 +12,10 @@
 所有行为参数都写在文件里，代码中不再有隐藏的默认值；标注为“对象”的字段原样传给对应库（如 vLLM、TRL）。
 下表中的数值是仓库提供的文件中的取值。
 
-单条 AR 输出上限只在 `ar.max_new_tokens` 定义；上下文上限只在 `ar.engine.context_window` 定义，
-同时用于 vLLM 引擎初始化和每次请求的剩余空间计算。服务与评测默认使用同一模板强度、采样设置和根种子。
-独立的服务配置文件、服务档位长度与数据集长度已移除，旧字段会报错。dLLM 画布上限仍独立定义在
+单条 AR 生成总长在 `ar.max_new_tokens` 定义，thinking 预算在 `ar.thinking` 定义；上下文容量由
+`ar.engine.context_window` 控制。前两种长度均以单条轨迹计，全部候选的累计计算量另行统计。
+`max_new_tokens=null` 使用剩余上下文，`context_window=null` 读取模型/引擎配置。
+服务与评测共用这些设置、采样策略和根种子。dLLM 画布上限独立定义在
 `dllm.max_new_tokens`。训练长度由训练设置中的 GRPO/VRPO 参数决定，不覆盖推理设置。
 
 `scripts/benchmark_is_gpu.py` 的采样、长度、奖励和引擎默认值均继承该文件。显式 CLI 参数覆盖对应字段，
@@ -81,6 +82,44 @@
 
 `self_certainty` 与 `consilience` 读取自回归模型的概率，只用于 `--model ar`。
 
+### `ar.thinking`
+
+思考档位和预算采用 [Qwen3.8-27B 的官方服务规则](https://www.alibabacloud.com/help/zh/model-studio/qwen-api-via-openai-chat-completions)。
+配置位于 `settings/inference.json`，CLI 与服务共用；`ar.thinking=null` 表示模型没有这套档位/预算配置。
+
+| 字段 | 当前值 | 含义 |
+| --- | --- | --- |
+| `reasoning_effort` | `null` | 显式选择档位，与 `budget_tokens` 互斥 |
+| `budget_tokens` | `null` | 显式指定 thinking token 上限，按档位阈值选择模板强度 |
+| `default_effort` / `default_budget_tokens` | `xhigh` / 131072 | 两项选择均未设置时使用 |
+| `effort_budgets` | `low: 4096, medium: 16384, xhigh: 262144` | 显式选择档位时使用的思考预算；按预算反查档位时，取上限不小于预算的最低档 |
+| `effort_aliases` | `minimal → low, high/max → xhigh, none → null` | `null` 目标表示关闭思考；预算为 0 也关闭思考生成 |
+
+服务可通过 `reasoning_effort` 或 `thinking_budget` 覆盖配置选择，两者互斥；Anthropic 接口对应
+`output_config.effort` 或 `thinking.budget_tokens`。`enable_thinking=false`、`thinking.type=disabled` 和
+`reasoning_effort=none` 关闭思考。参数冲突返回 HTTP 400。原始模板参数中的同名设置会被配置校验拒绝。
+
+[模型生成配置](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/generation_config.json)
+没有设置输出长度，因此 `ar.max_new_tokens` 默认为 `null`。
+[模型配置](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json)
+声明原生上下文 262144；`ar.engine.context_window=null` 使用这一容量和引擎实际限制，不启用上下文扩展。
+运行时生成总长取剩余上下文、显式配置上限和客户端上限中的最小值。thinking 预算受该总长约束，
+显式 `xhigh=262144` 因而无法在原生上下文中完整占满这一额度并同时容纳输入与最终内容。
+总长先耗尽时以 `length` 结束；思考预算先耗尽时关闭思考段，使用剩余总长继续最终内容。
+
+实现位于 [`shared/model/thinking.py`](../src/inference_scaling/shared/model/thinking.py) 和
+[`arllm/backends/thinking_budget.py`](../src/inference_scaling/arllm/backends/thinking_budget.py)：
+预算从原始提示之后累计，包含 IS/MH 已固定的前缀；每次补全继续消耗同一条轨迹的剩余额度。
+到限后加入确定性的结束标记，其采样与重评分对数概率均为 0；Consilience 排除标记，只读取思考 token 的统计量。
+这定义了有预算约束的基础生成分布，Base、IS 与 MH 使用同一规则；它与无限制生成是不同的目标。
+同步和流式生成共用该实现。独立预算要求能识别预填充的思考开始位置；其他格式可设置
+`output.thinking_start_text`、`thinking_end_text`、`starts_in_thinking`，或将 `ar.thinking` 设为 `null`。
+Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边界约束。
+同步 vLLM 的原生 beam 接口暂不支持该约束，使用该基线时选择上述后端或设置 `ar.thinking=null`。
+
+`trace.generation_budget` / `scaling.generation_budget` 记录原始与有效的 thinking 预算、总长和上下文限制。
+以上控制均不改变 M/K/B、奖励温度或词表惩罚。
+
 ### `ar.model`
 
 | 字段 | 类型 | 含义 |
@@ -99,7 +138,7 @@
 | --- | --- | --- |
 | `backend` | `transformers` \| `vllm` | 执行引擎 |
 | `device` / `dtype` | 字符串 | Transformers 设备与精度；vLLM 使用 `dtype`，精确评分后端同时使用两者 |
-| `context_window` | 整数或 `null` | 输入与输出合计的上下文上限，同时用作 vLLM 的 `max_model_len`；`null` 使用引擎/模型声明值。显式值须大于 `ar.max_new_tokens`，为提示保留空间；每个请求还受模型实际上下文限制 |
+| `context_window` | 正整数或 `null` | 输入与输出合计的上下文上限，同时用作 vLLM 的 `max_model_len`；`null` 使用引擎/模型声明值。每个请求扣除实际输入长度后计算可生成空间 |
 | `transformers.attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
 | `transformers.max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
 | `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
@@ -137,7 +176,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | --- | --- | --- |
 | `prompt.system` | 字符串或 `null` | 系统消息 |
 | `prompt.format` | `auto` \| `chat` \| `plain` | 使用 chat template、强制使用，或直接用用户文本 |
-| `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的参数（如 Qwen3.8 的 `reasoning_effort`：`low`、`medium`、`xhigh`）；`thinking_mode` 不为 `auto` 时模板的 `enable_thinking` 随之设置 |
+| `prompt.chat_template_kwargs` | 对象 | 传给 chat template 的其他参数；启用 `ar.thinking` 时，effort 与预算在该节设置，思考开关在 `output.thinking_mode` 设置 |
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的 `verifier` 会回退到 `full` 并记录原因 |
@@ -188,14 +227,14 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 逐题执行才有逐题计算量；只看吞吐时可调大 |
-| `engine.context_window` / `engine.vllm.max_num_batched_tokens` | 133120 / 16384 | 上下文为 131,072 token 输出加 2,048 token 提示余量；更长提示会压缩可生成空间。批处理 token 上限控制每次调度的计算量，不是单条输出上限 |
+| `engine.context_window` / `engine.vllm.max_num_batched_tokens` | `null` / 16384 | 上下文读取模型/引擎配置，当前模型原生容量 262144；批处理 token 上限只控制每次调度的计算量 |
 | `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
-| `prompt.chat_template_kwargs` | `{"reasoning_effort": "xhigh"}` | 模板默认值，思考最充分；IS 的每个候选与补全都要生成到思考结束，要降成本可改 `medium` 或 `low` |
+| `prompt.chat_template_kwargs` / `thinking` | `{}` / 官方档位配置 | 模板强度由 `ar.thinking` 统一解析；未指定档位/预算时为 `xhigh`、131072 thinking tokens |
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
 | `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
-| `max_new_tokens` | 131072 | 评测与服务共用；思考段与答案合计的单条输出上限，不是 IS 所有候选的总预算，也不保证轨迹在此长度内结束 |
+| `max_new_tokens` | `null` | 评测与服务共用，默认使用剩余上下文；显式整数限制 thinking 与最终内容合计的生成长度 |
 | `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 每一步使用相同的候选数、补全数与块长；M=4、K=1 同 [Qwen3 报告](reports/QWEN3_MATH500_REASONING.md)的高预算档；K=1 时候选连同第一条补全由一次请求生成，先生成块反而多一轮请求 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
@@ -225,19 +264,17 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 ### `serve`
 
 位于同一个 `settings/inference.json`；只配置 HTTP 服务行为。生成参数继承 `ar` 与 `rewards.consilience`，
-随机流使用 `run.seed`。未给推理强度的请求沿用 `ar.prompt.chat_template_kwargs`，没有服务专用默认档位。
+随机流使用 `run.seed`。思考设置继承 `ar.thinking`，没有另一套服务默认值。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `server.host` / `port` / `served_model_name` | 字符串 / 整数 / 字符串 | 监听地址与 `/v1/models` 报告的模型名（请求里的模型名不做校验） |
 | `server.max_concurrent_requests` | 整数 | 同时推理的请求数；各请求共用一个引擎的连续批处理，超出的请求排队 |
 | `server.keepalive_seconds` | 数 | 流式请求在搜索期间发送 keep-alive 的间隔 |
-| `effort_aliases` | 对象 | 客户端强度名到模板 `reasoning_effort` 的映射，如 `high` → `xhigh`；只改变强度，不改变长度、M/K/B 或奖励 |
 | `max_seconds` | 正数或 `null` | 默认 `null`，只按逻辑长度、EOS/思考边界完成。设为数值后，超时不再开始新的 IS 步，至少完成第一步，进行中的一步与答案仍完成；不是请求总时长硬限，启用后可能改变有限步输出分布 |
 
-请求的 `max_tokens` 或 `max_completion_tokens` 只能降低 `ar.max_new_tokens`。两者同时传入时须相等；
-非正整数返回 HTTP 400。单独的 `thinking.budget_tokens` 尚无独立的停止语义，返回 HTTP 400，使用
-`max_tokens` 限制思考与内容的合计长度。响应的 `scaling.generation_budget` 给出配置、客户端和实际生效的上限。
+请求的 `max_tokens` 或 `max_completion_tokens` 限制 thinking 与内容的合计长度；受显式配置上限和剩余上下文约束。
+两者同时传入时须相等，非正整数返回 HTTP 400。独立思考预算与别名见 [`ar.thinking`](#arthinking)。
 
 ## `settings/training.json`
 
