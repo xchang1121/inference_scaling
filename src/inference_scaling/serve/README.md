@@ -24,6 +24,9 @@
 `first_commit_seconds` 是首次固定非空前缀的时间，`first_thinking_publish_seconds` 是首次向服务交付思考文本的时间，
 `thought_ready_seconds` 是完整思考就绪时间，均从请求开始推理起计。排队及网络延迟由客户端测量；
 keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT。
+`cost` 分别记录搜索和最终内容生成的请求级计算量；`generated_tokens` 包含全部已选及未选候选，
+与 `usage.completion_tokens` 中最终保留输出的长度分开。取消、评分计数缺失或期间发生引擎抢占时，
+不完整的成本及生成量标为 `null`，避免跨客户端混算。
 
 `sibling_replay`、`completion_fraction` 与 `rollout_race` 分别记录同块补全复用、整轮完成配额和候选内超发的设置。超发最多将缺失补全数翻倍，每候选收齐 K 条后取消其余请求；完成时间筛选会引入偏差，默认关闭。配置为 `ar.algorithms.is.rollout_race`，需要流式后端。
 默认 `sibling_replay=false`、`completion_fraction=1.0`、`rollout_race=false`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
@@ -116,6 +119,23 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
 
 第二个请求应返回 `tool_use`，`input` 为 `{"path": "main.py"}`。启动时若报 vLLM 导入错误（如 `AsyncLLM`、
 `vllm.v1.metrics.reader`），说明所用 vLLM 与本仓库适配的 0.25–0.26 不同，需要适配后端。
+
+### 性能测量
+
+[`benchmark_is_service.py`](../../../scripts/benchmark_is_service.py) 从客户端测量 MATH-500 或 GSM8K 请求，
+报告思考/内容 TTFT、端到端延迟的 p50/p95、输出 TPS、全部生成 TPS、每卡输出 TPS、正确率和长度耗尽数。
+TPS 以整批请求的墙钟时间为分母；预热、加载和答案评判不计入。失败请求保留，并使整批吞吐结果标为不完整。
+
+```bash
+python scripts/benchmark_is_service.py --urls http://127.0.0.1:8000 \
+  --dataset math500 --questions 2 --repeats 2 --concurrency 1 --cards 2 \
+  --effort low --max-tokens 8192 --label tp2-c1 --output results/tp2-c1.jsonl
+```
+
+这是显式 4096 思考预算、8192 总长的短负载示例；省略 `--effort` 和 `--max-tokens` 则继承服务配置。
+对照实验固定题目、种子、M/K/B、奖励和长度，仅改变执行配置；跨卡数浮点误差可能改变轨迹，需要同时比较准确率和生成量。
+`--urls` 可列出多个独立副本，`--cards` 填总卡数；两个 TP=2 副本的吞吐与单个 TP=4 实例分别报告。
+`--deadline` 是客户端截止时间，超时后服务中的请求仍会继续，必须等待其结束或停止所属实验服务再启动下一组。
 
 ## 4. 接入网关与客户端
 

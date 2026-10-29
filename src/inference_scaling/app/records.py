@@ -255,6 +255,7 @@ class RequestMeter:
     def sample_batch(self, requests):
         samples = self.backend.sample_batch(requests)
         for sample in samples:
+            self.meter.attribute({"generated_tokens": len(sample.token_ids)})
             self.attribute(sample.forward_token_slots)
         return samples
 
@@ -283,6 +284,7 @@ class MeteredSession:
 
     def next_event(self):
         event = self.inner.next_event()
+        self.recorder.meter.attribute({"generated_tokens": len(event.delta.token_ids)})
         if event.finished:
             self.pending.remove(event.delta.request_id)
             self.recorder.attribute(event.delta.forward_token_slots)

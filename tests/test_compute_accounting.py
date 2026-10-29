@@ -35,13 +35,13 @@ class _Engine:
 def test_meter_attributes_per_request_work_when_problems_run_concurrently():
     # No engine counters: concurrent problems share them, so the caller reports what each request cost.
     meter = Meter({})
-    backend = SimpleNamespace(sample_batch=lambda requests: [SimpleNamespace(forward_token_slots=value) for value in requests],
+    backend = SimpleNamespace(sample_batch=lambda requests: [SimpleNamespace(forward_token_slots=value, token_ids=(1, 2)) for value in requests],
                               score_batch=lambda requests: [])
     measured = RequestMeter(backend, meter, 10)
     with meter.phase("search"):
         measured.sample_batch([30])
     assert _cost(meter) == {"phases": {"search": {"base": {"generation_forward_token_slots": 30,
-                                                            "score_forward_token_slots": 0,
+                                                            "score_forward_token_slots": 0, "generated_tokens": 2,
                                                             "estimated_dense_forward_flops": 600}}},
                             "forward_token_slots": 30, "flops": 600}
     with meter.phase("score"):

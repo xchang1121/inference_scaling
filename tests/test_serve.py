@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -84,7 +85,8 @@ class _ChatBackend(ThinkingBackend):
 
     def sample_batch(self, requests):
         self.batches.append(list(requests))
-        return super().sample_batch(requests)
+        return [replace(sample, forward_token_slots=len(sample.prefix) + max(0, len(sample.token_ids) - 1))
+                for sample in super().sample_batch(requests)]
 
 
 def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
@@ -148,6 +150,9 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
     assert [len(batch) for batch in backend.batches] == [3, 6 if block_first else 3, 2, 1]
     assert "".join(text for text, _ in published) == reply.thinking
     assert published[0][1] < len(backend.batches)
+    assert reply.scaling["generated_tokens"] == backend.generated
+    assert reply.scaling["cost"]["forward_token_slots"] > 0
+    assert reply.scaling["thinking_status"] == "complete"
     assert reply.scaling["first_commit_seconds"] <= reply.scaling["thought_ready_seconds"]
     assert reply.scaling["first_thinking_publish_seconds"] < reply.scaling["seconds"]
 
@@ -233,6 +238,18 @@ def test_openai_chat_completions_answer_and_stream(client) -> None:
     chunks = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: {")]
     assert "".join(chunk["choices"][0]["delta"].get("reasoning_content", "") for chunk in chunks) == "think"
     assert [chunk["choices"][0]["finish_reason"] for chunk in chunks][-1] == "tool_calls"
+    from scripts.benchmark_is_service import read_stream, summary
+    clock = iter(range(1, len(text.splitlines()) + 1))
+    measured = read_stream([line.encode() for line in text.splitlines()], 0, 1000, clock=lambda: next(clock))
+    assert measured["content"] == "Editing." and measured["thinking_chunks"] == 2
+    assert 0 < measured["thinking_ttft_seconds"] < measured["content_ttft_seconds"]
+    aggregate = summary([{"status": "complete", "seconds": 2., "correct": True, **measured}], 2., 2)
+    assert aggregate["output_tokens_per_second"] == 2.5 and aggregate["accuracy"] == 1.
+    assert aggregate["generated_tokens_per_second"] is None
+    failed = summary([{"status": "failed", "seconds": 2., "error": "disconnected"}], 2., 2)
+    assert failed["output_tokens_per_second"] is None and failed["failed"] == 1
+    with pytest.raises(RuntimeError, match="incomplete"):
+        read_stream([b"data: {\"choices\": []}"], 0, 100, clock=lambda: 1)
     assert client.get("/v1/models").json()["data"][0]["id"] == "qwen3.8-27b-is"
     for choice in ("required", {"type": "function", "function": {"name": "edit"}}):
         error = client.post("/v1/chat/completions", json=body | {"tool_choice": choice})

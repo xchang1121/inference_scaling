@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from inference_scaling.app.ar import conditional_is_config, confidence_reward, confidence_statistic
+from inference_scaling.app.records import Meter, RequestMeter
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.backends.statistics import StatisticRecorder
@@ -141,7 +142,9 @@ class Reasoner:
         policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
                                 top_k=sampling["top_k"], eos_token_id=raw.tokenizer.eos_token_id)
         thinking_format = thinking_format_from_backend(raw, output_settings_from_config(ar))
-        bounded = budgeted_backend(raw, prompt, thinking_format, dict(prepared.budget))
+        meter = Meter({})  # Engine-wide deltas would mix concurrent clients.
+        measured = RequestMeter(raw, meter, raw.parameter_count)
+        bounded = budgeted_backend(measured, prompt, thinking_format, dict(prepared.budget))
         scope = SamplingScope.from_config(raw, ar).for_prompt(prompt)
         if scope.scope == "thinking" and self.reward_settings["scope"] == "full":
             scope = scope.full_fallback("reward_uses_full_sequence")
@@ -150,6 +153,8 @@ class Reasoner:
         config = conditional_is_config(ar["algorithms"]["is"], reward, total_length=maximum, backend=raw)
         start = time.monotonic()
         clock_start = time.perf_counter()
+        snapshot = getattr(raw, "snapshot", lambda: None)
+        preemptions = getattr(snapshot(), "preemptions", 0)
         first_commit = first_publish = None
 
         def emit(text):
@@ -170,13 +175,23 @@ class Reasoner:
 
         limit = self.serve["max_seconds"]
         deadline = None if limit is None else start + float(limit)
-        result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
-                                    sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix,
-                                    on_commit=committed)
+        with meter.phase("search"):
+            result = run_conditional_is(backend, prompt, config, reward.batch, SeedStream(seeds),
+                                        sampling=policy, deadline=deadline, prefix_reward=reward.model.cached_prefix,
+                                        on_commit=committed)
         publisher.publish(result.token_ids, final=True)
         thought_ready = time.perf_counter() - clock_start
-        tokens, info = scope.finish(bounded, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
-                                    seed=SeedStream(seeds).derive("final-content"))
+        with meter.phase("finish"):
+            tokens, info = scope.finish(bounded, prompt, result.token_ids, max_new_tokens=maximum, sampling=policy,
+                                        seed=SeedStream(seeds).derive("final-content"))
+        # Recomputed preempted tokens are not attributable to an individual
+        # client. Conservatively suppress its cost if any preemption overlapped.
+        if getattr(snapshot(), "preemptions", 0) != preemptions:
+            meter.attribute(None)
+        cost = meter.cost(
+            lambda delta: delta.get("generation_forward_token_slots", 0) + delta.get("score_forward_token_slots", 0),
+            lambda _role, delta: delta.get("estimated_dense_forward_flops", 0),
+        )
         # An unfinished thought has no answer; it is returned as the reasoning.
         thinking, content = info["thinking_text"], info["content_text"]
         if info["thinking_status"] == "incomplete":
@@ -191,6 +206,12 @@ class Reasoner:
             "generation_budget": dict(prepared.budget), "max_seconds": limit,
             "first_commit_seconds": first_commit, "thought_ready_seconds": thought_ready,
             "first_thinking_publish_seconds": first_publish,
+            "sampling_seed": seeds, "cost": cost,
+            "thinking_status": info["thinking_status"],
+            "thinking_tokens": len(info["thinking_token_ids"]),
+            "content_tokens": len(info["content_token_ids"]),
+            "generated_tokens": (sum(phase.get("base", {}).get("generated_tokens", 0) for phase in meter.phases.values())
+                                 if cost is not None else None),
             "tensor_parallel_size": ar["engine"]["vllm"]["tensor_parallel_size"],
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,

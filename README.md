@@ -35,7 +35,6 @@ KL 正则化目标：
 python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward consilience --dataset gsm8k
 python -m inference_scaling --algorithm best_of_n --reward verifier
 python -m inference_scaling --algorithm mh_power --dataset math500
-python -m inference_scaling --algorithm is --model dllm --output results
 ```
 
 | 参数 | 取值 | 默认 |
@@ -47,8 +46,8 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `--output` | 结果根目录 | `results` |
 
 没有其他命令行参数。块长、候选数、温度、引擎与优化选项都在设置文件中，缺少、多出或类型不符的字段在加载模型前
-报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认的 AR 设置在单张 H100 级 GPU 上用 vLLM 以 BF16 运行
-[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) 的思考模式，各项取值的依据见
+报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认 AR 设置使用 vLLM、BF16 和
+[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) 的思考模式；卡数须按权重、缓存及上下文容量验证。配置依据见
 [SETTINGS.md](docs/SETTINGS.md#ar-defaults)。
 
 ### 长度与采样配置
@@ -59,7 +58,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 | `ar.engine.context_window` | 输入与输出合计的容量；`null` 读取模型/引擎配置，Qwen3.8-27B 原生为 262144 | `null` |
 | `ar.thinking` | 共用的思考档位、预算和别名；两项选择均为 `null` 时用官方默认 | `xhigh`，thinking 上限 131072 |
 | `ar.sampling` / `ar.model.token_penalty` | 共用采样策略与词表惩罚 | 温度 1、完整词表；8 词、强度 1 |
-| `dllm.max_new_tokens` | 扩散模型的输出画布上限，按扩散块长向下取整 | 512 |
+| `dllm` | 扩散推理接口保留，模型专用预设已移除 | `null`，默认禁用 |
 
 数据集只配置题目、提示与判定，不设置生成长度。模型实际上下文不足时，剩余空间会进一步限制输出；
 评测的 `trace.generation_budget` 和服务的 `scaling.generation_budget` 记录请求上限、生效上限及限制原因。
@@ -68,6 +67,7 @@ python -m inference_scaling --algorithm is --model dllm --output results
 `thinking_budget` 可单独指定思考上限，与 `reasoning_effort` 互斥。思考预算耗尽后关闭思考段并继续最终内容，生成总长仍优先。
 完整映射和实现边界见 [思考预算](docs/SETTINGS.md#arthinking)。
 上述上限均不代表 IS 全部候选的总 token 预算。性能测量脚本也继承同一配置，显式参数和生效配置随结果保存。
+服务的 TTFT、TPS、多副本吞吐和正确率对照使用[服务性能入口](src/inference_scaling/serve/README.md#性能测量)。
 
 ## 算法
 
