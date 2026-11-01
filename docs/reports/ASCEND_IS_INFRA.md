@@ -1,5 +1,7 @@
 # 昇腾条件 IS：探索调度与推理成本
 
+本报告保留历史实验及其原始命令。旧版参数扫描入口见[62af76c](https://github.com/xchang1121/inference_scaling/tree/62af76ce038b4d5224eac7c1963b42960140c333)；当前入口改为[Base/快速 IS 配对评测](../SETTINGS.md)，不再运行固定块 IS 性能对照。
+
 比较所选补全完成后结束、权重完成配额、末条补全筛选、单轮候选池、两阶段探索、完整候选池跨轮执行，以及固定 M/K/B 下的完整等待、同块补全复用和数量完成配额。算法见
 [所选补全完成后结束](../methods/ALGORITHMS.md#is-selection-ready)、
 [权重完成配额](../methods/ALGORITHMS.md#is-weighted-completion-quota)、

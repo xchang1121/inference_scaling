@@ -1,6 +1,9 @@
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
+import pytest
+
+from scripts.benchmark_is_gpu import pair_summary
 from inference_scaling.app.records import Meter, RequestMeter, pass_at_k, summarize_executions
 from inference_scaling.arllm.types import ScoreRequest
 
@@ -90,6 +93,25 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     summary = summarize_executions(executions[:1], records[:1])
     assert summary["incomplete_executions"] == summary["unmetered_records"] == 0
     assert summary["unmeasured_work_events"] == 1 and not summary["complete_accounting"]
+
+    # Paired benchmark failures must not turn a completed subset into a speedup.
+    base = {"problem_id": "a", "repeat": 0, "mode": "base", "status": "complete", "seconds": 2.,
+            "correct": True, "output_tokens": 3, "counters": {"generated_tokens": 3},
+            "graph_execution": {"estimated_dense_padded_flops": 60},
+            "length_exhausted": False, "thinking_status": "complete", "fallbacks": []}
+    fast = {**base, "mode": "is", "seconds": 3.}
+    paired = pair_summary([base, fast], 1)
+    assert paired["latency_ratio_is_over_base"] == 1.5 and paired["sample_quality_gate"]
+    missing = pair_summary([base], 1)
+    assert missing["latency_ratio_is_over_base"] is None and missing["missing_measurements"] == 1
+    failed = {"problem_id": "a", "repeat": 0, "mode": "is", "status": "failed"}
+    assert pair_summary([base, failed], 1)["sample_quality_gate"] is None
+    unknown = {key: value for key, value in fast.items() if key != "correct"}
+    unknown["counters"] = {"generated_tokens": 3, "cancelled_requests": 1}
+    incomplete = pair_summary([base, unknown], 1)
+    assert incomplete["sample_quality_gate"] is None and incomplete["is"]["generated_tokens"] is None
+    with pytest.raises(ValueError, match="duplicate"):
+        pair_summary([base, base], 1)
 
 
 def test_standard_pass_at_k_estimator() -> None:

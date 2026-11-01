@@ -188,6 +188,9 @@ python -m pytest
 
 ## 性能结果
 
+[配对评测入口](docs/SETTINGS.md)对每题运行 Base 与配置中的快速两阶段 IS，交替顺序并直接判题，报告
+`IS 总时延 / Base 总时延`、正确率、生成量与计算量。固定块 IS 退出真机性能对照；其小型正确性回归保留。
+
 [Qwen3.8-27B IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md)记录当前模型的卡数容量、思考与内容 TTFT、
 输出吞吐和实际生成量；区分已测结果、交付延迟改善与尚未验证的吞吐收益。
 
@@ -201,4 +204,4 @@ python -m pytest
 已删除方法只保留说明，其余方法给出在当前实现上复现的命令与设置。
 
 [昇腾调度验证](docs/reports/ASCEND_IS_INFRA.md)记录探索轮数、末条补全筛选、同块补全复用、完成配额与超发的单题对照，包含耗时回退、计算量与有限预算限制。
-入口为 `scripts/benchmark_is_gpu.py`，同时记录同后端 Base、IS 墙钟时间、长尾等待与实际执行量。
+其中旧参数扫描与逐轨迹比较入口可从历史版本恢复；当前 `scripts/benchmark_is_gpu.py` 已收敛为 Base/快速 IS 配对评测。

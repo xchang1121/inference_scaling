@@ -1,97 +1,31 @@
-"""Single-question CUDA/NPU latency of the production conditional IS path.
+"""Paired Base / fast IS latency on one CUDA or Ascend engine.
 
-Run in separate processes with PYTHONPATH pointing at each revision's src.
-Model loading, warm-up, prefix-cache reset and disk writes are outside timing.
-Only token digests and lengths are saved, never full rollout token histories.
+Both arms share model, prompt, sampling and sequence budgets. Timing excludes
+loading, warm-up, cache reset, grading and file writes. Incomplete pairs do not
+produce a latency ratio. Output is append-only JSONL.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import importlib.metadata
 import json
-import os
-import platform
 import statistics
-import struct
 import sys
 import time
 from collections import Counter
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
-from inference_scaling.app.ar import ARFamily
+import numpy as np
+
 from inference_scaling.app import ar as ar_app
+from inference_scaling.app.ar import ARFamily
+from inference_scaling.app.records import environment, git_state, json_sha256, source_sha256
 from inference_scaling.app.settings import load_settings, validate_settings
-from inference_scaling.arllm.algorithms import candidates
-from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter
-from inference_scaling.datasets.math500 import MATH500
-from inference_scaling.datasets.gsm8k import GSM8K
+from inference_scaling.datasets import load_dataset
+from inference_scaling.shared.model.thinking import resolve_thinking
 from inference_scaling.shared.rng import SeedStream
-
-
-class TimedSession:
-    def __init__(self, inner, row):
-        self.inner, self.row = inner, row
-        self.requests = {}
-
-    def submit(self, requests, *, phase="rollout", checkpoint=None):
-        for job in requests:
-            self.requests[job.request_id] = {
-                "seed": job.seed, "limit": job.max_new_tokens, "prefix_tokens": len(job.prefix),
-                "prefix_sha256": hashlib.sha256(struct.pack(f"<{len(job.prefix)}I", *job.prefix)).hexdigest(),
-                "submitted": time.perf_counter() - self.row["started"], "tokens": 0,
-                "digest": hashlib.sha256(), "events": 0,
-            }
-        return self.inner.submit(requests, phase=phase, checkpoint=checkpoint)
-
-    def next_event(self):
-        event = self.inner.next_event()
-        job = self.requests[event.delta.request_id]
-        tokens = event.delta.token_ids
-        job["tokens"] += len(tokens)
-        job["digest"].update(struct.pack(f"<{len(tokens)}I", *tokens))
-        job["events"] += 1
-        if event.finished:
-            job["finished"] = time.perf_counter() - self.row["started"]
-            job["reason"] = event.delta.finish_reason
-            job["forward_token_slots"] = event.delta.forward_token_slots
-        return event
-
-    def seal(self):
-        return self.inner.seal()
-
-    def stop(self, request_id):
-        result = self.inner.stop(request_id)
-        job = self.requests[request_id]
-        if "finished" not in job:
-            job.update(finished=time.perf_counter() - self.row["started"], reason="discarded", forward_token_slots=None)
-        return result
-
-    def close(self):
-        try:
-            self.inner.close()
-        finally:
-            for job in self.requests.values():
-                if "finished" not in job:
-                    job.update(finished=time.perf_counter() - self.row["started"],
-                               reason="discarded", forward_token_slots=None)
-            self.row["requests"] = {
-                key: {**job, "digest": job["digest"].hexdigest()} for key, job in self.requests.items()
-            }
-
-
-class TimedBackend:
-    def __init__(self, inner, row):
-        self.inner, self.row = inner, row
-
-    def __getattr__(self, name):
-        return getattr(self.inner, name)
-
-    def open_generation_session(self):
-        return TimedSession(self.inner.open_generation_session(), self.row)
 
 
 def single_request_seconds(requests):
@@ -114,52 +48,6 @@ def single_request_seconds(requests):
         active += change
         previous = timestamp
     return seconds
-
-
-def settings_for(args):
-    """Inherit production settings; only explicitly supplied benchmark options override them."""
-    settings = load_settings(Path(args.settings))
-    ar = settings["ar"]
-    if args.model is not None and args.model != ar["model"]["path"]:
-        ar["model"].update(path=args.model, revision=None, weight_sha256=None, adapter=None, tokenizer=None,
-                           tokenizer_revision=None)
-    args.model = ar["model"]["path"]
-    vllm = ar["engine"]["vllm"]
-    config = ar["algorithms"]["is"]
-    ds = settings["datasets"][args.dataset]
-    fields = [
-        (ar, "max_new_tokens", "max_new_tokens"),
-        (ar["engine"], "context_window", "context_window"), (ar["engine"], "device", "device"),
-        (ar["sampling"], "temperature", "temperature"), (settings["run"], "seed", "seed"),
-        (settings["run"], "draws", "repeats"), (ds["selection"], "count", "questions"),
-        (vllm, "gpu_memory_utilization", "memory_utilization"), (vllm, "enforce_eager", "eager"),
-        *((vllm, name, name) for name in ("tensor_parallel_size", "data_parallel_size", "async_scheduling", "parameter_count")),
-        *((config, name, name) for name in ("candidate_count", "block_size", "sibling_replay", "completion_fraction",
-            "rollout_race", "exploration_schedule", "last_rollout_filter", "weighted_completion_quota",
-            "selection_ready", "metropolized_blocks")),
-    ]
-    for section, key, option in fields:
-        value = getattr(args, option, None)
-        if value is not None:
-            section[key] = value
-        setattr(args, option, section[key])
-    args.k = args.k if args.k is not None else [config["rollout_count"]]
-    if args.execution is None:
-        args.execution = "stream" if vllm["asynchronous"] else "batch"
-    if ar["engine"]["backend"] != "vllm" or not vllm["asynchronous"]:
-        raise ValueError("this benchmark requires ar.engine.backend=vllm and vllm.asynchronous=true")
-    if ar["engine"]["continuous_batching"]["workers"] != 1:
-        raise ValueError("single-question measurements require continuous_batching.workers=1")
-    if args.engine_kwargs is not None:
-        vllm["engine_kwargs"].update(json.loads(args.engine_kwargs))
-    if (args.completion_fraction < 1 or args.rollout_race or getattr(args, "last_rollout_filter", False)
-            or getattr(args, "weighted_completion_quota", False) or getattr(args, "selection_ready", False)):
-        # Request-level counters can miss buffered work at cancellation.
-        vllm["engine_kwargs"]["cudagraph_metrics"] = True
-    if args.selection_skip is not None:
-        ds["selection"]["skip"] = args.selection_skip
-    validate_settings(settings)
-    return settings
 
 
 def reset_cache(raw):
@@ -316,356 +204,213 @@ def measured_solve(family, problem, seed, graph_measurements, admission_measurem
     return result, elapsed, counters, execution
 
 
-def compare_runs(paths):
-    """Compare complete IS runs; report execution speedup only for matching work."""
-    def load(path):
-        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-        metadata = next(row for row in rows if row["kind"] == "metadata")
-        if metadata.get("mode", "is") != "is":
-            raise ValueError("only complete IS measurements are supported")
-        return metadata, {(row["repeat"], row["k"], row["problem_id"]): row
-                          for row in rows if row["kind"] == "measurement"}
+def pair_summary(rows, expected_pairs):
+    """Complete paired latency, with failures and missing work kept explicit."""
+    indexed, pairs = {}, {}
+    for row in rows:
+        key = row["problem_id"], row["repeat"], row["mode"]
+        if key in indexed or row["mode"] not in {"base", "is"}:
+            raise ValueError(f"duplicate or unknown measurement: {key}")
+        if row["status"] == "complete" and (not np.isfinite(row["seconds"]) or row["seconds"] <= 0):
+            raise ValueError("completed measurements need positive finite latency")
+        indexed[key] = row
+        pairs.setdefault(key[:2], {})[row["mode"]] = row
+    if len(pairs) > expected_pairs:
+        raise ValueError("more measured pairs than requested")
+    complete = [pair for pair in pairs.values()
+                if set(pair) == {"base", "is"} and all(row["status"] == "complete" for row in pair.values())]
+    all_complete = bool(expected_pairs) and len(complete) == expected_pairs
+    result = {"kind": "summary", "expected_pairs": expected_pairs, "complete_pairs": len(complete),
+              "independent_questions": len({problem for problem, _ in pairs}),
+              "missing_measurements": 2 * expected_pairs - len(indexed),
+              "latency_ratio_is_over_base": None, "paired_ratio_p50": None, "paired_ratio_p95": None}
+    for mode in ("base", "is"):
+        arm = [row for row in rows if row["mode"] == mode]
+        valid = [row for row in arm if row["status"] == "complete"]
+        ungraded = sum("correct" not in row for row in valid)
+        generated = [row["counters"].get("generated_tokens") for row in valid]
+        measured = [row.get("graph_execution", {}).get("estimated_dense_padded_flops") for row in valid]
+        unknown_work = any(row["counters"].get("cancelled_requests", 0)
+                           or row["counters"].get("preemptions", 0) for row in valid)
+        result[mode] = {
+            "completed": len(valid), "failed": sum(row["status"] != "complete" for row in arm),
+            "ungraded": ungraded, "correct": sum(row.get("correct", False) for row in valid),
+            "accuracy": (sum(row.get("correct", False) for row in valid) / expected_pairs
+                         if expected_pairs and len(arm) == expected_pairs and not ungraded else None),
+            "wall_seconds": sum(row["seconds"] for row in valid),
+            "latency_p50_seconds": statistics.median(row["seconds"] for row in valid) if valid else None,
+            "latency_p95_seconds": float(np.percentile([row["seconds"] for row in valid], 95)) if valid else None,
+            "output_tokens": sum(row["output_tokens"] for row in valid),
+            "generated_tokens": (sum(generated) if all_complete and not unknown_work
+                                 and all(value is not None for value in generated) else None),
+            "observed_generated_tokens": sum(value for value in generated if value is not None),
+            "estimated_dense_padded_flops": (sum(measured) if all_complete
+                                            and all(value is not None for value in measured) else None),
+            "length_exhausted": sum(row["length_exhausted"] for row in valid),
+            "incomplete_thinking": sum(row["thinking_status"] not in {"complete", "disabled"} for row in valid),
+            "reward_fallbacks": sum(bool(row["fallbacks"]) for row in valid),
+        }
+    if all_complete:
+        ratios = [pair["is"]["seconds"] / pair["base"]["seconds"] for pair in complete]
+        result.update(latency_ratio_is_over_base=result["is"]["wall_seconds"] / result["base"]["wall_seconds"],
+                      paired_ratio_p50=statistics.median(ratios), paired_ratio_p95=float(np.percentile(ratios, 95)))
+    quality_known = all_complete and all(result[mode]["accuracy"] is not None for mode in ("base", "is"))
+    result["sample_quality_gate"] = (result["is"]["correct"] >= result["base"]["correct"]
+                                     and result["is"]["correct"] > 0 if quality_known else None)
+    return result
 
-    def signature(row):
-        return (row["output_sha256"], tuple(
-            (tuple(step["selection"]), tuple(
-                (key, job["seed"], job["limit"], job["prefix_sha256"], job["tokens"], job["digest"], job["reason"])
-                for key, job in sorted(step["requests"].items()))) for step in row["rounds"]))
 
-    (left_meta, left), (right_meta, right) = map(load, paths)
-    for name in ("model", "sampling", "prompt", "output", "algorithms"):
-        if left_meta["settings"]["ar"][name] != right_meta["settings"]["ar"][name]:
-            raise ValueError(f"comparison changed ar.{name}")
-    if left_meta["settings"]["ar"].get("thinking") != right_meta["settings"]["ar"].get("thinking"):
-        raise ValueError("comparison changed ar.thinking")
+def select_mode(family, mode, settings):
+    algorithm = "sample" if mode == "base" else "is"
+    family.choices = SimpleNamespace(algorithm=algorithm, reward=None if mode == "base" else "consilience")
+    family.config = family.ar["algorithms"][algorithm]
+    family.reward_settings = None if mode == "base" else settings["rewards"]["consilience"]
 
-    def limits(meta):
-        # Historical measurements keep their original schema; this is not a runtime configuration fallback.
-        ar = meta["settings"]["ar"]
-        maximum = ar.get("max_new_tokens")
-        if "max_new_tokens" not in ar:
-            maximum = meta["settings"]["datasets"][meta["arguments"]["dataset"]]["max_new_tokens"]
-        engine_limits = [ar["engine"]["context_window"], ar["engine"]["vllm"].get("max_model_len")]
-        finite = [value for value in engine_limits if value is not None]
-        return maximum, min(finite) if finite else None
 
-    if limits(left_meta) != limits(right_meta):
-        raise ValueError("comparison changed generation or context limits")
-    if left_meta["settings"]["rewards"]["consilience"] != right_meta["settings"]["rewards"]["consilience"]:
-        raise ValueError("comparison changed the reward")
-    if left_meta["dataset"] != right_meta["dataset"]:
-        raise ValueError("comparison changed the dataset or selected questions")
-    if not left or left.keys() != right.keys():
-        raise ValueError("comparison requires the same nonempty set of measurement keys")
-    for key, before in left.items():
-        after = right[key]
-        same = (signature(before) == signature(after)
-                and before["counters"]["generated_tokens"] == after["counters"]["generated_tokens"])
-        weight_error = (max(abs(a - b) for x, y in zip(before["rounds"], after["rounds"], strict=True)
-                            for a, b in zip(x["candidate_log_weights"], y["candidate_log_weights"], strict=True))
-                        if same else None)
-        print(json.dumps({
-            "repeat": key[0], "k": key[1], "problem_id": key[2], "same_trajectories_and_selection": same,
-            "max_log_weight_error": weight_error,
-            "seconds": [before["seconds"], after["seconds"]],
-            "speedup": before["seconds"] / after["seconds"] if same and weight_error < 1e-8 else None,
-            "tail_seconds": [before["tail_seconds"], after["tail_seconds"]],
-            **{name: [before["counters"][name], after["counters"][name]] for name in (
-                "generated_tokens", "generation_forward_token_slots", "estimated_dense_forward_flops")},
-        }))
+def run_pairs(family, dataset, settings, repeats, graph, admission, write):
+    """Pair questions and seeds, alternate order, stop after an engine failure."""
+    rows = []
+    expected = len(dataset.problems) * repeats
+    try:
+        for repeat in range(repeats):
+            for index, problem in enumerate(dataset.problems):
+                seed = SeedStream(settings["run"]["seed"]).derive("paired-benchmark", problem.id, repeat)
+                order = ("base", "is") if (index + repeat) % 2 == 0 else ("is", "base")
+                for mode in order:
+                    select_mode(family, mode, settings)
+                    row = {"kind": "measurement", "problem_id": problem.id, "repeat": repeat,
+                           "mode": mode, "seed": seed}
+                    print(json.dumps({"kind": "start", **{key: row[key] for key in
+                                                         ("problem_id", "repeat", "mode", "seed")}}), flush=True)
+                    try:
+                        solved, seconds, counters, execution = measured_solve(family, problem, seed, graph, admission)
+                    except BaseException as error:
+                        row.update(status="failed", error=f"{type(error).__name__}: {error}")
+                        rows.append(row)
+                        write(row)
+                        raise
+                    row.update(status="complete", seconds=seconds, counters=counters, **execution,
+                               output_tokens=solved["output"]["tokens"], answer_text=solved["answer_text"],
+                               output_text=solved["output"]["text"], trace=solved["trace"], cost=solved["cost"],
+                               thinking_status=solved["output"]["thinking_status"],
+                               length_exhausted=solved["output"]["length_exhausted"], fallbacks=solved["fallbacks"])
+                    try:
+                        row.update(asdict(dataset.grade(solved["answer_text"], problem)))
+                    except Exception as error:
+                        row["grade_error"] = f"{type(error).__name__}: {error}"
+                    rows.append(row)
+                    write(row)
+                    print(json.dumps({key: row.get(key) for key in
+                                      ("problem_id", "repeat", "mode", "seconds", "correct", "output_tokens")}), flush=True)
+    finally:
+        summary = pair_summary(rows, expected)
+        write(summary)
+        print(json.dumps(summary), flush=True)
+    return summary
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model")
-    parser.add_argument("--parameter-count", type=int, default=None,
-                        help="unique model parameters for the 2P-per-token FLOPs estimate")
-    parser.add_argument("--label")
-    parser.add_argument("--settings", default="settings/inference.json")
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"),
-                        help="compare existing measurements on CPU; no model is loaded")
+    parser.add_argument("--settings", type=Path, default=Path("settings/inference.json"))
+    parser.add_argument("--dataset", choices=("gsm8k", "math500"), default="math500")
     parser.add_argument("--questions", type=int)
-    parser.add_argument("--dataset", choices=("gsm8k", "math500"), default="gsm8k")
-    parser.add_argument("--selection-skip", type=int, default=None, help="MATH-500 selection offset")
-    parser.add_argument("--k", type=int, nargs="+")
-    parser.add_argument("--candidate-count", type=int)
-    parser.add_argument("--completion-fraction", type=float,
-                        help="stop at this mean completed fraction of candidate groups; below 1 is length-biased")
-    parser.add_argument("--sibling-replay", action=argparse.BooleanOptionalAction, help="reuse the selected block's other complete rollouts")
-    parser.add_argument("--rollout-race", action=argparse.BooleanOptionalAction,
-                        help="race up to twice the missing completions per candidate and keep the first K; length-biased")
-    parser.add_argument("--max-new-tokens", type=int, help="override ar.max_new_tokens; otherwise inherit settings")
-    parser.add_argument("--context-window", type=int, help="override the shared engine context limit")
-    parser.add_argument("--block-size", type=int)
-    parser.add_argument("--exploration-schedule", choices=("fixed", "two_stage", "single_pool"))
-    parser.add_argument("--metropolized-blocks", action=argparse.BooleanOptionalAction,
-                        help="select between distinct complete candidate blocks, then select a completion")
-    parser.add_argument("--last-rollout-filter", action=argparse.BooleanOptionalAction,
-                        help="apply inverse-probability-corrected tail filtering to fixed or single_pool exploration")
-    parser.add_argument("--weighted-completion-quota", action=argparse.BooleanOptionalAction,
-                        help="stop single_pool at estimated completed weight 1-1/M; changes the sampling law")
-    parser.add_argument("--selection-ready", action=argparse.BooleanOptionalAction,
-                        help="stop on a complete selection in single_pool or both two_stage pools; biased")
+    parser.add_argument("--selection-skip", type=int)
     parser.add_argument("--repeats", type=int)
-    parser.add_argument("--seed", type=int)
-    parser.add_argument("--temperature", type=float)
-    parser.add_argument("--eager", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--device", choices=("cuda", "npu"))
-    parser.add_argument("--tensor-parallel-size", type=int)
-    parser.add_argument("--data-parallel-size", type=int)
-    parser.add_argument("--memory-utilization", type=float)
-    parser.add_argument("--async-scheduling", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--with-base", action="store_true",
-                        help="measure ordinary thinking-mode sampling once per question/repeat, without reward statistics")
-    parser.add_argument("--execution", choices=("stream", "batch"))
-    parser.add_argument("--engine-kwargs", help="explicit JSON overrides merged into the configured engine options")
+    parser.add_argument("--max-tokens", type=int, help="explicit common output cap; otherwise use settings")
+    effort = parser.add_mutually_exclusive_group()
+    effort.add_argument("--effort", help="explicit common thinking effort; otherwise use settings")
+    effort.add_argument("--thinking-budget", type=int)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--label")
+    parser.add_argument("--summary", type=Path, help="summarize paired JSONL on CPU without loading a model")
     args = parser.parse_args()
-    if args.compare:
-        compare_runs(args.compare)
+    if args.summary:
+        rows = [json.loads(line) for line in args.summary.read_text(encoding="utf-8").splitlines()]
+        meta = next(row for row in rows if row["kind"] == "metadata")
+        print(json.dumps(pair_summary([row for row in rows if row["kind"] == "measurement"], meta["expected_pairs"]),
+                         ensure_ascii=False, indent=2))
         return
-    if not all((args.label, args.output)):
-        parser.error("--label and --output are required for an accelerator run")
-    try:
-        settings = settings_for(args)
-    except ValueError as error:
-        parser.error(str(error))
-    if min(args.tensor_parallel_size, args.data_parallel_size) < 1 or not 0 < args.memory_utilization < 1:
-        parser.error("parallel sizes must be positive and memory utilization must be between 0 and 1")
-    rollout_counts = args.k
-    if (min(args.repeats, args.block_size, *rollout_counts, args.candidate_count) < 1
-            or (args.max_new_tokens is not None and args.max_new_tokens < 1)
-            or (args.questions is not None and args.questions < 1)
-            or max(rollout_counts) > 4 or args.temperature <= 0):
-        parser.error("positive budgets and K <= 4 are required")
+    if not args.output or not args.label:
+        parser.error("--output and --label are required")
     if args.output.exists():
-        parser.error("output already exists; choose a new path")
-    if args.selection_skip is not None and (args.dataset != "math500" or args.selection_skip < 0):
-        parser.error("--selection-skip requires MATH-500 and a nonnegative offset")
-    if not 0 < args.completion_fraction <= 1:
-        parser.error("completion fraction must be in (0, 1]")
-    if (args.completion_fraction < 1 or args.rollout_race) and args.execution != "stream":
-        parser.error("completion quotas and rollout races require streaming")
-    if args.exploration_schedule != "fixed" and (
-            args.sibling_replay or args.completion_fraction != 1.0 or args.rollout_race):
-        parser.error(f"{args.exploration_schedule} exploration requires complete trees without sibling replay or rollout races")
-    if args.last_rollout_filter and (args.exploration_schedule == "two_stage" or args.execution != "stream"
-                                    or args.sibling_replay or args.completion_fraction != 1. or args.rollout_race):
-        parser.error("last-rollout-filter requires fixed or single_pool streaming without replay, quotas or races")
-    if args.weighted_completion_quota and (args.exploration_schedule != "single_pool" or args.execution != "stream"
-                                          or args.last_rollout_filter):
-        parser.error("weighted-completion-quota requires single_pool streaming without last-rollout-filter")
-    if args.selection_ready and (args.exploration_schedule not in {"single_pool", "two_stage"} or args.execution != "stream"
-                                 or args.last_rollout_filter or args.weighted_completion_quota):
-        parser.error("selection-ready requires single_pool or two_stage streaming without other early-stop rules")
-    if args.metropolized_blocks and (args.selection_ready or args.weighted_completion_quota or args.last_rollout_filter
-                                    or args.sibling_replay or args.completion_fraction != 1.0 or args.rollout_race):
-        parser.error("metropolized-blocks requires complete pools without replay, early stopping or races")
-    import torch
-    if args.device == "npu":
-        import torch_npu  # noqa: F401
-    accelerator = getattr(torch, args.device, None)
-    if accelerator is None or not accelerator.is_available():
-        raise RuntimeError(f"this benchmark requires an available {args.device} accelerator")
-    dataset = (GSM8K if args.dataset == "gsm8k" else MATH500)(settings["datasets"][args.dataset])
-    family = ARFamily(settings, SimpleNamespace(algorithm="is", reward="consilience"), dataset)
-    rounds = []
-    active_round = None
-    original_step = ConditionalISAdapter.step
-    original_batch_session = candidates.BatchGenerationSession
-
-    def timed_step(adapter, state, step_index, seeds):
-        nonlocal active_round
-        row = {"step": step_index, "fixed_tokens": state.fixed, "started": time.perf_counter()}
-        measured = replace(adapter, backend=TimedBackend(adapter.backend, row))
-        active_round = row
-        try:
-            record, updated = original_step(measured, state, step_index, seeds)
-        finally:
-            active_round = None
-        row["seconds"] = time.perf_counter() - row.pop("started")
-        # Batch barriers delay outer delivery, so use native request completion there.
-        finishes = sorted(row.get("native_finishes", [job["finished"] for job in row["requests"].values()]))
-        row["tail_seconds"] = finishes[-1] - finishes[-2] if len(finishes) >= 2 else 0.0
-        row["single_request_seconds"] = single_request_seconds(row["requests"]) if args.execution == "stream" else None
-        row["selection"] = [record.selected_index, record.completion_index]
-        row["candidate_log_weights"] = [candidate.log_weight for candidate in record.candidates]
-        row["completion_log_weights"] = [
-            [completion.log_weight for completion in candidate.rollouts] for candidate in record.candidates
-        ]
-        row["sampling_plan"] = record.sampling_plan
-        row["candidate_indices"] = record.candidate_indices
-        row["rollout_race"] = args.rollout_race
-        row["last_rollout_filter"] = args.last_rollout_filter
-        row["weighted_completion_quota"] = args.weighted_completion_quota
-        cold_pool = (args.exploration_schedule == "two_stage" and step_index == 0 and not state.token_ids
-                     and adapter.config.candidate_count > 1)
-        ready = args.selection_ready and (args.exploration_schedule == "single_pool" or cold_pool or (
-            step_index == 1 and bool(state.token_ids) and adapter.config.rollout_count == 1
-            and adapter.config.block_size >= adapter.config.total_length - state.fixed))
-        row["selection_ready"] = ready
-        if args.completion_fraction < 1 or args.weighted_completion_quota or ready:
-            width, count, rollouts = record.sampling_plan
-            sources = record.candidate_indices or tuple(range(count))
-            expected = [1 if width >= adapter.config.total_length - state.fixed else rollouts] * count
-            completed = [0] * count
-            for index, candidate in zip(sources, record.candidates, strict=True):
-                completed[index] = len(candidate.rollouts)
-                if len(candidate.rollouts) == 1 and not candidate.rollouts[0].token_ids:
-                    expected[index] = 1
-            row["completion_quota"] = {
-                "fraction": args.completion_fraction, "candidate_sources": sources,
-                "unit": "mean_candidate_completion_fraction",
-                "completed_fraction": sum(done / planned for done, planned in zip(
-                    completed, expected, strict=True)) / count,
-                "expected_leaves": expected, "completed_leaves": completed,
-                "discarded_requests": [key for key, job in row["requests"].items() if job["reason"] == "discarded"],
-                "sampling_law": "length-biased; incomplete leaves have zero weight",
-            }
-            if args.weighted_completion_quota:
-                row["completion_quota"].update(
-                    fraction=1 - 1 / count, unit="estimated_completed_weight_fraction",
-                    completed_count_fraction=row["completion_quota"].pop("completed_fraction"),
-                    sampling_law="prefix-score and completion-time biased; incomplete leaves have zero weight")
-            elif ready:
-                row["completion_quota"].update(
-                    fraction=None, unit="complete_priority_group_ready" if cold_pool else "selected_completion_ready",
-                    sampling_law=("fixed group uniform priorities with empirical prefix estimates and completion-time-dependent stopping"
-                                  if cold_pool else
-                                  ("completion-triggered branching; " if args.exploration_schedule == "single_pool" else "")
-                                  + "one fixed draw with prefix estimates and completion-time-dependent stopping"))
-        row["retained_tokens"] = len(updated.token_ids)
-        rounds.append(row)
-        print(json.dumps({"event": "round", "label": args.label, "k": record.sampling_plan[2],
-                          "sampling_plan": record.sampling_plan,
-                          "step": step_index, "seconds": row["seconds"], "tail_seconds": row["tail_seconds"],
-                          "retained_tokens": row["retained_tokens"]}), flush=True)
-        return record, updated
-
-    ConditionalISAdapter.step = timed_step
-    candidates.BatchGenerationSession = lambda backend: TimedSession(original_batch_session(backend), backend.row)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    graph_measurements = None
-    admission_measurements = None
+        parser.error("output exists; use --summary to read it or choose a new output")
+    settings = load_settings(args.settings)
+    ar, selection = settings["ar"], settings["datasets"][args.dataset]["selection"]
+    if args.questions is not None:
+        if args.questions < 1:
+            parser.error("--questions must be positive")
+        selection["count"] = args.questions
+    if args.selection_skip is not None:
+        if args.dataset != "math500" or args.selection_skip < 0:
+            parser.error("--selection-skip requires MATH-500 and a nonnegative offset")
+        selection["skip"] = args.selection_skip
+    if args.max_tokens is not None:
+        ar["max_new_tokens"] = args.max_tokens
+    if args.effort is not None or args.thinking_budget is not None:
+        if ar["thinking"] is None:
+            parser.error("explicit effort/budget requires an ar.thinking profile")
+        ar["thinking"].update(reasoning_effort=args.effort, budget_tokens=args.thinking_budget)
+    repeats = settings["run"]["draws"] if args.repeats is None else args.repeats
+    if repeats < 1:
+        parser.error("--repeats must be positive")
+    engine = ar["engine"]
+    if engine["backend"] != "vllm" or not engine["vllm"]["asynchronous"] or engine["continuous_batching"]["workers"] != 1:
+        parser.error("paired single-question measurements require asynchronous vLLM and workers=1")
+    if ar["algorithms"]["is"]["exploration_schedule"] != "two_stage":
+        parser.error("configure the fast two_stage IS path; fixed-block performance comparisons are retired")
+    resolved, _ = resolve_thinking(ar)
+    if (resolved["output"]["thinking_mode"] != "enabled" or ar["output"]["sampling_scope"] != "thinking"
+            or settings["rewards"]["consilience"]["scope"] != "thinking"):
+        parser.error("this comparison requires thinking generation and thinking-only IS")
+    # Count padded and canceled work through the engine's native execution statistics.
+    engine["vllm"]["engine_kwargs"]["cudagraph_metrics"] = True
+    validate_settings(settings)
+    dataset = load_dataset(args.dataset, settings["datasets"][args.dataset])
+    family, graph, admission = None, None, None
     original_run = ar_app.run_conditional_is
-
     def timed_run(*request_args, **request_kwargs):
         start = time.perf_counter()
         try:
             return original_run(*request_args, **request_kwargs)
         finally:
-            if admission_measurements is not None:
-                admission_measurements.search = start, time.perf_counter()
-
-    ar_app.run_conditional_is = timed_run
+            if admission is not None:
+                admission.search = start, time.perf_counter()
     try:
+        if not dataset.problems:
+            parser.error("the selected dataset is empty")
+        family = ARFamily(settings, SimpleNamespace(algorithm="is", reward="consilience"), dataset)
         family.load()
-        graph_measurements = GraphMeasurements(family.raw)
-        admission_measurements = AdmissionMeasurements(family.raw)
-        original_generate_one = family.raw._generate_one
-
-        async def timed_generate_one(*request_args, **request_kwargs):
-            result = await original_generate_one(*request_args, **request_kwargs)
-            if active_round is not None:
-                active_round.setdefault("native_finishes", []).append(time.perf_counter() - active_round["started"])
-            return result
-
-        family.raw._generate_one = timed_generate_one
-        if args.execution == "stream" and not family.raw.supports_streaming_generation:
-            raise RuntimeError("a streaming vLLM backend is required")
-        metadata = {"kind": "metadata", "mode": "is",
-                    "label": args.label, "arguments": vars(args) | {"output": str(args.output)},
-                    "command_line": sys.argv[1:],
-                    "settings": settings, "dataset": dataset.describe(), "engine": engine_settings(family.raw),
-                    "parameter_count": family.raw.parameter_count, "gpu": accelerator.get_device_name(),
-                    "device": args.device,
-                    "algorithm_sha256": {
-                        name: hashlib.sha256((Path(candidates.__file__).parent / name).read_bytes()).hexdigest()
-                        for name in ("candidates.py", "conditional_is.py", "config.py")
-                    },
-                    "environment": {key: os.environ.get(key) for key in (
-                        "VLLM_USE_V2_MODEL_RUNNER", "VLLM_WSL2_ENABLE_PIN_MEMORY", "VLLM_BATCH_INVARIANT", "OMP_NUM_THREADS",
-                        "TORCHINDUCTOR_COMPILE_THREADS")},
-                    "python": platform.python_version(), "cuda": torch.version.cuda,
-                    "versions": {name: importlib.metadata.version(name) for name in (
-                        "torch", "vllm", "transformers", *(("torch-npu", "vllm-ascend") if args.device == "npu" else ()))}}
+        if not family.raw.supports_streaming_generation:
+            raise RuntimeError("the fast IS path requires native streaming")
+        graph, admission = GraphMeasurements(family.raw), AdmissionMeasurements(family.raw)
+        ar_app.run_conditional_is = timed_run
+        maximum = family.max_new_tokens
+        try:
+            family.max_new_tokens = 64
+            for mode in ("base", "is"):
+                select_mode(family, mode, settings)
+                family.solve(dataset.problems[0], SeedStream(SeedStream(settings["run"]["seed"]).derive("paired-warmup", mode)))
+        finally:
+            family.max_new_tokens = maximum
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as sink:
-            sink.write(json.dumps(metadata, ensure_ascii=False) + "\n")
-            sink.flush()
-            # Warm every branch multiplicity; no timed run reuses warm-up KV entries.
-            for k in dict.fromkeys(rollout_counts):
-                family.max_new_tokens = 64
-                family.config.update(rollout_count=k, block_size=16)
-                warmed = family.solve(dataset.problems[0], SeedStream(args.seed))
-                if k == args.k[0]:
-                    print(json.dumps({"event": "warmup", "text": warmed["output"]["text"][:300]}), flush=True)
-            family.max_new_tokens = args.max_new_tokens
-            family.config["block_size"] = args.block_size
-            for repeat in range(args.repeats):
-                base_seconds = {}
-                if args.with_base:
-                    original = family.choices, family.config, family.reward_settings
-                    try:
-                        family.choices = SimpleNamespace(algorithm="sample", reward=None)
-                        family.config, family.reward_settings = family.ar["algorithms"]["sample"], None
-                        for problem in dataset.problems:
-                            result, elapsed, counters, execution = measured_solve(
-                                family, problem, args.seed, graph_measurements, admission_measurements)
-                            base_seconds[problem.id] = elapsed
-                            row = {"kind": "base", "label": args.label, "repeat": repeat,
-                                   "problem_id": problem.id, "seconds": elapsed,
-                                   "counters": counters, **execution,
-                                   "output_tokens": result["output"]["tokens"],
-                                   "output_sha256": hashlib.sha256(result["output"]["text"].encode()).hexdigest(),
-                                   "answer_text": result["answer_text"],
-                                   "thinking_status": result["output"]["thinking_status"],
-                                   "ended_by_eos": result["output"]["ended_by_eos"],
-                                   "length_exhausted": result["output"]["length_exhausted"],
-                                   "fallbacks": result["fallbacks"], "cost": result["cost"]}
-                            sink.write(json.dumps(row, ensure_ascii=False) + "\n")
-                            sink.flush()
-                            print(json.dumps({key: row[key] for key in (
-                                "kind", "label", "problem_id", "seconds", "output_tokens", "counters")}), flush=True)
-                    finally:
-                        family.choices, family.config, family.reward_settings = original
-                for k in args.k:
-                    family.config["rollout_count"] = k
-                    for problem in dataset.problems:
-                        rounds.clear()
-                        result, elapsed, counters, execution = measured_solve(
-                            family, problem, args.seed, graph_measurements, admission_measurements)
-                        row = {"kind": "measurement", "label": args.label, "repeat": repeat, "k": k,
-                               "problem_id": problem.id, "seconds": elapsed, "rounds": list(rounds),
-                               "base_seconds": base_seconds.get(problem.id),
-                               "relative_to_base": (elapsed / base_seconds[problem.id] if problem.id in base_seconds else None),
-                               "search_seconds": sum(step["seconds"] for step in rounds),
-                               "tail_seconds": sum(step["tail_seconds"] for step in rounds),
-                               "single_request_seconds": (sum(step["single_request_seconds"] for step in rounds)
-                                                          if args.execution == "stream" else None),
-                               "round_tail_median": statistics.median(step["tail_seconds"] for step in rounds),
-                               "counters": counters, "output_tokens": result["output"]["tokens"],
-                               "output_sha256": hashlib.sha256(result["output"]["text"].encode()).hexdigest(),
-                               "output_text": result["output"]["text"],
-                               "answer_text": result["answer_text"],
-                               "thinking_status": result["output"]["thinking_status"],
-                               "ended_by_eos": result["output"]["ended_by_eos"],
-                               "length_exhausted": result["output"]["length_exhausted"],
-                               "fallbacks": result["fallbacks"], "cost": result["cost"], "trace": result["trace"]}
-                        row.update(execution)
-                        sink.write(json.dumps(row, ensure_ascii=False) + "\n")
-                        sink.flush()
-                        print(json.dumps({key: row[key] for key in ("label", "k", "problem_id", "seconds",
-                                                                   "relative_to_base", "search_seconds",
-                                                                   "tail_seconds", "counters")}), flush=True)
+            def write(row):
+                sink.write(json.dumps(row, ensure_ascii=False) + "\n")
+                sink.flush()
+            write({"kind": "metadata", "label": args.label, "expected_pairs": len(dataset.problems) * repeats,
+                   "command_line": sys.argv[1:], "settings": settings, "dataset": dataset.describe(),
+                   "engine": engine_settings(family.raw), "parameter_count": family.raw.parameter_count,
+                   "git": git_state(), "source_sha256": json_sha256(source_sha256()), "environment": environment(),
+                   "timing": "cold-prefix generation, including final content; excluding loading, warm-up, grading and writes"})
+            run_pairs(family, dataset, settings, repeats, graph, admission, write)
     finally:
-        ConditionalISAdapter.step = original_step
-        candidates.BatchGenerationSession = original_batch_session
         ar_app.run_conditional_is = original_run
-        if graph_measurements is not None:
-            graph_measurements.close()
-        if admission_measurements is not None:
-            admission_measurements.close()
-        family.close()
+        if graph is not None:
+            graph.close()
+        if admission is not None:
+            admission.close()
+        if family is not None:
+            family.close()
         dataset.close()
 
 

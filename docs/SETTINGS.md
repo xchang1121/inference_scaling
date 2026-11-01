@@ -10,9 +10,27 @@
 `max_new_tokens=null` 使用剩余上下文，`context_window=null` 读取模型/引擎配置。
 服务与评测共用这些设置、采样策略和根种子。
 
-`scripts/benchmark_is_gpu.py` 的采样、长度、奖励和引擎默认值均继承该文件。显式 CLI 参数覆盖对应字段，
-例如 `--max-new-tokens 4096 --context-window 6144 --k 1 2 4`；它们和完整生效设置写入结果元数据。
-性能测量要求异步 vLLM 和单题执行。预热仍使用独立的 64 token 小请求，不计入测量。
+`scripts/benchmark_is_gpu.py` 配对测量同题 Base 思考采样与当前快速 IS。模型、采样、奖励、M/K/B 和硬件设置
+继承该文件，要求异步 vLLM、`workers=1`、thinking 范围及 `exploration_schedule="two_stage"`。
+`selection_ready` 由同一配置控制。该入口不运行固定块 IS 对照。
+
+```bash
+python scripts/benchmark_is_gpu.py --settings settings/inference.json \
+  --dataset math500 --questions 2 --repeats 1 --effort low --max-tokens 8192 \
+  --label tp2-fast --output results/tp2-fast.jsonl
+python scripts/benchmark_is_gpu.py --summary results/tp2-fast.jsonl
+```
+
+短负载示例显式使用 4096 thinking / 8192 总长；省略预算参数则继承配置。硬件和算法在配置中调整，CLI 不再重复
+暴露历史开关。每题每次重复派生独立根种子，两种方法使用同一根种子及各自的算法子流；运行顺序逐对交替。
+两种方法各用独立的 64 token 请求预热，计时前清空前缀缓存。时延包含最终内容生成，排除加载、预热、判题和写入。
+
+主指标 `latency_ratio_is_over_base` 为 IS 总时延除以 Base 总时延；另报逐题比值 p50/p95、正确率、长度耗尽、
+实际生成量与含填充前向 FLOPs。出现取消或抢占时，普通完成计数仅作为已观测量，完整生成量标为 `null`；
+原生执行计数仍记录已执行的计算。失败和缺失配对不产生完整时延比，判题失败不计为已知正确率。
+`sample_quality_gate` 只表示样本中 IS 正确数不少于 Base 且至少有一道正确，不代表总体非劣性。
+`is_single_admitted_seconds` 记录搜索阶段仅一条请求已准入的累计时间，区别于设备空闲时间。
+完整设置、代码版本和顺序保存在 JSONL；`--summary` 只读汇总，不加载模型。
 
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
 `ar` 中除 `algorithms` 外的全部字段，以及 `ar.algorithms.<算法>`。这些“有效设置”连同模型与数据的
