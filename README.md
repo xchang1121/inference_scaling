@@ -143,7 +143,21 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 
 ## 历史实现
 
-扩散模型与 GRPO/VRPO 训练路线已从主线移除，源码、设置和测试可从[历史版本 62af76c](https://github.com/xchang1121/inference_scaling/tree/62af76ce038b4d5224eac7c1963b42960140c333)恢复。历史实验报告与图片保留。IS 的同块多补全复用、数量/权重配额、超发、末条随机筛选、单池及 Metropolized 块选择也已退出主线，旧源码与说明由同一历史版本恢复。当前快速路径集中在两阶段探索与可选提前选择。
+已移除的实现保存在独立归档分支
+[`archive/legacy-dllm-training-is`](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
+归档以主线精简前的 `62af76c` 为基线，包含完整源码、依赖、设置、测试和原文档：
+
+- dLLM 推理与 LLaDA 后端；
+- GRPO、VRPO 训练及数据准备；
+- IS 的同块补全复用、数量与权重配额、超发、末条随机筛选、单池及 Metropolized 块选择。
+
+归档独立于主线的安装与测试。历史实验报告与图片仍保留在主线；当前快速路径集中在两阶段探索与可选提前选择。
+在单独目录中获取归档：
+
+```bash
+git clone --branch archive/legacy-dllm-training-is --single-branch \
+  https://github.com/xchang1121/inference_scaling.git inference_scaling-archive
+```
 
 ## 推理服务
 
