@@ -410,7 +410,10 @@ class VLLMBackend:
 
             SamplingParams, TokensPrompt, BeamSearchParams = _load_vllm_sampling_api()
         except ImportError as error:  # pragma: no cover - optional GPU installation
-            raise ModuleNotFoundError(f"{cls.__name__}.from_pretrained requires the project's vllm extra") from error
+            raise ImportError(
+                f"{cls.__name__} could not import the installed vLLM backend: {error}. "
+                "Use an engine environment matching the accelerator (vLLM + vllm-ascend on Ascend)."
+            ) from error
 
         tokenizer = _load_tokenizer(
             AutoTokenizer, model_name_or_path, tokenizer_name_or_path, tokenizer_revision,
