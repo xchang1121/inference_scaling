@@ -54,6 +54,10 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
   --local-dir /data/models/Qwen3.8-27B
 ```
 
+非 root 容器的运行 UID 应有对应的 `/etc/passwd` 条目和可写用户目录。四卡验证中，缺少该条目曾导致
+`hcclGetRootInfo` / `ra init` 错误；补齐容器内用户后，四卡通信和模型加载通过。部署时先检查设备可见性和
+小张量 HCCL 通信，再加载模型。相关故障说明见 [vllm-ascend #9490](https://github.com/vllm-project/vllm-ascend/issues/9490)。
+
 ## 2. 配置
 
 服务只读取 `settings/inference.json`：`ar` 提供模型、长度、模板、引擎、采样与 IS 参数，
