@@ -768,7 +768,7 @@ AR 的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一�
 
 $`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`。
 默认 `exploration_schedule="fixed"` 在一次运行中保持这三个量固定；还可选择
-[单轮完整候选池](#is-single-pool)或[两阶段探索](#is-two-stage)。
+[两阶段探索](#is-two-stage)。
 
 `ar.algorithms.is.block_first` 打开时，第 2 步先只生成各候选的 $`B`$ 个 token，第一条补全改为续写请求：沿用候选的种子，
 均匀数流从第 $`B`$ 个位置接着取，与其余 $`K-1`$ 条补全同批生成。在均匀数流按位置索引的后端上，续写逐 token 等于原先
@@ -822,145 +822,12 @@ kept = prefix + candidates[m].token_ids + rollouts[k].token_ids
 AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algorithms/conditional_is.py)，候选与所有
 补全都按异构请求展平为批次；执行细节见[重复前缀 KV 复用](#infra-prefix-kv)。
 
-<a id="is-single-pool"></a>
-### 单轮完整候选池
-
-`ar.algorithms.is.exploration_schedule="single_pool"` 只生成首轮完整候选池，从中选出一条完整序列后结束探索。
-首轮仍使用配置的 M/K/B：先生成 M 个候选块，每个块有 K 条完整补全；已终止的块只有一条。
-默认等待所有请求完成后再选择，保留原采样策略、完整序列奖励和前缀计算复用。节省的计算来自省略后续探索；
-首轮最长请求可另用[末条补全筛选](#is-last-rollout-filter)处理。
-
-该模式采用 Metropolized 索引更新。设第 $`m`$ 组实际有 $`K_m`$ 条补全，展平后的叶子权重为
-
-```math
-w_{mk}=\frac{\exp(r(z_m,u_{mk})/\tau)}{K_m}.
-```
-
-更新的起点 $`i`$ 固定为第 0 组第 0 条补全，由生成前的编号确定。先在其余叶子中按权重提出 $`j`$，再以
-
-```math
-\min\!\left(1,\frac{\sum_{\ell\ne i}w_\ell}{\sum_{\ell\ne j}w_\ell}\right)
-```
-
-接受；拒绝则保留 $`i`$。只有一个叶子时直接返回它。实现将提议和接受合并为一次分类抽样，其非对角转移概率为
-
-```math
-P(i,j)=\frac{w_j}{\max\!\left(\sum_{\ell\ne i}w_\ell,\sum_{\ell\ne j}w_\ell\right)},\qquad j\ne i.
-```
-
-对角概率补足到 1。分母关于 $`i,j`$ 对称，因此 $`w_iP(i,j)=w_jP(j,i)`$，更新保持按 $`w`$ 归一化的索引分布。
-把它替换到上节的候选树联合分布中，仍保持完整序列的目标边缘分布；$`K_m`$ 的分母保留了提前终止组与普通组的相对权重。
-从基模型生成的初始树出发，只执行一次更新得到的分布仍有有限样本误差。减少后续探索可能增大该误差，
-Metropolized 更新也没有对普通 SIR 的有限预算 TV 误差优势保证。
-
-选择规则位于公共采样层 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)，
-不依赖模型类型或推理引擎。AR 入口在一次选择后提交完整序列，直接复用它的补全和奖励：
-
-```python
-m, k = select_metropolized(candidates, seeds, "conditional_is", 0)
-candidate = candidates[m]
-completion = candidate.rollouts[k]
-generated = candidate.token_ids + completion.token_ids
-```
-
-此模式下 B 决定同组补全的分叉位置；关闭末条筛选且 K=1 时，候选是 M 条独立完整序列，B 不改变其理想采样分布。
-启用 `block_first` 时，后端续写种子的处理仍可能使不同 B 产生不同样本。
-`sampling_plan` 记录首轮请求的 B/M/K，运行只有一个探索步骤。CLI 与服务共享该选项，基准入口使用
-`--exploration-schedule single_pool`。同块补全复用、数量完成配额和超发与此模式互斥；
-[权重完成配额](#is-weighted-completion-quota)使用独立的停止与选择规则。
-
-<a id="is-block-selection"></a>
-### 按候选块进行 Metropolized 选择
-
-`ar.algorithms.is.metropolized_blocks = true` 在完整候选池上先选择下一块，再选择补全。
-同一块下的多条补全，以及不同候选位置生成的相同 token 块，合并为一个选择组。其作用是增加更新下一块内容的概率；
-当前候选池的生成请求、完整奖励和已有 rollout 的复用方式不变。
-
-沿用上一节的叶子权重 $`a_i=\exp(r_i/\tau)/K_m`$。设 $`G_g`$ 是 token 块相同的叶子集合，
-$`A_g=\sum_{i\in G_g}a_i`$，$`A=\sum_g A_g`$。以原第 0 组第 0 条补全所在的块 $`g`$ 为起点，使用
-
-```math
-P(g,h)=\frac{A_h}{\max(A-A_g,A-A_h)},\qquad h\ne g,
-\qquad P(g,g)=1-\sum_{h\ne g}P(g,h).
-```
-
-选定块 $`h`$ 后，以 $`a_j/A_h`$ 的概率选择其中的叶子 $`j`$。只有一个不同的块时，直接按叶子权重选择补全。
-原 $`K_m`$ 分母始终保留，合并相同块后不重新平均，也不删除重复出现的样本质量。
-
-对于不同块中的叶子 $`i,j`$，完整选择的概率流为
-
-```math
-a_i P(i,j)=\frac{a_i a_j}{\max(A-A_{g(i)},A-A_{g(j)})}.
-```
-
-右侧关于 $`i,j`$ 对称；同块内的概率流为 $`P(g,g)a_i a_j/A_g`$，同样对称。因此选择保持原叶子权重分布。
-代入式 (8a) 的条件树构造，仍保持完整序列目标；逐块固定前缀、保留已选补全和两阶段末轮继续使用原流程。
-
-由于 $`A_{g(i)}\ge a_i`$，跨不同块的每个转移概率均不低于上一节的叶子 Metropolized 选择。
-同块内的转移概率可能下降，所以该性质不推出有限轮数 TV 误差或同预算准确率的普遍优势。
-K=1 且候选块各不相同时，两种选择相同；K>1 时，即使各候选位置的块都不同，同组补全的合并仍会改变选择。
-
-实现复用 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)：
-
-```python
-m, k = select_metropolized(candidates, seeds, "conditional_is", step,
-                           group_blocks=True)
-```
-
-此选项默认关闭，适用于 `fixed`、`two_stage` 和 `single_pool` 的完整池，不与提前选择、末条筛选、配额、超发或兄弟复用组合。
-它不减少当前池的最长请求等待；后续选中的前缀、末轮预算和正文长度可能改变，因此整题耗时差异需与实际生成量一起比较。
-有限模型的同预算误差与 Ascend 执行成本见[实验结果](../reports/ASCEND_IS_INFRA.md#block-metropolized)。
-
-<a id="is-weighted-completion-quota"></a>
-### 按已完成权重结束候选池
-
-`ar.algorithms.is.weighted_completion_quota=true` 用已完成补全的权重占比决定结束时刻。
-它适用于 `single_pool`，默认关闭，使用完整原生根请求，与 `block_first`、末条筛选、数量配额、同块复用及超发互斥。
-M、K、B 和生成前确定的种子保持原值，实际完成数量随当前轨迹变化。
-奖励对象须提供缓存前缀评分接口 `cached_prefix`；当前内在置信度奖励提供该接口。
-
-沿用每组原定补全数 $`K_m`$；在 B 内终止的组取 1。记已完成叶子集合为 $`C`$，其完整奖励为 $`r_{mk}`$。
-对未完成叶子，只读取当前已生成前缀的缓存统计，按同一奖励公式计算暂时分数 $`h_{mk}`$。
-尚未释放的子请求使用其已知候选块。至少两个候选组有完整叶子后（M=1 时为一个），计算
-
-```math
-\widehat f=
-\frac{\displaystyle\sum_{(m,k)\in C}\frac{\exp(r_{mk}/\tau)}{K_m}}
-{\displaystyle\sum_{(m,k)\in C}\frac{\exp(r_{mk}/\tau)}{K_m}
-+\displaystyle\sum_{(m,k)\notin C}\frac{\exp(h_{mk}/\tau)}{K_m}}.
-```
-
-达到 $`\widehat f\ge 1-1/M`$ 时，取消剩余请求。任一所需前缀统计缺失时继续等待，全部完成后按普通 SIR 选择；调度仅读取生成缓存，
-完整奖励沿用原有评分流程。所有输出均来自已完成叶子，结束条件仍为 EOS、思考边界或原长度上限。
-
-保留叶子按 $`\exp(r_{mk}/\tau)/K_m`$ 进行普通 SIR 选择，分母保留原定补全数。
-编号 `(0, 0)` 的叶子也可能尚未完成，因此此模式使用普通 SIR，随后直接复用所选完整序列和奖励。
-实现复用 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py) 的分支释放、评分、取消和权重处理。
-CLI 与服务共用配置；基准入口增加 `--weighted-completion-quota --exploration-schedule single_pool`。
-
-该规则引入与完成时间及前缀分数相关的选择偏差。前缀统计只是完整奖励的估计，阈值用于控制等待程度，
-而非给出目标分布的误差保证。完整生成对照可测量实际被排除的权重：令 $`w_{mk}=\exp(r_{mk}/\tau)/K_m`$，
-对同一完整候选池，全部叶子 SIR 与保留叶子 SIR 在叶子编号上的 TV 距离精确等于
-
-```math
-1-\frac{\sum_{(m,k)\in C}w_{mk}}{\sum_{m,k}w_{mk}}.
-```
-
-映射到输出序列后的 TV 距离至多为该值；到理想目标的误差还包含有限候选误差。
-实际取消后的运行只观测保留叶子的完整奖励，完整生成对照用于单独审计这一取舍。
-
 <a id="is-selection-ready"></a>
 ### 所选补全完成后结束候选池
 
-`ar.algorithms.is.selection_ready=true` 沿用上节的完整奖励、缓存前缀分数和原定 $`K_m`$，
-使用生成前固定的随机数决定选择。它适用于流式 `single_pool` 和 `two_stage`，默认关闭，与权重配额、末条筛选、
-先块生成、同块复用、数量配额及超发互斥。
-
-在 `single_pool` 中，K=1 时仍直接生成 M 条完整根请求。K>1 时，先并行运行 M 条根请求，等首条根请求结束，再将共同分叉位置设为
-$`\max(B,\ell_{\mathrm{first}})`$，其中 $`\ell_{\mathrm{first}}`$ 为该请求的实际生成长度，B 为配置的下限。
-其余根请求达到此位置后，各释放 K−1 条独立补全；原根请求继续生成第零条补全。在分叉位置以内结束的组只有一条叶子。
-结束条件包括 EOS、思考边界和原长度上限。该安排复用更长前缀，减少重复补全；K=1、完整等待及权重完成配额的分叉策略不变。
-`sampling_plan` 记录本轮确定的分叉位置，服务的 `block_size` 仍记录配置下限。
+`ar.algorithms.is.selection_ready=true` 使用完整奖励、缓存的前缀分数及生成前固定的随机数决定选择，
+仅用于流式 `two_stage`，默认关闭，要求 `block_first=false`。前缀分数只读取已经生成的 token 概率统计；
+统计不足时继续等待，不额外调用模型评分。该规则近似未完成权重，存在完成时间相关的选择偏差。
 
 在 `two_stage` 中，首轮保持预设 M/K/B，原根请求在 B 处释放 K−1 条子请求，随后继续生成。
 每个候选组独立抽取并固定 $`U_m\sim\mathrm{Uniform}(0,1)`$。已完成叶子使用真实权重
@@ -994,7 +861,7 @@ J_t=\arg\max_m\frac{K_m^{-1}\sum_{k=1}^{K_m}\widetilde w_{mk}(t)}{U_m}.
 K>1 的共享前缀树、提前取消及依赖首轮观测的后续预算需要另外分析，完整池的结论不提供当前提前结束流程的误差保证。
 见 [Uniform Race，第4.2节](https://arxiv.org/html/2609.34639v1#S4.SS2)。
 
-`single_pool` 及 `two_stage` 的末轮使用以下固定累计概率抽样。末轮 K=1、B 为剩余生成上限，已有完整后缀及奖励作为 0 号候选。
+`two_stage` 的末轮使用以下固定累计概率抽样。末轮 K=1、B 为剩余生成上限，已有完整后缀及奖励作为 0 号候选。
 [末轮长度区间](#is-length-window)仍然生效：已经确认在区间外的候选取零权重，未完成候选才使用前缀估计。
 该模式不改变首轮分叉位置或已经固定的前缀。
 
@@ -1007,7 +874,7 @@ J_t=\min\{j:U\lt F_j(t)\}.
 ```
 
 若 $`J_t`$ 对应的补全已经完整，保留它并取消剩余请求；否则继续生成。
-`single_pool` 仍要求至少两个候选组有完整补全（M=1 时为一个）。`two_stage` 的末轮已经有完整的 0 号候选，
+末轮已经有完整的 0 号候选，
 各未完成候选具备可用前缀统计后即可开始判断；若固定 U 选中 0 号候选，无须再等待一条新补全结束。
 所有事件复用同一个 U，避免反复抽样增加已完成叶子的入选机会。
 所需前缀统计缺失时继续等待，全部完成后使用完整权重和原来的 U 选择。
@@ -1018,7 +885,6 @@ J_t=\min\{j:U\lt F_j(t)\}.
 该规则可以在已完成权重比例较小时结束等待：决定本次输出所需的补全已经可用。
 若各时刻的权重都等于固定候选池的最终权重，所选叶子始终相同，输出选择恰为该池的普通 SIR；
 实际实现使用暂时的前缀分数，J 可能随生成变化，因此存在与分数及完成时间相关的偏差。
-完成驱动的分叉还改变同组补全的相关性和有限候选树，不能仅凭根请求的基础模型分布不变，推断最终输出分布不变。
 两阶段的首轮和末轮均可能受前缀估计及完成时间影响；末轮允许在首条新补全结束前选择，还会增加保留参考序列的机会。
 [两阶段完整探索](#is-two-stage)的目标不变性不适用于提前选择。
 误差审计需要联合计算停止时刻和固定 U 的选择结果；单次保留权重比例无法直接给出该规则的 TV 误差。
@@ -1026,77 +892,7 @@ J_t=\min\{j:U\lt F_j(t)\}.
 实现复用 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py) 的请求释放、
 统计读取和取消流程。它返回已确定的选择索引，适配器直接使用，省去第二次 SIR 抽样；
 所有已完成候选的标量统计仍保留在步骤记录中。仅读取已有缓存，额外模型评分调用数为零。
-CLI 与服务共用配置，基准入口使用 `--selection-ready --exploration-schedule single_pool`，
-或将最后一项设为 `two_stage`。两个模式均复用原执行和计费流程，无额外模型评分。
-
-<a id="is-last-rollout-filter"></a>
-### 末条补全的继续概率与权重校正
-
-`ar.algorithms.is.last_rollout_filter=true` 在一轮仅剩最后一条补全时决定是否继续等待。
-它适用于 `fixed` 和 `single_pool`；默认关闭，与两阶段、同块多补全复用、完成配额和超发互斥。
-固定块模式仍复用上一轮选中的完整序列及奖励，已经提交的前缀保持不变。
-
-设第 $`m`$ 组原定有 $`K_m`$ 条补全，终止块取 $`K_m=1`$，物理叶子数为 $`n=\sum_m K_m`$。
-当其余叶子均完成，取本轮后缀的共同 token 位置
-
-```math
-\ell=\max\!\left(B,\max_{j\ne i}|z_j,u_j|\right).
-```
-
-仅当最后一条 $`i`$ 已超过 $`\ell`$ 时进行筛选；若最长长度并列，则本轮不筛选。
-决策读取它前 $`\ell`$ 个 token 的缓存统计，并与其余叶子的完整奖励比较。
-Consilience 对这个已观测前缀应用原有统计公式，得到暂时分数 $`h_i`$；它仅用于继续概率，完整奖励仍只由完整思考段计算。
-已有固定前缀也包含在分数的输入中。令
-
-```math
-v_i=\exp\!\left(\frac{h_i-\max(h_i,\max_{j\ne i}r_j)}{\tau}\right),
-\qquad a_i=\frac{1+(n-1)v_i}{n}.
-```
-
-其余叶子的保留概率为 1。最后一条以概率 $`a_i`$ 继续，否则取消；因此暂时分数低于其余完整奖励的末条更可能被取消，
-且 $`a_i\ge 1/n`$。缺少缓存统计时取 $`a_i=1`$，不发起额外评分。
-编号为 `(0, 0)` 的参考叶子始终保留：首轮中它由事先固定的请求编号确定，后续轮中它是被复用的序列。
-参考叶子如果最长，其最终权重同样除以 $`a_i`$，不能直接豁免校正。
-
-所有保留叶子使用
-
-```math
-\widetilde w_{mk}=\frac{\exp(r(g,z_m,u_{mk})/\tau)}{K_m a_{mk}}.
-```
-
-已取消叶子的贡献为零，分母仍是原定 $`K_m`$，不改为剩余补全数。固定块模式按这些权重选择；
-单轮模式使用相同权重进行 Metropolized 索引更新。完成通知有延迟、或者参考叶子已经完整复用时，
-仍在完整候选池上应用同一逻辑位置的决策，避免执行先后改变筛选规则。提前取消只省去被排除叶子的未执行部分。
-
-**目标分布。** 沿用式 (8a) 的候选树概率 $`\lambda(T)`$。允许终止组与普通组的 $`K_m`$ 不同时，
-先均匀选择候选组、再均匀选择组内叶子，其序列边缘仍为基模型分布，所以原联合权重为
-$`\lambda(T)\exp(r_i/\tau)/K_{m(i)}`$。设 $`S`$ 是上述随机筛选保留的叶子集合，普通筛选下的概率为 $`P(S\mid T)`$。
-引入集合后的联合分布写为
-
-```math
-\overline\pi(T,S,I=i)\propto
-\lambda(T)P(S\mid T)\mathbf 1\{i\in S\}
-\frac{\exp(r_i/\tau)}{K_{m(i)}a_i}.
-```
-
-由于 $`\sum_{S:i\in S}P(S\mid T)=a_i`$，对 $`S`$ 求和后恰好恢复原联合分布。
-给定参考叶子 $`i`$，集合的条件概率是 $`P(S\mid T)\mathbf 1\{i\in S\}/a_i`$：
-参考叶子为末条时强制保留，其余情况下按原概率抽取，正是实现中的规则。
-随后按 $`\widetilde w`$ 进行条件抽样，或执行前节已经证明保持这些索引权重的 Metropolized 更新，均保持该联合分布。
-筛选使用共同 token 位置、固定的序列奖励与前缀统计，并对组及组内编号对称；据此可把参考叶子放在 `(0, 0)`。
-这复用了候选树证明，只增加一次保留集合的条件更新。对固定前缀分别应用即可得到逐块版本，不需要回退前缀。
-
-上述结论要求相同逻辑前缀得到相同分数和统计可用性；实际设备的数值波动仍按本章执行等价性说明处理。
-它是目标不变性，不是冷启动的有限预算误差不增。前缀分数低而最终奖励高的长序列可能被排除；
-CPU 四状态精确例中，一次更新的 TV 误差可由 0.1438 增至 0.2152。因此该选项属于等待时间与有限预算精度的折中，
-性能验证见[昇腾结果](../reports/ASCEND_IS_INFRA.md#last-rollout-filter)。
-
-实现位于 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)；
-[`TokenStatisticReward.cached_prefix`](../../src/inference_scaling/arllm/rewards/intrinsic.py) 区分开放思考段与完整奖励，
-[`StatisticRecorder.recorded_statistics`](../../src/inference_scaling/arllm/backends/statistics.py) 仅读取已有统计。
-批量后端可执行相同筛选，但完整生成后的排除没有取消收益；流式后端才会停止尚未完成的请求。
-CLI 与服务共用配置，基准增加 `--last-rollout-filter`。所有取消前已执行的工作仍计入成本；
-已评分后再排除的完整叶子也计入 `rollout_evaluations_performed`。
+CLI、服务及配对评测共用 `ar.algorithms.is`；设置 `exploration_schedule="two_stage"` 和 `selection_ready=true` 即可启用。
 
 <a id="is-two-stage"></a>
 ### 两阶段完整探索
@@ -1206,7 +1002,7 @@ $`\pi_r(y\mid x,g)f(H\mid y)`$ 的 y 边缘分布仍为原条件目标。给定 
 N、n 只读取未选组的对称统计量；给定这些组及固定首块，下一轮是恒等转移与上述长度区间转移的混合，混合概率为 1−n/N
 与 n/N。二者均保持该前缀下的条件目标，对未选组与随机决策求平均也保持同一目标。
 终止组的组内平均等价于将空补全重复 K 次。条件为完整首轮树、逐序列固定奖励，以及上述区间或原 EOS/思考边界上的逻辑停止；
-两阶段模式不与同块补全复用、完成配额或超发混用，墙钟截止需另行分析。
+墙钟截止需另行分析。
 上述目标不变性要求关闭 `selection_ready`；开启后首轮和末轮使用[有偏的提前选择](#is-selection-ready)。
 
 从基础模型起步时，首轮结果仍是有限样本近似。减少末轮执行概率或限制长度范围都可能增大有限预算分布误差；
@@ -1217,67 +1013,12 @@ N、n 只读取未选组的对称统计量；给定这些组及固定首块，�
 两阶段模式默认关闭；长度区间随该模式启用，无单独开关。API 的 `final_pool_limit=None` 只取消容量截限，仍执行权重分配和长度区间；
 实验与服务通过共享的 `conditional_is_config` 从后端读取并发容量。
 
-<a id="is-sibling-replay"></a>
-### 同块完整补全复用
+### 历史探索选项
 
-`ar.algorithms.is.sibling_replay=true` 时，选中块的其他完整补全随机排序后，最多保留 M−1 条。
-下一轮把这些补全按固定 B 切为候选块和剩余后缀，直接复用奖励；其余候选根照常生成，每个非终止候选仍补齐 K 条。
-只保留当前选中块的补全，未选块和更早的候选池立即释放。K=1 没有额外补全，行为不变。
-
-每复用一条根即可省去该根的生成和评分，随后轮次仍可能因所选长度不同而增减。
-这些根经历了上一轮选择，不能当作重新独立抽到的基础模型样本；有限预算结果与关闭复用时不同，
-不据此推断分布误差更小。默认关闭。实现见
-[`ConditionalISAdapter.step`](../../src/inference_scaling/arllm/algorithms/conditional_is.py) 与
-[`StatisticRecorder.retain_statistics`](../../src/inference_scaling/arllm/backends/statistics.py)。
-
-<a id="is-completion-quota"></a>
-### 按候选完成比例停止
-
-`ar.algorithms.is.completion_fraction=f<1` 允许舍弃长尾。设候选 m 原定有 K_m 条补全，已完成 n_m 条，
-当平均完成比例达到 f 时结束本轮，并取消其余请求。块内已经终止的候选取 K_m=1；
-前缀尚未形成的候选按 K_m=K 计，完成数为零。若 B 覆盖全部剩余长度，则所有候选取 K_m=1。
-有新生成任务时，还要求至少有一条新补全完成，避免仅凭缓存立即结束。
-
-```math
-\frac{1}{M}\sum_{m=1}^{M}\frac{n_m}{K_m}\ge f,
-\qquad
-\widehat w_m=\frac{1}{K_m}\sum_{k\in\mathrm{completed}(m)}\exp(r_{mk}/\tau).
-```
-
-没有完成补全的候选不参与选择。其余候选使用上述权重，候选内仍按完整补全的原奖励权重选择。
-分母保持原定 K_m，避免将仅完成一条的候选当成已完成全部补全。
-取消会根据样本耗时筛选数据，因此估计有偏，不能沿用完整等待的目标不变性结论。
-默认 f=1 且关闭超发，所有原定补全完成后再选择；更小的 f 属于速度与采样质量的折中，准确率需另行评估。
-
-实现见 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)。
-取消后保留已生成前缀的概率统计量，供已完成子请求计算奖励；下一轮清理无关记录。
-请求级计费可能遗漏取消前尚未交付的计算，因此记录不完整标记；性能对照另读引擎实际执行统计，计入取消和批次补齐。
-
-<a id="is-rollout-race"></a>
-### 候选内超发补全
-
-`ar.algorithms.is.rollout_race=true` 在同一候选块后生成额外补全，以较早完成的补全替代长尾。
-候选原需 K_m 条、已有 c_m 条完整补全时，保留原定的 K_m−c_m 条请求，再发出至多 K_m−c_m 条备份。
-备份提交前已经完成的请求继续减少缺额。默认关闭的整轮配额保持 f=1 时，每个候选收齐 K_m 条即取消该组剩余请求，
-无需等待其他候选；复用的补全直接计入完成数。块内终止仍取 K_m=1，不生成重复空补全。
-
-记 A_m 为该候选保留的 K_m 条完整补全，权重和组内选择为
-
-```math
-\widehat w_m=\frac{1}{K_m}\sum_{k\in A_m}\exp(r_{mk}/\tau),
-\qquad
-\Pr(k\mid m,A_m)=\frac{\exp(r_{mk}/\tau)}{\sum_{j\in A_m}\exp(r_{mj}/\tau)}.
-```
-
-K=1 时，新候选的原请求与同前缀备份竞争，先收到完整结果的一条参与候选权重计算；已保留的候选无需重新补全。
-K>1 时，竞争范围扩展到同一候选的多条补全。M、K、B、完整序列奖励与候选归一化方式保持不变。
-`completion_fraction<1` 可在部分候选尚未收齐时结束整轮，此时继续使用上节的缺失叶权重规则。
-
-完成速度参与了 A_m 的选择，因此上述平均值一般有偏，增加 K 也不自动恢复原条件期望。
-本选项不具有原条件 IS 的目标不变性保证。收益来自用额外并发工作替代少数长尾等待；
-实际 token/FLOPs 可能增加，并发饱和或轨迹长度接近时也可能变慢。默认关闭，使用流式后端。
-实现与成本口径见[rollout 调度](ROLLOUT_SCHEDULING.md#可选复用完成配额与超发)及
-[`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py)。
+同块多补全复用、数量/权重完成配额、候选内超发、末条随机筛选、单池选择及 Metropolized 块选择已退出主线。
+当前只维护两阶段完整探索及可选的提前选择；固定块保留为 CPU 参考。旧选项的算法与实现见
+[历史版本](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md)，实测记录保留在
+[昇腾报告](../reports/ASCEND_IS_INFRA.md)。退出主线表示收紧维护范围，不否定已记录的局部收益。
 
 <a id="alg-logit-adjustment"></a>
 ### 6.1 可枚举候选的 logit adjustment

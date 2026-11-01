@@ -103,14 +103,9 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         candidate_count=int(config["candidate_count"]), rollout_count=int(config["rollout_count"]),
         block_size=min(int(config["block_size"]), total_length), total_length=total_length,
         reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
-        sibling_replay=bool(config["sibling_replay"]), completion_fraction=float(config["completion_fraction"]),
-        rollout_race=bool(config["rollout_race"]),
         exploration_schedule=schedule,
         final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
-        last_rollout_filter=bool(config.get("last_rollout_filter", False)),
-        weighted_completion_quota=bool(config.get("weighted_completion_quota", False)),
         selection_ready=bool(config.get("selection_ready", False)),
-        metropolized_blocks=bool(config.get("metropolized_blocks", False)),
     )
 
 
@@ -436,15 +431,9 @@ class ARFamily:
         )
         trace = importance_trace(list(result.steps))
         trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
-        trace["sibling_replay"] = bool(self.config["sibling_replay"])
-        trace["completion_fraction"] = self.config["completion_fraction"]
-        trace["rollout_race"] = self.config["rollout_race"]
         trace["exploration_schedule"] = self.config.get("exploration_schedule", "fixed")
         trace["final_pool_limit"] = config.final_pool_limit
-        trace["last_rollout_filter"] = config.last_rollout_filter
-        trace["weighted_completion_quota"] = config.weighted_completion_quota
         trace["selection_ready"] = config.selection_ready
-        trace["metropolized_blocks"] = config.metropolized_blocks
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

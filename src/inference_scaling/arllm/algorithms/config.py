@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from inference_scaling.shared.config import (
     require_finite,
     require_positive,
-    require_probability,
 )
 
 
@@ -81,62 +80,24 @@ class ConditionalISConfig:
     reward_temperature: float
     # Draw fresh candidates as blocks and their first completions with the other completions.
     block_first: bool
-    # Reuse completed siblings of the selected block; finite-budget sampling changes.
-    sibling_replay: bool = False
-    # Below one: stop at this mean completed fraction of candidate groups; length-biased.
-    completion_fraction: float = 1.0
-    # Race at most twice the missing completions per block, retaining the first K; length-biased.
-    rollout_race: bool = False
-    # Fixed blocks, an auxiliary final pool, or one complete pool with Metropolized selection.
+    # Fixed blocks are the CPU reference; two_stage bounds exploration to two pools.
     exploration_schedule: str = "fixed"
     # Fresh-suffix capacity; None retains weight-based allocation and the auxiliary length interval.
     final_pool_limit: int | None = None
-    # A corrected continuation decision for each pool's uniquely longest rollout.
-    last_rollout_filter: bool = False
-    # Stop a single pool at estimated completed weight 1-1/M; changes the sampling law.
-    weighted_completion_quota: bool = False
-    # Approximate stopping in a single pool or both pools of two-stage exploration.
-    # Two-stage cold groups use fixed random priorities; the retained final pool uses SIR.
+    # Approximate stopping from cached prefix weights in either two-stage pool.
     selection_ready: bool = False
-    # On complete trees, update the next token block before selecting its completion.
-    metropolized_blocks: bool = False
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             require_positive(name, getattr(self, name))
-        if type(self.sibling_replay) is not bool:
-            raise ValueError("sibling_replay must be a boolean")
-        if type(self.rollout_race) is not bool:
-            raise ValueError("rollout_race must be a boolean")
-        if type(self.last_rollout_filter) is not bool:
-            raise ValueError("last_rollout_filter must be a boolean")
-        if type(self.weighted_completion_quota) is not bool:
-            raise ValueError("weighted_completion_quota must be a boolean")
         if type(self.selection_ready) is not bool:
             raise ValueError("selection_ready must be a boolean")
-        if type(self.metropolized_blocks) is not bool:
-            raise ValueError("metropolized_blocks must be a boolean")
-        if self.metropolized_blocks and (self.selection_ready or self.weighted_completion_quota
-                                        or self.last_rollout_filter or self.sibling_replay
-                                        or self.completion_fraction != 1.0 or self.rollout_race):
-            raise ValueError("metropolized_blocks requires complete pools without replay, early stopping or races")
-        if self.selection_ready and (self.exploration_schedule not in {"single_pool", "two_stage"} or self.block_first
-                                     or self.last_rollout_filter or self.weighted_completion_quota):
-            raise ValueError("selection_ready requires single_pool or two_stage without block_first or other early-stop rules")
-        if self.weighted_completion_quota and (self.exploration_schedule != "single_pool"
-                                               or self.block_first or self.last_rollout_filter):
-            raise ValueError("weighted_completion_quota requires single_pool without block_first or last_rollout_filter")
-        if self.last_rollout_filter and (self.exploration_schedule == "two_stage" or self.sibling_replay
-                                        or self.completion_fraction != 1.0 or self.rollout_race):
-            raise ValueError("last_rollout_filter requires fixed or single_pool without sibling replay, quotas or races")
-        if self.exploration_schedule not in {"fixed", "two_stage", "single_pool"}:
+        if self.selection_ready and (self.exploration_schedule != "two_stage" or self.block_first):
+            raise ValueError("selection_ready requires two_stage without block_first")
+        if self.exploration_schedule not in {"fixed", "two_stage"}:
             raise ValueError("unknown IS exploration_schedule")
         if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):
             raise ValueError("final_pool_limit must be a positive integer or None")
-        if self.exploration_schedule != "fixed" and (
-                self.sibling_replay or self.completion_fraction != 1.0 or self.rollout_race):
-            raise ValueError(f"{self.exploration_schedule} exploration requires complete trees without sibling replay or rollout races")
-        require_probability("completion_fraction", self.completion_fraction, include_zero=False)
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")

@@ -56,13 +56,11 @@ def test_retained_children_start_without_waiting_for_fresh_candidate_tails():
     assert record.rollout_evaluations_performed == 8
 
 
-@pytest.mark.parametrize("marker,block_first,sibling_replay", [
-    ((1,), False, False), ((0, 1), False, True), ((0, 1), True, False), ((1,), True, True),
-])
-def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first, sibling_replay):
+@pytest.mark.parametrize("marker,block_first", [((1,), False), ((0, 1), True)])
+def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first):
     parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
     statistic = TokenStatistic(SamplingConfig(), top_k=2)
-    config = ConditionalISConfig(3, 3, 2, 7, .7, block_first, sibling_replay=sibling_replay)
+    config = ConditionalISConfig(3, 3, 2, 7, .7, block_first)
     for seed in range(3):
         results = []
         for streamed in (False, True):

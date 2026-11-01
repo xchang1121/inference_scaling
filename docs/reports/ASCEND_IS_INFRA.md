@@ -4,13 +4,13 @@
 
 比较所选补全完成后结束、权重完成配额、末条补全筛选、单轮候选池、两阶段探索、完整候选池跨轮执行，以及固定 M/K/B 下的完整等待、同块补全复用和数量完成配额。算法见
 [所选补全完成后结束](../methods/ALGORITHMS.md#is-selection-ready)、
-[权重完成配额](../methods/ALGORITHMS.md#is-weighted-completion-quota)、
-[末条补全筛选](../methods/ALGORITHMS.md#is-last-rollout-filter)、
-[单轮完整候选池](../methods/ALGORITHMS.md#is-single-pool)、
+[权重完成配额](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-weighted-completion-quota)、
+[末条补全筛选](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-last-rollout-filter)、
+[单轮完整候选池](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-single-pool)、
 [两阶段探索](../methods/ALGORITHMS.md#is-two-stage)、
 [完整候选池跨轮执行](../methods/ALGORITHMS.md#ensemble-pipeline)、
-[同块补全复用](../methods/ALGORITHMS.md#is-sibling-replay)、
-[完成配额](../methods/ALGORITHMS.md#is-completion-quota)；请求调度见
+[同块补全复用](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-sibling-replay)、
+[完成配额](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-completion-quota)；请求调度见
 [ROLLOUT_SCHEDULING.md](../methods/ROLLOUT_SCHEDULING.md)。
 
 ## 概率口径
@@ -413,7 +413,7 @@ GSM8K `selection.seed=20261108`，按表设置 M/B/K；当前版增加 `--weight
 比较 `7f9a91b` 的末条补全筛选与按已完成权重结束候选池的规则。两者都使用 `single_pool`；
 新规则可同时取消多条未完成补全，最终仅按已完成叶子的完整奖励作普通 SIR 选择。
 其前缀分数只用于判断结束时刻，选择权重保留各组原定的补全数。实现与偏差说明见
-[算法说明](../methods/ALGORITHMS.md#is-weighted-completion-quota)。该选项默认关闭。
+[算法说明](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-weighted-completion-quota)。该选项默认关闭。
 
 沿用下节的 Qwen3-8B BF16、910B3、4096-token 上限、思考段 Consilience、采样及引擎设置。
 GSM8K 为 456、670、922 三题，选择种子 20261108，生成种子 20261214。
@@ -480,7 +480,7 @@ GSM8K `selection.seed=20261108`，分别取表中 M/B/K。上一版增加 `--las
 
 比较 `6d3b3f9` 单轮候选池、完整生成后应用继续概率校正、生成中执行相同规则并取消末条请求。
 后两者用于分离选择规则变化与实际取消的收益。公式、参考叶子的处理及有限预算误差限制见
-[算法说明](../methods/ALGORITHMS.md#is-last-rollout-filter)。该选项默认关闭，支持固定块与单轮；本节成本测量使用单轮。
+[算法说明](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-last-rollout-filter)。该选项默认关闭，支持固定块与单轮；本节成本测量使用单轮。
 
 沿用下节 Qwen3-8B BF16、910B3、vLLM / vLLM-Ascend 0.23、4096-token 上限与思考段 Consilience 配置，
 模型、采样、奖励和引擎参数不变。GSM8K 为 456、670、922 三题，选择种子 20261108，生成种子 20261213、20261214；
@@ -543,7 +543,7 @@ M=4/B=1024/K=1 单独改变块长。完整生成后筛选属于本次诊断对�
 
 比较 `f05e842` 的两阶段探索、单轮普通 SIR、单轮 Metropolized 选择。
 后两者都生成完整首轮候选池，然后选出完整思考序列并生成正文；区别仅在选择规则。
-实现与目标不变性的说明见[单轮完整候选池](../methods/ALGORITHMS.md#is-single-pool)。
+实现与目标不变性的说明见[单轮完整候选池](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-single-pool)。
 
 Qwen3-8B BF16，910B3 单卡及双卡 TP，vLLM / vLLM-Ascend 0.23。
 生成上限 4096、上下文上限 5120、温度 0.6、top-p=1，思考段 Consilience 奖励；
@@ -865,7 +865,7 @@ K=1 在算法上没有可复用的同块补全，但双卡两次运行仍产生�
 ## 候选内超发对照
 
 本组采用单卡、M=4、B=512、K=1/2/4，种子 20261021，其余模型、奖励、采样和 4096-token 上限同前。
-同块复用关闭，整轮完成配额为 1。唯一算法差别是是否开启[候选内超发](../methods/ALGORITHMS.md#is-rollout-race)：
+同块复用关闭，整轮完成配额为 1。唯一算法差别是是否开启[候选内超发](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-rollout-race)：
 至多生成双份缺失补全，每候选收齐 K 条即取消其余请求。两种模式共用同一个已预热引擎；
 每个题目与 K 组合按关闭、开启、开启、关闭的顺序运行，每次清空前缀缓存。表中为各两次的均值，
 共 24 次 IS、2 次 Base。Base 在两题上分别为 34.19 s、6.28 s。
@@ -1120,7 +1120,7 @@ Qwen3-8B BF16，沿用上节两题与采样、Consilience 设置。完整候选�
 完整候选池先按相同 token 块合计权重，在块之间作 Metropolized 更新，再按原权重选择补全。
 该规则增加离开当前候选块的概率，不增加当前池的生成或评分；前缀固定、保留补全及两阶段末轮沿用原流程。
 原叶子权重和完整序列的平稳目标保持不变，但有限预算误差没有普遍下降保证。算法、概率公式及配置见
-[按候选块选择](../methods/ALGORITHMS.md#is-block-selection)。此选项默认关闭。
+[按候选块选择](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md#is-block-selection)。此选项默认关闭。
 
 ### 相同期望 token 预算的分布误差
 

@@ -64,7 +64,7 @@ def test_conditional_is_returns_a_complete_sequence_within_total_length() -> Non
         backend, (), config, reward, SeedStream(17), on_commit=committed.append)
     assert committed == [result.token_ids[:n] for n in (2, 4, 5)]
     assert run_conditional_is(backend, (), config, reward, SeedStream(17)) == result
-    for schedule in ("two_stage", "single_pool"):
+    for schedule in ("two_stage",):
         committed.clear()
         selected = run_conditional_is(backend, (), replace(config, exploration_schedule=schedule), reward,
                                       SeedStream(17), on_commit=committed.append)
@@ -125,8 +125,7 @@ def test_is_reports_the_forward_slots_its_requests_cost(block_first, rollouts, w
     assert silent.token_ids == measured.token_ids and silent.forward_token_slots is None
 
 
-@pytest.mark.parametrize("sibling_replay", [False, True])
-def test_kept_completion_is_reused_without_rescoring(sibling_replay) -> None:
+def test_kept_completion_is_reused_without_rescoring() -> None:
     scored: list[tuple[int, ...]] = []
 
     def reward(_prompt, generated) -> float:
@@ -134,13 +133,12 @@ def test_kept_completion_is_reused_without_rescoring(sibling_replay) -> None:
         return float(sum(generated))
 
     config = ConditionalISConfig(block_first=False, candidate_count=3, rollout_count=2, block_size=1, total_length=3,
-                                 reward_temperature=1.0, sibling_replay=sibling_replay)
+                                 reward_temperature=1.0)
     adapter = ConditionalISAdapter(backend=_backend(), prompt=(), config=config, sampling=SamplingConfig(), reward=pointwise(reward))
     state, evaluations, index = adapter.initial_state, 0, 0
     sequence: tuple[int, ...] | None = None
     kept_reward = 0.0
     while not adapter.is_terminal(state):
-        siblings = state.siblings
         step, state = adapter.step(state, index, SeedStream(7))
         index += 1
         evaluations += step.rollout_evaluations_performed
@@ -151,23 +149,19 @@ def test_kept_completion_is_reused_without_rescoring(sibling_replay) -> None:
             assert carried.token_ids == sequence[fixed : fixed + 1]
             assert carried.rollouts[0].token_ids == sequence[fixed + 1 :]
             assert carried.rollouts[0].reward == kept_reward
-        for candidate, sibling in zip(step.candidates[1:], siblings):
-            assert candidate.token_ids + candidate.rollouts[0].token_ids == sibling.token_ids
-            assert candidate.rollouts[0].reward == sibling.reward
         completion = step.selected.rollouts[step.completion_index]
         sequence = (sequence or ())[:fixed] + step.selected.token_ids + completion.token_ids
         kept_reward = completion.reward
     assert state.token_ids == sequence and len(sequence) == 3
     # Only fresh sequences are scored; the kept completion is never scored again.
-    assert len(scored) == evaluations == (11 if sibling_replay else 13)
+    assert len(scored) == evaluations == 13
 
 
 def test_block_first_candidates_leave_every_step_unchanged() -> None:
     backend = TabularAutoregressiveBackend({(): [0.3, 0.3, 0.4], (0,): [0.5, 0.2, 0.3]}, fallback=[0.4, 0.4, 0.2])
-    for metropolized_blocks in (False, True):
-        runs = [run_conditional_is(backend, (), ConditionalISConfig(
-            block_first=block_first, candidate_count=3, rollout_count=2, block_size=2, total_length=7,
-            reward_temperature=0.5, metropolized_blocks=metropolized_blocks),
-            pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(5), sampling=SamplingConfig(eos_token_id=2))
-            for block_first in (False, True)]
-        assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps
+    runs = [run_conditional_is(backend, (), ConditionalISConfig(
+        block_first=block_first, candidate_count=3, rollout_count=2, block_size=2, total_length=7,
+        reward_temperature=0.5),
+        pointwise(lambda _prompt, generated: float(sum(generated))), SeedStream(5), sampling=SamplingConfig(eos_token_id=2))
+        for block_first in (False, True)]
+    assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps

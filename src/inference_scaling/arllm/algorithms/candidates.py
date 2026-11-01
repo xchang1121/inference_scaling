@@ -1,23 +1,15 @@
-"""Conditional IS's tree, released as soon as its dependencies are known.
+"""Complete-rollout conditional IS with streamed branching and two-stage exploration.
 
-The original full request remains completion zero. Neither completion order nor
-runtime enters ordinary IS weights. The two-stage final pool can exclude samples
-outside an auxiliary length interval. Tail filtering uses a common
-observed token depth and inverse-continuation weights. Completion quotas and per-block
-races instead select by completion time and change the sampling law. A weighted
-quota estimates unfinished weights from cached prefixes, without extra scoring.
-Selection-ready stopping uses fixed random draws. A two-stage cold pool uses
-group weight divided by an independent uniform, selecting only a fully complete
-group. Pending weights are protected by the largest observed complete weight;
-this is an empirical estimate, not a valid bound or an invariant-target shortcut.
-Single-pool K>1 siblings branch after the first root finishes; two-stage siblings
-keep the preset B checkpoint, and the retained final pool keeps ordinary SIR.
+Roots keep running while K-1 siblings branch at the fixed checkpoint. The retained
+complete sequence is reused without rescoring. Optional selection-ready stopping
+estimates unfinished weights from cached prefixes; this approximation can change
+the target distribution. Complete waiting is the reference selection.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-from math import ceil, exp, floor, isfinite, log
+from math import exp, floor, isfinite, log
 from typing import TYPE_CHECKING, NamedTuple
 
 from inference_scaling.arllm.backends.scheduling import GenerationSession
@@ -36,13 +28,6 @@ if TYPE_CHECKING:
 class Block(NamedTuple):
     token_ids: tuple[int, ...]
     finish_reason: str
-
-
-class TailDecision(NamedTuple):
-    candidate: int
-    rollout: int
-    probability: float
-    keep: bool
 
 
 def _complete_priority_group(logs, complete, keys, planned, lengths, priorities, uniforms, width):
@@ -74,19 +59,16 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     if not adapter.sampling.full_support:
         raise ValueError("base candidates require full support: top_p=1 and top_k=None")
     config, prompt = adapter.config, adapter.prompt
-    if config.last_rollout_filter and adapter.prefix_reward is None:
-        raise ValueError("last_rollout_filter requires a cached prefix reward")
     final_pool = (config.exploration_schedule == "two_stage" and step == 1 and bool(state.token_ids)
                   and config.rollout_count == 1 and config.block_size >= config.total_length - state.fixed)
     first_pool = (config.exploration_schedule == "two_stage" and step == 0 and not state.token_ids
                   and config.candidate_count > 1)
     cold_priority = first_pool and config.selection_ready
-    selection_ready = config.selection_ready and (config.exploration_schedule == "single_pool" or first_pool or final_pool)
-    weighted = config.weighted_completion_quota or selection_ready
-    if (config.weighted_completion_quota or config.selection_ready) and adapter.prefix_reward is None:
+    selection_ready = config.selection_ready and (first_pool or final_pool)
+    if config.selection_ready and adapter.prefix_reward is None:
         raise ValueError("weight-based stopping requires a cached prefix reward")
     if selection_ready and state.token_ids and not final_pool:
-        raise ValueError("selection_ready requires a fresh single pool or the two-stage final pool")
+        raise ValueError("selection_ready requires the initial or final two-stage pool")
     chosen = None
     forecast = None
     # Keep the ordinary final SIR draw, including when prefix statistics are
@@ -102,7 +84,6 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     fixed = state.token_ids[:state.fixed]
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
-    branch_open = cold_priority or not selection_ready or rollout_count == 1
     minimum_length = None
     length_limit = remaining
     if final_pool and candidate_count > 1:
@@ -122,13 +103,10 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     submitted: dict[str, GenerationRequest] = {}
     finished: set[str] = set()
     cancelled: set[str] = set()
-    tail: TailDecision | None = None
     evaluations = 0
-    backup_groups: list[int] = []
     streaming = bool(getattr(adapter.backend, "supports_streaming_generation", False))
-    partial = config.completion_fraction < 1 or weighted
-    if (partial or config.rollout_race or config.selection_ready) and not streaming:
-        raise ValueError("completion quotas and rollout races require a streaming generation backend")
+    if selection_ready and not streaming:
+        raise ValueError("selection_ready requires a streaming generation backend")
     session: GenerationSession = (getattr(adapter.backend, "open_generation_session")() if streaming
                                   else BatchGenerationSession(adapter.backend))
     pending: dict[tuple[int, int], tuple[int, ...]] = {}
@@ -139,12 +117,12 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             "conditional_is", step, "candidate", index, "rollout", rollout)
         key = stem if root else stem + (":continuation" if continuation else f":rollout:{rollout}")
         routes[key] = index, rollout, root
-        if weighted:
+        if selection_ready:
             leaf_requests[index, rollout] = key
         buffers[key] = []
         job = GenerationRequest(prompt + fixed + prefix, length, adapter.sampling, seed, key,
                                 uniform_offset=len(prefix) if continuation else 0,
-                                intermediate_events=config.last_rollout_filter or weighted)
+                                intermediate_events=selection_ready)
         submitted[key] = job
         return job
 
@@ -154,8 +132,6 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         length = remaining - len(block.token_ids)
         if block.finish_reason != "length" or length == 0:
             return
-        if config.rollout_race:
-            backup_groups.append(index)
         jobs = [request(index, k, block.token_ids, length) for k in range(1, rollout_count)]
         if continuation:
             jobs.insert(0, request(index, 0, block.token_ids, length, continuation=True))
@@ -178,26 +154,6 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             leaves[index][rollout] = RolloutEvaluation(suffix, value, value / config.reward_temperature)
         evaluations += len(items)
 
-    def decide_tail(index, rollout, sequence, frontier):
-        """The same logical decision applies whether the last stream is still cancellable or has finished."""
-        assert adapter.prefix_reward is not None
-        value = adapter.prefix_reward(prompt, fixed + sequence[:frontier])
-        if value is None:
-            return TailDecision(index, rollout, 1., True)
-        if not isfinite(value):
-            raise ValueError("prefix reward must be finite or None")
-        proxy = value / config.reward_temperature
-        other = [item.log_weight for m, group in enumerate(leaves) for k, item in group.items()
-                 if (m, k) != (index, rollout)]
-        count = sum(expected(block) for block in blocks)
-        probability = (1 + (count - 1) * exp(proxy - max(proxy, *other))) / count
-        # Force the reference through the auxiliary subset update, while still
-        # dividing its final weight by this probability. This preserves the
-        # joint target; simply exempting its weight would not.
-        keep = (index, rollout) == (0, 0) or float(
-            seeds.generator("conditional_is", step, "last_tail_keep").random()) < probability
-        return TailDecision(index, rollout, probability, keep)
-
     try:
         carried = int(bool(state.token_ids))
         # Forward token slots of the requests this step measured; an unmeasured one makes the total unknown.
@@ -207,20 +163,14 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             end = state.fixed + width
             blocks[0] = Block(state.token_ids[state.fixed:end], "length" if end < len(state.token_ids) else "stop")
             leaves[0][0] = RolloutEvaluation(state.token_ids[end:], state.reward, state.reward / config.reward_temperature)
-        recycled = state.siblings[:candidate_count - carried] if config.sibling_replay else ()
-        for index, sibling in enumerate(recycled, start=carried):
-            blocks[index] = Block(sibling.token_ids[:width], "length" if width < len(sibling.token_ids) else "stop")
-            leaves[index][0] = RolloutEvaluation(sibling.token_ids[width:], sibling.reward,
-                                                sibling.reward / config.reward_temperature)
-        saved = carried + len(recycled)
         roots = [request(index, 0, (), min(width, length_limit) if config.block_first else length_limit, root=True)
-                 for index in range(saved, candidate_count)]
+                 for index in range(carried, candidate_count)]
         if roots:
-            checkpoint = width if (rollout_count > 1 or config.rollout_race) and not config.block_first else None
+            checkpoint = width if rollout_count > 1 and not config.block_first else None
             session.submit(roots, phase="prefix", checkpoint=checkpoint)
-        for index in range(saved):
+        for index in range(carried):
             branch(index)
-        sealed = rollout_count == 1 and not config.block_first and not config.rollout_race
+        sealed = rollout_count == 1 and not config.block_first
         if sealed:
             session.seal()
 
@@ -231,114 +181,82 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                 return rollout_count if width < remaining else 1
             return rollout_count if block.finish_reason == "length" and len(block.token_ids) < remaining else 1
 
-        def quota_ready():
+        def selection_is_ready():
             nonlocal chosen, forecast
-            if not partial:
+            if not selection_ready:
                 return False
-            if weighted:
-                resolved = all(name in finished or name in cancelled for name in routes)
-                # Final selection already has a complete reference. A fresh
-                # completion is not required when the same draw retains it.
-                if (not resolved and not (final_pool and selection_ready)
-                        and sum(bool(group) for group in leaves) < min(candidate_count, 2)):
-                    return False
-                logs, complete, keys, observed_lengths = [], [], [], []
-                for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
-                    if index in excluded:
-                        continue
-                    planned = expected(block)
-                    for rollout in range(planned):
-                        done = rollout in group
-                        if done:
-                            value = group[rollout].log_weight
-                            observed_length = len(block.token_ids) + len(group[rollout].token_ids)
+            resolved = all(name in finished or name in cancelled for name in routes)
+            # Final selection already has a complete reference. A fresh
+            # completion is not required when the same draw retains it.
+            if (not resolved and not (final_pool and selection_ready)
+                    and sum(bool(group) for group in leaves) < min(candidate_count, 2)):
+                return False
+            logs, complete, keys, observed_lengths = [], [], [], []
+            for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
+                if index in excluded:
+                    continue
+                planned = expected(block)
+                for rollout in range(planned):
+                    done = rollout in group
+                    if done:
+                        value = group[rollout].log_weight
+                        observed_length = len(block.token_ids) + len(group[rollout].token_ids)
+                    else:
+                        key = leaf_requests.get((index, rollout))
+                        if key is not None:
+                            root = routes[key][2]
+                            sequence = (() if root else block.token_ids) + tuple(buffers[key])
                         else:
-                            key = leaf_requests.get((index, rollout))
-                            if key is not None:
-                                root = routes[key][2]
-                                sequence = (() if root else block.token_ids) + tuple(buffers[key])
-                            else:
-                                # An unreleased sibling has observed only its root block.
-                                root_key = leaf_requests[index, 0]
-                                sequence = block.token_ids if block is not None else tuple(buffers[root_key][:width])
-                            if not sequence:
-                                return False
-                            proxy = adapter.prefix_reward(prompt, fixed + sequence)
-                            if proxy is None:
-                                return False
-                            if not isfinite(proxy):
-                                raise ValueError("prefix reward must be finite or None")
-                            value = proxy / config.reward_temperature
-                            observed_length = len(sequence)
-                        logs.append(value - log(planned))
-                        complete.append(done)
-                        keys.append((index, rollout))
-                        observed_lengths.append(observed_length)
-                if cold_priority:
-                    planned = [expected(block) for block in blocks]
-                    chosen = _complete_priority_group(logs, complete, keys, planned, observed_lengths,
-                                                      priorities, completion_uniforms, width)
-                    if chosen is None:
-                        return False
-                    from inference_scaling.arllm.algorithms.conditional_is import forecast_candidate_count
+                            # An unreleased sibling has observed only its root block.
+                            root_key = leaf_requests[index, 0]
+                            sequence = block.token_ids if block is not None else tuple(buffers[root_key][:width])
+                        if not sequence:
+                            return False
+                        proxy = adapter.prefix_reward(prompt, fixed + sequence)
+                        if proxy is None:
+                            return False
+                        if not isfinite(proxy):
+                            raise ValueError("prefix reward must be finite or None")
+                        value = proxy / config.reward_temperature
+                        observed_length = len(sequence)
+                    logs.append(value - log(planned))
+                    complete.append(done)
+                    keys.append((index, rollout))
+                    observed_lengths.append(observed_length)
+            if cold_priority:
+                planned = [expected(block) for block in blocks]
+                chosen = _complete_priority_group(logs, complete, keys, planned, observed_lengths,
+                                                  priorities, completion_uniforms, width)
+                if chosen is None:
+                    return False
+                from inference_scaling.arllm.algorithms.conditional_is import forecast_candidate_count
 
-                    observations = tuple(
-                        (key[0], planned[key[0]], state.fixed + length, value + log(planned[key[0]]))
-                        for key, length, value in zip(keys, observed_lengths, logs, strict=True)
-                        if key[0] != chosen[0])
-                    forecast = forecast_candidate_count(
-                        observations, state.fixed + len(blocks[chosen[0]].token_ids), config, seeds)
-                    return True
-                peak = max(logs)
-                masses = [exp(value - peak) for value in logs]
-                if selection_ready:
-                    # Reuse one uniform across events; redrawing would repeatedly
-                    # favor already-complete leaves. Prefix estimates still bias
-                    # the stopping rule relative to full-reward SIR.
-                    threshold = uniform * sum(masses)
-                    cumulative = 0.
-                    selected = len(masses) - 1
-                    for position, mass in enumerate(masses):
-                        cumulative += mass
-                        if threshold < cumulative:
-                            selected = position
-                            break
-                    if not complete[selected]:
-                        return False
-                    chosen = keys[selected]
-                    return True
-                # Prefix scores are estimates, not bounds on the final reward.
-                return (sum(value for value, done in zip(masses, complete, strict=True) if done)
-                        / sum(masses)) >= 1 - 1 / candidate_count
-            # A terminal block already has a known weight: its K empty
-            # continuations coincide. Count each group's completed fraction
-            # in units of 1/K, without generating duplicate empty continuations.
-            completed = sum(len(group) * rollout_count // expected(block)
-                            for block, group in zip(blocks, leaves, strict=True))
-            required = ceil(config.completion_fraction * candidate_count * rollout_count)
-            fresh = saved + int(bool(roots) or rollout_count > 1)
-            return sum(map(len, leaves)) >= fresh and completed >= required
-
-        def cancel_completed_group(index):
-            if not config.rollout_race or len(leaves[index]) < expected(blocks[index]):
-                return
-            for key, (candidate, _, _) in routes.items():
-                if candidate == index and key not in finished and key not in cancelled:
-                    session.stop(key)
-                    cancelled.add(key)
-                    buffers.pop(key, None)
-
+                observations = tuple(
+                    (key[0], planned[key[0]], state.fixed + length, value + log(planned[key[0]]))
+                    for key, length, value in zip(keys, observed_lengths, logs, strict=True)
+                    if key[0] != chosen[0])
+                forecast = forecast_candidate_count(
+                    observations, state.fixed + len(blocks[chosen[0]].token_ids), config, seeds)
+                return True
+            peak = max(logs)
+            masses = [exp(value - peak) for value in logs]
+            # Reuse one uniform across events; redrawing would repeatedly
+            # favor already-complete leaves. Prefix estimates still bias
+            # the stopping rule relative to full-reward SIR.
+            threshold = uniform * sum(masses)
+            cumulative = 0.
+            selected = len(masses) - 1
+            for position, mass in enumerate(masses):
+                cumulative += mass
+                if threshold < cumulative:
+                    selected = position
+                    break
+            if not complete[selected]:
+                return False
+            chosen = keys[selected]
+            return True
         while len(finished) + len(cancelled) < len(routes):
             if not sealed and all(block is not None for block in blocks):
-                # Submit all original branches before backups can use free slots.
-                # Already completed/reused leaves reduce the missing quota.
-                for index in backup_groups:
-                    block = blocks[index]
-                    assert block is not None
-                    missing = max(0, expected(block) - len(leaves[index]))
-                    if missing:
-                        session.submit([request(index, k, block.token_ids, remaining - len(block.token_ids))
-                                        for k in range(rollout_count, rollout_count + missing)], phase="spare")
                 session.seal()
                 sealed = True
             event = session.next_event()
@@ -379,13 +297,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                         branch(index, continuation=continuing)
                         if not continuing:
                             evaluate(index, 0, ())
-                elif (branch_open and len(tokens) >= width) or event.finished:
-                    if not branch_open:
-                        # All roots stay live. The first completed root sets a
-                        # common minimum fork depth; existing seeds are reused
-                        # for siblings of roots that continue beyond that depth.
-                        width = max(width, len(tokens))
-                        branch_open = True
+                elif len(tokens) >= width or event.finished:
                     # A stopped sequence of exactly B tokens has one empty leaf.
                     terminal = event.finished and len(tokens) <= width
                     blocks[index] = Block(tuple(tokens[:width]), "stop" if terminal else "length")
@@ -396,86 +308,34 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     assert block is not None
                     evaluate(index, rollout, tuple(tokens[len(block.token_ids):] if root else tokens))
                 del buffers[key]
-                cancel_completed_group(index)
-            if config.last_rollout_filter and not sealed and all(block is not None for block in blocks):
-                session.seal()
-                sealed = True
-            if (config.last_rollout_filter and tail is None and sealed
-                    and all(block is not None for block in blocks)
-                    and sum(map(len, leaves)) == sum(expected(block) for block in blocks) - 1
-                    and sum(map(len, leaves)) > 0):
-                outstanding = [name for name in routes if name not in finished and name not in cancelled]
-                if len(outstanding) != 1:
-                    raise RuntimeError("invalid last-rollout accounting")
-                last = outstanding[0]
-                m, k, root = routes[last]
-                block = blocks[m]
-                assert block is not None
-                sequence = (() if root else block.token_ids) + tuple(buffers[last])
-                frontier = max(width, max(len(blocks[i].token_ids) + len(item.token_ids)
-                                         for i, group in enumerate(leaves) for item in group.values()))
-                # Strictly past the frontier excludes equal-length completions,
-                # even when their empty final event has not yet been delivered.
-                if len(sequence) > frontier:
-                    tail = decide_tail(m, k, sequence, frontier)
-                    if not tail.keep:
-                        session.stop(last)
-                        cancelled.add(last)
-                        buffers.pop(last)
-            if quota_ready():
-                if weighted:
-                    for pending_key in routes:
-                        if pending_key not in finished and pending_key not in cancelled:
-                            session.stop(pending_key)
-                            cancelled.add(pending_key)
-                            buffers.pop(pending_key, None)
+            if selection_is_ready():
+                for pending_key in routes:
+                    if pending_key not in finished and pending_key not in cancelled:
+                        session.stop(pending_key)
+                        cancelled.add(pending_key)
+                        buffers.pop(pending_key, None)
                 break
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])
             pending.clear()
-        if config.last_rollout_filter and tail is None:
-            ordered = sorted(((len(blocks[m].token_ids) + len(item.token_ids), m, k)
-                              for m, group in enumerate(leaves) for k, item in group.items()))
-            if len(ordered) > 1:
-                length, m, k = ordered[-1]
-                frontier = max(width, ordered[-2][0])
-                if length > frontier:
-                    tail = decide_tail(m, k, blocks[m].token_ids + leaves[m][k].token_ids, frontier)
-        if tail is not None and not tail.keep:
-            leaves[tail.candidate].pop(tail.rollout, None)
-        if not partial and any(block is None and index not in excluded for index, block in enumerate(blocks)):
+        if not selection_ready and any(block is None and index not in excluded for index, block in enumerate(blocks)):
             raise RuntimeError("stream omitted a candidate prefix")
         canonical = []
         canonical_blocks = []
         indices = []
         for index, (block, group) in enumerate(zip(blocks, leaves, strict=True)):
-            required = set(range(expected(block)))
-            if tail is not None and not tail.keep and tail.candidate == index:
-                required.remove(tail.rollout)
-            complete = (len(group) == expected(block) if config.rollout_race
-                        else set(group) == required)
-            if not partial and not complete and index not in excluded:
+            complete = set(group) == set(range(expected(block)))
+            if not selection_ready and not complete and index not in excluded:
                 raise RuntimeError("stream omitted a required completion")
             if group:
                 assert block is not None
                 indices.append(index)
                 canonical_blocks.append(block)
-                if tail is None:
-                    correction = log(len(group) / expected(block)) if weighted else 0.
-                    canonical.append([replace(group[k], log_weight=group[k].log_weight + correction)
-                                      if weighted else group[k] for k in sorted(group)])
-                else:
-                    # weigh()/selection divide by the kept group size. Undo
-                    # that denominator and retain the originally planned K_m.
-                    correction = log(len(group) / expected(block))
-                    canonical.append([replace(group[k], log_weight=group[k].log_weight + correction
-                                      - (log(tail.probability) if (index, k) == tail[:2] else 0.))
-                                      for k in sorted(group)])
+                # Keep the planned K denominator when some siblings are unfinished.
+                correction = log(len(group) / expected(block)) if selection_ready else 0.
+                canonical.append([replace(group[k], log_weight=group[k].log_weight + correction)
+                                  if selection_ready else group[k] for k in sorted(group)])
         result = weigh([block.token_ids for block in canonical_blocks], canonical)
-        if partial and not weighted:
-            # Missing leaves contribute zero; keep the planned denominator.
-            result = tuple(replace(item, log_weight=item.log_weight + log(len(item.rollouts) / expected(block)))
-                           for item, block in zip(result, canonical_blocks, strict=True))
         if len(finished) != len(routes):
             measured = False
         sources = tuple(indices) if len(indices) != candidate_count else None
@@ -483,7 +343,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             # The last event may exclude a fresh request by its length. The
             # retained complete sequence remains eligible even if all fresh
             # proposals were excluded, and can be selected without new work.
-            quota_ready()
+            selection_is_ready()
         if selection_ready and chosen is None:
             raise RuntimeError("selection-ready pool ended without a completed selection")
         selection = (indices.index(chosen[0]), sorted(leaves[chosen[0]]).index(chosen[1])) if chosen else None

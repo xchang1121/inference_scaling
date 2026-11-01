@@ -1,7 +1,6 @@
 import asyncio
 import threading
-from dataclasses import replace
-from math import exp, fsum, log
+from math import log
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -131,43 +130,6 @@ def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_f
             "enforce_eager": False, "quantization": None,
             "cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4],
             "compile_sizes": None, "compile_ranges_endpoints": None}
-        # The optional quota changes selection, but retains complete continuations
-        # and the original K denominator instead of rewarding partially finished groups.
-        partial = run_conditional_is(backend, (1,), replace(config, completion_fraction=.75), reward, SeedStream(4))
-        assert len(partial.token_ids) == 12
-        for step in partial.steps:
-            expected = rollouts if step.generated_length_before + config.block_size < config.total_length else 1
-            if sum(len(candidate.rollouts) for candidate in step.candidates) < step.sampling_plan[1] * expected:
-                assert step.forward_token_slots is None and partial.forward_token_slots is None
-            for candidate in step.candidates:
-                weights = [item.log_weight for item in candidate.rollouts]
-                top = max(weights)
-                assert candidate.log_weight == pytest.approx(
-                    top + log(fsum(exp(value - top) for value in weights) / expected))
-            if step.candidate_indices is not None:
-                assert len(step.candidate_indices) == len(step.candidates)
-                assert tuple(sorted(set(step.candidate_indices))) == step.candidate_indices
-        assert engine.active == 0 and not backend._admission.queue.active and not backend._admission.queue.pending
-        assert backend.snapshot().cancelled_requests == len(engine.aborted)
-        if not block_first and interval == 1:
-            # The entire sequence is one block: a late root has no known block
-            # when the first three complete. It must not hold the quota barrier.
-            single_block = run_conditional_is(backend, (1,), replace(
-                config, block_size=config.total_length, completion_fraction=.75), reward, SeedStream(4))
-            assert len(single_block.steps) == 1 and len(single_block.steps[0].candidates) == 3
-            assert len(single_block.token_ids) == config.total_length
-            assert all(len(candidate.rollouts) == 1 for candidate in single_block.steps[0].candidates)
-            assert engine.active == 0
-            # Three roots terminate before B. Their weights are fully known,
-            # even with K>1; an unknown fourth root must not inflate the quota.
-            terminal = run_conditional_is(backend, (1,), replace(config, completion_fraction=.75),
-                                          reward, SeedStream(2), sampling=SamplingConfig(eos_token_id=4))
-            assert len(terminal.steps) == 1 and len(terminal.steps[0].candidates) == 3
-            assert terminal.token_ids[-1] == 4 and len(terminal.token_ids) <= config.block_size
-            assert all(len(candidate.rollouts) == 1 for candidate in terminal.steps[0].candidates)
-            assert all(candidate.log_weight == candidate.rollouts[0].log_weight
-                       for candidate in terminal.steps[0].candidates)
-            assert engine.active == 0
     finally:
         backend.close()
     assert engine.active == 0

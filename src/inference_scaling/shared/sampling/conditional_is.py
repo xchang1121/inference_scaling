@@ -1,4 +1,4 @@
-"""The conditional SIR step shared by the AR and diffusion importance samplers.
+"""Conditional SIR weights and selection, independent of the generation backend.
 
 A step weighs each candidate block by the mean ``exp(reward / temperature)`` of
 its completions, selects a candidate in proportion to that weight and one of its
@@ -10,10 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from math import log
-
-import numpy as np
-from numpy.typing import NDArray
 
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
@@ -65,9 +61,8 @@ class ConditionalISStep:
     # Measurement never enters the step's identity: two execution paths are compared on what they sampled.
     forward_token_slots: int | None = field(default=None, compare=False)
     # Planned (block size, candidates, rollouts), before terminal groups collapse to one leaf.
-    # Selection-ready pools record their completion-triggered fork width here.
     sampling_plan: tuple[int, int, int] | None = None
-    # Original candidate slots when quotas or auxiliary constraints remove entire groups.
+    # Original candidate slots when stopping or auxiliary constraints remove entire groups.
     candidate_indices: tuple[int, ...] | None = None
 
     @property
@@ -116,48 +111,4 @@ def select(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: 
     return selected, completions[selected]
 
 
-def _metropolized_probabilities(weights: NDArray[np.float64]) -> NDArray[np.float64]:
-    leave_out = weights.sum() - weights
-    denominator = np.maximum(leave_out[0], leave_out)
-    probabilities = np.divide(weights, denominator, out=np.zeros_like(weights), where=denominator > 0)
-    probabilities[0] = 0.
-    stay = 1 - probabilities.sum()
-    if stay < -1e-12:
-        raise ArithmeticError("invalid Metropolized index probabilities")
-    probabilities[0] = max(0., stay)
-    probabilities /= probabilities.sum()
-    return probabilities
-
-
-def select_metropolized(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: object,
-                       group_blocks: bool = False) -> tuple[int, int]:
-    """One Metropolized index update from candidate zero's first complete rollout.
-
-    Leaf mass is exp(log_weight) / group_size, including terminal one-leaf
-    groups. SIR's index probabilities are the stationary distribution of this
-    update; a smaller finite-budget error from a base sample is not guaranteed.
-    With group_blocks, aggregate identical candidate token blocks, update their
-    index, and draw a completion conditionally using the original leaf masses.
-    """
-    if not candidates or any(not candidate.rollouts for candidate in candidates):
-        raise ValueError("Metropolized selection requires non-empty candidate groups")
-    labels = [(m, k) for m, candidate in enumerate(candidates) for k in range(len(candidate.rollouts))]
-    logs = np.array([candidates[m].rollouts[k].log_weight - log(len(candidates[m].rollouts)) for m, k in labels])
-    if not np.isfinite(logs).all():
-        raise ValueError("Metropolized selection requires finite complete rollout weights")
-    weights = np.exp(logs - logs.max())
-    if group_blocks:
-        groups: dict[TokenSequence, int] = {}
-        membership = np.array([groups.setdefault(candidates[m].token_ids, len(groups)) for m, _ in labels])
-        mass = np.asarray(np.bincount(membership, weights=weights), dtype=np.float64)
-        conditional = np.divide(weights, mass[membership], out=np.zeros_like(weights), where=mass[membership] > 0)
-        probabilities = _metropolized_probabilities(mass)[membership] * conditional
-        probabilities /= probabilities.sum()
-    else:
-        probabilities = _metropolized_probabilities(weights)
-    chosen = categorical_index_from_uniform(probabilities.tolist(), float(seeds.generator(*key, "metropolized").random()))
-    return labels[chosen]
-
-
-__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select",
-           "select_metropolized", "weigh"]
+__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select", "weigh"]

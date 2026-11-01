@@ -29,28 +29,16 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 与 `usage.completion_tokens` 中最终保留输出的长度分开。取消、评分计数缺失或期间发生引擎抢占时，
 不完整的成本及生成量标为 `null`，避免跨客户端混算。
 
-`sibling_replay`、`completion_fraction` 与 `rollout_race` 分别记录同块补全复用、整轮完成配额和候选内超发的设置。超发最多将缺失补全数翻倍，每候选收齐 K 条后取消其余请求；完成时间筛选会引入偏差，默认关闭。配置为 `ar.algorithms.is.rollout_race`，需要流式后端。
-默认 `sibling_replay=false`、`completion_fraction=1.0`、`rollout_race=false`。配额小于 1 会改变采样分布，详见[算法说明](../../../docs/methods/ALGORITHMS.md#is-completion-quota)。
+`ar.algorithms.is.exploration_schedule="two_stage"` 首轮使用 M/K/B，再按未选 rollout 的长度与权重决定
+末轮候选数。末轮最多占用已配置的在途容量，并使用保留序列的随机长度区间。`fixed` 保留为 CPU 参考；
+当前默认设置待 Qwen3.8-27B 配对验证后再调整。
+`scaling.sampling_plans` 记录各轮实际 `(B, M, K)`，`final_pool_limit` 记录容量限制；
+末轮 M=1 表示直接复用已有序列，无新请求。见[两阶段探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
 
-`ar.algorithms.is.exploration_schedule` 默认 `fixed`。设为 `two_stage` 后，首轮使用配置的 M/K/B，
-按未选 rollout 的长度预测末轮候选数，并按其权重差异随机决定执行完整末池或直接复用已有完整序列。
-流式后端按现有并发容量限制新候选数；少于两个未选组时执行完整池。与上述三项复用/取消选项互斥。
-`scaling.exploration_schedule` 记录该选择，`scaling.sampling_plans` 按轮记录实际 `(B, M, K)`，
-`scaling.final_pool_limit` 记录容量上限（未启用时为 `null`）；末轮 M=1 表示复用已有序列、没有新生成请求。
-原理与限制见[两阶段完整探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
-
-设为 `single_pool` 时，只生成首轮 M/K/B 候选池，使用 Metropolized 索引选择后提交完整思考，再正常生成答案。
-全部首轮请求完成后才选择；省略后续探索会降低计算量，也可能增大有限预算分布误差。
-该模式同样与上述三项复用/取消选项互斥。`scaling.sampling_plans` 只有首轮计划，
-`scaling.final_pool_limit` 为 `null`。实现与权重公式见[单轮完整候选池](../../../docs/methods/ALGORITHMS.md#is-single-pool)。
-
-`single_pool` 开启 `selection_ready=true` 时，K>1 的分叉由首条根请求结束触发，实际位置为配置 B 与该请求长度的较大值；
-`scaling.sampling_plans` 记录确定后的块长，`scaling.block_size` 仍为配置下限。达到原完成选择条件后取消剩余请求。
-该选项默认关闭，有完成时间、前缀分数及自适应分叉相关偏差；K=1 的生成请求不变。
-`two_stage` 开启同一选项时，首轮保持预设 M/K/B，按组权重与固定均匀随机数确定优先级，
-只允许收齐原定补全的组入选；末轮复用原 SIR 随机数及长度区间。完成条件见
-[所选补全完成后结束](../../../docs/methods/ALGORITHMS.md#is-selection-ready)。
-该组合存在前缀估计与完成时间相关偏差；关闭该选项时仍等待全部有效候选。两种模式均读取已有统计，不增加模型评分请求。
+`selection_ready=true` 使用已有前缀统计近似未完成权重，在完整候选已满足选择条件时取消其余请求。
+首轮保持预设 B，仅收齐原定补全的组可以入选；末轮允许直接选回完整参考序列。
+关闭时等待全部有效候选。该近似存在选择偏差，详见[提前选择](../../../docs/methods/ALGORITHMS.md#is-selection-ready)；
+仅读取缓存统计，额外模型评分调用数为零。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。

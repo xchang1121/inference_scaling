@@ -1,8 +1,7 @@
 """Conditional SIR on a kept complete sequence, with token-free step history.
 
-Candidate zero reuses the current block, completion and reward. Optional sibling
-replay keeps a bounded subset of the chosen block's other completions for the
-next step. Batch and streaming execution share the same tree and selection.
+Candidate zero reuses the current block, completion and reward. Batch and
+streaming execution share the same tree and complete-weight selection.
 """
 
 from __future__ import annotations
@@ -17,20 +16,18 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import (
-    CandidateSummary, ConditionalISResult, ConditionalISStep, RolloutEvaluation, RolloutSummary, select, select_metropolized,
+    CandidateSummary, ConditionalISResult, ConditionalISStep, RolloutSummary, select,
 )
 from inference_scaling.shared.types import TokenBatchReward
 
 
 @dataclass(frozen=True, slots=True)
 class RetainedSequence:
-    """Selected sequence and optional same-prefix siblings; no older candidate pools."""
+    """Selected complete sequence; no older candidate pools."""
 
     token_ids: TokenSequence = ()
     reward: float = 0.0
     fixed: int = 0
-    # Suffixes relative to token_ids[:fixed], in uniformly random order.
-    siblings: tuple[RolloutEvaluation, ...] = ()
     # An early first pool forecasts from observed prefixes, then discards them.
     next_candidate_count: int | None = None
 
@@ -64,10 +61,6 @@ class ConditionalISAdapter:
         carried = bool(state.token_ids)
         if selection is not None:
             selected, kept = selection
-        elif self.config.metropolized_blocks or (self.config.exploration_schedule == "single_pool"
-                                                 and not self.config.weighted_completion_quota):
-            selected, kept = select_metropolized(candidates, seeds, "conditional_is", step_index,
-                                                 group_blocks=self.config.metropolized_blocks)
         else:
             selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]
@@ -81,20 +74,10 @@ class ConditionalISAdapter:
             sources,
         )
         fixed = state.token_ids[:state.fixed] + candidate.token_ids
-        siblings: tuple[RolloutEvaluation, ...] = ()
-        if self.config.sibling_replay and completion.token_ids:
-            available = [item for index, item in enumerate(candidate.rollouts) if index != kept]
-            count = min(len(available), self.config.candidate_count - 1)
-            if count:
-                order = seeds.generator("conditional_is", step_index, "siblings").permutation(len(available))
-                siblings = tuple(available[int(index)] for index in order[:count])
-        updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), siblings, forecast)
-        if self.config.exploration_schedule == "single_pool":
-            # Commit the selected complete sequence without a reuse-only final step.
-            updated = replace(updated, fixed=len(updated.token_ids))
+        updated = RetainedSequence(fixed + completion.token_ids, completion.reward, len(fixed), forecast)
         retain = getattr(self.backend, "retain_statistics", None)
         if retain is not None:
-            retain(self.prompt, updated.token_ids, *(fixed + sibling.token_ids for sibling in siblings))
+            retain(self.prompt, updated.token_ids)
         return record, updated
 
 
