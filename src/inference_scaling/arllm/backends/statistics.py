@@ -16,6 +16,29 @@ from inference_scaling.arllm.types import GenerationRequest, ScoreRequest, Seque
 from inference_scaling.shared.types import TokenSequence
 
 
+class _StreamStatistics:
+    """Append deltas once; expose array views for repeated prefix lookups."""
+
+    def __init__(self, prefix: TokenSequence) -> None:
+        self.prefix, self.size = prefix, 0
+        self.tokens = np.empty(0, dtype=np.int64)
+        self.values = np.empty(0, dtype=np.float64)
+
+    def append(self, sample: SequenceSample) -> None:
+        end = self.size + len(sample.token_ids)
+        if end > len(self.tokens):
+            capacity = max(end, 32, 2 * len(self.tokens))
+            tokens, values = np.empty(capacity, dtype=np.int64), np.empty(capacity, dtype=np.float64)
+            tokens[:self.size], values[:self.size] = self.arrays()
+            self.tokens, self.values = tokens, values
+        self.tokens[self.size:end] = sample.token_ids
+        self.values[self.size:end] = np.nan if sample.token_statistics is None else sample.token_statistics
+        self.size = end
+
+    def arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.tokens[:self.size], self.values[:self.size]
+
+
 class StatisticRecorder:
     """Ask generation for one statistic, keep it and serve ``token_statistics`` from it; other calls pass through."""
 
@@ -23,7 +46,7 @@ class StatisticRecorder:
         self.backend, self.statistic = backend, statistic
         # Generated tokens and their statistics, by the length of their prefix and then the prefix.
         self._outputs: dict[int, dict[TokenSequence, list[tuple[np.ndarray, np.ndarray]]]] = {}
-        self._streams: dict[object, dict[str, tuple[TokenSequence, list[int], list[float]]]] = {}
+        self._streams: dict[object, dict[str, _StreamStatistics]] = {}
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -37,7 +60,7 @@ class StatisticRecorder:
     def _remember(self, prefix, tokens, values) -> None:
         if values is not None and not np.isnan(values).all():
             self._outputs.setdefault(len(prefix), {}).setdefault(prefix, []).append(
-                (np.asarray(tokens), np.asarray(values, dtype=np.float64)))
+                (np.array(tokens, copy=True), np.array(values, dtype=np.float64, copy=True)))
 
     def sample_batch(self, requests: Sequence[GenerationRequest]) -> list[SequenceSample]:
         samples = self.backend.sample_batch([replace(request, statistic=self.statistic) for request in requests])
@@ -68,7 +91,8 @@ class StatisticRecorder:
         """
         paths = dict.fromkeys(completed)
         for session in self._streams.values():
-            for prefix, _, _ in session.values():
+            for record in session.values():
+                prefix = record.prefix
                 if prefix[:len(prompt)] != prompt:
                     raise ValueError("retained requests must share the declared prompt")
                 paths.setdefault(prefix[len(prompt):], None)
@@ -90,9 +114,9 @@ class StatisticRecorder:
         tokens, values = np.asarray(sequence), np.full(len(sequence) - start, np.nan)
         records = [(length, generated, statistics) for length, outputs in self._outputs.items()
                    for generated, statistics in outputs.get(sequence[:length], ()) if length < len(sequence)]
-        records.extend((len(prefix), np.asarray(generated), np.asarray(statistics))
-                       for session in self._streams.values() for prefix, generated, statistics in session.values()
-                       if sequence[:len(prefix)] == prefix and len(prefix) < len(sequence))
+        records.extend((len(record.prefix), *record.arrays())
+                       for session in self._streams.values() for record in session.values()
+                       if sequence[:len(record.prefix)] == record.prefix and len(record.prefix) < len(sequence))
         for length, generated, statistics in records:
             same = generated[: len(sequence) - length] == tokens[length : length + len(generated)]
             # The output follows the sequence over positions [length, end).
@@ -133,7 +157,7 @@ class StatisticSession:
         for request in requests:
             if request.request_id in records:
                 raise ValueError("duplicate pending request")
-            records[request.request_id] = (request.prefix, [], [])
+            records[request.request_id] = _StreamStatistics(request.prefix)
         self.inner.submit([replace(request, statistic=self.recorder.statistic) for request in requests],
                           phase=phase, checkpoint=checkpoint)
 
@@ -141,11 +165,12 @@ class StatisticSession:
         event = self.inner.next_event()
         sample = event.delta
         records = self.recorder._streams[self]
-        prefix, tokens, values = records.setdefault(sample.request_id, (sample.prefix, [], []))
-        tokens.extend(sample.token_ids)
-        values.extend(sample.token_statistics if sample.token_statistics is not None else [float("nan")] * len(sample.token_ids))
+        record = records.get(sample.request_id)
+        if record is None:
+            record = records[sample.request_id] = _StreamStatistics(sample.prefix)
+        record.append(sample)
         if event.finished:
-            self.recorder._remember(prefix, tokens, values)
+            self.recorder._remember(record.prefix, *record.arrays())
             del records[sample.request_id]
         return event
 
@@ -161,8 +186,8 @@ class StatisticSession:
         finally:
             # A finished child may reuse a cancelled parent's generated block.
             # Keep its observed statistics until retain_statistics prunes the pool.
-            for prefix, tokens, values in self.recorder._streams.pop(self, {}).values():
-                self.recorder._remember(prefix, tokens, values)
+            for record in self.recorder._streams.pop(self, {}).values():
+                self.recorder._remember(record.prefix, *record.arrays())
 
 
 __all__ = ["StatisticRecorder", "StatisticSession"]

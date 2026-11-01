@@ -60,6 +60,10 @@ vLLM 内部使用 DELTA 输出，`stream_interval` 默认 32。首 token 立即�
 对 sampled-token 与 top-K 的重复项保留与字典接口相同的语义，Consilience 仍按原公式和 `fsum` 计算。
 没有修改 worker 的采样、温度或词表惩罚；传输内容仍包含必要的 top-K 概率，归约后算法只保存原有的逐 token 标量。
 
+活跃 rollout 的 token 和置信度使用增量数组存储，容量不足时倍增；前缀查询读取数组视图，省去每次查询时
+重新转换全部活跃序列的列表。完成或取消后保留实际长度的紧凑副本。重叠前缀的覆盖顺序、缺失统计与奖励公式保持原样，
+实现见 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py)。
+
 `stream_outputs` 记录后端处理的引擎增量数，`stream_events` 记录向外层交付的事件数。
 实验的 `executions.json` 和服务的 `scaling` 中，`engine_execution` 记录生效的 `async_scheduling`、输出间隔、
 `enforce_eager`、CUDA Graph 模式与捕获批大小配置。`asynchronous=true` 只说明使用异步接口，不能据此断定引擎内部
