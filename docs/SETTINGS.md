@@ -217,7 +217,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
 | `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
-| `is.exploration_schedule` | `two_stage` 将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为 CPU 参考，当前默认值仍为 `fixed`，待 Qwen3.8-27B 配对质量验证后再变更。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
+| `is.exploration_schedule` | `two_stage` 将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为默认完整等待与 CPU 参考；快速配置的[当前配对结果](reports/QWEN38_IS_SERVING.md)限于小样本，尚不支持默认长预算下的普遍质量与时延保证。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
 | `is.selection_ready` | 默认 `false`，等待完整权重。设为 `true` 后，首轮以完整组权重和固定随机优先级提前选择，末轮复用固定 SIR 随机数；未完成权重由缓存前缀估计，存在选择偏差。仅支持流式 `two_stage` 且 `block_first=false`。见[选择条件](methods/ALGORITHMS.md#is-selection-ready) |
 | `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 

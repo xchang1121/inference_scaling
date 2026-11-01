@@ -31,7 +31,7 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 
 `ar.algorithms.is.exploration_schedule="two_stage"` 首轮使用 M/K/B，再按未选 rollout 的长度与权重决定
 末轮候选数。末轮最多占用已配置的在途容量，并使用保留序列的随机长度区间。`fixed` 保留为 CPU 参考；
-当前默认设置待 Qwen3.8-27B 配对验证后再调整。
+快速配置已完成两卡／四卡小样本配对验证，默认设置保持不变；[结果与适用范围](../../../docs/reports/QWEN38_IS_SERVING.md)。
 `scaling.sampling_plans` 记录各轮实际 `(B, M, K)`，`final_pool_limit` 记录容量限制；
 末轮 M=1 表示直接复用已有序列，无新请求。见[两阶段探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
 
