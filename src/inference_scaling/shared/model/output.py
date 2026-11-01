@@ -15,6 +15,12 @@ def find_token_sequence(
     """Find an exact marker, including markers crossing generation chunks."""
     if not marker:
         raise ValueError("a token marker must be nonempty")
+    # Native tuple search avoids a Python loop for every token in long thinking spans.
+    if len(marker) == 1 and start >= 0:
+        try:
+            return tokens.index(marker[0], start)
+        except ValueError:
+            return None
     for index in range(start, len(tokens) - len(marker) + 1):
         if tuple(tokens[index : index + len(marker)]) == tuple(marker):
             return index
