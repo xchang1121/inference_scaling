@@ -30,6 +30,9 @@ python scripts/benchmark_is_gpu.py --summary results/tp2-fast.jsonl
 原生执行计数仍记录已执行的计算。失败和缺失配对不产生完整时延比，判题失败不计为已知正确率。
 `sample_quality_gate` 只表示样本中 IS 正确数不少于 Base 且至少有一道正确，不代表总体非劣性。
 `is_single_admitted_seconds` 记录搜索阶段仅一条请求已准入的累计时间，区别于设备空闲时间。
+`is_search_seconds` 记录整个 IS 搜索，`is_first_commit_seconds` 记录搜索开始至首次固定非空前缀的时间；
+`is_commits` 只保存各次固定前缀的相对时间和累计长度，可区分首轮与后续更新，不保存历史 token。
+这些时间不含 HTTP 传输，客户端 TTFT 由服务性能入口测量。观测通过原有 `on_commit` 回调完成，不参与选择。
 完整设置、代码版本和顺序保存在 JSONL；`--summary` 只读汇总，不加载模型。
 
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、

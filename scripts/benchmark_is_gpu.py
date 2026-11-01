@@ -14,6 +14,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,13 +130,12 @@ class AdmissionMeasurements:
 
     def __init__(self, raw):
         self.raw, self.original = raw, raw.configure_scheduler
-        self.intervals, self.search = {}, None
         raw.configure_scheduler = self.configure
         self.configure(raw.scheduler_config)
 
     def configure(self, config):
         self.original(config)
-        self.intervals, self.search = {}, None
+        self.intervals, self.search, self.commits = {}, None, []
         pool = self.raw._admission
         acquire, finish = pool.acquire, pool.finish
         self.pool = pool, acquire, finish
@@ -151,10 +151,28 @@ class AdmissionMeasurements:
 
         pool.acquire, pool.finish = measured_acquire, measured_finish
 
+    def measure_search(self, run, *args, **kwargs):
+        started = time.perf_counter()
+        observer = kwargs.pop("on_commit", None)
+
+        def committed(tokens):
+            if tokens:
+                self.commits.append({"seconds": time.perf_counter() - started, "tokens": len(tokens)})
+            if observer is not None:
+                observer(tokens)
+
+        try:
+            return run(*args, **kwargs, on_commit=committed)
+        finally:
+            self.search = started, time.perf_counter()
+
     def summary(self):
+        timing = {"is_search_seconds": self.search[1] - self.search[0] if self.search is not None else None,
+                  "is_first_commit_seconds": self.commits[0]["seconds"] if self.commits else None,
+                  "is_commits": self.commits.copy()}
         if not self.raw.scheduler_config.enabled:
             return {"admitted_requests": None, "single_admitted_seconds": None,
-                    "is_single_admitted_seconds": None}
+                    "is_single_admitted_seconds": None, **timing}
         async def collect():
             if any("finished" not in interval for interval in self.intervals.values()):
                 raise RuntimeError("admitted work outlived a measured solve")
@@ -167,7 +185,7 @@ class AdmissionMeasurements:
                           if interval["submitted"] < end and interval["finished"] > start}
             return {"admitted_requests": len(self.intervals),
                     "single_admitted_seconds": single_request_seconds(self.intervals),
-                    "is_single_admitted_seconds": single_request_seconds(scoped)}
+                    "is_single_admitted_seconds": single_request_seconds(scoped), **timing}
         return self.raw._runner.run(collect())
 
     def close(self):
@@ -368,13 +386,6 @@ def main():
     dataset = load_dataset(args.dataset, settings["datasets"][args.dataset])
     family, graph, admission = None, None, None
     original_run = ar_app.run_conditional_is
-    def timed_run(*request_args, **request_kwargs):
-        start = time.perf_counter()
-        try:
-            return original_run(*request_args, **request_kwargs)
-        finally:
-            if admission is not None:
-                admission.search = start, time.perf_counter()
     try:
         if not dataset.problems:
             parser.error("the selected dataset is empty")
@@ -383,7 +394,7 @@ def main():
         if not family.raw.supports_streaming_generation:
             raise RuntimeError("the fast IS path requires native streaming")
         graph, admission = GraphMeasurements(family.raw), AdmissionMeasurements(family.raw)
-        ar_app.run_conditional_is = timed_run
+        ar_app.run_conditional_is = partial(admission.measure_search, original_run)
         maximum = family.max_new_tokens
         try:
             family.max_new_tokens = 64
