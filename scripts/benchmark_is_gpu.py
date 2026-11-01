@@ -125,7 +125,7 @@ class GraphMeasurements:
 
 
 class AdmissionMeasurements:
-    """Actual admitted intervals, including requests canceled by completion quotas."""
+    """Actual admitted intervals, including requests canceled after selection."""
 
     def __init__(self, raw):
         self.raw, self.original = raw, raw.configure_scheduler

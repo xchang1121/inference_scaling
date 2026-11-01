@@ -309,11 +309,11 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
                     evaluate(index, rollout, tuple(tokens[len(block.token_ids):] if root else tokens))
                 del buffers[key]
             if selection_is_ready():
-                for pending_key in routes:
-                    if pending_key not in finished and pending_key not in cancelled:
-                        session.stop(pending_key)
-                        cancelled.add(pending_key)
-                        buffers.pop(pending_key, None)
+                # No further event is consumed after selection. The finally
+                # block closes this pool and cancels all producers together,
+                # instead of waiting for each request's abort in sequence.
+                cancelled.update(routes.keys() - finished)
+                buffers.clear()
                 break
         if pending:
             score([(index, rollout, suffix) for (index, rollout), suffix in sorted(pending.items())])

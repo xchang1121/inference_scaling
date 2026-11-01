@@ -136,7 +136,7 @@ class AsyncGenerationSession:
         self.backend._runner.run(seal())
 
     def stop(self, request_id: str) -> None:
-        # Explicit semantic stop; whole-pool quotas cancel through close().
+        # Explicit per-request stop; whole-pool selection cancels through close().
         self.stopped.add(request_id)
 
         async def stop() -> None:
