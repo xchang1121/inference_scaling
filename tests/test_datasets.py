@@ -127,6 +127,13 @@ def test_math_judge_cleans_up_its_worker() -> None:
     try:
         assert not judge.grade(r"$\boxed{3}$", "4")["correct"]
         assert judge.answer_key(r"\boxed{2}") == "2"
+        vector = r"\begin{pmatrix} 1/5 \\ -18/5 \end{pmatrix}"
+        for spacing in ("6pt", "-.5em", "+12 mm"):
+            formatted = r"\boxed{" + vector.replace(r"\\", rf"\\[{spacing}]") + "}"
+            assert judge.grade(formatted, vector)["correct"]
+            assert judge.equivalent(formatted, r"\boxed{" + vector + "}")
+            assert not judge.grade(formatted, vector.replace("-18", "-19"))["correct"]
+        assert judge.grade(r"\boxed{[6,7]}", "[6,7]")["correct"]
     finally:
         judge.close()
     assert judge._process is None

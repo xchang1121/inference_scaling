@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import random
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -14,6 +15,11 @@ from typing import Any, Mapping
 from inference_scaling.datasets.base import Dataset, Grade, Problem, file_sha256
 
 
+# TeX row spacing is layout, not an entry in a matrix or aligned equation.
+_ROW_SPACING = re.compile(
+    r"(\\\\)\*?\s*\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|pc|in|bp|cm|mm|dd|cc|sp|em|ex)\s*\]")
+
+
 def _judge_worker(connection: Any) -> None:
     # One persistent process gives a real timeout on Windows and Unix; the
     # library's own signal-based timeouts are disabled inside it.
@@ -21,6 +27,7 @@ def _judge_worker(connection: Any) -> None:
 
     @lru_cache(maxsize=4096)
     def parsed(text: str, reference: bool) -> Any:
+        text = _ROW_SPACING.sub(r"\1", text)
         if reference:
             text = "\\boxed{" + text + "}"
         return parse(text, extraction_config=[LatexExtractionConfig()], fallback_mode="no_fallback",
