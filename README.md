@@ -1,5 +1,23 @@
 # inference_scaling
 
+## 历史归档
+
+分支 `archive/legacy-dllm-training-is` 保存主线精简前的完整快照，代码基线为
+[`62af76c`](https://github.com/xchang1121/inference_scaling/commit/62af76ce038b4d5224eac7c1963b42960140c333)。
+归档日期：2026-11-02。本次仅增加归档说明，源码、依赖、设置、测试和原文档保持该版本内容。
+当前维护版本见 [`main`](https://github.com/xchang1121/inference_scaling/tree/main)。
+
+| 内容 | 位置 |
+| --- | --- |
+| dLLM 推理与 LLaDA 后端 | [`src/inference_scaling/dllm/`](src/inference_scaling/dllm/)、[`app/dllm.py`](src/inference_scaling/app/dllm.py) |
+| GRPO、VRPO 训练及数据准备 | [`training/`](training/)、[`dllm/training/`](src/inference_scaling/dllm/training/)、[`settings/training.json`](settings/training.json) |
+| 历史 IS 组合：同块补全复用、数量与权重配额、超发、末条筛选、单池及 Metropolized 块选择 | [`arllm/algorithms/`](src/inference_scaling/arllm/algorithms/)、[算法说明](docs/methods/ALGORITHMS.md) |
+| 配套环境、配置和检查 | [`pyproject.toml`](pyproject.toml)、[`settings/`](settings/)、[`tests/`](tests/) |
+
+以下内容为该历史版本的使用说明；主线后续修复与性能结论以 `main` 为准。恢复实验时使用本分支的配套依赖、设置和测试。
+
+## 版本说明
+
 本仓库实现自回归语言模型（AR-LLM）与掩码扩散语言模型（dLLM）的推理扩展与训练对照。
 批量评测与 HTTP 服务共用 [`settings/inference.json`](settings/inference.json)；评测命令行选择算法、模型族、奖励和数据集。
 训练（GRPO、VRPO、数据与权重下载）是独立的一套入口，读取 [`settings/training.json`](settings/training.json)。
