@@ -1,30 +1,22 @@
 # 设置文件
 
-推理与训练各有一个固定的设置文件，从仓库根目录读取：
-
-| 文件 | 读取者 |
-| --- | --- |
-| `settings/inference.json` | `python -m inference_scaling` 与 `python -m inference_scaling.serve`；性能测量脚本也从此文件继承参数 |
-| `settings/training.json` | `python -m training`（没有命令行参数） |
-
-两个文件都按代码中的 schema 严格校验（[`app/settings.py`](../src/inference_scaling/app/settings.py)、
-[`training/settings.py`](../training/settings.py)）：缺少字段、多出字段或类型不符都会在加载模型前报错。
-所有行为参数都写在文件里，代码中不再有隐藏的默认值；标注为“对象”的字段原样传给对应库（如 vLLM、TRL）。
+所有入口从仓库根目录读取 `settings/inference.json`。模型、长度、奖励和执行参数共用同一来源。
+[`app/settings.py`](../src/inference_scaling/app/settings.py) 严格校验字段名称与类型，错误在加载模型前报出。
+标注为“对象”的字段原样传给对应库。
 下表中的数值是仓库提供的文件中的取值。
 
 单条 AR 生成总长在 `ar.max_new_tokens` 定义，thinking 预算在 `ar.thinking` 定义；上下文容量由
 `ar.engine.context_window` 控制。前两种长度均以单条轨迹计，全部候选的累计计算量另行统计。
 `max_new_tokens=null` 使用剩余上下文，`context_window=null` 读取模型/引擎配置。
-服务与评测共用这些设置、采样策略和根种子。dLLM 画布上限独立定义在
-`dllm.max_new_tokens`。训练长度由训练设置中的 GRPO/VRPO 参数决定，不覆盖推理设置。
+服务与评测共用这些设置、采样策略和根种子。
 
 `scripts/benchmark_is_gpu.py` 的采样、长度、奖励和引擎默认值均继承该文件。显式 CLI 参数覆盖对应字段，
 例如 `--max-new-tokens 4096 --context-window 6144 --k 1 2 4`；它们和完整生效设置写入结果元数据。
 性能测量要求异步 vLLM 和单题执行。预热仍使用独立的 64 token 小请求，不计入测量。
 
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
-`<模型族>` 中除 `algorithms` 外的全部字段，以及 `<模型族>.algorithms.<算法>`。这些“有效设置”连同模型与数据的
-哈希、包源码哈希一起决定结果目录的指纹；修改无关部分（例如另一个模型族）不会使已有结果失效，
+`ar` 中除 `algorithms` 外的全部字段，以及 `ar.algorithms.<算法>`。这些“有效设置”连同模型与数据的
+哈希、包源码哈希一起决定结果目录的指纹；修改无关部分（例如未使用的奖励）不会使已有结果失效，
 `run.draws` 与 `run.hash_cache_dir` 也不参与指纹。
 
 ## `settings/inference.json`
@@ -126,8 +118,8 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | --- | --- | --- |
 | `path` | 字符串 | 本地目录或 Hub 模型 ID |
 | `revision` | 字符串或 `null` | 固定的 Hub 提交 |
-| `weight_sha256` | 对象或 `null` | 权重文件名到 SHA-256 的对象；非空时必须恰好列出检查点的全部权重文件并逐个校验（下载、训练与 `dllm.model` 用同一格式） |
-| `adapter` | `null` 或 `{path, revision}` | 叠加在基础模型上的 PEFT 适配器（如 GRPO 训练结果） |
+| `weight_sha256` | 对象或 `null` | 权重文件名到 SHA-256 的对象；非空时必须恰好列出检查点的全部权重文件并逐个校验 |
+| `adapter` | `null` 或 `{path, revision}` | 叠加在基础模型上的 PEFT 适配器 |
 | `tokenizer` / `tokenizer_revision` / `tokenizer_kwargs` | 字符串或 `null` / 字符串或 `null` / 对象 | 独立的 tokenizer 及其参数 |
 | `cache_dir` / `local_files_only` / `trust_remote_code` | 字符串或 `null` / 布尔 / 布尔 | Hub 缓存与加载选项 |
 | `token_penalty` | `null` 或 `{words, strength}` | 每个词前有空格的小写与首字母大写形式、以及行首的首字母大写形式（只取单个 token 的形式），其 logit 在温度之前减去 `strength`；惩罚后的分布就是模型本身，采样、参考概率与评分都用它（见[算法说明](methods/ALGORITHMS.md#token-penalty)）。vLLM 的原生评分与 `fused_logprobs` 读未惩罚的 logit，所以评分需要 `exact_scoring = "transformers"`，同步引擎也不能做 beam search；`null` 关闭 |
@@ -238,31 +230,6 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 当前固定的探索预算；K=1 时候选连同第一条补全由一次请求生成。不同卡数的执行性能比较保持这些参数、采样和奖励相同 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
-### `dllm`
-
-默认 `null`，没有其他模型的权重、采样或设备调优预设。通用接口保留；显式配置时使用下表字段。
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `model.path` / `revision` | 字符串 / 字符串或 `null` | LLaDA 目录与记录用的提交 |
-| `model.weight_sha256` | 对象或 `null` | 同 `ar.model.weight_sha256` |
-| `model.mask_token_id` / `trust_remote_code` | 整数 / 布尔 | 掩码 token 与自定义代码加载 |
-| `model.adapter` | `null` 或 `{path}` | 叠加的 LoRA 适配器（如 VRPO 训练结果） |
-| `engine.device` / `dtype` / `attn_implementation` / `max_batch_size` | — | 加载与批处理选项 |
-| `engine.block_logits_only` | 布尔 | 输出投影只计算当前块的位置（模型仍读取整张画布）；logits 与轨迹不变，省去其余位置的 LM head 计算，计算量按实际投影的位置统计 |
-| `prompt.system` | 字符串或 `null` | 系统消息 |
-| `max_new_tokens` | 整数 | dLLM 输出画布上限，取不超过它的扩散块长整数倍；与 AR 及数据集设置独立 |
-| `sampling` | 对象 | 普通采样与 IS 候选、补全的策略：`block_length`、`steps_per_block`、`temperature`、`top_k`、`top_p`、`remasking`（`low_confidence` \| `random`） |
-| `exact_sampling` | 对象 | 字段同上；随机重掩码使轨迹概率可计算，用于块 beam、轨迹幂 MH 与冻结历史 MH |
-| `algorithms.beam.decision_block_size` / `width` / `branching_factor` | 整数 | 分块 beam |
-| `algorithms.best_of_n.samples` | 整数 | 候选数 |
-| `algorithms.mh_power.alpha` / `decision_block_size` / `updates_per_stage` | 数 / 整数 / 整数 | 轨迹幂 MH |
-| `algorithms.mh.updates` | 整数 | 独立 MH 的更新数 |
-| `algorithms.mh.proposal` / `frozen_history.samples` / `frozen_history.mixture` | — | 同 AR；`frozen_history` 使用 `exact_sampling` 的冻结轨迹 |
-| `algorithms.is.candidate_count` / `rollout_count` / `decision_block_size` | 整数 | 逐块扩散 IS 的 M、K 与决策块长 |
-| `algorithms.is.candidate_canvas` | `block` \| `full` | `block`：候选单独请求，画布止于该块；`full`：从到输出上限的完整输出切出，其余部分作为第一条补全，与补全同一策略（见[算法说明](methods/ALGORITHMS.md#alg-dllm-is)） |
-| `algorithms.is.kept_sequence` | 布尔 | 保留一条完整序列的条件 IS（同 AR）；需要 `candidate_canvas = "full"` |
-
 ### `serve`
 
 位于同一个 `settings/inference.json`；只配置 HTTP 服务行为。生成参数继承 `ar` 与 `rewards.consilience`，
@@ -277,31 +244,3 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 
 请求的 `max_tokens` 或 `max_completion_tokens` 限制 thinking 与内容的合计长度；受显式配置上限和剩余上下文约束。
 两者同时传入时须相等，非正整数返回 HTTP 400。独立思考预算与别名见 [`ar.thinking`](#arthinking)。
-
-## `settings/training.json`
-
-默认 `stages=[]`、`download.models=[]`、`grpo=null`、`vrpo=null`，不下载旧模型或启动训练。
-启用训练阶段前必须显式提供对应完整配置；以下为接口字段。
-
-GRPO 的奖励与 VRPO 的偏好对都取数据集判定的正确性（正确为 1，否则为 0），即推理 verifier 的 oracle。
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `stages` | 数组 | 依次运行的阶段：`download`、`grpo`、`vrpo_preferences`、`vrpo`；各阶段可续跑 |
-| `hash_cache_dir` | 字符串 | 同推理 |
-| `gsm8k.train` / `gsm8k.test` | 对象 | 字段同 `datasets.gsm8k`；训练集供 GRPO 与 VRPO，测试集只用于检查训练/测试题目重叠 |
-| `download.retries` / `retry_wait_seconds` | 整数 / 数 | 下载重试 |
-| `download.huggingface.endpoint` / `max_workers` | 字符串或 `null` / 整数 | Hugging Face 镜像与并发 |
-| `download.models[]` | 数组 | 每项：`path`、`repository`、`revision`、`allow_patterns`（数组或 `null`）、`weight_sha256`（文件名到哈希的对象，或 `null` 表示不校验） |
-| `grpo.model` | 对象 | `path`、`revision`、`weight_sha256`、`tokenizer`、`tokenizer_revision`、`tokenizer_kwargs`、`cache_dir`、`local_files_only`、`trust_remote_code`，以及加载模型用的 `model_kwargs` |
-| `grpo.output` / `grpo.resume` | 字符串 / 布尔 | LoRA 输出目录；从最新检查点续跑 |
-| `grpo.lora` | 对象 | `r`、`lora_alpha`、`lora_dropout`、`bias`、`target_modules` |
-| `grpo.trainer` | 对象 | 原样传给 `trl.GRPOConfig`（步数、批大小、生成数、学习率、KL 系数 `beta`、精度与检查点等） |
-| `grpo.power_sample_seconds` | 数 | `nvidia-smi` 功率采样间隔 |
-| `vrpo.model` / `engine` / `prompt` / `sampling` | 对象 | 字段同 `dllm` 的对应部分（模型不含适配器） |
-| `vrpo.max_new_tokens` | 整数 | 候选生成长度与训练补全的截断长度 |
-| `vrpo.preferences.data` / `manifest` | 字符串 | 偏好对 JSONL 与清单 |
-| `vrpo.preferences.selection.count` / `seed` | 整数 | 从训练集抽取的候选题数 |
-| `vrpo.preferences.pairs` / `num_generations` / `include_reference_completion` / `seed` | 整数 / 整数 / 布尔 / 整数 | 目标偏好对数；每题生成数；是否把参考解答作为一个同样评分的候选；生成种子 |
-| `vrpo.training.*` | — | `output`、`resume`、`max_steps`、`gradient_accumulation_steps`、ELBO 估计的 `timestep_samples` / `masks_per_timestep` / `antithetic`、`learning_rate`、`beta`、`max_grad_norm`、`save_steps`、`seed`、`gradient_checkpointing` |
-| `vrpo.lora` | 对象 | 同 `grpo.lora` |

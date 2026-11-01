@@ -3,7 +3,7 @@
 - ``cli``: the four choices (algorithm, model family, reward, dataset) and the output root
 - ``settings``: the fixed settings file and its strict schema
 - ``run``: results directory, resume and records
-- ``ar`` / ``dllm``: each model family's backends and algorithms
+- ``ar``: autoregressive backends and algorithm assembly
 - ``rewards``: the chosen reward bound to one problem
 - ``records``: manifest identities, record IO and the summary
 """

@@ -23,15 +23,6 @@ _NULLABLE_STR = (str, None)
 # Weight file name -> SHA-256, enforced when given.
 _PINS = (dict, None)
 
-_DLLM_SAMPLING = {
-    "block_length": int,
-    "steps_per_block": int,
-    "temperature": float,
-    "top_k": int,
-    "top_p": float,
-    "remasking": _Choices({"low_confidence", "random"}),
-}
-
 SCHEMA: dict[str, Any] = {
     "run": {"seed": int, "draws": int, "hash_cache_dir": str},
     "datasets": {
@@ -194,47 +185,7 @@ SCHEMA: dict[str, Any] = {
                    "keepalive_seconds": float},
         "max_seconds": (float, None),
     },
-    "dllm": {
-        "model": {
-            "path": str,
-            "revision": _NULLABLE_STR,
-            "weight_sha256": _PINS,
-            "mask_token_id": int,
-            "trust_remote_code": bool,
-            "adapter": (None, {"path": str}),
-        },
-        "engine": {"device": str, "dtype": str, "attn_implementation": _NULLABLE_STR, "max_batch_size": int,
-                   "block_logits_only": bool},
-        "prompt": {"system": _NULLABLE_STR},
-        "max_new_tokens": int,
-        "sampling": _DLLM_SAMPLING,
-        "exact_sampling": _DLLM_SAMPLING,
-        "algorithms": {
-            "sample": {},
-            "greedy": {},
-            "beam": {"decision_block_size": int, "width": int, "branching_factor": int},
-            "best_of_n": {"samples": int},
-            "mh": {
-                "updates": int,
-                "proposal": _Choices({"base", "frozen_history"}),
-                "frozen_history": {"samples": int, "mixture": float},
-            },
-            "mh_power": {"alpha": float, "decision_block_size": int, "updates_per_stage": int},
-            "is": {
-                "candidate_count": int,
-                "rollout_count": int,
-                "decision_block_size": int,
-                "candidate_canvas": _Choices({"block", "full"}),
-                "kept_sequence": bool,
-            },
-        },
-    },
 }
-
-
-# Optional families retain their schema without shipping other model presets.
-DLLM_SCHEMA = SCHEMA["dllm"]
-SCHEMA["dllm"] = (None, DLLM_SCHEMA)
 
 
 class SettingsError(ValueError):
@@ -311,12 +262,9 @@ def validate_settings(settings: dict[str, Any]) -> None:
     """Reject conflicting limits before any model is loaded, including benchmark overrides."""
 
     check(settings, SCHEMA, "settings")
-    for family in ("ar", "dllm"):
-        if settings[family] is None:
-            continue
-        if settings[family]["max_new_tokens"] is not None and settings[family]["max_new_tokens"] <= 0:
-            raise SettingsError(f"{family}.max_new_tokens must be positive")
     ar = settings["ar"]
+    if ar["max_new_tokens"] is not None and ar["max_new_tokens"] <= 0:
+        raise SettingsError("ar.max_new_tokens must be positive")
     context = ar["engine"]["context_window"]
     if context is not None and context <= 0:
         raise SettingsError("ar.engine.context_window must be positive or null")
@@ -350,4 +298,4 @@ def validate_settings(settings: dict[str, Any]) -> None:
             raise SettingsError(str(error)) from error
 
 
-__all__ = ["DLLM_SCHEMA", "SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]
+__all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]

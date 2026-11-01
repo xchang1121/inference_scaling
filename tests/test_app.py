@@ -16,9 +16,9 @@ from tests.tabular import TabularAutoregressiveBackend
 def test_cli_defaults_and_reward_rules() -> None:
     choices, output = parse([])
     assert choices == Choices("is", "ar", "consilience", "gsm8k") and output == Path("results")
-    assert parse(["--model", "dllm"])[0].reward == "verifier" and parse(["--algorithm", "sample"])[0].reward is None
+    assert parse(["--algorithm", "sample"])[0].reward is None
     assert parse(["--algorithm", "best_of_n", "--reward", "verifier"])[0].label == "best_of_n-verifier"
-    for argv in (["--algorithm", "greedy", "--reward", "verifier"], ["--reward", "vote"]):
+    for argv in (["--model", "dllm"], ["--algorithm", "greedy", "--reward", "verifier"], ["--reward", "vote"]):
         with pytest.raises(SystemExit):
             parse(argv)
 
@@ -119,30 +119,19 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
 
 AR_RUNS = [
     ("sample", None, {}), ("greedy", None, {}), ("beam", None, {}),
-    ("best_of_n", "verifier", {"source": "vote"}), ("best_of_n", "verifier", {}), ("best_of_n", "self_certainty", {}),
-    ("best_of_n", "consilience", {}),
-    ("mh_power", None, {}), ("mh_power", None, {"sampling_scope": "full"}),
-    ("mh", "verifier", {"source": "vote"}), ("mh", "verifier", {"proposal": "frozen_history"}),
-    ("mh", "self_certainty", {"sampling_scope": "full"}), ("mh", "consilience", {}),
+    ("best_of_n", "verifier", {"source": "vote"}),
+    ("mh_power", None, {}),
     ("mh", "consilience", {"ensemble_size": 3, "iterations": 2, "suffix_schedule": "log_uniform", "execution": "pipeline"}),
-    ("is", "verifier", {"source": "vote"}), ("is", "verifier", {}),
-    ("is", "self_certainty", {"block_first": True}),
-    ("is", "consilience", {"sampling_scope": "full"}),
+    ("is", "consilience", {}),
 ]
 
 
 @pytest.mark.parametrize(("algorithm", "reward", "options"), AR_RUNS)
 def test_every_ar_algorithm_writes_graded_records_and_resumes(ar_settings, tmp_path, algorithm, reward, options):
     ar = ar_settings["ar"]
-    if "sampling_scope" in options:
-        ar["output"]["sampling_scope"] = options["sampling_scope"]
-    if "proposal" in options:
-        ar["algorithms"]["mh"]["proposal"] = options["proposal"]
     for key in ("ensemble_size", "iterations", "suffix_schedule", "execution"):
         if key in options:
             ar["algorithms"]["mh"][key] = options[key]
-    if "block_first" in options:
-        ar["algorithms"]["is"]["block_first"] = options["block_first"]
     if "source" in options:
         ar_settings["rewards"]["verifier"]["source"] = options["source"]
     choices = Choices(algorithm, "ar", reward, "gsm8k")

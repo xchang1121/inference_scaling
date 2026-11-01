@@ -1,8 +1,8 @@
 # inference_scaling
 
-本仓库实现自回归语言模型（AR-LLM）与掩码扩散语言模型（dLLM）的推理扩展与训练对照。
-批量评测与 HTTP 服务共用 [`settings/inference.json`](settings/inference.json)；评测命令行选择算法、模型族、奖励和数据集。
-训练（GRPO、VRPO、数据与权重下载）是独立的一套入口，读取 [`settings/training.json`](settings/training.json)。
+本仓库实现自回归语言模型的 training-free 推理扩展，当前主线为 Qwen3.8-27B 的 IS 推理与昇腾执行。
+批量评测与 HTTP 服务共用 [`settings/inference.json`](settings/inference.json)，包括模型、生成预算、采样、奖励与执行设置。
+性能评测以同题 Base 思考采样为对照，主要报告 IS/Base 端到端时延比，并同时检查正确率、生成量与计算量。
 
 ## 目标分布
 
@@ -40,8 +40,8 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 | 参数 | 取值 | 默认 |
 | --- | --- | --- |
 | `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
-| `--model` | `ar`、`dllm`（模型族；具体模型在 `settings/inference.json` 的 `ar.model` / `dllm.model`） | `ar` |
-| `--reward` | `verifier`、`self_certainty`、`consilience`；只用于 `best_of_n`、`mh`、`is` | AR 为 `consilience`，dLLM 为 `verifier` |
+| `--model` | `ar`（兼容既有命令；具体权重由 `ar.model` 指定） | `ar` |
+| `--reward` | `verifier`、`self_certainty`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `consilience` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
@@ -58,7 +58,6 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 | `ar.engine.context_window` | 输入与输出合计的容量；`null` 读取模型/引擎配置，Qwen3.8-27B 原生为 262144 | `null` |
 | `ar.thinking` | 共用的思考档位、预算和别名；两项选择均为 `null` 时用官方默认 | `xhigh`，thinking 上限 131072 |
 | `ar.sampling` / `ar.model.token_penalty` | 共用采样策略与词表惩罚 | 温度 1、完整词表；8 词、强度 1 |
-| `dllm` | 扩散推理接口保留，模型专用预设已移除 | `null`，默认禁用 |
 
 数据集只配置题目、提示与判定，不设置生成长度。模型实际上下文不足时，剩余空间会进一步限制输出；
 评测的 `trace.generation_budget` 和服务的 `scaling.generation_budget` 记录请求上限、生效上限及限制原因。
@@ -71,15 +70,14 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 
 ## 算法
 
-| 算法 | AR-LLM | dLLM |
-| --- | --- | --- |
-| `sample` | 基础策略采样一次 | 按 `dllm.sampling` 分块解码一次 |
-| `greedy` | 贪心解码 | 温度 0 的分块解码 |
-| `beam` | token 级 beam search | 按轨迹概率保留的分块 beam |
-| `best_of_n` | $`N`$ 个样本中按奖励选一个；verifier 投票时即多数投票 | 同左 |
-| `mh` | 目标 $`p\exp\{r/\tau\}`$ 的后缀 MH；可选[完整候选池更新](docs/methods/ALGORITHMS.md#ensemble-mh)或冻结历史 proposal | 独立 MH；proposal 为基础策略或冻结历史轨迹混合 |
-| `mh_power` | [幂目标后缀 MH](docs/methods/ALGORITHMS.md)，可选 `multiscale` 后缀长度分布 | 反向轨迹幂 MH |
-| `is` | 保留完整序列的条件 IS：默认固定 M/K/B，可选[单轮候选池](docs/methods/ALGORITHMS.md#is-single-pool)、[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)；单轮支持[权重配额](docs/methods/ALGORITHMS.md#is-weighted-completion-quota)，单轮与两阶段支持[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready)。提前结束均使用前缀估计，存在选择偏差 | 逐块扩散 IS；候选与补全都来自基础模型 |
+| 算法 | 实现 |
+| --- | --- |
+| `sample` | 按共用采样策略正常生成一次，作为 Base |
+| `greedy` / `beam` | 贪心解码 / token 级 beam search |
+| `best_of_n` | 独立生成 N 个样本后按奖励选择；verifier 投票时为多数投票 |
+| `mh` | 奖励目标的后缀 MH，可选完整候选池和冻结历史 proposal |
+| `mh_power` | 幂目标的后缀 MH |
+| `is` | 保留完整 rollout 的条件 IS；主推加速方向为[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)和[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready) |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。
@@ -123,7 +121,7 @@ MATH-500，按学科×难度分层抽题，用 [Math-Verify](https://github.com/
 
 指纹由有效设置、模型与数据哈希和包源码哈希决定。相同指纹的目录会续跑缺少的记录；增加 `run.draws` 也在原目录继续。
 IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token 保留在当前序列及本轮候选中。MH 当前状态、草稿重放和显式冻结 proposal 池仍按算法需要保留。
-计算量以前向 token 位置计：FLOPs 约为 `2 × 参数量 × 前向 token 位置数`（LLaDA 用激活参数量）。
+计算量以前向 token 位置计：FLOPs 约为 `2 × 参数量 × 前向 token 位置数`。
 
 ## 执行优化
 
@@ -140,29 +138,13 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | 分层候选池 | 上述完整候选池可设 `ar.algorithms.mh.initialization = "stratified"`，在 vLLM Ascend 上分层生成首轮候选；再设 `stratified_updates = true` 可在后续更新中保留各层。分别改善初始化覆盖、维持探索范围，默认均关闭；[初始化](docs/methods/ALGORITHMS.md#ensemble-initial-strata)、[持续分层](docs/methods/ALGORITHMS.md#ensemble-persistent-strata) |
 | 排除原轨迹的后缀更新 | 完整候选池可设 `ar.algorithms.mh.nonself_updates = true`，避免提议相同序列；按第一次分歧复用前缀，以接受率修正保持目标。默认关闭，可与首轮分层结合，与持续分层互斥；[算法与适用范围](docs/methods/ALGORITHMS.md#ensemble-nonself) |
 | 按候选块选择 | `ar.algorithms.is.metropolized_blocks = true`：合并相同 token 块，先在不同块之间作 Metropolized 选择，再选择组内补全。复用完整候选池与原奖励；默认关闭，需关闭提前选择、配额、超发及兄弟复用。[选择规则与边界](docs/methods/ALGORITHMS.md#is-block-selection) |
-| 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"`（dLLM 同名字段） |
+| 冻结历史 MH proposal | `ar.algorithms.mh.proposal = "frozen_history"` |
 
 互相冲突的组合（如融合概率与词表惩罚）在加载模型前报错；与所选算法无关的优化不生效。
 
-## 训练与其他模型族接口
+## 历史实现
 
-```bash
-python -m training
-```
-
-当前配置仅启用 Qwen3.8-27B 的 training-free 推理。旧模型的下载、训练与扩散采样预设已移除：
-`dllm=null`，训练的 `stages=[]`、`download.models=[]`、`grpo=null`、`vrpo=null`。
-算法和后端接口保留，调用未配置的模型族或训练阶段会在加载模型前报错。
-另行配置训练时，入口按 `settings/training.json` 的 `stages` 依次执行，各阶段可续跑：
-
-| 阶段 | 内容 | 代码 |
-| --- | --- | --- |
-| `download` | 下载并校验 GSM8K 训练/测试拆分与固定版本的模型权重（Hugging Face） | [`training/download.py`](training/download.py) |
-| `grpo` | 在 GSM8K 训练集上训练 GRPO LoRA，奖励为数据集判定的正确性；记录墙钟、生成 token、显存与 GPU 功率积分 | [`training/grpo.py`](training/grpo.py) |
-| `vrpo_preferences` | 用 LLaDA 生成候选并按数据集判定的正确性选出偏好对 | [`training/vrpo.py`](training/vrpo.py) |
-| `vrpo` | 方差缩减偏好优化（[VRPO](https://arxiv.org/abs/2505.19223)）：以掩码扩散 ELBO 代替序列对数似然 | 同上及 [`dllm/training/`](src/inference_scaling/dllm/training/) |
-
-训练适配器须与基模型匹配，填入对应模型族的 `model.adapter` 后评测。
+扩散模型与 GRPO/VRPO 训练路线已从主线移除，源码、设置和测试可从[历史版本 62af76c](https://github.com/xchang1121/inference_scaling/tree/62af76ce038b4d5224eac7c1963b42960140c333)恢复。历史实验报告与图片保留。
 
 ## 推理服务
 
@@ -192,19 +174,17 @@ python -m pytest
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/inference_scaling/app/` | 推理入口：命令行、设置 schema、运行与续跑、结果记录、两个模型族的算法组装、奖励绑定 |
+| `src/inference_scaling/app/` | 推理入口：命令行、设置 schema、运行与续跑、结果记录、算法组装、奖励绑定 |
 | `src/inference_scaling/datasets/` | 数据集：题目、提示、答案规则与判定器 |
 | `src/inference_scaling/arllm/` | AR-LLM：`algorithms/`（MH、条件 IS）、`backends/`（Transformers、vLLM、连续批处理与包装器）、`rewards/`（Self-Certainty、Consilience） |
-| `src/inference_scaling/dllm/` | LLaDA：`algorithms/`（条件扩散 IS、MH、分块 beam）、`backends/`、`training/`（VRPO） |
-| `src/inference_scaling/shared/` | 两侧共用：`sampling/`（SIR、IS 权重、MH 接受核）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
-| `settings/` | 推理与训练设置 |
-| `training/` | 训练入口与各阶段 |
+| `src/inference_scaling/shared/` | 公共组件：`sampling/`（SIR、IS 权重、MH 接受核）、`model/`（加载、提示、生成上限、思考段解析）、`rewards/`（投票与 Consilience 算术） |
+| `settings/` | 推理设置 |
 | `tests/` | 分布、实现一致性、端到端运行与结果处理测试 |
 | `docs/` | [设置说明](docs/SETTINGS.md)、[算法](docs/methods/ALGORITHMS.md)与实验报告 |
 | `results/` | 运行结果，Git 忽略 |
 | `online-speculation/` | 独立的在线推测解码项目 |
 
-[`tests/test_repository_layout.py`](tests/test_repository_layout.py) 检查分层：底层不依赖上层，两个模型族互不依赖。
+测试覆盖权重与选择、思考边界、异步资源清理、概率接口和计量；相同公共流程使用代表配置验证。
 
 ## 性能结果
 

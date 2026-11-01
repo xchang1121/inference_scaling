@@ -159,14 +159,13 @@ class TransformersBackend:
         except TypeError as error:
             if "unexpected keyword argument 'dtype'" not in str(error):
                 raise
-            # Transformers 4.x names this argument ``torch_dtype``; 5.x uses ``dtype``.  Supporting both keeps the
-            # AR backend usable from the dLLM-compatible test environment without changing model values.
+            # Local CPU reference environments may still use the earlier argument name.
             model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, **model_load_kwargs)
         if adapter_name_or_path is not None:
             try:
                 from peft import PeftModel
-            except ImportError as error:  # pragma: no cover - optional training extra
-                raise ModuleNotFoundError("Loading a GRPO adapter requires the project's training extra") from error
+            except ImportError as error:  # pragma: no cover - optional adapter library
+                raise ModuleNotFoundError("Loading an adapter requires peft") from error
             model = PeftModel.from_pretrained(model, adapter_name_or_path, local_files_only=local_files_only,
                                               revision=adapter_revision, cache_dir=cache_dir)
         if device_map is None and not getattr(model, "is_quantized", False):

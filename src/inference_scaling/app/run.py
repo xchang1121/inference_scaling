@@ -48,14 +48,10 @@ class Choices:
 
 
 def _family(settings: Mapping[str, Any], choices: Choices, dataset: Dataset) -> Any:
-    # Imported lazily: each family pulls in its own model stack.
-    if choices.model == "ar":
-        from inference_scaling.app.ar import ARFamily
+    # Keep the CLI and settings usable without loading model libraries.
+    from inference_scaling.app.ar import ARFamily
 
-        return ARFamily(settings, choices, dataset)
-    from inference_scaling.app.dllm import DLLMFamily
-
-    return DLLMFamily(settings, choices, dataset)
+    return ARFamily(settings, choices, dataset)
 
 
 def effective_settings(settings: Mapping[str, Any], choices: Choices) -> dict[str, Any]:
@@ -97,8 +93,8 @@ def _solve(family: Any, dataset: Dataset, problem: Problem, draw: int, seed: int
 
 def run(choices: Choices, settings: Mapping[str, Any], output: Path) -> dict[str, Any]:
     validate_settings(dict(settings))
-    if settings.get(choices.model) is None:
-        raise SettingsError(f"{choices.model} is not configured; the supplied settings target Qwen3.8-27B (ar)")
+    if choices.model != "ar":
+        raise SettingsError("only autoregressive inference is supported")
     draws, seed = int(settings["run"]["draws"]), int(settings["run"]["seed"])
     if draws < 1:
         raise ValueError("run.draws must be positive")

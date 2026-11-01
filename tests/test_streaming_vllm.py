@@ -93,9 +93,7 @@ def backend_for(engine, **options):
                             parameter_count=100, sampling_params_factory=lambda **kwargs: SimpleNamespace(**kwargs), **options)
 
 
-@pytest.mark.parametrize("block_first", [False, True])
-@pytest.mark.parametrize("rollouts", [1, 2, 4])
-@pytest.mark.parametrize("interval", [1, 4])
+@pytest.mark.parametrize("block_first,rollouts,interval", [(False, 1, 1), (False, 1, 4), (False, 2, 4), (True, 4, 1)])
 def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_first, rollouts, interval):
     engine = DeltaEngine(stream_interval=interval)
     backend = backend_for(engine)

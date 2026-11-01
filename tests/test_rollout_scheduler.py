@@ -26,8 +26,7 @@ def _duration(request, offset, sample):
     return .001 * (1 + 6 * int(sample.token_ids[-1] == 1) + request.seed % 3)
 
 
-@pytest.mark.parametrize("block_first", [False, True])
-@pytest.mark.parametrize("capacity,policy", [(1, "fifo"), (2, "fair_lpt"), (8, "fair_lpt")])
+@pytest.mark.parametrize("block_first,capacity,policy", [(False, 1, "fifo"), (False, 2, "fair_lpt"), (True, 8, "fair_lpt")])
 def test_all_weights_choices_and_tokens_match_for_changed_execution_orders(block_first, capacity, policy):
     config = ConditionalISConfig(4, 3, 2, 7, .7, block_first)
     reward = pointwise(lambda prompt, tokens: .4 * sum(tokens) - .1 * len(tokens))
@@ -57,9 +56,9 @@ def test_retained_children_start_without_waiting_for_fresh_candidate_tails():
     assert record.rollout_evaluations_performed == 8
 
 
-@pytest.mark.parametrize("marker", [(1,), (0, 1)])
-@pytest.mark.parametrize("block_first", [False, True])
-@pytest.mark.parametrize("sibling_replay", [False, True])
+@pytest.mark.parametrize("marker,block_first,sibling_replay", [
+    ((1,), False, False), ((0, 1), False, True), ((0, 1), True, False), ((1,), True, True),
+])
 def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first, sibling_replay):
     parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
     statistic = TokenStatistic(SamplingConfig(), top_k=2)

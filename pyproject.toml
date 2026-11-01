@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "inference-scaling"
 version = "0.1.0"
-description = "Theory-aligned inference scaling for autoregressive and diffusion language models."
+description = "Training-free importance sampling and MH inference for autoregressive language models."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -28,12 +28,6 @@ gpu = [
   "safetensors>=0.8,<1",
   "transformers>=5.14,<6",
 ]
-dllm = [
-  "accelerate>=1.7,<2",
-  "huggingface-hub>=0.30,<1",
-  "safetensors>=0.4.3,<1",
-  "transformers==4.53.2",
-]
 vllm = [
   "safetensors>=0.8,<1",
   "torch==2.11.0",
@@ -44,15 +38,6 @@ vllm = [
 serve = [
   "fastapi>=0.110",
   "uvicorn>=0.29",
-]
-training = [
-  "datasets==5.0.1",
-  "peft==0.20.0",
-  "pyarrow==25.0.0",
-  "trl==1.9.2",
-]
-dllm-training = [
-  "peft==0.20.0",
 ]
 
 [tool.setuptools]
