@@ -128,10 +128,18 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     settings = load_settings()
     family = SimpleNamespace(ar=settings["ar"])
     for mode, algorithm, reward in (("bon-consilience", "best_of_n", "consilience"),
-                                     ("is-self-certainty", "is", "self_certainty"), ("is", "is", "consilience")):
+                                   ("is-self-certainty", "is", "self_certainty"),
+                                   ("met-k1-self-certainty", "is", "self_certainty"),
+                                   ("met-k2-self-certainty", "is", "self_certainty"),
+                                   ("block-met-k2-self-certainty", "is", "self_certainty"),
+                                   ("is", "is", "consilience")):
         select_mode(family, mode, settings)
         assert (family.choices.algorithm, family.choices.reward) == (algorithm, reward)
         assert family.reward_settings["scope"] == "thinking"
+        if "met-k" in mode:
+            assert not family.config["selection_ready"]
+            assert family.config["rollout_count"] == (1 if "-k1-" in mode else 2)
+            assert family.config["selection"] == ("block_metropolized" if mode.startswith("block-") else "metropolized")
     assert family.config == settings["ar"]["algorithms"]["is"]
     assert settings["ar"]["algorithms"]["best_of_n"]["samples"] == 8  # Mode overrides remain local.
 

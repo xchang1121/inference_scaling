@@ -29,11 +29,17 @@ from inference_scaling.shared.model.thinking import resolve_thinking
 from inference_scaling.shared.rng import SeedStream
 
 
+POOL_MODES = ("sir-k1", "met-k1", "sir-k2", "met-k2", "block-met-k2")
+SC_SUFFIX = "-self-certainty"
+SELECTION_PAIRS = (("sir-k1", "met-k1"), ("sir-k2", "met-k2"),
+                   ("sir-k2", "block-met-k2"), ("met-k2", "block-met-k2"))
+
 STUDIES = {
     "latency": ("base", "is"),
     # K=1 with distinct blocks has identical leaf/block Metropolized kernels.
-    "selection": ("base", "is", "sir-k1", "met-k1", "sir-k2", "met-k2", "block-met-k2"),
+    "selection": ("base", "is", *POOL_MODES),
     "rewards": ("base", "is", "bon-consilience", "is-self-certainty"),
+    "selection-self-certainty": ("base", "is-self-certainty", *(mode + SC_SUFFIX for mode in POOL_MODES)),
 }
 
 
@@ -316,27 +322,30 @@ def comparison_summary(rows, expected_pairs, modes):
             "versus_base": {mode: compare("base", mode) for mode in modes if mode != "base" and "base" in modes},
             "reward_pairs": [compare(reference, alternative) for reference, alternative in
                              (("is", "bon-consilience"), ("is", "is-self-certainty"),
-                              ("bon-consilience", "is-self-certainty")) if reference in modes and alternative in modes],
-            "selection_pairs": [compare(reference, alternative) for reference, alternative in
-                                (("sir-k1", "met-k1"), ("sir-k2", "met-k2"), ("sir-k2", "block-met-k2"),
-                                 ("met-k2", "block-met-k2")) if reference in modes and alternative in modes]}
+                              ("bon-consilience", "is-self-certainty"),
+                              *((mode, mode + SC_SUFFIX) for mode in POOL_MODES))
+                             if reference in modes and alternative in modes],
+            "selection_pairs": [compare(reference + suffix, alternative + suffix)
+                                for suffix in ("", SC_SUFFIX) for reference, alternative in SELECTION_PAIRS
+                                if reference + suffix in modes and alternative + suffix in modes]}
 
 
 def select_mode(family, mode, settings):
     if mode not in {mode for modes in STUDIES.values() for mode in modes}:
         raise ValueError(f"unknown benchmark mode: {mode}")
     algorithm = "sample" if mode == "base" else "best_of_n" if mode == "bon-consilience" else "is"
-    reward = None if mode == "base" else "self_certainty" if mode == "is-self-certainty" else "consilience"
+    reward = None if mode == "base" else "self_certainty" if mode.endswith(SC_SUFFIX) else "consilience"
     family.choices = SimpleNamespace(algorithm=algorithm, reward=reward)
     family.config = dict(family.ar["algorithms"][algorithm])
-    if mode in STUDIES["selection"] and mode not in STUDIES["latency"]:
-        family.config.update(rollout_count=int(mode[-1]), selection_ready=False,
-                             selection=("sir" if mode.startswith("sir-") else
-                                        "block_metropolized" if mode.startswith("block-") else "metropolized"))
+    pool_mode = mode.removesuffix(SC_SUFFIX)
+    if pool_mode in POOL_MODES:
+        family.config.update(rollout_count=int(pool_mode[-1]), selection_ready=False,
+                             selection=("sir" if pool_mode.startswith("sir-") else
+                                        "block_metropolized" if pool_mode.startswith("block-") else "metropolized"))
     if mode == "bon-consilience":
         family.config["samples"] = 4
     family.reward_settings = None if reward is None else dict(settings["rewards"][reward])
-    if mode == "is-self-certainty":
+    if reward == "self_certainty":
         family.reward_settings["scope"] = "thinking"
 
 
@@ -398,7 +407,8 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--label")
     parser.add_argument("--study", choices=tuple(STUDIES), default="latency",
-                        help="selection compares complete pools; rewards adds Best-of-4 and IS + Self-Certainty")
+                        help="selection compares Consilience pools; selection-self-certainty uses full-vocabulary KL; "
+                             "rewards compares Best-of-4 and fast IS rewards")
     parser.add_argument("--modes", nargs="+", help="run only these arms from the selected study (independent supplement)")
     parser.add_argument("--summary", type=Path, help="summarize paired JSONL on CPU without loading a model")
     args = parser.parse_args()
@@ -440,13 +450,14 @@ def main():
         parser.error("paired single-question measurements require asynchronous vLLM and workers=1")
     if ar["algorithms"]["is"]["exploration_schedule"] != "two_stage":
         parser.error("configure the fast two_stage IS path; fixed-block performance comparisons are retired")
-    if args.study == "selection" and (ar["algorithms"]["is"]["candidate_count"] != 4
-                                     or ar["algorithms"]["is"]["rollout_count"] != 1
-                                     or not ar["algorithms"]["is"]["selection_ready"]):
+    if args.study.startswith("selection") and (ar["algorithms"]["is"]["candidate_count"] != 4
+                                             or ar["algorithms"]["is"]["rollout_count"] != 1
+                                             or not ar["algorithms"]["is"]["selection_ready"]):
         parser.error("selection study requires the current M=4, K=1, selection_ready=true baseline")
     if "bon-consilience" in modes:
         ar["algorithms"]["best_of_n"]["samples"] = 4
-    if "is-self-certainty" in modes:
+    uses_self_certainty = any(mode.endswith(SC_SUFFIX) for mode in modes)
+    if uses_self_certainty:
         settings["rewards"]["self_certainty"]["scope"] = "thinking"
     resolved, _ = resolve_thinking(ar)
     if (resolved["output"]["thinking_mode"] != "enabled" or ar["output"]["sampling_scope"] != "thinking"
@@ -461,7 +472,7 @@ def main():
     try:
         if not dataset.problems:
             parser.error("the selected dataset is empty")
-        initial_reward = "self_certainty" if "is-self-certainty" in modes else "consilience"
+        initial_reward = "self_certainty" if uses_self_certainty else "consilience"
         family = ARFamily(settings, SimpleNamespace(algorithm="is", reward=initial_reward), dataset)
         family.load()
         if not family.raw.supports_streaming_generation:

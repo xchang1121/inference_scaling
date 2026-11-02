@@ -201,3 +201,20 @@ B 补测首次初始化失败且未产生测量，恢复原引擎路径后同配
 
 `--summary <结果文件>` 可在 CPU 上汇总原始判分与配对成本；本报告另外保留答案等价复核和内容审核统计。
 服务与卡数性能对照见[延迟与吞吐报告](QWEN38_IS_SERVING.md)。
+
+### Metropolized + Self-Certainty 补测
+
+同一固定 100 题追加逐条 K=1、逐条 K=2、按块 K=2 三种完整池 Self-Certainty 版本。
+采样、长度、M/B、奖励温度 0.25、评分温度 1 及思考段范围保持不变；三个版本均关闭提前选择。
+同选择核的 Consilience 与已有快速 Self-Certainty 结果作为对照，原九种方法的测量直接复用。
+其中与快速 IS 的差异同时包含完整池等待和选择核变化。结果待补测完成后并入上述表格。
+
+```bash
+VLLM_USE_V2_MODEL_RUNNER=0 python scripts/benchmark_is_gpu.py --settings settings/inference.json \
+  --study selection-self-certainty \
+  --modes met-k1-self-certainty met-k2-self-certainty block-met-k2-self-certainty \
+  --dataset math500 --questions 35 --selection-skip 50 --repeats 1 --effort low --max-tokens 8192 \
+  --label selection-sc-new-a --output results/selection-sc-new-a.jsonl
+```
+
+沿用前述四批题目与实例分配；独立输出中保存选择核、奖励和预算，避免与既有结果混合。
