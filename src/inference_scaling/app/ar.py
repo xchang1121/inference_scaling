@@ -151,11 +151,18 @@ class ARFamily:
                 raise ValueError(f"ar.algorithms.{choices.algorithm}.{option} needs the transformers engine, which "
                                  "samples from request uniform streams and reports reference log-probabilities")
         vllm = engine["vllm"]
-        # vLLM returns the whole next-token distribution only through the fused worker, at temperature 1.
+        # The Ascend adapter reduces the actual sampling distribution on device.
+        # The older GPU fused worker instead reads raw logits at temperature 1.
+        scalar = engine["backend"] == "vllm" and vllm["scalar_self_certainty"]
+        if scalar and choices.algorithm == "beam":
+            raise ValueError("beam search requires scalar_self_certainty=false")
         if choices.reward == "self_certainty" and engine["backend"] == "vllm" and vllm["exact_scoring"] == "none" and not (
-                vllm["fused_logprobs"] and float(settings["rewards"]["self_certainty"]["score_temperature"]) == 1):
+                (vllm["fused_logprobs"] and float(settings["rewards"]["self_certainty"]["score_temperature"]) == 1)
+                or (scalar and float(settings["rewards"]["self_certainty"]["score_temperature"]) == float(sampling["temperature"])
+                    and float(sampling["top_p"]) == 1 and sampling["top_k"] is None)):
             raise ValueError("self_certainty reads the whole next-token distribution; on vLLM set "
-                             "ar.engine.vllm.fused_logprobs (at score_temperature 1) or exact_scoring = transformers")
+                             "scalar_self_certainty (Ascend, matching full-support sampling), "
+                             "fused_logprobs (GPU, score_temperature 1), or exact_scoring = transformers")
         self.raw: Any = None
         self.backend: Any = None
         self._direct_slots = 0

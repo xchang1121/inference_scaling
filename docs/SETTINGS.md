@@ -41,6 +41,21 @@ K、选择核与提前选择开关，实际生效配置逐条记录。方法顺�
 相同长度上限不代表相同总计算量；汇总同时给出正确率、配对答对/答错变化、时延与 FLOPs，评估质量与成本的取舍。
 K=1 且候选块互异时，逐条与按块 Metropolized 完全相同，故不重复设组。
 
+`--study rewards` 对比 Base、当前 Consilience IS、`bon-consilience`（四条完整候选中取思考段 Consilience
+最高者）及 `is-self-certainty`（IS 改用思考段平均全词表 KL）。后两项分别固定 N=4、评分范围为 thinking；
+其余参数继承设置，实际算法和奖励配置逐条记录。Best-of-4 为四条候选都生成最终内容，IS 选定思考后只续写一份
+最终内容；因此按各自实际计算量比较。`--modes` 可指定该 study 的子集，补测无需重跑已有方法：
+
+```bash
+python scripts/benchmark_is_gpu.py --settings settings/inference.json --study rewards \
+  --modes bon-consilience is-self-certainty --dataset math500 --questions 2 --repeats 1 \
+  --effort low --max-tokens 8192 --label rewards --output results/rewards.jsonl
+```
+
+Ascend 上先在设置中开启 `ar.engine.vllm.scalar_self_certainty`；采样与评分温度须相同且使用完整支持集。
+Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2；不按评测答案选择温度。
+独立补测需按题目 ID 与原 Base/IS 记录配对，并注明不同运行批次；不能将未测的 Base 时延写入本批汇总。
+
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
 `ar` 中除 `algorithms` 外的全部字段，以及 `ar.algorithms.<算法>`。这些“有效设置”连同模型与数据的
 哈希、包源码哈希一起决定结果目录的指纹；修改无关部分（例如未使用的奖励）不会使已有结果失效，
@@ -94,7 +109,7 @@ K=1 且候选块互异时，逐条与按块 Metropolized 完全相同，故不�
 | `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
 | `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
 | `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
-| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；计算分布所用的温度（1 为模型原始分布）；评分范围（原始定义为 `full`）。奖励为评分段上各位置的分布相对全词表均匀分布的 KL 散度的均值；要用整个词表的概率，vLLM 引擎需设 `ar.engine.vllm.fused_logprobs = true`（评分温度 1）或 `exact_scoring = "transformers"` |
+| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；评分分布温度；评分范围（默认 `full`）。取评分段上全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值。vLLM 使用下述 Ascend 标量路径、GPU 融合路径或 `exact_scoring = "transformers"` |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
 | `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty` 倍首段均值 |
@@ -171,6 +186,7 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数；上下文统一使用 `ar.engine.context_window` |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
+| `vllm.scalar_self_certainty` | 布尔 | 默认 `false`。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false` |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |

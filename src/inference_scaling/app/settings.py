@@ -106,6 +106,7 @@ SCHEMA: dict[str, Any] = {
                 "enable_prefix_caching": bool,
                 "max_lora_rank": int,
                 "fused_logprobs": bool,
+                "scalar_self_certainty": bool,
                 "exact_scoring": _Choices({"none", "transformers"}),
                 "parameter_count": _NULLABLE_INT,
                 "engine_kwargs": dict,
@@ -255,6 +256,9 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
         config = config.get(key, {}) if isinstance(config, dict) else {}
     if isinstance(config, dict):
         config.setdefault("selection", "sir")
+    vllm = settings.get("ar", {}).get("engine", {}).get("vllm", {})
+    if isinstance(vllm, dict):
+        vllm.setdefault("scalar_self_certainty", False)
     validate_settings(settings)
     return settings
 

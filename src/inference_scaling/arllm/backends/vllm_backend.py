@@ -40,6 +40,7 @@ from packaging.version import Version
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
+from inference_scaling.arllm.backends.vllm_statistics import SCALAR_STATISTICS_KEY, scalar_generated_logprobs
 from inference_scaling.arllm.types import (AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence,
                                           TokenStatistic)
 
@@ -71,6 +72,9 @@ def _engine_worker(engine_arguments: dict[str, Any], fused: bool):
 
     from vllm.platforms import current_platform
 
+    scalar = (engine_arguments.get("additional_config") or {}).get(SCALAR_STATISTICS_KEY, False)
+    if scalar and (current_platform.device_type != "npu" or fused):
+        raise ValueError("scalar Self-Certainty requires the Ascend processed-logprob worker, without fused_logprobs")
     if current_platform.device_type == "npu":
         if fused:
             raise ValueError("fused log-probabilities are unsupported on Ascend")
@@ -351,7 +355,7 @@ class VLLMBackend:
                  scoring_backend: AutoregressiveBackend | None = None, lora_request: Any | None = None,
                  fused_logprobs: bool = False, token_penalty: TokenPenalty | None = None,
                  metrics: Callable[[], Sequence[Any]] | None = None, flat_logprobs: bool = True,
-                 initial_strata: bool = False) -> None:
+                 initial_strata: bool = False, scalar_self_certainty: bool = False) -> None:
         if parameter_count <= 0:
             raise ValueError("parameter_count must be positive")
         # A token penalty makes the penalized model the model, so it is part of the identity.
@@ -368,6 +372,7 @@ class VLLMBackend:
         self._scoring_backend = scoring_backend
         self._lora_request = lora_request
         self._fused_logprobs = bool(fused_logprobs)
+        self._scalar_self_certainty = bool(scalar_self_certainty)
         self._flat_logprobs = bool(flat_logprobs)
         self.bos_token_id = None if getattr(tokenizer, "bos_token_id", None) is None else int(tokenizer.bos_token_id)
         self._engine_lock = threading.RLock()
@@ -396,6 +401,7 @@ class VLLMBackend:
         max_lora_rank: int, parameter_count: int | None, seed: int, scoring_backend: AutoregressiveBackend | None,
         engine_kwargs: dict[str, Any] | None, token_penalty: Mapping[str, Any] | None,
         enable_fused_logprobs: bool = False,
+        scalar_self_certainty: bool = False,
         flat_logprobs: bool = True, stream_interval: int = 32, async_scheduling: bool | None = None,
     ) -> "VLLMBackend":
         """Load the tokenizer and engine; :meth:`_create` picks the vLLM frontend."""
@@ -443,6 +449,12 @@ class VLLMBackend:
             if overlap:
                 raise ValueError("engine_kwargs cannot override correctness-critical settings: " + ", ".join(sorted(overlap)))
             kwargs.update(engine_kwargs)
+        additional = dict(kwargs.get("additional_config") or {})
+        if SCALAR_STATISTICS_KEY in additional:
+            raise ValueError("set vllm.scalar_self_certainty, not its private additional_config transport flag")
+        if scalar_self_certainty:
+            additional[SCALAR_STATISTICS_KEY] = True
+            kwargs["additional_config"] = additional
         counted = parameter_count or _checkpoint_parameter_count(model_name_or_path)
         if counted is None:
             raise ValueError("parameter_count could not be read from a local safetensors checkpoint; "
@@ -464,6 +476,7 @@ class VLLMBackend:
                 tokenizer, token_penalty["words"], token_penalty["strength"]),
             metrics=get_metrics_snapshot,
             flat_logprobs=flat_logprobs,
+            scalar_self_certainty=scalar_self_certainty,
         )
 
     @classmethod
@@ -603,7 +616,8 @@ class VLLMBackend:
             top_k=0 if policy.top_k is None else int(policy.top_k),
             seed=int(seed),
             # The K most likely tokens' processed log-probabilities give the policy's top-K statistic.
-            logprobs=0 if statistic is None or statistic.top_k is None else statistic.top_k,
+            logprobs=(0 if statistic is None else
+                      (statistic.top_k or 0) + int(self._scalar_self_certainty)),
             flat_logprobs=self._flat_logprobs,
             logit_bias=self._logit_bias(),
             ignore_eos=True,
@@ -688,9 +702,10 @@ class VLLMBackend:
         tokens = tuple(int(token) for token in completion.token_ids)
         positions = completion.logprobs
         statistic = self._statistic(request)
-        token_logprobs, statistics = _generated_logprobs(
+        scalar = self._scalar_self_certainty and statistic is not None
+        token_logprobs, statistics = (scalar_generated_logprobs if scalar else _generated_logprobs)(
             positions, tokens, None if statistic is None else statistic.top_k)
-        if statistic is not None and statistic.top_k is None:
+        if statistic is not None and statistic.top_k is None and not scalar:
             if fused is None:
                 raise RuntimeError("the fused worker omitted a generated request")
             statistics = fused[1]
@@ -832,10 +847,12 @@ class VLLMBackend:
         return results
 
     def records(self, statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
-        """The engine's most likely log-probabilities give its sampling policy's top-K confidences; the fused worker
-        reads the unpenalized model at temperature 1, which gives that model's divergence from uniform."""
+        """Top-K and Ascend scalar statistics use the actual sampling policy.
 
-        if statistic.top_k is not None:
+        The GPU fused worker separately reads the unpenalized model at temperature 1.
+        """
+
+        if statistic.top_k is not None or self._scalar_self_certainty:
             return statistic.matches(sampling)
         return self._fused_logprobs and self._penalty is None and statistic.policy.temperature == 1
 
@@ -891,6 +908,7 @@ class VLLMBackend:
         mode = getattr(compilation, "cudagraph_mode", None)
         return {
             "flat_logprobs": self._flat_logprobs,
+            "scalar_self_certainty": self._scalar_self_certainty,
             "stream_interval": getattr(scheduler, "stream_interval", None),
             "async_scheduling": getattr(scheduler, "async_scheduling", None),
             "enforce_eager": getattr(getattr(config, "model_config", None), "enforce_eager", None),
@@ -912,6 +930,8 @@ class VLLMBackend:
 
         if max_new_tokens <= 0 or num_beams <= 0:
             raise ValueError("generation length and beam count must be positive")
+        if self._scalar_self_certainty and num_beams > 1:
+            raise ValueError("beam search requires scalar_self_certainty=false")
         model_prefix = self._model_prefix(prefix)
         prompt = self._prompt(model_prefix)
         if num_beams == 1:
@@ -1171,6 +1191,8 @@ class AsyncVLLMBackend(VLLMBackend):
 
     async def _beam_search_async(self, prefix: TokenSequence, *, max_new_tokens: int, num_beams: int,
                                  token_constraint=None) -> TokenSequence:
+        if self._scalar_self_certainty:
+            raise ValueError("constrained/beam search requires scalar_self_certainty=false")
         params = self._sampling_params_factory(
             max_tokens=1, temperature=0.0, top_p=1.0, top_k=0, seed=0, logprobs=2 * int(num_beams), flat_logprobs=False,
             logit_bias=self._logit_bias(), ignore_eos=True, detokenize=False, skip_special_tokens=False,

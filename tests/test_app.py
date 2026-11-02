@@ -246,6 +246,10 @@ def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_set
         run(choices, ar_settings, tmp_path / "results")
     ar_settings["ar"]["engine"]["vllm"]["fused_logprobs"] = True
     assert run(choices, ar_settings, tmp_path / "results")["accuracy"] == 1.0
+    ar_settings["ar"]["engine"]["vllm"]["fused_logprobs"] = False
+    ar_settings["ar"]["engine"]["vllm"]["scalar_self_certainty"] = True
+    ar_settings["rewards"]["self_certainty"]["score_temperature"] = ar_settings["ar"]["sampling"]["temperature"]
+    assert run(choices, ar_settings, tmp_path / "scalar-results")["accuracy"] == 1.0
 
 
 def test_text_rewards_fall_back_from_the_thinking_scope(ar_settings, tmp_path):

@@ -117,6 +117,23 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     assert matrix["selection_pairs"][0]["wins"] == 1 and matrix["selection_pairs"][0]["losses"] == 0
     assert matrix["versus_base"]["sir-k2"]["losses"] == 1
     assert matrix["versus_base"]["block-met-k2"]["latency_ratio_is_over_base"] == 1.5
+    supplement = comparison_summary([{**base, "mode": "bon-consilience"}, {**fast, "mode": "is-self-certainty"}],
+                                    1, ("bon-consilience", "is-self-certainty"))
+    assert supplement["versus_base"] == {}
+    assert supplement["reward_pairs"][0]["complete_pairs"] == 1
+    assert supplement["reward_pairs"][0]["latency_ratio_is_over_base"] == 1.5
+    from types import SimpleNamespace
+    from inference_scaling.app.settings import load_settings
+    from scripts.benchmark_is_gpu import select_mode
+    settings = load_settings()
+    family = SimpleNamespace(ar=settings["ar"])
+    for mode, algorithm, reward in (("bon-consilience", "best_of_n", "consilience"),
+                                     ("is-self-certainty", "is", "self_certainty"), ("is", "is", "consilience")):
+        select_mode(family, mode, settings)
+        assert (family.choices.algorithm, family.choices.reward) == (algorithm, reward)
+        assert family.reward_settings["scope"] == "thinking"
+    assert family.config == settings["ar"]["algorithms"]["is"]
+    assert settings["ar"]["algorithms"]["best_of_n"]["samples"] == 8  # Mode overrides remain local.
 
 
 def test_standard_pass_at_k_estimator() -> None:

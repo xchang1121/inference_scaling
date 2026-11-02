@@ -126,6 +126,7 @@ def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_f
                 assert first_child < last_root_finish
         assert backend.execution_config() == {
             "flat_logprobs": True,
+            "scalar_self_certainty": False,
             "stream_interval": interval, "async_scheduling": True,
             "enforce_eager": False, "quantization": None,
             "cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4],

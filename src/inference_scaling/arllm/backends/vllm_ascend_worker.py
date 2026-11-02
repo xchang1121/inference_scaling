@@ -10,6 +10,7 @@ from vllm_ascend.sample.sampler import AscendSampler, AscendTopKTopPSampler
 from vllm_ascend.worker.worker import NPUWorker
 
 from inference_scaling.arllm.backends.vllm_sampling import SamplingConstraintsWorker
+from inference_scaling.arllm.backends.vllm_statistics import SCALAR_STATISTICS_KEY, install_scalar_statistics
 
 
 class AscendLogprobWorker(SamplingConstraintsWorker, NPUWorker):
@@ -27,3 +28,5 @@ class AscendLogprobWorker(SamplingConstraintsWorker, NPUWorker):
             raise ValueError("the inference-scaling backend requires processed_logprobs")
         sampler.logprobs_mode = mode
         sampler.topk_topp_sampler.logprobs_mode = mode
+        if self.vllm_config.additional_config.get(SCALAR_STATISTICS_KEY, False):
+            install_scalar_statistics(sampler, self.model_config.get_vocab_size())

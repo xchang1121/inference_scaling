@@ -221,7 +221,7 @@ flowchart LR
 | 后续每步 | $`M-1`$ | $`M(K-1)`$ | $`MK-1`$ |
 
 补全在生成时已返回基础模型概率，不需要重评分。`verifier` 只读取答案文本；`self_certainty` 与 `consilience`
-读取的逐 token 统计量由生成一并算出（未开启融合概率的 vLLM 上的 `self_certainty` 除外，见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
+读取的逐 token 统计量由生成一并算出（vLLM 的 Self-Certainty 需开启对应设备的统计路径，见[第 9 节](#alg-token-statistics)），也不需要评分前向。候选与补全按异构请求展平为批次；连续批处理把逻辑请求合并为较少的批量模型调用，
 主要降低墙钟时间，请求随机种子与候选选择随机数保持不变，填充可能使实际参与前向计算的 token 位置数略有增加。
 
 主要入口为
@@ -1201,7 +1201,7 @@ $`e^{1.25}\approx 3.5`$，保留对多数的软偏好。verifier 由 [`app/rewar
 ### Self-Certainty 与置信度
 
 两种模型奖励都读下一 token 分布有多集中，与实际采到哪个 token 无关。`self_certainty` 是原始
-[Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的分布相对词表上均匀分布 $`U`$ 的 KL 散度，在评分段上
+[Self-Certainty](https://arxiv.org/abs/2502.18581)：从词表均匀分布 $`U`$ 到每个位置预测分布的 KL 散度，在评分段上
 取均值，空段取 0：
 
 ```math
@@ -1214,9 +1214,10 @@ r_{\mathrm{SC}}(x,y)=\frac{1}{L}\sum_{t=1}^{L}s_t(x,y),
 $`V`$ 为词表大小，$`L`$ 为评分段长度。均值使奖励不随长度增长；原始定义对整条输出取平均，`scope` 因而默认 `full`。
 它不同于采到 token 的平均对数概率：后者在温度 1 下是路径上平均负熵的单样本估计，一次采到小概率 token 就大幅降低
 奖励；$`s_t`$ 直接读分布，没有这份采样噪声。$`s_t`$ 要用整个词表的概率：Transformers 后端生成时算出；vLLM 的输出只有
-最可能的几个 token，由[融合概率](#infra-fused-logprobs)在采样的同一步读出（`ar.engine.vllm.fused_logprobs = true`，
-评分温度须为 1），或交给精确评分后端（`exact_scoring = "transformers"`，每条序列多一次评分前向）；两者都没有时在
-加载模型前报错。
+最可能的几个 token。Ascend 可开启 `ar.engine.vllm.scalar_self_certainty`，在设备上归约完整分布并随生成返回标量，
+保留原生异步调度；评分策略须与采样策略一致。GPU 可用[融合概率](#infra-fused-logprobs)
+（`fused_logprobs = true`，评分温度须为 1）。也可交给精确评分后端
+（`exact_scoring = "transformers"`，每条序列多一次评分前向）。这些路径均使用完整词表，不用 top-K 代替全词表 KL。
 
 Consilience 读 top-$`K`$ 置信度：对第 $`t`$ 个位置取概率最高的 $`K`$ 个 token $`v_{t,1},\ldots,v_{t,K}`$，
 
@@ -1268,7 +1269,7 @@ Self-Certainty 与 Consilience 分别把评分策略下的 $`s_t`$ 与 $`c_t`$ �
 （[`TokenStatisticReward`](../../src/inference_scaling/arllm/rewards/intrinsic.py)）：前者取均值，后者取窗口分数。
 统计量只依赖该位置之前的 token，所以生成时由同一次 logits 算出：Transformers 后端对任意评分策略计算（与采样策略
 不同时多一次 log-softmax）；vLLM 只在评分策略就是采样策略时，从引擎返回的 $`K`$ 个最可能 token 的对数概率读出 $`c_t`$，
-开启融合概率时再读出评分温度为 1 的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
+Ascend 标量路径在相同策略下返回 $`s_t`$；GPU 融合路径返回评分温度为 1 的 $`s_t`$。每题的 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py) 让该题的
 生成请求带上奖励的统计量；IS/MH 每轮选择后只保留当前序列的 token 与统计量，释放其余分支。
 评分一条序列时，逐位置读取相同上下文、相同 token 的当前缓存；未覆盖评分段时（如冻结历史 proposal 的后缀或
 已释放分支），对整条评分。重放的草稿 token 不计算统计量，
@@ -1436,6 +1437,19 @@ Consilience 的逐 token 统计量；已采样 token 同时位于 top-K 时，�
 
 <a id="infra-fused-logprobs"></a>
 #### 11.3.1 融合概率记录
+
+**Ascend 全词表统计。** `scalar_self_certainty=true` 对采样器已计算的 processed log-probabilities 做
+`-logprobs.mean(-1) - log(V)`。词表惩罚与采样温度均已生效，采样 token 和其概率保持原值；评分温度须与
+采样温度相同。仅增加词表归约，无新增模型前向。计时包含该归约，报告的 $`2P\times`$ 前向位置 FLOPs
+仍是模型前向估计，不将归约算子伪记成额外模型前向。
+
+[`vllm_statistics.py`](../../src/inference_scaling/arllm/backends/vllm_statistics.py) 在内部概率载荷中增加一个带
+负 ID 标记的统计槽，后端读取时将其分离；它不进入生成 token、采样概率、top-K 排序或累计 log-probability。
+原生输出负责请求切分、异步复制及流式聚合，主机每步只接收一个新增浮点数及标记，而非整个词表。
+同一引擎的 top-K 请求也多计算该标量；本开关默认关闭。该适配不支持 beam search、词表裁剪采样或硬掩码下
+的无限 KL；未传回完整、有限统计量时显式报错。它也不提供与采样温度不同的基础概率。
+
+**GPU 原始概率记录。** 下述 `fused_logprobs` 是独立路径，与 Ascend 标量开关互斥。
 
 幂目标 MH 使用温度 proposal 时，每个新后缀同时需要实际 proposal 概率 $`q`$ 和基础模型概率 $`p`$；Self-Certainty
 需要每步整个词表上的 $`p`$。vLLM 的常规输出只含 $`q`$ 下最可能的几个 token，因而原路径在生成后还要对完整后缀

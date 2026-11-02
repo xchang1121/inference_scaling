@@ -87,7 +87,7 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 | 奖励 | 定义 | 实现 |
 | --- | --- | --- |
 | `verifier` | 按最终答案评分。默认对照参考答案（oracle：正确为 1，否则为 0）；`rewards.verifier.source = "vote"` 或数据集没有参考答案时改为投票：与模型自身答案一致的比例（`best_of_n` 在候选之间投票，`is`/`mh` 与冻结的 `pool_size` 个独立样本比较） | [`app/rewards.py`](src/inference_scaling/app/rewards.py)、[`shared/rewards/vote.py`](src/inference_scaling/shared/rewards/vote.py) |
-| `self_certainty` | [Self-Certainty](https://arxiv.org/abs/2502.18581)：每个位置的下一 token 分布相对全词表均匀分布的 KL 散度，对整条输出取均值（AR；vLLM 上需开启 `fused_logprobs`） | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
+| `self_certainty` | [Self-Certainty](https://arxiv.org/abs/2502.18581)：对评分段取全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值；`scope` 选 `thinking` 或 `full`。Ascend 用 `scalar_self_certainty` 随生成返回标量，GPU 用 `fused_logprobs`，约束见[设置](docs/SETTINGS.md) | [`arllm/rewards/intrinsic.py`](src/inference_scaling/arllm/rewards/intrinsic.py) |
 | `consilience` | [Consilience](https://arxiv.org/abs/2608.09898) 置信度轨迹：末段 top-$`K`$ 置信度均值减去若干倍首段均值，默认只评思考段（AR） | 同上及 [`shared/rewards/consilience.py`](src/inference_scaling/shared/rewards/consilience.py) |
 
 `is` 与 `mh` 所用的奖励都是逐序列的固定分数（投票用冻结样本池），因此条件 IS 可以复用保留序列的奖励，MH 的

@@ -50,6 +50,7 @@ def test_ascend_worker_mode_and_platform_selection(monkeypatch) -> None:
 
     class Worker:
         model_config = SimpleNamespace(logprobs_mode="processed_logprobs")
+        vllm_config = SimpleNamespace(additional_config={})
 
         def init_device(self):
             self.model_runner = runner
@@ -140,6 +141,64 @@ class _Output:
 class _SamplingParams:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+
+def test_scalar_self_certainty_preserves_probabilities_and_stream_alignment():
+    import math
+    from collections import namedtuple
+    import torch
+    from inference_scaling.arllm.backends.vllm_statistics import install_scalar_statistics, scalar_generated_logprobs
+
+    Payload = namedtuple("Payload", "logprob_token_ids logprobs selected_token_ranks")
+
+    def gather(logprobs, count, token_ids):
+        values, ids = logprobs.topk(count, dim=-1)
+        return Payload(torch.cat((token_ids[:, None], ids), dim=1),
+                       torch.cat((logprobs.gather(-1, token_ids[:, None]), values), dim=1),
+                       torch.ones(len(token_ids), dtype=torch.int32))
+
+    sampler = SimpleNamespace(gather_logprobs=gather)
+    install_scalar_statistics(sampler, 7)
+    install_scalar_statistics(sampler, 7)
+    logits = torch.tensor([[0., 0., 0., 0., 0., 0., 0.], [3., 2., 1., 0., -1., -2., -3.]])
+    logits[1, 0] -= 1.0  # The configured model's token penalty is already applied.
+    logprobs = logits.log_softmax(-1)
+    saved = logprobs.clone()
+    chosen = torch.tensor([0, 6])
+    for count, top_k in ((1, None), (4, 3)):
+        result = sampler.gather_logprobs(logprobs, count, chosen)
+        assert torch.equal(result.logprobs[:, 0], gather(logprobs, 0, chosen).logprobs[:, 0])
+        rows = [(ids.tolist(), values.tolist()) for ids, values in zip(result.logprob_token_ids, result.logprobs)]
+        flat = FlatLogprobs(rows)
+        dictionaries = [dict(zip(ids, map(_Logprob, values), strict=True)) for ids, values in rows]
+        expected = scalar_generated_logprobs(flat, (0, 6), top_k)
+        assert scalar_generated_logprobs(dictionaries, (0, 6), top_k) == expected
+        # Stream fragments and complete outputs must give the same per-token values.
+        parts = [scalar_generated_logprobs(FlatLogprobs([row]), (token,), top_k)
+                 for row, token in zip(rows, (0, 6))]
+        assert tuple(part[1][0] for part in parts) == expected[1]
+        truth = (-logprobs.mean(-1) - math.log(7) if top_k is None else -logprobs.topk(top_k).values.mean(-1))
+        assert expected[1] == pytest.approx(truth.tolist(), abs=1e-6)
+    assert torch.equal(logprobs, saved)
+    assert sampler.gather_logprobs(logprobs, 0, chosen).logprobs.shape == (2, 1)
+    with pytest.raises(RuntimeError, match="tagged statistic"):
+        scalar_generated_logprobs(FlatLogprobs([([0], [-1.])]), (0,), None)
+    with pytest.raises(RuntimeError, match="finite full-vocabulary"):
+        scalar_generated_logprobs(FlatLogprobs([([0, -1], [-1., float("inf")])]), (0,), None)
+
+    backend = VLLMBackend(None, SimpleNamespace(bos_token_id=None), model_id="fake", parameter_count=7,
+                          sampling_params_factory=_SamplingParams, scalar_self_certainty=True)
+    policy = SamplingConfig()
+    request = GenerationRequest((1,), 2, policy, 3, "scalar", statistic=TokenStatistic(policy))
+    assert backend.records(request.statistic, policy)
+    assert not backend.records(request.statistic, SamplingConfig(temperature=.7))
+    assert backend._sampling_params(request).logprobs == 1
+    completion = _Completion([0, 6], FlatLogprobs([(ids.tolist(), values.tolist()) for ids, values in
+                             zip(sampler.gather_logprobs(logprobs, 1, chosen).logprob_token_ids,
+                                 sampler.gather_logprobs(logprobs, 1, chosen).logprobs)]))
+    sample = backend._sample_from_output(request, _Output([completion]))[0]
+    assert sample.token_statistics == pytest.approx((-logprobs.mean(-1) - math.log(7)).tolist(), abs=1e-6)
+    assert sample.reference_token_logprobs == sample.token_logprobs
 
 
 def test_initial_strata_preserve_aliases_concurrent_pools_and_native_payload():
