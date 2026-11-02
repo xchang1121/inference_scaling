@@ -208,8 +208,10 @@ python -m pytest
 [Qwen3.8-27B IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md)记录当前模型的卡数容量、思考与内容 TTFT、
 输出吞吐和实际生成量；区分已测结果、交付延迟改善与尚未验证的吞吐收益。
 
-[完整池选择的正确率与成本](docs/reports/QWEN38_IS_SELECTION.md)比较 30 道题上的 Base、快速 IS、完整池 SIR、
-逐条与按块 Metropolized。K=2 按块选择相对同 K SIR 多对 1 题；相对快速 IS 正确率持平、计算量增加，保持非默认选项。
+[100 题的选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md)比较 Base、快速 IS、完整池 SIR、
+逐条与按块 Metropolized、Best-of-4 + Consilience 及 IS + 全词表 Self-Certainty。
+Base / 快速 IS 为 92% / 93%，四个方法达到 94%，配对差异区间均包含 0；报告分别列出新增 70 题、合计 100 题的
+答案正确率、最终论证审核、耗时与 FLOPs。默认设置保持不变。
 
 ## 历史结果
 
