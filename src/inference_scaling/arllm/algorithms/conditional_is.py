@@ -16,7 +16,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import AutoregressiveBackend, TokenSequence
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import (
-    CandidateSummary, ConditionalISResult, ConditionalISStep, RolloutSummary, select,
+    CandidateSummary, ConditionalISResult, ConditionalISStep, RolloutSummary, select, select_metropolized,
 )
 from inference_scaling.shared.types import TokenBatchReward
 
@@ -61,6 +61,9 @@ class ConditionalISAdapter:
         carried = bool(state.token_ids)
         if selection is not None:
             selected, kept = selection
+        elif self.config.selection != "sir":
+            selected, kept = select_metropolized(candidates, seeds, "conditional_is", step_index,
+                                                group_blocks=self.config.selection == "block_metropolized")
         else:
             selected, kept = select(candidates, seeds, "conditional_is", step_index)
         candidate = candidates[selected]

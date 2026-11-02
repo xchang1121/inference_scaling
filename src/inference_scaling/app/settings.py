@@ -171,6 +171,7 @@ SCHEMA: dict[str, Any] = {
                 "block_first": bool,
                 "exploration_schedule": _Choices({"fixed", "two_stage"}),
                 "selection_ready": bool,
+                "selection": _Choices({"sir", "metropolized", "block_metropolized"}),
             },
         },
     },
@@ -248,6 +249,12 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
     if not path.is_file():
         raise SettingsError(f"{path} does not exist; run from the repository root")
     settings = json.loads(path.read_text(encoding="utf-8"))
+    # Older complete settings files used only SIR; preserve that explicit default.
+    config = settings
+    for key in ("ar", "algorithms", "is"):
+        config = config.get(key, {}) if isinstance(config, dict) else {}
+    if isinstance(config, dict):
+        config.setdefault("selection", "sir")
     validate_settings(settings)
     return settings
 
@@ -257,6 +264,8 @@ def validate_settings(settings: dict[str, Any]) -> None:
 
     check(settings, SCHEMA, "settings")
     ar = settings["ar"]
+    if ar["algorithms"]["is"]["selection_ready"] and ar["algorithms"]["is"]["selection"] != "sir":
+        raise SettingsError("Metropolized selection requires selection_ready=false")
     if ar["max_new_tokens"] is not None and ar["max_new_tokens"] <= 0:
         raise SettingsError("ar.max_new_tokens must be positive")
     context = ar["engine"]["context_window"]

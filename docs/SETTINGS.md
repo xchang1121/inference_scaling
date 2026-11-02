@@ -35,6 +35,12 @@ python scripts/benchmark_is_gpu.py --summary results/tp2-fast.jsonl
 这些时间不含 HTTP 传输，客户端 TTFT 由服务性能入口测量。观测通过原有 `on_commit` 回调完成，不参与选择。
 完整设置、代码版本和顺序保存在 JSONL；`--summary` 只读汇总，不加载模型。
 
+`--study selection` 在同一入口增加完整等待的 SIR、逐条 Metropolized 选择（K=1、2）及按块 Metropolized
+选择（K=2），保留 Base 与当前快速 IS。要求配置为 M=4、K=1、`two_stage`、`selection_ready=true`；各对照只覆盖
+K、选择核与提前选择开关，实际生效配置逐条记录。方法顺序逐题轮换，判题在生成后执行，标准答案不参与选择。
+相同长度上限不代表相同总计算量；汇总同时给出正确率、配对答对/答错变化、时延与 FLOPs，评估质量与成本的取舍。
+K=1 且候选块互异时，逐条与按块 Metropolized 完全相同，故不重复设组。
+
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
 `ar` 中除 `algorithms` 外的全部字段，以及 `ar.algorithms.<算法>`。这些“有效设置”连同模型与数据的
 哈希、包源码哈希一起决定结果目录的指纹；修改无关部分（例如未使用的奖励）不会使已有结果失效，
@@ -219,6 +225,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
 | `is.exploration_schedule` | `two_stage` 将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为默认完整等待与 CPU 参考；快速配置的[当前配对结果](reports/QWEN38_IS_SERVING.md)限于小样本，尚不支持默认长预算下的普遍质量与时延保证。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
 | `is.selection_ready` | 默认 `false`，等待完整权重。设为 `true` 后，首轮以完整组权重和固定随机优先级提前选择，末轮复用固定 SIR 随机数；未完成权重由缓存前缀估计，存在选择偏差。仅支持流式 `two_stage` 且 `block_first=false`。见[选择条件](methods/ALGORITHMS.md#is-selection-ready) |
+| `is.selection` | 默认 `sir`；`metropolized` 对完整 rollout 索引做一次 Metropolized 更新，`block_metropolized` 先合并同块质量再选择补全。两个可选核均要求 `selection_ready=false`，不额外生成或评分；端到端成本仍会因后续选中轨迹改变。见[选择核](methods/ALGORITHMS.md#is-metropolized)。旧设置文件省略此字段时按 `sir` 读取 |
 | `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 
 <a id="ar-defaults"></a>

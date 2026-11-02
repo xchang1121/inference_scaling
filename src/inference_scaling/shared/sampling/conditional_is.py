@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from math import fsum, log
+
+import numpy as np
+from numpy.typing import NDArray
 
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.importance import categorical_index_from_uniform, logmeanexp, normalize_log_weights
@@ -111,4 +115,49 @@ def select(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: 
     return selected, completions[selected]
 
 
-__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select", "weigh"]
+def _metropolized_probabilities(weights: NDArray[np.float64]) -> NDArray[np.float64]:
+    # Sum complements directly: total - weight loses small off-diagonal masses.
+    leave_out = np.array([fsum(float(w) for j, w in enumerate(weights) if i != j)
+                          for i in range(len(weights))])
+    denominator = np.maximum(leave_out[0], leave_out)
+    probabilities = np.zeros_like(weights)
+    np.divide(weights[1:], denominator[1:], out=probabilities[1:], where=denominator[1:] > 0)
+    stay = 1 - fsum(probabilities)
+    if stay < -1e-12:
+        raise ArithmeticError("invalid Metropolized index probabilities")
+    probabilities[0] = max(0., stay)
+    return probabilities / probabilities.sum()
+
+
+def select_metropolized(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: object,
+                       group_blocks: bool = False) -> tuple[int, int]:
+    """One index update from candidate zero's first complete rollout.
+
+    Leaf mass is exp(log_weight) / group_size, including terminal one-leaf
+    groups. The update preserves SIR's conditional index distribution; one
+    update from a base sample need not reduce finite-budget error or raise
+    answer accuracy. Grouping sums identical blocks' masses, then samples a
+    leaf conditionally. It never drops duplicate mass or uses partial scores.
+    """
+    if not candidates or any(not candidate.rollouts for candidate in candidates):
+        raise ValueError("Metropolized selection requires non-empty candidate groups")
+    labels = [(m, k) for m, candidate in enumerate(candidates) for k in range(len(candidate.rollouts))]
+    logs = np.array([candidates[m].rollouts[k].log_weight - log(len(candidates[m].rollouts)) for m, k in labels])
+    if not np.isfinite(logs).all():
+        raise ValueError("Metropolized selection requires finite complete rollout weights")
+    weights = np.exp(logs - logs.max())
+    if group_blocks:
+        groups: dict[TokenSequence, int] = {}
+        membership = np.array([groups.setdefault(candidates[m].token_ids, len(groups)) for m, _ in labels])
+        mass = np.asarray(np.bincount(membership, weights=weights), dtype=np.float64)
+        conditional = np.divide(weights, mass[membership], out=np.zeros_like(weights), where=mass[membership] > 0)
+        probabilities = _metropolized_probabilities(mass)[membership] * conditional
+        probabilities /= probabilities.sum()
+    else:
+        probabilities = _metropolized_probabilities(weights)
+    chosen = categorical_index_from_uniform(probabilities.tolist(), float(seeds.generator(*key, "metropolized").random()))
+    return labels[chosen]
+
+
+__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select",
+           "select_metropolized", "weigh"]

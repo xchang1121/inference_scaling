@@ -1013,10 +1013,37 @@ N、n 只读取未选组的对称统计量；给定这些组及固定首块，�
 两阶段模式默认关闭；长度区间随该模式启用，无单独开关。API 的 `final_pool_limit=None` 只取消容量截限，仍执行权重分配和长度区间；
 实验与服务通过共享的 `conditional_is_config` 从后端读取并发容量。
 
+<a id="is-metropolized"></a>
+
+### 完整候选池的 Metropolized 选择
+
+`ar.algorithms.is.selection` 可选 `sir`（默认）、`metropolized`、`block_metropolized`；后两者要求关闭
+`selection_ready`，等待完整奖励。令第 $`m`$ 个候选有 $`K_m`$ 条补全，叶子权重为
+$`a_{mk}=\exp(r_{mk}/\tau)/K_m`$。逐条选择使用这些叶子权重；按块选择将 token 完全相同的候选块合并，
+把所属叶子权重相加为 $`A_g`$。相同块的重复质量全部保留。
+
+参考索引为 0 号候选的第 0 条补全，后续阶段即上轮保留的序列。记其所在组为 $`g`$，总权重为
+$`A=\sum_h A_h`$，一次更新的转移概率为
+
+```math
+P(g,h)=\frac{A_h}{\max(A-A_g,A-A_h)}\quad(h\ne g),
+\qquad P(g,g)=1-\sum_{h\ne g}P(g,h).
+```
+
+只有一个正质量组时保留该组。选中块后，以原叶子权重为比例选择一条补全。因为
+$`A_g P(g,h)=A_h P(h,g)`$，该索引核保持完整池的归一化权重分布；它增加离开参考索引的概率，
+不保证从基模型初始化时一次更新的分布误差或解题准确率必然改善。真实正确率仍取决于奖励与正确性的关联。
+首轮采样、后续预算分配及有限轮数的误差须与索引核的性质区分。
+
+K=1 且各块互异时，两个 Metropolized 核相同；K>1 时，按块选择减少在同一块内切换补全而未改变块的更新。
+它们不增加当前完整池的模型调用，但相对提前选择需要等待所有 rollout，且会改变后续前缀、预算与成本。
+实现见 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)，真机对照使用
+[`benchmark_is_gpu.py --study selection`](../../scripts/benchmark_is_gpu.py)。
+
 ### 历史探索选项
 
-同块多补全复用、数量/权重完成配额、候选内超发、末条随机筛选、单池选择及 Metropolized 块选择已退出主线。
-当前只维护两阶段完整探索及可选的提前选择；固定块保留为 CPU 参考。旧选项的算法与实现见
+同块多补全复用、数量/权重完成配额、候选内超发、末条随机筛选及单池选择已退出主线。
+当前维护两阶段完整探索、可选提前选择及上述完整池选择核；固定块保留为 CPU 参考。旧选项的算法与实现见
 [历史版本](https://github.com/xchang1121/inference_scaling/blob/a68a157/docs/methods/ALGORITHMS.md)，实测记录保留在
 [昇腾报告](../reports/ASCEND_IS_INFRA.md)。退出主线表示收紧维护范围，不否定已记录的局部收益。
 

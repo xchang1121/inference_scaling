@@ -86,6 +86,8 @@ class ConditionalISConfig:
     final_pool_limit: int | None = None
     # Approximate stopping from cached prefix weights in either two-stage pool.
     selection_ready: bool = False
+    # Complete-pool index kernel; experimental alternatives leave generation unchanged.
+    selection: str = "sir"
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
@@ -94,6 +96,10 @@ class ConditionalISConfig:
             raise ValueError("selection_ready must be a boolean")
         if self.selection_ready and (self.exploration_schedule != "two_stage" or self.block_first):
             raise ValueError("selection_ready requires two_stage without block_first")
+        if self.selection not in {"sir", "metropolized", "block_metropolized"}:
+            raise ValueError("unknown IS selection")
+        if self.selection_ready and self.selection != "sir":
+            raise ValueError("Metropolized selection requires complete rollout weights; disable selection_ready")
         if self.exploration_schedule not in {"fixed", "two_stage"}:
             raise ValueError("unknown IS exploration_schedule")
         if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):

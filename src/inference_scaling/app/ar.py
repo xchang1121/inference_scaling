@@ -106,6 +106,7 @@ def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_le
         exploration_schedule=schedule,
         final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
         selection_ready=bool(config.get("selection_ready", False)),
+        selection=str(config.get("selection", "sir")),
     )
 
 
@@ -434,6 +435,7 @@ class ARFamily:
         trace["exploration_schedule"] = self.config.get("exploration_schedule", "fixed")
         trace["final_pool_limit"] = config.final_pool_limit
         trace["selection_ready"] = config.selection_ready
+        trace["selection"] = config.selection
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

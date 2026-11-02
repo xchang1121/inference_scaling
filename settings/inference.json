@@ -174,7 +174,8 @@
         "block_size": 1024,
         "block_first": false,
         "exploration_schedule": "fixed",
-        "selection_ready": false
+        "selection_ready": false,
+        "selection": "sir"
       }
     }
   },

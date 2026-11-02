@@ -1,4 +1,4 @@
-"""Paired Base / fast IS latency on one CUDA or Ascend engine.
+"""Paired Base / IS quality and latency on one CUDA or Ascend engine.
 
 Both arms share model, prompt, sampling and sequence budgets. Timing excludes
 loading, warm-up, cache reset, grading and file writes. Incomplete pairs do not
@@ -27,6 +27,13 @@ from inference_scaling.app.settings import load_settings, validate_settings
 from inference_scaling.datasets import load_dataset
 from inference_scaling.shared.model.thinking import resolve_thinking
 from inference_scaling.shared.rng import SeedStream
+
+
+STUDIES = {
+    "latency": ("base", "is"),
+    # K=1 with distinct blocks has identical leaf/block Metropolized kernels.
+    "selection": ("base", "is", "sir-k1", "met-k1", "sir-k2", "met-k2", "block-met-k2"),
+}
 
 
 def single_request_seconds(requests):
@@ -278,26 +285,63 @@ def pair_summary(rows, expected_pairs):
     return result
 
 
+def comparison_summary(rows, expected_pairs, modes):
+    """Reuse paired accounting; each alternative is compared on identical questions."""
+    if tuple(modes) == STUDIES["latency"]:
+        return pair_summary(rows, expected_pairs)
+    unknown = {row["mode"] for row in rows} - set(modes)
+    if unknown:
+        raise ValueError(f"unknown comparison modes: {unknown}")
+
+    def compare(reference, alternative):
+        paired = [{**row, "mode": "base" if row["mode"] == reference else "is"}
+                  for row in rows if row["mode"] in {reference, alternative}]
+        summary = pair_summary(paired, expected_pairs)
+        indexed = {(row["problem_id"], row["repeat"], row["mode"]): row for row in paired}
+        wins = losses = ties = 0
+        for (problem, repeat, mode), row in indexed.items():
+            other = indexed.get((problem, repeat, "is"))
+            if (mode != "base" or other is None or row["status"] != "complete" or other["status"] != "complete"
+                    or "correct" not in row or "correct" not in other):
+                continue
+            wins += bool(other["correct"] and not row["correct"])
+            losses += bool(row["correct"] and not other["correct"])
+            ties += row["correct"] == other["correct"]
+        return {"reference": reference, "alternative": alternative, "wins": wins, "losses": losses,
+                "ties": ties, **summary}
+
+    return {"kind": "summary", "expected_pairs": expected_pairs, "modes": list(modes),
+            "versus_base": {mode: compare("base", mode) for mode in modes if mode != "base"},
+            "selection_pairs": [compare(reference, alternative) for reference, alternative in
+                                (("sir-k1", "met-k1"), ("sir-k2", "met-k2"), ("sir-k2", "block-met-k2"),
+                                 ("met-k2", "block-met-k2")) if reference in modes and alternative in modes]}
+
+
 def select_mode(family, mode, settings):
     algorithm = "sample" if mode == "base" else "is"
     family.choices = SimpleNamespace(algorithm=algorithm, reward=None if mode == "base" else "consilience")
-    family.config = family.ar["algorithms"][algorithm]
+    family.config = dict(family.ar["algorithms"][algorithm])
+    if mode not in STUDIES["latency"]:
+        family.config.update(rollout_count=int(mode[-1]), selection_ready=False,
+                             selection=("sir" if mode.startswith("sir-") else
+                                        "block_metropolized" if mode.startswith("block-") else "metropolized"))
     family.reward_settings = None if mode == "base" else settings["rewards"]["consilience"]
 
 
-def run_pairs(family, dataset, settings, repeats, graph, admission, write):
-    """Pair questions and seeds, alternate order, stop after an engine failure."""
+def run_pairs(family, dataset, settings, repeats, graph, admission, write, modes=STUDIES["latency"]):
+    """Pair questions and seeds, rotate method order, stop after an engine failure."""
     rows = []
     expected = len(dataset.problems) * repeats
     try:
         for repeat in range(repeats):
             for index, problem in enumerate(dataset.problems):
                 seed = SeedStream(settings["run"]["seed"]).derive("paired-benchmark", problem.id, repeat)
-                order = ("base", "is") if (index + repeat) % 2 == 0 else ("is", "base")
+                offset = (index + repeat) % len(modes)
+                order = modes[offset:] + modes[:offset]
                 for mode in order:
                     select_mode(family, mode, settings)
                     row = {"kind": "measurement", "problem_id": problem.id, "repeat": repeat,
-                           "mode": mode, "seed": seed}
+                           "mode": mode, "seed": seed, "algorithm_config": family.config}
                     print(json.dumps({"kind": "start", **{key: row[key] for key in
                                                          ("problem_id", "repeat", "mode", "seed")}}), flush=True)
                     try:
@@ -321,7 +365,7 @@ def run_pairs(family, dataset, settings, repeats, graph, admission, write):
                     print(json.dumps({key: row.get(key) for key in
                                       ("problem_id", "repeat", "mode", "seconds", "correct", "output_tokens")}), flush=True)
     finally:
-        summary = pair_summary(rows, expected)
+        summary = comparison_summary(rows, expected, modes)
         write(summary)
         print(json.dumps(summary), flush=True)
     return summary
@@ -340,12 +384,15 @@ def main():
     effort.add_argument("--thinking-budget", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--label")
+    parser.add_argument("--study", choices=tuple(STUDIES), default="latency",
+                        help="selection adds complete-pool SIR and leaf/block Metropolized arms at K=1,2")
     parser.add_argument("--summary", type=Path, help="summarize paired JSONL on CPU without loading a model")
     args = parser.parse_args()
     if args.summary:
         rows = [json.loads(line) for line in args.summary.read_text(encoding="utf-8").splitlines()]
         meta = next(row for row in rows if row["kind"] == "metadata")
-        print(json.dumps(pair_summary([row for row in rows if row["kind"] == "measurement"], meta["expected_pairs"]),
+        print(json.dumps(comparison_summary([row for row in rows if row["kind"] == "measurement"], meta["expected_pairs"],
+                                           tuple(meta.get("modes", STUDIES["latency"]))),
                          ensure_ascii=False, indent=2))
         return
     if not args.output or not args.label:
@@ -376,6 +423,10 @@ def main():
         parser.error("paired single-question measurements require asynchronous vLLM and workers=1")
     if ar["algorithms"]["is"]["exploration_schedule"] != "two_stage":
         parser.error("configure the fast two_stage IS path; fixed-block performance comparisons are retired")
+    if args.study == "selection" and (ar["algorithms"]["is"]["candidate_count"] != 4
+                                     or ar["algorithms"]["is"]["rollout_count"] != 1
+                                     or not ar["algorithms"]["is"]["selection_ready"]):
+        parser.error("selection study requires the current M=4, K=1, selection_ready=true baseline")
     resolved, _ = resolve_thinking(ar)
     if (resolved["output"]["thinking_mode"] != "enabled" or ar["output"]["sampling_scope"] != "thinking"
             or settings["rewards"]["consilience"]["scope"] != "thinking"):
@@ -409,11 +460,12 @@ def main():
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
                 sink.flush()
             write({"kind": "metadata", "label": args.label, "expected_pairs": len(dataset.problems) * repeats,
+                   "modes": list(STUDIES[args.study]),
                    "command_line": sys.argv[1:], "settings": settings, "dataset": dataset.describe(),
                    "engine": engine_settings(family.raw), "parameter_count": family.raw.parameter_count,
                    "git": git_state(), "source_sha256": json_sha256(source_sha256()), "environment": environment(),
                    "timing": "cold-prefix generation, including final content; excluding loading, warm-up, grading and writes"})
-            run_pairs(family, dataset, settings, repeats, graph, admission, write)
+            run_pairs(family, dataset, settings, repeats, graph, admission, write, STUDIES[args.study])
     finally:
         ar_app.run_conditional_is = original_run
         if graph is not None:

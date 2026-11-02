@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.benchmark_is_gpu import pair_summary
+from scripts.benchmark_is_gpu import comparison_summary, pair_summary
 from inference_scaling.app.records import Meter, RequestMeter, pass_at_k, summarize_executions
 from inference_scaling.arllm.types import ScoreRequest
 
@@ -112,6 +112,11 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     assert incomplete["sample_quality_gate"] is None and incomplete["is"]["generated_tokens"] is None
     with pytest.raises(ValueError, match="duplicate"):
         pair_summary([base, base], 1)
+    alternatives = [base, {**base, "mode": "sir-k2", "correct": False}, {**fast, "mode": "block-met-k2"}]
+    matrix = comparison_summary(alternatives, 1, ("base", "sir-k2", "block-met-k2"))
+    assert matrix["selection_pairs"][0]["wins"] == 1 and matrix["selection_pairs"][0]["losses"] == 0
+    assert matrix["versus_base"]["sir-k2"]["losses"] == 1
+    assert matrix["versus_base"]["block-met-k2"]["latency_ratio_is_over_base"] == 1.5
 
 
 def test_standard_pass_at_k_estimator() -> None:
