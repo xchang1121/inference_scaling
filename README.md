@@ -200,13 +200,16 @@ python -m pytest
 
 测试覆盖权重与选择、思考边界、异步资源清理、概率接口和计量；相同公共流程使用代表配置验证。
 
-## 性能结果
+## 质量与性能结果
 
 [配对评测入口](docs/SETTINGS.md)对每题运行 Base 与配置中的快速两阶段 IS，交替顺序并直接判题，报告
 `IS 总时延 / Base 总时延`、正确率、生成量与计算量。固定块 IS 退出真机性能对照；其小型正确性回归保留。
 
 [Qwen3.8-27B IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md)记录当前模型的卡数容量、思考与内容 TTFT、
 输出吞吐和实际生成量；区分已测结果、交付延迟改善与尚未验证的吞吐收益。
+
+[完整池选择的正确率与成本](docs/reports/QWEN38_IS_SELECTION.md)比较 30 道题上的 Base、快速 IS、完整池 SIR、
+逐条与按块 Metropolized。K=2 按块选择相对同 K SIR 多对 1 题；相对快速 IS 正确率持平、计算量增加，保持非默认选项。
 
 ## 历史结果
 
@@ -218,4 +221,5 @@ python -m pytest
 已删除方法只保留说明，其余方法给出在当前实现上复现的命令与设置。
 
 [昇腾调度验证](docs/reports/ASCEND_IS_INFRA.md)记录探索轮数、末条补全筛选、同块补全复用、完成配额与超发的单题对照，包含耗时回退、计算量与有限预算限制。
-其中旧参数扫描与逐轨迹比较入口可从历史版本恢复；当前 `scripts/benchmark_is_gpu.py` 已收敛为 Base/快速 IS 配对评测。
+其中旧参数扫描与逐轨迹比较入口可从历史版本恢复；当前 `scripts/benchmark_is_gpu.py` 默认进行 Base/快速 IS 配对评测，
+`--study selection` 增加上述完整池质量与成本对照。

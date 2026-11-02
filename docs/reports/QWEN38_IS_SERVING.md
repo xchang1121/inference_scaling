@@ -1,7 +1,8 @@
 # Qwen3.8-27B：IS 服务延迟与吞吐
 
-当前性能入口只比较两阶段 IS 与同题 Base；此前的服务交付及并发记录单独列于后文。
+默认性能对照为两阶段 IS 与同题 Base；此前的服务交付及并发记录单独列于后文。
 配置与入口见 [SETTINGS.md](../SETTINGS.md)。固定块 IS 已退出真机性能对照。
+完整池 SIR 与 Metropolized 的 30 题准确率及成本比较见[选择策略报告](QWEN38_IS_SELECTION.md)。
 
 ## 同环境的两阶段 IS 与 Base（2026-11-02）
 

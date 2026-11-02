@@ -1038,7 +1038,8 @@ $`A_g P(g,h)=A_h P(h,g)`$，该索引核保持完整池的归一化权重分布�
 K=1 且各块互异时，两个 Metropolized 核相同；K>1 时，按块选择减少在同一块内切换补全而未改变块的更新。
 它们不增加当前完整池的模型调用，但相对提前选择需要等待所有 rollout，且会改变后续前缀、预算与成本。
 实现见 [`select_metropolized`](../../src/inference_scaling/shared/sampling/conditional_is.py)，真机对照使用
-[`benchmark_is_gpu.py --study selection`](../../scripts/benchmark_is_gpu.py)。
+[`benchmark_is_gpu.py --study selection`](../../scripts/benchmark_is_gpu.py)。30 题的正确率与成本对照见
+[选择策略报告](../reports/QWEN38_IS_SELECTION.md)；两种核保持非默认选项。
 
 ### 历史探索选项
 
