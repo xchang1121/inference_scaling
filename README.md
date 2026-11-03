@@ -212,7 +212,7 @@ python -m pytest
 逐条与按块 Metropolized、Best-of-4 + Consilience，以及快速 IS 和三种 Metropolized 的全词表 Self-Certainty 版本，
 共 12 种方法。Base / 快速 Consilience IS / 快速 Self-Certainty IS 为 92% / 93% / 94%，按块 Self-Certainty K=2 为 95%；
 后者比快速 Self-Certainty IS 净多对 1 题，耗时约 +20%、FLOPs 约 +75%，准确率差区间包含 0。
-报告分别列出新增 70 题、合计 100 题的答案、论证审核、配对区间和成本；默认设置保持不变。
+报告统一汇总 100 题的答案、论证审核、配对区间和成本；默认设置保持不变。
 
 ## 历史结果
 
