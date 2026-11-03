@@ -1,10 +1,10 @@
 # 推理扩展算法：基础、原理与实现
 
-本文档集中说明仓库中全部推理算法及其执行实现。第 2.1 节给出统一入口 `python -m inference_scaling` 的执行规则，
-以及 MH 与 IS 的完整数据流；后续各节分别展开目标分布、有限预算算法、关键代码、统计性质和成本来源。批处理、
-KV 复用、vLLM 和计算量统计统一列在第 11 节。[设置说明](../SETTINGS.md)逐项说明 `settings/inference.json` 的字段。
-[算法质量报告](../reports/GSM8K_3090_ALIGNED_RESULTS.md)与
-[执行成本报告](../reports/RTX3090_ROLLOUT_INFRA.md)分别汇总准确率与执行开销。
+本文集中介绍目标分布、算法步骤、关键代码和计算成本。阅读顺序：
+[入口与数据流](#alg-execution) → [MH](#alg-power-mh) / [IS](#alg-conditional-is) →
+[奖励](#alg-token-statistics) → [执行实现](#11-共同执行实现)。
+字段定义见[设置说明](../SETTINGS.md)，结果见[质量对照](../reports/QWEN38_IS_SELECTION.md)与
+[服务性能](../reports/QWEN38_IS_SERVING.md)。
 
 ## 1. 统一记号与实现边界
 
@@ -39,8 +39,8 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 
 本文使用三类性质：
 
-- **目标分布保持不变**：若当前状态服从指定目标，执行一次 MH 更新或一次保留完整序列的条件 IS 步后仍服从该目标；
-  有限更新轮次仍有链的收敛误差。
+- **目标分布保持不变**：若当前状态服从指定目标，执行一次 MH 更新或完整池条件 IS 步后仍服从该目标。
+  从基础模型初始化的有限步输出仍有收敛误差；提前选择的前缀估计另有偏差。
 - **估计量无偏**：未截断的普通 IS 对条件奖励权重给出无偏估计；有限候选数下的归一化重采样仍是近似。
 - **执行等价**：批处理与连续批处理只改变物理执行顺序，随机请求与统计量保持固定。
 
@@ -50,10 +50,8 @@ $`r(g,z,u)`$，奖励温度写作 $`\tau\gt 0`$。仓库中最常用的显式奖
 有效样本量（effective sample size）。边缘分布指只保留一部分随机变量、对其余随机变量的概率求和后得到的
 分布；细致平衡指任意两个状态之间按目标概率加权后的正向与反向转移概率相等，因此一次更新保持目标分布不变。
 
-为与代码和设置字段对应，文档保留少量英文标识。rollout 指从当前候选继续生成到终止位置的补全；proposal
-指产生候选的提议分布；`history` 指冻结历史 proposal 在链开始前生成并冻结的样本。转移核指“给定当前状态时，
-下一状态的条件分布”。代码字段名继续写在反引号内，说明文字使用上述中文含义。设置键写作点分路径，
-例如 `ar.algorithms.is.block_size` 表示 `settings/inference.json` 中 `ar` → `algorithms` → `is` → `block_size` 字段。
+rollout 指从当前候选继续生成到终止位置的补全；proposal 指候选的提议分布；`history` 指链开始前生成并冻结的
+历史样本。转移核是给定当前状态时下一状态的条件分布。设置键使用 `settings/inference.json` 内的点分路径。
 
 重要性修正要求 $`p(y)\gt 0\Rightarrow q(y)\gt 0`$。把部分概率直接截为零的 top-k/top-p 可能破坏该条件，统一入口
 因此要求 `mh`、`mh_power` 与 `is` 使用 `ar.sampling.top_p = 1` 和 `ar.sampling.top_k = null`；权重截断以偏差换取
@@ -98,7 +96,7 @@ Qwen3.8-27B 默认对 wait、hmm、alternatively、actually、however、but、ma
 标记在 $`\lambda\in[0.5,4]`$ 上扫描，思维链缩短 12%–23%，准确率持平或提高。该文只取前有空格的形式；这里另取行首的
 首字母大写形式（段首的 “Wait”），不取无空格的小写形式，因为它多是其他词的片段。vLLM 用 `logit_bias` 施加惩罚，
 它在温度之前生效；原生评分与 `fused_logprobs` 读未惩罚的 logit，所以评分转交精确后端，同步引擎的 beam search
-报错。$`\lambda`$ 应在 `selection.skip` 跳过的留出题上选择，并在相同 FLOP 下与幂指数 $`\alpha`$ 比较。
+报错。
 
 <a id="alg-overview"></a>
 ## 2. 方法总览
@@ -123,7 +121,7 @@ logit adjustment 只作理论参考，未接入统一入口。源码路径均位
 ### 2.1 统一入口的执行规则
 
 ```bash
-python -m inference_scaling --algorithm is --model ar --reward consilience --dataset gsm8k --output results
+python -m inference_scaling --algorithm is --dataset math500 --output results
 ```
 
 命令行只选择算法、模型族、奖励和数据集；其余参数全部位于 `settings/inference.json`，缺失、未知或类型不符的
@@ -133,7 +131,7 @@ python -m inference_scaling --algorithm is --model ar --reward consilience --dat
    chat template（`ar.prompt`）。生成上限取 `ar.max_new_tokens` 与模型剩余上下文（含统一的
    `ar.engine.context_window`）的较小值。
 2. **采样范围**（AR）：`ar.output.sampling_scope = "thinking"` 时，`mh`、`mh_power` 与 `is` 只对思考段采样，
-   最终内容随后由基础模型生成。`verifier` 与全序列 Consilience 需要完整输出，`mh` 与 `is` 因而回退到
+   最终内容随后由基础模型生成。`verifier` 与设为 `scope="full"` 的模型奖励需要完整输出，`mh` 与 `is` 因而回退到
    `full` 并记录原因 `reward_uses_full_sequence`。
 3. **奖励阶段**：按 `--reward` 构造逐序列奖励。verifier 投票用于 `is` 或 `mh` 时，先从基础模型独立生成
    `rewards.verifier.pool_size` 条样本并冻结为投票池；池的随机种子与算法无关，同一重复下各算法共用同一池。
@@ -156,18 +154,7 @@ python -m inference_scaling --algorithm is --model ar --reward consilience --dat
 $`\log\widetilde\pi(y)=\alpha\log p(y\mid x)+r(y)/\tau`$：幂目标没有奖励项，奖励目标取 $`\alpha=1`$。后缀长度分布由 `suffix_schedule` 指定；`mh` 可用
 `proposal = "frozen_history"` 改用冻结历史混合 proposal。
 
-```mermaid
-flowchart LR
-    A[当前序列 y] --> B[按 suffix_schedule 抽后缀长度]
-    B --> C{proposal = frozen_history?}
-    C -- 否 --> D[从 proposal 生成新后缀]
-    C -- 是 --> E[从基础模型与冻结历史后缀的固定混合分布抽样]
-    D --> F[计算新旧后缀的正反 proposal 概率]
-    E --> F
-    F --> G[计算未归一化目标概率的对数差]
-    G --> H[完整 Hastings 接受或拒绝]
-    H --> I[进入下一更新轮次]
-```
+![后缀 MH：抽取切点、生成后缀、计算接受概率、更新当前序列](../assets/mh-flow.svg)
 
 固定当前阶段的长度上限 $`T`$ 后，一次更新执行：
 
@@ -200,18 +187,13 @@ proposal 作为参数传入；统一入口的调用位于 [`app/ar.py`](../../sr
 <a id="alg-qwen-default-is"></a>
 #### 2.1.2 条件 IS
 
-`is` 从基础模型生成候选和补全，并保留一条完整序列（第 6 节）。每步使用 `ar.algorithms.is` 中固定的
-候选数 $`M`$、补全数 $`K`$ 与块长 $`B`$，块长在输出上限处截短。
+`is` 从基础模型生成候选和补全，并保留一条完整序列（第 6 节）。固定块版本每步使用相同的候选数 $`M`$、
+补全数 $`K`$ 与块长 $`B`$。默认 `two_stage` 只在首轮使用这三个参数，随后根据未选 rollout 的统计量分配末轮探索。
 
-```mermaid
-flowchart LR
-    A[当前完整序列 y 与下一切点] --> D[使用固定的 M K B]
-    D --> E[0 号候选沿用 y 的下一块与剩余部分]
-    E --> F[基础模型生成其余候选与补全]
-    F --> G[按奖励权重计算候选权重]
-    G --> H[选择一个候选及其一条补全]
-    H --> I[保留新的完整序列并进入下一切点]
-```
+![默认两阶段 IS：首轮选择、保留完整补全、分配末轮探索、续写最终内容](../assets/is-flow.svg)
+
+提前选择开启时，未完成候选的权重由前缀估计；关闭后等待完整权重。下表描述固定块版本的完整池工作量，
+两阶段版本的末轮分配见[第 6 节](#is-two-stage)。
 
 假设本步的 $`M`$ 个候选均未终止，一步的逻辑工作量为：
 
@@ -271,7 +253,7 @@ flowchart LR
 <a id="alg-baselines"></a>
 ## 3. 生成基线与历史训练对照
 
-### 3.1 sample、greedy、beam 与 Best-of-$`N`$
+### 3.1 sample、greedy、beam 与 Best-of-N
 
 `sample` 按 `ar.sampling` 的温度从基础模型抽样；`greedy` 逐 token 取最大概率项；`beam` 保留累计对数概率最高的
 `ar.algorithms.beam.num_beams` 个前缀。
@@ -287,7 +269,8 @@ Best-of-$`N`$ 先独立生成 $`y_1,\ldots,y_N\sim p`$，再按奖励选择一�
 
 式 (3) 随 $`N`$ 增大趋向奖励最大化。verifier 投票时，每个候选的奖励是 $`N`$ 个候选中与它答案相同的比例，式 (3)
 因而选出得票最多的答案（多数投票）；无法解析的答案得 0。最高奖励出现平票时，按固定种子在并列候选中均匀选取。`self_certainty` 与 `consilience`
-读取生成时算出的逐 token 统计量，不增加前向计算（未开启融合概率的 vLLM 上的 `self_certainty` 除外）。
+读取生成时算出的逐 token 统计量。Self-Certainty 的 Ascend 标量路径和 GPU 融合路径均无需额外评分前向；
+使用独立精确评分后端时另计成本，配置条件见[概率统计](#alg-token-statistics)。
 
 ### 3.2 历史训练对照
 
@@ -1170,7 +1153,7 @@ $`\tau`$。算法层的奖励是批量函数 `reward(prompt_tokens, sequences)`�
 | 奖励 | 定义 | 设置 | 模型族与成本 |
 | --- | --- | --- | --- |
 | `verifier` | 最终答案对照参考答案（oracle）或与模型自身答案一致的比例（投票） | `rewards.verifier.*` | 按文本计算，不计模型前向；投票样本池在奖励阶段生成并单独计量 |
-| `self_certainty` | 评分段上各位置的分布相对均匀分布的 KL 散度的均值 | `rewards.self_certainty.*` | AR；Transformers 或开启融合概率的 vLLM 在生成时算出（见[下文](#alg-token-statistics)） |
+| `self_certainty` | 评分段上 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值 | `rewards.self_certainty.*` | Transformers、Ascend 标量或 GPU 融合路径在生成时算出；其余路径另计评分前向 |
 | `consilience` | top-$`K`$ 置信度的末段均值减去加权首段均值 | `rewards.consilience.*` | AR；读生成时算出的 top-$`K`$ 置信度 |
 
 ### verifier
@@ -1254,12 +1237,11 @@ r_{\mathrm{Cns}}(x,y)=
 $`c_t`$ 的来源见[模型奖励的统计量](#alg-token-statistics)。Best-of-$`N`$ 选择原始 $`r_{\mathrm{Cns}}`$ 最大的序列。IS 与奖励 MH 的目标写为
 
 ```math
-\pi_\beta(y\mid x)\propto p(y\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,y)\},
-\qquad \beta=\frac{1}{\tau}.
+\pi_r(y\mid x)\propto p(y\mid x)\exp\{r_{\mathrm{Cns}}(x,y)/\tau\}.
 ```
 
-只有 $`\beta`$ 控制指数加权强度；首段系数 3 控制首尾窗口的相对贡献。`rewards.consilience.temperature = 2`
-对应 $`\beta=0.5`$，原始分数差 1 对应约 1.65 倍权重差。奖励保留逐序列定义，模型、概率策略、分段规则和奖励参数
+奖励温度 $`\tau`$ 控制指数加权强度；首段系数 3 控制首尾窗口的相对贡献。`rewards.consilience.temperature = 2`
+时，原始分数差 1 对应约 1.65 倍权重差。模型、概率策略、分段规则和奖励参数
 固定后，保留补全的奖励才能按相同目标复用。条件 IS 应对累计思考前缀、候选和补全构成的整段思考计分，
 各生成块单独计分后相加会得到不同奖励。
 
@@ -1285,11 +1267,12 @@ Ascend 标量路径在相同策略下返回 $`s_t`$；GPU 融合路径返回评�
 固定分段规则、停止规则和长度预算，若该分支的奖励只依赖 $`h`$，则
 
 ```math
-\pi_\beta(h,a\mid x)
-=\frac{p(h\mid x)\exp\{\beta r_{\mathrm{Cns}}(x,h)\}}{Z_\beta(x)}
+\pi_r(h,a\mid x)
+=\frac{p(h\mid x)\exp\{r(x,h)/\tau\}}{Z_r(x)}
  p(a\mid x,h).
 ```
 
+这里 $`Z_r(x)`$ 是对全部思考段求和得到的归一化常数，$`r`$ 可取思考段 Self-Certainty 或 Consilience。
 因此，可以对思考段执行 IS/MH，再从相同基模型条件分布生成最终内容。该分解保持理想目标分布；有限候选 IS
 和有限轮次 MH 仍有各自的近似误差。最终内容使用贪心解码时，条件分布随之改变。对完整生成取 $`p^\alpha`$
 的幂目标则依赖两段，限制为思考段的幂目标是另一种分布。
@@ -1307,7 +1290,7 @@ Ascend 标量路径在相同策略下返回 $`s_t`$；GPU 融合路径返回评�
 
 输出解析与奖励计算分别位于 [`shared/model/output.py`](../../src/inference_scaling/shared/model/output.py) 和
 [`arllm/rewards/intrinsic.py`](../../src/inference_scaling/arllm/rewards/intrinsic.py)。采样范围与评分范围独立设置，
-字段均位于 `ar.output`。
+分别位于 `ar.output.sampling_scope` 与 `rewards.<name>.scope`。
 
 | 格式 | 识别与切分 | `thinking` 采样范围 |
 | --- | --- | --- |
@@ -1347,7 +1330,8 @@ top-$`K`$ 总概率、IS 权重有效样本量和 MH 有效状态变化。复用
 | --- | --- | --- |
 | 增加 MH 更新轮次 | 目标固定；有限链误差下降 | 更新数、接受率、链间结果 |
 | 多尺度后缀或冻结历史 proposal | 目标固定；正反 proposal 概率完整进入 Hastings 比 | 后缀长度、各分量抽样次数、接受率 |
-| 增加条件 IS 的 $`M,K`$ | 渐近目标固定；有限 SIR 误差下降 | 每候选 rollout、ESS、前向 token 位置数 |
+| 增加完整池条件 IS 的 $`M,K`$ | 目标固定；有限预算误差没有逐例单调下降保证 | 每候选 rollout、ESS、前向 token 位置数 |
+| 提前选择 | 前缀权重近似引入额外选择偏差 | 取消数量、已完成权重、成本与准确率 |
 | 可枚举候选 + logit adjustment | 精确 $`h`$ 时得到式 (7)；估计 $`h`$ 时只保留条件权重误差 | 候选集合完整性、每候选 rollout、调整前后 logits |
 | 连续批处理 | 统计量固定，执行顺序变化 | 请求随机种子、token 与计算量 |
 
@@ -1374,8 +1358,8 @@ ScoreRequest(prefix, continuations, sampling)
 
 预填充、解码与完整序列评分分别计数；墙钟、显存和吞吐单独报告。统一入口按阶段记录后端计数器的差值：
 `reward`（verifier 投票的样本池）、`search`（算法本身）与 `finish`（思考段之后的最终内容），写入记录的 `cost.phases`，并按模型
-角色（当前为 `base`）汇总前向 token 位置数与 FLOPs。多个题目并发共享后端时，计数器无法分到
-单题，`cost` 为 `null`。
+角色（当前为 `base`）汇总前向 token 位置数与 FLOPs。多个题目并发时，IS 按请求归属计量；
+缺少完整请求级计数时，逐题 `cost` 为 `null`，保留运行级总量。
 
 前向 token 位置数包括预填充、解码、完整序列评分以及实际参与计算的批量填充。模型 $`j`$ 的参数量为 $`N_j`$、
 前向 token 位置数为 $`S_j`$ 时，密集前向 FLOPs 估计为 $`\widehat F=2\sum_j N_jS_j`$；该估计省略注意力的
@@ -1426,9 +1410,9 @@ AR-LLM 由 `ar.engine.backend` 选择引擎，vLLM 再由 `ar.engine.vllm.asynch
 
 公共算法接口和计算量统计不随执行引擎变化。
 
-条件 IS 的 K=1 请求向算法只交付完成结果；K>1 的新候选在下一次引擎增量覆盖 B 时通知，随后继续原请求，
+关闭提前选择时，条件 IS 的 K=1 请求只向算法交付完成结果；K>1 的新候选在下一次引擎增量覆盖 B 时通知，随后继续原请求，
 不重启随机流。多 token 思考边界保留中间事件供外层解析。引擎内部保留首 token 通知，用来释放准入队列中的
-预填充额度；其余输出默认每 32 token 交付一次。该路径降低消息与解析开销，候选数、完整 rollout、权重和选择顺序不变。
+预填充额度；其余输出默认每 32 token 交付一次。开启提前选择时，还需交付用于前缀权重估计的中间增量。
 
 生成概率默认使用 vLLM 的扁平数组。实现直接取出已采样 token 的概率，对 top-K 项使用原有 `fsum` 归约得到
 Consilience 的逐 token 统计量；已采样 token 同时位于 top-K 时，重复项只按 top-K 原集合计入一次。
@@ -1483,17 +1467,15 @@ self_certainty = -raw_logprobs.mean(dim=-1) - math.log(raw_logprobs.shape[-1])
 
 #### 11.3.2 运行设置
 
-默认设置就是 vLLM 路径：异步引擎、BF16、前缀缓存、`exact_scoring = "none"`，各项取值见
-[默认 AR 配置](../SETTINGS.md#ar-defaults)。幂目标 MH 省去基础模型重评分、或在 vLLM 上使用 Self-Certainty，只需再设
-`"fused_logprobs": true`，然后运行：
+默认使用 Ascend 异步 vLLM、BF16、前缀缓存、`scalar_self_certainty=true` 和 `exact_scoring="none"`。
+Self-Certainty 随生成返回，无需另开融合 worker；字段见[默认 AR 配置](../SETTINGS.md#ar-defaults)。
 
 ```bash
-python -m inference_scaling --algorithm mh_power --model ar --dataset gsm8k
-python -m inference_scaling --reward self_certainty
+python -m inference_scaling --algorithm is --reward self_certainty --dataset math500
 ```
 
-生成时读不到的 Consilience top-$`K`$ 统计（评分温度不等于采样温度时）、非单位温度采样分布和把部分概率截为零的
-top-k/top-p 所需精确评分交给 Transformers 后端，即设 `"exact_scoring": "transformers"`。精确评分后端按 `ar.engine.device`
+GPU 融合路径须满足[第 11.3.1 节](#infra-fused-logprobs)的版本、词表惩罚与异步调度约束，并关闭 IS 提前选择。
+生成时缺失的统计量或其他策略概率使用 `exact_scoring="transformers"`。精确评分后端按 `ar.engine.device`
 与 `ar.engine.dtype` 加载同一份已解析的权重和 tokenizer；与 vLLM 共用 GPU 时，需要相应降低 `gpu_memory_utilization`。后端计数器分别
 记录 vLLM 直接评分的序列数（`native_score_sequences`）和交给 Transformers 的序列数、前向 token 位置数与 FLOPs
 （`delegated_*`）。vLLM `0.25.x`--`0.26.x` 的 Linux/WSL2 安装见仓库 [README](../../README.md#安装)。
@@ -1559,7 +1541,7 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | MH 同步双概率 | 相同 vLLM、proposal、随机种子与更新次数，但在生成后单独执行基础模型后缀评分 |
 | vLLM | 使用同一模型、dtype、GPU 数与请求集合的 Transformers |
 
-每组对照只改动一个设置字段；运行指纹随之改变，两次运行写入不同目录，比较时读取各自的记录与 `summary.json`。
+每组固定采样与预算，只改变待比较机制及其必要适配字段；完整设置写入运行指纹与记录。
 
 <a id="alg-code-index"></a>
 ## 12. 代码与验证入口
@@ -1572,9 +1554,6 @@ $`O(C|\mathcal V|)`$；KV 缓存仍随上下文长度增长。分块长度由 `a
 | 式 (9) 的冻结历史 proposal | `run_mh_chain` 的 `history` 与 `history_mixture` | `ar.algorithms.mh.proposal`、`frozen_history.{samples,mixture}` | `trace.proposal_sources`、新旧混合分布对数概率、搜索阶段成本 |
 | 式 (7)、(8) 的条件 IS | `ConditionalISAdapter.step`、`run_conditional_is` | `ar.algorithms.is.{candidate_count,rollout_count,block_size,block_first}` | 候选对数权重、所选索引、`trace.rollout_evaluations`、`trace.mean_rollout_ess`、前向 token 位置数 |
 | 连续批处理 | `ContinuousBatchingBackend` | `ar.engine.continuous_batching.*` | 顺序/批处理输出一致性、实际批量大小、填充 token 位置数、墙钟和峰值显存 |
-
-logit adjustment 当前只有第 6.1 节的算法定义，没有对应函数、CLI 或结果字段。增加实现后，至少需要记录
-候选集合构造、$`|\mathcal Z|`$、每候选 rollout 数、调整前后 logits、归一化概率和总补全成本。
 
 | 层 | 实现 | 主要测试 |
 | --- | --- | --- |

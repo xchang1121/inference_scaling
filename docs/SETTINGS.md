@@ -10,6 +10,8 @@
 `max_new_tokens=null` 使用剩余上下文，`context_window=null` 读取模型/引擎配置。
 服务与评测共用这些设置、采样策略和根种子。
 
+## 性能评测
+
 `scripts/benchmark_is_gpu.py` 配对测量同题 Base 思考采样与当前快速 IS。模型、采样、奖励、M/K/B 和硬件设置
 继承该文件，要求异步 vLLM、`workers=1`、thinking 范围及 `exploration_schedule="two_stage"`。
 `selection_ready` 由同一配置控制。默认 `--study latency` 的 IS 奖励读取 `run.reward`；该入口不运行固定块 IS 对照。
@@ -41,7 +43,7 @@ K、选择核与提前选择开关，实际生效配置逐条记录。方法顺�
 相同长度上限不代表相同总计算量；汇总同时给出正确率、配对答对/答错变化、时延与 FLOPs，评估质量与成本的取舍。
 K=1 且候选块互异时，逐条与按块 Metropolized 完全相同，故不重复设组。
 
-`--study rewards` 对比 Base、当前 Consilience IS、`bon-consilience`（四条完整候选中取思考段 Consilience
+`--study rewards` 对比 Base、快速 Consilience IS、`bon-consilience`（四条完整候选中取思考段 Consilience
 最高者）及 `is-self-certainty`（IS 改用思考段平均全词表 KL）。后两项分别固定 N=4、评分范围为 thinking；
 其余参数继承设置，实际算法和奖励配置逐条记录。Best-of-4 为四条候选都生成最终内容，IS 选定思考后只续写一份
 最终内容；因此按各自实际计算量比较。`--modes` 可指定该 study 的子集，补测无需重跑已有方法：
@@ -54,7 +56,7 @@ python scripts/benchmark_is_gpu.py --settings settings/inference.json --study re
 
 Ascend 的 `ar.engine.vllm.scalar_self_certainty` 默认开启；采样与评分温度须相同且使用完整支持集。
 Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2；不按评测答案选择温度。
-独立补测需按题目 ID 与原 Base/IS 记录配对，并注明不同运行批次；不能将未测的 Base 时延写入本批汇总。
+独立补测按题目 ID 与已有 Base/IS 配对，注明运行环境和统计来源。
 
 一次推理只读取与所选组合相关的部分：`run.seed`、`datasets.<数据集>`、`rewards.<奖励>`（仅使用奖励的算法）、
 `ar` 中除 `algorithms` 外的全部字段，以及 `ar.algorithms.<算法>`。这些“有效设置”连同模型与数据的
@@ -174,23 +176,47 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | `backend` | `transformers` \| `vllm` | 执行引擎 |
 | `device` / `dtype` | 字符串 | Transformers 设备与精度；vLLM 使用 `dtype`，精确评分后端同时使用两者 |
 | `context_window` | 正整数或 `null` | 输入与输出合计的上下文上限，同时用作 vLLM 的 `max_model_len`；`null` 使用引擎/模型声明值。每个请求扣除实际输入长度后计算可生成空间 |
-| `transformers.attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
-| `transformers.max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
-| `transformers.score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
-| `transformers.prefix_cache_mib` | 整数 | 前缀 KV 存储的容量（MiB，`0` 关闭）：结束的生成行保存 KV，后续请求从最长的已存前缀接着预填充；结果不变 |
-| `transformers.in_place_kv` | 布尔 | 解码时把新位置写入预留缓冲区，而不是每步复制整层 KV；结果不变 |
-| `transformers.cuda_graphs` | 布尔 | 解码步在固定形状上执行：KV 放入常驻缓冲区，行数与关注的位置数取整到 2 的幂，其余部分由掩码屏蔽；CUDA 上每种形状的第一步捕获为 CUDA graph，之后重放（CPU 上走同一路径但不捕获）。结果与动态解码相同，至多差浮点舍入；缓冲区保留到见过的最大批。需要模型在单一设备上、注意力为 `sdpa` 或 `eager` |
-| `vllm.asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
-| `vllm.async_scheduling` | 布尔或 `null` | 引擎内部的 CPU/GPU 异步调度，与 `asynchronous` 接口选项分开；默认 `null`，由 vLLM 按模型和设备决定。融合统计模式要求 `false` 或 `null`，实际生效值记录在 `engine_execution` |
-| `vllm.stream_interval` | 正整数 | 默认 `32`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付，减少 Python 输出开销。K>1 的前缀通知因分批最多额外等待 `stream_interval−1` 个 token（队列等待另计）；较短的块可设为 `1`。多 token 停止标记仍由外层增量检测，可能产生边界后的额外解码 |
-| `vllm.flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
-| `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数；上下文统一使用 `ar.engine.context_window` |
-| `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
-| `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
-| `vllm.scalar_self_certainty` | 布尔 | 默认 `true`，用于当前昇腾配置。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false`。CUDA 或 beam search 需显式关闭此项并选择支持所需统计量的后端 |
-| `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
-| `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
-| `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
+
+#### Transformers
+
+下表字段位于 `ar.engine.transformers`。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `attn_implementation` / `device_map` / `model_kwargs` | 字符串或 `null` / 字符串、对象或 `null` / 对象 | Transformers 加载选项 |
+| `max_score_batch_size` | 整数 | 一个评分批次的最大序列数；批次的填充位置数也不超过它乘以 `score_chunk_size` |
+| `score_chunk_size` | 整数 | 长序列评分与前缀预填充的分块长度 |
+| `prefix_cache_mib` | 整数 | 前缀 KV 存储的容量（MiB，`0` 关闭）：结束的生成行保存 KV，后续请求从最长的已存前缀接着预填充；结果不变 |
+| `in_place_kv` | 布尔 | 解码时把新位置写入预留缓冲区，而不是每步复制整层 KV；结果不变 |
+| `cuda_graphs` | 布尔 | 解码步在固定形状上执行：KV 放入常驻缓冲区，行数与关注的位置数取整到 2 的幂，其余部分由掩码屏蔽；CUDA 上每种形状的第一步捕获为 CUDA graph，之后重放（CPU 上走同一路径但不捕获）。结果与动态解码相同，至多差浮点舍入；缓冲区保留到见过的最大批。需要模型在单一设备上、注意力为 `sdpa` 或 `eager` |
+
+#### vLLM
+
+下表字段位于 `ar.engine.vllm`。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
+| `async_scheduling` | 布尔或 `null` | 引擎内部的 CPU/GPU 异步调度，与 `asynchronous` 接口选项分开；默认 `null`，由 vLLM 按模型和设备决定。融合统计模式要求 `false` 或 `null`，实际生效值记录在 `engine_execution` |
+| `stream_interval` | 正整数 | 默认 `32`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付，减少 Python 输出开销。K>1 的前缀通知因分批最多额外等待 `stream_interval−1` 个 token（队列等待另计）；较短的块可设为 `1`。多 token 停止标记仍由外层增量检测，可能产生边界后的额外解码 |
+| `flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
+| `tensor_parallel_size` / `data_parallel_size` | 整数 | 模型切分卡数 / 引擎数据并行副本数 |
+| `gpu_memory_utilization` | 数 | 引擎使用的设备内存比例 |
+| `max_num_seqs` / `max_num_batched_tokens` | 整数 | 活跃序列上限 / 每次调度的 token 上限；上下文另由 `context_window` 控制 |
+| `quantization` / `enforce_eager` / `max_lora_rank` | 字符串或 `null` / 布尔 / 整数 | 量化方案 / 强制 eager 执行 / 适配器最大秩 |
+| `enable_prefix_caching` | 布尔 | 前缀缓存 |
+| `fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
+| `scalar_self_certainty` | 布尔 | 默认 `true`，用于当前昇腾配置。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false`。CUDA 或 beam search 需显式关闭此项并选择支持所需统计量的后端 |
+| `exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
+| `parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
+| `engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
+
+#### 合批与准入
+
+以下字段位于 `ar.engine`。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
 | `continuous_batching.workers` | 整数 | 同时求解的题数；大于 1 时 `is` 的后端按请求归属前向 token 开销，逐题成本仍然保留，其余算法的逐题成本为 `null` |
 | `continuous_batching.max_batch_size` / `max_batch_tokens` / `batch_wait_seconds` | 整数 / 整数 / 数 | 合并批的上限与等待时间 |
 | `rollout_scheduler.enabled` | 布尔 | 默认 `true`；异步 vLLM 共用一个准入队列，IS 在候选前缀就绪时释放分支。`fused_logprobs = true` 时保留批次生成、仍限制准入；同步 vLLM 与 Transformers 保留原路径。实际路径记录为 `rollout_scheduler = streaming/batch`；详见[调度说明](methods/ROLLOUT_SCHEDULING.md) |
@@ -248,27 +274,27 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
 
-仓库提供的 `ar` 设置仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，使用昇腾 vLLM、BF16、`is` 和思考段 `self_certainty`。
-`tensor_parallel_size` 控制每个副本的模型切分，`data_parallel_size` 控制副本数。部署时同时验证权重、缓存、
-原生上下文与并发容量；显存占用比例相同也可能具有不同的可用并发。下表中 `ar` 下的字段省略前缀 `ar.`。
+仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，当前取值如下。同组字段省略重复前缀；
+详细含义与后端约束见上文，默认算法的选择依据见[100 题对照](reports/QWEN38_IS_SELECTION.md)。
 
-| 设置 | 取值 | 依据 |
-| --- | --- | --- |
-| `model.path` / `revision` / `local_files_only` | Hub ID / 固定提交 / `false` | 首次运行下载 BF16 权重（约 55.6 GB）；提交固定文件内容，清单另记每个权重文件的哈希 |
-| `model.token_penalty` | 8 个词，`strength = 1.0` | wait、hmm、alternatively、actually、however、but、maybe、perhaps；覆盖 thinking 与正文，改变基础分布；该模型上的质量与速度收益尚未验证，设为 `null` 可关闭 |
-| `engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16` | 当前默认使用 Ascend 原生标量统计；vLLM 按已安装平台识别设备。候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
-| `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
-| `engine.continuous_batching.workers` | 1 | 批量评测的题目并发度。串行使用引擎总计数，并发使用请求级计数；缺失或存在未计入工作时成本标为 `null` |
-| `engine.context_window` / `engine.vllm.max_num_batched_tokens` | `null` / 16384 | 上下文读取模型/引擎配置，当前模型原生容量 262144；批处理 token 上限只控制每次调度的计算量 |
-| `vllm.engine_kwargs.language_model_only` / `parameter_count` | `true` / `null` | 不加载视觉编码器，MTP 头也不加载；FLOPs 按实际运行的 26,895,998,464 个参数估算 |
-| `prompt.chat_template_kwargs` / `thinking` | `{}` / 官方档位配置 | 模板强度由 `ar.thinking` 统一解析；未指定档位/预算时为 `xhigh`、131072 thinking tokens |
-| `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
-| `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
-| `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
-| `rewards.self_certainty` | 奖励温度 0.25，评分温度 1，`scope = "thinking"` | 对思考段取全词表 KL 均值；`scalar_self_certainty=true` 随生成返回统计，无额外模型评分前向，`exact_scoring=none`。保留原生异步调度；CUDA 融合路径另有上述限制 |
-| `max_new_tokens` | `null` | 评测与服务共用，默认使用剩余上下文；显式整数限制 thinking 与最终内容合计的生成长度 |
-| `algorithms.is` | M=4、K=1、B=1024；`two_stage`、`selection_ready=true`、`sir`、`block_first=false` | 通用默认；K=1 时候选连同第一条补全由一次请求生成。不同卡数的执行性能比较保持这些参数、采样和奖励相同 |
-| `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
+| 设置 | 当前值 |
+| --- | --- |
+| `run.reward` | `self_certainty`；思考段均值，奖励温度 0.25、评分温度 1 |
+| `ar.model` | 固定权重版本，BF16；首次下载约 55.6 GB |
+| `ar.model.token_penalty` | wait、hmm、alternatively、actually、however、but、maybe、perhaps，强度 1 |
+| `ar.engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16` |
+| `ar.engine.vllm` | 内存比例 0.92、最多 32 条序列、调度 token 上限 16384；Ascend 全词表标量统计开启 |
+| `ar.engine.continuous_batching.workers` | 1；并发 IS 使用请求级成本归属 |
+| `ar.engine.context_window` / `ar.max_new_tokens` | 均为 `null`，分别读取原生上下文与剩余生成空间 |
+| `ar.thinking` / `ar.output` | 默认 xhigh、131072 思考预算；启用思考、IS/MH 作用于思考段 |
+| `ar.sampling` | 温度 1、完整支持集 |
+| `ar.algorithms.is` | M=4、K=1、B=1024；`two_stage`、`selection_ready=true`、`sir`、`block_first=false` |
+| `ar.algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新，均匀后缀；重放与提前拒绝关闭 |
+
+部署时按设备容量设置 TP/DP，校验权重、缓存、原生上下文与并发的总内存需求。
+`language_model_only=true` 只加载文本部分；FLOPs 按实际运行的 26,895,998,464 个参数估算。
+混合模型前缀缓存的兼容性异常需关闭 `enable_prefix_caching` 并复核输出。
+词表惩罚作用于思考和最终内容，其独立质量与速度收益尚未在该模型上验证。
 
 ### `serve`
 

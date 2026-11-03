@@ -29,7 +29,8 @@ C 表示 Consilience，SC 表示 Self-Certainty。标准答案仅供生成后的
 | 按块 Metropolized + SC，K=2 | 沿用按块选择核，替换奖励 |
 
 完整池方法均关闭提前选择；Metropolized 指 IS 候选池内的选择核，非完整序列后缀 MH。
-同核、同 K 的 C / SC 对照考察奖励变化；完整池与快速 IS 的比较同时改变等待方式和选择核。
+同核、同 K 的 C / SC 对照考察奖励变化；完整池 SIR 与快速 IS 比较等待方式及前缀估计，
+Metropolized 与快速 IS 的比较还涉及选择核变化。
 实现见[完整候选池选择](../methods/ALGORITHMS.md#is-metropolized)。
 
 Consilience 使用思考段 top-5 概率统计，奖励温度 2、首段惩罚 3、首尾窗口比例 0.2、跳过开头比例 0.05。
@@ -185,7 +186,8 @@ SC 相对同核 C 的正确数变化为 +3、0、+1；相对快速 SC，完整�
 `engine_kwargs` 中启用 `compilation_config={"cudagraph_mode":"FULL_DECODE_ONLY"}`。
 基础算法设置为 M=4、K=1、B=1024、`two_stage`、SIR、`selection_ready=true`，入口按方法覆盖相应字段。
 
-以下命令均展示完整 100 题范围。原始测量的逐题实例分配保存在结果记录中；复现墙钟比较时应保持实例分配和运行负载一致。
+以下命令均展示完整 100 题范围。基础七方法测量使用 `scalar_self_certainty=false`；奖励与 SC 选择核补测开启该统计。
+原始逐题实例分配保存在结果记录中，墙钟复测需保持实例分配和运行负载一致。
 
 ```bash
 VLLM_USE_V2_MODEL_RUNNER=0 python scripts/benchmark_is_gpu.py --settings settings/inference.json \

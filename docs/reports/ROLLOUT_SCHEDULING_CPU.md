@@ -20,7 +20,7 @@ python -m pytest tests/test_rollout_scheduler.py tests/test_streaming_vllm.py -q
 
 逐次配对检查合计 12,640 组。第一项覆盖服务时间与生成结果相关的场景。穷举检查直接运行两种算法路径，再从返回的真实权重解析积分选择概率。
 
-这些检查验证调度保持原算法输出律，以及原条件核的目标不变性。
+这些检查针对完整候选池、关闭提前选择的路径，验证执行顺序变化前后的输出分布与条件核不变性。
 
 ## 资源受限与长尾的虚拟时延
 
@@ -44,4 +44,5 @@ python -m pytest tests/test_rollout_scheduler.py tests/test_streaming_vllm.py -q
 
 集成测试覆盖思考边界跨事件、原生空思考标记续写、提前 EOS、保留叶子奖励复用、流式前缀统计量复用、多个调用者的共享上限、逻辑请求同名隔离、评分使用同一引擎、生成/评分异常清理，以及服务默认的逻辑停止。异步 vLLM 适配使用 CPU 假引擎覆盖 DELTA 事件和持久请求生命周期。
 
-本环境全量回归：315 通过、2 跳过、1 个失败。失败为 `test_growing_cache_matches_the_dynamic_cache_through_crops_and_row_selection`：Transformers 5.20 拒绝测试中的 `DynamicCache.crop(4)`。两项跳过的原因是 `math_verify` 依赖缺失。Ruff 全库检查通过，新增调度核心模块的定向类型检查通过。
+当时回归为 315 通过、2 跳过、1 失败：失败来自 Transformers 5.20 的 `DynamicCache.crop(4)` 兼容性，
+跳过项缺少 `math_verify`。上述调度模拟均完成；该历史回归状态与当前版本分别记录。

@@ -3,7 +3,7 @@
 本报告比较批处理、rollout 复用、MH proposal、奖励调度与固定采样树调度的执行成本；准确率见
 [算法质量报告](GSM8K_3090_ALIGNED_RESULTS.md)，机制与成本口径见[算法文档](../methods/ALGORITHMS.md#alg-runtime)。
 第 1–5 节记录统一入口之前的 RTX 3090 实验，数字按当时的实现测得。标注“旧方法”
-的机制已从代码中删除，这里保留其说明与结论；其余机制的复现命令对应当前实现（第 7 节）。
+的机制已归档，保留其结论；第 7 节说明当前入口的机制重测方式。
 第 6 节记录 2026-10-16 实现的 rollout 调度，以及 CPU 上的分布验证和虚拟时延实验。
 
 RTX 3090 实验的主模型为 Qwen2.5-1.5B-Instruct，旧方法的辅助模型为 Qwen2.5-0.5B-Instruct，硬件为单张 RTX 3090 24 GiB，
@@ -91,8 +91,8 @@ replay 从历史库读取与当前条件匹配的 rollout（每条最终估计�
 <a id="infra-report-rollout-scheduling"></a>
 ## 6. 固定采样树的 rollout 调度
 
-异步 vLLM 已接入共享准入队列和流式条件 IS。调度保持每轮 M、K、B、请求编号与随机种子、奖励、权重和选择规则，
-通过提前释放依赖已满足的请求、安排执行顺序来减少等待。
+本组使用完整候选池、关闭提前选择。异步 vLLM 的准入队列保持 M/K/B、请求编号与种子、奖励及选择规则，
+在前缀就绪时释放补全分支，通过安排执行顺序减少等待。
 
 - **前缀就绪即释放分支。** 新候选生成到 B 个 token 后立即提交 K−1 条补全，原生请求持续生成第零条补全；
   保留候选的额外补全在本轮开始时提交。所有规定叶子完成后，按固定候选与叶子编号计算权重和选择。
@@ -176,7 +176,7 @@ P95 长尾时延需要在部署机器测量。算法仍等待全部规定的完�
 | 连续批处理 | `python -m inference_scaling --algorithm sample`（或 `best_of_n`、`is`，加 `--reward verifier`） | `ar.engine.continuous_batching.workers = 8`，对照为 1；多数投票设 `rewards.verifier.source = "vote"` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule` 三选一；`ar.max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
 | 冻结历史 proposal | `--algorithm mh --reward verifier` | `ar.algorithms.mh.proposal = "frozen_history"`，对照为 `"base"`；组合时再设 `suffix_schedule = "multiscale"` |
-| 训练成本 | `python -m training` | `stages = ["grpo"]`；训练成本写入 `grpo.output` 下的 `training_cost.json` |
+| 训练成本 | [归档训练入口](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is) | 读取训练输出中的 `training_cost.json` |
 
 Rollout 调度的 CPU 模拟和集成测试：
 
@@ -186,7 +186,8 @@ python -m pytest tests/test_rollout_scheduler.py tests/test_streaming_vllm.py te
 ```
 
 异步 vLLM 的 IS 入口为 `python -m inference_scaling --algorithm is --reward consilience`；
-使用 `ar.engine.rollout_scheduler.enabled` 切换流式调度，使用 `policy = fifo/fair_lpt` 比较准入策略。
+设 `selection_ready=false`、`exploration_schedule="fixed"`，用 `ar.engine.rollout_scheduler.enabled` 切换流式调度，
+用 `policy=fifo/fair_lpt` 比较准入策略。Consilience 的评分温度与采样温度保持一致。
 
 与当时实现的差异：冻结历史与后缀对照当时用人工奖励（末 token 奇偶）在单题上测成本，当前命令用正式奖励在 GSM8K 上
 测量同一机制。

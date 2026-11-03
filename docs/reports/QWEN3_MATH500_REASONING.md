@@ -3,7 +3,7 @@
 使用 [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) 的固定权重，在
 [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) 的 Level 5 分层子集中按固定顺序取前 30 题（子集与
 生成种子 20260911，开发题目排除），单张 RTX 3090，BF16、SDPA；最终答案由 Math-Verify 评定，标准答案只用于评测。
-每个方法与预算组合，每题评测一次随机输出。结论来自统一入口之前的实验，数字按当时的实现测得；复现命令对应当前实现。
+每种方法与预算组合每题运行一次。数字来自统一入口之前的实验，当前入口的机制重测方式见末节。
 
 | 项目 | 当时的设置 |
 | --- | --- |
@@ -38,9 +38,11 @@
 ## 复现
 
 模型设为 `ar.model.path = "Qwen/Qwen3-1.7B"`（`revision` 固定版本，`weight_sha256` 固定权重），并设
-`ar.engine.backend = "transformers"`、`ar.sampling.temperature = 0.6`、`ar.prompt.chat_template_kwargs = {}`、
+`ar.engine.backend = "transformers"`、`ar.engine.device = "cuda"`、`ar.sampling.temperature = 0.6`、
+`ar.thinking = null`、`ar.model.token_penalty = null`、
 `ar.output.sampling_scope = "full"`、`datasets.math500.selection.count = 30`、`max_new_tokens = 32768`。BF16 与思考模式
-（`ar.output.thinking_mode = "enabled"`）同默认设置，普通采样取 `"disabled"`。
+（`ar.output.thinking_mode = "enabled"`）配合模板参数 `enable_thinking=true`；普通采样分别取 `"disabled"` 与 `false`。
+IS 使用 `exploration_schedule="fixed"`、`selection_ready=false`、`selection="sir"`，适配 Transformers 完整池路径。
 
 | 方法 | 命令 | 设置改动 |
 | --- | --- | --- |
@@ -50,5 +52,5 @@
 | MH | `--algorithm mh --dataset math500 --reward verifier`（或 `consilience`） | `iterations = 1 / 3`，`suffix_schedule = "uniform"` |
 
 自一致性奖励设 `source = "vote"`、`pool_size = 2`、`temperature = 0.25`；Consilience 使用默认设置。log-probability
-奖励（当时为对数概率之和，目标为 $`p^{1.1}`$）已从代码中删除，没有对应命令。与当时实现的差异：两档预算当时由统一
-的前向 token 预算约束，当前以候选数与单条长度复现。
+奖励（当时为对数概率之和，目标为 $`p^{1.1}`$）见[归档实现](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
+历史实验按统一前向 token 预算停止，当前入口以候选数和单条长度控制探索；两者应作为不同预算规则比较。

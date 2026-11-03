@@ -1,114 +1,92 @@
 # 条件 IS 的 rollout 调度
 
-请求准入调度只改变已确定采样树的执行顺序。M、K、B、采样策略、每条请求的逻辑编号与种子、长度上限、奖励、权重和最终选择规则均沿用算法配置。异步 vLLM 开启此路径；CPU 离散事件模拟复用同一个准入队列。仓库默认同时开启两阶段探索及提前选择；二者会改变有限预算采样结果，与请求准入分开说明。
+请求准入只调整已确定采样树的执行顺序。M/K/B、请求编号与种子、长度上限、奖励和选择规则由算法决定。
+异步 vLLM 与 CPU 模拟共用准入队列。默认两阶段探索和提前选择会改变有限预算结果，其统计条件与调度等价性分别说明。
 
 ## 请求释放与完成
 
-1. 保留候选的前缀已经已知，其额外 K−1 条补全在本轮开始时提交；保留补全的奖励直接复用。
-2. 新候选仍是一条完整原生请求。K>1 时，在第一份覆盖 B 个 token 的引擎增量到达后发出前缀事件，提交 K−1 条子请求；原请求继续产生第零条补全，不中断、不以新种子重新续写。K=1 没有额外分支，只需完成通知。子请求的完整提示由已有前缀组成，前缀缓存由 vLLM 处理。
-3. 在 B 以内已结束的候选只有一条空补全，仍使用原来的 K_m=1。`block_first=true` 时，原有分块请求与续写的种子、offset 保持原样。
-4. 叶子完成便在调用线程计算奖励，归入固定的 `(candidate, rollout)` 槽位；记录器在前缀事件到达时即可提供对应的 token 统计量。所有必需叶子齐全后，才按编号顺序调用原来的 `weigh`、`select`。
+1. 保留候选的前缀已知，其额外 K−1 条补全在本轮开始时提交；保留补全的奖励直接复用。
+2. 新候选使用一条完整原生请求。K>1 时，引擎增量首次覆盖 B 个 token 后提交 K−1 条分支；原请求继续产生第零条补全，随机流不中断。K=1 无额外分支。
+3. B 以内结束的候选只有一条空补全；`block_first=true` 沿用先生成块、再续写的请求与种子规则。
+4. 完成的叶子按 `(candidate, rollout)` 槽位记录奖励。关闭 `selection_ready` 时，全部规定叶子齐全后才按槽位顺序计算权重并选择。
 
-关闭 `selection_ready` 时等待全部规定补全，只有 EOS/思考边界和失败清理可以终止原生请求。
+`selection_ready=true` 以缓存前缀估计未完成权重，选出已完整候选后取消其余请求。首轮至少需要两组全部完成；
+末轮有完整参考序列，可在新结果完成前选择。完成时间和前缀估计会引入偏差，详见[提前选择](ALGORITHMS.md#is-selection-ready)。
 
-`selection_ready=true` 在两阶段探索中读取缓存前缀分数，以固定随机数判断能否选出已经完整的候选，
-随后取消其余请求。首轮要求至少两组全部完成，分叉位置保持 B；末轮已有完整参考序列，无须等待新结果后才能选择。
-该选项默认开启，前缀估计与完成时间会引入偏差。公式见[提前选择](ALGORITHMS.md#is-selection-ready)。
-
-`exploration_schedule="two_stage"` 将首轮之后的探索集中为一次完整后缀候选池，按未选 rollout 的权重差异
-随机决定执行该池或复用已有完整序列。末轮还根据保留序列抽取长度区间，将新请求限制到区间上界；
-区间外候选权重为零，截停前缀无需评分。请求数量和区间均在提交前确定，已执行工作照常计费，沿用本页的生成与准入代码。
-它改变探索树及有限预算结果，不属于固定树的执行等价优化。
-分配公式与统计条件见[两阶段完整探索](ALGORITHMS.md#is-two-stage)及[末轮长度区间](ALGORITHMS.md#is-length-window)。
+`two_stage` 把首轮之后的探索集中为一个完整后缀池，用未选 rollout 的权重差异决定执行末池或复用已有序列，
+并在提交前确定候选数与辅助长度区间。区间外权重为零，截停前缀无需评分；所有已执行工作照常计费。
+公式见[两阶段探索](ALGORITHMS.md#is-two-stage)与[长度区间](ALGORITHMS.md#is-length-window)。
 
 ## 资源限制与长尾
 
-`ar.engine.rollout_scheduler` 作用于一个异步引擎的全部调用者：
+`ar.engine.rollout_scheduler` 由同一引擎的全部调用者共用：
 
-- 原生请求总数受 `max_in_flight` 限制；候选、补全以及普通生成/评分调用共享准入。
-- 尚未产生首 token 的请求按完整提示长度累计预填充预算，长提示可独占预填充预算；原生 chunked prefill 仍由 vLLM 执行。提示缓存可能降低真实成本，预算采用保守估计。
+| 机制 | 准入规则 |
+| --- | --- |
+| 并发与预填充 | 原生请求数受 `max_in_flight` 限制；尚未产生首 token 的请求累计完整提示长度，受 `max_prefill_tokens` 限制。超长提示允许独占预填充预算 |
+| KV 水位 | 达到水位后暂停新准入，已准入请求继续解码；空闲时允许一条进入。vLLM 负责实际 KV 分配和抢占 |
+| 公平与长度排序 | `fair_lpt` 先平衡各题活动请求数，再推进候选前缀，同类请求按预计长度从长到短排列；预测只用长度上限与已完成请求历史 |
+| 等待老化 | 等待过久的任务优先；老任务需要较大预填充预算时停止准入小任务，等待额度释放 |
+| 尾部保护 | 一轮分支已全部释放、队列已空且仅余至多两条活动请求时，暂缓其他题的长预填充；等待老化可解除此保护 |
 
-- KV 使用率达到水位时暂停新准入，当前请求继续解码；空闲时允许一条进入，以免陈旧指标阻止进展。水位是软限，vLLM 仍负责实际 KV 分配与必要的抢占。
-- 未老化任务先按各题活动请求数公平分配，题内按候选前缀、补全排序，同类请求将预计耗时较长的提前。预测只用当前长度上限和已完成请求的长度历史，不读取未生成内容、奖励或未来服务时间。
-- 老化任务按等待先后处理。若老任务需要较大的预填充预算，则停止继续塞入小预填充，等已有预填充结束；因此连续到来的小请求不能使它永久等待。
-- 当一轮分支已全部释放、队列已空、只剩一两条活动请求时，暂缓其他题较长的新预填充，给尾部解码留出空间；老化会解除此保护。
-
-默认 `fair_lpt`，也提供 `fifo` 作对照。调度不会抢占正在运行的统计样本。它消除的是候选与补全之间的批次屏障，并改善资源使用和任务排列；单条不可并行的自回归长尾仍存在。单并发且总工作不变时，不应期待调度本身带来加速。
-
-普通批量调用也在内部消费 DELTA 输出：首 token 到达即释放预填充额度，不再占用到整条序列完成。
-外层仍一次返回完整结果；扁平概率数组直接拼接，避免展开成逐 token 字典。
-
-仓库默认 K=1，没有额外分支可以提前释放，收益来自减少输出处理、跨题准入和资源保护。调度器保持配置中的 K。
+`fifo` 用作排序对照。准入队列不抢占样本；收益来自提前释放分支和协调资源，单条自回归长尾仍需顺序完成。
+默认 K=1 没有额外分支，收益主要来自输出处理、跨题准入与资源保护。单并发且工作量固定时，排序本身没有并行收益。
 
 <a id="compact-output"></a>
 ## 输出交付与概率处理
 
-vLLM 内部使用 DELTA 输出，`stream_interval` 默认 32。首 token 立即交付以确认预填充结束，其余增量按间隔交付，
-结束时交付剩余 token。仅在外层合并事件无法省掉内层逐 token 概率解析，因此间隔设置在 vLLM 引擎中。
+vLLM 使用 DELTA 输出，`stream_interval=32`：首 token 立即交付并释放预填充额度，其余增量按间隔交付，完成时交付余量。
+普通批量调用也在内部消费这些增量，外层一次返回完整结果。
 
-算法交付由 `GenerationRequest.intermediate_events` 与会话的 `checkpoint` 决定：
+| 路径 | 交付给算法的事件 |
+| --- | --- |
+| 完整池、K=1 | 完成结果 |
+| 完整池、K>1 | 新候选增加一次 B-token 前缀事件，随后只交付完成结果 |
+| 提前选择 | 另交付中间增量，用于前缀权重估计与取消 |
+| 多 token 思考边界 | 保留中间事件以检测边界；单 token 标记使用引擎原生停止 |
 
-- 关闭提前选择时，IS 请求关闭普通中间事件：K=1 只交付完成结果；K>1 的新候选增加一次前缀事件，后续补全只交付完成结果。默认开启提前选择，交付中间增量以读取前缀统计及取消；原生输出间隔不变。
-- 前缀事件因输出分批可能比第 B 个 token 晚至多 `stream_interval−1` 个 token（队列等待另计），但前缀仍严格取前 B 个，原请求的随机流不变。短块可减小间隔。
-- 单 token 的 thinking 结束标记由 vLLM 原生停止；多 token 标记或未声明原生停止能力的后端保留普通中间事件。外层语义停止前可能存在额外解码，实际成本按后端计数；逻辑输出仍截在原边界。
-- K=1、`block_first=false` 时，提交新候选后即可声明本轮无新增请求，使已有尾部保护及时生效。
+前缀事件最多因分批多等待 `stream_interval−1` 个 token（排队另计），切点仍取前 B 个 token。
+K=1 且 `block_first=false` 时，候选提交完即可声明本轮不再产生分支，及时启用尾部保护。
 
-调用线程尚未读取的同一请求事件继续合并，只保留一份待通知记录。缓冲空间随待处理 token 数线性增长；
-生成事件消费不等待奖励计算，奖励仍可向同一引擎提交评分请求。
+`flat_logprobs=true` 直接读取扁平概率数组，省去逐 token 字典与对象；Consilience 保留原 top-K 集合及 `fsum` 归约。
+Self-Certainty 的 Ascend 路径读取随生成返回的全词表 KL 标量，详见[概率统计](ALGORITHMS.md#infra-fused-logprobs)。
+活跃序列使用增量数组和前缀视图，结束后保留紧凑副本，避免每次查询都转换整条序列。
 
-`flat_logprobs=true` 使用 vLLM 的 `FlatLogprobs` 数组。直接读取数组可省掉每个位置的字典和概率对象；
-对 sampled-token 与 top-K 的重复项保留与字典接口相同的语义，Consilience 仍按原公式和 `fsum` 计算。
-没有修改 worker 的采样、温度或词表惩罚；传输内容仍包含必要的 top-K 概率，归约后算法只保存原有的逐 token 标量。
+同一请求尚未消费的事件合并为一份通知；奖励可向同一引擎提交评分请求。
+选择完成后，并发取消其余请求并等待资源释放。语义停止只取消相应请求；错误路径完成取消和额度清理后报错。
+越过多 token 边界的额外解码计入成本，逻辑输出截在原边界。
 
-活跃 rollout 的 token 和置信度使用增量数组存储，容量不足时倍增；前缀查询读取数组视图，省去每次查询时
-重新转换全部活跃序列的列表。完成或取消后保留实际长度的紧凑副本。重叠前缀的覆盖顺序、缺失统计与奖励公式保持原样，
-实现见 [`StatisticRecorder`](../../src/inference_scaling/arllm/backends/statistics.py)。
+`stream_outputs` 计引擎增量，`stream_events` 计外层事件。`engine_execution` 保存生效的输出间隔、内部异步调度和执行图配置；
+`asynchronous=true` 仅表示异步接口，执行图配置也仅表示可用设置，实际命中需单独观测。
 
-`stream_outputs` 记录后端处理的引擎增量数，`stream_events` 记录向外层交付的事件数。
-实验的 `executions.json` 和服务的 `scaling` 中，`engine_execution` 记录生效的 `async_scheduling`、输出间隔、
-`enforce_eager`、CUDA Graph 模式与捕获批大小配置。`asynchronous=true` 只说明使用异步接口，不能据此断定引擎内部
-异步调度已开启；CUDA Graph 配置也不等于每个解码步实际命中图。默认保留 vLLM 的硬件适配选择，可通过
-`vllm.async_scheduling` 和 `engine_kwargs.compilation_config` 显式调整。
+GPU `fused_logprobs=true` 在请求结束后提供统计量，使用批次算法和共享准入，须关闭提前选择。
+同步 vLLM、Transformers 使用各自批次路径。运行记录的 `rollout_scheduler=streaming/batch` 表示实际路径。
 
-思考边界包装器支持多 token 标记跨事件与跨请求前缀；只在出现可能的 EOS/结束标记时解析完整序列。原生结束标记若对应空思考，按原有 offset 和派生种子继续。错误路径等待活动请求取消和额度释放后再返回错误，不使用不完整树作选择。
+实现索引：[候选树](../../src/inference_scaling/arllm/algorithms/candidates.py)、
+[准入队列](../../src/inference_scaling/arllm/backends/scheduling.py)、
+[事件合并](../../src/inference_scaling/arllm/backends/streaming.py)、
+[vLLM 接口](../../src/inference_scaling/arllm/backends/vllm_backend.py)、
+[统计缓存](../../src/inference_scaling/arllm/backends/statistics.py)。
+公共接口：[DELTA](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/sampling_params.py)、
+[generate/abort](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/v1/engine/async_llm.py)、
+[FlatLogprobs](https://docs.vllm.ai/en/v0.26.0/api/vllm/logprobs/)。
 
-提前选择确定后，候选池统一关闭，并发取消未完成请求并等待资源释放；单条轨迹的语义停止仍只取消该请求。
-这样省去逐条等待取消的串行路径，不再消费选择之后的事件，也不改变已经确定的候选、权重或随机数。
+<a id="默认调度的执行等价性"></a>
+## 完整候选池下的执行等价性
 
-主要实现：
+以下论证要求 `selection_ready=false`、无墙钟截止，且奖励是序列的固定函数。
+为每个逻辑请求固定独立随机流，为选择固定独立随机数。给定同一轮状态：
 
-- [固定树与事件处理](../../src/inference_scaling/arllm/algorithms/candidates.py)
-- [共享准入队列](../../src/inference_scaling/arllm/backends/scheduling.py)
-- [异步会话和事件合并](../../src/inference_scaling/arllm/backends/streaming.py)
-- [异步 vLLM 接口](../../src/inference_scaling/arllm/backends/vllm_backend.py)
-- [CPU 模拟引擎](../../tests/simulation.py)
+1. 请求的条件生成分布、随机流与停止规则相同；第零条请求在 B 处继续运行，分支只在前缀确定后提交。
+2. 调度可以依赖长度、完成情况和资源指标，但全部规定请求最终参与计算。
+3. 每个叶子的序列和奖励相同，候选的平均权重、候选及补全的归一化概率相同。
+4. 按固定槽位归约并使用同一选择随机数，得到相同保留序列；逐轮归纳得到相同输出。
 
-当前 `fused_logprobs=true` 只在请求结束后提供全词表统计量，因此回退到原批次算法，仍使用异步引擎的共享准入限制。同步 vLLM、Transformers 保留原路径。运行记录和服务返回值的 `rollout_scheduler` 显示实际使用 `streaming` 或 `batch`，设置本身不等于流式路径已生效。
-
-所用公共接口见 vLLM [RequestOutputKind](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/sampling_params.py)、[AsyncLLM.generate/abort](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/v1/engine/async_llm.py) 和 [KV 指标说明](https://docs.vllm.ai/en/latest/usage/metrics/)。
-
-紧凑输出所用接口见 [FlatLogprobs](https://docs.vllm.ai/en/v0.26.0/api/vllm/logprobs/) 与
-[stream_interval](https://docs.vllm.ai/en/v0.26.0/api/vllm/config/scheduler/#vllm.config.scheduler.SchedulerConfig.stream_interval)。
-
-## 默认调度的执行等价性
-
-为每个逻辑请求 j 预先固定独立随机流 U_j，为选择操作固定独立的选择随机数。给定同一轮状态：
-
-1. 候选块与各补全的条件生成分布和 U_j 均相同。原生第零条请求持续运行，不在 B 处重启随机流；后续请求只在其前缀确定后提交。
-2. 调度可以依赖已观察的长度、完成情况或资源指标，但所有规定请求最终都完成。它只决定随机变量的计算时机，不决定哪些变量被纳入统计量。
-3. 每个叶子的序列和奖励因此相同；候选的 `logmeanexp(r/τ)`、候选归一化概率以及候选内叶子归一化概率相同。
-4. 按固定槽位进行同样的浮点归约、使用同样的选择随机数，得到相同的被保留序列。对后续轮次归纳，完整生成结果相同。
-
-因此，在同一底层请求采样律和逻辑停止规则下，调度前后的有限步算法输出律相同，原条件 SIR 对 `π(y) ∝ p(y) exp(r(y)/τ)` 的不变性也保留。奖励必须是序列的固定函数，不能依赖调用顺序、批大小或墙钟时间。
-
-这不把原算法从空状态开始的有限样本近似变成 π 的精确样本；“原有限步算法的输出律不变”和“条件核保持 π 不变”是两项不同的性质，CPU 报告分别检查了它们。
-
-服务默认 `max_seconds=null`，按逻辑长度、EOS/思考边界停止。显式打开墙钟限制后，运行快慢可能改变完成的 IS 步数，且耗时可能与样本内容相关，此时上述有限步一致性保证不适用。
-
-CPU 的精确耦合验证不代表不同加速卡批形状下逐 bit 输出必然相同；真实设备的浮点舍入、内核确定性与性能需要部署环境验证。
+因此，固定工作量下的调度保持原有限步算法的输出分布，原条件核的平稳目标也保留。
+从基础模型初始化仍有有限步误差；默认提前选择及显式墙钟限制不满足上述全部条件。
+CPU 精确耦合验证的是相同底层采样律，真实设备的不同批形状仍可能通过浮点舍入改变轨迹。
 
 ## 验证
 
-见 [CPU 验证报告](../reports/ROLLOUT_SCHEDULING_CPU.md)：实际算法路径的逐次对照、小模型穷举转移矩阵、目标分布平稳性抽样，以及固定工作量与长尾工作量的虚拟时延。
-
-单卡与双卡复核及复现入口见[昇腾调度验证](../reports/ASCEND_IS_INFRA.md)。
+[CPU 报告](../reports/ROLLOUT_SCHEDULING_CPU.md)核对实际算法路径、有限状态转移矩阵与虚拟时延；
+[昇腾报告](../reports/ASCEND_IS_INFRA.md)记录单卡、双卡的真实成本及适用范围。

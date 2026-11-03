@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="174" viewBox="0 0 960 174" role="img" aria-labelledby="title desc">
+  <title id="title">后缀 MH 的一次更新</title>
+  <desc id="desc">由当前序列抽取切点，生成新后缀，计算目标与正反提议概率，再接受新序列或保留旧序列。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#52667d"/></marker></defs>
+  <rect width="960" height="174" rx="12" fill="#f6f8fa"/>
+  <g fill="#fff" stroke="#b8c9da" stroke-width="1.5">
+    <rect x="18" y="26" width="210" height="100" rx="10"/>
+    <rect x="256" y="26" width="210" height="100" rx="10"/>
+    <rect x="494" y="26" width="210" height="100" rx="10"/>
+    <rect x="732" y="26" width="210" height="100" rx="10"/>
+  </g>
+  <g stroke="#52667d" stroke-width="2" marker-end="url(#arrow)"><path d="M230 76 H252"/><path d="M468 76 H490"/><path d="M706 76 H728"/></g>
+  <g font-family="Microsoft YaHei, PingFang SC, sans-serif" text-anchor="middle" fill="#17324d">
+    <g font-size="19" font-weight="600"><text x="123" y="58">1. 抽取切点</text><text x="361" y="58">2. 生成新后缀</text><text x="599" y="58">3. 计算接受概率</text><text x="837" y="58">4. 更新当前序列</text></g>
+    <g font-size="16"><text x="123" y="87">按固定后缀长度分布</text><text x="123" y="111">保留切点之前的内容</text><text x="361" y="87">基础 / 温度 proposal</text><text x="361" y="111">或冻结历史混合分布</text><text x="599" y="87">新旧目标概率</text><text x="599" y="111">及正反 proposal 概率</text><text x="837" y="87">接受新序列或保留旧序列</text><text x="837" y="111">随后进入下一轮</text></g>
+    <text x="480" y="155" font-size="15" fill="#52667d">每轮使用完整 Hastings 比；冻结历史命中仍计算混合 proposal 的概率。</text>
+  </g>
+</svg>

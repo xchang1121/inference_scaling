@@ -1,7 +1,7 @@
 # 推理服务
 
-一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；默认在思考段上按配置运行条件 IS
-（Self-Certainty 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
+提供 OpenAI Chat Completions 与 Anthropic Messages 接口。默认以 Self-Certainty 加权选择思考段，
+再由基础模型续写最终内容；算法、奖励与预算共用仓库设置。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -19,7 +19,8 @@
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
    schema 取类型。
 
-返回里额外带 `scaling`：生效推理强度、候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
+响应中的 `scaling` 记录生效推理强度、M/K/B、IS 步数、停止原因（`eos`、`length`、`stop`、`deadline`）、
+耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 `scaling.generation_budget` 记录配置上限、客户端上限、剩余上下文和实际生成上限。
 `scaling.reward`、`reward_config` 和 `selection` 记录实际奖励、奖励设置与选择核。
 `first_commit_seconds` 是首次固定非空前缀的时间，`first_thinking_publish_seconds` 是首次向服务交付思考文本的时间，
@@ -46,11 +47,11 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 
 ## 1. 安装（昇腾）
 
-在已能用 vLLM + vllm-ascend 起 Qwen3.8-27B 的环境里：
+使用已安装兼容 vLLM + vllm-ascend 的环境：
 
 ```bash
 git clone https://github.com/xchang1121/inference_scaling.git && cd inference_scaling
-pip install -e ".[serve]"      # 只加装 fastapi、uvicorn；不要装 .[vllm]，它锁的是 CUDA 版 torch 与 vLLM
+pip install -e ".[serve]"      # 沿用昇腾依赖；.[vllm] 用于 NVIDIA 环境
 huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 \
   --local-dir /data/models/Qwen3.8-27B
 ```
@@ -65,16 +66,16 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 `run.reward` 选择奖励（`self_certainty` 或 `consilience`），`rewards` 提供其参数，`run.seed` 提供根种子，`serve` 提供 HTTP 参数。
 字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#serve)。
 
-`settings/inference.json` 需要按机器改的项：
+部署参数：
 
 | 字段 | 取值 | 说明 |
 | --- | --- | --- |
 | `ar.model.path` / `local_files_only` | 本地权重目录 / `true` | 启动时不联网 |
 | `ar.engine.vllm.tensor_parallel_size` | 卡数，如 `2` | BF16 权重约 54 GB，64 GB 卡单卡几乎没有缓存空间 |
-| `ar.engine.vllm.gpu_memory_utilization` | `0.9` 左右 | 按已跑通时的取值 |
+| `ar.engine.vllm.gpu_memory_utilization` | 默认 `0.92` | 结合设备容量、上下文与并发校验 |
 | `ar.engine.vllm.fused_logprobs` / `scalar_self_certainty` | `false` / `true` | Ascend 随生成计算全词表 KL 标量，不增加评分前向；保留原生异步调度与词表惩罚 |
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
-| `ar.engine.vllm.enable_prefix_caching` | 先 `true` | 混合模型的前缀缓存出错或输出异常时改 `false`，只影响速度 |
+| `ar.engine.vllm.enable_prefix_caching` | 默认 `true` | 复用共享前缀；混合缓存兼容性异常时关闭并复核输出 |
 | `ar.algorithms.is` | M=4、K=1、B=1024、`block_first=false`、`two_stage`、`selection_ready=true`、`sir` | 评测与服务共用的首轮设置；末轮复用已有 rollout 并按预算构造完整后缀池 |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
@@ -90,7 +91,7 @@ thinking 与最终内容的合计长度；同时传入时须相等，非法值�
 `scaling.generation_budget`，M/K/B、奖励和词表惩罚保持配置值。
 
 `serve.max_seconds` 默认 `null`。显式设定后，到时不再开始新的 IS 步；至少完成第一步，进行中的一步与答案仍完成。
-它不是整题总时长硬限，启用后可能改变有限步输出分布。单条长度上限同样不限制全部候选的总计算量。
+它是更新轮次间的软时限，可能改变有限步输出分布。单条长度与全部候选累计计算量分别计量。
 
 ## 3. 启动与验证
 
@@ -111,7 +112,7 @@ curl -N localhost:8000/v1/messages -H 'content-type: application/json' -d '{
   "messages":[{"role":"user","content":"看一下 main.py 里有什么"}]}'
 ```
 
-第二个请求应返回 `tool_use`，`input` 为 `{"path": "main.py"}`。启动时若报 vLLM 导入错误（如 `AsyncLLM`、
+工具请求可检查返回的 `tool_use` 及参数，例如 `{"path": "main.py"}`；模型仍可能选择直接生成内容。启动时若报 vLLM 导入错误（如 `AsyncLLM`、
 `vllm.v1.metrics.reader`），说明所用 vLLM 与本仓库适配的 0.25–0.26 不同，需要适配后端。
 
 ### 性能测量
@@ -146,7 +147,7 @@ python scripts/benchmark_is_service.py --urls http://127.0.0.1:8000 \
 
 ## 限制
 
-- 思考前缀在本轮全部必要补全完成、选择确定后交付，尚未选中的候选保持内部可见。此改动保持采样、权重、随机种子与计算量不变；首轮仍有完整 rollout 的等待。
+- 思考前缀在选择确定后交付；提前选择使用部分完成结果，完整池模式等待全部规定补全。交付机制本身保持算法决定与计算量不变。
 - Qwen 预填充的思考通道支持增量交付；未知或非预填充格式缓冲到完整思考选定。预填充通道中格式异常的文本仍作为思考返回，奖励的全序列回退规则不变。
 - 流式后端逐步交付无工具的最终答案，工具调用保留完整解析后交付；全序列回退与非流式后端仍在完整生成后交付答案。TTFT 的降低不代表整体 TPS 同幅改善。
 - 客户端断开或取消等待后，已启动的推理继续执行，并在实际结束后释放并发名额；服务正常关闭时等待这些请求完成。

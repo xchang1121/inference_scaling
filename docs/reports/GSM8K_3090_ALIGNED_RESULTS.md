@@ -1,9 +1,8 @@
 # 算法设计与准确率：Qwen2.5-1.5B / GSM8K
 
 本报告比较采样方法、奖励信号、rollout 来源和 MH 更新策略对任务准确率的影响；执行成本见
-[执行成本报告](RTX3090_ROLLOUT_INFRA.md)，方法见[算法文档](../methods/ALGORITHMS.md)。结论来自统一入口之前的
-实验，数字按当时的实现测得。标注“旧方法”的方法已从代码中删除，这里只保留其说明与结论；其余方法的复现命令对应
-当前实现（第 6 节）。
+[执行成本报告](RTX3090_ROLLOUT_INFRA.md)，方法见[算法文档](../methods/ALGORITHMS.md)。数字来自统一入口之前的实验；
+第 6 节区分归档复现与当前入口的机制重测。
 
 | 项目 | 设置 |
 | --- | --- |
@@ -109,13 +108,15 @@ IS 的准确率点估计更高。rollout 复用、动态候选和预算分配的
 <a id="quality-reproduction"></a>
 ## 6. 复现
 
-本报告的模型、引擎与长度不是当前默认值，先改回：`ar.model.path = "Qwen/Qwen2.5-1.5B-Instruct"`、
-`revision = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"`；`ar.engine.backend = "transformers"`、`dtype = "float32"`；
-`ar.prompt.chat_template_kwargs = {}`、`ar.output.thinking_mode = "auto"`、`sampling_scope = "full"`；
-`ar.max_new_tokens = 192`；`mh` 与 `mh_power` 的 `block_size = 12`；
-`ar.algorithms.is = {"candidate_count": 8, "rollout_count": 3, "block_size": 48, "block_first": false}`。其余（32 题、温度 1、Beam 8 路、
-Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后缀）与默认相同。自一致性奖励设
-`rewards.verifier.source = "vote"`，正确性奖励保持 `"dataset"`。旧方法没有对应命令。
+历史训练及旧 IS 组合见[归档实现](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
+当前入口可重测保留机制，但投票奖励和候选复用规则已有变化，原数值仍对应实验时的实现。
+
+机制重测时显式设置：Qwen2.5-1.5B-Instruct、权重版本 `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`，
+`ar.engine.backend="transformers"`、`device="cuda"`、`dtype="float32"`；`ar.thinking=null`、
+`ar.model.token_penalty=null`、空模板参数、`thinking_mode="auto"`、`sampling_scope="full"`，生成上限 192。
+IS 设 M=8、K=3、B=48、`block_first=false`、`exploration_schedule="fixed"`、`selection_ready=false`、`selection="sir"`。
+MH 块长 12、每块 3 次更新、均匀后缀，幂指数 4；数据 32 题、温度 1、Beam/Best-of-N 均为 8 路。
+自一致性用 `verifier.source="vote"`，正确性奖励用 `"dataset"`。
 
 | 方法 | 命令 | 设置改动 |
 | --- | --- | --- |
@@ -125,10 +126,10 @@ Best-of-N 8 个样本、`mh_power` 的 α=4、每阶段 3 次更新、均匀后�
 | 幂目标 MH | `python -m inference_scaling --algorithm mh_power` | — |
 | 条件 IS，自一致性奖励 | `python -m inference_scaling --algorithm is --reward verifier` | `rewards.verifier.source = "vote"` |
 | 正确性奖励的 MH 与条件 IS | `--algorithm mh --reward verifier`、`--algorithm is --reward verifier` | `rewards.verifier.temperature = 0.04` |
-| GRPO | `python -m training`，再用 `--algorithm sample`、`--algorithm greedy` 评测 | 训练时 `stages = ["grpo"]`；评测时 `ar.model.adapter` 指向 `grpo.output` |
+| GRPO | 使用归档训练入口；当前入口用 `sample` / `greedy` 评测已有适配器 | `ar.model.adapter` 指向训练输出 |
 | pass@k | 同上各命令 | `run.draws = 8` |
 | 预算消融 | `--algorithm is --reward verifier`、`--algorithm mh_power` | `datasets.gsm8k.selection.count = 8`，IS 设 `source = "vote"`；`candidate_count`、`block_size`、`steps_per_block`、`ar.max_new_tokens` |
 | 后缀长度分布 | `--algorithm mh_power` | `suffix_schedule`；`max_new_tokens = 128`、`block_size = 16`、`steps_per_block = 2`、`run.draws = 4` |
 | 奖励选择 | `--algorithm is --reward verifier`、`--reward self_certainty` | `selection.count = 8`；verifier 设 `source = "vote"`。当时的自确定度还在每批候选内做 min-max 归一化，当前是逐序列的原始定义；平均对数概率与平均负熵已删除 |
 
-与当时实现的差异：自一致性奖励现在与冻结的 `pool_size` 个独立样本比较，当时为已评估补全的累计众数。
+当前自一致性奖励与冻结的 `pool_size` 个独立样本比较，历史实验使用已评估补全的累计众数。
