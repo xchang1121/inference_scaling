@@ -2,7 +2,7 @@
 
 默认性能对照为两阶段 IS 与同题 Base；此前的服务交付及并发记录单独列于后文。
 配置与入口见 [SETTINGS.md](../SETTINGS.md)。固定块 IS 已退出真机性能对照。
-完整池 SIR、Metropolized 与两种奖励对照的 100 题准确率、论证质量及成本见[选择策略报告](QWEN38_IS_SELECTION.md)。
+完整池 SIR、Metropolized、Best-of-4 及 Consilience / Self-Certainty 的 100 题、12 方法准确率、论证质量与成本见[选择策略报告](QWEN38_IS_SELECTION.md)。
 
 ## 同环境的两阶段 IS 与 Base（2026-11-02）
 

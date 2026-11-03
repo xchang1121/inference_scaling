@@ -209,9 +209,10 @@ python -m pytest
 输出吞吐和实际生成量；区分已测结果、交付延迟改善与尚未验证的吞吐收益。
 
 [100 题的选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md)比较 Base、快速 IS、完整池 SIR、
-逐条与按块 Metropolized、Best-of-4 + Consilience 及 IS + 全词表 Self-Certainty。
-Base / 快速 IS 为 92% / 93%，四个方法达到 94%，配对差异区间均包含 0；报告分别列出新增 70 题、合计 100 题的
-答案正确率、最终论证审核、耗时与 FLOPs。默认设置保持不变。
+逐条与按块 Metropolized、Best-of-4 + Consilience，以及快速 IS 和三种 Metropolized 的全词表 Self-Certainty 版本，
+共 12 种方法。Base / 快速 Consilience IS / 快速 Self-Certainty IS 为 92% / 93% / 94%，按块 Self-Certainty K=2 为 95%；
+后者比快速 Self-Certainty IS 净多对 1 题，耗时约 +20%、FLOPs 约 +75%，准确率差区间包含 0。
+报告分别列出新增 70 题、合计 100 题的答案、论证审核、配对区间和成本；默认设置保持不变。
 
 ## 历史结果
 
