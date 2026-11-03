@@ -133,7 +133,7 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
                                    ("met-k2-self-certainty", "is", "self_certainty"),
                                    ("block-met-k2-self-certainty", "is", "self_certainty"),
                                    ("is", "is", "consilience")):
-        select_mode(family, mode, settings)
+        select_mode(family, mode, settings, study="rewards")
         assert (family.choices.algorithm, family.choices.reward) == (algorithm, reward)
         assert family.reward_settings["scope"] == "thinking"
         if "met-k" in mode:
@@ -142,6 +142,12 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
             assert family.config["selection"] == ("block_metropolized" if mode.startswith("block-") else "metropolized")
     assert family.config == settings["ar"]["algorithms"]["is"]
     assert settings["ar"]["algorithms"]["best_of_n"]["samples"] == 8  # Mode overrides remain local.
+    select_mode(family, "is", settings)
+    assert family.choices.reward == settings["run"]["reward"] == "self_certainty"
+    assert family.reward_settings == settings["rewards"]["self_certainty"]
+    settings["run"]["reward"] = "consilience"
+    select_mode(family, "is", settings)
+    assert family.choices.reward == "consilience"
 
 
 def test_standard_pass_at_k_estimator() -> None:

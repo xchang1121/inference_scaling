@@ -1,11 +1,11 @@
 """Think-only conditional IS for one request, then one ordinary answer from the chosen thought.
 
-The model, engine, base sampling policy, fixed IS parameters and the
-Consilience reward and length policy are those of ``settings/inference.json``.
+The model, engine, base sampling policy, IS parameters, default reward and
+length policy are those of ``settings/inference.json``.
 Requests may select an effort or a thinking budget, disable thinking, and cap
 the combined output length. An optional
-wall-clock limit is checked only between complete IS steps; the default uses
-logical stopping so execution speed cannot change the number of IS moves.
+wall-clock limit is checked only between complete IS steps. The default has no
+wall-clock deadline; early selection remains a progress-dependent approximation.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from inference_scaling.app.ar import conditional_is_config, confidence_reward, confidence_statistic
+from inference_scaling.app.ar import CONFIDENCE_REWARDS, conditional_is_config, confidence_reward, confidence_statistic
 from inference_scaling.app.records import Meter, RequestMeter
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
@@ -107,7 +107,10 @@ class _ThoughtPublisher(_TextPublisher):
 
 class Reasoner:
     def __init__(self, settings: Mapping[str, Any], backend: Any | None = None) -> None:
-        self.ar, self.reward_settings, self.serve = settings["ar"], settings["rewards"]["consilience"], settings["serve"]
+        self.reward_kind = settings["run"]["reward"]
+        if self.reward_kind not in CONFIDENCE_REWARDS:
+            raise ValueError("the service requires run.reward=self_certainty or consilience; verifier needs a dataset")
+        self.ar, self.reward_settings, self.serve = settings["ar"], settings["rewards"][self.reward_kind], settings["serve"]
         self.seed = int(settings["run"]["seed"])
         self.raw: Any = backend
         self._seeds = itertools.count()
@@ -166,8 +169,8 @@ class Reasoner:
         scope = SamplingScope.from_config(raw, ar).for_prompt(prompt)
         if scope.scope == "thinking" and self.reward_settings["scope"] == "full":
             scope = scope.full_fallback("reward_uses_full_sequence")
-        backend = StatisticRecorder(scope.wrap(bounded, prompt), confidence_statistic("consilience", self.reward_settings))
-        reward = confidence_reward("consilience", self.reward_settings, backend, thinking_format)
+        backend = StatisticRecorder(scope.wrap(bounded, prompt), confidence_statistic(self.reward_kind, self.reward_settings))
+        reward = confidence_reward(self.reward_kind, self.reward_settings, backend, thinking_format)
         config = conditional_is_config(ar["algorithms"]["is"], reward, total_length=maximum, backend=raw)
         start = time.monotonic()
         clock_start = time.perf_counter()
@@ -247,6 +250,8 @@ class Reasoner:
             "tensor_parallel_size": ar["engine"]["vllm"]["tensor_parallel_size"],
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
             "block_size": config.block_size,
+            "reward": self.reward_kind, "reward_config": dict(self.reward_settings),
+            "selection": config.selection,
             "exploration_schedule": config.exploration_schedule,
             "final_pool_limit": config.final_pool_limit,
             "selection_ready": config.selection_ready,

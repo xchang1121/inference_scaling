@@ -115,8 +115,8 @@ Qwen3.8-27B 默认对 wait、hmm、alternatively、actually、however、but、ma
 | `is` | 式 (1) | 保留完整序列的条件 IS；完整池更新与提前选择近似分别说明 |
 
 `--reward` 只作用于 `best_of_n`、`mh` 和 `is`，可选 `verifier`、`self_certainty`、`consilience`（第 9 节），
-默认运行 `--algorithm is --model ar --reward consilience --dataset gsm8k`；
-AR 的 `is` 默认固定使用 M=4、K=1、B=1024（`ar.algorithms.is`）。第 6.1 节的可枚举候选
+默认奖励从 `run.reward` 读取，当前为思考段 Self-Certainty；默认算法为 `is`、模型族为 `ar`、数据集为 `gsm8k`。
+AR 的 `is` 默认首轮 M=4、K=1、B=1024，并开启两阶段探索与提前选择（`ar.algorithms.is`）。第 6.1 节的可枚举候选
 logit adjustment 只作理论参考，未接入统一入口。源码路径均位于 [`src/inference_scaling`](../../src/inference_scaling/)。
 
 <a id="alg-execution"></a>
@@ -767,8 +767,8 @@ AR 的条件 IS 始终保留一条完整序列 $`y`$，每一步在它的下一�
    选一条，保留 $`y=(g,z_m,u_{mk})`$，进入下一个块边界。保留补全的奖励直接复用，不再评分。
 
 $`M,K,B`$ 分别取自 `ar.algorithms.is` 的 `candidate_count`、`rollout_count` 与 `block_size`。
-默认 `exploration_schedule="fixed"` 在一次运行中保持这三个量固定；还可选择
-[两阶段探索](#is-two-stage)。
+`exploration_schedule="fixed"` 在一次运行中保持这三个量固定；仓库默认使用
+[两阶段探索](#is-two-stage)，上述数值用于首轮。
 
 `ar.algorithms.is.block_first` 打开时，第 2 步先只生成各候选的 $`B`$ 个 token，第一条补全改为续写请求：沿用候选的种子，
 均匀数流从第 $`B`$ 个位置接着取，与其余 $`K-1`$ 条补全同批生成。在均匀数流按位置索引的后端上，续写逐 token 等于原先
@@ -826,7 +826,7 @@ AR 条件 IS 位于 [`conditional_is.py`](../../src/inference_scaling/arllm/algo
 ### 所选补全完成后结束候选池
 
 `ar.algorithms.is.selection_ready=true` 使用完整奖励、缓存的前缀分数及生成前固定的随机数决定选择，
-仅用于流式 `two_stage`，默认关闭，要求 `block_first=false`。前缀分数只读取已经生成的 token 概率统计；
+仅用于流式 `two_stage`，仓库默认开启，要求 `block_first=false`。前缀分数只读取已经生成的 token 概率统计；
 统计不足时继续等待，不额外调用模型评分。该规则近似未完成权重，存在完成时间相关的选择偏差。
 
 在 `two_stage` 中，首轮保持预设 M/K/B，原根请求在 B 处释放 K−1 条子请求，随后继续生成。
@@ -1010,7 +1010,7 @@ N、n 只读取未选组的对称统计量；给定这些组及固定首块，�
 实现复用 [`run_conditional_is`](../../src/inference_scaling/arllm/algorithms/conditional_is.py) 的原步骤：
 `_final_candidate_count` 汇集未选组的长度与权重，`forecast_candidate_count` 计算 N 并用独立随机数决定实际新候选数。
 [`evaluate_candidates`](../../src/inference_scaling/arllm/algorithms/candidates.py) 设置末轮长度区间并剔除零权重候选，复用原有请求计费和关闭流程。
-两阶段模式默认关闭；长度区间随该模式启用，无单独开关。API 的 `final_pool_limit=None` 只取消容量截限，仍执行权重分配和长度区间；
+仓库默认开启两阶段模式；长度区间随该模式启用，无单独开关。API 的 `final_pool_limit=None` 只取消容量截限，仍执行权重分配和长度区间；
 实验与服务通过共享的 `conditional_is_config` 从后端读取并发容量。
 
 <a id="is-metropolized"></a>
@@ -1212,7 +1212,7 @@ s_t(x,y)=D_{\mathrm{KL}}\!\left(U\,\Vert\,p(\cdot\mid x,y_{\lt t})\right)
 r_{\mathrm{SC}}(x,y)=\frac{1}{L}\sum_{t=1}^{L}s_t(x,y),
 ```
 
-$`V`$ 为词表大小，$`L`$ 为评分段长度。均值使奖励不随长度增长；原始定义对整条输出取平均，`scope` 因而默认 `full`。
+$`V`$ 为词表大小，$`L`$ 为评分段长度。均值消除按长度累加的尺度差异；仓库默认 `scope="thinking"`，只对思考段取平均，`full` 则评整条输出。
 它不同于采到 token 的平均对数概率：后者在温度 1 下是路径上平均负熵的单样本估计，一次采到小概率 token 就大幅降低
 奖励；$`s_t`$ 直接读分布，没有这份采样噪声。$`s_t`$ 要用整个词表的概率：Transformers 后端生成时算出；vLLM 的输出只有
 最可能的几个 token。Ascend 可开启 `ar.engine.vllm.scalar_self_certainty`，在设备上归约完整分布并随生成返回标量，
@@ -1230,7 +1230,7 @@ c_t(x,y)=-\frac{1}{K}\sum_{j=1}^{K}
 分布越尖，第 2 名以后的概率越小，$`c_t`$ 越大；vLLM 生成时就能返回这 $`K`$ 个对数概率（默认 $`K=5`$）。两种统计量
 所用的模型和概率策略固定（评分温度为 `rewards.<name>.score_temperature`），使同一条轨迹的奖励与其来源 proposal 无关。
 
-两种奖励取 `scope = "thinking"` 时优先对完整、非空的思考段评分（Consilience 默认如此）。关闭思考、缺少边界、思考
+两种奖励默认均取 `scope = "thinking"`，优先对完整、非空的思考段评分。关闭思考、缺少边界、思考
 未结束、思考段为空或结构解析失败时，同一公式应用于全序列；`scope = "full"` 直接选择全序列模式。该回退规则在 rollout 评分时确定，作为
 逐序列奖励定义的一部分；最终输出的回退原因记入记录的 `fallbacks`（前缀为奖励名，如 `consilience:`）。
 
@@ -1447,7 +1447,7 @@ Consilience 的逐 token 统计量；已采样 token 同时位于 top-K 时，�
 [`vllm_statistics.py`](../../src/inference_scaling/arllm/backends/vllm_statistics.py) 在内部概率载荷中增加一个带
 负 ID 标记的统计槽，后端读取时将其分离；它不进入生成 token、采样概率、top-K 排序或累计 log-probability。
 原生输出负责请求切分、异步复制及流式聚合，主机每步只接收一个新增浮点数及标记，而非整个词表。
-同一引擎的 top-K 请求也多计算该标量；本开关默认关闭。该适配不支持 beam search、词表裁剪采样或硬掩码下
+同一引擎的 top-K 请求也多计算该标量；当前 Ascend 配置默认开启。该适配不支持 beam search、词表裁剪采样或硬掩码下
 的无限 KL；未传回完整、有限统计量时显式报错。它也不提供与采样温度不同的基础概率。
 
 **GPU 原始概率记录。** 下述 `fused_logprobs` 是独立路径，与 Ascend 标量开关互斥。

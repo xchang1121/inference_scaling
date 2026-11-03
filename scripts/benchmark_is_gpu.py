@@ -330,11 +330,13 @@ def comparison_summary(rows, expected_pairs, modes):
                                 if reference + suffix in modes and alternative + suffix in modes]}
 
 
-def select_mode(family, mode, settings):
+def select_mode(family, mode, settings, *, study="latency"):
     if mode not in {mode for modes in STUDIES.values() for mode in modes}:
         raise ValueError(f"unknown benchmark mode: {mode}")
     algorithm = "sample" if mode == "base" else "best_of_n" if mode == "bon-consilience" else "is"
     reward = None if mode == "base" else "self_certainty" if mode.endswith(SC_SUFFIX) else "consilience"
+    if study == "latency" and mode == "is":
+        reward = settings["run"]["reward"]
     family.choices = SimpleNamespace(algorithm=algorithm, reward=reward)
     family.config = dict(family.ar["algorithms"][algorithm])
     pool_mode = mode.removesuffix(SC_SUFFIX)
@@ -345,11 +347,11 @@ def select_mode(family, mode, settings):
     if mode == "bon-consilience":
         family.config["samples"] = 4
     family.reward_settings = None if reward is None else dict(settings["rewards"][reward])
-    if reward == "self_certainty":
+    if reward == "self_certainty" and study != "latency":
         family.reward_settings["scope"] = "thinking"
 
 
-def run_pairs(family, dataset, settings, repeats, graph, admission, write, modes=STUDIES["latency"]):
+def run_pairs(family, dataset, settings, repeats, graph, admission, write, modes=STUDIES["latency"], *, study="latency"):
     """Pair questions and seeds, rotate method order, stop after an engine failure."""
     rows = []
     expected = len(dataset.problems) * repeats
@@ -360,10 +362,10 @@ def run_pairs(family, dataset, settings, repeats, graph, admission, write, modes
                 offset = (index + repeat) % len(modes)
                 order = modes[offset:] + modes[:offset]
                 for mode in order:
-                    select_mode(family, mode, settings)
+                    select_mode(family, mode, settings, study=study)
                     row = {"kind": "measurement", "problem_id": problem.id, "repeat": repeat,
                            "mode": mode, "seed": seed, "algorithm_config": family.config,
-                           "reward_config": family.reward_settings}
+                           "reward": family.choices.reward, "reward_config": family.reward_settings}
                     print(json.dumps({"kind": "start", **{key: row[key] for key in
                                                          ("problem_id", "repeat", "mode", "seed")}}), flush=True)
                     try:
@@ -456,12 +458,17 @@ def main():
         parser.error("selection study requires the current M=4, K=1, selection_ready=true baseline")
     if "bon-consilience" in modes:
         ar["algorithms"]["best_of_n"]["samples"] = 4
-    uses_self_certainty = any(mode.endswith(SC_SUFFIX) for mode in modes)
-    if uses_self_certainty:
+    uses_self_certainty = (any(mode.endswith(SC_SUFFIX) for mode in modes)
+                          or args.study == "latency" and settings["run"]["reward"] == "self_certainty")
+    if uses_self_certainty and args.study != "latency":
         settings["rewards"]["self_certainty"]["scope"] = "thinking"
+    initial_reward = (settings["run"]["reward"] if args.study == "latency" else
+                      "self_certainty" if uses_self_certainty else "consilience")
+    if initial_reward not in ar_app.CONFIDENCE_REWARDS:
+        parser.error("thinking-only performance measurements require self_certainty or consilience")
     resolved, _ = resolve_thinking(ar)
     if (resolved["output"]["thinking_mode"] != "enabled" or ar["output"]["sampling_scope"] != "thinking"
-            or settings["rewards"]["consilience"]["scope"] != "thinking"):
+            or settings["rewards"][initial_reward]["scope"] != "thinking"):
         parser.error("this comparison requires thinking generation and thinking-only IS")
     # Count padded and canceled work through the engine's native execution statistics.
     engine["vllm"]["engine_kwargs"]["cudagraph_metrics"] = True
@@ -472,7 +479,6 @@ def main():
     try:
         if not dataset.problems:
             parser.error("the selected dataset is empty")
-        initial_reward = "self_certainty" if uses_self_certainty else "consilience"
         family = ARFamily(settings, SimpleNamespace(algorithm="is", reward=initial_reward), dataset)
         family.load()
         if not family.raw.supports_streaming_generation:
@@ -483,7 +489,7 @@ def main():
         try:
             family.max_new_tokens = 64
             for mode in modes:
-                select_mode(family, mode, settings)
+                select_mode(family, mode, settings, study=args.study)
                 family.solve(dataset.problems[0], SeedStream(SeedStream(settings["run"]["seed"]).derive("paired-warmup", mode)))
         finally:
             family.max_new_tokens = maximum
@@ -493,12 +499,12 @@ def main():
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
                 sink.flush()
             write({"kind": "metadata", "label": args.label, "expected_pairs": len(dataset.problems) * repeats,
-                   "modes": list(modes),
+                   "study": args.study, "modes": list(modes),
                    "command_line": sys.argv[1:], "settings": settings, "dataset": dataset.describe(),
                    "engine": engine_settings(family.raw), "parameter_count": family.raw.parameter_count,
                    "git": git_state(), "source_sha256": json_sha256(source_sha256()), "environment": environment(),
                    "timing": "cold-prefix generation, including final content; excluding loading, warm-up, grading and writes"})
-            run_pairs(family, dataset, settings, repeats, graph, admission, write, modes)
+            run_pairs(family, dataset, settings, repeats, graph, admission, write, modes, study=args.study)
     finally:
         ar_app.run_conditional_is = original_run
         if graph is not None:

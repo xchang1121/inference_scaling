@@ -27,12 +27,12 @@ KL 正则化目标：
 ```
 
 `is` 与 `mh` 以这一分布为目标，有限候选数或有限更新轮数产生近似误差；`mh_power` 的目标为幂分布 $`p(y\mid x)^\alpha`$。
-IS 的可选提前选择还会引入前缀估计与完成时间相关的偏差。其余算法是生成与选择基线；奖励只用于打分，不回传给模型。
+IS 默认开启的提前选择还会引入前缀估计与完成时间相关的偏差，可设 `selection_ready=false` 等待完整权重。其余算法是生成与选择基线；奖励只用于打分，不回传给模型。
 
 ## 快速开始
 
 ```bash
-python -m inference_scaling                                   # 默认：--algorithm is --model ar --reward consilience --dataset gsm8k
+python -m inference_scaling                                   # 默认：IS + Self-Certainty；数据集 gsm8k
 python -m inference_scaling --algorithm best_of_n --reward verifier
 python -m inference_scaling --algorithm mh_power --dataset math500
 ```
@@ -41,14 +41,18 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 | --- | --- | --- |
 | `--algorithm` | `sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`、`is` | `is` |
 | `--model` | `ar`（兼容既有命令；具体权重由 `ar.model` 指定） | `ar` |
-| `--reward` | `verifier`、`self_certainty`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `consilience` |
+| `--reward` | `verifier`、`self_certainty`、`consilience`；只用于 `best_of_n`、`mh`、`is` | `run.reward`，当前为 `self_certainty` |
 | `--dataset` | `gsm8k`、`math500` | `gsm8k` |
 | `--output` | 结果根目录 | `results` |
 
 没有其他命令行参数。块长、候选数、温度、引擎与优化选项都在设置文件中，缺少、多出或类型不符的字段在加载模型前
-报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认 AR 设置使用 vLLM、BF16 和
+报错。每个字段的含义见 [SETTINGS.md](docs/SETTINGS.md)。默认 AR 设置使用昇腾 vLLM、BF16 和
 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) 的思考模式；卡数须按权重、缓存及上下文容量验证。配置依据见
 [SETTINGS.md](docs/SETTINGS.md#ar-defaults)。
+
+全仓默认使用 **思考段 Self-Certainty + 两阶段 IS**：首轮 M=4、K=1、B=1024，SIR 选择，
+`selection_ready=true`；奖励温度 0.25、评分温度 1。CLI、HTTP 服务与默认性能评测共用 `run.reward` 和
+`ar.algorithms.is`，不随数据集切换。Ascend 的 `scalar_self_certainty=true` 随生成返回全词表统计，无额外模型评分前向。
 
 ### 长度与采样配置
 
@@ -77,7 +81,7 @@ python -m inference_scaling --algorithm mh_power --dataset math500
 | `best_of_n` | 独立生成 N 个样本后按奖励选择；verifier 投票时为多数投票 |
 | `mh` | 奖励目标的后缀 MH，可选完整候选池和冻结历史 proposal |
 | `mh_power` | 幂目标的后缀 MH |
-| `is` | 保留完整 rollout 的条件 IS；主推加速方向为[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)和[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready) |
+| `is` | 保留完整 rollout 的条件 IS；默认使用[两阶段探索](docs/methods/ALGORITHMS.md#is-two-stage)和[所选补全完成后结束](docs/methods/ALGORITHMS.md#is-selection-ready) |
 
 原理、步骤与实现见[算法文档](docs/methods/ALGORITHMS.md)。算法层只接收 `reward(prompt_tokens, completion_tokens)`，
 不接触数据集或文本解析；共享的 SIR 选择、IS 权重和 MH 接受核位于 [`shared/sampling/`](src/inference_scaling/shared/sampling/)。
@@ -129,7 +133,7 @@ IS 历史步骤仅保存长度、权重、奖励与选择索引，完整 token �
 | --- | --- |
 | 跨题连续批处理 | `ar.engine.continuous_batching.workers > 1` |
 | IS 前缀就绪即释放分支、共享并发上限与长尾调度 | `ar.engine.rollout_scheduler`（默认启用；异步 vLLM，非融合统计模式；[实现与分布保证](docs/methods/ROLLOUT_SCHEDULING.md)、[INFRA 结果](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-report-rollout-scheduling)） |
-| IS 必要事件交付、紧凑概率输出 | K=1 向算法交付完成结果，K>1 增加分支所需的前缀事件；`ar.engine.vllm.stream_interval = 32`、`flat_logprobs = true`（[CPU 输出层测试](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-cpu-output)） |
+| IS 必要事件交付、紧凑概率输出 | 提前选择开启时交付中间增量；关闭时 K=1 只交付完成结果，K>1 增加分支所需的前缀事件；`ar.engine.vllm.stream_interval = 32`、`flat_logprobs = true`（[CPU 输出层测试](docs/reports/RTX3090_ROLLOUT_INFRA.md#infra-cpu-output)） |
 | vLLM 引擎、前缀缓存、融合概率（MH 的基础概率与 Self-Certainty 在采样同一步读出） | `ar.engine.backend = "vllm"`、`ar.engine.vllm.enable_prefix_caching`、`ar.engine.vllm.fused_logprobs` |
 | 长序列分块评分 | `ar.engine.transformers.score_chunk_size` |
 | 多尺度 MH 后缀 | `ar.algorithms.mh_power.suffix_schedule = "multiscale"` |
@@ -212,7 +216,7 @@ python -m pytest
 逐条与按块 Metropolized、Best-of-4 + Consilience，以及快速 IS 和三种 Metropolized 的全词表 Self-Certainty 版本，
 共 12 种方法。Base / 快速 Consilience IS / 快速 Self-Certainty IS 为 92% / 93% / 94%，按块 Self-Certainty K=2 为 95%；
 后者比快速 Self-Certainty IS 净多对 1 题，耗时约 +20%、FLOPs 约 +75%，准确率差区间包含 0。
-报告统一汇总 100 题的答案、论证审核、配对区间和成本；默认设置保持不变。
+报告统一汇总 100 题的答案、论证审核、配对区间和成本；据此采用上述快速 Self-Certainty IS 通用默认，长度预算仍由共用配置决定。
 
 ## 历史结果
 

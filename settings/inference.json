@@ -1,5 +1,6 @@
 {
   "run": {
+    "reward": "self_certainty",
     "seed": 20260808,
     "draws": 1,
     "hash_cache_dir": ".cache/artifact_hashes"
@@ -42,7 +43,7 @@
   },
   "rewards": {
     "verifier": {"temperature": 0.1, "source": "dataset", "pool_size": 8},
-    "self_certainty": {"temperature": 0.25, "score_temperature": 1.0, "scope": "full"},
+    "self_certainty": {"temperature": 0.25, "score_temperature": 1.0, "scope": "thinking"},
     "consilience": {
       "temperature": 2.0,
       "score_temperature": 1.0,
@@ -82,7 +83,7 @@
     },
     "engine": {
       "backend": "vllm",
-      "device": "cuda",
+      "device": "npu",
       "dtype": "bfloat16",
       "context_window": null,
       "transformers": {
@@ -110,7 +111,7 @@
         "enable_prefix_caching": true,
         "max_lora_rank": 16,
         "fused_logprobs": false,
-        "scalar_self_certainty": false,
+        "scalar_self_certainty": true,
         "exact_scoring": "none",
         "parameter_count": null,
         "engine_kwargs": {"enable_chunked_prefill": true, "language_model_only": true}
@@ -174,8 +175,8 @@
         "rollout_count": 1,
         "block_size": 1024,
         "block_first": false,
-        "exploration_schedule": "fixed",
-        "selection_ready": false,
+        "exploration_schedule": "two_stage",
+        "selection_ready": true,
         "selection": "sir"
       }
     }

@@ -13,9 +13,20 @@ from inference_scaling.app.settings import SCHEMA, SettingsError, check, load_se
 from tests.tabular import TabularAutoregressiveBackend
 
 
-def test_cli_defaults_and_reward_rules() -> None:
+def test_cli_defaults_and_reward_rules(monkeypatch) -> None:
     choices, output = parse([])
-    assert choices == Choices("is", "ar", "consilience", "gsm8k") and output == Path("results")
+    assert choices == Choices("is", "ar", "self_certainty", "gsm8k") and output == Path("results")
+    settings = load_settings()
+    assert settings["ar"]["algorithms"]["is"] == {
+        "candidate_count": 4, "rollout_count": 1, "block_size": 1024, "block_first": False,
+        "exploration_schedule": "two_stage", "selection_ready": True, "selection": "sir",
+    }
+    assert settings["rewards"]["self_certainty"] == {"temperature": 0.25, "score_temperature": 1.0, "scope": "thinking"}
+    assert settings["ar"]["engine"]["vllm"]["scalar_self_certainty"]
+    settings["run"]["reward"] = "consilience"
+    monkeypatch.setattr("inference_scaling.app.cli.load_settings", lambda: settings)
+    assert parse(["--algorithm", "mh"])[0].reward == "consilience"
+    assert parse(["--reward", "self_certainty"])[0].reward == "self_certainty"
     assert parse(["--algorithm", "sample"])[0].reward is None
     assert parse(["--algorithm", "best_of_n", "--reward", "verifier"])[0].label == "best_of_n-verifier"
     for argv in (["--model", "dllm"], ["--algorithm", "greedy", "--reward", "verifier"], ["--reward", "vote"]):
@@ -112,7 +123,8 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     # The fake backend computes any token statistic, as the Transformers engine does.
     settings["ar"]["engine"].update(backend="transformers", device="cpu")
     settings["rewards"]["verifier"]["pool_size"] = 3
-    settings["ar"]["algorithms"]["is"].update(candidate_count=2, rollout_count=1, block_size=2)
+    settings["ar"]["algorithms"]["is"].update(candidate_count=2, rollout_count=1, block_size=2,
+                                             exploration_schedule="fixed", selection_ready=False)
     monkeypatch.setattr("inference_scaling.app.ar.load_backend", lambda *args, **kwargs: ThinkingBackend())
     return settings
 
@@ -122,7 +134,7 @@ AR_RUNS = [
     ("best_of_n", "verifier", {"source": "vote"}),
     ("mh_power", None, {}),
     ("mh", "consilience", {"ensemble_size": 3, "iterations": 2, "suffix_schedule": "log_uniform", "execution": "pipeline"}),
-    ("is", "consilience", {}),
+    ("is", "self_certainty", {}),
 ]
 
 
@@ -241,6 +253,7 @@ def test_fixed_is_uses_the_configured_shape_for_each_thinking_step(ar_settings, 
 
 def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_settings, tmp_path):
     ar_settings["ar"]["engine"]["backend"] = "vllm"
+    ar_settings["ar"]["engine"]["vllm"]["scalar_self_certainty"] = False
     choices = Choices("is", "ar", "self_certainty", "gsm8k")
     with pytest.raises(ValueError, match="whole next-token distribution"):
         run(choices, ar_settings, tmp_path / "results")

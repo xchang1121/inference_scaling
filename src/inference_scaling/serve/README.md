@@ -1,7 +1,7 @@
 # 推理服务
 
 一个模型对外提供 OpenAI Chat Completions 与 Anthropic Messages 两种接口；默认在思考段上按配置运行条件 IS
-（Consilience 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
+（Self-Certainty 加权）选出一段思考，再从它正常生成一次答案。网关、agent、写代码的客户端按普通模型调用即可。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -14,13 +14,14 @@
 
 1. 请求（含工具定义）转成 Qwen3.8 的 chat template 消息；多轮历史里的思考与工具调用按模板还原。
 2. 使用 `ar.algorithms.is` 配置的探索调度、块长、候选数与补全数做思考段条件 IS；
-   候选与补全写到 `</think>` 停止，按 Consilience 加权。单条输出上限和默认推理强度与批量评测共用。
+   候选与补全写到 `</think>` 停止，按 `run.reward` 加权，默认使用思考段全词表 Self-Certainty。单条输出上限和默认推理强度与批量评测共用。
 3. 每轮选择后，向流式客户端交付已经固定的思考前缀；从最终选中的完整思考正常生成一次答案。无工具的答案使用增量交付。
 4. Qwen3.8 的 `<tool_call><function=…><parameter=…>` 解析为 OpenAI `tool_calls` 或 Anthropic `tool_use`，参数按工具
    schema 取类型。
 
 返回里额外带 `scaling`：生效推理强度、候选数、补全数与块长、IS 步数、停止原因（`eos`、`length`、`stop` 或显式启用时限后的 `deadline`）、耗时、`stopping_policy`（`logical/wall_clock`）与实际 `rollout_scheduler`（`streaming/batch`）。
 `scaling.generation_budget` 记录配置上限、客户端上限、剩余上下文和实际生成上限。
+`scaling.reward`、`reward_config` 和 `selection` 记录实际奖励、奖励设置与选择核。
 `first_commit_seconds` 是首次固定非空前缀的时间，`first_thinking_publish_seconds` 是首次向服务交付思考文本的时间，
 `thought_ready_seconds` 是完整思考就绪时间，均从请求开始推理起计。排队及网络延迟由客户端测量；
 keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT。
@@ -29,19 +30,19 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 与 `usage.completion_tokens` 中最终保留输出的长度分开。取消、评分计数缺失或期间发生引擎抢占时，
 不完整的成本及生成量标为 `null`，避免跨客户端混算。
 
-`ar.algorithms.is.exploration_schedule="two_stage"` 首轮使用 M/K/B，再按未选 rollout 的长度与权重决定
+默认 `ar.algorithms.is.exploration_schedule="two_stage"` 首轮使用 M=4/K=1/B=1024，再按未选 rollout 的长度与权重决定
 末轮候选数。末轮最多占用已配置的在途容量，并使用保留序列的随机长度区间。`fixed` 保留为 CPU 参考；
-快速配置已完成两卡／四卡小样本配对验证，默认设置保持不变；[结果与适用范围](../../../docs/reports/QWEN38_IS_SERVING.md)。
+默认奖励与选择配置依据[100 题对照](../../../docs/reports/QWEN38_IS_SELECTION.md)确定；多卡服务性能见[结果与适用范围](../../../docs/reports/QWEN38_IS_SERVING.md)。
 `scaling.sampling_plans` 记录各轮实际 `(B, M, K)`，`final_pool_limit` 记录容量限制；
 末轮 M=1 表示直接复用已有序列，无新请求。见[两阶段探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
 
-`selection_ready=true` 使用已有前缀统计近似未完成权重，在完整候选已满足选择条件时取消其余请求。
+默认 `selection_ready=true` 使用已有前缀统计近似未完成权重，在完整候选已满足选择条件时取消其余请求。
 首轮保持预设 B，仅收齐原定补全的组可以入选；末轮允许直接选回完整参考序列。
 关闭时等待全部有效候选。该近似存在选择偏差，详见[提前选择](../../../docs/methods/ALGORITHMS.md#is-selection-ready)；
 仅读取缓存统计，额外模型评分调用数为零。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
-K=1 默认只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
+提前选择开启时交付中间增量以估计未完成权重。关闭后，K=1 只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
 
 ## 1. 安装（昇腾）
 
@@ -61,7 +62,7 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 ## 2. 配置
 
 服务只读取 `settings/inference.json`：`ar` 提供模型、长度、模板、引擎、采样与 IS 参数，
-`rewards.consilience` 提供奖励，`run.seed` 提供根种子，`serve` 提供 HTTP 参数。
+`run.reward` 选择奖励（`self_certainty` 或 `consilience`），`rewards` 提供其参数，`run.seed` 提供根种子，`serve` 提供 HTTP 参数。
 字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#serve)。
 
 `settings/inference.json` 需要按机器改的项：
@@ -71,10 +72,10 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | `ar.model.path` / `local_files_only` | 本地权重目录 / `true` | 启动时不联网 |
 | `ar.engine.vllm.tensor_parallel_size` | 卡数，如 `2` | BF16 权重约 54 GB，64 GB 卡单卡几乎没有缓存空间 |
 | `ar.engine.vllm.gpu_memory_utilization` | `0.9` 左右 | 按已跑通时的取值 |
-| `ar.engine.vllm.fused_logprobs` | `false` | 融合 worker 只适配 GPU；Consilience 不需要它 |
+| `ar.engine.vllm.fused_logprobs` / `scalar_self_certainty` | `false` / `true` | Ascend 随生成计算全词表 KL 标量，不增加评分前向；保留原生异步调度与词表惩罚 |
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
 | `ar.engine.vllm.enable_prefix_caching` | 先 `true` | 混合模型的前缀缓存出错或输出异常时改 `false`，只影响速度 |
-| `ar.algorithms.is` | `candidate_count = 4`、`rollout_count = 1`、`block_size = 1024`、`block_first = false` | 评测与服务共用；候选数、补全数与块长固定，块长在输出上限处截短 |
+| `ar.algorithms.is` | M=4、K=1、B=1024、`block_first=false`、`two_stage`、`selection_ready=true`、`sir` | 评测与服务共用的首轮设置；末轮复用已有 rollout 并按预算构造完整后缀池 |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
 `ar.max_new_tokens=null` 使用剩余上下文作为生成总长，`ar.engine.context_window=null` 读取模型/引擎配置；

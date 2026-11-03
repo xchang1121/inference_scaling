@@ -86,6 +86,7 @@ def test_async_vllm_uses_its_public_signature_and_shares_files_with_the_exact_sc
     assert kwargs["max_model_len"] == engine["context_window"]
     assert kwargs["engine_kwargs"] == {**engine["vllm"]["engine_kwargs"], "max_logprobs": 16}
     assert kwargs["enable_fused_logprobs"] is False
+    assert kwargs["scalar_self_certainty"] is True
     assert kwargs["flat_logprobs"] is True and kwargs["stream_interval"] == 32
     assert kwargs["async_scheduling"] is None
 
@@ -95,6 +96,7 @@ def test_fused_logprobs_reach_either_engine_but_need_an_unpenalized_model(monkey
     model["path"] = str(tmp_path)
     model["token_penalty"] = {"words": ["wait"], "strength": 1.0}
     engine["vllm"]["fused_logprobs"] = True
+    engine["vllm"]["scalar_self_certainty"] = False
     with pytest.raises(ValueError, match="unpenalized"):
         loader.load_backend(model, engine, seed=0, logprobs=0)
 

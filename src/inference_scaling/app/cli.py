@@ -28,13 +28,14 @@ def parse(argv: Sequence[str] | None = None) -> tuple[Choices, Path]:
     )
     parser.add_argument("--algorithm", choices=ALGORITHMS, default="is")
     parser.add_argument("--model", choices=MODELS, default="ar", help="model family")
-    parser.add_argument("--reward", choices=REWARDS, help=f"reward of {', '.join(sorted(REWARD_ALGORITHMS))} (default: consilience)")
+    parser.add_argument("--reward", choices=REWARDS,
+                        help=f"reward of {', '.join(sorted(REWARD_ALGORITHMS))} (default: run.reward in settings/inference.json)")
     parser.add_argument("--dataset", choices=sorted(DATASETS), default="gsm8k")
     parser.add_argument("--output", type=Path, default=Path("results"), help="root of the results directories")
     args = parser.parse_args(argv)
     reward = args.reward
     if args.algorithm in REWARD_ALGORITHMS:
-        reward = reward or "consilience"
+        reward = reward or load_settings()["run"]["reward"]
     elif reward is not None:
         parser.error(f"--algorithm {args.algorithm} does not use a reward")
     return Choices(args.algorithm, args.model, reward, args.dataset), args.output

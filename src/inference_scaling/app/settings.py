@@ -24,7 +24,8 @@ _NULLABLE_STR = (str, None)
 _PINS = (dict, None)
 
 SCHEMA: dict[str, Any] = {
-    "run": {"seed": int, "draws": int, "hash_cache_dir": str},
+    "run": {"reward": _Choices({"verifier", "self_certainty", "consilience"}),
+            "seed": int, "draws": int, "hash_cache_dir": str},
     "datasets": {
         "gsm8k": {
             "path": str,
@@ -250,6 +251,9 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
     if not path.is_file():
         raise SettingsError(f"{path} does not exist; run from the repository root")
     settings = json.loads(path.read_text(encoding="utf-8"))
+    run = settings.get("run", {})
+    if isinstance(run, dict):
+        run.setdefault("reward", "self_certainty")
     # Older complete settings files used only SIR; preserve that explicit default.
     config = settings
     for key in ("ar", "algorithms", "is"):

@@ -12,7 +12,7 @@
 
 `scripts/benchmark_is_gpu.py` 配对测量同题 Base 思考采样与当前快速 IS。模型、采样、奖励、M/K/B 和硬件设置
 继承该文件，要求异步 vLLM、`workers=1`、thinking 范围及 `exploration_schedule="two_stage"`。
-`selection_ready` 由同一配置控制。该入口不运行固定块 IS 对照。
+`selection_ready` 由同一配置控制。默认 `--study latency` 的 IS 奖励读取 `run.reward`；该入口不运行固定块 IS 对照。
 
 ```bash
 python scripts/benchmark_is_gpu.py --settings settings/inference.json \
@@ -36,7 +36,7 @@ python scripts/benchmark_is_gpu.py --summary results/tp2-fast.jsonl
 完整设置、代码版本和顺序保存在 JSONL；`--summary` 只读汇总，不加载模型。
 
 `--study selection` 在同一入口增加完整等待的 SIR、逐条 Metropolized 选择（K=1、2）及按块 Metropolized
-选择（K=2），保留 Base 与当前快速 IS。要求配置为 M=4、K=1、`two_stage`、`selection_ready=true`；各对照只覆盖
+选择（K=2），保留 Base 与快速 Consilience IS。该历史对照显式使用 Consilience，不随 `run.reward` 改变。要求配置为 M=4、K=1、`two_stage`、`selection_ready=true`；各对照只覆盖
 K、选择核与提前选择开关，实际生效配置逐条记录。方法顺序逐题轮换，判题在生成后执行，标准答案不参与选择。
 相同长度上限不代表相同总计算量；汇总同时给出正确率、配对答对/答错变化、时延与 FLOPs，评估质量与成本的取舍。
 K=1 且候选块互异时，逐条与按块 Metropolized 完全相同，故不重复设组。
@@ -52,7 +52,7 @@ python scripts/benchmark_is_gpu.py --settings settings/inference.json --study re
   --effort low --max-tokens 8192 --label rewards --output results/rewards.jsonl
 ```
 
-Ascend 上先在设置中开启 `ar.engine.vllm.scalar_self_certainty`；采样与评分温度须相同且使用完整支持集。
+Ascend 的 `ar.engine.vllm.scalar_self_certainty` 默认开启；采样与评分温度须相同且使用完整支持集。
 Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2；不按评测答案选择温度。
 独立补测需按题目 ID 与原 Base/IS 记录配对，并注明不同运行批次；不能将未测的 Base 时延写入本批汇总。
 
@@ -67,6 +67,7 @@ Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2�
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
+| `reward` | `self_certainty` \| `consilience` \| `verifier` | 通用默认奖励，当前为 `self_certainty`。CLI 未传 `--reward`、HTTP 服务及默认性能评测共同读取；与数据集无关。服务支持前两种，verifier 由评测入口提供数据集。旧配置省略此字段时按 `self_certainty` 读取 |
 | `seed` | 整数 | 所有随机流的根种子；每题每次抽取的种子由它、抽取序号、算法名和题目 ID 派生 |
 | `draws` | 整数 | 每题独立重复次数；大于 1 时汇总报告 pass@k。增加它会在同一目录续跑 |
 | `hash_cache_dir` | 字符串 | 大文件 SHA-256 缓存目录（按路径、大小和修改时间失效） |
@@ -109,7 +110,7 @@ Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2�
 | `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
 | `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
 | `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
-| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；评分分布温度；评分范围（默认 `full`）。取评分段上全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值。vLLM 使用下述 Ascend 标量路径、GPU 融合路径或 `exact_scoring = "transformers"` |
+| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；评分分布温度；评分范围（默认 `thinking`，缺少完整思考段时回退到全序列并记录原因）。取评分段上全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值。vLLM 使用下述 Ascend 标量路径、GPU 融合路径或 `exact_scoring = "transformers"` |
 | `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
 | `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty` 倍首段均值 |
@@ -186,7 +187,7 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | `vllm.tensor_parallel_size` / `data_parallel_size` / `gpu_memory_utilization` / `max_num_seqs` / `max_num_batched_tokens` / `quantization` / `enforce_eager` / `max_lora_rank` | — | 对应 vLLM 引擎参数；上下文统一使用 `ar.engine.context_window` |
 | `vllm.enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `vllm.fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
-| `vllm.scalar_self_certainty` | 布尔 | 默认 `false`。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false` |
+| `vllm.scalar_self_certainty` | 布尔 | 默认 `true`，用于当前昇腾配置。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false`。CUDA 或 beam search 需显式关闭此项并选择支持所需统计量的后端 |
 | `vllm.exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `vllm.parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `vllm.engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
@@ -238,16 +239,16 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
-| `is.candidate_count` / `rollout_count` / `block_size` | 初始候选数 M、每候选补全数 K 与块长 B；默认全程固定，块长在输出上限处截短 |
-| `is.exploration_schedule` | `two_stage` 将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为默认完整等待与 CPU 参考；快速配置的[当前配对结果](reports/QWEN38_IS_SERVING.md)限于小样本，尚不支持默认长预算下的普遍质量与时延保证。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
-| `is.selection_ready` | 默认 `false`，等待完整权重。设为 `true` 后，首轮以完整组权重和固定随机优先级提前选择，末轮复用固定 SIR 随机数；未完成权重由缓存前缀估计，存在选择偏差。仅支持流式 `two_stage` 且 `block_first=false`。见[选择条件](methods/ALGORITHMS.md#is-selection-ready) |
+| `is.candidate_count` / `rollout_count` / `block_size` | 首轮候选数 M、每候选补全数 K 与块长 B，默认 4 / 1 / 1024；两阶段模式在后续轮次重分配探索预算。块长在输出上限处截短 |
+| `is.exploration_schedule` | 默认 `two_stage`：将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为显式选项与 CPU 参考。[100 题对照](reports/QWEN38_IS_SELECTION.md)用于默认方案选择，未建立跨任务及长预算的普遍优势。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
+| `is.selection_ready` | 默认 `true`：首轮以完整组权重和固定随机优先级提前选择，末轮复用固定 SIR 随机数；未完成权重由缓存前缀估计，存在选择偏差。仅支持流式 `two_stage`、`block_first=false` 和可读取缓存前缀分数的奖励。`false` 等待完整权重；非流式后端、verifier 或完整池选择核需关闭此项。见[选择条件](methods/ALGORITHMS.md#is-selection-ready) |
 | `is.selection` | 默认 `sir`；`metropolized` 对完整 rollout 索引做一次 Metropolized 更新，`block_metropolized` 先合并同块质量再选择补全。两个可选核均要求 `selection_ready=false`，不额外生成或评分；端到端成本仍会因后续选中轨迹改变。见[选择核](methods/ALGORITHMS.md#is-metropolized)。旧设置文件省略此字段时按 `sir` 读取 |
 | `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
 
-仓库提供的 `ar` 设置仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，使用 BF16、`is` 和 `consilience`。
+仓库提供的 `ar` 设置仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，使用昇腾 vLLM、BF16、`is` 和思考段 `self_certainty`。
 `tensor_parallel_size` 控制每个副本的模型切分，`data_parallel_size` 控制副本数。部署时同时验证权重、缓存、
 原生上下文与并发容量；显存占用比例相同也可能具有不同的可用并发。下表中 `ar` 下的字段省略前缀 `ar.`。
 
@@ -255,7 +256,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | --- | --- | --- |
 | `model.path` / `revision` / `local_files_only` | Hub ID / 固定提交 / `false` | 首次运行下载 BF16 权重（约 55.6 GB）；提交固定文件内容，清单另记每个权重文件的哈希 |
 | `model.token_penalty` | 8 个词，`strength = 1.0` | wait、hmm、alternatively、actually、however、but、maybe、perhaps；覆盖 thinking 与正文，改变基础分布；该模型上的质量与速度收益尚未验证，设为 `null` 可关闭 |
-| `engine.backend` / `dtype` | `vllm` / `bfloat16` | 权重的原生精度；候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
+| `engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16` | 当前默认使用 Ascend 原生标量统计；vLLM 按已安装平台识别设备。候选与补全经前缀缓存共享预填充。线性注意力层的前缀状态缓存（vLLM 的 `align` 模式）仍属实验功能，出现异常时关闭 `enable_prefix_caching` |
 | `vllm.gpu_memory_utilization` / `max_num_seqs` | 0.92 / 32 | 纯文本部分的权重约 50 GiB，其余用作缓存（全注意力层的 KV 每 token 约 64 KiB，同一前缀的请求共享前缀块）；限制并发以减少抢占（抢占使计算量记录变为下界） |
 | `engine.continuous_batching.workers` | 1 | 批量评测的题目并发度。串行使用引擎总计数，并发使用请求级计数；缺失或存在未计入工作时成本标为 `null` |
 | `engine.context_window` / `engine.vllm.max_num_batched_tokens` | `null` / 16384 | 上下文读取模型/引擎配置，当前模型原生容量 262144；批处理 token 上限只控制每次调度的计算量 |
@@ -264,14 +265,14 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `output.thinking_mode` / `sampling_scope` | `enabled` / `thinking` | 未结束的思考没有答案；IS 与 MH 只重采样思考段，Consilience 也只读思考段 |
 | `sampling` | 温度 1，完整支持集 | 模型推荐温度 1；IS 与 MH 要求完整支持集，因而不用推荐的 top-p 0.95、top-k 20 |
 | `rewards.consilience.score_temperature` | 1 | 等于采样温度，vLLM 生成时返回 top-5 对数概率，奖励不需要评分前向，`exact_scoring` 保持 `none` |
-| `rewards.self_certainty` | 温度 0.25，`scope = "full"` | 原始定义对整条输出取平均；温度未经校准，应在留出题上按 IS 权重的有效样本量调整。它要整个词表的概率：vLLM 上设 `fused_logprobs = true`（默认关闭，因为它关掉 vLLM 的异步调度） |
+| `rewards.self_certainty` | 奖励温度 0.25，评分温度 1，`scope = "thinking"` | 对思考段取全词表 KL 均值；`scalar_self_certainty=true` 随生成返回统计，无额外模型评分前向，`exact_scoring=none`。保留原生异步调度；CUDA 融合路径另有上述限制 |
 | `max_new_tokens` | `null` | 评测与服务共用，默认使用剩余上下文；显式整数限制 thinking 与最终内容合计的生成长度 |
-| `algorithms.is` | M=4、K=1、B=1024；`block_first = false` | 当前固定的探索预算；K=1 时候选连同第一条补全由一次请求生成。不同卡数的执行性能比较保持这些参数、采样和奖励相同 |
+| `algorithms.is` | M=4、K=1、B=1024；`two_stage`、`selection_ready=true`、`sir`、`block_first=false` | 通用默认；K=1 时候选连同第一条补全由一次请求生成。不同卡数的执行性能比较保持这些参数、采样和奖励相同 |
 | `algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新；`suffix_replay` 与 `early_rejection` 关闭 | 块长按思考长度取而不随上限变：切点落在输出之后的更新直接跳过，奖励目标 MH 的有效更新约为 3 × 思考长度 / 1024；两个开关需要 Transformers 的请求级均匀数流 |
 
 ### `serve`
 
-位于同一个 `settings/inference.json`；只配置 HTTP 服务行为。生成参数继承 `ar` 与 `rewards.consilience`，
+位于同一个 `settings/inference.json`；只配置 HTTP 服务行为。生成参数继承 `ar` 与 `rewards[run.reward]`，
 随机流使用 `run.seed`。思考设置继承 `ar.thinking`，没有另一套服务默认值。
 
 | 字段 | 类型 | 含义 |
