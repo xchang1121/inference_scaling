@@ -1,0 +1,1015 @@
+[
+  {
+    "section": 1,
+    "case_id": "5064c85c8239689fcc75",
+    "problem_id": "lcb/abc393_f",
+    "mode": "block-met-k2",
+    "matching_methods": [
+      "block-met-k2"
+    ],
+    "correct": false,
+    "thinking_characters": 15761,
+    "seconds": 427.8508755429648,
+    "estimated_flops": 4742410033166336,
+    "length_exhausted": true,
+    "submission_sha256": "0affbfcf39b2a358ea846db9c4678a325a247beb65148fab64031f5580bdcb58",
+    "thinking_sha256": "de0153133d306fe0f61806814fe25c0d3e4ab9f0063e7b8b94a19f0369c4a9ff",
+    "source_replica": "a",
+    "source_line": 123,
+    "excerpts": [
+      {
+        "label": "按块 K=2 + C 的状态与更新",
+        "field": "thinking_text",
+        "start": 4626,
+        "end": 5235,
+        "quote": "Define f_i(v) = max length of strictly increasing subsequence in A[1..i] where all elements <=? no exact value? Let's store `dp_i(x)` = max length of LIS in prefix i ending with value exactly x (coordinate). If x not present maybe 0. Recurrence: when adding x=A_i, any increasing subsequence ending at this new x either length 1 or formed by LIS in prefix i-1 ending with value <x plus x. So candidate = 1+max_{y<x} dp_{i-1}(y). Existing subsequences unchanged, so dp_i(x)=max(dp_{i-1}(x), candidate); dp_i(y)=dp_{i-1}(y) for y!=x. This is exactly persistent segment tree max point update and range max query."
+      },
+      {
+        "label": "按块 K=2 + C 后期仍在讨论实现选择",
+        "field": "thinking_text",
+        "start": 14447,
+        "end": 15399,
+        "quote": "Potential issue: `array('i')` append and index operations may be slower than list. Could use `list` for speed if memory allowed. AtCoder? Problem likely from AtCoder? N,Q=2e5. Python accepted maybe with pypy and lists? Need choose robust. We can implement with lists and maybe memory ~300-500 MB. AtCoder memory 1024 MB? Usually 1024 for such. But if 512 MB, still maybe okay? Let's estimate PyPy: list of ints in PyPy uses strategies? PyPy has list of ints unboxed? I think PyPy can store lists of homogeneous ints as rvalue? It has list strategies storing unboxed ints, memory ~8 bytes each, no individual int objects. So list approach in PyPy memory ~3*3.6M*8=86MB, very good. CPython list of ints memory big. Online judge likely PyPy? The request just Python program; we don't know. Use `array` for memory in CPython; speed? Might be okay with 7M operations. Could also use `list` and hope. Need produce code likely run under CPython? We need safe."
+      }
+    ]
+  },
+  {
+    "section": 1,
+    "case_id": "d05f2eb2cc1efda64fa1",
+    "problem_id": "lcb/abc393_f",
+    "mode": "block-met-k2-self-certainty",
+    "matching_methods": [
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 9978,
+    "seconds": 284.69675438432023,
+    "estimated_flops": 3524720598707200,
+    "length_exhausted": false,
+    "submission_sha256": "4b899c6cb2ce3caa3af6f1dfee43e027a2048e5d1a52c623a31a3a0042b1d521",
+    "thinking_sha256": "739772c4c8c71c6f7c0a27c45f4258963468dd7c7c5aa111ddc29a2646dbd076",
+    "source_replica": "a",
+    "source_line": 109,
+    "excerpts": [
+      {
+        "label": "按块 K=2 + SC 对严格递增边界的处理",
+        "field": "thinking_text",
+        "start": 3094,
+        "end": 3489,
+        "quote": "1. Sort elements by value (ascending). For ties in value, we need to be careful. Actually, since we need strictly increasing subsequence, elements with the same value can't both be in the subsequence. So when processing elements with the same value, we should compute all their lis values first (based on the current state of the Fenwick tree), and then update the Fenwick tree with all of them."
+      }
+    ]
+  },
+  {
+    "section": 2,
+    "case_id": "3db6e3d8e61b2957adf6",
+    "problem_id": "lcb/3779",
+    "mode": "block-met-k2",
+    "matching_methods": [
+      "block-met-k2"
+    ],
+    "correct": true,
+    "thinking_characters": 11107,
+    "seconds": 174.92996424576268,
+    "estimated_flops": 1529683016641536,
+    "length_exhausted": false,
+    "submission_sha256": "c118ef27f9e6c431fdb74505be501650ed4c0bc24d87e24583147f87785c7b0a",
+    "thinking_sha256": "ae437479e5ecc52c8883a30a7e6e8a0bc5e7d934afa79843b4cb15d74e46388c",
+    "source_replica": "b",
+    "source_line": 775,
+    "excerpts": [
+      {
+        "label": "C 先提出错误的总和猜测，再被公开样例否定",
+        "field": "thinking_text",
+        "start": 4436,
+        "end": 4778,
+        "quote": "Claim: The optimal answer is a[0] + a[1] + ... + a[o-1] + a[o] + a[o+1] + ... + a[o+e-1] = sum of top (o+e) = sum of top k elements.\n\nWait, that's just the sum of the top k = n/4 elements? Let me verify with examples.\n\nExample 1: [1,2,3,4,5,6,7,8], n=8, k=2, o=1, e=1\nTop k=2 elements: 8+7=15. But expected answer is 14.\n\nSo that's not right."
+      },
+      {
+        "label": "C 最终给出的全局分配规则",
+        "field": "thinking_text",
+        "start": 9468,
+        "end": 9671,
+        "quote": "1. Sort pizzas in descending order\n2. k = n // 4\n3. o = (k + 1) // 2 (ceil of k/2)\n4. e = k // 2 (floor of k/2)\n5. Answer = sum of first o elements + sum of elements at indices o+1, o+3, o+5, ..., o+2e-1"
+      }
+    ]
+  },
+  {
+    "section": 2,
+    "case_id": "eaf6f9fbbe5fd0bc397d",
+    "problem_id": "lcb/3779",
+    "mode": "block-met-k2-self-certainty",
+    "matching_methods": [
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": false,
+    "thinking_characters": 6191,
+    "seconds": 174.59251103689894,
+    "estimated_flops": 1669165664675840,
+    "length_exhausted": false,
+    "submission_sha256": "d89be58ebdf4b46b100e68e9c23263f9bdd45c15deb219500bc88d971ea87ce5",
+    "thinking_sha256": "a9e5b3559ed050e3bc89c565a509e45cc23c257068467891a0e76c8716102b35",
+    "source_replica": "b",
+    "source_line": 785,
+    "excerpts": [
+      {
+        "label": "SC 则按日期依次做局部贪心",
+        "field": "thinking_text",
+        "start": 1884,
+        "end": 2200,
+        "quote": "So the greedy strategy would be:\n1. Sort in descending order.\n2. Process days in order (day 1, day 2, day 3, ...).\n3. On odd days: take the largest remaining as the \"gained\" weight, consume 3 smallest remaining.\n4. On even days: take the second largest remaining as the \"gained\" weight, consume 2 smallest remaining."
+      },
+      {
+        "label": "SC 核对两日样例后的结论",
+        "field": "thinking_text",
+        "start": 3389,
+        "end": 3435,
+        "quote": "This greedy approach works! Let me code it up."
+      }
+    ]
+  },
+  {
+    "section": 3,
+    "case_id": "d010e4e1149deb826268",
+    "problem_id": "HumanEval/145",
+    "mode": "base",
+    "matching_methods": [
+      "base"
+    ],
+    "correct": false,
+    "thinking_characters": 3322,
+    "seconds": 46.13230406912044,
+    "estimated_flops": 86228571075584,
+    "length_exhausted": false,
+    "submission_sha256": "75232f61d269aeb2093caa463b8b2f7af69004a801d5f7ad7a323785aa6a8b94",
+    "thinking_sha256": "508948094cf175d0aad6ce371b370162d217dbb6a1e176260d760940692a0b56",
+    "source_replica": "b",
+    "source_line": 2475,
+    "excerpts": [
+      {
+        "label": "Base 已发现自己解释的结果与样例冲突",
+        "field": "thinking_text",
+        "start": 1254,
+        "end": 1481,
+        "quote": "Stable sort by digit sum:\n- Digit sum 1: 1 (index 0), -1 (index 2)\n- Digit sum 2: 11 (index 1), -11 (index 3)\n- Digit sum 3: -12 (index 4)\n\nResult: [1, -1, 11, -11, -12]\n\nBut expected is [-1, -11, 1, -12, 11]. That's different!"
+      },
+      {
+        "label": "Base 对冲突的最终处理",
+        "field": "thinking_text",
+        "start": 2302,
+        "end": 2648,
+        "quote": "Actually, looking at this more carefully, I think the example might just be incorrect in the problem statement, or I'm misreading it. Let me just implement the straightforward interpretation: sort by sum of digits of absolute value, with stable ordering for ties.\n\nThis is a well-known HumanEval problem (HumanEval/109). The standard solution is:"
+      }
+    ]
+  },
+  {
+    "section": 3,
+    "case_id": "381be7956f422da17538",
+    "problem_id": "HumanEval/145",
+    "mode": "bon-consilience",
+    "matching_methods": [
+      "bon-consilience"
+    ],
+    "correct": true,
+    "thinking_characters": 5802,
+    "seconds": 110.63966909376904,
+    "estimated_flops": 519092770355200,
+    "length_exhausted": false,
+    "submission_sha256": "595329e74ae8a4b4a65e9188a134e2180e5b55a644efd542affdb03e80f95340",
+    "thinking_sha256": "341a0c800f027c8310806cdca6cdd63bedca89262b002d4359ad64b5e6a2f4a8",
+    "source_replica": "b",
+    "source_line": 2465,
+    "excerpts": [
+      {
+        "label": "Best-of-4 + C 尝试让负号只作用于首位数字",
+        "field": "thinking_text",
+        "start": 2865,
+        "end": 3451,
+        "quote": "Hmm, what if the sum of digits is computed differently for negative numbers? What if it's `sum(int(d) for d in str(n))` where for negative numbers, we treat the minus sign as making the first digit negative?\n\n   - -1: -1\n   - -11: -1+1 = 0\n   - -12: -1+2 = 1\n   \n   Then:\n   - 1: 1\n   - 11: 2\n   - -1: -1\n   - -11: 0\n   - -12: 1\n\n   Sorted by these values: -1 (-1), 0 (-11), 1 (1, -12), 2 (11)\n   Result: [-1, -11, 1, -12, 11] (with stable sort for ties at value 1: 1 at index 0, -12 at index 4)\n   \n   That matches! So the approach is: for negative numbers, the first digit is negated."
+      },
+      {
+        "label": "修正落实到最终排序键",
+        "field": "submitted_code",
+        "start": 413,
+        "end": 571,
+        "quote": "    def digit_sum(n):\n        s = str(abs(n))\n        total = sum(int(d) for d in s)\n        if n < 0:\n            total -= 2 * int(s[0])\n        return total"
+      }
+    ]
+  },
+  {
+    "section": 4,
+    "case_id": "522147770130ef3737ec",
+    "problem_id": "lcb/3704",
+    "mode": "sir-k1",
+    "matching_methods": [
+      "sir-k1"
+    ],
+    "correct": true,
+    "thinking_characters": 2693,
+    "seconds": 47.92800102522597,
+    "estimated_flops": 322214061598720,
+    "length_exhausted": false,
+    "submission_sha256": "42a9894e94e600f4e3482b68058fed3459790e10435aa0272372a8b815914501",
+    "thinking_sha256": "cd2fec769b38658a05af36ebcb9e1012f21caa6f5ca7cd29997ccd45ffedc94b",
+    "source_replica": "a",
+    "source_line": 95,
+    "excerpts": [
+      {
+        "label": "SIR K=1 最初错误地只计算偶数前缀",
+        "field": "thinking_text",
+        "start": 683,
+        "end": 947,
+        "quote": "If total_sum is even, then we need left_sum to be even (which means right_sum is also even since total is even).\n\nSo the algorithm is:\n1. If total_sum is odd, return 0\n2. Otherwise, count the number of indices i (0 <= i < n-1) where the prefix sum up to i is even."
+      },
+      {
+        "label": "公开样例迫使它找回被遗漏的奇数＋奇数情形",
+        "field": "thinking_text",
+        "start": 1418,
+        "end": 1817,
+        "quote": "All 4 are even! But left_sum at i=2 is 23 which is odd, and right_sum is 13 which is odd. 23-13=10 which is even. So both being odd also works!\n\nSo the condition is: left_sum and right_sum have the same parity. Which means left_sum % 2 == right_sum % 2.\n\nSince total = left_sum + right_sum, if total is even, then left_sum % 2 == right_sum % 2 always holds. So if total is even, ALL partitions work!"
+      }
+    ]
+  },
+  {
+    "section": 4,
+    "case_id": "b5fa890d166725201216",
+    "problem_id": "lcb/3704",
+    "mode": "sir-k2",
+    "matching_methods": [
+      "is",
+      "sir-k2",
+      "is-self-certainty",
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 1146,
+    "seconds": 43.286420352291316,
+    "estimated_flops": 290207823426560,
+    "length_exhausted": false,
+    "submission_sha256": "fb6e0d035a8240bab0e3932a22c40980cd802a2b5df4afe2842c05089a9319b6",
+    "thinking_sha256": "5a0b830e807df359b324bb8b59afdbd0ad8fb0020c333aca44487282ed72cb9f",
+    "source_replica": "a",
+    "source_line": 99,
+    "excerpts": [
+      {
+        "label": "SIR K=2 直接利用代数恒等式",
+        "field": "thinking_text",
+        "start": 221,
+        "end": 603,
+        "quote": "- left_sum - right_sum is even\n- left_sum + right_sum = total_sum\n- left_sum - right_sum = left_sum - (total_sum - left_sum) = 2 * left_sum - total_sum\n\nSo 2 * left_sum - total_sum is even.\n- 2 * left_sum is always even\n- So 2 * left_sum - total_sum is even when total_sum is even\n\nWait, that means if total_sum is even, ALL partitions work. If total_sum is odd, NO partitions work."
+      }
+    ]
+  },
+  {
+    "section": 5,
+    "case_id": "737c671191e54701b73a",
+    "problem_id": "lcb/3760",
+    "mode": "block-met-k2",
+    "matching_methods": [
+      "block-met-k2"
+    ],
+    "correct": true,
+    "thinking_characters": 8333,
+    "seconds": 186.08602214138955,
+    "estimated_flops": 887944493290496,
+    "length_exhausted": false,
+    "submission_sha256": "aeeebe4bf25397a77bdefab17b6bdebe226025cfc0e04cdfe00ef604274da5c9",
+    "thinking_sha256": "576f37cc818ce7b1da9868c0990861e7f44a05fcb7a38f4b73e93471e31ab85f",
+    "source_replica": "b",
+    "source_line": 99,
+    "excerpts": [
+      {
+        "label": "C 识别“没有更新”不等于“没有遍历”",
+        "field": "thinking_text",
+        "start": 3836,
+        "end": 4067,
+        "quote": "Wait, this has the issue I mentioned. If elements = [1] * 100000, then for j=0, we set all best[multiple] = 0. For j=1, we iterate through all multiples of 1 again (10^5 iterations) but none get updated. Total: 10^5 * 10^5 = 10^10."
+      },
+      {
+        "label": "提前终止方案仍被新的最坏情况推翻",
+        "field": "thinking_text",
+        "start": 5184,
+        "end": 5507,
+        "quote": "The real worst case: elements = [2, 2, 2, ..., 2] (10^5 times), groups contain only odd numbers up to 10^5. Then for each element, we iterate through 5*10^4 multiples, none of which are in `unassigned` (since they're all even and groups are odd). Total: 10^5 * 5*10^4 = 5*10^9. Still too slow.\n\nI need a different approach."
+      }
+    ]
+  },
+  {
+    "section": 5,
+    "case_id": "b6689e2b24a0e86ef7d5",
+    "problem_id": "lcb/3760",
+    "mode": "block-met-k2-self-certainty",
+    "matching_methods": [
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 2598,
+    "seconds": 116.66936887893826,
+    "estimated_flops": 539802689172480,
+    "length_exhausted": false,
+    "submission_sha256": "6a68e5bcd4b2979efc2948432f76505d76266a4713f3bc16c03204462ddf69e2",
+    "thinking_sha256": "a3d2c60ddbe13681790453d2cf90fb0c1480770572cea42c774e41bc4f9df99f",
+    "source_replica": "b",
+    "source_line": 85,
+    "excerpts": [
+      {
+        "label": "SC 较直接地进入首下标映射＋约数枚举",
+        "field": "thinking_text",
+        "start": 640,
+        "end": 1169,
+        "quote": "One approach: For each possible divisor value `d` (from 1 to 10^5), precompute the minimum index `j` such that `elements[j] == d`. Then for each group `g`, I need to find the minimum of `min_index[d]` over all divisors `d` of `g`.\n\nSteps:\n1. Create an array `min_index` of size 100001, initialized to infinity. For each element `j`, set `min_index[elements[j]] = min(min_index[elements[j]], j)`.\n2. For each group `g`, find all divisors of `g`, and for each divisor `d`, check if `min_index[d]` is not infinity. Take the minimum."
+      }
+    ]
+  },
+  {
+    "section": 6,
+    "case_id": "3b67bd32e7ad7a72a64e",
+    "problem_id": "lcb/3759",
+    "mode": "block-met-k2",
+    "matching_methods": [
+      "is",
+      "met-k1",
+      "met-k2",
+      "block-met-k2"
+    ],
+    "correct": false,
+    "thinking_characters": 3002,
+    "seconds": 63.456802690867335,
+    "estimated_flops": 406237160800256,
+    "length_exhausted": false,
+    "submission_sha256": "5c3f42cf7a6769a45aa910a7886c42b57c8485ba96b0fcc63bfd8f0970887e04",
+    "thinking_sha256": "8ac88fed2f270df3026dab2a6f42c3816b4e061388d4b5b97942fd89542cc3bb",
+    "source_replica": "a",
+    "source_line": 987,
+    "excerpts": [
+      {
+        "label": "C 的分组顺序与堆更新思路成立",
+        "field": "thinking_text",
+        "start": 1530,
+        "end": 2088,
+        "quote": "So the algorithm:\n1. Create pairs (nums1[i], nums2[i], i) for all i\n2. Sort by nums1 value\n3. Process in groups of same nums1 value\n4. For each group, first compute answers for all indices in the group (using the current state of the data structure), then add all elements in the group to the data structure\n\nFor the data structure: maintain a min-heap of size at most k, and a running sum of the heap.\n\nWhen adding a value v:\n- If heap size < k: push v, add to sum\n- If heap size == k and v > heap[0]: pop the min, push v, update sum\n- Otherwise: do nothing"
+      },
+      {
+        "label": "C 实际提交的错误调用",
+        "field": "submitted_code",
+        "start": 1059,
+        "end": 1205,
+        "quote": "                    current_sum -= heapq.heapop(min_heap)\n                    heapq.heappush(min_heap, val)\n                    current_sum += val"
+      }
+    ]
+  },
+  {
+    "section": 6,
+    "case_id": "4909fe4435fc4c3f8f62",
+    "problem_id": "lcb/3759",
+    "mode": "block-met-k2-self-certainty",
+    "matching_methods": [
+      "is-self-certainty",
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 2815,
+    "seconds": 66.20731052104384,
+    "estimated_flops": 407958504701952,
+    "length_exhausted": false,
+    "submission_sha256": "5cc2a8de36921478635398799fc705e7d5b900cc67f79a565c9094e81b9c4a47",
+    "thinking_sha256": "1b3ef1be989a4fd1802025d18297b6d42dcf8e35710535c66121307c91362aa3",
+    "source_replica": "a",
+    "source_line": 973,
+    "excerpts": [
+      {
+        "label": "SC 描述的是同一核心算法",
+        "field": "thinking_text",
+        "start": 1353,
+        "end": 1889,
+        "quote": "So the algorithm:\n1. Sort indices by nums1 value\n2. Use a min-heap to keep track of the top k nums2 values seen so far\n3. Maintain a running sum of the heap\n4. Process groups of equal nums1 values:\n   - For each element in the group, answer[i] = current sum of top k\n   - After the group, add all nums2 values of the group to the heap\n\nFor adding to the heap:\n- If heap size < k: push the value, add to sum\n- If heap size == k and value > heap[0]: pop heap[0], push value, update sum\n- If heap size == k and value <= heap[0]: do nothing"
+      },
+      {
+        "label": "SC 实际提交的堆替换",
+        "field": "submitted_code",
+        "start": 1043,
+        "end": 1175,
+        "quote": "                    heap_sum -= min_heap[0]\n                    heapq.heapreplace(min_heap, val)\n                    heap_sum += val"
+      }
+    ]
+  },
+  {
+    "section": 7,
+    "case_id": "86217df34921541dfbda",
+    "problem_id": "lcb/3750",
+    "mode": "met-k2",
+    "matching_methods": [
+      "met-k2"
+    ],
+    "correct": false,
+    "thinking_characters": 7289,
+    "seconds": 124.07474631629884,
+    "estimated_flops": 847277743612928,
+    "length_exhausted": false,
+    "submission_sha256": "d443f92f2451d63669df177b5f6f262655c96af29f9dd07d570ad61ef974a6bc",
+    "thinking_sha256": "a53640cf221fd17a44ecd31035a57429df9c363805f34f636993a86cfeeb236c",
+    "source_replica": "b",
+    "source_line": 197,
+    "excerpts": [
+      {
+        "label": "逐条 K=2 + C 早期已经覆盖首尾环绕候选",
+        "field": "thinking_text",
+        "start": 4500,
+        "end": 4845,
+        "quote": "The minimum circular distance from `q` to any point in `indices` will be achieved by one of:\n- The nearest point to the left in the linear sense\n- The nearest point to the right in the linear sense\n- The first point (if wrapping around from the right gives a shorter path)\n- The last point (if wrapping around from the left gives a shorter path)"
+      },
+      {
+        "label": "随后把距离公式误当成候选覆盖的保证",
+        "field": "thinking_text",
+        "start": 4847,
+        "end": 5283,
+        "quote": "Actually, the nearest point to the left or right in the linear sense already covers the circular case when combined with the circular distance formula. The circular distance `min(|a-b|, n-|a-b|)` already accounts for wrap-around.\n\nSo really, we just need the nearest neighbor(s) in the sorted list. The nearest neighbor to `q` in the sorted list will give the minimum linear distance, and the circular distance formula handles the rest."
+      },
+      {
+        "label": "最终删除首尾候选的结论",
+        "field": "thinking_text",
+        "start": 7106,
+        "end": 7288,
+        "quote": "Let me refine: check `indices[pos-1]`, `indices[pos]`, `indices[pos+1]` (with bounds checking), exclude `q`, and compute min circular distance.\n\nThis should be correct and efficient."
+      }
+    ]
+  },
+  {
+    "section": 7,
+    "case_id": "c81caf648a042532f711",
+    "problem_id": "lcb/3750",
+    "mode": "is",
+    "matching_methods": [
+      "is"
+    ],
+    "correct": true,
+    "thinking_characters": 6641,
+    "seconds": 96.93331729667261,
+    "estimated_flops": 630872539971584,
+    "length_exhausted": false,
+    "submission_sha256": "55ebcfd60272ea59f0583feb2007b8c210c711ead7381b3ed6efe2ca8e6cbe56",
+    "thinking_sha256": "f59604fca1f0d836899029c5329361fafa32c91044e00d8196199edb3e088b53",
+    "source_replica": "b",
+    "source_line": 213,
+    "excerpts": [
+      {
+        "label": "快速 IS + C 也做简化，但保留循环邻接关系",
+        "field": "thinking_text",
+        "start": 4890,
+        "end": 5308,
+        "quote": "Actually, let me just use `pos` from bisect_left. Since `q` is in the list, `indices[pos] == q`. So:\n- Right neighbor: `indices[(pos + 1) % len(indices)]`\n- Left neighbor: `indices[(pos - 1) % len(indices)]`\n\nThese two should be sufficient for the circular case! Because in a circular array, the nearest same-value element must be either the immediate next or immediate previous in the sorted circular list of indices."
+      }
+    ]
+  },
+  {
+    "section": 8,
+    "case_id": "b9b0c5cc051f21637bcb",
+    "problem_id": "lcb/abc392_d",
+    "mode": "is",
+    "matching_methods": [
+      "is"
+    ],
+    "correct": false,
+    "thinking_characters": 2449,
+    "seconds": 66.6068987720646,
+    "estimated_flops": 406882664763392,
+    "length_exhausted": false,
+    "submission_sha256": "ed9d0aa203b97dd192817968167474517cc24f77c5c79180e433263742264120",
+    "thinking_sha256": "c64c71003f09a8139873fb3ba3553643b0672c85d6e72a9d14602b28a37615b4",
+    "source_replica": "a",
+    "source_line": 813,
+    "excerpts": [
+      {
+        "label": "快速 IS + C 的概率公式和遍历策略",
+        "field": "thinking_text",
+        "start": 219,
+        "end": 696,
+        "quote": "For two dice i and j, the probability they show the same number is:\nP = sum over all values v of (count of v in die i / K_i) * (count of v in die j / K_j)\n\nSo for each pair of dice (i, j), I need to compute:\nP(i,j) = sum over all v: (freq_i(v) / K_i) * (freq_j(v) / K_j)\n\nTo do this efficiently, I can:\n1. For each die, compute a frequency map of its faces.\n2. For each pair of dice, compute the sum by iterating over the smaller frequency map and looking up in the larger one."
+      },
+      {
+        "label": "C 为遍历较小字典而交换外层状态",
+        "field": "submitted_code",
+        "start": 344,
+        "end": 602,
+        "quote": "    for i in range(N):\n        ki, fi = dice[i]\n        for j in range(i + 1, N):\n            kj, fj = dice[j]\n            # Iterate over the smaller dictionary\n            if len(fi) > len(fj):\n                fi, fj = fj, fi\n                ki, kj = kj, ki"
+      }
+    ]
+  },
+  {
+    "section": 8,
+    "case_id": "f35599a7e0885bd605e3",
+    "problem_id": "lcb/abc392_d",
+    "mode": "is-self-certainty",
+    "matching_methods": [
+      "is-self-certainty",
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": false,
+    "thinking_characters": 1790,
+    "seconds": 52.02198839513585,
+    "estimated_flops": 443515014671360,
+    "length_exhausted": false,
+    "submission_sha256": "c6a0e3f32680c25de6f13fc38a955a9e1923a38956b8d2019769d911665ad746",
+    "thinking_sha256": "ce52828efc593a4f64bb091b9429665f984bebf761e5102606284ef7ef5fbb2a",
+    "source_replica": "a",
+    "source_line": 803,
+    "excerpts": [
+      {
+        "label": "SC 使用相同的频数内积思路",
+        "field": "thinking_text",
+        "start": 827,
+        "end": 1200,
+        "quote": "Approach:\n1. For each die, compute a frequency map of the numbers on it.\n2. For each pair (i, j), compute the dot product of their frequency maps (only over keys present in both), then divide by K_i * K_j.\n3. Return the maximum.\n\nFor efficiency, when computing the dot product for pair (i, j), we should iterate over the smaller frequency map and look up in the larger one."
+      },
+      {
+        "label": "SC 为当前骰子对使用独立临时变量",
+        "field": "submitted_code",
+        "start": 585,
+        "end": 775,
+        "quote": "            if len(freq_i) <= len(freq_j):\n                smaller = freq_i\n                larger = freq_j\n            else:\n                smaller = freq_j\n                larger = freq_i"
+      }
+    ]
+  },
+  {
+    "section": 9,
+    "case_id": "33047554383b3cc4b3a7",
+    "problem_id": "lcb/3777",
+    "mode": "base",
+    "matching_methods": [
+      "base"
+    ],
+    "correct": false,
+    "thinking_characters": 13358,
+    "seconds": 160.5555059146136,
+    "estimated_flops": 306506798495744,
+    "length_exhausted": false,
+    "submission_sha256": "60dfa7956b910b9eda6b92953f85f98a9118a2485b7e94fd36dfa3cb30284473",
+    "thinking_sha256": "79bb272b3a2998c6e3d8ff3b09e26610b50c52f29e550e63c522af2d2bc2c67a",
+    "source_replica": "a",
+    "source_line": 831,
+    "excerpts": [
+      {
+        "label": "Base 明确识别只保存最大乘积不成立",
+        "field": "thinking_text",
+        "start": 3213,
+        "end": 3574,
+        "quote": "But as I noted, a smaller product might be better in some cases. For example, if current product is 4 and we multiply by 3, we get 12. If current product is 3 and we multiply by 4, we get 12. Both are fine. But if limit is 10, product 4 * 3 = 12 > 10, but product 3 * 3 = 9 <= 10.\n\nSo we can't just keep the max product. We need to keep all achievable products."
+      },
+      {
+        "label": "Base 最终代码仍只保存最大值，并初始化空子序列",
+        "field": "submitted_code",
+        "start": 86,
+        "end": 467,
+        "quote": "        # dp[parity][s_offset] = max product achievable (or -1 if not reachable)\n        # parity 0 = even count chosen (next element gets +), parity 1 = odd count (next gets -)\n        OFFSET = 1800\n        SIZE = 3601\n        \n        NEG = -1  # unreachable\n        dp = [[NEG] * SIZE for _ in range(2)]\n        dp[0][OFFSET] = 1  # empty subsequence: parity 0, sum 0, product 1"
+      }
+    ]
+  },
+  {
+    "section": 9,
+    "case_id": "a66262b492a64f368c33",
+    "problem_id": "lcb/3777",
+    "mode": "block-met-k2",
+    "matching_methods": [
+      "block-met-k2",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 12989,
+    "seconds": 184.2403216548264,
+    "estimated_flops": 1774813146642432,
+    "length_exhausted": false,
+    "submission_sha256": "f5e80683be4be926f6ca807e3816669084c94e2511472c8ae198aa54e3ae8dc7",
+    "thinking_sha256": "a6f2a5d0a60cfafae70b524f845811fd4d0fb6bae8f87ea3b4db096bd6babbde",
+    "source_replica": "a",
+    "source_line": 843,
+    "excerpts": [
+      {
+        "label": "按块 K=2 + C 最终明确区分非空状态",
+        "field": "thinking_text",
+        "start": 6962,
+        "end": 7559,
+        "quote": "Simpler approach: just don't include the empty state. Instead, for each element, I can start a new subsequence with just that element.\n\nLet me redo:\n- dp[(parity, sum)] = set of products\n- For each num in nums:\n  - new_dp = copy of dp\n  - Start new: new_dp[(1, num)].add(num)  [picking this as first element, parity becomes 1]\n  - Extend existing: for each (p, s) -> prods in dp:\n    - new_p = 1 - p\n    - new_s = s + num if p == 0 else s - num\n    - for prod in prods: new_dp[(new_p, new_s)].add(prod * num)\n  - dp = new_dp\n\nAt the end, check dp for states with sum = k, find max product ≤ limit."
+      },
+      {
+        "label": "它也意识到乘零会改变乘积",
+        "field": "thinking_text",
+        "start": 9942,
+        "end": 10045,
+        "quote": "Let me also add: if num == 0, then prod * num = 0 for all prods. So the product becomes 0. That's fine."
+      }
+    ]
+  },
+  {
+    "section": 10,
+    "case_id": "8365280d2bcd3e04608f",
+    "problem_id": "lcb/abc388_f",
+    "mode": "block-met-k2-self-certainty",
+    "matching_methods": [
+      "block-met-k2-self-certainty"
+    ],
+    "correct": false,
+    "thinking_characters": 12799,
+    "seconds": 315.61768580786884,
+    "estimated_flops": 4486951839755264,
+    "length_exhausted": false,
+    "submission_sha256": "379ce4f0a385affc47411129ba55e85184eb5f7f235a736c50f22faf59cc9713",
+    "thinking_sha256": "98a23977007aa50f338f5e9d07a947179bc2fc9f8cb5957104dd5d98158a7dcd",
+    "source_replica": "a",
+    "source_line": 1097,
+    "excerpts": [
+      {
+        "label": "按块 SC 将含 k 的间隔错误消去",
+        "field": "thinking_text",
+        "start": 4134,
+        "end": 4421,
+        "quote": "The gap between [x+kA, x+kB] and [x+(k+1)A, x+(k+1)B] is: x+(k+1)A - (x+kB) - 1 = A - B - 1. Since A ≤ B, this is ≤ -1, meaning they overlap or are adjacent! So the reachable set from a single position x is actually [x+A, ∞) (within the good stretch), because consecutive ranges overlap."
+      },
+      {
+        "label": "它后来确实找到了无法迈出第一步的边界",
+        "field": "thinking_text",
+        "start": 10539,
+        "end": 10707,
+        "quote": "Hmm wait, if A=2, B=3, N=2: from 1 we can jump to 3 or 4, but N=2, so we can't reach it. But we need x+i ≤ N, so 1+2=3 > 2=N, can't even make the jump. So answer is No."
+      }
+    ]
+  },
+  {
+    "section": 10,
+    "case_id": "b9d08bc11b68a11e90de",
+    "problem_id": "lcb/abc388_f",
+    "mode": "met-k1",
+    "matching_methods": [
+      "met-k1"
+    ],
+    "correct": false,
+    "thinking_characters": 13559,
+    "seconds": 299.6023273873143,
+    "estimated_flops": 2448127572190208,
+    "length_exhausted": false,
+    "submission_sha256": "5a49e972078c1b5c99046cb7861aeefada0b7b044befddbc37e9d8770c672f51",
+    "thinking_sha256": "b45fe13e95205cf0687283e2ac159adc9c3bfcc46e46e367fc0d1fa5ac6b2b29",
+    "source_replica": "a",
+    "source_line": 1105,
+    "excerpts": [
+      {
+        "label": "逐条 K=1 + C 推导出正确的正距离判据",
+        "field": "thinking_text",
+        "start": 12238,
+        "end": 12435,
+        "quote": "For a given difference d = t - s:\n- If d < A: not reachable\n- If A = B: reachable iff d % A == 0\n- If A < B: reachable iff there exists k ≥ 1 with k*A ≤ d ≤ k*B. This is iff ceil(d/B) ≤ floor(d/A)."
+      },
+      {
+        "label": "但在衔接坏区间时排除了已经站在临界格上的状态",
+        "field": "submitted_code",
+        "start": 1246,
+        "end": 1359,
+        "quote": "            for s in reachable:\n                if s >= x:\n                    continue\n                d = x - s"
+      }
+    ]
+  },
+  {
+    "section": 11,
+    "case_id": "2d08d33a41e0d57c34e4",
+    "problem_id": "HumanEval/46",
+    "mode": "is-self-certainty",
+    "matching_methods": [
+      "is-self-certainty"
+    ],
+    "correct": false,
+    "thinking_characters": 667,
+    "seconds": 26.228625571355224,
+    "estimated_flops": 184775509447680,
+    "length_exhausted": false,
+    "submission_sha256": "0556bac1fd22487b066625f57123faaf360720a0bee760b006affad5915c6784",
+    "thinking_sha256": "2f0dbb358aa4acf1589dceaec9acb44685090e23289439bb3b99548c9a74bcf5",
+    "source_replica": "b",
+    "source_line": 1911,
+    "excerpts": [
+      {
+        "label": "快速 IS + SC 的样例演算全部正确",
+        "field": "thinking_text",
+        "start": 160,
+        "end": 479,
+        "quote": "Let me verify with the examples:\n- fib4(4) = fib4(3) + fib4(2) + fib4(1) + fib4(0) = 0 + 2 + 0 + 0 = 2\n- fib4(5) = fib4(4) + fib4(3) + fib4(2) + fib4(1) = 2 + 0 + 2 + 0 = 4 ✓\n- fib4(6) = fib4(5) + fib4(4) + fib4(3) + fib4(2) = 4 + 2 + 0 + 2 = 8 ✓\n- fib4(7) = fib4(6) + fib4(5) + fib4(4) + fib4(3) = 8 + 4 + 2 + 0 = 14 ✓"
+      },
+      {
+        "label": "它的实际初始化与上面的规则不一致",
+        "field": "submitted_code",
+        "start": 584,
+        "end": 736,
+        "quote": "    a, b, c, d = 0, 2, 0, 0  # fib4(0), fib4(1), fib4(2), fib4(3)\n    for _ in range(4, n + 1):\n        a, b, c, d = b, c, d, a + b + c + d\n    return d"
+      }
+    ]
+  },
+  {
+    "section": 11,
+    "case_id": "8482a026a8c999fc404e",
+    "problem_id": "HumanEval/46",
+    "mode": "met-k1-self-certainty",
+    "matching_methods": [
+      "sir-k1",
+      "sir-k2",
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 606,
+    "seconds": 27.56223388016224,
+    "estimated_flops": 186873397327872,
+    "length_exhausted": false,
+    "submission_sha256": "7549ba43fcb5687d4ac18ac54a6e83c7194ff0a3041735465da40f7cc02d2ec9",
+    "thinking_sha256": "cc7d1dbc03deb7af2416bbd5ad87fee5f8ab5180d2b8a3c7e56242fbecee7a23",
+    "source_replica": "b",
+    "source_line": 1913,
+    "excerpts": [
+      {
+        "label": "逐条 K=1 + SC 的思考也采用普通迭代",
+        "field": "thinking_text",
+        "start": 481,
+        "end": 605,
+        "quote": "So the approach is straightforward iterative computation. I'll handle base cases for n=0,1,2,3 and then iterate from 4 to n."
+      },
+      {
+        "label": "有效修正出现在最终代码内部",
+        "field": "submitted_code",
+        "start": 584,
+        "end": 769,
+        "quote": "    a, b, c, d = 0, 2, 0, 0  # fib4(0), fib4(1), fib4(2), fib4(3)\n    # Actually let me use a sliding window\n    # fib4(0)=0, fib4(1)=0, fib4(2)=2, fib4(3)=0\n    a, b, c, d = 0, 0, 2, 0"
+      }
+    ]
+  },
+  {
+    "section": 12,
+    "case_id": "82b01251f220ee233da5",
+    "problem_id": "HumanEval/125",
+    "mode": "base",
+    "matching_methods": [
+      "base"
+    ],
+    "correct": true,
+    "thinking_characters": 1366,
+    "seconds": 23.063234152738005,
+    "estimated_flops": 49219677189120,
+    "length_exhausted": false,
+    "submission_sha256": "86ab2346ce6da83ec8ca8385a1eee4ead8f8c698705de2d275cf2b0ccf645ec8",
+    "thinking_sha256": "cf720601c82043c0a3975cf3ba6b42a35e4f27040d09d590c990f6cee93468a6",
+    "source_replica": "b",
+    "source_line": 1755,
+    "excerpts": [
+      {
+        "label": "Base 对规则的复述覆盖了 whitespace",
+        "field": "thinking_text",
+        "start": 43,
+        "end": 392,
+        "quote": "1. Given a string of words, I need to:\n   - If there are whitespaces, split on whitespace and return the list of words\n   - If no whitespaces but there are commas, split on commas and return the list\n   - If no whitespaces and no commas, return the count of lower-case letters that have an odd order in the alphabet (where 'a'=0, 'b'=1, ..., 'z'=25)"
+      },
+      {
+        "label": "但它的实际条件只检查普通空格",
+        "field": "submitted_code",
+        "start": 489,
+        "end": 585,
+        "quote": "    if ' ' in txt:\n        return txt.split()\n    elif ',' in txt:\n        return txt.split(',')"
+      }
+    ]
+  },
+  {
+    "section": 12,
+    "case_id": "85115e5cbc606d0d3adf",
+    "problem_id": "HumanEval/125",
+    "mode": "is",
+    "matching_methods": [
+      "is"
+    ],
+    "correct": true,
+    "thinking_characters": 1782,
+    "seconds": 27.076305812224746,
+    "estimated_flops": 199891060584448,
+    "length_exhausted": false,
+    "submission_sha256": "d531e849e58845ab126622664f5403c833f9a4b2e3156184356245504ac8c2cf",
+    "thinking_sha256": "6d9e14976dd5b9f973142ecbf9ec139b7d44805c1f29007f01c9e3db6b06171a",
+    "source_replica": "b",
+    "source_line": 1733,
+    "excerpts": [
+      {
+        "label": "快速 IS + C 主动检查空白的范围",
+        "field": "thinking_text",
+        "start": 888,
+        "end": 1473,
+        "quote": "Wait, I should consider if there are other whitespace characters besides space. The problem says \"whitespace\" so I should probably check for any whitespace. Let me use a more general check.\n\nActually, looking at the examples, it seems like regular space is the whitespace character in question. But to be safe, I could check if any character is a whitespace character. Let me use `' '.join` approach or check with `any(c.isspace() for c in txt)`.\n\nLet me keep it simple and check for space, since the examples use spaces. But to be more robust, I'll check for any whitespace character."
+      },
+      {
+        "label": "修改落实为与 split 一致的判定",
+        "field": "submitted_code",
+        "start": 489,
+        "end": 553,
+        "quote": "    if any(c.isspace() for c in txt):\n        return txt.split()"
+      }
+    ]
+  },
+  {
+    "section": 13,
+    "case_id": "dfddce6f0e269c7bc341",
+    "problem_id": "HumanEval/160",
+    "mode": "is-self-certainty",
+    "matching_methods": [
+      "is-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 1392,
+    "seconds": 28.612432369031012,
+    "estimated_flops": 220869939386368,
+    "length_exhausted": false,
+    "submission_sha256": "00f0ab0083bcc59eb0a15dd2309c44908c70b2343c18a969e310e98a8e590cce",
+    "thinking_sha256": "75b026125e3c6b911f46e98afdc29309b6049371f8d287f3e8c34771b1576e3c",
+    "source_replica": "a",
+    "source_line": 1607,
+    "excerpts": [
+      {
+        "label": "快速 IS + SC 开头直接作了错误解释",
+        "field": "thinking_text",
+        "start": 0,
+        "end": 199,
+        "quote": "The user wants me to implement a function `do_algebra` that takes a list of operators and a list of operands, and evaluates the algebraic expression left to right (not following operator precedence)."
+      },
+      {
+        "label": "它用两种算法对同一表达式的不同预测修正规则",
+        "field": "thinking_text",
+        "start": 331,
+        "end": 626,
+        "quote": "Let me check: if we follow operator precedence:\n2 + 3 * 4 - 5 = 2 + 12 - 5 = 9 ✓\n\nIf we go left to right:\n(2 + 3) * 4 - 5 = 5 * 4 - 5 = 20 - 5 = 15 ≠ 9\n\nSo it follows standard operator precedence! That means I should use `eval` to evaluate the expression, or implement it with proper precedence."
+      }
+    ]
+  },
+  {
+    "section": 13,
+    "case_id": "312775e042c982c108c5",
+    "problem_id": "HumanEval/160",
+    "mode": "base",
+    "matching_methods": [
+      "base"
+    ],
+    "correct": true,
+    "thinking_characters": 1460,
+    "seconds": 24.936753345653415,
+    "estimated_flops": 56320220783616,
+    "length_exhausted": false,
+    "submission_sha256": "eef5d1b4aa4516efca5e7c489c387976f1a7c8e962615b9c80d624f286a094f3",
+    "thinking_sha256": "51916355dabbb7ff9dba20aed6e90a36e973e59c0691230fd25e85a3479c8146",
+    "source_replica": "a",
+    "source_line": 1591,
+    "excerpts": [
+      {
+        "label": "Base 则先把两种解释作为待判定选项",
+        "field": "thinking_text",
+        "start": 338,
+        "end": 720,
+        "quote": "The key question is: do I need to respect operator precedence, or just evaluate left to right?\n\nLooking at the example: 2 + 3 * 4 - 5 = 9\n- If we respect precedence: 2 + (3*4) - 5 = 2 + 12 - 5 = 9 ✓\n- If we evaluate left to right: (2+3) * 4 - 5 = 20 - 5 = 15 ✗\n\nSo we need to respect operator precedence. The simplest way to do this is to build a string expression and use `eval()`."
+      }
+    ]
+  },
+  {
+    "section": 14,
+    "case_id": "da237fe7ba135d10b36c",
+    "problem_id": "HumanEval/97",
+    "mode": "bon-consilience",
+    "matching_methods": [
+      "bon-consilience"
+    ],
+    "correct": false,
+    "thinking_characters": 1230,
+    "seconds": 24.741946823894978,
+    "estimated_flops": 165141430568960,
+    "length_exhausted": false,
+    "submission_sha256": "8d67a8fd2f85fd121688bde8928c02de4ab88c07ae4dd63de3739f232066ab60",
+    "thinking_sha256": "1c4b93f9618f79d0dbd77e60cec6b0c853aa1f92394a3e1e417a4758d7e8e1df",
+    "source_replica": "b",
+    "source_line": 2569,
+    "excerpts": [
+      {
+        "label": "Best-of-4 + C 从 −15 的巧合推出一般结论",
+        "field": "thinking_text",
+        "start": 551,
+        "end": 678,
+        "quote": "If I used `-15 % 10` in Python, it gives `5` (Python's modulo always returns non-negative for positive divisor). So that works."
+      },
+      {
+        "label": "它只重复已有样例后采用了无 abs 的实现",
+        "field": "thinking_text",
+        "start": 940,
+        "end": 1229,
+        "quote": "So simply `a % 10 * b % 10` would work? Let me check:\n- `148 % 10` = 8, `412 % 10` = 2, 8 * 2 = 16 ✓\n- `19 % 10` = 9, `28 % 10` = 8, 9 * 8 = 72 ✓\n- `2020 % 10` = 0, `1851 % 10` = 1, 0 * 1 = 0 ✓\n- `14 % 10` = 4, `-15 % 10` = 5, 4 * 5 = 20 ✓\n\nSo the solution is simply `(a % 10) * (b % 10)`."
+      }
+    ]
+  },
+  {
+    "section": 14,
+    "case_id": "b994d3b80115eaa2d5db",
+    "problem_id": "HumanEval/97",
+    "mode": "met-k1",
+    "matching_methods": [
+      "met-k1",
+      "sir-k2",
+      "block-met-k2"
+    ],
+    "correct": true,
+    "thinking_characters": 1332,
+    "seconds": 24.917381074745208,
+    "estimated_flops": 176814293902336,
+    "length_exhausted": false,
+    "submission_sha256": "22d47d6212120cf7c106bf9caa82f0c9efabf5a581160ec928c649691c882a57",
+    "thinking_sha256": "55a6246587cc890bade0a5d0c77c883258b5c432c707f6edb89ed1f5a3f261ae",
+    "source_replica": "b",
+    "source_line": 2561,
+    "excerpts": [
+      {
+        "label": "逐条 K=1 + C 在思维链中也给出了同样的错误泛化",
+        "field": "thinking_text",
+        "start": 839,
+        "end": 1331,
+        "quote": "Actually, in Python, `-15 % 10 = 5` (Python's modulo always returns non-negative for positive divisor), so `a % 10` would already work for negative numbers in Python. Let me verify: `-15 % 10` in Python gives `5`. Yes!\n\nSo simply `(a % 10) * (b % 10)` would work in Python.\n\nBut to be safe and clear, I'll use `abs(a) % 10 * abs(b) % 10` or just `(a % 10) * (b % 10)`.\n\nLet me go with the simple approach: `(a % 10) * (b % 10)` since Python's modulo handles negatives correctly for this case."
+      },
+      {
+        "label": "但它最终交付的是带 abs 的正确版本",
+        "field": "submitted_code",
+        "start": 345,
+        "end": 385,
+        "quote": "    return (abs(a) % 10) * (abs(b) % 10)"
+      }
+    ]
+  },
+  {
+    "section": 15,
+    "case_id": "3f0ec062125a71ff7413",
+    "problem_id": "HumanEval/47",
+    "mode": "met-k1-self-certainty",
+    "matching_methods": [
+      "met-k1",
+      "is-self-certainty",
+      "met-k1-self-certainty",
+      "met-k2-self-certainty",
+      "block-met-k2-self-certainty"
+    ],
+    "correct": true,
+    "thinking_characters": 999,
+    "seconds": 44.538496368099004,
+    "estimated_flops": 231520754778112,
+    "length_exhausted": false,
+    "submission_sha256": "c458b2d5467385df3088a373fae34401a4cfc5c367d266422d7b0501a9ab7cf8",
+    "thinking_sha256": "c978943741eca93edc1266cff8c82c130bb0cbd25240d9bb28dbe21a732955d5",
+    "source_replica": "b",
+    "source_line": 1645,
+    "excerpts": [
+      {
+        "label": "逐条 K=1 + SC 原文把错误算式当作核对通过",
+        "field": "thinking_text",
+        "start": 319,
+        "end": 555,
+        "quote": "Let me verify with the examples:\n- `median([3, 1, 2, 4, 5])` → sorted: [1, 2, 3, 4, 5], middle element is 3 ✓\n- `median([-10, 4, 6, 1000, 10, 20])` → sorted: [-10, 4, 6, 10, 20, 1000], two middle elements are 6 and 10, average is 15.0 ✓"
+      },
+      {
+        "label": "SC 的最终公式仍然正确",
+        "field": "submitted_code",
+        "start": 217,
+        "end": 308,
+        "quote": "    if n % 2 == 1:\n        return s[mid]\n    else:\n        return (s[mid - 1] + s[mid]) / 2"
+      }
+    ]
+  },
+  {
+    "section": 15,
+    "case_id": "68487bab726a484bd3fd",
+    "problem_id": "HumanEval/47",
+    "mode": "base",
+    "matching_methods": [
+      "base"
+    ],
+    "correct": true,
+    "thinking_characters": 1424,
+    "seconds": 23.019366283435374,
+    "estimated_flops": 46153533364224,
+    "length_exhausted": false,
+    "submission_sha256": "e1a160240e23398991f5e18fdc6146a7d466b1dcdeabdf8e106e09d8756d8547",
+    "thinking_sha256": "5c663e60f92ebb3b4f2987fa718f1d4e0b565cc3fa019d9a79847721101745c1",
+    "source_replica": "b",
+    "source_line": 1651,
+    "excerpts": [
+      {
+        "label": "Base 则明确发现了题面和计算的矛盾",
+        "field": "thinking_text",
+        "start": 507,
+        "end": 1209,
+        "quote": "Wait, that gives 8.0, not 15.0. Let me re-check.\n\nsorted: [-10, 4, 6, 10, 20, 1000]\nn = 6, so middle indices are 2 and 3\nElements at index 2 and 3: 6 and 10\n(6 + 10) / 2 = 8.0\n\nBut the expected output is 15.0. That's strange. Let me re-read the problem.\n\nHmm, maybe the expected output in the docstring is wrong? Or maybe I'm misunderstanding something.\n\nWait, let me re-check: [-10, 4, 6, 1000, 10, 20]\nSorted: [-10, 4, 6, 10, 20, 1000]\nn = 6\nMiddle elements: index 2 = 6, index 3 = 10\nMedian = (6 + 10) / 2 = 8.0\n\nThe docstring says 15.0 which doesn't match. This seems like an error in the docstring. I'll implement the standard median calculation, which should be correct for the actual test cases."
+      }
+    ]
+  }
+]

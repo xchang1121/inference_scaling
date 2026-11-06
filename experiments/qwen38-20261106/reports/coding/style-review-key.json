@@ -1,0 +1,242 @@
+{
+  "c68a69d052a5": {
+    "case_id": "b0ad04fd9f84860717bb",
+    "problem_id": "lcb/3817",
+    "mode": "is-self-certainty"
+  },
+  "ced2be0b7f14": {
+    "case_id": "b0ad04fd9f84860717bb",
+    "problem_id": "lcb/3817",
+    "mode": "is"
+  },
+  "0d0a327bd34b": {
+    "case_id": "2a760281aa4f067f5dd1",
+    "problem_id": "lcb/abc392_b",
+    "mode": "is-self-certainty"
+  },
+  "350df919d63a": {
+    "case_id": "8df76d44d835b1167c35",
+    "problem_id": "lcb/abc392_b",
+    "mode": "is"
+  },
+  "2431c510ac6f": {
+    "case_id": "150e63749f20eead99ff",
+    "problem_id": "lcb/abc392_a",
+    "mode": "is-self-certainty"
+  },
+  "3e1da332f380": {
+    "case_id": "1074df6d3c8035eba5cd",
+    "problem_id": "lcb/abc392_a",
+    "mode": "is"
+  },
+  "8968eae0e537": {
+    "case_id": "0f1195417929a4dd4752",
+    "problem_id": "lcb/abc397_a",
+    "mode": "is-self-certainty"
+  },
+  "a62e7efdff57": {
+    "case_id": "9092e0ad86510025e7c8",
+    "problem_id": "lcb/abc397_a",
+    "mode": "is"
+  },
+  "5b6786d5116a": {
+    "case_id": "0e609ed715a2f04d23eb",
+    "problem_id": "lcb/3722",
+    "mode": "is"
+  },
+  "770f82404891": {
+    "case_id": "0e609ed715a2f04d23eb",
+    "problem_id": "lcb/3722",
+    "mode": "is-self-certainty"
+  },
+  "2d34e058ee3d": {
+    "case_id": "ecd9025e8907e909e574",
+    "problem_id": "lcb/3737",
+    "mode": "is"
+  },
+  "dc1b83b61cf1": {
+    "case_id": "832f3fc6fea2dc6dfb74",
+    "problem_id": "lcb/3737",
+    "mode": "is-self-certainty"
+  },
+  "359bcd7aeb65": {
+    "case_id": "92c6875200f26030ba0b",
+    "problem_id": "lcb/arc191_a",
+    "mode": "is"
+  },
+  "0a8f092d4d16": {
+    "case_id": "4867490c2d63fd1cd0f1",
+    "problem_id": "lcb/arc191_a",
+    "mode": "is-self-certainty"
+  },
+  "39fbaec5908a": {
+    "case_id": "63024a1c7b04d9c18aa3",
+    "problem_id": "lcb/abc400_c",
+    "mode": "is-self-certainty"
+  },
+  "dbd3fde7c234": {
+    "case_id": "63024a1c7b04d9c18aa3",
+    "problem_id": "lcb/abc400_c",
+    "mode": "is"
+  },
+  "e56d53690024": {
+    "case_id": "68e3d93c3e44d3da4b9a",
+    "problem_id": "lcb/3805",
+    "mode": "is-self-certainty"
+  },
+  "fa9035dd0502": {
+    "case_id": "d5cdfa6cdbc3823d8ba9",
+    "problem_id": "lcb/3805",
+    "mode": "is"
+  },
+  "d8c4ccf4b957": {
+    "case_id": "08062dd10b468b11f180",
+    "problem_id": "lcb/abc398_f",
+    "mode": "is"
+  },
+  "a9260baf84a8": {
+    "case_id": "903d4b25a3eab8d65095",
+    "problem_id": "lcb/abc398_f",
+    "mode": "is-self-certainty"
+  },
+  "8c55f7625ee3": {
+    "case_id": "ee1f3934b464709c6659",
+    "problem_id": "lcb/arc190_d",
+    "mode": "is"
+  },
+  "7da8ff04ad64": {
+    "case_id": "efc426ee2838e49157a3",
+    "problem_id": "lcb/arc190_d",
+    "mode": "is-self-certainty"
+  },
+  "ad5e3a22bc7a": {
+    "case_id": "49d2297ec147b749f569",
+    "problem_id": "lcb/arc194_b",
+    "mode": "is-self-certainty"
+  },
+  "b1652204cead": {
+    "case_id": "e7591dccebc68ae7735a",
+    "problem_id": "lcb/arc194_b",
+    "mode": "is"
+  },
+  "e0e988246b0a": {
+    "case_id": "0c825f796dff727e96cf",
+    "problem_id": "lcb/arc196_b",
+    "mode": "is"
+  },
+  "d65a12f14988": {
+    "case_id": "55abcb0e661abcaf5ca2",
+    "problem_id": "lcb/arc196_b",
+    "mode": "is-self-certainty"
+  },
+  "45d6add8b7b4": {
+    "case_id": "e84020da83585791f35f",
+    "problem_id": "lcb/arc193_d",
+    "mode": "is"
+  },
+  "4e729cde372f": {
+    "case_id": "d755559eb0bcf966d559",
+    "problem_id": "lcb/arc193_d",
+    "mode": "is-self-certainty"
+  },
+  "a28b7bb52980": {
+    "case_id": "69e281328f2e547d8185",
+    "problem_id": "lcb/abc393_e",
+    "mode": "is-self-certainty"
+  },
+  "9ca5d18f565d": {
+    "case_id": "69e281328f2e547d8185",
+    "problem_id": "lcb/abc393_e",
+    "mode": "is"
+  },
+  "3f44f1f6f12b": {
+    "case_id": "e625e48097306c3a1b3c",
+    "problem_id": "lcb/3770",
+    "mode": "is-self-certainty"
+  },
+  "0220d81a49d6": {
+    "case_id": "135a9728cfd12b091f46",
+    "problem_id": "lcb/3770",
+    "mode": "is"
+  },
+  "8980ee67af4d": {
+    "case_id": "22133664962dbfda2d8f",
+    "problem_id": "HumanEval/73",
+    "mode": "is-self-certainty"
+  },
+  "a1ac31e4d5c1": {
+    "case_id": "d0c458e2b106c4878b6d",
+    "problem_id": "HumanEval/73",
+    "mode": "is"
+  },
+  "2b2ffe144d4f": {
+    "case_id": "0788a1c077d3ada6af1a",
+    "problem_id": "HumanEval/144",
+    "mode": "is-self-certainty"
+  },
+  "e6da6a55ba38": {
+    "case_id": "bf2577c93cc0c38275e7",
+    "problem_id": "HumanEval/144",
+    "mode": "is"
+  },
+  "81cb528af4a8": {
+    "case_id": "42579df6c1f3914f82ae",
+    "problem_id": "HumanEval/129",
+    "mode": "is"
+  },
+  "269e1a479eb8": {
+    "case_id": "42579df6c1f3914f82ae",
+    "problem_id": "HumanEval/129",
+    "mode": "is-self-certainty"
+  },
+  "4a85a4edf4a9": {
+    "case_id": "37343ee4651c9650d6f6",
+    "problem_id": "HumanEval/137",
+    "mode": "is-self-certainty"
+  },
+  "865054f87f0d": {
+    "case_id": "3d29216f778e084d91f7",
+    "problem_id": "HumanEval/137",
+    "mode": "is"
+  },
+  "b97cd8494fb0": {
+    "case_id": "4e36eebf87b3061a6126",
+    "problem_id": "HumanEval/99",
+    "mode": "is"
+  },
+  "f9c305663b8f": {
+    "case_id": "da19e6b3d96866d3d3af",
+    "problem_id": "HumanEval/99",
+    "mode": "is-self-certainty"
+  },
+  "2d7bbb8a6203": {
+    "case_id": "152e56ea19882862177c",
+    "problem_id": "HumanEval/90",
+    "mode": "is-self-certainty"
+  },
+  "f3509d652e78": {
+    "case_id": "29e7a7f0d0f231e8be2d",
+    "problem_id": "HumanEval/90",
+    "mode": "is"
+  },
+  "d5615269f603": {
+    "case_id": "9b33321f15938ce098a8",
+    "problem_id": "HumanEval/116",
+    "mode": "is"
+  },
+  "68484055c597": {
+    "case_id": "50340492b90d9d8e2b8d",
+    "problem_id": "HumanEval/116",
+    "mode": "is-self-certainty"
+  },
+  "26907443a102": {
+    "case_id": "53056aca85d6de9e4ddd",
+    "problem_id": "HumanEval/86",
+    "mode": "is"
+  },
+  "e7ceab7e02f5": {
+    "case_id": "e589ab4efc6d2daab8a2",
+    "problem_id": "HumanEval/86",
+    "mode": "is-self-certainty"
+  }
+}

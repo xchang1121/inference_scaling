@@ -1,0 +1,137 @@
+[
+  {
+    "number": 1,
+    "title": "LiveCodeBench abc393_f：正确的状态递推，未必能在预算内交付程序",
+    "problem_id": "lcb/abc393_f",
+    "cases": [
+      "5064c85c8239689fcc75",
+      "d05f2eb2cc1efda64fa1"
+    ]
+  },
+  {
+    "number": 2,
+    "title": "LiveCodeBench 3779：修复局部猜测之后，还需要全局分配",
+    "problem_id": "lcb/3779",
+    "cases": [
+      "3db6e3d8e61b2957adf6",
+      "eaf6f9fbbe5fd0bc397d"
+    ]
+  },
+  {
+    "number": 3,
+    "title": "HumanEval/145：样例冲突可以触发规则修正，也可能被当成题面错误",
+    "problem_id": "HumanEval/145",
+    "cases": [
+      "d010e4e1149deb826268",
+      "381be7956f422da17538"
+    ]
+  },
+  {
+    "number": 4,
+    "title": "LiveCodeBench 3704：一次真正改变算法的反思，与直接证明的对照",
+    "problem_id": "lcb/3704",
+    "cases": [
+      "522147770130ef3737ec",
+      "b5fa890d166725201216"
+    ]
+  },
+  {
+    "number": 5,
+    "title": "LiveCodeBench 3760：复杂度反例有效，但最终算法并未因此更强",
+    "problem_id": "lcb/3760",
+    "cases": [
+      "737c671191e54701b73a",
+      "b6689e2b24a0e86ef7d5"
+    ]
+  },
+  {
+    "number": 6,
+    "title": "LiveCodeBench 3759：通过差异来自一个 API 拼写，而非核心算法",
+    "problem_id": "lcb/3759",
+    "cases": [
+      "3b67bd32e7ad7a72a64e",
+      "4909fe4435fc4c3f8f62"
+    ]
+  },
+  {
+    "number": 7,
+    "title": "LiveCodeBench 3750：继续简化，也可能把正确草稿改错",
+    "problem_id": "lcb/3750",
+    "cases": [
+      "86217df34921541dfbda",
+      "c81caf648a042532f711"
+    ]
+  },
+  {
+    "number": 8,
+    "title": "LiveCodeBench abc392_d：相同概率公式，状态污染与判题容差是两件事",
+    "problem_id": "lcb/abc392_d",
+    "cases": [
+      "b9b0c5cc051f21637bcb",
+      "f35599a7e0885bd605e3"
+    ]
+  },
+  {
+    "number": 9,
+    "title": "LiveCodeBench 3777：正确指出状态压缩问题，代码却没有遵守；通过测试仍有遗漏",
+    "problem_id": "lcb/3777",
+    "cases": [
+      "33047554383b3cc4b3a7",
+      "a66262b492a64f368c33"
+    ]
+  },
+  {
+    "number": 10,
+    "title": "LiveCodeBench abc388_f：一般可达性推导与零步边界，都必须落实到状态转移",
+    "problem_id": "lcb/abc388_f",
+    "cases": [
+      "8365280d2bcd3e04608f",
+      "b9d08bc11b68a11e90de"
+    ]
+  },
+  {
+    "number": 11,
+    "title": "HumanEval/46：手算序列正确，初始化依然可能写错",
+    "problem_id": "HumanEval/46",
+    "cases": [
+      "2d08d33a41e0d57c34e4",
+      "8482a026a8c999fc404e"
+    ]
+  },
+  {
+    "number": 12,
+    "title": "HumanEval/125：公开样例之外的规则扩展，可能改善实现但不改变得分",
+    "problem_id": "HumanEval/125",
+    "cases": [
+      "82b01251f220ee233da5",
+      "85115e5cbc606d0d3adf"
+    ]
+  },
+  {
+    "number": 13,
+    "title": "HumanEval/160：把样例当作区分解释的实验",
+    "problem_id": "HumanEval/160",
+    "cases": [
+      "dfddce6f0e269c7bc341",
+      "312775e042c982c108c5"
+    ]
+  },
+  {
+    "number": 14,
+    "title": "HumanEval/97：特殊负数样例掩盖错误泛化，代码又可能偏离文字结论",
+    "problem_id": "HumanEval/97",
+    "cases": [
+      "da237fe7ba135d10b36c",
+      "b994d3b80115eaa2d5db"
+    ]
+  },
+  {
+    "number": 15,
+    "title": "HumanEval/47：打勾的样例核对不一定真的完成了计算",
+    "problem_id": "HumanEval/47",
+    "cases": [
+      "3f0ec062125a71ff7413",
+      "68487bab726a484bd3fd"
+    ]
+  }
+]

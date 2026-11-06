@@ -1,0 +1,100 @@
+{
+  "measurements": [
+    {
+      "path": "a\\results\\selection-expanded-20261102\\a.jsonl",
+      "sha256": "31646ade7ff81fca767098a48d6784f5521e1e7f246c61f68fb2e060b3cc1217",
+      "label": "selection-expanded-tp2-a",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "a\\results\\selection-met-sc-20261103\\a-new.jsonl",
+      "sha256": "5a93a1e89210e5a087ea50ae2c642e3a99db7233b404ea724a42d2df253b6d17",
+      "label": "selection-sc-tp2-a-new",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "a\\results\\selection-met-sc-20261103\\a-old.jsonl",
+      "sha256": "8e9ec49e4f94e79bdedef9ee4ac6bea6ac2bde30ffaded3bcde8d13a63d85b33",
+      "label": "selection-sc-tp2-a-old",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "a\\results\\selection-rewards-20261103\\a-new.jsonl",
+      "sha256": "aa26e0cad6da8e4c4819e69895b290c87ce65dcc5b7ce34a69abdfa8928eedae",
+      "label": "rewards-tp2-a-new",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "a\\results\\selection-rewards-20261103\\a-old.jsonl",
+      "sha256": "5e3d771e92266ff28d20ea556962012a9223f1d632d504454c7d3e469fbe5f14",
+      "label": "rewards-tp2-a-old",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "a\\results\\selector-quality-20261102\\a.jsonl",
+      "sha256": "41737b2054e9817b83032e67979957d03c58707b71f10560d8db3dc2cc2b73f8",
+      "label": "selection-tp2-a",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selection-expanded-20261102\\b.jsonl",
+      "sha256": "da0fff550150e95d51df3302451368b57709218838054fe907c6c7b30d9c500d",
+      "label": "selection-expanded-tp2-b",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selection-met-sc-20261103\\b-new.jsonl",
+      "sha256": "23ce59f7368ef08c0c0fb76dfb190f6ecd07b7ea9b3a8037d0a77fe15a30a549",
+      "label": "selection-sc-tp2-b-new",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selection-met-sc-20261103\\b-old.jsonl",
+      "sha256": "666b9c2e49f592e8453cce91ae205af59f27a54b680d833c31da8b3be85121bc",
+      "label": "selection-sc-tp2-b-old",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selection-rewards-20261103\\b-new.jsonl",
+      "sha256": "90da9795a08729a5bbb996acb8ae363df1f9dbc987f210644ace5a12c1bd9d3d",
+      "label": "rewards-tp2-b-new",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selection-rewards-20261103\\b-old.jsonl",
+      "sha256": "42598979979eef409b6a74dfc8432d0ecd8d3759d8611dc09e5404b7a9346cf2",
+      "label": "rewards-tp2-b-old",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    },
+    {
+      "path": "b\\results\\selector-quality-20261102\\b.jsonl",
+      "sha256": "13cf3975123d88fe16151a097310ab9281c47913b7aa19a9be6ee7aab55cd380",
+      "label": "selection-tp2-b",
+      "dataset_sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+    }
+  ],
+  "review_files": {
+    "labels.jsonl": "eeda2b02e5eb803952e1bb9dfb431881d5e0bb6b80376cd27ba2417da0c7497b",
+    "answer_only_labels.jsonl": "8b299f6aa346e4d1d3412fd20007ed1d54fa2c2c68c33ce9c222f403ae738083"
+  },
+  "historical_report": {
+    "source": "C:\\Users\\singm\\Documents\\Codex\\2026-10-20\\wei-w\\work\\met_sc_20261103\\a\\source\\docs\\reports\\QWEN38_IS_SELECTION.md",
+    "copy": "historical-selection-report.md",
+    "sha256": "1326065caacca85f73bc47190e9c70218804e4f47b018515155f6d40020d3a46"
+  },
+  "branch_sensitivity": {
+    "problem_id": "test/precalculus/768.json",
+    "answer": "{-3 + 2*sqrt(2), -3 - 1*2*sqrt(2), 2*sqrt(2) + 3, -1*2*sqrt(2) + 3}",
+    "all_12_answer_sets_equal": true,
+    "correct_increase_per_method": 1,
+    "evidence": "For arccot in (0,pi), the equation reduces to 2|x|/(1+x^2)=1/3, giving the four displayed roots."
+  },
+  "generators": {
+    "summarize_met_sc.py": "078e8a5f52039257f8f5679f069800104af359c5c57234a0dc47a7a46188f063",
+    "merge_selection_results.py": "25d70ec74a2c776adc5a88ee78889356ff2b791f02114a4ac8d999d2fd9e3765"
+  },
+  "outputs": {
+    "all-methods-summary.json": "a8d6ae38135d1b4b17b56ca09530e76a4b894471c8a3e48aea4e2e1882a2e2bf",
+    "all-method-records.json": "7e9d7fbca2fc94e919cfb7ce4ff1fc555cc4f282cc6b219ddab0759f52efd48a"
+  }
+}

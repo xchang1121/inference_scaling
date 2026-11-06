@@ -1,0 +1,384 @@
+{
+  "witness_checks_passed": 45,
+  "checks": [
+    {
+      "name": "01_C_incomplete_submission",
+      "actual": {
+        "error": "NameError: name 'root' is not defined"
+      },
+      "expected": {
+        "error": "NameError: name 'root' is not defined"
+      },
+      "input": "5 3\n2 4 1 3 3\n2 5\n5 2\n5 3\n"
+    },
+    {
+      "name": "01_SC_public_example",
+      "actual": "2\n1\n2",
+      "expected": "2\n1\n2",
+      "input": "5 3\n2 4 1 3 3\n2 5\n5 2\n5 3\n"
+    },
+    {
+      "name": "02_exhaustive_optimum",
+      "actual": 32,
+      "expected": 32
+    },
+    {
+      "name": "02_C_counterexample",
+      "actual": 32,
+      "expected": 32
+    },
+    {
+      "name": "02_SC_counterexample",
+      "actual": 31,
+      "expected": 31
+    },
+    {
+      "name": "03_Base_public_example",
+      "actual": [
+        1,
+        -1,
+        11,
+        -11,
+        -12
+      ],
+      "expected": [
+        1,
+        -1,
+        11,
+        -11,
+        -12
+      ]
+    },
+    {
+      "name": "03_BoN_public_example",
+      "actual": [
+        -1,
+        -11,
+        1,
+        -12,
+        11
+      ],
+      "expected": [
+        -1,
+        -11,
+        1,
+        -12,
+        11
+      ]
+    },
+    {
+      "name": "04_direct_partition_count",
+      "actual": 4,
+      "expected": 4
+    },
+    {
+      "name": "04_522147770130ef3737ec",
+      "actual": 4,
+      "expected": 4
+    },
+    {
+      "name": "04_b5fa890d166725201216",
+      "actual": 4,
+      "expected": 4
+    },
+    {
+      "name": "05_737c671191e54701b73a",
+      "actual": [
+        0,
+        0,
+        -1,
+        1,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        -1,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "05_b6689e2b24a0e86ef7d5",
+      "actual": [
+        0,
+        0,
+        -1,
+        1,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        -1,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "06_C_API_typo",
+      "actual": {
+        "error": "AttributeError: module 'heapq' has no attribute 'heapop'. Did you mean: 'heappop'?"
+      },
+      "expected": "AttributeError for heapq.heapop"
+    },
+    {
+      "name": "06_SC_public_example",
+      "actual": [
+        80,
+        30,
+        0,
+        80,
+        50
+      ],
+      "expected": [
+        80,
+        30,
+        0,
+        80,
+        50
+      ]
+    },
+    {
+      "name": "07_exhaustive_distance",
+      "actual": [
+        1
+      ],
+      "expected": [
+        1
+      ],
+      "nums": [
+        7,
+        1,
+        2,
+        7,
+        3,
+        4,
+        5,
+        6,
+        8,
+        7
+      ],
+      "queries": [
+        0
+      ]
+    },
+    {
+      "name": "07_met_k2",
+      "actual": [
+        3
+      ],
+      "expected": [
+        3
+      ]
+    },
+    {
+      "name": "07_fast_is",
+      "actual": [
+        1
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "name": "08_C_state_mutation",
+      "actual": 0.0,
+      "expected": 0.0,
+      "input": "3\n2 1 2\n1 3\n2 1 2\n"
+    },
+    {
+      "name": "08_SC_state_preserved",
+      "actual": 0.5,
+      "expected": 0.5,
+      "input": "3\n2 1 2\n1 3\n2 1 2\n"
+    },
+    {
+      "name": "08_frozen_float_input_b9b0c5cc051f21637bcb",
+      "actual": "0.076923076923077",
+      "expected": "0.076923076923077"
+    },
+    {
+      "name": "08_frozen_float_input_f35599a7e0885bd605e3",
+      "actual": "0.076923076923077",
+      "expected": "0.076923076923077"
+    },
+    {
+      "name": "09_exhaustive_[0]",
+      "actual": 0,
+      "expected": 0,
+      "nums": [
+        0
+      ],
+      "k": 0,
+      "limit": 1
+    },
+    {
+      "name": "09_exhaustive_[10, 0]",
+      "actual": 0,
+      "expected": 0,
+      "nums": [
+        10,
+        0
+      ],
+      "k": 10,
+      "limit": 1
+    },
+    {
+      "name": "09_exhaustive_[3, 2, 1, 3]",
+      "actual": 6,
+      "expected": 6,
+      "nums": [
+        3,
+        2,
+        1,
+        3
+      ],
+      "k": 4,
+      "limit": 8
+    },
+    {
+      "name": "09_Base_empty_subsequence",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "name": "09_Base_lost_smaller_product",
+      "actual": -1,
+      "expected": -1
+    },
+    {
+      "name": "09_block_kept_smaller_product",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "name": "09_block_zero",
+      "actual": 0,
+      "expected": 0
+    },
+    {
+      "name": "09_block_zero_recovery",
+      "actual": -1,
+      "expected": -1
+    },
+    {
+      "name": "10_SC_counterexample_oracle",
+      "actual": false,
+      "expected": false
+    },
+    {
+      "name": "10_SC_actual",
+      "actual": "Yes",
+      "expected": "Yes"
+    },
+    {
+      "name": "10_C_zero_step_oracle",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "name": "10_C_actual",
+      "actual": "No",
+      "expected": "No"
+    },
+    {
+      "name": "11_fib4_oracle",
+      "actual": 8,
+      "expected": 8
+    },
+    {
+      "name": "11_fast_SC",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "name": "11_met_k1_SC",
+      "actual": 8,
+      "expected": 8
+    },
+    {
+      "name": "12_Base_tab",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "name": "12_fast_C_tab",
+      "actual": [
+        "a",
+        "b"
+      ],
+      "expected": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "13_dfddce6f0e269c7bc341",
+      "actual": 9,
+      "expected": 9
+    },
+    {
+      "name": "13_312775e042c982c108c5",
+      "actual": 9,
+      "expected": 9
+    },
+    {
+      "name": "14_BoN_negative_digit",
+      "actual": 32,
+      "expected": 32
+    },
+    {
+      "name": "14_met_k1_negative_digit",
+      "actual": 8,
+      "expected": 8
+    },
+    {
+      "name": "15_median_oracle",
+      "actual": 8.0,
+      "expected": 8.0
+    },
+    {
+      "name": "15_3f0ec062125a71ff7413",
+      "actual": 8.0,
+      "expected": 8.0
+    },
+    {
+      "name": "15_68487bab726a484bd3fd",
+      "actual": 8.0,
+      "expected": 8.0
+    }
+  ],
+  "frozen_generation_and_judgment_hashes": {
+    "snapshots\\a\\generation\\a.jsonl": "58d44272489133515941cf9351d76e3c3822719aaf36dae3306acb287be7e82c",
+    "snapshots\\a\\evaluation\\a-judgments.jsonl": "28458ad570dbc3425498ecaf094239f7ba7799c962af9be5bd3d0ef152c80571",
+    "snapshots\\b\\generation\\b.jsonl": "4ffd603697eb16ddfc821fe7ef2319849e282a70ed8d86dbc4c11b4ac49954f6",
+    "snapshots\\b\\evaluation\\b-judgments.jsonl": "e064a2b8b7e33e1bcfca81092be0f953c8b227962d33dd6c3a91ece11fc2b3df"
+  },
+  "grading_tolerance_finding": {
+    "problem_id": "lcb/abc392_d",
+    "input": "2\n13 1 10 4 3 3 8 2 8 6 5 3 1 4\n7 6 6 8 5 5 9 6",
+    "true_probability": "1/13",
+    "observed_output": "0.076923076923077",
+    "reference_output": "0.076923076923",
+    "absolute_error_of_output": "7.692307692308E-17",
+    "absolute_error_of_reference": "7.692307692307692E-14",
+    "problem_tolerance": "1e-8",
+    "within_problem_tolerance": true,
+    "frozen_judge_correct": false,
+    "frozen_error_message": "Wrong answer at output_line_idx=0: 0.076923076923077 != 0.076923076923",
+    "grader_path": "vendor\\LiveCodeBench\\lcb_runner\\evaluation\\testing_util.py",
+    "grader_sha256": "715812d61abc40aea812d49066bd4add3895a7b59c05c2b243eec212588d7ced",
+    "grader_comparison": "decimal_prediction_line == decimal_gtout_line",
+    "interpretation": "Exact decimal equality rejects distinct representations within the stated tolerance."
+  },
+  "verification_scope": "Only the examples cited in the narrative; no new model generation or aggregate regrading.",
+  "all_1739_cases_reviewed": true,
+  "selected_quotes_match": true,
+  "comparison_sections": 15,
+  "selected_cases": 30,
+  "thinking_excerpt_count": 42,
+  "submitted_code_excerpt_count": 13,
+  "exact_excerpt_characters": 17293,
+  "original_judgments_unchanged": true
+}

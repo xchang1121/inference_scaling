@@ -1,2 +1,6 @@
 *.sh text eol=lf
 *.bash text eol=lf
+
+# Preserve audit hashes across Windows and Unix checkouts.
+/experiments/qwen38-20261106/** -text
+/experiments/qwen38-20261106/full/* -diff

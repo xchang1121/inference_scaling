@@ -1,0 +1,171 @@
+{
+  "scope": "All 264 problems x 12 methods for objective metrics; a fixed 24-problem paired semantic recoding of fast IS C/SC.",
+  "all_original_unique_cases_read": 1739,
+  "semantic_sample_problems": 24,
+  "semantic_sample_texts": 48,
+  "semantic_counts": {
+    "is": {
+      "exploration": {
+        "0": 10,
+        "1": 11,
+        "2": 3
+      },
+      "revisiting": {
+        "0": 7,
+        "1": 4,
+        "2": 13
+      },
+      "walkthrough": {
+        "0": 4,
+        "1": 7,
+        "2": 13
+      },
+      "implementation": {
+        "0": 9,
+        "1": 12,
+        "2": 3
+      },
+      "formalization": {
+        "0": 10,
+        "1": 14
+      },
+      "closure": {
+        "0": 17,
+        "2": 7
+      }
+    },
+    "is-self-certainty": {
+      "exploration": {
+        "0": 12,
+        "1": 8,
+        "2": 4
+      },
+      "revisiting": {
+        "0": 10,
+        "1": 1,
+        "2": 13
+      },
+      "walkthrough": {
+        "0": 3,
+        "1": 8,
+        "2": 13
+      },
+      "implementation": {
+        "0": 13,
+        "1": 7,
+        "2": 4
+      },
+      "formalization": {
+        "0": 10,
+        "1": 14
+      },
+      "closure": {
+        "0": 16,
+        "2": 8
+      }
+    }
+  },
+  "paired_ordinal_counts": {
+    "exploration": {
+      "equal": 17,
+      "C_higher": 4,
+      "SC_higher": 3
+    },
+    "revisiting": {
+      "equal": 19,
+      "C_higher": 4,
+      "SC_higher": 1
+    },
+    "walkthrough": {
+      "equal": 22,
+      "SC_higher": 1,
+      "C_higher": 1
+    },
+    "implementation": {
+      "equal": 19,
+      "C_higher": 4,
+      "SC_higher": 1
+    },
+    "formalization": {
+      "equal": 24
+    },
+    "closure": {
+      "equal": 23,
+      "SC_higher": 1
+    }
+  },
+  "semantics_limits": "One assistant reviewer; method names masked during coding; all texts had been accessible in the earlier full review. Not an independent multi-rater or experiment-preregistered study. Quota sample counts are not population estimates.",
+  "length_variance_decomposition": {
+    "livecodebench": {
+      "problem_fraction": 0.95122649258889,
+      "method_fraction": 0.0017449621041467724,
+      "interaction_and_unseparated_sampling_fraction": 0.04702854530696295,
+      "interpretation": "Descriptive two-way decomposition of log character length, not causal attribution."
+    },
+    "humanevalplus": {
+      "problem_fraction": 0.8962483161046989,
+      "method_fraction": 0.005773128508158946,
+      "interaction_and_unseparated_sampling_fraction": 0.09797855538714197,
+      "interpretation": "Descriptive two-way decomposition of log character length, not causal attribution."
+    }
+  },
+  "length_tail_contribution": {
+    "livecodebench": {
+      "net_SC_minus_C_characters": -64359,
+      "five_largest_shortenings": [
+        {
+          "problem_id": "lcb/arc195_a",
+          "SC_minus_C_characters": -10919
+        },
+        {
+          "problem_id": "lcb/abc388_e",
+          "SC_minus_C_characters": -10330
+        },
+        {
+          "problem_id": "lcb/abc395_e",
+          "SC_minus_C_characters": -10163
+        },
+        {
+          "problem_id": "lcb/abc399_f",
+          "SC_minus_C_characters": -8535
+        },
+        {
+          "problem_id": "lcb/abc397_d",
+          "SC_minus_C_characters": -6841
+        }
+      ],
+      "five_largest_sum": -46788,
+      "selection": "Post-hoc descriptive contribution; not a representative semantic sample."
+    },
+    "humanevalplus": {
+      "net_SC_minus_C_characters": -22847,
+      "five_largest_shortenings": [
+        {
+          "problem_id": "HumanEval/116",
+          "SC_minus_C_characters": -2682
+        },
+        {
+          "problem_id": "HumanEval/20",
+          "SC_minus_C_characters": -2579
+        },
+        {
+          "problem_id": "HumanEval/142",
+          "SC_minus_C_characters": -2371
+        },
+        {
+          "problem_id": "HumanEval/47",
+          "SC_minus_C_characters": -2125
+        },
+        {
+          "problem_id": "HumanEval/132",
+          "SC_minus_C_characters": -1442
+        }
+      ],
+      "five_largest_sum": -11199,
+      "selection": "Post-hoc descriptive contribution; not a representative semantic sample."
+    }
+  },
+  "protocol_sha256": "d8dfe0ecd41a07bb3be03e4330d45fa2fbb392192aac361f044d7a60ef451d5a",
+  "labels_sha256": "631d1706d74794881d6f92c6eba527eee9b0ddfcc1917a89fab9df62984b64c3",
+  "metrics_sha256": "5e653fc22267c117202e1d019736e99b529f8701c196e6b8d610d4ba11e62f56"
+}

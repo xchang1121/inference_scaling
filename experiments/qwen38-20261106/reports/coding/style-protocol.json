@@ -1,0 +1,48 @@
+{
+  "seed": "style-audit-20261106-v1",
+  "selection": "Rank SHA256(seed + | + problem_id) within each stratum; no correctness/length filtering.",
+  "strata_quotas": {
+    "livecodebench_easy": 4,
+    "livecodebench_medium": 5,
+    "livecodebench_hard": 7,
+    "humanevalplus": 8
+  },
+  "comparison": [
+    "is",
+    "is-self-certainty"
+  ],
+  "rationale": "Hold the fast-IS search settings fixed to examine the C-versus-SC writing tendency; other search variants assessed by all-problem identity/length data and illustrative original traces.",
+  "rubric": {
+    "exploration": {
+      "0": "One approach; only perfunctory dismissal of naive method",
+      "1": "Substantive comparison or revision of two approaches",
+      "2": "Sustained branching among approaches/state designs or repeated route changes"
+    },
+    "revisiting": {
+      "0": "No material return to a settled step",
+      "1": "One local clarification/correction/return",
+      "2": "Repeated reconsideration or re-derivation"
+    },
+    "walkthrough": {
+      "0": "No example evaluation",
+      "1": "Brief example checks",
+      "2": "Detailed step-by-step simulation or multiple prolonged checks"
+    },
+    "implementation": {
+      "0": "Conceptual plan, no extended draft/representation discussion",
+      "1": "One substantive code draft or implementation discussion",
+      "2": "Multiple code drafts or sustained representation/performance/edge-case engineering discussion"
+    },
+    "formalization": {
+      "0": "Direct rule or informal explanation",
+      "1": "Explicit state/recurrence/invariant/algebraic derivation"
+    },
+    "closure": {
+      "0": "Settles on an approach with an ordinary ending",
+      "1": "Ends with unresolved alternatives/doubt",
+      "2": "Text breaks off mid-derivation or mid-code"
+    }
+  },
+  "procedure": "Read full thinking; exact common-prefix references allowed only within the pair. Record semantic codes and short text-grounded notes before revealing mode mapping. No keyword-count classification.",
+  "limits": "One assistant reviewer; exploratory fixed sample, not an independent multi-rater study. Counts apply to sample, not population prevalence. Formatting/length are not reasoning quality."
+}

@@ -1,0 +1,87 @@
+{
+  "directory": "/data/disk/changxiangyu/agentic_scaling/results/selection-met-sc-20261103/audit-codex-20261103",
+  "files": [
+    {
+      "name": "REPORT.md",
+      "bytes": 22950,
+      "sha256": "b88ff191ba8eeef806b0b194c330530b21275667c5703d91206d131063cde8a8"
+    },
+    {
+      "name": "summary.json",
+      "bytes": 41912,
+      "sha256": "57ae89bf02dafc25a995942b000fd61056a065d1257113bf0c2e434a622f99c5"
+    },
+    {
+      "name": "paired-records.json",
+      "bytes": 607869,
+      "sha256": "6d1ad17b087e4843ca05f90c0388d33a0992057f15a77a7f3832b667ba1bfcc6"
+    },
+    {
+      "name": "answer-equivalence-corrections.json",
+      "bytes": 10013,
+      "sha256": "a07ca03ddc23f9dcdd741a392b25ee0d6bb259cefc05f19d6adfe1091fb7f5c0"
+    },
+    {
+      "name": "alignment-checks.json",
+      "bytes": 104291,
+      "sha256": "b340ba49b49f1fd1ef99c09662cb51ec76544e5ca5d1aec51d143a5aaff053c1"
+    },
+    {
+      "name": "labels.jsonl",
+      "bytes": 167863,
+      "sha256": "eeda2b02e5eb803952e1bb9dfb431881d5e0bb6b80376cd27ba2417da0c7497b"
+    },
+    {
+      "name": "answer_only_labels.jsonl",
+      "bytes": 2041,
+      "sha256": "8b299f6aa346e4d1d3412fd20007ed1d54fa2c2c68c33ce9c222f403ae738083"
+    },
+    {
+      "name": "blind_cases.jsonl",
+      "bytes": 1177994,
+      "sha256": "f850e9a28f7911c1f32c8e3c08a339ac06392269487ac1f28b249944767222f3"
+    },
+    {
+      "name": "method_key.json",
+      "bytes": 213760,
+      "sha256": "a715f342612aa1517b8e7214fc9ee668641cc3beb417f59459d4c5afb46a961c"
+    },
+    {
+      "name": "provenance.json",
+      "bytes": 10560,
+      "sha256": "015da3441e3c66f6cef7a663820fdcc7454047af96bd7ca034902a268feffac2"
+    },
+    {
+      "name": "all-methods-summary.json",
+      "bytes": 427798,
+      "sha256": "a8d6ae38135d1b4b17b56ca09530e76a4b894471c8a3e48aea4e2e1882a2e2bf"
+    },
+    {
+      "name": "all-method-records.json",
+      "bytes": 952339,
+      "sha256": "7e9d7fbca2fc94e919cfb7ce4ff1fc555cc4f282cc6b219ddab0759f52efd48a"
+    },
+    {
+      "name": "all-methods-provenance.json",
+      "bytes": 4957,
+      "sha256": "3bbfd3d47936d23e1a86c2a6d9005dd1b889eac57c89a7d4902466e3823fdc1d"
+    },
+    {
+      "name": "historical-selection-report.md",
+      "bytes": 15650,
+      "sha256": "1326065caacca85f73bc47190e9c70218804e4f47b018515155f6d40020d3a46"
+    }
+  ],
+  "verified_at_utc": "2026-11-03T09:38:20.328664+00:00",
+  "source_commit": "6bde29bb89856d15ca31768610f54ea750c7278a",
+  "source_status": "",
+  "exit_codes": {
+    "a-old.exit": "0",
+    "a-launch.exit": "0",
+    "a-new.exit": "0",
+    "a.exit": "0"
+  },
+  "final_report": true,
+  "replica": "a",
+  "host": "27.106.124.198"
+}

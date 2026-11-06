@@ -1,0 +1,19 @@
+{
+  "a_runtime_alignment": {
+    "runtime_file": "/vllm-workspace/vllm-ascend/vllm_ascend/worker/model_runner_v1.py",
+    "sha256": "60b10f97333df49c4bb2a6b5673d13d2d3b964056564c50681984b16fd84d049",
+    "source_container": "agentic-scaling-changxiangyu-ascend-pair",
+    "target_container": "agentic-scaling-changxiangyu-coding-a",
+    "reason": "preserve previous validated dummy-run slot invalidation order before attention metadata construction",
+    "measurements_before_alignment": 0,
+    "time": 1793780297.045979
+  },
+  "queue_controller": {
+    "local_file": "work\\coding_bench_20261104\\controller-v2.py",
+    "remote_file": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/coding-bench-20261104-controller-v2.py",
+    "sha256": "7e1b5bf08a9701a4c9cca61e968d155aa27a10ad88313d989e2af4b67f9f597d",
+    "fix": "docker top pid,comm column format",
+    "installed_before_formal_measurements": true
+  },
+  "frozen_source_commit": "214a358c7ba2ff3037fdf7a8e188fb3877f81dcb"
+}

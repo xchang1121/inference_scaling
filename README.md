@@ -103,9 +103,13 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
+| [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |
 | [100 题选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md) | Base / 快速 Consilience IS / 默认 Self-Certainty IS：92% / 93% / 94%。按块 SC K=2 为 95%，比快速 SC 耗时约多 20%、FLOPs 多 75%；准确率差区间包含 0 |
 | [IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md) | 同环境的 TP2/TP4、IS/Base 时延比、思考与内容 TTFT，以及输出吞吐 |
 | [昇腾调度实验](docs/reports/ASCEND_IS_INFRA.md) | 历史调度与探索消融，区分固定工作量加速和减少探索计算 |
+
+[完整分析材料](experiments/qwen38-20261106/README.md)包含代码评测 3168 份输出及判题、数学评测 1200 份输出，
+以及报告、完整思维链、审阅标签、冻结判题输入、配置和分析脚本。普通 Git 归档附逐文件 SHA-256 与离线展开工具。
 
 默认配置依据质量与成本对照选定，通用长度预算保持独立。性能入口为
 [`scripts/benchmark_is_gpu.py`](scripts/benchmark_is_gpu.py)，默认比较同题 Base 与配置中的 IS；
@@ -140,7 +144,7 @@ python -m pytest
 ```
 
 源码分为 `app/`（入口与记录）、`datasets/`（提示和判分）、`arllm/`（算法与后端）、`shared/`（公共概率核与模型工具）。
-`online-speculation/` 是独立项目；运行数据保存在 Git 忽略的 `results/` 中。
+`online-speculation/` 是独立项目；日常运行数据保存在 Git 忽略的 `results/` 中，已归档分析材料位于 `experiments/`。
 
 <a id="历史实现"></a>
 <a id="历史结果"></a>

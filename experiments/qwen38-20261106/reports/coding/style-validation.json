@@ -1,0 +1,42 @@
+{
+  "all_1739_original_cases_reviewed": true,
+  "all_3168_outputs_preserved": true,
+  "dataset_score_and_cost_aggregates_unchanged": true,
+  "accuracy_and_performance_table_in_main_report": true,
+  "accuracy_and_performance_method_rows": 12,
+  "fixed_semantic_pairs_checked": 24,
+  "fixed_semantic_labels_checked": 48,
+  "all_semantic_quotes_match": true,
+  "objective_comparisons_checked": 115,
+  "style_quote_count": 16,
+  "style_quote_problem_count": 10,
+  "style_quote_characters": 6063,
+  "all_style_quotes_match": true,
+  "full_trace_cases_written": 53,
+  "raw_source_sha256": {
+    "work\\coding_bench_20261104\\snapshots\\b\\evaluation\\b-judgments.jsonl": "e064a2b8b7e33e1bcfca81092be0f953c8b227962d33dd6c3a91ece11fc2b3df",
+    "work\\coding_bench_20261104\\snapshots\\b\\generation\\b.jsonl": "4ffd603697eb16ddfc821fe7ef2319849e282a70ed8d86dbc4c11b4ac49954f6",
+    "work\\coding_bench_20261104\\snapshots\\a\\evaluation\\a-judgments.jsonl": "28458ad570dbc3425498ecaf094239f7ba7799c962af9be5bd3d0ef152c80571",
+    "work\\coding_bench_20261104\\snapshots\\a\\generation\\a.jsonl": "58d44272489133515941cf9351d76e3c3822719aaf36dae3306acb287be7e82c"
+  },
+  "verified_implementation_sha256": {
+    "source/scripts/benchmark_is_gpu.py": "e6da8762491abcde8b5f42d5be17943fea8f01ca60d014726e1ab11ca038e1a0",
+    "source/src/inference_scaling/shared/rewards/consilience.py": "87f25dd7ff863b9a37015897fd9da43897b0574af8772a432927fc5132e32649",
+    "source/src/inference_scaling/arllm/rewards/intrinsic.py": "3fb2ba206e3519480bffd1cfce34c51e5fd69f6431c2c6ff1209a8d947d5bd08",
+    "source/src/inference_scaling/shared/sampling/conditional_is.py": "ad9bf046d0547467297bc53fad69407b7ad103d6a33b2929ddc989b2a8d0d15d",
+    "source/src/inference_scaling/arllm/algorithms/conditional_is.py": "18b9db92e4c30397a182f57ca24b3dc66f571bd55475e183ccdba632f56c6c89",
+    "settings-a.json": "95b156a21af23143383f4e53af20d29ff6d5af3c33a287e3718a1c5f1ffb1e12",
+    "settings-b.json": "95b156a21af23143383f4e53af20d29ff6d5af3c33a287e3718a1c5f1ffb1e12"
+  },
+  "artifact_sha256": {
+    "REPORT.md": "5565a16091050d0c858a557684727b5686a75d95a68dd6b1b6ac6e2c2f53602a",
+    "STYLE_TRACES.md": "8791daf48b78e618f13811ac94372dfda6dc945b3f551d9e17c45953248e40a4",
+    "STYLE_METHODS.md": "66b6a1737b13a95486ba035bb7ba40a3652caa18cdf242814ca23ebff0b92bb6",
+    "style-evidence.json": "bd46247fd2864e61521f1ecbd00e81f02cdad17e4cd44e96074c29129b5c2528",
+    "style-summary.json": "4e2b487910d64c1d965cfcbd3729c5b059acf8ebbd65cf6c1c543f2dfb20ed98",
+    "style-metrics.json": "5e653fc22267c117202e1d019736e99b529f8701c196e6b8d610d4ba11e62f56",
+    "style-review-labels.jsonl": "631d1706d74794881d6f92c6eba527eee9b0ddfcc1917a89fab9df62984b64c3",
+    "CASE_COMPARISONS.md": "2ec45d29e7abc0329e51745f12e393c339518360a2befe5cfec5711546bcd307",
+    "RESULTS.md": "dd9dbf4398f3aa328083f1fe082c1db8934baeb421a911a4f9a878fd83613360"
+  }
+}
