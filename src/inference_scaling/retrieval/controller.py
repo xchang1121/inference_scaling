@@ -40,6 +40,7 @@ class InjectionConfig:
     sentence_wait_tokens: int = 64
     context_tokens: int = 8192
     self_certainty: bool = False
+    answer_tokens: int | None = None
 
     def __post_init__(self):
         if self.position not in {"none", "user", "start", "inline", "sentence", "pre_answer"}:
@@ -54,6 +55,8 @@ class InjectionConfig:
             raise ValueError("sc_drop needs self_certainty statistics")
         if self.query not in {"question", "recent", "hybrid"}:
             raise ValueError("unknown query strategy")
+        if self.answer_tokens is not None and self.answer_tokens <= 0:
+            raise ValueError("answer_tokens must be positive when specified")
 
 
 def _clean_reference(text: str) -> str:
@@ -98,6 +101,7 @@ class OnlineInjectionController:
         phase, finish = "thinking", "max_tokens"
         generation_seconds = retrieval_seconds = 0.0
         generation_calls = 0
+        answer_generated = 0
 
         def fetch(text: str, signals: dict):
             nonlocal retrieval_attempts, last_attempt, retrieval_seconds
@@ -185,9 +189,14 @@ class OnlineInjectionController:
                 else:
                     pending[1]["skip_reason"] = "thinking_ended_before_sentence"
                 pending = None
+            if phase == "answer" and cfg.answer_tokens is not None and answer_generated >= cfg.answer_tokens:
+                finish = "answer_budget"
+                break
             remaining = min(cfg.max_new_tokens-len(generated), cfg.context_tokens-len(context))
             if phase == "thinking":
                 remaining = min(remaining, cfg.thinking_tokens-len(reason_ids))
+            elif cfg.answer_tokens is not None:
+                remaining = min(remaining, cfg.answer_tokens-answer_generated)
             if remaining <= 0:
                 finish = "context_budget"
                 break
@@ -213,6 +222,8 @@ class OnlineInjectionController:
                              "token_statistics": sample.token_statistics})
             context += sample.token_ids
             generated.extend(sample.token_ids)
+            if phase == "answer":
+                answer_generated += len(sample.token_ids)
             if phase == "thinking":
                 reason_ids.extend(sample.token_ids)
                 reason_lp.extend(sample.token_logprobs)
@@ -256,6 +267,8 @@ class OnlineInjectionController:
                         pending = item
         if pending is not None:
             pending[1]["skip_reason"] = "generation_ended_before_injection"
+        if finish == "max_tokens" and cfg.answer_tokens is not None and answer_generated >= cfg.answer_tokens:
+            finish = "answer_budget"
         after = _snapshot(backend)
         costs = {key: after[key]-before[key] for key in before.keys() & after.keys()
                  if type(before[key]) in (int, float) and type(after[key]) in (int, float)}
@@ -282,6 +295,7 @@ class OnlineInjectionController:
                 "thinking_text": backend.decode(tuple(reason_ids), skip_special_tokens=False),
                 "answer_text": clean_answer, "finish_reason": finish, "generated_tokens": len(generated),
                 "thinking_tokens": len(reason_ids), "injected_tokens": evidence_used,
+                "answer_generated_tokens": answer_generated,
                 "retrieval_attempts": retrieval_attempts, "generation_calls": generation_calls,
                 "generation_seconds": generation_seconds, "retrieval_seconds": retrieval_seconds,
                 "seconds": time.perf_counter()-started, "cost": costs,
