@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import statistics
+import sys
 
 import numpy as np
 
@@ -80,6 +81,7 @@ def main():
                 "generated_probability_lengths_match":all(len(s["token_ids"]) == len(s["token_logprobs"])
                     for s in row["segments"] if s["kind"] == "generated"),
                 "native_graph_cost_available":row.get("graph_execution",{}).get("estimated_dense_padded_flops",0) > 0,
+                "native_at_least_logical_forward":row.get("graph_execution",{}).get("forward_token_slots",-1) >= row["cost"].get("generation_forward_token_slots",0),
                 "no_rescoring_forward":row["cost"].get("score_forward_token_slots",0) == 0,
                 "no_preemption":row["cost"].get("preemptions",0) == 0,
                 "no_cancelled_request":row["cost"].get("cancelled_requests",0) == 0})
@@ -112,8 +114,9 @@ def main():
                 "empty_answers":sum(not r["answer_text"].strip() for r in chosen),
                 "length_exhausted":sum(r["finish_reason"] == "max_tokens" for r in chosen),
                 "pflops":sum(native)/1e15 if chosen and all(v is not None for v in native) else None,
+                "logical_pflops":sum(r["cost"]["estimated_dense_forward_flops"] for r in chosen)/1e15 if chosen else None,
                 "cache_hit_fraction":cached/(cached+fresh) if cached+fresh else None})
-        comparisons = []
+        comparisons, coupling = [], []
         if common:
             baseline = [by_key[qid,"closed-book"] for qid in common]
             for mode in modes:
@@ -123,11 +126,37 @@ def main():
                 ratio = sum(r["seconds"] for r in chosen)/sum(r["seconds"] for r in baseline)
                 comparisons.append({"reference":"closed-book", "alternative":mode,
                     "n":len(common), **paired(baseline,chosen,"score"), "wall_ratio":ratio})
+            def sampled_tokens(row):
+                return [t for segment in row["segments"] if segment["kind"] == "generated" for t in segment["token_ids"]]
+            for qid in common:
+                base = by_key[qid,"closed-book"]
+                original = sampled_tokens(base)
+                for mode in modes:
+                    if mode in {"closed-book","static-user-bm25","start-bm25"}:
+                        continue
+                    row = by_key[qid,mode]
+                    tokens = sampled_tokens(row)
+                    shared = next((i for i,(a,b) in enumerate(zip(original,tokens)) if a != b),min(len(original),len(tokens)))
+                    injections = [e for e in row["events"] if e.get("injected")]
+                    intervention = injections[0]["actual_generated_offset"] if injections else min(len(original),len(tokens))
+                    # Sentence waiting changes request seeds/cutting before the
+                    # actual evidence append; treat that as the first intervention.
+                    waiting = [e["generated_offset"] for e in row["events"] if e.get("position") == "sentence"]
+                    cutoff = min([intervention,*waiting])
+                    coupling.append({"question_id":qid,"arm":mode,"expected_prefix_tokens":cutoff,
+                        "common_sampled_prefix_tokens":shared,"same_prompt":row["prompt_ids"] == base["prompt_ids"],
+                        "matches_before_intervention":shared >= cutoff,
+                        "identical_complete_context":row["context_ids"] == base["context_ids"]})
         indexes = [r for r in rows if r["kind"] == "index"]
+        reconciliation = [{"question_id":r["question_id"],"arm":r["arm"],
+            "logical_slots":r["cost"]["generation_forward_token_slots"],
+            "native_slots":r["graph_execution"]["forward_token_slots"],
+            "extra_native_slots":r["graph_execution"]["forward_token_slots"]-r["cost"]["generation_forward_token_slots"],
+            "forced_thinking_end":any(e["kind"] == "forced_thinking_end" for e in r["events"])} for r in measurements]
         summary[name] = {"manifest":manifest,"generated":len(measurements),"expected":len(gold)*len(modes),
             "complete_marker":any(r["kind"] == "complete" for r in rows),"common_questions":common,
             "failed_attempts":[r for r in rows if r["kind"] == "failed"],"methods":methods,
-            "comparisons":comparisons,"index_builds":indexes}
+            "comparisons":comparisons,"coupling_checks":coupling,"cost_reconciliation":reconciliation,"index_builds":indexes}
     retrieval = {}
     for name, path in (("api", args.data/"api/retrieval.jsonl"), ("techqa",args.snapshot/"techqa-retrieval.jsonl")):
         if path.exists():
@@ -138,6 +167,8 @@ def main():
              if (args.snapshot/(name+".exit")).exists() else None for name in ("generation","techqa","api")}
     finished = all(s["generated"] == s["expected"] and s["complete_marker"] and not s["failed_attempts"] for s in summary.values()) and all(v == "0" for v in exits.values())
     result = {"status":"complete" if finished else "in_progress", "frozen":state["frozen"],
+              "analysis_runtime":{"python":sys.version,"numpy":np.__version__,
+                  "summarizer_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
               "snapshot_time":state["time"],"datasets":summary,"retrieval":retrieval,"exit_codes":exits,
               "all_saved_measurements_pass_audit":bool(checks) and all(all(v for v in c.values() if isinstance(v,bool)) for c in checks)}
     (args.output/"summary.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
@@ -179,6 +210,9 @@ def report(out, result):
             for kind, metrics in result["retrieval"][name].items():
                 lines.append("| "+kind+" | "+" | ".join(f"{metrics[f'hit@{k}']*100:.1f}%" for k in (1,2,3,5))+" |")
         lines += ["", f"生成失败记录：{len(s['failed_attempts'])}。索引构建记录：{json.dumps(s['index_builds'],ensure_ascii=False)}。"]
+        extra = [r["extra_native_slots"] for r in s["cost_reconciliation"]]
+        if extra:
+            lines += ["", f"原生执行图相对逻辑估算多出的前向位置：合计 {sum(extra)}，单条范围 [{min(extra)}, {max(extra)}]；逐条对应关系见 cost_reconciliation。PFLOPs 表格采用原生执行图计数。"]
     lines += ["", "## 解释范围与成本口径", "",
         "规则题的 JSON action 是题目给定的决策标签，wait_seconds 是剩余强制等待秒数，无计时要求时取 0；两项同时正确才得分。八条短文档的检索难度低，且没有隐藏新事实，闭卷可能已掌握规则。TechQA 使用规范化回答 token F1；EM 与逐样本判分在 summary.json / grades.jsonl。这里只抽取可回答 DEV 样本，未覆盖不可回答题；原数据集可能出现在模型训练资料中，不能声称无污染。", "",
         "配对 bootstrap 以题目为单位重采样 5,000 次，未作多重比较校正。小样本区间退化不代表方法稳定等价；阈值没有在本 pilot 上优化。", "",
