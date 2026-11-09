@@ -111,3 +111,5 @@ included in study resource receipts. Raw traces and source/input/runtime hashes
 must support an offline structural audit before handoff.
 
 Before any formal generation, the design added paired literal assistant-step insertion and user-region reconstruction. The initial two-TRAIN smoke source used reconstruction only; its outputs remain a separately versioned runtime check. The final source receives a focused two-TRAIN FLARE smoke check (8 format/content outcomes) before formal launch; unchanged baselines are covered by the original 18-outcome smoke. No DEV model outcomes informed this change.
+
+The focused final-source smoke also includes a labeled synthetic positive contract for the supported-evidence path: a fictional Mercury API v2 source explicitly specifies 27 seconds. Its provided reasoning/draft is input rather than sampled prehistory. Planner/checker generations and two short format continuations are recorded as separate probe cost, excluded from formal conditions and quality scores. The probe never supplies a DEV answer or changes formal thresholds.

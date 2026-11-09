@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 import hashlib
 import json
@@ -16,8 +16,8 @@ from inference_scaling.arllm.backends.loader import close_backend, load_backend
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
 from inference_scaling.retrieval.ablation import SYSTEM
 from inference_scaling.retrieval.controller import _snapshot
-from inference_scaling.retrieval.corpus import Retriever
-from inference_scaling.retrieval.stepwise import StepConfig, StepController, WindowEvidence, token_hash
+from inference_scaling.retrieval.corpus import Document, Retriever
+from inference_scaling.retrieval.stepwise import StepConfig, StepController, StepState, WindowEvidence, token_hash
 from inference_scaling.shared.model.prompting import render_prompt
 from inference_scaling.shared.rng import SeedStream
 
@@ -104,6 +104,7 @@ def main():
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--seed", type=int, default=20261109)
     parser.add_argument("--policies", nargs="+", choices=POLICIES, default=list(POLICIES))
+    parser.add_argument("--checker-contract-probe", action="store_true")
     args = parser.parse_args()
     settings = load_settings(args.settings)
     if args.prepare_only:
@@ -117,7 +118,8 @@ def main():
     conditions_per_question = sum(1 if p == "closed" else 4 if p == "flare_gap" else 2 for p in args.policies)
     root = Path(__file__).resolve().parents[1]
     identity_data = {"settings_sha256": sha(args.settings.read_bytes()), "prepared_sha256": sha(args.prepared.read_bytes()),
-        "seed": args.seed, "policies": args.policies, "runner_sha256": sha(Path(__file__).read_bytes()),
+        "seed": args.seed, "policies": args.policies, "checker_contract_probe": args.checker_contract_probe,
+        "runner_sha256": sha(Path(__file__).read_bytes()),
         "source": {p.relative_to(root).as_posix(): sha(p.read_bytes()) for p in (root/"src").rglob("*.py")}}
     identity = sha(json.dumps(identity_data, sort_keys=True).encode())
     import fcntl
@@ -164,6 +166,42 @@ def main():
                     async def clear():
                         if await raw._engine.reset_prefix_cache() is False: raise RuntimeError("prefix cache reset failed")
                     raw._runner.run(clear())
+                if args.checker_contract_probe:
+                    # A transparent synthetic positive contract, not a benchmark
+                    # sample or sampled prehistory. It checks the supported path
+                    # even when the two TRAIN retrievals are correctly rejected.
+                    fixture_question = "What exact retry timeout should Mercury API v2 use?"
+                    fixture_reason = "The required value depends on the version-specific retry policy. "*10
+                    fixture_draft = "The Mercury API v2 retry timeout is 31 seconds."
+                    fixture_source = "Mercury API v2 uses a retry timeout of exactly 27 seconds. Apply this timeout before retrying a failed request."
+                    fixture_index = Retriever([Document("mercury-v2", "Mercury API v2 retry policy", fixture_source)], kind="bm25")
+                    fixture_evidence = WindowEvidence(raw, fixture_index, prepared["noise_ids"], cfg)
+                    fixture_ctrl = StepController(raw, fixture_evidence, fmt, aux_prompt, cfg=cfg)
+                    state = StepState(render(raw.tokenizer, settings["ar"], SYSTEM, fixture_question, True), 77, fixture_question,
+                        reason=list(raw.encode(fixture_reason, add_special_tokens=False)),
+                        pending=list(raw.encode(fixture_draft, add_special_tokens=False)))
+                    state.pending_lp = [-3.]*len(state.pending)
+                    reset()
+                    probe_before, probe_graph, probe_started = _snapshot(raw), graph.snapshot(), time.perf_counter()
+                    packet = fixture_ctrl._gap(state, len(state.pending))
+                    branches = []
+                    if packet:
+                        state.pending.clear(); state.pending_lp.clear()
+                        short = replace(cfg, work_tokens=state.work+64, answer_tokens=32)
+                        fixture_ctrl = StepController(raw, fixture_evidence, fmt, aux_prompt, cfg=short)
+                        for position in ("flare_gap", "flare_gap_rebuild"):
+                            reset()
+                            branch = fixture_ctrl.branch(state, packet, "relevant", position)
+                            branches.append({"policy": position, "calls": branch.calls, "result": fixture_ctrl.result(branch)})
+                    probe_after = _snapshot(raw)
+                    write({"kind": "checker_contract", "accepted": bool(packet), "seconds": time.perf_counter()-probe_started,
+                        "fixture": {"question": fixture_question, "provided_reason": fixture_reason, "provided_draft": fixture_draft,
+                                    "source": fixture_source, "note": "provided prefix is input, not sampled or charged as generation"},
+                        "calls": state.calls, "events": state.events, "branches": branches,
+                        "cost": {k: probe_after[k]-probe_before[k] for k in probe_before.keys() & probe_after.keys()
+                                 if type(probe_before[k]) in (int, float) and type(probe_after[k]) in (int, float)},
+                        **graph.difference(probe_graph)})
+                    if not packet: raise RuntimeError("supported synthetic checker contract was not accepted; preserve failed smoke")
                 def unit(uid, action):
                     reset()
                     before, graphs, started = _snapshot(raw), graph.snapshot(), time.perf_counter()
