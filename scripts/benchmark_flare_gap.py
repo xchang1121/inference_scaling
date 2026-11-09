@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from functools import partial
 import hashlib
 import json
 import math
@@ -189,14 +190,14 @@ def main():
                         uid = case["id"]+":"+policy+":common"
                         write({"kind": "attempt_start", "question_id": case["id"], "policy": policy})
                         print(json.dumps({"question": case["id"], "cohort": case.get("cohort", "smoke"), "policy": policy}), flush=True)
-                        common, packet = unit(uid, lambda: ctrl.stem(case["question"], case["prompt_ids"], seed, policy))
+                        common, packet = unit(uid, partial(ctrl.stem, case["question"], case["prompt_ids"], seed, policy))
                         conditions = ("none",) if policy == "closed" else ("relevant", "unrelated")
                         for content in conditions:
                             units = [uid]
                             result_state = common
                             if packet:
                                 bid = case["id"]+":"+policy+":"+content
-                                result_state = unit(bid, lambda: ctrl.branch(common, packet, content, policy))
+                                result_state = unit(bid, partial(ctrl.branch, common, packet, content, policy))
                                 units.append(bid)
                             result = ctrl.result(result_state)
                             if result["work_tokens"] > cfg.work_tokens or result["answer_tokens"] > cfg.answer_tokens:
