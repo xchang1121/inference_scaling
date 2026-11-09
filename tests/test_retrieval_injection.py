@@ -25,6 +25,7 @@ class Counts:
 
 class EngineDouble:
     tokenizer = SimpleNamespace(eos_token_id=3)
+    model_id = "test-double"
     encode = staticmethod(encode)
 
     def __init__(self):

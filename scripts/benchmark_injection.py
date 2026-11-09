@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.backends.loader import close_backend, load_backend
@@ -180,9 +181,15 @@ def main():
                             raise ValueError("could not open thinking segment")
                         prefix += fmt.start_token_ids + tuple(raw.encode("\n", add_special_tokens=False))
                     return prefix
+                at = time.perf_counter()
                 kinds = {available_arms[a][0] for a in args.arms}
                 index = Retriever.from_jsonl(args.data/"corpus.jsonl", kind="hybrid" if len(kinds) > 1 else next(iter(kinds)))
                 retrievers = {kind:index.with_kind(kind) for kind in kinds}
+                write({"kind":"index", "documents":len(index.documents), "retrievers":sorted(kinds),
+                       "corpus_sha256":index.fingerprint, "build_seconds":time.perf_counter()-at})
+                from benchmark_is_gpu import engine_settings
+                write({"kind":"engine", "model_id":raw.model_id, "parameter_count":raw.parameter_count,
+                       "config":engine_settings(raw) if hasattr(raw,"_runner") else {}})
                 # Unmeasured engine warmup, before per-question cache reset.
                 raw.sample_batch([GenerationRequest(
                     prompt("Say ready.", ""), 8, SamplingConfig(eos_token_id=raw.tokenizer.eos_token_id), 1, "warmup")])

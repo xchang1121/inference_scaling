@@ -276,6 +276,7 @@ class OnlineInjectionController:
         clean_answer = backend.decode(tuple(answer_ids), skip_special_tokens=True)
         finite_sc = [value for value in reason_sc if math.isfinite(value)]
         return {"question": question, "seed": seed, "config": asdict(cfg),
+                "model_id": backend.model_id, "sampling_policy": sampling.policy_id,
                 "corpus_sha256": self.retriever.fingerprint, "retriever": self.retriever.kind,
                 "prompt_ids": prompt_ids, "context_ids": context, "segments": segments, "events": events,
                 "thinking_text": backend.decode(tuple(reason_ids), skip_special_tokens=False),
