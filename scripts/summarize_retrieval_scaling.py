@@ -101,7 +101,8 @@ def summarize(args):
     rows = read_jsonl(args.input)
     metadata = next(r for r in rows if r["kind"] == "metadata")
     complete = [r for r in rows if r["kind"] == "completed"]
-    units = {r["unit_id"]: r for r in rows if r["kind"] == "execution_unit"}
+    unit_rows = [r for r in rows if r["kind"] == "execution_unit"]
+    units = {r["unit_id"]: r for r in unit_rows}
     measurements = [r for r in rows if r["kind"] == "measurement"]
     gold = {r["id"]: r for r in read_jsonl(args.gold)} if args.gold else {}
     cfg = metadata["config"]
@@ -185,8 +186,8 @@ def summarize(args):
             if not group:
                 continue
             summaries.append({"cohort": cohort, "arm": arm, "n": len(group),
-                "f1_percent": average([g["f1"]*100 for g in group if g["f1"] is not None]),
-                **{k: average([g[k] for g in group]) for k in ("work_tokens", "seconds", "native_pflops", "unused_work_budget")},
+                "f1_percent": average([g["f1"]*100 for g in group if g["f1"] is not None]) if any(g["f1"] is not None for g in group) else None,
+                **{k: average([g[k] for g in group]) for k in ("work_tokens", "seconds", "native_pflops", "unused_work_budget", "search_steps")},
                 **{k: sum(g[k] for g in group) for k in ("empty_answer", "eos_inside_thinking", "immediate_thinking_end", "immediate_eos", "forced_thinking_end", "search_bypassed", "raw_search_eos", "raw_probe_eos", "raw_immediate_search_eos", "raw_immediate_search_close", "provisional_eos")}})
     lookup = {(g["question_id"], g["arm"]): g for g in graded}
     contrasts = []
@@ -205,16 +206,25 @@ def summarize(args):
                 if (i, arm) in lookup and (i, base) in lookup and lookup[(i, arm)]["f1"] is not None]
             if diffs:
                 contrasts.append({"cohort": cohort, "contrast": arm+" minus "+base, **bootstrap(diffs)})
-    failed = [(group, uid, k) for group, mapping in [("unit", audits), ("condition", condition_checks), ("pair", pairs)]
+    failed_units = [r for r in rows if r["kind"] == "failed_unit"]
+    ids = set(gold) if gold else {m["question_id"] for m in measurements}
+    expected_grid = {(i, context+"."+content+"/"+method) for i in ids for context in metadata["contexts"]
+        for method in metadata["methods"] for content in (("none",) if context == "closed" else ("relevant", "unrelated"))}
+    actual_grid = {(m["question_id"], m["arm"]) for m in measurements}
+    global_audit = {"run": {"unique_execution_units": len(unit_rows) == len(units),
+        "unique_conditions": len(actual_grid) == len(measurements), "no_failed_units": not failed_units,
+        "complete_grid": not complete or actual_grid == expected_grid}}
+    audit_groups = [("unit", audits), ("condition", condition_checks), ("pair", pairs), ("global", global_audit)]
+    failed = [(group, uid, k) for group, mapping in audit_groups
         for uid, checks in mapping.items() for k, ok in checks.items() if not ok]
     report = {"complete": bool(complete), "conditions": len(measurements), "expected_conditions": metadata["expected_conditions"],
-        "execution_units": len(units), "audit_checks": sum(len(c) for mapping in (audits, condition_checks, pairs) for c in mapping.values()),
-        "audit_failures": failed, "summary": summaries, "contrasts": contrasts,
+        "execution_units": len(units), "audit_checks": sum(len(c) for _, mapping in audit_groups for c in mapping.values()),
+        "audit_failures": failed, "failed_units": failed_units, "summary": summaries, "contrasts": contrasts,
         "actual_study": {"seconds": sum(u["seconds"] for u in units.values()),
             "work_tokens": sum(len(c["token_ids"]) for u in units.values() for c in u["calls"] if c["purpose"] != "answer"),
             "native_pflops": sum(u.get("graph_execution", {}).get("estimated_dense_padded_flops", 0) for u in units.values())/1e15}}
     args.output.mkdir(parents=True, exist_ok=True)
-    for name, value in [("summary.json", report), ("audit.json", {"units": audits, "conditions": condition_checks, "pairs": pairs})]:
+    for name, value in [("summary.json", report), ("audit.json", {"units": audits, "conditions": condition_checks, "pairs": pairs, "global": global_audit})]:
         (args.output/name).write_text(json.dumps(value, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     for name, records in [("graded.jsonl", graded), ("gate-events.jsonl", [{"unit_id": uid, "event": e} for uid, u in units.items() for e in u["result"]["events"] if e["kind"] in {"gap_check", "support_check", "search_checkpoint", "rollback"}])]:
         (args.output/name).write_text("".join(json.dumps(x, ensure_ascii=False)+"\n" for x in records), encoding="utf-8")
@@ -223,7 +233,8 @@ def summarize(args):
             writer = csv.DictWriter(stream, fieldnames=list(summaries[0])); writer.writeheader(); writer.writerows(summaries)
     text = ["# Retrieval + inference scaling pilot", "", f"Completed: {bool(complete)}; {len(measurements)}/{metadata['expected_conditions']} conditions; {len(units)} unique execution units; {report['audit_checks']} checks, {len(failed)} failures.", "", "F1 is normalized answer token F1 (%), not exact-answer accuracy. Four fresh questions and four regression questions; one seed. Equal generated-token caps do not imply equal realized work or FLOPs.", "", "Times cover measured execution units, including online dynamic lookup. Model startup, corpus-index construction and offline static-packet preparation are excluded. PFLOPs are native dense-padded graph estimates, not hardware-counter measurements of every operation.", "", "| Cohort | Evidence / method | F1 % | Mean work | Mean s | Mean PFLOPs | Empty | Thinking EOS | Forced close |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for s in summaries:
-        text.append(f"| {s['cohort']} | {s['arm']} | {s['f1_percent']:.3f} | {s['work_tokens']:.1f} | {s['seconds']:.2f} | {s['native_pflops']:.3f} | {s['empty_answer']} | {s['eos_inside_thinking']} | {s['forced_thinking_end']} |")
+        score = f"{s['f1_percent']:.3f}" if s['f1_percent'] is not None else "not scored"
+        text.append(f"| {s['cohort']} | {s['arm']} | {score} | {s['work_tokens']:.1f} | {s['seconds']:.2f} | {s['native_pflops']:.3f} | {s['empty_answer']} | {s['eos_inside_thinking']} | {s['forced_thinking_end']} |")
     text += ["", "Paired question-bootstrap contrasts (percentage points):", ""]
     for c in contrasts:
         text.append(f"- {c['cohort']}: {c['contrast']}: {c['difference']:+.3f}, 95% [{c['bootstrap_95'][0]:+.3f}, {c['bootstrap_95'][1]:+.3f}], n={c['n_questions']}.")

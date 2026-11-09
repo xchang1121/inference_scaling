@@ -22,3 +22,4 @@
 /experiments/online-injection-scaling-20261109/full/* -diff
 /experiments/online-injection-scaling-20261109/reports/figures/*.svg -diff -whitespace
 /experiments/online-injection-scaling-20261109/reports/audit.json -diff
+/experiments/online-injection-scaling-20261109/reports/traces/*.txt -diff -whitespace

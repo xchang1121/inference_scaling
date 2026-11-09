@@ -38,7 +38,7 @@ def main():
             ax.set_xticks(np.arange(len(views)), names)
             ax.set_title(("Fresh, n=4" if cohort == "heldout" else "Regression, n=4")+" | "+title, loc="left", fontsize=12)
             ax.grid(axis="y", alpha=.2); ax.set_axisbelow(True); ax.margins(y=.22)
-    axes[0, 0].legend(loc="upper left", frameon=False, fontsize=9)
+    axes[0, 0].legend(loc="upper left", frameon=False, fontsize=9, ncol=3, columnspacing=1, handlelength=1.4)
     fig.suptitle("Evidence retrieval + inference scaling: feasibility pilot", fontsize=18)
     fig.supxlabel("8192 search/aux generated-token cap + 512 answer tokens; one seed; realized compute differs.", fontsize=11)
     a.output.mkdir(parents=True, exist_ok=True)
