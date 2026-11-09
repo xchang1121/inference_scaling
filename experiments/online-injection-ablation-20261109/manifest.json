@@ -1,0 +1,762 @@
+{
+  "schema": 1,
+  "source_commit": "0bc7220744af3147928e1fb74317888a4dc92a1b",
+  "formal_measurements": 336,
+  "thinking_budgets": [
+    256,
+    1024,
+    4096
+  ],
+  "devices": [
+    3
+  ],
+  "prepared_sha256": "8bc8af899449f8cacd2a450303d7043cadb1a8070d1690e5df2d97b047eff322",
+  "retrieved_and_gold_documents": 21,
+  "direct_files": [
+    {
+      "path": "README.md",
+      "bytes": 3869,
+      "sha256": "640c83008cbdd9611b0e143a79eab10e6b56c5b5ffc46ce6baaf04a6ba7f22d2"
+    },
+    {
+      "path": "analysis/benchmark_injection.py",
+      "bytes": 14151,
+      "sha256": "18509fe667f20829523fe9028470cba173a56231de27533c229eebb81716f465"
+    },
+    {
+      "path": "analysis/export_injection_ablation_traces.py",
+      "bytes": 5540,
+      "sha256": "2ee982576406476e4f2113d47e2b2e6535f29c5f4fdc411d6697c00649c5691b"
+    },
+    {
+      "path": "analysis/package_results.py",
+      "bytes": 9121,
+      "sha256": "42f8bc16928c623b98a6cd9d3b0dce7f96f73f0e7b7d9a32359f19842bdb1e1c"
+    },
+    {
+      "path": "analysis/plot_injection_ablation.py",
+      "bytes": 9298,
+      "sha256": "537cf8dcd335315489e65e13a3aa5b2d0d30c6b5b45dbd2bf6e64112d5ac3b23"
+    },
+    {
+      "path": "analysis/summarize_injection_ablation.py",
+      "bytes": 24491,
+      "sha256": "dd0a578baefd1c858da14718f3cb8cb75cd53b172fbfc3ab1ea4454c649250b2"
+    },
+    {
+      "path": "analysis/verify_handoff.py",
+      "bytes": 5023,
+      "sha256": "01f1a59bdc1d4bd115551cffad7226e10febb11defb00bdacc1bc18ab53cab37"
+    },
+    {
+      "path": "reports/OBSERVATIONS.md",
+      "bytes": 6506,
+      "sha256": "947a6e4f80a5cfa4df293c18f94c955b172aa7efd20049940ef1ff817f8142cc"
+    },
+    {
+      "path": "reports/REPORT.md",
+      "bytes": 19917,
+      "sha256": "adfcbc3d58cf4f7444ed7891230c8e2ff088ed497e899d5b5c38bb2e86dcaa25"
+    },
+    {
+      "path": "reports/audit-checks.json",
+      "bytes": 271549,
+      "sha256": "dc1c72cb42e181f5cef369625786b74703e76e2df480d9a0c89ba47e0ed86409"
+    },
+    {
+      "path": "reports/figures/figures-manifest.json",
+      "bytes": 1046,
+      "sha256": "0d69b38b09ebdb2df56cd36fb88161df907bf63c0c597d0c241a27805423c4a8"
+    },
+    {
+      "path": "reports/figures/immediate-end.png",
+      "bytes": 254572,
+      "sha256": "1b5fb83299861553fa793e505ef7404b9c4a227786350f42d059b4bafd13135e"
+    },
+    {
+      "path": "reports/figures/immediate-end.svg",
+      "bytes": 49365,
+      "sha256": "121b61c748b058105af519e044cfdee5f092456f213afd9f820651d155de08fe"
+    },
+    {
+      "path": "reports/figures/quality.png",
+      "bytes": 229448,
+      "sha256": "23a0567ef3ab25b5dd8def3af1f0f07ffb84f59fbc99fce245368e32ab4acbfc"
+    },
+    {
+      "path": "reports/figures/quality.svg",
+      "bytes": 57375,
+      "sha256": "73c0ca76a2fe4f3113f55ffd690f3f52496e4640bb1d699103c684d8b0f141f3"
+    },
+    {
+      "path": "reports/figures/stop-outcomes.png",
+      "bytes": 292390,
+      "sha256": "423ea527386124506af79e40c17ee6ab451f6209499bf8169c69e749de6f993c"
+    },
+    {
+      "path": "reports/figures/stop-outcomes.svg",
+      "bytes": 56611,
+      "sha256": "90bf775081f2020c5951af78efb6ba62ec55ef80293dfb86b1503fa02469e86a"
+    },
+    {
+      "path": "reports/figures/thinking-length.png",
+      "bytes": 253916,
+      "sha256": "6ec12c7c5859d91e6bf28887f94033117594ed55ed3d85338859c6f8f8959694"
+    },
+    {
+      "path": "reports/figures/thinking-length.svg",
+      "bytes": 59867,
+      "sha256": "eba140c4dd132de83ac3f31bd5588c142b9bae7d09e11faead3ada5ca43b01b4"
+    },
+    {
+      "path": "reports/grades.jsonl",
+      "bytes": 160309,
+      "sha256": "8f9cde4e26e498a9adbe706fb588020ceedb142ecd64baf8c7030768d0e4ccea"
+    },
+    {
+      "path": "reports/handoff-verification.json",
+      "bytes": 2245,
+      "sha256": "3723f1005f452e1f44e3c06a78e89f68d3069b86d2ada479fa52b3cf5f545a41"
+    },
+    {
+      "path": "reports/summary.json",
+      "bytes": 302166,
+      "sha256": "048ecfb4bdf845a818c34c33de5b8a114b1c40f680a5342e6526631a1dd7a493"
+    },
+    {
+      "path": "reports/traces/DEV_Q209-budget-1024-all-14-methods.txt",
+      "bytes": 99727,
+      "sha256": "2f0da5730b43b35a73257cc4d887d441f08e12788fb33849172f142a0f8d2b3a"
+    },
+    {
+      "path": "reports/traces/DEV_Q209-budget-256-all-14-methods.txt",
+      "bytes": 87214,
+      "sha256": "b5bb2d0b8a0ba026251791599557bf5cd53a786e7c70cef5036f863637d32ef4"
+    },
+    {
+      "path": "reports/traces/DEV_Q209-budget-4096-all-14-methods.txt",
+      "bytes": 99981,
+      "sha256": "675564bf5201780437f0b1679e9cf1b101add4fbd2a12b149bcc0991000dac82"
+    },
+    {
+      "path": "reports/traces/trace-manifest.json",
+      "bytes": 964,
+      "sha256": "8ab7410bea43af5990957a20acfb2c357d4ae6a40463e8727bd352600bbeb402"
+    },
+    {
+      "path": "unpack.py",
+      "bytes": 3907,
+      "sha256": "660a09d3459fefc522a203255b418d9b88cd68a97a40a5b4f7798763698b8c82"
+    }
+  ],
+  "archives": [
+    {
+      "path": "full/analysis-workspace.tar.gz",
+      "bytes": 5345712,
+      "sha256": "613ee37df8f96d0c0a3c2bf10764694985b9dc1ce9f334279a0f0cceae55a1bb",
+      "destination": ".",
+      "files": [
+        {
+          "path": "data/techqa/DATASET_CARD.md",
+          "bytes": 2113,
+          "sha256": "8d85191f81a748f2a66bb32cecb972727e69fcc0541c1f936c4debfa4823190b"
+        },
+        {
+          "path": "data/techqa/LICENSE-Apache-2.0.txt",
+          "bytes": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "data/techqa/gold.jsonl",
+          "bytes": 3183,
+          "sha256": "34e2378162d198045496b4c9b00dd04f5b4acd573e5c8fe990269ae1772e6276"
+        },
+        {
+          "path": "data/techqa/manifest.json",
+          "bytes": 1061,
+          "sha256": "583520f2f4ea3127b7e230ac196a21343531674c5725f429888b4769c7c53179"
+        },
+        {
+          "path": "data/techqa/questions.jsonl",
+          "bytes": 5404,
+          "sha256": "c581030e2f5519d9b65252b7f8a944234f4553042b560fb78c68da2c83715fa1"
+        },
+        {
+          "path": "data/techqa/retrieved-and-gold-documents.jsonl",
+          "bytes": 67365,
+          "sha256": "9050e6f132edc37a12bf79541c1d35dadef4c611696e41aab960cedb5099a0ed"
+        },
+        {
+          "path": "data/unrelated-prose.txt",
+          "bytes": 7462,
+          "sha256": "9a95856014382bc89062577bfcf098cba352d11dbcb7372d91060f553284d862"
+        },
+        {
+          "path": "generation-source/pyproject.toml",
+          "bytes": 1390,
+          "sha256": "fb84732eb69ce90fbc61d35752824fd452d45c726ee543e62faf9c928ad04fff"
+        },
+        {
+          "path": "generation-source/scripts/benchmark_injection_ablation.py",
+          "bytes": 14803,
+          "sha256": "bcfa1e30573d00b284cbde4df42679d47afd734d1d83abfede40eacacc35fdab"
+        },
+        {
+          "path": "generation-source/scripts/benchmark_is_gpu.py",
+          "bytes": 29094,
+          "sha256": "e6da8762491abcde8b5f42d5be17943fea8f01ca60d014726e1ab11ca038e1a0"
+        },
+        {
+          "path": "generation-source/settings/inference.json",
+          "bytes": 6247,
+          "sha256": "255655d9357b830df73d09633e526ff4a8320a8a8c7f561b1cbaf971de3172d7"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/__init__.py",
+          "bytes": 355,
+          "sha256": "1e93a0ed79a848127eb62a6cfcbb524f25c2f1daef544d59aad23cf36737fa91"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/__main__.py",
+          "bytes": 54,
+          "sha256": "cd6bc90c1f1919ae3916f3bea3391a8f37548633cbb2230dbda7f3ade8debd31"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/__init__.py",
+          "bytes": 454,
+          "sha256": "5273504ac56855636d4d3dba569c7b54a9d00b6a275ec9c54f62877efa275bb1"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/ar.py",
+          "bytes": 26767,
+          "sha256": "58c1dd472bd87921deb9a66fc8c0f42b68fe87ff88d4ec0c0c9f500453abf4fe"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/cli.py",
+          "bytes": 2202,
+          "sha256": "83f50feb73186b6c84a380cfa4948bcf8874887fa6624d6c95b8e1b473e1d36c"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/records.py",
+          "bytes": 20104,
+          "sha256": "c8cd2feaf32bc093472b4197a2ec1b2e3b52da1d24adc357d0db2773c51f73ba"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/rewards.py",
+          "bytes": 4757,
+          "sha256": "714a350677e3f845eec63d408e1d856cffbe1d86a42c257e60d9348609fa46bf"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/run.py",
+          "bytes": 8776,
+          "sha256": "b17cb978e250a0841588b0e07f79910d294dfac9aabbf3ee0d9fdade40d8de06"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/app/settings.py",
+          "bytes": 14044,
+          "sha256": "eb8e3e1bee7aa8b7e9284e905993f5f12340dc8bae266b7c398e0e4ab7a1f4ce"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/__init__.py",
+          "bytes": 96,
+          "sha256": "6710050d6489ed63b1bdde0998b1620e01f9f22d21260769e167af9ce81082c0"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/__init__.py",
+          "bytes": 356,
+          "sha256": "42dc269e09672646dae986101c5f5c229adc08caab3f867cf671ce419dc145c2"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/candidates.py",
+          "bytes": 19810,
+          "sha256": "5ed588025787623e37ade66e439def02c42b7ee614d9ced0f2c507c974629112"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/conditional_is.py",
+          "bytes": 9586,
+          "sha256": "18b9db92e4c30397a182f57ca24b3dc66f571bd55475e183ccdba632f56c6c89"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/config.py",
+          "bytes": 5181,
+          "sha256": "61d83bfa9c25292d018976e79fca44f03186b325e9809cc30043ee923d4f67d4"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/ensemble_mh.py",
+          "bytes": 15848,
+          "sha256": "b793489dc1ebd70711a381bfa41e1cd6d2932fdb514a84d4c21062ff5b4f2d6a"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/ensemble_schedule.py",
+          "bytes": 10474,
+          "sha256": "4f290c715e76bbb4ffbc09b93f63153ca15d29fea5b80fbcaf8962d832173804"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/algorithms/mh.py",
+          "bytes": 19823,
+          "sha256": "e4cdada79bf9682a9fd0292f2ba2f107637724d37d2e12289bf7683517778807"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/__init__.py",
+          "bytes": 561,
+          "sha256": "f64642cef4c81025e8c0f45a2378a2a728c789b0e9c6ca8098cc2237e5fb6244"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/batching.py",
+          "bytes": 12923,
+          "sha256": "c10ae56f812da276a1dd5cd59f8db30bbb0c1e1f936b8c0741cb0ebd129b3a95"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/causal_scoring.py",
+          "bytes": 2032,
+          "sha256": "ae77c0ae05606dde734af7d43ae42c7c5998aaa32e77f6e57b1294b473a09a31"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/kv_cache.py",
+          "bytes": 11144,
+          "sha256": "aabcbb1ec7f8984a685fd1e7327ec897bfe981229060b7bd673bada81da2ba4d"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/loader.py",
+          "bytes": 6769,
+          "sha256": "280dc6b1691d9b89d6718b93d45e8d2578039b714d0132a3ca9dc45882408fc7"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/replay.py",
+          "bytes": 5180,
+          "sha256": "33e894f768fd12925f03472401edcc2c4dd49b3dc789819d23367364c6789a5e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/scheduling.py",
+          "bytes": 9300,
+          "sha256": "dc628c1a25f9df1814759c2e883a3b5ad0c7a7496d48140744883a7366251cfe"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/statistics.py",
+          "bytes": 9959,
+          "sha256": "8b1907e3c3b5b6c3637712940eaf897d3000ddfd0a76a4a833efcaaa0905b49a"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/stopping.py",
+          "bytes": 18940,
+          "sha256": "bcc5ac80f93479627cd99faa05e08dfbf27e930bca269ba432fa506eeddb007a"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/streaming.py",
+          "bytes": 6764,
+          "sha256": "c6695d6a8c6a244521c4d843f4fbeaf9233db1268389500aaba971fb8228a7b5"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/thinking_budget.py",
+          "bytes": 13458,
+          "sha256": "b8ff4e8228d3ae17d3d84153397d37612642ca0edc771482fcb7c1dd269d0d45"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/transformers_backend.py",
+          "bytes": 35151,
+          "sha256": "fca9b34585d678d2e9931c98b0e862eac0f362caf0c7e9e88eef53b1f7c09da0"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/vllm_ascend_worker.py",
+          "bytes": 1775,
+          "sha256": "155b648dd95755c367274690f67f5b710e7755e802237ccafe5edcecce80889e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/vllm_backend.py",
+          "bytes": 69114,
+          "sha256": "69d58d7f2ddd3d4f050aca3c739890bfbd421d80286d07c5eac0038e17ecabdb"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/vllm_fused_worker.py",
+          "bytes": 6811,
+          "sha256": "3dbda192e38391e7bdd72be4427d7971aaf7dbfcb6e6979b4745bd6801ed5573"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/vllm_sampling.py",
+          "bytes": 5072,
+          "sha256": "e30dad639f8b0c923dfbbf9a4c9ff881f33d434614a909dbad507673443d660e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/backends/vllm_statistics.py",
+          "bytes": 3654,
+          "sha256": "4007dcf425689e4991e4d6859cd94dcaca55d29386a33a69e0388cfeb8c20f59"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/config.py",
+          "bytes": 3435,
+          "sha256": "d4d91cd9fb04bf83667ad75e1f0ae4a7411ea9b8813f31d518fe1bcab808591e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/output.py",
+          "bytes": 4214,
+          "sha256": "2914f44e3732cb6c462e1251726c61da32796cc554390972a1d627f75baf5a16"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/rewards/__init__.py",
+          "bytes": 407,
+          "sha256": "59ab703374df8892be44aa54d81a93fdf34a511d66ca6d7971c83f90a305a3d1"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/rewards/intrinsic.py",
+          "bytes": 7770,
+          "sha256": "3fb2ba206e3519480bffd1cfce34c51e5fd69f6431c2c6ff1209a8d947d5bd08"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/scope.py",
+          "bytes": 7535,
+          "sha256": "a5d4f5fd5cc3d37c6ba138c4d58f553adb6856292e170d0beb2fe497fbde51cc"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/arllm/types.py",
+          "bytes": 8921,
+          "sha256": "7fed3cf3509e371bd7db8008b7a7eed939b381e38d8aaf5f2201969da53616aa"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/datasets/__init__.py",
+          "bytes": 1122,
+          "sha256": "2619098ebcd673fc1c0910036c3f039363c309a7b2047c8a34bd8069b66204f3"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/datasets/base.py",
+          "bytes": 2705,
+          "sha256": "983dfdb2662e9490d9511956af1eb268b75e9f8b4755f52a4b3c695b6d9833b0"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/datasets/gsm8k.py",
+          "bytes": 4913,
+          "sha256": "9e084f5f0558316f8da6e5f0607afd3dd29be8ee0b69be409127863f89f8d96c"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/datasets/math500.py",
+          "bytes": 8674,
+          "sha256": "3708131c1f22b5ce1584afe17ff00bde5d12582f2b04925a6cf705f2d277e464"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/retrieval/__init__.py",
+          "bytes": 515,
+          "sha256": "e5b4f954a5c23dddecb87c8fcff05e809ec9bdd749e44a2382261cc56ce0910b"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/retrieval/ablation.py",
+          "bytes": 5656,
+          "sha256": "a4f4fbf4d4d227fd83189c6558607eba3b71488368b2b5fc34f6158e8a11c33b"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/retrieval/controller.py",
+          "bytes": 17274,
+          "sha256": "1dab298630ce2ededf2fc5d965326088b9a4468eb2875546ac7409e0967bb7b8"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/retrieval/corpus.py",
+          "bytes": 6722,
+          "sha256": "d04a76b3b6a6ab46d984199a25a3ab25e1cd5e5af0b486b63213b0312cb8d1d7"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/retrieval/triggers.py",
+          "bytes": 2985,
+          "sha256": "5f92276edee1e7ac824865c1dfc35528c42309fdff0a34931cf2a18f9452a60e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/README.md",
+          "bytes": 13405,
+          "sha256": "84f0c50c3e034accb2a4608fd47db5b9fb9c3f107d328417b8b63f7e56401783"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/__init__.py",
+          "bytes": 368,
+          "sha256": "2cffef346c5c209cc975b14c33cdaa5065fc60633b4c9d361f2fbbd9bfe72753"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/__main__.py",
+          "bytes": 59,
+          "sha256": "b26e192f5edf600bb9b39735b204cda7af53dfc3c9facd52b4dd7c04694c4d1a"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/protocol.py",
+          "bytes": 19545,
+          "sha256": "52c38654a5362de6012313c7ecbb46af08c9d1283ae46bec4a89516607392c85"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/reasoner.py",
+          "bytes": 14713,
+          "sha256": "301bae1171ae24363a4e2a430a675535fd8c8ffbcf3c39782638c82b2eec01b5"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/serve/server.py",
+          "bytes": 9038,
+          "sha256": "f5556d8f58fa3fe00de4f45e106bb4834f908751d1091afdc1e9f36990b49318"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/__init__.py",
+          "bytes": 251,
+          "sha256": "368d43b7dd00bfcf6e0fcd019bd7fa753bac2f4d07eac61d21bf5c6358a09580"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/compute.py",
+          "bytes": 462,
+          "sha256": "c24b1adfc863a78becdd931869fa4bc19c96c9cf9ea0031363d6be185b59645a"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/config.py",
+          "bytes": 1526,
+          "sha256": "faf8d6895a9563f42aff07d5880f4770ac85a17dfbc29c4390de566e78fba439"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/metrics.py",
+          "bytes": 1347,
+          "sha256": "1f5bf13c2fddebaf8f01dfcbdd27728937af71b0beb3f91214c28bb1dbbfdf14"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/__init__.py",
+          "bytes": 446,
+          "sha256": "b9da3d5930ae53fa51b534591c4f093f9430a9e04600c2a4e8e1a24e7cb79a01"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/generation.py",
+          "bytes": 3248,
+          "sha256": "c264b68e2af219632e40042d5e253dada4e38c05d1673fe59d49f22647f21208"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/loading.py",
+          "bytes": 3923,
+          "sha256": "06251a594909b065a146f5b0624afdd2595bb9f3fe2f5ce74d4150e3d037eade"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/output.py",
+          "bytes": 11767,
+          "sha256": "5799c3bc82438c3115c04e9e0eb67181e1e862cac013aa2602e490996512cb8e"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/prompting.py",
+          "bytes": 1987,
+          "sha256": "11cac68332c6dd311ccb6415dec166fbc874ef621393a08649d056109029c4c2"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/model/thinking.py",
+          "bytes": 4050,
+          "sha256": "6580ec9a2cbe7fbf8bac7a46dffe9c5d40337ec6c71006e0c233cc63dc1f36c4"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/rewards/__init__.py",
+          "bytes": 326,
+          "sha256": "4328a6e4afb14aed031b239c300eaec6f0845984c92e21a1c764b33daf2650c4"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/rewards/consilience.py",
+          "bytes": 2038,
+          "sha256": "87f25dd7ff863b9a37015897fd9da43897b0574af8772a432927fc5132e32649"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/rewards/vote.py",
+          "bytes": 1149,
+          "sha256": "1cc70ed32a429a5081cba3ff91066a9e0331ad84dc282bf36f1a4d45a1658343"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/rng.py",
+          "bytes": 2365,
+          "sha256": "990bf3b0ed1d8403c266278ce74a1197c53816a424d63a20f6d08717887b28f5"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/__init__.py",
+          "bytes": 375,
+          "sha256": "f8289736598df5d533852e28a7d7c0a99e9970e27a6900495acc9294b766b06b"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/conditional_is.py",
+          "bytes": 7821,
+          "sha256": "ad9bf046d0547467297bc53fad69407b7ad103d6a33b2929ddc989b2a8d0d15d"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/importance.py",
+          "bytes": 2038,
+          "sha256": "66cc3981d62845debcdba1a40866ed980d5eb35e5a2f7cfb16d0eb1652af0ee1"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/mh.py",
+          "bytes": 2847,
+          "sha256": "5daf3ffa7a9011673692d11f260c1651e4136debe61fe4df52fd3c31246eaef1"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/nonself.py",
+          "bytes": 5536,
+          "sha256": "e17f34ee05122043474dfc40aef5bf73cb8306e4acdf21a363559da296d5616c"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/sampling/stratified.py",
+          "bytes": 5596,
+          "sha256": "6725587a40fd4db968b66c14f6be1b1f3ed8cb95e006ca8aa0213de074196de9"
+        },
+        {
+          "path": "generation-source/src/inference_scaling/shared/types.py",
+          "bytes": 623,
+          "sha256": "e2a87e135bc0a74a9fadd2713c263aea9afc6d5b705b958df9c11b1d22a30a5e"
+        },
+        {
+          "path": "protocol/FROZEN.json",
+          "bytes": 13101,
+          "sha256": "c76055d4d81b55b812c0ec3772755658ce4aa6c8f74d10b4fdc4ca7bbe5092dc"
+        },
+        {
+          "path": "protocol/PREPARE-PROTOCOL.json",
+          "bytes": 11479,
+          "sha256": "d4c4622537d1fe588e31b2d45d0d40aaf98441dc4ed7ff98d4170b841759a412"
+        },
+        {
+          "path": "protocol/collection-receipts.json",
+          "bytes": 3083,
+          "sha256": "8e385c8a8aec29ba7eafd36f8594e18042c6f49fbfca3d78c356052e5c71c2dd"
+        },
+        {
+          "path": "protocol/container-finish.json",
+          "bytes": 445,
+          "sha256": "89e8e8945c3234471234475a4f6b0f52adda5f7320312a8bd91a7c57a15dcf3d"
+        },
+        {
+          "path": "protocol/final-runtime-receipt.json",
+          "bytes": 1060,
+          "sha256": "6f8795d210bf26d23be11d626ceecfcf59974ebe3c2592dd0819b88ea7f0ee00"
+        },
+        {
+          "path": "protocol/generation.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "path": "protocol/generation.log",
+          "bytes": 115776,
+          "sha256": "aa07697a3e98d1ae08df3fcd46269f975f79c0ac786484fc78002c2d14c81002"
+        },
+        {
+          "path": "protocol/launch-prepare.py",
+          "bytes": 673,
+          "sha256": "128b825d00c53007180e9953ca1e9ef04763540f83eadf8c66204125a5012ed0"
+        },
+        {
+          "path": "protocol/launch.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "protocol/launch.py",
+          "bytes": 1411,
+          "sha256": "93e0066f63681744a037d68572dc2f389caa45ba1a72693f7f65cba51e7f14b8"
+        },
+        {
+          "path": "protocol/prepare-initial-1.exit",
+          "bytes": 2,
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "path": "protocol/prepare-initial-1.log",
+          "bytes": 2472,
+          "sha256": "3d3e4f9451e7efdc08775777cb5569bea2536ff7ebcec090c9b9b17346571dce"
+        },
+        {
+          "path": "protocol/prepare-launch.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "protocol/prepare.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "path": "protocol/prepare.log",
+          "bytes": 1574,
+          "sha256": "8dfbbfffabfb5f4f030bd3ee07faa7173004c774573c2c8d4c5d06f6eb3fa170"
+        },
+        {
+          "path": "protocol/prepare.sh",
+          "bytes": 574,
+          "sha256": "1651e8ec9343279daf9568cd6b7efbfa4ee1cf235e1ada57e597fe53bda00fd3"
+        },
+        {
+          "path": "protocol/runtime-model_runner_v1.py",
+          "bytes": 258312,
+          "sha256": "60b10f97333df49c4bb2a6b5673d13d2d3b964056564c50681984b16fd84d049"
+        },
+        {
+          "path": "protocol/runtime-versions.json",
+          "bytes": 302,
+          "sha256": "72719c76b057d1abf62dd34da551edf9a99c0ee3d99707506851f63b440455e1"
+        },
+        {
+          "path": "protocol/settings-a3-prepare-initial-1.json",
+          "bytes": 6617,
+          "sha256": "fedb72940252c44624ba281f80943b216e6137c0b2861020e8c4ac2a16774344"
+        },
+        {
+          "path": "protocol/settings-a3.json",
+          "bytes": 6540,
+          "sha256": "deeb7a113ccd276afbb3a5861f77cb1a3643b457c5aee3b2a8a67ffc80863620"
+        },
+        {
+          "path": "protocol/source-frozen.tgz",
+          "bytes": 162684,
+          "sha256": "ae916ad3b9bfaf1ce2e2c0eddf7e09a126f3046b65ebf4ea6668837ad1ca6eb6"
+        },
+        {
+          "path": "protocol/start.sh",
+          "bytes": 471,
+          "sha256": "ce56a0f56694f2830295404ccb29072f41bde3effe7e91491a0815a43e912ec0"
+        },
+        {
+          "path": "protocol/unrelated-prose.txt",
+          "bytes": 7462,
+          "sha256": "9a95856014382bc89062577bfcf098cba352d11dbcb7372d91060f553284d862"
+        },
+        {
+          "path": "snapshot/FROZEN.json",
+          "bytes": 13101,
+          "sha256": "c76055d4d81b55b812c0ec3772755658ce4aa6c8f74d10b4fdc4ca7bbe5092dc"
+        },
+        {
+          "path": "snapshot/container-finish.json",
+          "bytes": 445,
+          "sha256": "89e8e8945c3234471234475a4f6b0f52adda5f7320312a8bd91a7c57a15dcf3d"
+        },
+        {
+          "path": "snapshot/generation.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "path": "snapshot/generation.jsonl",
+          "bytes": 15609908,
+          "sha256": "c0270ead8a6908986bbc14e26dc566ad50f5be724252cb0b5b512f9165356f6e"
+        },
+        {
+          "path": "snapshot/prepare-initial-1.exit",
+          "bytes": 2,
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "path": "snapshot/prepare.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "path": "snapshot/prepared.json",
+          "bytes": 703805,
+          "sha256": "8bc8af899449f8cacd2a450303d7043cadb1a8070d1690e5df2d97b047eff322"
+        },
+        {
+          "path": "snapshot/runtime-versions.json",
+          "bytes": 302,
+          "sha256": "72719c76b057d1abf62dd34da551edf9a99c0ee3d99707506851f63b440455e1"
+        },
+        {
+          "path": "snapshot/state.json",
+          "bytes": 29707,
+          "sha256": "90db85846ee3efc503cd0c2acef43541cb76907757f19798398cc76097e12c1b"
+        },
+        {
+          "path": "snapshot/trace-tokenizer-subset.json",
+          "bytes": 35781,
+          "sha256": "e2f455a3e5d2927719a9f0dbb4c0752c5460d985bac2daa9ba632d9eb3417342"
+        }
+      ]
+    }
+  ]
+}

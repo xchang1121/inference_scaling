@@ -8,3 +8,7 @@
 /experiments/online-injection-20261109/full/* -diff
 # Keep generated vector path bytes intact for the recorded figure hashes.
 /experiments/online-injection-20261109/reports/figures/*.svg -diff -whitespace
+/experiments/online-injection-ablation-20261109/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/experiments/online-injection-ablation-20261109/full/* -diff
+/experiments/online-injection-ablation-20261109/reports/figures/*.svg -diff -whitespace
+/experiments/online-injection-ablation-20261109/reports/traces/*.txt -diff -whitespace

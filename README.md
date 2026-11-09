@@ -105,6 +105,7 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
+| [无 effort 提示的预算与注入格式对照](docs/reports/ONLINE_INJECTION_ABLATION.md) | 三档预算、十四条件共 336 条轨迹；同长度无关正文仍可立即关闭 thinking，去包装可转为 thinking 内 EOS；中途注入相对静态 RAG 的主要质量差区间包含 0 |
 | [在线知识注入：触发、位置与检索对照](docs/reports/ONLINE_INJECTION_PILOT.md) | 十三方法共 312 份回答；TechQA 8 题固定 32-token BM25 F1 为 22.4%，闭卷 13.0%，估算计算量 1.744 倍；含官方规则格式影响与缓存复现失败记录 |
 | [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |
 | [100 题选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md) | Base / 快速 Consilience IS / 默认 Self-Certainty IS：92% / 93% / 94%。按块 SC K=2 为 95%，比快速 SC 耗时约多 20%、FLOPs 多 75%；准确率差区间包含 0 |

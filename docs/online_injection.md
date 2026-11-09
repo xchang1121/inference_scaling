@@ -2,6 +2,8 @@
 
 本分支实现外部控制的 context intervention：控制器读取已生成的推理，在检查点完成请求，检索本地文档，将证据 token 追加到原始 token 前缀，再提交续写。模型不接收工具定义，也不需要生成检索指令。入口为 `inference_scaling.retrieval.OnlineInjectionController`；基准脚本为 `scripts/benchmark_injection.py`。
 
+已完成[首轮 312 条 pilot](reports/ONLINE_INJECTION_PILOT.md)及[无 effort 提示的三档预算与注入格式对照，336 条](reports/ONLINE_INJECTION_ABLATION.md)。后者使用 `scripts/benchmark_injection_ablation.py`，独立设置回答上限，保留自然关闭、预算强制关闭和 thinking 内 EOS。关于更智能的触发、查询和插入边界，见[论文与接入取舍](reports/ADAPTIVE_RETRIEVAL_OPTIONS.md)。
+
 ## 首轮要回答的问题
 
 1. 技术规则来自上下文后，回答是否比闭卷更正确？静态 RAG 与中途追加有什么差别？
@@ -102,7 +104,7 @@ TechQA 原始文件为固定 revision 下的 `train.json` 和 `corpus.zip`，取
 
 ### 对照扩展与进入下一阶段的条件
 
-根据首轮暴露的问题，下一轮按以下次序冻结独立对照：
+下表保留后续扩展路线。同八题上的无 effort 提示、思考预算、固定资料位置与同长度正文/包装对照已完成，见[第二轮报告](reports/ONLINE_INJECTION_ABLATION.md)；新的阈值校准、片段检索和泛化评测仍需使用独立开发分区。
 
 | 阶段 | 固定条件 | 比较变量 | 核心观测 |
 |---|---|---|---|

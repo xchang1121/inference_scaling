@@ -1,0 +1,34 @@
+{
+  "verified_at_utc": "2026-11-09T12:07:07.308046+00:00",
+  "archive_sha256": "613ee37df8f96d0c0a3c2bf10764694985b9dc1ce9f334279a0f0cceae55a1bb",
+  "verified_frozen_source_files": 80,
+  "prepared_input_matches_frozen": true,
+  "runtime_runner_matches_frozen": true,
+  "recomputed_measurements": 336,
+  "analysis_uses_packaged_scripts_and_extracted_frozen_source": true,
+  "scores_audits_and_report_byte_identical": {
+    "summary.json": "048ecfb4bdf845a818c34c33de5b8a114b1c40f680a5342e6526631a1dd7a493",
+    "audit-checks.json": "dc1c72cb42e181f5cef369625786b74703e76e2df480d9a0c89ba47e0ed86409",
+    "grades.jsonl": "8f9cde4e26e498a9adbe706fb588020ceedb142ecd64baf8c7030768d0e4ccea",
+    "REPORT.md": "adfcbc3d58cf4f7444ed7891230c8e2ff088ed497e899d5b5c38bb2e86dcaa25"
+  },
+  "regenerated_png_and_svg_byte_identical": {
+    "immediate-end.png": "1b5fb83299861553fa793e505ef7404b9c4a227786350f42d059b4bafd13135e",
+    "immediate-end.svg": "121b61c748b058105af519e044cfdee5f092456f213afd9f820651d155de08fe",
+    "stop-outcomes.png": "423ea527386124506af79e40c17ee6ab451f6209499bf8169c69e749de6f993c",
+    "stop-outcomes.svg": "90bf775081f2020c5951af78efb6ba62ec55ef80293dfb86b1503fa02469e86a",
+    "thinking-length.png": "6ec12c7c5859d91e6bf28887f94033117594ed55ed3d85338859c6f8f8959694",
+    "thinking-length.svg": "eba140c4dd132de83ac3f31bd5588c142b9bae7d09e11faead3ada5ca43b01b4",
+    "quality.png": "23a0567ef3ab25b5dd8def3af1f0f07ffb84f59fbc99fce245368e32ab4acbfc",
+    "quality.svg": "73c0ca76a2fe4f3113f55ffd690f3f52496e4640bb1d699103c684d8b0f141f3"
+  },
+  "regenerated_trace_files_byte_identical": {
+    "DEV_Q209-budget-1024-all-14-methods.txt": "2f0da5730b43b35a73257cc4d887d441f08e12788fb33849172f142a0f8d2b3a",
+    "DEV_Q209-budget-256-all-14-methods.txt": "b5bb2d0b8a0ba026251791599557bf5cd53a786e7c70cef5036f863637d32ef4",
+    "DEV_Q209-budget-4096-all-14-methods.txt": "675564bf5201780437f0b1679e9cf1b101add4fbd2a12b149bcc0991000dac82",
+    "trace-manifest.json": "8ab7410bea43af5990957a20acfb2c357d4ae6a40463e8727bd352600bbeb402"
+  },
+  "network_requests": 0,
+  "model_generation_requests": 0,
+  "verification_script_sha256": "01f1a59bdc1d4bd115551cffad7226e10febb11defb00bdacc1bc18ab53cab37"
+}

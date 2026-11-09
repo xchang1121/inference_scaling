@@ -1,0 +1,21 @@
+{
+  "matplotlib": "3.11.2",
+  "numpy": "2.5.2",
+  "budgets": [
+    256,
+    1024,
+    4096
+  ],
+  "summary_sha256": "048ecfb4bdf845a818c34c33de5b8a114b1c40f680a5342e6526631a1dd7a493",
+  "grades_sha256": "8f9cde4e26e498a9adbe706fb588020ceedb142ecd64baf8c7030768d0e4ccea",
+  "files": {
+    "immediate-end.png": "1b5fb83299861553fa793e505ef7404b9c4a227786350f42d059b4bafd13135e",
+    "immediate-end.svg": "121b61c748b058105af519e044cfdee5f092456f213afd9f820651d155de08fe",
+    "quality.png": "23a0567ef3ab25b5dd8def3af1f0f07ffb84f59fbc99fce245368e32ab4acbfc",
+    "quality.svg": "73c0ca76a2fe4f3113f55ffd690f3f52496e4640bb1d699103c684d8b0f141f3",
+    "stop-outcomes.png": "423ea527386124506af79e40c17ee6ab451f6209499bf8169c69e749de6f993c",
+    "stop-outcomes.svg": "90bf775081f2020c5951af78efb6ba62ec55ef80293dfb86b1503fa02469e86a",
+    "thinking-length.png": "6ec12c7c5859d91e6bf28887f94033117594ed55ed3d85338859c6f8f8959694",
+    "thinking-length.svg": "eba140c4dd132de83ac3f31bd5588c142b9bae7d09e11faead3ada5ca43b01b4"
+  }
+}

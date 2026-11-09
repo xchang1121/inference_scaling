@@ -1,0 +1,23 @@
+{
+  "question_id": "DEV_Q209",
+  "selection": "first question in frozen input, every method and budget; not selected by outcome",
+  "trajectories": 42,
+  "records_sha256": "c0270ead8a6908986bbc14e26dc566ad50f5be724252cb0b5b512f9165356f6e",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "thinking_answer_and_evidence_decode_verified": true,
+  "all_prefixes_and_trajectory_hashes_verified": true,
+  "files": {
+    "DEV_Q209-budget-256-all-14-methods.txt": {
+      "bytes": 87214,
+      "sha256": "b5bb2d0b8a0ba026251791599557bf5cd53a786e7c70cef5036f863637d32ef4"
+    },
+    "DEV_Q209-budget-1024-all-14-methods.txt": {
+      "bytes": 99727,
+      "sha256": "2f0da5730b43b35a73257cc4d887d441f08e12788fb33849172f142a0f8d2b3a"
+    },
+    "DEV_Q209-budget-4096-all-14-methods.txt": {
+      "bytes": 99981,
+      "sha256": "675564bf5201780437f0b1679e9cf1b101add4fbd2a12b149bcc0991000dac82"
+    }
+  }
+}
