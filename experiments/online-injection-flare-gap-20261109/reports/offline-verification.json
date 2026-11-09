@@ -1,0 +1,87 @@
+{
+  "offline_rebuild_byte_identical": true,
+  "model_or_network_used": false,
+  "files": [
+    {
+      "path": "summary.json",
+      "bytes": 33572,
+      "sha256": "b79c8425fda8d7902da49902f3776b8c1cbed3af0f2dd1a0d7a4ef16c67601d3"
+    },
+    {
+      "path": "graded.jsonl",
+      "bytes": 540868,
+      "sha256": "4e261757033f4fcaef69fcc8a4cbe5b8ba1b696486fe876c685e49049b178e25"
+    },
+    {
+      "path": "audit.jsonl",
+      "bytes": 82068,
+      "sha256": "7174a9e8a0fc17336786ee9e0bd5a2f9c648bc2038535201407a2ad83f7ecabf"
+    },
+    {
+      "path": "pair-audit.jsonl",
+      "bytes": 21872,
+      "sha256": "63591d2cfb5ed92268706bcf542cc3924af58bf8d8d6508242221a81c1c7f049"
+    },
+    {
+      "path": "gate-events.jsonl",
+      "bytes": 63249,
+      "sha256": "d5bf451022d0b5d431a997ca05ce8959138b64bf617f242bcbb422abc5cbf07a"
+    },
+    {
+      "path": "unit-audit.json",
+      "bytes": 769252,
+      "sha256": "f03f03f57e85d7233bb61036377545564143480661f3d2ec985fb1930f48f18f"
+    },
+    {
+      "path": "comparison.csv",
+      "bytes": 4162,
+      "sha256": "a25bdd3816088ea06ebfc87c0ccd1acae2c948562a1891593c51a4211090fd50"
+    },
+    {
+      "path": "REPORT.md",
+      "bytes": 5868,
+      "sha256": "1051d6e01089f7f68bc7a143515a2e52c48d4b61faa7bad36401bac092a06383"
+    },
+    {
+      "path": "figures/comparison.png",
+      "bytes": 131284,
+      "sha256": "65e06b30573b7ac1425f24bec8b3f23025566fb2d6a08f68b735034f9e060f8b"
+    },
+    {
+      "path": "figures/comparison.svg",
+      "bytes": 82904,
+      "sha256": "39582666311f00acf442eaecfbde815003e3cf29dba9826540eeb89314568058"
+    },
+    {
+      "path": "traces/manifest.json",
+      "bytes": 690,
+      "sha256": "bf195f2178e4715cd860f61ce9cc6999da39caab1c998b639e2ab98612902735"
+    },
+    {
+      "path": "traces/DEV_Q120-all-11-conditions.txt",
+      "bytes": 125061,
+      "sha256": "2ae63b7ef1f5305a198500c3d5dce33b56201f9c6d43557fc573643a55474716"
+    },
+    {
+      "path": "traces/DEV_Q156-all-11-conditions.txt",
+      "bytes": 138440,
+      "sha256": "fb45985589186cff1d79b7d813847f37616bf1d17b75e377512d541fee652bb7"
+    },
+    {
+      "path": "accepted-traces/manifest.json",
+      "bytes": 722,
+      "sha256": "bf0a76780f8d3f334ea5eaf2edca183c1cdbfd3decde2d44c780a030f5f625af"
+    },
+    {
+      "path": "accepted-traces/DEV_Q184-all-11-conditions.txt",
+      "bytes": 200875,
+      "sha256": "7deadcb42e03458168f9ffcd59698b050f8cc67a8d7a98a4315401522639a3c1"
+    },
+    {
+      "path": "accepted-traces/DEV_Q119-all-11-conditions.txt",
+      "bytes": 155064,
+      "sha256": "d3d2877dcd87f70eb5fd155e4a90a4ce3f0bb69ed12e8d52fe7ac62f36746989"
+    }
+  ],
+  "source_generation_commit": "28bc5e657e7d30d026bdf96d19d00b745be25ee9"
+}

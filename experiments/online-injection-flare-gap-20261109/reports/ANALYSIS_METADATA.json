@@ -1,0 +1,37 @@
+{
+  "generation_source_commit": "28bc5e657e7d30d026bdf96d19d00b745be25ee9",
+  "generation_frozen_files": 86,
+  "formal_input_prepared_sha256": "4853d165da20fde943e5cb130bd27f00023aa81f0f8f511f4debaf31e5628a20",
+  "formal_raw_sha256": "164ee6d51e028ab85de02604dbb2d6b18235875e6a0de5baa49591d425f417ef",
+  "gold_offline_sha256": "bf0f220d474e486bb8b08b8da883da66ac7f1ad857bfc41c6d7130d74bb79da8",
+  "source_data_manifest_sha256": "1c77864c32135c42dad3dcb56eca8edef068329504ac1e03d652cf3616b52ec0",
+  "model_id": "/cache/models/Qwen3.8-27B;revision=1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "parameter_count": 26895998464,
+  "runtime_versions": {
+    "python": "3.12.13",
+    "packages": {
+      "vllm": "0.23.0+empty",
+      "vllm-ascend": "0.23.0",
+      "torch": "2.10.0+cpu",
+      "torch-npu": "2.10.0.post4",
+      "transformers": "5.5.4",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "analysis_runtime": {
+    "python": "3.14.6",
+    "packages": {
+      "numpy": "2.5.2",
+      "matplotlib": "3.11.2",
+      "pillow": "13.0.0"
+    }
+  },
+  "analysis_scripts_sha256": {
+    "summarize_flare_gap.py": "cdc64108b395d8e8249903025981188b89e93963cdda7182224149325f16f6e1",
+    "plot_flare_gap.py": "aca449109c55982b41090b0f97fc04f43ef8aa81487bc6554d055d537dada7ae",
+    "export_flare_gap_traces.py": "f7fec3ea6d5396eefd864086a23022849dea005ccf52b1e79b5bdcf057d802c0"
+  },
+  "analysis_changes_after_generation_freeze": "Deterministic LF/keys/SVG, missing-value handling, detailed stopping accounting and complete accepted-case trace export; inference controller unchanged.",
+  "gold_runtime_visibility": false,
+  "initialization_native_flops_instrumented": false
+}

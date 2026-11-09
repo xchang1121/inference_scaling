@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--selection", choices=("preselected", "accepted"), default="preselected")
     args = parser.parse_args()
     prepared = json.loads((args.snapshot/"prepared.json").read_text(encoding="utf-8"))
     rows = [json.loads(line) for line in (args.snapshot/"formal.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -27,7 +28,13 @@ def main():
     for uid, unit in units.items():
         assert decode(unit["result"]["reason_ids"]) == unit["result"]["thinking_text"], uid
         assert decode(unit["result"]["answer_ids"], True).strip() == unit["result"]["answer_text"], uid
-    selected = [c for c in prepared["cases"] if c["cohort"] == "heldout"][:2]
+    if args.selection == "preselected":
+        selected = [c for c in prepared["cases"] if c["cohort"] == "heldout"][:2]
+        selection = "first two heldout IDs in frozen input, all 11 conditions; chosen before outcomes"
+    else:
+        accepted = {uid.split(":")[0] for uid, u in units.items() if uid.endswith(":flare_gap:common") and u.get("packet")}
+        selected = [c for c in prepared["cases"] if c["id"] in accepted]
+        selection = "every case with an accepted FLARE intervention, all 11 conditions; selected by gate decision, never answer score"
     args.output.mkdir(parents=True, exist_ok=True)
     files = []
     for case in selected:
@@ -49,6 +56,8 @@ def main():
                     text += [f">>> Injected input, not generated / {injection['position']} / confirmed offset {injection['confirmed_offset']}",
                         decode(injection["payload_ids"]), ">>> Exact reconstructed continuation prefix", decode(injection["continuation_prefix_ids"]), ""]
                 for i, call in enumerate(unit["calls"]):
+                    if call["purpose"] in {"gap_plan", "support_check"}:
+                        text += [">>> Complete independent checker prompt", decode(call["prefix_ids"]), ""]
                     text += [f">>> Model call {i} / {call['purpose']} / seed {call['seed']} / prefix_sha256 {call['prefix_sha256']}",
                         decode(call["token_ids"]), ""]
                 if uid.endswith(":common"):
@@ -62,7 +71,7 @@ def main():
         data = ("\n"+"="*88+"\n\n").join(blocks).encode()
         name = case["id"]+"-all-11-conditions.txt"; (args.output/name).write_bytes(data)
         files.append({"path": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    manifest = {"selection": "first two heldout IDs in frozen input, all 11 conditions; chosen before outcomes",
+    manifest = {"selection": selection,
         "questions": [c["id"] for c in selected], "condition_examples": 11*len(selected),
         "all_execution_unit_thinking_and_answer_decodes_verified": len(units),
         "tokenizer_sha256": vocab["tokenizer_sha256"], "files": files}

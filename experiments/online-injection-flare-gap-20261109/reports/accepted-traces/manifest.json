@@ -1,0 +1,22 @@
+{
+  "selection": "every case with an accepted FLARE intervention, all 11 conditions; selected by gate decision, never answer score",
+  "questions": [
+    "DEV_Q184",
+    "DEV_Q119"
+  ],
+  "condition_examples": 22,
+  "all_execution_unit_thinking_and_answer_decodes_verified": 180,
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "files": [
+    {
+      "path": "DEV_Q184-all-11-conditions.txt",
+      "bytes": 200875,
+      "sha256": "7deadcb42e03458168f9ffcd59698b050f8cc67a8d7a98a4315401522639a3c1"
+    },
+    {
+      "path": "DEV_Q119-all-11-conditions.txt",
+      "bytes": 155064,
+      "sha256": "d3d2877dcd87f70eb5fd155e4a90a4ce3f0bb69ed12e8d52fe7ac62f36746989"
+    }
+  ]
+}

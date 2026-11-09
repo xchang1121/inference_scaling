@@ -12,12 +12,13 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
     import numpy as np
     data = json.loads(args.summary.read_text(encoding="utf-8"))
     args.output.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "svg.fonttype": "none", "svg.hashsalt": "flare-gap-20261109"})
     methods = ["closed", "static", "legacy_sc", "step_sc", "flare_gap", "flare_gap_rebuild"]
-    labels = ["Closed", "Static RAG", "SC inline", "SC step\nrebuild", "FLARE step\ninline", "FLARE step\nrebuild"]
+    labels = ["Closed", "Static\nRAG", "SC\ninline", "SC step\nrebuild", "FLARE\ninline", "FLARE\nrebuild"]
     cohorts = [c for c in ("heldout", "regression") if c in data["cohorts"]]
     fig, axes = plt.subplots(len(cohorts), 3, figsize=(15, 4*len(cohorts)), squeeze=False, layout="constrained")
     x = np.arange(len(methods)); width = .36
@@ -26,8 +27,8 @@ def main():
         n = len(data["cohorts"][cohort]["complete_questions"])
         for ci, (metric, title, ymax) in enumerate([
             ("f1", "Generative token overlap F1 (%)", None),
-            ("empty_answer", "Empty final answers (count)", n),
-            ("eos_inside_thinking", "EOS inside thinking (count)", n)]):
+            ("immediate_thinking_end", "Immediate thinking close (count)", n),
+            ("empty_answer", "Empty final answers (count)", n)]):
             ax = axes[ri, ci]
             for content, offset, color in (("relevant", -width/2, "#2166AC"), ("unrelated", width/2, "#D87824")):
                 values = []
@@ -46,9 +47,12 @@ def main():
             ax.set_title(f"{cohort.capitalize()} (n={n}) — {title}", loc="left", fontsize=10, weight="bold")
             ax.spines[["top", "right"]].set_visible(False)
             ax.grid(axis="y", alpha=.2); ax.set_axisbelow(True)
-            if ymax is not None: ax.set_ylim(0, ymax+1)
+            if ymax is not None:
+                ax.set_ylim(0, ymax+1)
+                ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             if ri == 0 and ci == 0: ax.legend(frameon=False)
-    fig.suptitle("Step-boundary retrieval: fixed 1024-token work cap (previews and checkers charged)", fontsize=14, weight="bold")
+    prefix = "PARTIAL — " if not data["completed_marker"] else ""
+    fig.suptitle(prefix+"Step-boundary retrieval: fixed 1024-token work cap (previews and checkers charged)", fontsize=14, weight="bold")
     fig.savefig(args.output/"comparison.png", dpi=180)
     fig.savefig(args.output/"comparison.svg", metadata={"Date": None})
     plt.close(fig)

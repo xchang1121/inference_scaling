@@ -182,6 +182,7 @@ def summarize(args):
             "discarded_provisional_eos": sum(e["kind"] == "rollback" and e.get("terminal") == "eos" for e in result["events"]),
             "discarded_provisional_close": sum(e["kind"] == "rollback" and e.get("terminal") == "close" for e in result["events"]),
             "answer_thinking_reopens": result["answer_ids"].count(OPEN),
+            "empty_after_thinking_close": result["empty_answer"] and (result["sampled_thinking_end"] or result["forced_thinking_end"]),
             "standalone_seconds": sum(u["seconds"] for u in selected), "standalone_cost": standalone_cost,
             "native_pflops": sum(u.get("graph_execution", {}).get("estimated_dense_padded_flops", 0) for u in selected)/1e15,
             "shared_no_intervention": row["shared_no_intervention"], "execution_units": row["execution_units"],
@@ -231,6 +232,8 @@ def summarize(args):
                 **{"mean_"+k: mean(r[k] for r in chosen) for k in ("work_tokens", "auxiliary_tokens", "discarded_tokens", "retained_thinking_tokens", "answer_tokens", "standalone_seconds", "native_pflops", "post_injection_thinking")},
                 "answer_cap": sum(r["finish_reason"] == "answer_budget" for r in chosen),
                 "context_cap": sum(r["finish_reason"] == "context_budget" for r in chosen),
+                "empty_after_thinking_close": sum(r["empty_after_thinking_close"] for r in chosen),
+                "answer_thinking_reopens": sum(r["answer_thinking_reopens"] > 0 for r in chosen),
                 "injection_at_work_cap": sum(r["injection_at_work_cap"] for r in chosen),
                 "observed_pretrigger_prefix_mismatches": sum(r["observed_baseline_prefix_coupling"] is not None and not r["observed_baseline_prefix_coupling"]["matches"] for r in chosen),
                 "discarded_provisional_eos": sum(r["discarded_provisional_eos"] for r in chosen),
@@ -286,7 +289,7 @@ def summarize(args):
         lines.append("")
     lines += ["## Accounting and limits", "", f"Unique executed units: {len(units)}; measured unit time {summary['actual_unique_seconds']:.1f}s, native padded dense FLOP estimate {summary['actual_unique_native_pflops']:.3f} PFLOP. Warmup is separate. Model load, smoke, failed prep and container lifetime appear in provenance receipts.",
         "", "Each condition's cost includes its full common stem plus cold branch prefill. Study totals deduplicate shared execution. A no-intervention real/noise pair reuses one result and is not an independent replicate. Unrelated bodies are substituted after the real-evidence support gate. Primary FLARE-gap appends after a complete assistant step. Its rebuild companion shares the same common stem/payload and moves references to the user region. Step SC also reconstructs the user region; legacy SC retains assistant-inline placement. Query, timing and gating still differ between trigger policies.",
-        "", "Source labels and wrappers stay identical in paired content controls. EOS, empty answers, capped outputs, parse failures and unsupported retrievals remain in the denominator. Bootstrap intervals do not cover sampling-seed variability or generalization beyond this small sample.", ""]
+        "", "Source labels and wrappers stay identical in paired content controls. EOS, empty answers, capped outputs, parse failures and unsupported retrievals remain in the denominator. An empty answer may follow an immediate answer-phase EOS after a valid thinking close, as well as EOS inside thinking; these cases are separate in the data. Bootstrap intervals do not cover sampling-seed variability or generalization beyond this small sample.", ""]
     (args.output/"REPORT.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print(json.dumps({k: summary[k] for k in ("conditions", "expected_conditions", "execution_units", "gate_counts", "audit_failures")}, ensure_ascii=False))
     return summary

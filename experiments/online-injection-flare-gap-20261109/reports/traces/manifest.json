@@ -1,0 +1,22 @@
+{
+  "selection": "first two heldout IDs in frozen input, all 11 conditions; chosen before outcomes",
+  "questions": [
+    "DEV_Q120",
+    "DEV_Q156"
+  ],
+  "condition_examples": 22,
+  "all_execution_unit_thinking_and_answer_decodes_verified": 180,
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "files": [
+    {
+      "path": "DEV_Q120-all-11-conditions.txt",
+      "bytes": 125061,
+      "sha256": "2ae63b7ef1f5305a198500c3d5dce33b56201f9c6d43557fc573643a55474716"
+    },
+    {
+      "path": "DEV_Q156-all-11-conditions.txt",
+      "bytes": 138440,
+      "sha256": "fb45985589186cff1d79b7d813847f37616bf1d17b75e377512d541fee652bb7"
+    }
+  ]
+}
