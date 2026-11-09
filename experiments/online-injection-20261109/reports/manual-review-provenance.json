@@ -1,0 +1,15 @@
+{
+  "reviewed": 104,
+  "source": "frozen TechQA documents",
+  "independent_blinded_review": false,
+  "used_to_tune_frozen_methods": false,
+  "label_counts": {
+    "wrong": 47,
+    "partial": 21,
+    "empty": 5,
+    "correct_core": 31
+  },
+  "labels_sha256": "509b6578ca6f5947cb42e502994e4e95d73bcb4d623286ad839a35492472302d",
+  "all_trajectory_hashes_match": true,
+  "scope": "Source-based exploratory assessment of the central rule, not exhaustive validation of every added claim."
+}

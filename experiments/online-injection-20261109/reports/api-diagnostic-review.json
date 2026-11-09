@@ -1,0 +1,340 @@
+{
+  "scope": "Post-generation diagnostic annotation. Primary frozen grading and all 16 questions retained. This is not an independent blind semantic review.",
+  "ambiguous_question": {
+    "id": "official-redis-1",
+    "dataset": "api_contract_diagnostic",
+    "category": "redis",
+    "question": "In Redis, an existing key has 20 seconds of TTL remaining. EXPIRE key 60 GT is issued immediately. What should happen?\nReason carefully. End with ONLY a JSON object containing action and wait_seconds. Allowed actions: set_expiry, keep_existing_ttl, delete_key. Set wait_seconds to the required remaining delay in seconds; use 0 when no mandatory timer is specified."
+  },
+  "frozen_gold": {
+    "id": "official-redis-1",
+    "answer": {
+      "action": "set_expiry",
+      "wait_seconds": 0
+    },
+    "document_ids": [
+      "official-redis"
+    ]
+  },
+  "interpretation": "The expected action set_expiry is clear, while wait_seconds=0 encodes client waiting. The wording required remaining delay can also be read as the resulting 60-second TTL. Outputs with set_expiry and 60 demonstrate the Redis GT fact correctly and are penalized by the frozen output convention; this is not evidence of failed domain knowledge.",
+  "next_round": "Define wait_seconds explicitly as required client wait before a further request, or use a separate ttl_seconds field for Redis; freeze and validate new questions before generating.",
+  "inputs": {
+    "questions.jsonl": "833456eabed1c398c4b6bbabb6db36776d4b092c30182879b17e2f70e1f99db8",
+    "gold.jsonl": "eb84f10306a898966b13b14d91848d7676a27402e578e9c00f6aacb9caecec91",
+    "manifest.json": "dda6b2a808b8b42189901460fa7396adcddd89ef9a047dac7595c1c9c67f2354"
+  },
+  "methods": [
+    {
+      "arm": "closed-book",
+      "n": 16,
+      "primary_strict_correct": 7,
+      "parseable_objects": 8,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "closed-book",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "3d98a99c64e070ff5b827e9917ea3082aa1913679262ae7f0d4d308824405abb"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 7,
+        "accuracy": 0.4666666666666667
+      }
+    },
+    {
+      "arm": "static-user-bm25",
+      "n": 16,
+      "primary_strict_correct": 11,
+      "parseable_objects": 12,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "static-user-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "8717f02fceae6d67b3cf2299ac666105123b00f33e80e90c47be9ba2390e0843"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 11,
+        "accuracy": 0.7333333333333333
+      }
+    },
+    {
+      "arm": "start-bm25",
+      "n": 16,
+      "primary_strict_correct": 14,
+      "parseable_objects": 15,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "start-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "317acbada7869f0bac1fd1081aaeb93353ffd92439214357e5615a1d26e24d3d"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 14,
+        "accuracy": 0.9333333333333333
+      }
+    },
+    {
+      "arm": "fixed32-bm25",
+      "n": 16,
+      "primary_strict_correct": 13,
+      "parseable_objects": 14,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "fixed32-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "f769ddac749d627e804939cecd2bb330a5d5d3cd61d93ed3c48475387debf954"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 13,
+        "accuracy": 0.8666666666666667
+      }
+    },
+    {
+      "arm": "fixed128-bm25",
+      "n": 16,
+      "primary_strict_correct": 14,
+      "parseable_objects": 15,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "fixed128-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "fc98b6fe48171064191145d58d46cb437f46b99d32e2e47d994ed74ba90f443b"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 14,
+        "accuracy": 0.9333333333333333
+      }
+    },
+    {
+      "arm": "lowprob-bm25",
+      "n": 16,
+      "primary_strict_correct": 8,
+      "parseable_objects": 9,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "lowprob-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "3d98a99c64e070ff5b827e9917ea3082aa1913679262ae7f0d4d308824405abb"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 8,
+        "accuracy": 0.5333333333333333
+      }
+    },
+    {
+      "arm": "rule-bm25",
+      "n": 16,
+      "primary_strict_correct": 12,
+      "parseable_objects": 13,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "rule-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "3d98a99c64e070ff5b827e9917ea3082aa1913679262ae7f0d4d308824405abb"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 12,
+        "accuracy": 0.8
+      }
+    },
+    {
+      "arm": "hybrid-trigger-bm25",
+      "n": 16,
+      "primary_strict_correct": 13,
+      "parseable_objects": 14,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "hybrid-trigger-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "3d98a99c64e070ff5b827e9917ea3082aa1913679262ae7f0d4d308824405abb"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 13,
+        "accuracy": 0.8666666666666667
+      }
+    },
+    {
+      "arm": "sentence-bm25",
+      "n": 16,
+      "primary_strict_correct": 13,
+      "parseable_objects": 14,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "sentence-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "e7df19c69365211c3f7f8250ecc48608fb2e216a645f2ecafbfa9f4b3b67d3cf"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 13,
+        "accuracy": 0.8666666666666667
+      }
+    },
+    {
+      "arm": "preanswer-bm25",
+      "n": 16,
+      "primary_strict_correct": 1,
+      "parseable_objects": 1,
+      "parseable_but_strict_incorrect": [],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 1,
+        "accuracy": 0.06666666666666667
+      }
+    },
+    {
+      "arm": "fixed32-char",
+      "n": 16,
+      "primary_strict_correct": 13,
+      "parseable_objects": 14,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "fixed32-char",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "12dee731cc8f4cc0b5d4b68ef241be2008533f33ce38758361845d7616808714"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 13,
+        "accuracy": 0.8666666666666667
+      }
+    },
+    {
+      "arm": "fixed32-hybrid",
+      "n": 16,
+      "primary_strict_correct": 12,
+      "parseable_objects": 13,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "fixed32-hybrid",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "12dee731cc8f4cc0b5d4b68ef241be2008533f33ce38758361845d7616808714"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 12,
+        "accuracy": 0.8
+      }
+    },
+    {
+      "arm": "scdrop-bm25",
+      "n": 16,
+      "primary_strict_correct": 14,
+      "parseable_objects": 15,
+      "parseable_but_strict_incorrect": [
+        {
+          "dataset": "api",
+          "question_id": "official-redis-1",
+          "arm": "scdrop-bm25",
+          "correct": false,
+          "parseable": true,
+          "prediction": {
+            "action": "set_expiry",
+            "wait_seconds": 60
+          },
+          "trajectory_sha256": "5719b5af5a9ced1ca69eee4c1735428585f664b9d83016d226339870ff9b44a3"
+        }
+      ],
+      "posthoc_sensitivity_without_redis1": {
+        "n": 15,
+        "strict_correct": 14,
+        "accuracy": 0.9333333333333333
+      }
+    }
+  ]
+}

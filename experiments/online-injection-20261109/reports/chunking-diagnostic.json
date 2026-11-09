@@ -1,0 +1,585 @@
+{
+  "protocol": {
+    "chunk_words": 256,
+    "overlap_words": 64,
+    "retriever": "bm25",
+    "top_k": [
+      1,
+      2,
+      3,
+      5
+    ],
+    "questions": 8,
+    "generated_answers": 0,
+    "corpus_sha256": "fe99c7ecda4bb2535affea30a125b38c1286072cc5a544cacbc205a96615c99a",
+    "script_sha256": "0c74d88d75171a39129c43ded666908ae1f0a498a2b4eaf26eb69193277d58cf",
+    "scope": "Exploratory after the pilot questions were seen; not an independent test and not mixed into the thirteen primary arms."
+  },
+  "index_chunks": 71450,
+  "index_fingerprint": "c54555f3791147815c8d2bd3b9cbec3973cda9de1c5b9ef4e78c9fdf88e12fc1",
+  "index_build_seconds": 20.495049699675292,
+  "summary": {
+    "parent_hit@1": 0.125,
+    "gold_text_in_chunk@1": 0.125,
+    "parent_hit@2": 0.25,
+    "gold_text_in_chunk@2": 0.25,
+    "parent_hit@3": 0.375,
+    "gold_text_in_chunk@3": 0.25,
+    "parent_hit@5": 0.625,
+    "gold_text_in_chunk@5": 0.5
+  },
+  "questions": [
+    {
+      "question_id": "DEV_Q209",
+      "query": "how to change the maximum string length for properties in filenet administration console for content engine acce i am trying to change the maximum string length in acce like we do in filenet enterprise manager but in the more tab i am not seeing the option in this case how can i change it give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases",
+      "hits": [
+        {
+          "id": "swg21978402.txt::words-0-256",
+          "parent": "swg21978402.txt",
+          "score": 101.38014134518106,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 1482,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21385716.txt::words-0-230",
+          "parent": "swg21385716.txt",
+          "score": 99.87148641717425,
+          "start_word": 0,
+          "end_word": 230,
+          "start_char": 0,
+          "end_char": 1536,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21680952.txt::words-0-121",
+          "parent": "swg21680952.txt",
+          "score": 99.7816607563906,
+          "start_word": 0,
+          "end_word": 121,
+          "start_char": 0,
+          "end_char": 782,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21980248.txt::words-0-235",
+          "parent": "swg21980248.txt",
+          "score": 98.67120708215526,
+          "start_word": 0,
+          "end_word": 235,
+          "start_char": 0,
+          "end_char": 1528,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21696083.txt::words-0-212",
+          "parent": "swg21696083.txt",
+          "score": 98.27112381229342,
+          "start_word": 0,
+          "end_word": 212,
+          "start_char": 0,
+          "end_char": 1296,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": true
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": false,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": true,
+      "gold_text_in_chunk@5": true
+    },
+    {
+      "question_id": "DEV_Q195",
+      "query": "tls protocol with itcam for datapower we have a datapower appliance with tls security protocol enabled can we configure itcam for datapower appliance v7.1 to specifically use the tls protocol v1.2 not v1.0 give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases v7 1 v1 2 v1 0",
+      "hits": [
+        {
+          "id": "swg21632275.txt::words-0-256",
+          "parent": "swg21632275.txt",
+          "score": 119.22530124880703,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 1660,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg22004497.txt::words-0-104",
+          "parent": "swg22004497.txt",
+          "score": 115.50189288292447,
+          "start_word": 0,
+          "end_word": 104,
+          "start_char": 0,
+          "end_char": 656,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21399537.txt::words-0-237",
+          "parent": "swg21399537.txt",
+          "score": 109.26842509249958,
+          "start_word": 0,
+          "end_word": 237,
+          "start_char": 0,
+          "end_char": 1812,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21984371.txt::words-192-448",
+          "parent": "swg21984371.txt",
+          "score": 105.55674671784256,
+          "start_word": 192,
+          "end_word": 448,
+          "start_char": 1169,
+          "end_char": 2609,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21632275.txt::words-192-260",
+          "parent": "swg21632275.txt",
+          "score": 103.06897022336538,
+          "start_word": 192,
+          "end_word": 260,
+          "start_char": 1239,
+          "end_char": 1684,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": false,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": false,
+      "gold_text_in_chunk@5": false
+    },
+    {
+      "question_id": "DEV_Q239",
+      "query": "state the concrete fix or rule omit the reasoning and introductory phrases 8 2 8 2 12 46 16 org eclipse equinox launcher 2013 11 04 12 46 16 359 java lang classnotfoundexception org eclipse core runtime adaptor eclipsestarter java net urlclassloader findclass urlclassloader java 423 java lang classloader loadclass classloader java 653 java lang classloader loadclass classloader java 619 org eclipse equinox launcher main invokeframework main java 616 org eclipse equinox launcher main basicrun main java 574 org eclipse equinox launcher main run main java 1407 org eclipse equinox launcher main main main java 1383",
+      "hits": [
+        {
+          "id": "swg21455178.txt::words-384-552",
+          "parent": "swg21455178.txt",
+          "score": 269.3571583374537,
+          "start_word": 384,
+          "end_word": 552,
+          "start_char": 2751,
+          "end_char": 4348,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21389763.txt::words-0-148",
+          "parent": "swg21389763.txt",
+          "score": 266.34177478756254,
+          "start_word": 0,
+          "end_word": 148,
+          "start_char": 0,
+          "end_char": 1715,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21461495.txt::words-0-256",
+          "parent": "swg21461495.txt",
+          "score": 260.84252382417037,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2332,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21330011.txt::words-0-188",
+          "parent": "swg21330011.txt",
+          "score": 252.9266322525781,
+          "start_word": 0,
+          "end_word": 188,
+          "start_char": 0,
+          "end_char": 1952,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": true
+        },
+        {
+          "id": "swg21455178.txt::words-192-448",
+          "parent": "swg21455178.txt",
+          "score": 251.95761318963403,
+          "start_word": 192,
+          "end_word": 448,
+          "start_char": 1420,
+          "end_char": 3631,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": false,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": true,
+      "gold_text_in_chunk@5": true
+    },
+    {
+      "question_id": "DEV_Q160",
+      "query": "how to increase the http session time-out value for workplace application on websphere application server we would like to increase the http session time-out value for our workplace application where are all the locations that this value is set and what are their precedence give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases time out time out",
+      "hits": [
+        {
+          "id": "swg21276751.txt::words-0-184",
+          "parent": "swg21276751.txt",
+          "score": 128.18363766142625,
+          "start_word": 0,
+          "end_word": 184,
+          "start_char": 0,
+          "end_char": 1274,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21163875.txt::words-0-256",
+          "parent": "swg21163875.txt",
+          "score": 116.78385820455792,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 1686,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": true
+        },
+        {
+          "id": "swg21163875.txt::words-384-599",
+          "parent": "swg21163875.txt",
+          "score": 116.44547960885656,
+          "start_word": 384,
+          "end_word": 599,
+          "start_char": 2496,
+          "end_char": 4347,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21163875.txt::words-192-448",
+          "parent": "swg21163875.txt",
+          "score": 113.22216571085946,
+          "start_word": 192,
+          "end_word": 448,
+          "start_char": 1275,
+          "end_char": 2989,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg22003267.txt::words-0-256",
+          "parent": "swg22003267.txt",
+          "score": 108.42228115462707,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 1771,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": true,
+      "gold_text_in_chunk@2": true,
+      "parent_hit@3": true,
+      "gold_text_in_chunk@3": true,
+      "parent_hit@5": true,
+      "gold_text_in_chunk@5": true
+    },
+    {
+      "question_id": "DEV_Q011",
+      "query": "how to proceed when jextract utility is throwing an outofmemory error i was getting a crash and was told to provide a jextracted core dump i ran the jextract command as instructed java/jre/bin/jextract core_path but i am getting now an outofmemory error when jextract itself is running so i cannot proceed with the original crash investigation give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases java jre bin jextract core path",
+      "hits": [
+        {
+          "id": "swg21636414.txt::words-0-150",
+          "parent": "swg21636414.txt",
+          "score": 135.6407151760508,
+          "start_word": 0,
+          "end_word": 150,
+          "start_char": 0,
+          "end_char": 2927,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21273291.txt::words-192-448",
+          "parent": "swg21273291.txt",
+          "score": 130.10237640953116,
+          "start_word": 192,
+          "end_word": 448,
+          "start_char": 1233,
+          "end_char": 3029,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21577379.txt::words-0-256",
+          "parent": "swg21577379.txt",
+          "score": 128.09889882358743,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 1732,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "isg3T1022708.txt::words-768-1024",
+          "parent": "isg3T1022708.txt",
+          "score": 127.57496997455713,
+          "start_word": 768,
+          "end_word": 1024,
+          "start_char": 4947,
+          "end_char": 6824,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg22015892.txt::words-0-179",
+          "parent": "swg22015892.txt",
+          "score": 126.51774707955644,
+          "start_word": 0,
+          "end_word": 179,
+          "start_char": 0,
+          "end_char": 1343,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": true,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": true,
+      "gold_text_in_chunk@5": false
+    },
+    {
+      "question_id": "DEV_Q262",
+      "query": "table could not be found when doing a table mapping with db2 as source selecting a table which contains special characters on column comments like comment on column is test comment 1 complete mapping fails with following error message table could not be found in the database what s the reason for the error give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases",
+      "hits": [
+        {
+          "id": "swg21647171.txt::words-0-139",
+          "parent": "swg21647171.txt",
+          "score": 159.9462235213421,
+          "start_word": 0,
+          "end_word": 139,
+          "start_char": 0,
+          "end_char": 958,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1PM34408.txt::words-0-256",
+          "parent": "swg1PM34408.txt",
+          "score": 89.17936851315248,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2211,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1PK01798.txt::words-0-256",
+          "parent": "swg1PK01798.txt",
+          "score": 83.54575074446349,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2044,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1PJ32546.txt::words-192-406",
+          "parent": "swg1PJ32546.txt",
+          "score": 80.63153896923801,
+          "start_word": 192,
+          "end_word": 406,
+          "start_char": 1640,
+          "end_char": 3412,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1PJ32546.txt::words-0-256",
+          "parent": "swg1PJ32546.txt",
+          "score": 80.51737347880295,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2212,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": false,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": false,
+      "gold_text_in_chunk@5": false
+    },
+    {
+      "question_id": "DEV_Q184",
+      "query": "mediation module has one service invoke calling an external service through web service binding upon testing the process we observe see that the service invoke is being called twice there is no fan-in or fan out in the request flow below is the error caused by com.ibm.wsspi.sibx.mediation.flow.mediationruntimeexception cwsxm1023e exception when calling flow action cwsxm0100e multiple replies have been produced for a single request flow in module give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases fan in com ibm wsspi sibx mediation flow mediationruntimeexception",
+      "hits": [
+        {
+          "id": "swg1IC51160.txt::words-192-448",
+          "parent": "swg1IC51160.txt",
+          "score": 205.23263318880848,
+          "start_word": 192,
+          "end_word": 448,
+          "start_char": 1616,
+          "end_char": 5094,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1IC64965.txt::words-0-256",
+          "parent": "swg1IC64965.txt",
+          "score": 193.96489939985952,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2881,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21405864.txt::words-0-177",
+          "parent": "swg21405864.txt",
+          "score": 191.38739220708948,
+          "start_word": 0,
+          "end_word": 177,
+          "start_char": 0,
+          "end_char": 1139,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1IC64276.txt::words-0-256",
+          "parent": "swg1IC64276.txt",
+          "score": 190.68227640820754,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 3184,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg1JR27493.txt::words-0-256",
+          "parent": "swg1JR27493.txt",
+          "score": 189.28361059155088,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 3389,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": false,
+      "gold_text_in_chunk@1": false,
+      "parent_hit@2": false,
+      "gold_text_in_chunk@2": false,
+      "parent_hit@3": false,
+      "gold_text_in_chunk@3": false,
+      "parent_hit@5": false,
+      "gold_text_in_chunk@5": false
+    },
+    {
+      "question_id": "DEV_Q249",
+      "query": "help with security bulletin ibm websphere mq administration command could cause denial of service cve-2016-8971 i need to understand details regarding security bulletin ibm websphere mq administration command could cause denial of service cve-2016-8971 where can i find this information give a concise technical answer in the final answer state the concrete fix or rule omit the reasoning and introductory phrases cve 2016 8971 cve 2016 8971",
+      "hits": [
+        {
+          "id": "swg21998663.txt::words-0-256",
+          "parent": "swg21998663.txt",
+          "score": 199.70482870274395,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2245,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": true
+        },
+        {
+          "id": "swg21999232.txt::words-0-256",
+          "parent": "swg21999232.txt",
+          "score": 176.97231781258088,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2897,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21998663.txt::words-192-425",
+          "parent": "swg21998663.txt",
+          "score": 160.02026324008708,
+          "start_word": 192,
+          "end_word": 425,
+          "start_char": 1790,
+          "end_char": 3639,
+          "gold_parent": true,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg21999232.txt::words-192-358",
+          "parent": "swg21999232.txt",
+          "score": 127.1575720479033,
+          "start_word": 192,
+          "end_word": 358,
+          "start_char": 2017,
+          "end_char": 3646,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        },
+        {
+          "id": "swg22001520.txt::words-0-256",
+          "parent": "swg22001520.txt",
+          "score": 102.9356595160402,
+          "start_word": 0,
+          "end_word": 256,
+          "start_char": 0,
+          "end_char": 2263,
+          "gold_parent": false,
+          "full_normalized_gold_answer_in_chunk": false
+        }
+      ],
+      "parent_hit@1": true,
+      "gold_text_in_chunk@1": true,
+      "parent_hit@2": true,
+      "gold_text_in_chunk@2": true,
+      "parent_hit@3": true,
+      "gold_text_in_chunk@3": true,
+      "parent_hit@5": true,
+      "gold_text_in_chunk@5": true
+    }
+  ]
+}

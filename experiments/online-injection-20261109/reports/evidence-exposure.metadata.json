@@ -1,0 +1,7 @@
+{
+  "count": 104,
+  "records_sha256": "b203539a272df8b646078127cbbf21ce8fcdc02f07694b650de95e0ff1de38b4",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "analyzer_sha256": "32a04b574f4fb36b481760c8ff287482ccaa60bf6e3491be763a373275bfe84b",
+  "scope": "Lexical exposure diagnostic only; substring absence does not prove absence of the fact."
+}

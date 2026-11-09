@@ -1,0 +1,16 @@
+{
+  "chunk_words": 256,
+  "overlap_words": 64,
+  "retriever": "bm25",
+  "top_k": [
+    1,
+    2,
+    3,
+    5
+  ],
+  "questions": 8,
+  "generated_answers": 0,
+  "corpus_sha256": "fe99c7ecda4bb2535affea30a125b38c1286072cc5a544cacbc205a96615c99a",
+  "script_sha256": "0c74d88d75171a39129c43ded666908ae1f0a498a2b4eaf26eb69193277d58cf",
+  "scope": "Exploratory after the pilot questions were seen; not an independent test and not mixed into the thirteen primary arms."
+}

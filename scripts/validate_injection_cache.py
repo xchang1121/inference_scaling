@@ -89,7 +89,9 @@ def main():
             close_backend(raw)
         finally:
             args.output.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
-    print(json.dumps({"passed":result["passed"],"max_logprob_difference":max(p["max_abs_logprob_difference"] or 0 for p in pairs)}))
+    comparable = [p["max_abs_logprob_difference"] for p in pairs if p["tokens_equal"]]
+    print(json.dumps({"passed":result["passed"],"branches_tokens_equal":[p["tokens_equal"] for p in pairs],
+                      "max_logprob_difference_on_equal_paths":max(comparable,default=None)}))
     if not result["passed"]:
         raise SystemExit(1)
 

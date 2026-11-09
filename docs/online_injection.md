@@ -75,11 +75,13 @@ vLLM 根据完全相同的 token 前缀自动复用仍驻留的缓存块。这�
 
 主要统计：API 严格正确率、TechQA 回答 F1/EM、检索 Hit@1/2/3/5、触发/实际注入比例、生成和证据 token、端到端延迟、检索开销、缓存命中和总计算量。质量/成本比较使用相同已完成题目；置信区间以题为单位配对 bootstrap。失败/超长/未注入的输出保留。小样本结果只能用于发现现象与运行问题。
 
+规则题的“严格”指最后一个可提取平面 JSON 对象的字段、类型和值严格匹配；评分不要求整段输出仅有 JSON。报告分别列出对象可提取率、空回答、长度耗尽与决策正确率，帮助解释格式与规则应用的影响。
+
 ## 复现入口
 
 ```bash
-PYTHONPATH=src python scripts/prepare_injection_benchmark.py --output /path/api --count 16
-PYTHONPATH=src python scripts/prepare_official_api_diagnostic.py --output /path/official-api
+PYTHONPATH=src python scripts/prepare_official_api_diagnostic.py --output /path/api
+PYTHONPATH=src python scripts/prepare_injection_benchmark.py --output /path/synthetic-api --count 16
 PYTHONPATH=src python scripts/prepare_techqa_injection.py --raw /path/nvidia-files --output /path/techqa --count 8
 PYTHONPATH=src python scripts/benchmark_injection.py --data /path/api --output /path/retrieval.jsonl --retrieval-only
 PYTHONPATH=src python scripts/benchmark_injection.py --data /path/api --settings /path/settings.json --output /path/generation.jsonl
@@ -100,13 +102,27 @@ TechQA 原始文件为固定 revision 下的 `train.json` 和 `corpus.zip`，取
 
 ### 对照扩展与进入下一阶段的条件
 
+根据首轮暴露的问题，下一轮按以下次序冻结独立对照：
+
+| 阶段 | 固定条件 | 比较变量 | 核心观测 |
+|---|---|---|---|
+| 文档与片段检索 | 原始 TRAIN 开发题；按文档/产品分组留出新题；固定 top-k 和注入上限 | 直接片段检索、先文档后段落；tokenizer 计数切块、段落边界；BM25/本地 embedding/reranker | 标注文档召回、替代证据相关性、实际 token 截断后的事实暴露率、检索成本 |
+| 注入反事实 | 相同 checkpoint、相同资料、相同后续请求切分与预算 | 正确资料、无资料、同长度无信息资料、错误版本资料 | 最终正确性、独立事实 probe、采用错误证据比例 |
+| 位置与继续推理 | 先固定检索结果，避免 query 漂移同时改变资料 | 起点、固定位置、句界、回答前；原样追加与显式重开推理的控制序列 | 资料后推理长度、格式残留、答案质量、控制 token 成本 |
+| 自适应触发 | 在开发题校准后固定阈值；新测试题不回调参数 | 周期、低概率、SC、文本规则与组合；相同调用数/证据预算 | 每次检索的边际收益、触发精度/覆盖率、质量与成本曲线 |
+| 多候选与状态共享 | 明确联合路径概率及外部转移；通过缓存状态隔离测试 | 共同前缀先检索再分叉、分支各自检索；APC 开/关或原生活动请求 fork | 选择质量、实际复用量、完整候选/评分/probe 计算成本 |
+
+本次已看过的 8 道 DEV 题只保留作回归和案例分析。新触发阈值、切块与查询策略先在开发文档上选定，再对尚未使用的 DEV 题固定评测。当前额外的一次 256 词 / 64 词重叠 BM25 诊断只做 CPU 检索：其标注文档 Hit@2 从 3/8 变为 2/8，未重新生成回答。空白分词对中文长段落不等于模型 token 计数，下一轮不将该词块设置直接当成正式注入长度。
+
 先保持文档集、检索次数和上下文上限不变，用独立开发分区校准阈值，再将产品或文档整体留出。位置比较需同时报告实际注入偏移、资料后继续生成的推理 token，以及最终回答是否有内容。若注入后模型立即关闭推理，正确率变化只能说明外部资料影响了后续回答，不能据此声称改善了后续推理过程。
 
 知识获取量应通过独立 probe 定义：在相同 checkpoint 复制上下文，分别追加正确资料、无资料和同长度无信息资料，再询问不参与轨迹选择的事实 probe。比较 probe 的正确率或目标答案条件概率、证据一致性及最终任务分数。Probe 调用的 token 和前向计算另计；probe 的答案与分数不能成为在线触发器的隐藏 oracle。来源冲突或版本不匹配时，单独统计采用错误资料的比例。
 
 缓存优化需满足两个条件：相同 token 前缀能在真实模型中得到与完整重算一致的续写结果，并且实测节省的 prefill 大于追加资料和重新提交请求的成本。本分支的真实小型因果模型 CPU 测试覆盖“生成前缀后追加资料”和“同 checkpoint 追加两份不同资料的兄弟分支”，核对 token、log probability 与缓存计数。它验证参考后端的状态隔离，不能替代昇腾混合模型的原生缓存测试。
 
-补充的目标模型验证由 `scripts/validate_injection_cache.py` 在全部正式回答完成后单独运行，不混入质量和延迟表。按题号、方法排序，选择首个长度至少 1,600 token 的已记录上下文，取前 1,600 token 作为共同前缀；追加两份固定的不同资料，各采样 8 token，种子固定为 20261109/20261110。先从缓存中的父前缀运行兄弟分支，再分别清空缓存重算。要求缓存分支有实际命中、重算分支命中为零、采样 token 完全一致、BF16 采样 token 的 log probability 最大绝对差不超过 0.05 nats。此容差和题目/种子选择在验证前固定；不更换失败例子来获取通过结果。这只能核对所选两个分支，不能证明所有输入的缓存状态都正确。
+补充的目标模型验证由 `scripts/validate_injection_cache.py` 在全部正式回答完成后单独运行，不混入质量和延迟表。按题号、方法排序，选择首个长度至少 1,600 token 的已记录上下文，取前 1,600 token 作为共同前缀；追加两份固定的不同资料，各采样 8 token，种子固定为 20261109/20261110。先从缓存中的父前缀运行兄弟分支，再分别清空缓存重算。要求缓存分支有实际命中、重算分支命中为零、采样 token 完全一致、BF16 采样 token 的 log probability 最大绝对差不超过 0.05 nats。此容差和题目/种子选择在验证前固定；不更换失败例子来获取通过结果。这只能核对所选两个分支，不能证明所有输入的缓存状态都正确。 验证直接导入正式运行的冻结源码；Git 检出的 Linux LF 与冻结包的 Windows CRLF 单独做内容归一化比较，不据此改写原文件。原始预检查脚本、修订协议和逐文件哈希均保留。
+
+首轮目标模型的同种子多 token 缓存续写测试有一支未通过。事后沿用相同父前缀、两份资料和固定八 token 历史，逐位置比较贪心 token 与其概率，16/16 个位置一致，但尚未核对全部词表分布或定位随机续写差异。两类结果分别保留，见[首轮报告](reports/ONLINE_INJECTION_PILOT.md)。继续做同 checkpoint 反事实前，需要先分离随机流推进、请求调度与缓存状态差异，不能仅凭相同 seed 宣称后续随机数已对齐。
 
 接入 IS/ETS 时，状态应显式包含生成前缀、资料来源、触发历史和预算。把资料选择写为外部转移核 `K(e | history)`，模型生成写为 `p(token | context_with_evidence)`。若 proposal 与 target 共享完全相同的确定性检索/注入规则，外部转移在同一路径的概率比中可以约去；若检索、重排或分支筛选是随机的，必须记录相应概率与支持集。改变后缀后继续使用旧资料相当于条件化到另一种路径规则，需要单独定义目标，不能默认仍保持原来的估计性质。只有在这套路径定义、权重和回放测试通过后，才把在线注入接入现有选择核。
 

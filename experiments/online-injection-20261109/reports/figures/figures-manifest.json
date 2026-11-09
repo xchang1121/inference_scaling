@@ -1,0 +1,18 @@
+{
+  "matplotlib": "3.11.2",
+  "numpy": "2.5.2",
+  "cohorts": [
+    "techqa",
+    "api"
+  ],
+  "source_summary_status": "complete",
+  "summary_sha256": "d1b138b58c96c23e5855339d14a439ed1f2a15fc77deefa23acea600187ebf61",
+  "files": {
+    "cost-ratios.png": "7b649fd3729f806405316a14e467c7ebcb21223dfdd2827adf10661a8797587b",
+    "cost-ratios.svg": "8746f95acee4ed35ce4a410580667abe8289620f2f02736866a40d3d6a3ee7d8",
+    "quality-paired.png": "c1c2445b166341e1ba10e3bbafa33f597633441aa2dfbc8368be32e02edd75e5",
+    "quality-paired.svg": "5474699ecc43368f5ea34a785f820369a4fdac65de920bf4da0f3fde1048a76b",
+    "thinking-position.png": "dc010fb55354ee3eb793f298286b9247848e5054e5a70a506714373edab4006b",
+    "thinking-position.svg": "cff2d551bf8d1ad7345f6375d775fdabc6874488d8ceb6a0e87ada763a41980f"
+  }
+}

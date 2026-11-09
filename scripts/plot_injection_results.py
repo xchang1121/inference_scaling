@@ -18,22 +18,29 @@ def main():
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--cohorts",nargs="+",choices=("techqa","api"),default=["techqa","api"])
     args = parser.parse_args()
     result = json.loads(args.summary.read_text(encoding="utf-8"))
-    if result["status"] != "complete" or not result["all_saved_measurements_pass_audit"]:
+    if not result["all_saved_measurements_pass_audit"] or any(
+            result["datasets"][key]["generated"] != result["datasets"][key]["expected"]
+            or not result["datasets"][key]["complete_marker"] or result["exit_codes"][key] != "0"
+            for key in args.cohorts):
         raise ValueError("only completed, audited measurements can be plotted")
     args.output.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family":"DejaVu Sans", "font.size":9,
                          "axes.spines.top":False, "axes.spines.right":False,
                          "svg.fonttype":"none", "savefig.dpi":180})
-    cohorts = [("techqa","TechQA: answer token F1"),("api","Official rules: exact JSON accuracy")]
+    titles = {"techqa":"TechQA: answer token F1","api":"Official rules: exact JSON accuracy"}
+    cohorts = [(key,titles[key]) for key in args.cohorts]
+    width = 7.5*len(cohorts)
 
     def save(fig, name):
         for extension in ("png","svg"):
             fig.savefig(args.output/f"{name}.{extension}", bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
-    fig, axes = plt.subplots(1,2,figsize=(15,6.2))
+    fig, axes = plt.subplots(1,len(cohorts),figsize=(width,6.2),squeeze=False)
+    axes = axes.ravel()
     for ax,(key,title) in zip(axes,cohorts,strict=True):
         cohort = result["datasets"][key]
         cs = cohort["comparisons"]
@@ -54,7 +61,8 @@ def main():
     fig.tight_layout(w_pad=4)
     save(fig,"quality-paired")
 
-    fig, axes = plt.subplots(1,2,figsize=(15,6.5))
+    fig, axes = plt.subplots(1,len(cohorts),figsize=(width,6.5),squeeze=False)
+    axes = axes.ravel()
     for ax,(key,title) in zip(axes,cohorts,strict=True):
         methods = result["datasets"][key]["methods"]
         baseline = next(m for m in methods if m["arm"] == "closed-book")
@@ -73,7 +81,8 @@ def main():
     fig.tight_layout(w_pad=4)
     save(fig,"cost-ratios")
 
-    fig, axes = plt.subplots(1,2,figsize=(15,6.5))
+    fig, axes = plt.subplots(1,len(cohorts),figsize=(width,6.5),squeeze=False)
+    axes = axes.ravel()
     for ax,(key,title) in zip(axes,cohorts,strict=True):
         cohort = result["datasets"][key]
         rows = [r for line in (args.snapshot/f"{key}.jsonl").read_text(encoding="utf-8").splitlines()
@@ -98,14 +107,15 @@ def main():
         ax.set_xlabel("Mean sampled thinking tokens (injected subset)")
         ax.set_title(title,loc="left",weight="bold")
         ax.grid(axis="x",alpha=.15)
-    axes[0].legend(handles=[Patch(color="#91b4cf",label="Before first injection"),
+    fig.legend(handles=[Patch(color="#91b4cf",label="Before first injection"),
         Patch(color="#d68b38",label="After first injection"),Patch(color="#dddddd",label="No injection")],
-        loc="upper center",bbox_to_anchor=(1.17,-.12),ncol=3,frameon=False)
+        loc="lower center",bbox_to_anchor=(.5,-.08),ncol=3,frameon=False)
     fig.suptitle("Where evidence arrives and whether thinking continues",weight="bold",y=1.02)
-    fig.text(.5,-.10,"Right labels: injected / total questions. Evidence and forced closing tokens are excluded.",ha="center",color="#555555")
+    fig.text(.5,-.13,"Right labels: injected / total questions. Evidence and forced closing tokens are excluded.",ha="center",color="#555555")
     fig.tight_layout(w_pad=4)
     save(fig,"thinking-position")
-    metadata = {"matplotlib":matplotlib.__version__,"numpy":np.__version__,
+    metadata = {"matplotlib":matplotlib.__version__,"numpy":np.__version__,"cohorts":args.cohorts,
+                "source_summary_status":result["status"],
                 "summary_sha256":hashlib.sha256(args.summary.read_bytes()).hexdigest(),
                 "files":{p.name:hashlib.sha256(p.read_bytes()).hexdigest()
                          for p in args.output.iterdir() if p.suffix in {".png",".svg"}}}

@@ -1,0 +1,312 @@
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "static-user-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "return_saved_500", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "static-user-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "fixed32-char", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "fixed32-hybrid", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_incomplete_work", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-stripe-2", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "start-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "fixed32-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "fixed128-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "lowprob-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "rule-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "hybrid-trigger-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "sentence-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "fixed32-char", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "fixed32-hybrid", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "scdrop-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "closed-book", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-1", "arm": "static-user-bm25", "correct": false, "parseable": true, "prediction": {"action": "set_expiry", "wait_seconds": 60}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-redis-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "keep_persistent", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "retry_whole_transaction", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "rule-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "hybrid-trigger-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-postgresql-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "use_statement_snapshot", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "scdrop-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-1", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_until_visible", "wait_seconds": 20}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "sentence-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "static-user-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-sqs-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "duplicate_delivery_possible", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "fixed32-char", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "fixed32-hybrid", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "fixed32-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "insert_default", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "start-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-dict-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "leave_dictionary_unchanged", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "rule-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "may_execute_twice", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "fixed32-hybrid", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "fixed32-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "rule-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "hybrid-trigger-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-lru-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "retains_reference", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "static-user-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "fixed128-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "wait_for_cancellation", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-asyncio-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "underlying_task_continues", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "lowprob-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-http-1", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "sentence-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-http-1", "arm": "preanswer-bm25", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-http-1", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "automatic_retry_permitted", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-1", "arm": "closed-book", "correct": false, "parseable": false}
+{"dataset": "api", "question_id": "official-http-2", "arm": "start-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "fixed32-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "fixed128-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "lowprob-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "rule-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "hybrid-trigger-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "sentence-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "preanswer-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "fixed32-char", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "fixed32-hybrid", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "scdrop-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "closed-book", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "api", "question_id": "official-http-2", "arm": "static-user-bm25", "correct": true, "parseable": true, "prediction": {"action": "avoid_automatic_retry", "wait_seconds": 0}}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "closed-book", "exact_match": false, "f1": 0.2268041237113402}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "static-user-bm25", "exact_match": false, "f1": 0.33195020746887965}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "start-bm25", "exact_match": false, "f1": 0.2709677419354839}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.27149321266968324}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.20535714285714285}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.1630901287553648}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "rule-bm25", "exact_match": false, "f1": 0.2268041237113402}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.1630901287553648}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "sentence-bm25", "exact_match": false, "f1": 0.31718061674008813}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "fixed32-char", "exact_match": false, "f1": 0.32160804020100503}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.27149321266968324}
+{"dataset": "techqa", "question_id": "DEV_Q209", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.36464088397790057}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "static-user-bm25", "exact_match": false, "f1": 0.037037037037037035}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "start-bm25", "exact_match": false, "f1": 0.08}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.04081632653061224}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.05405405405405406}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.022988505747126436}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "rule-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "sentence-bm25", "exact_match": false, "f1": 0.07272727272727272}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "fixed32-char", "exact_match": false, "f1": 0.15}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.07291666666666667}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.022988505747126436}
+{"dataset": "techqa", "question_id": "DEV_Q195", "arm": "closed-book", "exact_match": false, "f1": 0.022988505747126436}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "start-bm25", "exact_match": false, "f1": 0.1728395061728395}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.08641975308641975}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.042105263157894736}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "rule-bm25", "exact_match": false, "f1": 0.042105263157894736}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.042105263157894736}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "sentence-bm25", "exact_match": false, "f1": 0.07}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "fixed32-char", "exact_match": false, "f1": 0.08641975308641975}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.08641975308641975}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.13636363636363635}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "closed-book", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q239", "arm": "static-user-bm25", "exact_match": false, "f1": 0.22}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.18487394957983194}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.24161073825503357}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.2077922077922078}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "rule-bm25", "exact_match": false, "f1": 0.18326693227091634}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.18326693227091634}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "sentence-bm25", "exact_match": false, "f1": 0.19753086419753085}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "fixed32-char", "exact_match": false, "f1": 0.18487394957983194}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.18487394957983194}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.17120622568093385}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "closed-book", "exact_match": false, "f1": 0.2077922077922078}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "static-user-bm25", "exact_match": false, "f1": 0.23030303030303031}
+{"dataset": "techqa", "question_id": "DEV_Q160", "arm": "start-bm25", "exact_match": false, "f1": 0.18834080717488788}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.15942028985507245}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.20930232558139536}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "rule-bm25", "exact_match": false, "f1": 0.20930232558139536}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.20930232558139536}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "sentence-bm25", "exact_match": false, "f1": 0.13114754098360656}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.1518987341772152}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "fixed32-char", "exact_match": false, "f1": 0.10566037735849057}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.13333333333333333}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.16042780748663102}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "closed-book", "exact_match": false, "f1": 0.20930232558139536}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "static-user-bm25", "exact_match": false, "f1": 0.22807017543859648}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "start-bm25", "exact_match": false, "f1": 0.09584664536741214}
+{"dataset": "techqa", "question_id": "DEV_Q011", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.26666666666666666}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.22784810126582278}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "rule-bm25", "exact_match": false, "f1": 0.12280701754385964}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.22784810126582278}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "sentence-bm25", "exact_match": false, "f1": 0.3238095238095238}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.3127962085308057}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "fixed32-char", "exact_match": false, "f1": 0.2644628099173554}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.2808988764044944}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.273972602739726}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "closed-book", "exact_match": false, "f1": 0.12280701754385964}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "static-user-bm25", "exact_match": false, "f1": 0.38095238095238093}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "start-bm25", "exact_match": false, "f1": 0.265625}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.2808988764044944}
+{"dataset": "techqa", "question_id": "DEV_Q262", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.10126582278481013}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "rule-bm25", "exact_match": false, "f1": 0.09876543209876543}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.09876543209876543}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "sentence-bm25", "exact_match": false, "f1": 0.2972972972972973}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.0}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "fixed32-char", "exact_match": false, "f1": 0.3466666666666667}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.3466666666666667}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.09876543209876543}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "closed-book", "exact_match": false, "f1": 0.09876543209876543}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "static-user-bm25", "exact_match": false, "f1": 0.19393939393939394}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "start-bm25", "exact_match": false, "f1": 0.11661807580174927}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.2972972972972973}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.2631578947368421}
+{"dataset": "techqa", "question_id": "DEV_Q184", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.09876543209876543}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "hybrid-trigger-bm25", "exact_match": false, "f1": 0.35406698564593303}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "sentence-bm25", "exact_match": false, "f1": 0.17543859649122806}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "preanswer-bm25", "exact_match": false, "f1": 0.18421052631578946}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "fixed32-char", "exact_match": false, "f1": 0.36681222707423583}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "fixed32-hybrid", "exact_match": false, "f1": 0.37373737373737376}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "scdrop-bm25", "exact_match": false, "f1": 0.125}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "closed-book", "exact_match": false, "f1": 0.14977973568281938}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "static-user-bm25", "exact_match": false, "f1": 0.18181818181818182}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "start-bm25", "exact_match": false, "f1": 0.5070422535211268}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "fixed32-bm25", "exact_match": false, "f1": 0.3627906976744186}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "fixed128-bm25", "exact_match": false, "f1": 0.09230769230769231}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "lowprob-bm25", "exact_match": false, "f1": 0.35406698564593303}
+{"dataset": "techqa", "question_id": "DEV_Q249", "arm": "rule-bm25", "exact_match": false, "f1": 0.14977973568281938}
