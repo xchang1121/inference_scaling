@@ -42,6 +42,11 @@ updates the candidate **index**, not a power-target suffix MH sampler.
   termination is respected, so realized compute can differ substantially.
   Evidence input tokens are recorded separately; native graph FLOPs and wall
   time are reported, never claimed to be FLOPs matched.
+- SC-BoN funds a complete batch from the remaining worst-case suffix capacity:
+  `min(8, remaining_work // horizon)` candidates. Thus the dynamic probe can
+  reduce N from eight to seven at horizon 1024. Early endings do not refill
+  that batch. IS likewise stops between complete trees. These conservative
+  allocations and unused budgets must remain visible in the results.
 - Same full-support T=1 main policy and SC=mean KL(U||p). SC is read from native
   generation statistics, over the new suffix only, excluding EOS/think-close.
   Empty thinking has neutral score zero and is not filtered out. No rescoring
@@ -92,3 +97,11 @@ length; record empty answers, selected/raw EOS, immediate think-close, forced
 closure, search bypass, wall time and native graph estimates. Normalized answer
 token F1/EM and paired question-level bootstrap intervals are descriptive only.
 No hyperparameters or question selection are tuned on formal outputs.
+
+Wall times cover measured model execution units, with online dynamic lookup
+included. Offline static-packet preparation, index construction and model
+startup are excluded from those per-condition times and recorded separately
+where possible. Native graph FLOPs are dense-padded estimates, excluding some
+attention and host operations. The two TRAIN smoke questions are not quality
+selection data. A pre-formal input correction restored the exact prior DEV_Q119
+prompt (one trailing space); both input versions and hashes are preserved.

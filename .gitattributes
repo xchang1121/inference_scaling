@@ -18,3 +18,7 @@
 /experiments/online-injection-flare-gap-20261109/reports/traces/*.txt -diff -whitespace
 /experiments/online-injection-flare-gap-20261109/reports/accepted-traces/*.txt -diff -whitespace
 /experiments/online-injection-flare-gap-20261109/reports/unit-audit.json -diff
+/experiments/online-injection-scaling-20261109/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/experiments/online-injection-scaling-20261109/full/* -diff
+/experiments/online-injection-scaling-20261109/reports/figures/*.svg -diff -whitespace
+/experiments/online-injection-scaling-20261109/reports/audit.json -diff

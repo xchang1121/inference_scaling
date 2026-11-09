@@ -7,7 +7,7 @@ import pytest
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.retrieval.scaled import (
-    ScalingConfig, SearchLedger, pool_upper_bound, search_suffix,
+    ProbeController, ScalingConfig, SearchLedger, pool_upper_bound, search_suffix,
 )
 
 
@@ -98,3 +98,29 @@ def test_fresh_evidence_epoch_cannot_reuse_old_statistics():
     new = SearchLedger(old.backend, (2,), (4,), 8192, 77, 16384)
     with pytest.raises(RuntimeError, match="uncached"):
         new.reward((2,), [sample.token_ids])
+
+
+def test_probe_rolls_back_draft_at_a_completed_step_after_a_reject():
+    from test_stepwise_injection import BASE, Engine as TextEngine, Evidence
+    from inference_scaling.retrieval.stepwise import StepConfig
+    from inference_scaling.shared.model.output import ThinkingFormat
+    raw = TextEngine(main=["A complete factual sentence. "*5], auxiliary=['{"need":false}'])
+    ctrl = ProbeController(raw, Evidence(), ThinkingFormat((126,), (94,)),
+        lambda system, user: raw.encode(system+user),
+        cfg=replace(StepConfig(), minimum_tokens=16, planner_checks=1))
+    state, packet = ctrl.probe("Question", BASE, 77)
+    assert packet is None and state.checks == 1 and state.phase == "thinking"
+    assert raw.decode(state.reason).endswith(".")
+    assert state.pending == []
+    assert state.discarded == state.work-state.auxiliary-len(state.reason) > 0
+
+
+def test_probe_respects_a_natural_end_without_reopening_search():
+    from test_stepwise_injection import BASE, Engine as TextEngine, Evidence
+    from inference_scaling.shared.model.output import ThinkingFormat
+    raw = TextEngine(main=["Clear fact.~", "Answer\x03"])
+    ctrl = ProbeController(raw, Evidence(), ThinkingFormat((126,), (94,)),
+        lambda system, user: raw.encode(system+user))
+    state, packet = ctrl.probe("Question", BASE, 77)
+    assert packet is None and state.sampled_close and state.finish == "eos"
+    assert ctrl.result(state)["answer_text"] == "Answer"
