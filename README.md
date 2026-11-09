@@ -3,6 +3,8 @@
 自回归语言模型的 training-free 推理扩展。当前主线为 **Qwen3.8-27B、昇腾 vLLM、思考段 IS**。
 CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/inference.json)，默认值与数据集无关。
 
+本分支增加[技术文档在线知识注入实验](docs/online_injection.md)：外部自动触发检索、推理中追加资料、位置对照与配对评测。
+
 ## 快速开始
 
 在已安装兼容 vLLM + vllm-ascend 的环境中：

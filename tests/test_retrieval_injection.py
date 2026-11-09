@@ -190,6 +190,14 @@ class RetrievalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Retriever(self.docs, kind="bm25").with_kind("char")
 
+    def test_multiple_retrievals_deduplicate_sources_and_keep_probability_mask(self):
+        _, out = self.run_controller("inline", max_retrievals=2, top_k=1)
+        events = [e for e in out["events"] if e["kind"] == "retrieval" and e["injected"]]
+        self.assertEqual(len(events), 2)
+        self.assertFalse(set(h["id"] for h in events[0]["hits"]) & set(h["id"] for h in events[1]["hits"]))
+        self.assertLessEqual(out["injected_tokens"], out["config"]["total_evidence_tokens"])
+        self.assertEqual(out["confidence"]["sampled_thinking_tokens"], len(EngineDouble().reason))
+
 
 if __name__ == "__main__":
     unittest.main()
