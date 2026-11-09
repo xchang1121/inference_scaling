@@ -29,7 +29,7 @@ sufficiency checks, not a reproduction of a trained retrieval policy.
 Closed book; static RAG; legacy SC; step-boundary SC; FLARE-gap. Every retrieval
 method has relevant and exactly length-matched unrelated bodies: 11 conditions
 per question, 176 formal condition outcomes, one seed per question. These are
-not 144 independent pre-intervention generations.
+not 176 independent pre-intervention generations.
 
 For each question/method, execute one common pre-intervention unit, including
 all drafts and checks. Save its exact token IDs. Cold-reprefill relevant and

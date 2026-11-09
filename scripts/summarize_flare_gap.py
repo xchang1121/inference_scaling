@@ -188,6 +188,22 @@ def summarize(args):
                 "same_length_packet": not ea or len(ea["payload_ids"]) == len(eb["payload_ids"]),
                 "same_prefix_length": not ea or len(ea["continuation_prefix_ids"]) == len(eb["continuation_prefix_ids"])}
             pair_audits.append(check)
+        for content in ("relevant", "unrelated"):
+            inline = next((r for r in measurements if r["question_id"] == qid and r["arm"] == "flare_gap."+content), None)
+            rebuilt = next((r for r in measurements if r["question_id"] == qid and r["arm"] == "flare_gap_rebuild."+content), None)
+            if inline is None or rebuilt is None: continue
+            ea = next((e for e in inline["result"]["events"] if e["kind"] == "injection"), None)
+            eb = next((e for e in rebuilt["result"]["events"] if e["kind"] == "injection"), None)
+            checks = {"question_id": qid, "policy": "flare_format."+content,
+                "same_common_unit": inline["execution_units"][0] == rebuilt["execution_units"][0],
+                "same_gate_decision": bool(ea) == bool(eb),
+                "same_payload": not ea or ea["payload_ids"] == eb["payload_ids"],
+                "same_checkpoint_and_work": not ea or (ea["confirmed_offset"], ea["work_spent"]) == (eb["confirmed_offset"], eb["work_spent"]),
+                "intended_positions": not ea or (ea["position"] == "assistant_inline" and eb["position"] == "user_reference_rebuild_at_step_boundary")}
+            if ea:
+                ca, cb = (units[r["execution_units"][-1]]["calls"] for r in (inline, rebuilt))
+                checks["same_next_seed"] = bool(ca) and bool(cb) and ca[0]["seed"] == cb[0]["seed"]
+            pair_audits.append(checks)
     cohorts = {}
     for cohort in sorted({r["cohort"] for r in graded}):
         qids = [q for q, c in cases.items() if c.get("cohort", "smoke") == cohort and all((q, arm) in by_key for arm in ARMS)]
