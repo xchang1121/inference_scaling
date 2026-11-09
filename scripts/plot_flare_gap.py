@@ -15,7 +15,7 @@ def main():
     import numpy as np
     data = json.loads(args.summary.read_text(encoding="utf-8"))
     args.output.mkdir(parents=True, exist_ok=True)
-    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "svg.fonttype": "none"})
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "svg.fonttype": "none", "svg.hashsalt": "flare-gap-20261109"})
     methods = ["closed", "static", "legacy_sc", "step_sc", "flare_gap", "flare_gap_rebuild"]
     labels = ["Closed", "Static RAG", "SC inline", "SC step\nrebuild", "FLARE step\ninline", "FLARE step\nrebuild"]
     cohorts = [c for c in ("heldout", "regression") if c in data["cohorts"]]
@@ -34,11 +34,14 @@ def main():
                 for method in methods:
                     arm = "closed.none" if method == "closed" else method+"."+content
                     value = groups[arm][metric]
-                    values.append(100*value if metric == "f1" and value is not None else value or 0)
+                    values.append(float("nan") if method == "closed" else 100*value if metric == "f1" and value is not None else value or 0)
                 ax.bar(x+offset, values, width, label=content.capitalize(), color=color, edgecolor="white")
                 if metric != "f1":
                     for xpos, value in zip(x+offset, values):
-                        if value: ax.text(xpos, value+.08, str(int(value)), ha="center", va="bottom", fontsize=8)
+                        if value and np.isfinite(value): ax.text(xpos, value+.08, str(int(value)), ha="center", va="bottom", fontsize=8)
+            closed = groups["closed.none"][metric] or 0
+            if metric == "f1": closed *= 100
+            ax.bar(0, closed, .7, color="#7A7A7A", edgecolor="white", label="Closed")
             ax.set_xticks(x, labels)
             ax.set_title(f"{cohort.capitalize()} (n={n}) — {title}", loc="left", fontsize=10, weight="bold")
             ax.spines[["top", "right"]].set_visible(False)
@@ -47,7 +50,7 @@ def main():
             if ri == 0 and ci == 0: ax.legend(frameon=False)
     fig.suptitle("Step-boundary retrieval: fixed 1024-token work cap (previews and checkers charged)", fontsize=14, weight="bold")
     fig.savefig(args.output/"comparison.png", dpi=180)
-    fig.savefig(args.output/"comparison.svg")
+    fig.savefig(args.output/"comparison.svg", metadata={"Date": None})
     plt.close(fig)
     print(json.dumps({"figures": ["comparison.png", "comparison.svg"], "source": str(args.summary)}))
 

@@ -66,7 +66,7 @@ def main():
         "questions": [c["id"] for c in selected], "condition_examples": 11*len(selected),
         "all_execution_unit_thinking_and_answer_decodes_verified": len(units),
         "tokenizer_sha256": vocab["tokenizer_sha256"], "files": files}
-    (args.output/"manifest.json").write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
+    (args.output/"manifest.json").write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8", newline="\n")
     print(json.dumps(manifest))
 
 

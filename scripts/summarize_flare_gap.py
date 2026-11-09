@@ -24,7 +24,7 @@ def read_jsonl(path):
 
 
 def mean(values):
-    values = list(values)
+    values = [v for v in values if v is not None]
     return statistics.fmean(values) if values else None
 
 
@@ -161,17 +161,31 @@ def summarize(args):
                 checks["support_gate_validated"] = parse_support(support["raw"], packet)[0] == support["support"] and support["support"]["use"]
         audits.append({"question_id": qid, "arm": arm, **checks})
         score = grade(result["answer_text"], gold[qid]["answer"]) if qid in gold else {}
-        cost_keys = set().union(*(u["cost"] for u in selected))
+        cost_keys = sorted(set().union(*(u["cost"] for u in selected)))
         standalone_cost = {k: sum(u["cost"].get(k, 0) for u in selected) for k in cost_keys}
         offset = injection["confirmed_offset"] if injection else None
+        baseline_unit = units.get(qid+":closed:common")
+        coupling = None
+        if baseline_unit is not None and row["policy"] not in {"closed", "static"}:
+            observed = [t for c in common["calls"] if c["purpose"] == "thinking" for t in c["token_ids"]]
+            baseline = [t for c in baseline_unit["calls"] if c["purpose"] == "thinking" for t in c["token_ids"]]
+            first_gap = next((e for e in common["result"]["events"] if e["kind"] == "gap_check"), None)
+            scope = first_gap["confirmed_offset"] if first_gap else offset if offset is not None else min(len(observed), len(baseline))
+            coupling = {"tokens": scope, "matches": observed[:scope] == baseline[:scope],
+                        "scope": "before first gap check" if first_gap else "before injection" if offset is not None else "common available generated prefix"}
         value = {"question_id": qid, "cohort": row["cohort"], "arm": arm, **score,
             **{k: v for k, v in result.items() if k not in {"events", "reason_ids", "answer_ids", "thinking_text"}},
             "injected": bool(injection), "injection_offset": offset,
             "post_injection_thinking": len(result["reason_ids"])-offset if offset is not None else None,
+            "injection_at_work_cap": bool(injection) and injection["work_spent"] >= cfg["work_tokens"],
+            "work_remaining_at_injection": cfg["work_tokens"]-injection["work_spent"] if injection else None,
+            "discarded_provisional_eos": sum(e["kind"] == "rollback" and e.get("terminal") == "eos" for e in result["events"]),
+            "discarded_provisional_close": sum(e["kind"] == "rollback" and e.get("terminal") == "close" for e in result["events"]),
             "answer_thinking_reopens": result["answer_ids"].count(OPEN),
             "standalone_seconds": sum(u["seconds"] for u in selected), "standalone_cost": standalone_cost,
             "native_pflops": sum(u.get("graph_execution", {}).get("estimated_dense_padded_flops", 0) for u in selected)/1e15,
             "shared_no_intervention": row["shared_no_intervention"], "execution_units": row["execution_units"],
+            "observed_baseline_prefix_coupling": coupling,
             "gold_parent_hit": bool(injection) and qid in gold and bool(set(gold[qid]["document_ids"]) & {b["id"].split("@")[0] for b in injection["packet"]["bodies"]})}
         graded.append(value); by_key[qid, arm] = value
     pair_audits = []
@@ -216,6 +230,11 @@ def summarize(args):
                 **{k: sum(bool(r[k]) for r in chosen) for k in ("eos_inside_thinking", "empty_answer", "immediate_thinking_end", "immediate_eos", "forced_thinking_end", "sampled_thinking_end", "shared_no_intervention")},
                 **{"mean_"+k: mean(r[k] for r in chosen) for k in ("work_tokens", "auxiliary_tokens", "discarded_tokens", "retained_thinking_tokens", "answer_tokens", "standalone_seconds", "native_pflops", "post_injection_thinking")},
                 "answer_cap": sum(r["finish_reason"] == "answer_budget" for r in chosen),
+                "context_cap": sum(r["finish_reason"] == "context_budget" for r in chosen),
+                "injection_at_work_cap": sum(r["injection_at_work_cap"] for r in chosen),
+                "observed_pretrigger_prefix_mismatches": sum(r["observed_baseline_prefix_coupling"] is not None and not r["observed_baseline_prefix_coupling"]["matches"] for r in chosen),
+                "discarded_provisional_eos": sum(r["discarded_provisional_eos"] for r in chosen),
+                "discarded_provisional_close": sum(r["discarded_provisional_close"] for r in chosen),
                 "retrieval_attempts": sum(r["retrieval_attempts"] for r in chosen)})
         contrasts = []
         if gold:
@@ -244,10 +263,10 @@ def summarize(args):
         "unit_checks": unique_checks, "condition_audits": len(audits), "pair_audits": len(pair_audits),
         "audit_failures": failures, "cohorts": cohorts,
         "gate_counts": dict(Counter(e["kind"]+":"+(e.get("error") or ("need" if e.get("plan", {}).get("need") else "no_need") if e["kind"] == "gap_check" else e.get("error") or ("use" if e.get("support", {}).get("use") else "reject")) for e in gate_events))}
-    (args.output/"summary.json").write_text(json.dumps(summary, indent=2)+"\n", encoding="utf-8")
+    (args.output/"summary.json").write_text(json.dumps(summary, indent=2)+"\n", encoding="utf-8", newline="\n")
     for name, data in (("graded.jsonl", graded), ("audit.jsonl", audits), ("pair-audit.jsonl", pair_audits), ("gate-events.jsonl", gate_events)):
-        (args.output/name).write_text("".join(json.dumps(r, ensure_ascii=False)+"\n" for r in data), encoding="utf-8")
-    (args.output/"unit-audit.json").write_text(json.dumps(unit_audits, indent=2)+"\n", encoding="utf-8")
+        (args.output/name).write_text("".join(json.dumps(r, ensure_ascii=False)+"\n" for r in data), encoding="utf-8", newline="\n")
+    (args.output/"unit-audit.json").write_text(json.dumps(unit_audits, indent=2)+"\n", encoding="utf-8", newline="\n")
     with (args.output/"comparison.csv").open("w", newline="", encoding="utf-8") as f:
         group_rows = [{"cohort": c, **r} for c, val in cohorts.items() for r in val["groups"]]
         writer = csv.DictWriter(f, fieldnames=list(group_rows[0]) if group_rows else ["cohort"])
@@ -268,7 +287,7 @@ def summarize(args):
     lines += ["## Accounting and limits", "", f"Unique executed units: {len(units)}; measured unit time {summary['actual_unique_seconds']:.1f}s, native padded dense FLOP estimate {summary['actual_unique_native_pflops']:.3f} PFLOP. Warmup is separate. Model load, smoke, failed prep and container lifetime appear in provenance receipts.",
         "", "Each condition's cost includes its full common stem plus cold branch prefill. Study totals deduplicate shared execution. A no-intervention real/noise pair reuses one result and is not an independent replicate. Unrelated bodies are substituted after the real-evidence support gate. Primary FLARE-gap appends after a complete assistant step. Its rebuild companion shares the same common stem/payload and moves references to the user region. Step SC also reconstructs the user region; legacy SC retains assistant-inline placement. Query, timing and gating still differ between trigger policies.",
         "", "Source labels and wrappers stay identical in paired content controls. EOS, empty answers, capped outputs, parse failures and unsupported retrievals remain in the denominator. Bootstrap intervals do not cover sampling-seed variability or generalization beyond this small sample.", ""]
-    (args.output/"REPORT.md").write_text("\n".join(lines), encoding="utf-8")
+    (args.output/"REPORT.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print(json.dumps({k: summary[k] for k in ("conditions", "expected_conditions", "execution_units", "gate_counts", "audit_failures")}, ensure_ascii=False))
     return summary
 
