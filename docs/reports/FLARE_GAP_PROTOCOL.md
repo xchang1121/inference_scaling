@@ -27,8 +27,8 @@ sufficiency checks, not a reproduction of a trained retrieval policy.
 ## Conditions and paired execution
 
 Closed book; static RAG; legacy SC; step-boundary SC; FLARE-gap. Every retrieval
-method has relevant and exactly length-matched unrelated bodies: 9 conditions
-per question, 144 formal condition outcomes, one seed per question. These are
+method has relevant and exactly length-matched unrelated bodies: 11 conditions
+per question, 176 formal condition outcomes, one seed per question. These are
 not 144 independent pre-intervention generations.
 
 For each question/method, execute one common pre-intervention unit, including
@@ -74,13 +74,17 @@ A second checker must say the exposed evidence supplies that fact and copy
 insertion without retries. This gate can be semantically wrong; it is no oracle.
 
 For FLARE-gap, discard the unconfirmed draft/tail only after the gate accepts.
-For step SC discard only the lookahead tail past its accepted boundary. Rebuild
-the original user reference region, preserve the confirmed thinking IDs, and
-regenerate from that boundary. Thus these are mid-trajectory interventions with
-user-region prompt reconstruction, not references appended inside generated
-thoughts. Static uses the same reference region at offset zero. Legacy SC keeps
-the old assistant-inline placement. Step SC helps distinguish placement from
-the additional trigger/query/gate changes; it does not isolate every component.
+The primary FLARE-gap continuation appends its short packet directly after the
+confirmed complete assistant reasoning step. A companion `flare_gap_rebuild`
+condition shares that same common stem, trigger, payload and work already spent,
+and changes only reference placement to the user region.
+For step SC discard only the lookahead tail past its accepted boundary. Step SC
+and the FLARE-gap companion rebuild the original user reference region, preserve
+the confirmed thinking IDs, and regenerate from that boundary. Static uses the
+same reference region at offset zero. Legacy SC keeps the old assistant-inline
+placement. The FLARE-gap format pair directly tests placement from one exact
+checkpoint; step SC versus the rebuilt FLARE-gap companion further compares the
+additional trigger/query/gate changes. This does not isolate every component.
 
 Unrelated bodies are substituted **after** the real-evidence gate accepts.
 Source labels/wrappers, trigger checkpoint and payload length are identical.
@@ -105,3 +109,5 @@ question bootstrap intervals describe this small sample, not independent seeds.
 Smoke/initialization/failed attempts are kept separate from formal results and
 included in study resource receipts. Raw traces and source/input/runtime hashes
 must support an offline structural audit before handoff.
+
+Before any formal generation, the design added paired literal assistant-step insertion and user-region reconstruction. The initial two-TRAIN smoke source used reconstruction only; its outputs remain a separately versioned runtime check. The final source receives a focused two-TRAIN FLARE smoke check (8 format/content outcomes) before formal launch; unchanged baselines are covered by the original 18-outcome smoke. No DEV model outcomes informed this change.

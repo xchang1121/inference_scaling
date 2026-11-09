@@ -1,8 +1,8 @@
 """Paid FLARE-style previews and external evidence-gap checks.
 
 This is an inference-only combination, not the trained FLARE policy. All main
-drafts and auxiliary generations consume one work cap. Evidence is inserted by
-rebuilding the user reference region at a confirmed step boundary. Paired
+drafts and auxiliary generations consume one work cap. Evidence is appended at
+a complete assistant step or used to rebuild the user reference region. Paired
 branches start from saved exact token IDs; no native KV fork is assumed.
 """
 from __future__ import annotations
@@ -495,7 +495,7 @@ class StepController:
         state.calls = []
         state.payload = self.evidence.variant(packet, content)
         state.inline_offset = len(state.reason)
-        state.placement = "assistant_inline" if policy == "legacy_sc" else "user_reference_rebuild_at_step_boundary"
+        state.placement = "assistant_inline" if policy in {"legacy_sc", "flare_gap"} else "user_reference_rebuild_at_step_boundary"
         state.track_post = True
         prefix = self.prefix(state)
         if len(prefix) >= self.cfg.context_tokens:

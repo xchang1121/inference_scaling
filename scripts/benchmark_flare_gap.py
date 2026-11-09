@@ -103,6 +103,7 @@ def main():
         parser.add_argument("--"+name, type=Path, required=name in {"settings", "prepared", "corpus"})
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--seed", type=int, default=20261109)
+    parser.add_argument("--policies", nargs="+", choices=POLICIES, default=list(POLICIES))
     args = parser.parse_args()
     settings = load_settings(args.settings)
     if args.prepare_only:
@@ -112,9 +113,11 @@ def main():
     if args.output is None: parser.error("--output required")
     prepared = json.loads(args.prepared.read_text(encoding="utf-8"))
     cfg = StepConfig(**prepared["config"])
+    if len(set(args.policies)) != len(args.policies): parser.error("duplicate policy")
+    conditions_per_question = sum(1 if p == "closed" else 4 if p == "flare_gap" else 2 for p in args.policies)
     root = Path(__file__).resolve().parents[1]
     identity_data = {"settings_sha256": sha(args.settings.read_bytes()), "prepared_sha256": sha(args.prepared.read_bytes()),
-        "seed": args.seed, "runner_sha256": sha(Path(__file__).read_bytes()),
+        "seed": args.seed, "policies": args.policies, "runner_sha256": sha(Path(__file__).read_bytes()),
         "source": {p.relative_to(root).as_posix(): sha(p.read_bytes()) for p in (root/"src").rglob("*.py")}}
     identity = sha(json.dumps(identity_data, sort_keys=True).encode())
     import fcntl
@@ -129,7 +132,7 @@ def main():
                 stream.write(json.dumps(clean(row), ensure_ascii=False, allow_nan=False)+"\n")
                 stream.flush(); os.fsync(stream.fileno())
             write({"kind": "metadata", "identity": identity, "identity_data": identity_data,
-                "config": asdict(cfg), "policies": POLICIES, "expected_conditions": 9*len(prepared["cases"]),
+                "config": asdict(cfg), "policies": args.policies, "expected_conditions": conditions_per_question*len(prepared["cases"]),
                 "protocol": "exact shared preintervention units; each condition charged common+branch; cold branch prefill; no native KV fork",
                 "noise_policy": "substitute body only after real-evidence support gate; no independent noise gate evaluation"})
             try:
@@ -183,30 +186,33 @@ def main():
                         "result": ctrl.result(state), "packet": value[1] if isinstance(value, tuple) else None})
                     return value
                 for qi, case in enumerate(prepared["cases"]):
-                    alternatives = list(POLICIES[1:]); shift = qi % len(alternatives)
-                    policies = ["closed", *alternatives[shift:], *alternatives[:shift]]
+                    alternatives = [p for p in args.policies if p != "closed"]
+                    shift = qi % len(alternatives) if alternatives else 0
+                    policies = (["closed"] if "closed" in args.policies else [])+alternatives[shift:]+alternatives[:shift]
                     seed = SeedStream(args.seed).derive("question", case["id"])
                     for policy in policies:
                         uid = case["id"]+":"+policy+":common"
                         write({"kind": "attempt_start", "question_id": case["id"], "policy": policy})
                         print(json.dumps({"question": case["id"], "cohort": case.get("cohort", "smoke"), "policy": policy}), flush=True)
                         common, packet = unit(uid, partial(ctrl.stem, case["question"], case["prompt_ids"], seed, policy))
-                        conditions = ("none",) if policy == "closed" else ("relevant", "unrelated")
-                        for content in conditions:
+                        conditions = [(policy, "none")] if policy == "closed" else [(policy, c) for c in ("relevant", "unrelated")]
+                        if policy == "flare_gap":
+                            conditions += [("flare_gap_rebuild", c) for c in ("relevant", "unrelated")]
+                        for condition_policy, content in conditions:
                             units = [uid]
                             result_state = common
                             if packet:
-                                bid = case["id"]+":"+policy+":"+content
-                                result_state = unit(bid, partial(ctrl.branch, common, packet, content, policy))
+                                bid = case["id"]+":"+condition_policy+":"+content
+                                result_state = unit(bid, partial(ctrl.branch, common, packet, content, condition_policy))
                                 units.append(bid)
                             result = ctrl.result(result_state)
                             if result["work_tokens"] > cfg.work_tokens or result["answer_tokens"] > cfg.answer_tokens:
                                 raise RuntimeError("generation budget exceeded")
                             write({"kind": "measurement", "question_id": case["id"], "cohort": case.get("cohort", "smoke"),
-                                "policy": policy, "content": content, "arm": policy+"."+content,
+                                "policy": condition_policy, "stem_policy": policy, "content": content, "arm": condition_policy+"."+content,
                                 "execution_units": units, "shared_no_intervention": not bool(packet) and policy != "closed",
                                 "base_prompt_sha256": case["prompt_sha256"], "result": result})
-                write({"kind": "completed", "conditions": 9*len(prepared["cases"])})
+                write({"kind": "completed", "conditions": conditions_per_question*len(prepared["cases"])})
             finally:
                 if graph is not None: graph.close()
                 if raw is not None: close_backend(raw)

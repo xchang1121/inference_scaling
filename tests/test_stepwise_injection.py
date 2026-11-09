@@ -97,8 +97,8 @@ class StepwiseTests(unittest.TestCase):
         self.assertEqual(common.work, len(text)+len(plan)+len(support))
         self.assertEqual(common.auxiliary, len(plan)+len(support))
         self.assertEqual(common.discarded, len(text)-len(common.reason))
-        real = ctrl.branch(common, packet, "relevant", "flare_gap")
-        noise = ctrl.branch(common, packet, "unrelated", "flare_gap")
+        real = ctrl.branch(common, packet, "relevant", "flare_gap_rebuild")
+        noise = ctrl.branch(common, packet, "unrelated", "flare_gap_rebuild")
         self.assertEqual(ctrl.result(real)["answer_text"], "OK")
         self.assertTrue(ctrl.result(noise)["empty_answer"])
         self.assertTrue(ctrl.result(noise)["immediate_thinking_end"])
@@ -148,6 +148,20 @@ class StepwiseTests(unittest.TestCase):
         state = StepState(BASE, 1, "Q", reason=list(map(ord, "beforeAFTER")), payload=(777,),
                           placement="assistant_inline", inline_offset=6)
         self.assertEqual(ctrl.prefix(state), BASE+tuple(map(ord, "before"))+(777,)+tuple(map(ord, "AFTER")))
+
+    def test_flare_placement_pair_shares_exact_checkpoint_and_generation_work(self):
+        engine = Engine(["~", "A\x03", "~", "A\x03"])
+        ctrl = controller(engine)
+        common = StepState(BASE, 3, "Q", reason=list(map(ord, "Confirmed fact.")), work=15)
+        inline = ctrl.branch(common, PACKET, "relevant", "flare_gap")
+        rebuild = ctrl.branch(common, PACKET, "relevant", "flare_gap_rebuild")
+        self.assertEqual(inline.placement, "assistant_inline")
+        self.assertEqual(rebuild.placement, "user_reference_rebuild_at_step_boundary")
+        self.assertEqual(inline.payload, rebuild.payload)
+        self.assertEqual(inline.reason, rebuild.reason)
+        self.assertEqual(inline.work, rebuild.work)
+        self.assertEqual(inline.calls[0]["seed"], rebuild.calls[0]["seed"])
+        self.assertNotEqual(inline.calls[0]["prefix_ids"], rebuild.calls[0]["prefix_ids"])
 
     def test_window_packet_noise_preserves_labels_and_length(self):
         engine = Engine()
