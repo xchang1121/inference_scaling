@@ -123,6 +123,8 @@ def summarize(args):
         checks["no_scoring_forwards"] = unit["cost"].get("score_forward_token_slots", 0) == 0
         checks["no_cancellations"] = unit["cost"].get("cancelled_requests", 0) == 0
         checks["native_graphs"] = not unit["calls"] or unit.get("graph_execution", {}).get("estimated_dense_padded_flops", 0) > 0
+        checks["native_covers_logical"] = unit.get("graph_execution", {}).get("forward_token_slots", 0) >= unit["cost"].get("generation_forward_token_slots", 0)
+        checks["no_preemptions"] = unit["cost"].get("preemptions", 0) == 0
         audits[uid] = checks
     condition_checks, graded = {}, []
     for m in measurements:
@@ -187,6 +189,7 @@ def summarize(args):
                 continue
             summaries.append({"cohort": cohort, "arm": arm, "n": len(group),
                 "f1_percent": average([g["f1"]*100 for g in group if g["f1"] is not None]) if any(g["f1"] is not None for g in group) else None,
+                "exact_match_percent": 100*average([g["exact_match"] for g in group if g["exact_match"] is not None]) if any(g["exact_match"] is not None for g in group) else None,
                 **{k: average([g[k] for g in group]) for k in ("work_tokens", "seconds", "native_pflops", "unused_work_budget", "search_steps")},
                 **{k: sum(g[k] for g in group) for k in ("empty_answer", "eos_inside_thinking", "immediate_thinking_end", "immediate_eos", "forced_thinking_end", "search_bypassed", "raw_search_eos", "raw_probe_eos", "raw_immediate_search_eos", "raw_immediate_search_close", "provisional_eos")}})
     lookup = {(g["question_id"], g["arm"]): g for g in graded}
@@ -226,12 +229,13 @@ def summarize(args):
     args.output.mkdir(parents=True, exist_ok=True)
     for name, value in [("summary.json", report), ("audit.json", {"units": audits, "conditions": condition_checks, "pairs": pairs, "global": global_audit})]:
         (args.output/name).write_text(json.dumps(value, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
-    for name, records in [("graded.jsonl", graded), ("gate-events.jsonl", [{"unit_id": uid, "event": e} for uid, u in units.items() for e in u["result"]["events"] if e["kind"] in {"gap_check", "support_check", "search_checkpoint", "rollback"}])]:
+    for name, records in [("graded.jsonl", graded), ("gate-events.jsonl", [{"unit_id": uid, "event": e} for uid, u in units.items() if uid.endswith(":probe") for e in u["result"]["events"] if e["kind"] in {"gap_check", "support_check", "search_checkpoint", "rollback"}])]:
         (args.output/name).write_text("".join(json.dumps(x, ensure_ascii=False)+"\n" for x in records), encoding="utf-8")
     if summaries:
         with (args.output/"summary.csv").open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(summaries[0])); writer.writeheader(); writer.writerows(summaries)
-    text = ["# Retrieval + inference scaling pilot", "", f"Completed: {bool(complete)}; {len(measurements)}/{metadata['expected_conditions']} conditions; {len(units)} unique execution units; {report['audit_checks']} checks, {len(failed)} failures.", "", "F1 is normalized answer token F1 (%), not exact-answer accuracy. Four fresh questions and four regression questions; one seed. Equal generated-token caps do not imply equal realized work or FLOPs.", "", "Times cover measured execution units, including online dynamic lookup. Model startup, corpus-index construction and offline static-packet preparation are excluded. PFLOPs are native dense-padded graph estimates, not hardware-counter measurements of every operation.", "", "| Cohort | Evidence / method | F1 % | Mean work | Mean s | Mean PFLOPs | Empty | Thinking EOS | Forced close |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+    cohort_note = ", ".join(cohort+"="+str(len({g["question_id"] for g in graded if g["cohort"] == cohort})) for cohort in sorted({g["cohort"] for g in graded}))
+    text = ["# Retrieval + inference scaling pilot", "", f"Completed: {bool(complete)}; {len(measurements)}/{metadata['expected_conditions']} conditions; {len(units)} unique execution units; {report['audit_checks']} checks, {len(failed)} failures.", "", f"F1 is normalized answer token F1 (%), not exact-answer accuracy. Question counts: {cohort_note}; one seed. Equal generated-token caps do not imply equal realized work or FLOPs. Normalized EM is in summary.csv.", "", "Times cover measured execution units, including online dynamic lookup. Model startup, corpus-index construction and offline static-packet preparation are excluded. PFLOPs are native dense-padded graph estimates, not hardware-counter measurements of every operation.", "", "| Cohort | Evidence / method | F1 % | Mean work | Mean s | Mean PFLOPs | Empty | Thinking EOS | Forced close |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for s in summaries:
         score = f"{s['f1_percent']:.3f}" if s['f1_percent'] is not None else "not scored"
         text.append(f"| {s['cohort']} | {s['arm']} | {score} | {s['work_tokens']:.1f} | {s['seconds']:.2f} | {s['native_pflops']:.3f} | {s['empty_answer']} | {s['eos_inside_thinking']} | {s['forced_thinking_end']} |")

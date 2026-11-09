@@ -68,7 +68,7 @@ def main():
             for event in unit["result"]["events"]:
                 if event["kind"] == "injection":
                     text += [f">>> Injected INPUT at {event['position']}, confirmed offset={event['confirmed_offset']}; not generated work", decode(event["payload_ids"])]
-                elif event["kind"] in {"rollback", "search_checkpoint"}:
+                elif uid.endswith(":probe") and event["kind"] in {"rollback", "search_checkpoint"}:
                     text += [">>> Discarded provisional draft", decode(event["discarded_ids"])]
         for measurement in measurements:
             result = measurement["result"]

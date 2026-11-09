@@ -1,0 +1,47 @@
+{
+  "stages": [
+    {
+      "stage": "smoke",
+      "raw_sha256": "4cceda6e02ad6af462429154a75c5375418adef0456dfa859a40d7c28362e481",
+      "condition_outcomes": 18,
+      "unique_execution_units": 14,
+      "model_requests": 233,
+      "work_tokens": 35630,
+      "auxiliary_tokens": 99,
+      "answer_tokens": 3104,
+      "warmup_tokens": 16,
+      "unit_seconds": 904.9392695794813,
+      "warmup_seconds": 1.5959710967727005,
+      "stage_wall_seconds": 1160.1036972999573,
+      "setup_teardown_seconds": 253.56845662370324,
+      "unit_native_padded_dense_pflops": 9.74334440356864,
+      "warmup_native_padded_dense_pflops": 0.00968255944704,
+      "generation_exit": 0,
+      "container_base_process_exit": 137,
+      "oom_killed": false
+    },
+    {
+      "stage": "formal",
+      "raw_sha256": "07ad82331b1567c029cd4e9477c2228f5428c61cd3a61953744f6488400e953b",
+      "condition_outcomes": 120,
+      "unique_execution_units": 119,
+      "model_requests": 1695,
+      "work_tokens": 349027,
+      "auxiliary_tokens": 456,
+      "answer_tokens": 24081,
+      "warmup_tokens": 16,
+      "unit_seconds": 8276.424150611274,
+      "warmup_seconds": 1.5730776390992105,
+      "stage_wall_seconds": 8528.237283706665,
+      "setup_teardown_seconds": 250.24005545629188,
+      "unit_native_padded_dense_pflops": 84.79700466133913,
+      "warmup_native_padded_dense_pflops": 0.012748703271936,
+      "generation_exit": 0,
+      "container_base_process_exit": 137,
+      "oom_killed": false
+    }
+  ],
+  "scope": "Actual unique execution units, not duplicated logical real/noise or method views.",
+  "device": "A 27.106.124.198 physical NPU3 only, TP1; B CPU mirror only.",
+  "limits": "Graph FLOPs are dense-padded estimates, not all-operation hardware counters. Initialization profiling FLOPs uninstrumented. Static packets/index are prepared offline; online dynamic lookup is included in unit wall time."
+}

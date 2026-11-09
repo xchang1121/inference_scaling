@@ -1,0 +1,38 @@
+{
+  "generation_source_commit": "46244219de2d608ecf9228dcddf1fe3541957be7",
+  "generation_files": 85,
+  "formal_prepared_sha256": "2426cf53a0047ec16368aab1d46631de977a7f29982a81223a897347af850972",
+  "formal_raw_sha256": "07ad82331b1567c029cd4e9477c2228f5428c61cd3a61953744f6488400e953b",
+  "gold_offline_sha256": "a815db94659b768d6aeed3056481eb4a4e8e16be540cc2d532c1fd56ce2f63f9",
+  "data_manifest_sha256": "e75646be6b8d61b38e481bf3fecb37b5e8a1323952ea07e24bd3e45dd0f7b161",
+  "model_id": "/cache/models/Qwen3.8-27B;revision=1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "parameter_count": 26895998464,
+  "runtime_versions": {
+    "python": "3.12.13",
+    "packages": {
+      "vllm": "0.23.0+empty",
+      "vllm-ascend": "0.23.0",
+      "torch": "2.10.0+cpu",
+      "torch-npu": "2.10.0.post4",
+      "transformers": "5.5.4",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "analysis_runtime": {
+    "python": "3.14.6",
+    "packages": {
+      "numpy": "2.5.2",
+      "matplotlib": "3.11.2",
+      "pillow": "13.0.0"
+    }
+  },
+  "analysis_scripts": {
+    "summarize_retrieval_scaling.py": "85e05bcdc4e391faa7632f0eaca18004e98783405ab999f6e817da3630781fe2",
+    "summarize_flare_gap.py": "cdc64108b395d8e8249903025981188b89e93963cdda7182224149325f16f6e1",
+    "plot_retrieval_scaling.py": "7bb1e70025a99d288f60ace9c467106ac5eeac23d5686648d49c5a381331451e",
+    "export_retrieval_scaling.py": "6207e1714e8724c59027611eb8cc5f70bd0c0f011b1a654e392c5802565ac72f"
+  },
+  "gold_runtime_visibility": false,
+  "cpu_tests": 51,
+  "generation_changes_after_freeze": false
+}

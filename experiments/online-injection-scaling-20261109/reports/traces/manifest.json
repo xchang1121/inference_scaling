@@ -1,0 +1,48 @@
+{
+  "selection": "all eight frozen cases and every condition; no quality-based selection",
+  "condition_examples": 120,
+  "all_execution_unit_decodes_verified": 119,
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "files": [
+    {
+      "path": "DEV_Q184-all-15-conditions.txt",
+      "bytes": 551297,
+      "sha256": "89cf341c5bbb684dc60e08519e8ee4bf714b93c961859772be9d3c05820fa5e2"
+    },
+    {
+      "path": "DEV_Q119-all-15-conditions.txt",
+      "bytes": 346500,
+      "sha256": "4d22fba9471b0b52f61f6905fefb2c0aa89ae8d0e305dc29829337575c93cc9e"
+    },
+    {
+      "path": "DEV_Q160-all-15-conditions.txt",
+      "bytes": 414111,
+      "sha256": "9c8d37491a5cf06e175aa0ccb466abcc0e225e8fb9b5950b0b9b1e154e6fff59"
+    },
+    {
+      "path": "DEV_Q209-all-15-conditions.txt",
+      "bytes": 370931,
+      "sha256": "827429083fea51467aea79853f472f5ab1872be0d7d28d4bf3f16dffacce24f7"
+    },
+    {
+      "path": "DEV_Q229-all-15-conditions.txt",
+      "bytes": 314893,
+      "sha256": "115334315a31c3a26e552a8242deced0fe56f7a4a83d39fd33874846e1e32226"
+    },
+    {
+      "path": "DEV_Q077-all-15-conditions.txt",
+      "bytes": 305406,
+      "sha256": "92f149e95ae29155623637d9420892af6342fa01c44fb9ba12400b740350c8b0"
+    },
+    {
+      "path": "DEV_Q186-all-15-conditions.txt",
+      "bytes": 396638,
+      "sha256": "716791be96f7f83cfd5ce62f7076173235d8b4356f5c0bc37ee7a427106bb641"
+    },
+    {
+      "path": "DEV_Q102-all-15-conditions.txt",
+      "bytes": 413788,
+      "sha256": "96ebf427292e022a254742055e6be6bddaec1e49901eb49bdccb51feab61e569"
+    }
+  ]
+}
