@@ -49,6 +49,7 @@ def summarize(snapshot, output, gold_path, stage):
     output.mkdir(parents=True,exist_ok=True)
     gold = {x['id']:x['answer'] for x in read(gold_path)}
     selected, checks, raw_counts, physical = [], Counter(), Counter(), set()
+    budget_views=[]
     failures, packets = [], {}
     def check(ok, name):
         checks['total']+=1
@@ -125,6 +126,17 @@ def summarize(snapshot, output, gold_path, stage):
                     chosen=max(range(len(computed)),key=lambda i:(computed[i],-i))
                     check(audit['selection']['bon_'+kind]==chosen,uid+':selection_'+kind)
                 check(len(row['candidates'])==cfg.candidates,uid+':complete_bon')
+            if row['method']=='bon':
+                for n in (2,3,4,8):
+                    if n>cfg.candidates:continue
+                    for reward in ('sc','consilience','logprob'):
+                        scores=audit.get('scores',{}).get(reward)
+                        index=max(range(n),key=lambda j:(scores[j],-j)) if scores is not None else 0
+                        answer=row['answers'][index]
+                        budget_views.append({'question_id':q,'seed':s,'context':row['context'],'reward':reward,'n':n,
+                            'f1':100*grade(answer['answer_text'],gold[q])['f1'],
+                            'search_tokens':row['probe_work']+sum(len(c) for c in row['candidates'][:n]),
+                            'answer_tokens':len(answer['answer_ids']), 'bypassed':scores is None})
             kept=()
             for si,record in enumerate(audit.get('steps',[])):
                 fixed=kept[:record['generated_length_before']]
@@ -181,11 +193,18 @@ def summarize(snapshot, output, gold_path, stage):
                     raw_counts['candidate_truncated']+=answer['truncated']
             for method,i in audit['selection'].items():
                 answer=row['answers'][i]
+                suffix=row['candidates'][i]
+                first_after=(suffix[:1] if inline else probe['calls'][0]['token_ids'][:1] if probe['calls'] else [])
+                body_length=next((j for j,t in enumerate(suffix) if t in {EOS,CLOSE}),len(suffix))
+                prior_length=next((j for j,t in enumerate(reason) if t in {EOS,CLOSE}),len(reason))
                 selected.append({'question_id':q,'seed':s,'context':row['context'],'method':method,
                     'f1':100*grade(answer['answer_text'],gold[q])['f1'],
                     'packet_available':bool(packet),'injected':row['injected'],'answer_text':answer['answer_text'],
                     'answer_tokens':len(answer['answer_ids']),'empty':answer['empty_answer'],
                     'forced_thinking_end':answer['forced_thinking_end'],'eos_inside_thinking':answer['eos_inside_thinking'],
+                    'immediate_injected_close':row['injected'] and list(first_after)==[CLOSE],
+                    'immediate_injected_eos':row['injected'] and list(first_after)==[EOS],
+                    'post_injection_thinking_tokens':(body_length+(0 if inline else prior_length)) if row['injected'] else None,
                     'search_tokens':(len(row['candidates'][0]) if method=='single' else row['search_work'])+row['probe_work'],
                     'physical_shared_search_tokens':row['search_work']+row['probe_work'],'evidence_tokens':row['evidence_work'],
                     'all_answer_tokens':sum(len(x['answer_ids']) for x in row['answers']),
@@ -203,7 +222,10 @@ def summarize(snapshot, output, gold_path, stage):
             'packet_present_f1':statistics.fmean(r['f1'] for r in rows if r['packet_available']) if any(r['packet_available'] for r in rows) else None,
             'mean_search_tokens':statistics.fmean(r['search_tokens'] for r in rows),
             'mean_answer_tokens':statistics.fmean(r['answer_tokens'] for r in rows),
-            'empty':sum(r['empty'] for r in rows),'forced_thinking_end':sum(r['forced_thinking_end'] for r in rows)})
+            'empty':sum(r['empty'] for r in rows),'forced_thinking_end':sum(r['forced_thinking_end'] for r in rows),
+            'injected':sum(r['injected'] for r in rows),'immediate_injected_close':sum(r['immediate_injected_close'] for r in rows),
+            'immediate_injected_eos':sum(r['immediate_injected_eos'] for r in rows),'eos_inside_thinking':sum(r['eos_inside_thinking'] for r in rows),
+            'mean_post_injection_thinking':statistics.fmean(r['post_injection_thinking_tokens'] for r in rows if r['injected']) if any(r['injected'] for r in rows) else None})
     summary.sort(key=lambda r:(r['context'],-r['f1']))
     qmeans={}
     for key,rows in groups.items():
@@ -222,6 +244,13 @@ def summarize(snapshot, output, gold_path, stage):
             if a and a.keys()==b.keys():contrasts.append({'method':context,'left':method,'right':'bon_sc',**bootstrap(a[q]-b[q] for q in sorted(a))})
     result={'stage':stage,'questions':len(packets),'accepted_packets':sum(packets.values()),'selected_answers':len(selected),
         'summary':summary,'contrasts':contrasts,'audit':audit_out}
+    curves=defaultdict(list)
+    for r in budget_views:curves[r['context'],r['reward'],r['n']].append(r)
+    budget_summary=[{'context':k[0],'reward':k[1],'n':k[2],'cases':len(v),
+        'f1':statistics.fmean(r['f1'] for r in v),'mean_search_tokens':statistics.fmean(r['search_tokens'] for r in v),
+        'mean_answer_tokens':statistics.fmean(r['answer_tokens'] for r in v),'bypassed':sum(r['bypassed'] for r in v)} for k,v in sorted(curves.items())]
+    (output/'budget-curves.json').write_text(json.dumps({'note':'Paired prefixes of the same BoN8 pool, not independent native runs. Fixed N=2,3,4,8; reward-only selection; no oracle selection.',
+        'summary':budget_summary,'per_case':budget_views},indent=2)+'\n',encoding='utf-8')
     (output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     (output/'answers.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in selected),encoding='utf-8')
     with (output/'scores.csv').open('w',newline='',encoding='utf-8') as f:
@@ -231,6 +260,12 @@ def summarize(snapshot, output, gold_path, stage):
         '', '| Context | Method | F1 | Search tokens | Answer tokens | Empty | Forced thinking close |',
         '|---|---|---:|---:|---:|---:|---:|']
     for r in summary:text.append(f"| {r['context']} | {r['method']} | {r['f1']:.3f} | {r['mean_search_tokens']:.0f} | {r['mean_answer_tokens']:.0f} | {r['empty']} | {r['forced_thinking_end']} |")
+    text+=['','## Selected-path injection stops','','An immediate thinking-close marker is distinct from EOS or an empty final answer. Counts below are correlated selector views; raw physical counts follow separately.','',
+        '| Context | Method | Injected | Immediate thinking close | Immediate EOS | Mean thinking after injection |',
+        '|---|---|---:|---:|---:|---:|']
+    for r in summary:
+        mean_after='—' if r['mean_post_injection_thinking'] is None else f"{r['mean_post_injection_thinking']:.1f}"
+        text.append(f"| {r['context']} | {r['method']} | {r['injected']} | {r['immediate_injected_close']} | {r['immediate_injected_eos']} | {mean_after} |")
     text+=['','Paired differences below average seeds within each question; bootstrap intervals are descriptive and unadjusted.','']
     for r in contrasts:text.append(f"- {r['method']}, {r['left']} − {r['right']}: {r['difference']:+.3f} F1 points, 95% CI [{r['bootstrap_95'][0]:+.3f}, {r['bootstrap_95'][1]:+.3f}].")
     text+=['','Raw stop diagnostics: `'+json.dumps(dict(raw_counts),sort_keys=True)+'`.',
