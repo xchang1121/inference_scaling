@@ -144,3 +144,26 @@ these formatting corrections. Formal assignments are fixed round-robin across
 the two workers before execution, with every question's seeds/arms together.
 The supplemental FORMAL-WORKER-PLAN.json overrides the initial three-worker
 WORKER-PLAN.json; generator source and prepared questions remain unchanged.
+
+## Supplementary routing policy fixed before fresh cases
+
+At 2026-11-10 02:50:43 UTC, after the native smoke and while only regression
+questions DEV_Q184 and DEV_Q119 had produced formal model units, a supplementary
+policy was registered: use answer-verified IS if the shared extractor accepts an
+evidence packet; otherwise use anchored SC. Static and dynamic versions apply
+the same rule, and real/noise controls share the gate. Selection sees only packet
+presence, never candidate answers, verifier scores or evaluation labels.
+
+This rule is evaluated by exact dispatch among the already paired native arms;
+it adds no model calls or independent trials. Every selected branch pays its
+common probe/extraction cost. Preserve the original eight-arm analysis and label
+the four supplementary outputs as derived views. Record realized total generated
+tokens and verify each derived condition stays below 8192, including its answer.
+The implementation also exposes a direct runtime dispatcher for future use;
+the running native generator remains frozen at commit 2a806da.
+
+The registration stores SHA256 hashes and byte lengths of the append-only native
+logs at that time. Offline evaluation verifies these prefixes, the recorded
+regression-only model-unit IDs, identical paid probes and evidence roots, and
+all primary audits. This is a before-fresh registration, not a claim that the
+policy predates the regression observations or the original study.
