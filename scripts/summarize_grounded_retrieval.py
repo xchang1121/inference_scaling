@@ -226,7 +226,7 @@ def summarize(snapshot, output, stage, gold_path=None):
         work=sum(len(c["token_ids"]) for c in calls if c["purpose"] != "answer")
         extra_answer=sum(len(c["token_ids"]) for c in calls if c["purpose"] == "answer")
         aux=sum(len(c["token_ids"]) for c in calls if c["purpose"] in {"gap_plan","support_check","leaf_verify"})
-        key=f"{row['worker']}:{row['question_id']}:{row['seed']}:{row['arm']}"
+        key=f"condition:{row['worker']}:{row['question_id']}:{row['seed']}:{row['arm']}"
         audits[key]={"work":work == r["work_tokens"] <= 8192,"auxiliary":aux == r["auxiliary_tokens"],
             "returned_answer_cap":len(r["answer_ids"]) == r["answer_tokens"] <= 512,
             "answer_accounting":row["search"].get("answer_prepaid_in_work",False) or extra_answer == r["answer_tokens"],
