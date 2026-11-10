@@ -74,6 +74,19 @@ def summarize(snapshot, output, gold_path, stage):
         evidence={r['question_id']:r for r in rows if r['kind']=='evidence'}
         probes={(r['question_id'],r['seed'],r.get('probe_root_sha256')):r for r in rows if r['kind']=='probe'}
         for probe in probes.values():
+            if meta.get('schema')==3:
+                backend=SimpleNamespace(model_id='offline',tokenizer=SimpleNamespace(eos_token_id=EOS))
+                probe_ledger=GuidanceLedger(backend,None,probe['probe_root_ids'],(CLOSE,),0,cfg)
+                probe_ledger.calls=probe['calls']
+                rebuilt=probe_ledger.statistics(probe['reason_ids'])
+                check(all(len(rebuilt[k])==len(probe['statistics'][k]) and all(math.isclose(x,y,abs_tol=1e-10) for x,y in zip(rebuilt[k],probe['statistics'][k],strict=True)) for k in rebuilt),folder.name+':probe_statistics')
+                check(sum(len(c['token_ids']) for c in probe['calls'])==probe['work']<=cfg.probe_tokens,folder.name+':probe_work')
+                prefix=list(probe['probe_root_ids'])
+                for c in probe['calls']:
+                    check(c['prefix_ids']==prefix,folder.name+':probe_continuation')
+                    prefix+=c['token_ids']
+                if probe['boundary'] is not None:
+                    check(probe['reason_ids']==prefix[len(probe['probe_root_ids']):][:probe['boundary']],folder.name+':probe_retained_tokens')
             for c in probe['calls']:
                 raw_counts['probe_calls']+=1
                 raw_counts['probe_thinking_eos']+=EOS in c['token_ids']
