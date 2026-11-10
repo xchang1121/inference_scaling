@@ -8,7 +8,7 @@ import pytest
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.retrieval.grounded import (
     AnchoredController, AnchoredEvidence, GroundedConfig, VerifiedLedger,
-    grounded_condition, parse_evidence, parse_verdict, verified_search, verdict_reward,
+    evidence_spans, grounded_condition, parse_evidence, parse_verdict, verified_search, verdict_reward,
 )
 from inference_scaling.retrieval.stepwise import StepConfig, StepState
 from inference_scaling.retrieval.corpus import Document, Retriever
@@ -44,6 +44,22 @@ def test_evidence_rejects_long_url_despite_small_word_count():
     assert parse_evidence(evidence_output(quote=text), [{"text": text}])[1] == "quote_contains_url"
     text = "Use the fixed version " + "x"*601
     assert parse_evidence(evidence_output(quote=text), [{"text": text}])[0] is None
+
+
+def test_indexed_evidence_cannot_rewrite_or_copy_url_and_keeps_exact_source():
+    text = ('The easy solution is to upgrade to Fix Pack 1 or higher. '
+            'This applies to version 6.1.0 only.\n'
+            'Download the fix from https://example.com/very-long-download-link\n'
+            'A different workaround is described in the manual.')
+    spans = evidence_spans(text)
+    assert spans and all(s in text and 'https://' not in s and len(s.split()) <= 50 for s in spans)
+    first = 'The easy solution is to upgrade to Fix Pack 1 or higher.'
+    assert first in spans and first+' This applies to version 6.1.0 only.' in spans
+    source = {'text': text, 'spans': spans}
+    raw = json.loads(evidence_output());raw.pop('quote');raw['span'] = spans.index(first)
+    assert parse_evidence(json.dumps(raw), [source])[0]['quote'] == first
+    for bad in [True, -1, len(spans), '0']:
+        assert parse_evidence(json.dumps({**raw, 'span': bad}), [source])[1] == 'invalid_span'
 
 
 def test_question_retrieval_survives_wrong_draft_product_and_includes_solution_tail():

@@ -8,11 +8,15 @@ All preceding experiments remain unchanged.
 ## Resources and validation split
 
 The user explicitly requested checking and using more available cards. Read-only
-inventory found A3 free, A7 attached to another active experiment, and B0/4/5/6/7
-without accelerator processes. Use only A3 and B4/5/6, after rechecking each at
-launch. Every worker is an isolated TP1 replica. Do not change other jobs or the
-shared main checkout. Four replicas improve experimental throughput, not the
-per-answer compute budget.
+inventory initially found A3 and B4/5/6 available and used them for the first
+smoke. Subsequent B host-memory failures and an external job occupying B5 made
+that allocation unstable. A6/7 were tried after their model processes exited but
+failed device initialization while the old pair container remained running.
+The user then explicitly requested stopping the container on A0/1 and moving
+host198 experiments onto those two devices. The final planned workers are A0,
+A1 and B4, three isolated TP1 replicas. The A0/1 container was stopped as asked;
+no other existing jobs or the shared main checkout are changed. Replicas improve
+experimental throughput, not the per-answer compute budget.
 
 Both hosts use the exact same v0.23 base image, the already validated patched
 runner and all 804 native operator files, same Qwen3.8-27B weights/tokenizer and
@@ -75,9 +79,13 @@ No answer labels or gold parent IDs participate in retrieval.
 
 A paid greedy extractor (224 tokens maximum) checks entity/edition/version and
 whether an exact contiguous excerpt supplies a requested fact, including relevant
-exceptions. It requests at most50 words/500 characters without URLs or headings;
-the parser enforces at most64 words/600 characters and rejects URLs. It accepts at
-most one excerpt, packaged within the original 256-input
+exceptions. It selects source/span indices from numbered original sentences or
+adjacent sentence pairs, each5–50 words and at most500 characters without URLs.
+If overlapping pairs exceed the auxiliary context limit, only single sentences
+are exposed. No model copying is needed; the program resolves the chosen index
+to literal source text. The parser also retains exact-quote compatibility with
+earlier tests, enforcing at most64 words/600 characters and rejecting URLs.
+It accepts at most one excerpt, packaged within the original256-input
 token cap. Never truncate an accepted quote to fit; reject oversized/invalid
 outputs. The extractor checks every assumption in the confirmed prefix. If the
 prefix is unsafe, roll back to reasoning offset0 (a complete-step boundary).
@@ -125,7 +133,11 @@ thinking-scored search, including its extra generation cost.
 The first native smoke on TRAIN_Q559 exposed a literal-copy formatting failure:
 the extractor copied a very long download URL, exhausted its224-token output cap,
 and returned truncated JSON. The original run remains archived. Before any formal
-DEV execution, constrain quotes to short facts and reject URLs; repeat the six
-affected anchored/verified/noise arms on all four workers and both TRAIN fixtures.
-The two unchanged legacy arms are already exercised by the original smoke.
-No gold answer or fresh-model outcome is used for this formatting correction.
+DEV execution, a second version constrained quotes to short facts and rejected
+URLs. Its native TRAIN_Q545 run still copied a nonliteral table row or an overlong
+paragraph, rejecting both static and dynamic evidence. Preserve both versions and
+all infrastructure failures. The final pre-formal correction replaces text copying
+with numbered source/span selection. Repeat all eight arms on A0, A1 and B4,
+covering both TRAIN fixtures. No gold answer or fresh-model outcome is used for
+these formatting corrections. Formal assignments are fixed round-robin across
+the three workers before execution, with every question's seeds/arms together.
