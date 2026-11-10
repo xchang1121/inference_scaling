@@ -16,6 +16,13 @@ placement is after the earliest complete sentence/paragraph at or after 64
 generated reasoning tokens, found in a <=512-token probe. Retain that exact
 prefix; charge all probe work, including unused lookahead. If no boundary or
 natural reasoning termination precedes it, do not invent an injection point.
+Both static and inline groups use this SAME checkpoint stopping policy before
+branching candidates. Static checkpoints are generated with evidence already in
+the user message; inline checkpoints are generated without evidence and then
+receive the packet. This avoids confounding evidence placement with shared-prefix
+versus independent-from-start candidate generation. These are checkpointed BoN
+and IS comparisons, not independently sampled whole-trajectory BoN. Naturally
+finished checkpoints bypass search and are explicitly recorded.
 Report these cases separately. Both placements use identical packet IDs and
 wrapper. Noise replaces body tokens only, preserving length, labels and wrapper.
 No accepted evidence means no packet; report all questions and packet-present
@@ -51,10 +58,11 @@ reuse. BoN's four views are paired selectors, not independent generation runs.
 Model and probability policy unchanged: Qwen3.8-27B, BF16, temperature=1,
 full support; medium chat-template setting without an explicit low instruction.
 Context=32768; total retained thinking horizon=8192 (including inline prefix).
-Search generated-token cap=65536 including inline probe. BoN always completes
+Search generated-token cap=65536 including the probe in BOTH placements. BoN completes
 8 candidates; IS reserves each full pool before starting. Both have the same
 maximum search cap, not necessarily equal realized work. Extraction and final
-answer generation are accounted separately. Candidate answers can require up to
+answer generation are accounted separately. Independent candidate answers are
+batched, with per-candidate/per-chunk seeds. Candidate answers can require up to
 16384 tokens each, in <=4096-token calls, until natural EOS. No short-answer
 word cap. Common final instruction asks direct technical answers without repeating
 analysis, identical in every group. A selected thinking horizon can still force
@@ -83,3 +91,9 @@ Freeze generation source/settings before formal execution; do not tune on DEV F1
 Native resources: use currently idle devices in new task-owned containers;
 leave previous artifacts and other workloads untouched. Save hashes, raw logs,
 answers and reproducible offline analysis; stop own containers on completion.
+
+Pre-formal revision: v1 smoke exposed the required extra SC transport slot
+(6 rather than 5 logprob slots). v2 tested all native statistic/IS paths but was
+retired during TRAIN-only smoke to match the checkpoint policy in both placements
+and batch independent answer readouts. Preserve both attempts; no DEV generation
+or F1-guided tuning preceded these corrections.

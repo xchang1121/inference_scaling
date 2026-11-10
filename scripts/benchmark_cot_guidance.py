@@ -18,7 +18,7 @@ from inference_scaling.retrieval.ablation import static_prompt
 from inference_scaling.retrieval.controller import _snapshot
 from inference_scaling.retrieval.corpus import Retriever
 from inference_scaling.retrieval.cot_guidance import (
-    DualStatistics, GuidanceConfig, GuidanceLedger, completed_boundary, finish_answer, search,
+    DualStatistics, GuidanceConfig, GuidanceLedger, checkpoint, finish_answers, search,
 )
 from inference_scaling.retrieval.grounded import AnchoredController, AnchoredEvidence, GroundedConfig
 from inference_scaling.retrieval.stepwise import StepConfig, StepState, token_hash
@@ -62,7 +62,7 @@ def main():
             source = Path(__file__).resolve().parents[1]
             hashes = {str(f.relative_to(source)): hashlib.sha256(f.read_bytes()).hexdigest()
                 for f in [*source.joinpath("src").rglob("*.py"), Path(__file__)]}
-            write({"kind": "metadata", "config": asdict(cfg), "worker": a.worker, "source": hashes,
+            write({"kind": "metadata", "schema":3, "config": asdict(cfg), "worker": a.worker, "source": hashes,
                 "cases": [c["id"] for c in cases], "seeds": a.seeds, "methods": a.methods, "contexts": a.contexts,
                 "prepared_sha256": hashlib.sha256(a.prepared.read_bytes()).hexdigest(),
                 "settings_sha256": hashlib.sha256(a.settings.read_bytes()).hexdigest()})
@@ -94,38 +94,26 @@ def main():
                     for run_seed in a.seeds:
                         seed = SeedStream(run_seed).derive("question", case["id"])
                         base = tuple(case["prompt_ids"])
-                        probe = GuidanceLedger(raw, tap, base, close, SeedStream(seed).derive("probe"), cfg, cap=cfg.probe_tokens)
-                        draft, boundary, terminal = [], None, False
-                        while len(draft) < cfg.probe_tokens:
-                            sample, = probe.sample_batch([probe.request(min(128,cfg.probe_tokens-len(draft)), len(probe.calls), draft)])
-                            draft.extend(sample.token_ids)
-                            boundary = completed_boundary(raw, draft, cfg.probe_minimum)
-                            stop = next((i for i,t in enumerate(draft) if t in {raw.tokenizer.eos_token_id, close[0]}), len(draft))
-                            if boundary is not None and boundary <= stop:
-                                break
-                            if stop < len(draft):
-                                terminal = True
-                                break
-                        if boundary is not None:
-                            draft = draft[:boundary]
-                        elif not terminal:
-                            # No complete step: skip the intervention; do not invent a boundary at token 512.
-                            draft = []
-                        carried = probe.statistics(draft)
-                        write({"kind": "probe", "question_id": case["id"], "seed": run_seed,
-                            "calls": probe.calls, "work": probe.work, "reason_ids": draft,
-                            "boundary": boundary, "terminal": terminal, "statistics": carried})
                         contexts = list(a.contexts[qi%len(a.contexts):])+list(a.contexts[:qi%len(a.contexts)])
-                        reuse = {}
+                        reuse, probes = {}, {}
                         for context in contexts:
                             position, content = context.split("_",1)
                             inline = position == "inline"
+                            payload = tuple(ev.variant(packet, content)) if packet else ()
+                            probe_root = base if inline or not payload else static_prompt(base,payload,ctrl.end_id,())
+                            if probe_root not in probes:
+                                probe = checkpoint(raw,tap,probe_root,close,SeedStream(seed).derive("probe"),cfg)
+                                probes[probe_root] = probe
+                                write({"kind":"probe","question_id":case["id"],"seed":run_seed,
+                                    "evidence_in_probe":not inline and bool(packet),**probe})
+                            probe = probes[probe_root]
+                            draft, boundary, terminal = probe["reason_ids"],probe["boundary"],probe["terminal"]
                             injected = bool(packet) and (not inline or boundary is not None)
-                            payload = tuple(ev.variant(packet, content)) if injected else ()
-                            root = (base+tuple(draft)+payload) if inline else (static_prompt(base,payload,ctrl.end_id,()) if payload else base)
-                            common = carried if inline else None
+                            if not injected: payload=()
+                            root = probe_root+tuple(draft)+(payload if inline else ())
+                            common = probe["statistics"]
                             for method in a.methods:
-                                identity = (tuple(root), method, inline, terminal if inline else False)
+                                identity = (tuple(root), method, probe["work"], terminal)
                                 if identity in reuse:
                                     old = reuse[identity]
                                     write({**old, "context": context, "reused_from": old["unit_id"]})
@@ -135,26 +123,22 @@ def main():
                                 print(json.dumps({"unit": uid, "completed": completed}), flush=True)
                                 before, g0, started = _snapshot(raw), graph.snapshot(), time.perf_counter()
                                 ledger = GuidanceLedger(raw,tap,root,close,SeedStream(seed).derive("search"),cfg,
-                                    carried=common,cap=cfg.search_tokens-(probe.work if inline else 0))
-                                if inline and terminal and boundary is None:
+                                    carried=common,cap=cfg.search_tokens-probe["work"])
+                                if terminal and boundary is None:
                                     candidates = [()]
-                                    audit = {"selection": {m:0 for m in (["single","bon_sc","bon_consilience","bon_logprob"] if method=="bon" else [method])}, "natural_end_before_injection": True}
+                                    audit = {"selection": {m:0 for m in (["single","bon_sc","bon_consilience","bon_logprob"] if method=="bon" else [method])}, "natural_end_before_branching": True}
                                 else:
                                     candidates, audit = search(ledger,method)
-                                answers = []
-                                for i, candidate in enumerate(candidates):
-                                    answer_seed = SeedStream(seed).derive("answer_suffix",token_hash(candidate))
-                                    if inline and terminal and boundary is None:
-                                        result = finish_answer(raw,base,draft,close,cfg,answer_seed)
-                                    else:
-                                        result = finish_answer(raw,root,candidate,close,cfg,answer_seed)
-                                    answers.append(result)
+                                answer_seeds = [SeedStream(seed).derive("answer_suffix",token_hash(c)) for c in candidates]
+                                answers = finish_answers(raw,probe_root if terminal else root,
+                                    [draft] if terminal else candidates,close,cfg,answer_seeds)
                                 after = _snapshot(raw)
                                 row = {"kind":"measurement", "unit_id":uid, "question_id":case["id"],
                                     "seed":run_seed, "worker":a.worker, "context":context, "method":method,
                                     "injected":injected, "payload_ids":payload, "root_ids":root,
-                                    "root_sha256":token_hash(root), "carried_reason_ids":draft if inline else [],
-                                    "calls":ledger.calls, "search_work":ledger.work, "probe_work":probe.work if inline else 0,
+                                    "root_sha256":token_hash(root), "carried_reason_ids":draft,
+                                    "probe_root_sha256":probe["probe_root_sha256"],
+                                    "calls":ledger.calls, "search_work":ledger.work, "probe_work":probe["work"],
                                     "evidence_work":state.work, "candidates":candidates, "answers":answers, "audit":audit,
                                     "seconds":time.perf_counter()-started,
                                     "cost":{k:after[k]-before[k] for k in before.keys()&after.keys() if type(before[k]) in (int,float) and type(after[k]) in (int,float)},

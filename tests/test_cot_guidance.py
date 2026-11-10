@@ -4,7 +4,7 @@ import pytest
 
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.retrieval.cot_guidance import (
-    GuidanceConfig, GuidanceLedger, completed_boundary, finish_answer, search, trajectory_score,
+    GuidanceConfig, GuidanceLedger, checkpoint, completed_boundary, finish_answer, finish_answers, search, trajectory_score,
 )
 from inference_scaling.retrieval.ablation import static_prompt
 
@@ -84,3 +84,40 @@ def test_length_limit_is_reported_as_failure_not_natural_eos():
     result=finish_answer(raw,(1,),(65,99),(90,),GuidanceConfig(),1)
     assert result['eos_inside_thinking'] and result['empty_answer'] and not raw.requests
     assert trajectory_score([],[],[],'sc')==0
+
+
+def test_batched_answers_keep_individual_prefixes_and_stop_independently():
+    class Answer(Fake):
+        def __init__(self): super().__init__();self.batches=[]
+        def sample_batch(self,requests):
+            self.batches.append(len(requests))
+            result=[]
+            for r in requests:
+                self.requests.append(r)
+                final=':answer:0:' in r.request_id or r.request_id.endswith(':1')
+                ids=(65,99) if final else (65,66)
+                result.append(SequenceSample(r.prefix,ids,(-1.,)*2,r.sampling.policy_id,self.model_id,r.request_id,'eos' if final else 'length'))
+            return result
+    raw=Answer()
+    results=finish_answers(raw,(1,),[(2,90),(3,90)],(90,),replace(GuidanceConfig(),answer_chunk=2,answer_tokens=8),[1,2])
+    assert raw.batches==[2,1]
+    assert [r['answer_ids'] for r in results]==[[65,99],[65,66,65,99]]
+    assert raw.requests[-1].prefix==(1,3,90,65,66)
+    assert not any(r['truncated'] for r in results)
+
+
+def test_both_placements_use_identical_checkpoint_stopping_policy():
+    class Text(Fake):
+        def sample_batch(self,requests):
+            self.requests.extend(requests)
+            ids=tuple(map(ord,'A complete sentence. More unfinished words'))
+            return [SequenceSample(r.prefix,ids,(-1.,)*len(ids),r.sampling.policy_id,self.model_id,r.request_id,'length') for r in requests]
+    class Stats:
+        def take(self,request,sample):return (2.,)*len(sample.token_ids),(3.,)*len(sample.token_ids)
+    cfg=replace(GuidanceConfig(),probe_minimum=10)
+    raw=Text()
+    left=checkpoint(raw,Stats(),(1,7,8),(90,),1,cfg)
+    right=checkpoint(raw,Stats(),(1,),(90,),1,cfg)
+    assert left['reason_ids']==right['reason_ids']==list(map(ord,'A complete sentence.'))
+    assert left['work']==right['work']
+    assert left['probe_root_ids']==[1,7,8] and right['probe_root_ids']==[1]

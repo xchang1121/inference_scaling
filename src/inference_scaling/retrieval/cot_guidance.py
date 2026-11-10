@@ -208,6 +208,72 @@ def search(ledger, method):
         "stop": "terminal" if adapter.is_terminal(state) else "whole_pool_budget", "selection": {method: 0}}
 
 
+def checkpoint(backend, tap, root, close, seed, cfg):
+    """Both placements branch after the same complete-step stopping policy."""
+    ledger = GuidanceLedger(backend,tap,root,close,seed,cfg,cap=cfg.probe_tokens)
+    draft, boundary, terminal = [], None, False
+    while len(draft) < cfg.probe_tokens:
+        sample, = ledger.sample_batch([ledger.request(min(128,cfg.probe_tokens-len(draft)),len(ledger.calls),draft)])
+        draft.extend(sample.token_ids)
+        boundary = completed_boundary(backend,draft,cfg.probe_minimum)
+        stop = next((i for i,t in enumerate(draft) if t in {backend.tokenizer.eos_token_id,close[0]}),len(draft))
+        if boundary is not None and boundary <= stop:
+            break
+        if stop < len(draft):
+            terminal = True
+            break
+    if boundary is not None:
+        draft = draft[:boundary]
+    elif not terminal:
+        draft = []
+    return {"probe_root_ids":list(root),"probe_root_sha256":token_hash(root),"calls":ledger.calls,"work":ledger.work,
+        "reason_ids":draft,"boundary":boundary,"terminal":terminal,"statistics":ledger.statistics(draft)}
+
+
+def finish_answers(backend, root, suffixes, close, cfg, seeds):
+    """Batch independent final readouts, preserving each trajectory's own RNG keys."""
+    if len(suffixes) == 1:
+        return [finish_answer(backend,root,suffixes[0],close,cfg,seeds[0])]
+    eos,close=backend.tokenizer.eos_token_id,tuple(close)
+    prefixes,results,done=[],[],[]
+    for suffix in map(tuple,suffixes):
+        early=eos in suffix
+        natural=bool(close) and suffix[-len(close):]==close
+        prefixes.append(tuple(root)+suffix+(() if natural else close))
+        results.append({"answer_text":"","answer_ids":[],"calls":[],"empty_answer":True,
+            "eos_inside_thinking":early,"truncated":False,"forced_thinking_end":not natural and not early})
+        done.append(early)
+    sampling=SamplingConfig(eos_token_id=eos)
+    while not all(done):
+        jobs,indices=[],[]
+        for i,result in enumerate(results):
+            if done[i]:continue
+            count=min(cfg.answer_chunk,cfg.answer_tokens-len(result['answer_ids']))
+            prefix=prefixes[i]+tuple(result['answer_ids'])
+            if count<=0 or len(prefix)+count>cfg.context_tokens:
+                raise RuntimeError('answer context exhausted')
+            jobs.append(GenerationRequest(prefix,count,sampling,
+                SeedStream(seeds[i]).derive('answer',len(result['calls'])),
+                f'{seeds[i]}:answer:{i}:{len(result["calls"])}',intermediate_events=False))
+            indices.append(i)
+        samples=backend.sample_batch(jobs)
+        for i,request,sample in zip(indices,jobs,samples,strict=True):
+            result=results[i]
+            result['calls'].append({'seed':request.seed,'prefix_sha256':token_hash(request.prefix),
+                'max_new_tokens':request.max_new_tokens,'token_ids':list(sample.token_ids),'finish_reason':sample.finish_reason})
+            result['answer_ids'].extend(sample.token_ids)
+            if eos in sample.token_ids or sample.finish_reason in {'eos','eos_token','stop'}:
+                done[i]=True
+            elif not sample.token_ids:
+                raise RuntimeError('answer generation made no progress')
+            elif len(result['answer_ids'])>=cfg.answer_tokens:
+                done[i]=True;result['truncated']=True
+    for result in results:
+        result['answer_text']=backend.decode(tuple(result['answer_ids']),skip_special_tokens=True).strip()
+        result['empty_answer']=not bool(result['answer_text'])
+    return results
+
+
 def finish_answer(backend, root, suffix, close, cfg, seed):
     """Continue answers in large chunks until natural EOS; never silently accept a cap."""
     eos, close = backend.tokenizer.eos_token_id, tuple(close)

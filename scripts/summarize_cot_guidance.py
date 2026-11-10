@@ -71,12 +71,20 @@ def summarize(snapshot, output, gold_path, stage):
         check(hashlib.sha256((folder/('prepared-'+stage+'.json')).read_bytes()).hexdigest()==meta['prepared_sha256'],folder.name+':prepared_hash')
         base={c['id']:tuple(c['prompt_ids']) for c in prepared['cases']}
         evidence={r['question_id']:r for r in rows if r['kind']=='evidence'}
-        probes={(r['question_id'],r['seed']):r for r in rows if r['kind']=='probe'}
+        probes={(r['question_id'],r['seed'],r.get('probe_root_sha256')):r for r in rows if r['kind']=='probe'}
+        for probe in probes.values():
+            for c in probe['calls']:
+                raw_counts['probe_calls']+=1
+                raw_counts['probe_thinking_eos']+=EOS in c['token_ids']
+                if probe.get('evidence_in_probe') and c['prefix_ids']==probe['probe_root_ids']:
+                    raw_counts['injected_root_calls']+=1
+                    raw_counts['immediate_injected_eos']+=c['token_ids'][:1]==[EOS]
+                    raw_counts['immediate_injected_close']+=c['token_ids'][:1]==[CLOSE]
         packets.update({q:bool(e['packet']) for q,e in evidence.items()})
         for row in measurements:
             uid=row['unit_id']+':'+row['context']
             q,s=row['question_id'],row['seed']
-            probe=probes[q,s]
+            probe=probes[q,s,row.get('probe_root_sha256')]
             packet=evidence[q]['packet']
             inline=row['context'].startswith('inline')
             payload=list(packet['ids']) if row['injected'] else []
@@ -85,9 +93,13 @@ def summarize(snapshot, output, gold_path, stage):
                     size=b['stop']-b['start']
                     payload[b['start']:b['stop']]=prepared['noise_ids'][i*512:i*512+size]
             check(payload==row['payload_ids'],uid+':identical_packet')
-            reason=probe['reason_ids'] if inline else []
+            reason=probe['reason_ids']
+            expected_probe_root=base[q] if inline or not payload else static_prompt(base[q],payload,EOS,())
             expected_root=(base[q]+tuple(reason)+tuple(payload) if inline else
-                static_prompt(base[q],payload,EOS,()) if payload else base[q])
+                expected_probe_root+tuple(reason))
+            if meta.get('schema')==3:
+                check(expected_probe_root==tuple(probe['probe_root_ids']),uid+':probe_position')
+                check(row['probe_work']==probe['work'],uid+':matched_probe_cost')
             check(expected_root==tuple(row['root_ids']),uid+':placement_preserves_reason')
             check(reason==row['carried_reason_ids'],uid+':no_reset')
             check(token_hash(row['root_ids'])==row['root_sha256'],uid+':root_hash')
@@ -95,7 +107,7 @@ def summarize(snapshot, output, gold_path, stage):
             check(row['search_work']+row['probe_work']<=cfg.search_tokens,uid+':budget')
             seed=SeedStream(SeedStream(s).derive('question',q)).derive('search')
             backend=SimpleNamespace(model_id='offline',tokenizer=SimpleNamespace(eos_token_id=EOS))
-            ledger=GuidanceLedger(backend,None,row['root_ids'],(CLOSE,),seed,cfg,carried=probe['statistics'] if inline else None)
+            ledger=GuidanceLedger(backend,None,row['root_ids'],(CLOSE,),seed,cfg,carried=probe['statistics'])
             ledger.calls=row['calls']
             for ci,c in enumerate(row['calls']):
                 tag=uid+f':call{ci}'
@@ -148,8 +160,8 @@ def summarize(snapshot, output, gold_path, stage):
                 check([t for c in answer['calls'] for t in c['token_ids']]==answer['answer_ids'],uid+f':answer{i}:ids')
                 suffix=tuple(row['candidates'][i])
                 answer_root=tuple(row['root_ids'])+suffix+(() if suffix[-1:]==(CLOSE,) else (CLOSE,))
-                if audit.get('natural_end_before_injection'):
-                    answer_root=base[q]+tuple(reason)
+                if audit.get('natural_end_before_branching'):
+                    answer_root=expected_probe_root+tuple(reason)
                 for c in answer['calls']:
                     check(token_hash(answer_root)==c['prefix_sha256'],uid+f':answer{i}:exact_prefix')
                     answer_root+=tuple(c['token_ids'])
@@ -159,7 +171,7 @@ def summarize(snapshot, output, gold_path, stage):
                 for c in row['calls']:
                     raw_counts['search_calls']+=1
                     raw_counts['thinking_eos']+=EOS in c['token_ids']
-                    if c['prefix_ids']==row['root_ids'] and row['injected']:
+                    if inline and c['prefix_ids']==row['root_ids'] and row['injected']:
                         raw_counts['injected_root_calls']+=1
                         raw_counts['immediate_injected_eos']+=c['token_ids'][:1]==[EOS]
                         raw_counts['immediate_injected_close']+=c['token_ids'][:1]==[CLOSE]

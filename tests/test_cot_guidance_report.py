@@ -35,7 +35,7 @@ def test_offline_report_recomputes_shared_pool_and_rejects_tampering(tmp_path, m
     rows=[{'kind':'metadata','config':asdict(cfg),'cases':['toy'],'seeds':[1],'contexts':['static_relevant'],'methods':['bon'],
            'prepared_sha256':hashlib.sha256(prepared_path.read_bytes()).hexdigest()},
         {'kind':'evidence','question_id':'toy','packet':None},
-        {'kind':'probe','question_id':'toy','seed':1,'reason_ids':[],'statistics':{'sc':[],'cn':[],'lp':[]}},
+        {'kind':'probe','question_id':'toy','seed':1,'reason_ids':[],'calls':[],'statistics':{'sc':[],'cn':[],'lp':[]}},
         {'kind':'measurement','unit_id':'toy','question_id':'toy','seed':1,'context':'static_relevant','method':'bon',
          'injected':False,'payload_ids':[],'root_ids':base,'root_sha256':token_hash(base),'carried_reason_ids':[],
          'search_work':ledger.work,'probe_work':0,'evidence_work':0,'calls':ledger.calls,'candidates':candidates,'answers':answers,'audit':audit,'seconds':1},
