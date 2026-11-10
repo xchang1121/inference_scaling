@@ -34,6 +34,18 @@ determines answerability, group exclusions and eventual evaluation. Two separate
 TRAIN fixtures check native contracts before formal execution. No tuning on fresh
 outputs; old regressions must never be pooled into generalization estimates.
 
+The frozen question text differs across cohorts: all eight reused regression
+questions retain the earlier concise-answer suffix, while the twelve fresh
+questions use the original benchmark question without that suffix. This was
+discovered during the fixed fresh-case review, after generation had started.
+Every arm and seed for a given question receives the same frozen question;
+neither prompts nor selection rules were changed in response. Paired within-
+question comparisons remain interpretable, but differences between cohorts in
+answer length, truncation or F1 cannot be attributed solely to question difficulty
+or generalization. `prompt-scope-audit.json` records the exact question hashes and
+suffix counts. Keep the cohorts separate and report the 512-token answer-cap
+truncation explicitly; it is distinct from an early thinking EOS.
+
 ## Eight arms and budget
 
 1. Static legacy BM25 windows + previous block-Met SC (M4/K2, horizon1024/block256).
