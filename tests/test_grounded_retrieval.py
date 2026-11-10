@@ -86,6 +86,8 @@ class VerifiedEngine:
                 ids, reason = ((21, 3), "eos") if self.mode == "short" else ((21,)*job.max_new_tokens, "length")
             elif job.request_id.startswith("leaf_verify:"):
                 ids, reason = ((91,), "eos") if self.mode == "short" else ((91,)*job.max_new_tokens, "length")
+            elif self.mode == "eos":
+                ids, reason = (3,), "eos"
             else:
                 ids, reason = ((8, 4), "stop") if self.mode == "short" else ((8,)*job.max_new_tokens, "length")
             out.append(SequenceSample(job.prefix, ids, (-1.,)*len(ids), job.sampling.policy_id,
@@ -152,3 +154,21 @@ def test_verified_condition_does_not_generate_a_new_unverified_answer():
     assert audit["answer_prepaid_in_work"]
     assert state.work == sum(len(c["token_ids"]) for c in state.calls)
     assert common.calls == [] and common.work == 0
+
+
+def test_source_title_cannot_substitute_for_missing_body_evidence():
+    ledger = book()
+    ledger.evidence_bodies = ["The unrelated gardener watered the roses."]
+    sample, = ledger.sample_batch([ledger.request(10, 0)])
+    assert ledger.reward(ledger.root, [sample.token_ids])[0] < 0
+    assert ledger.verdicts[0]["error"] == "unsubstantiated_positive_score"
+
+
+def test_verified_search_keeps_thinking_eos_without_answer_or_verifier():
+    ledger = book("eos")
+    selected, audit = verified_search(ledger, GroundedConfig(), True)
+    assert selected == (3,) and ledger.work == 3
+    assert ledger.answers[selected]["answer_ids"] == []
+    assert not ledger.verdicts
+    assert all(c["purpose"] == "search" for c in ledger.calls)
+    assert audit["stop"] == "terminal"
