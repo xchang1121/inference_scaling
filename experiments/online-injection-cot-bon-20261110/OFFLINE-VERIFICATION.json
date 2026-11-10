@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "verified_package_files": 45,
+  "byte_identical_reports": [
+    "smoke/answers.jsonl",
+    "smoke/audit.json",
+    "smoke/budget-curves.json",
+    "smoke/REPORT.md",
+    "smoke/scores.csv",
+    "smoke/summary.json",
+    "formal/answers.jsonl",
+    "formal/audit.json",
+    "formal/budget-curves.json",
+    "formal/REPORT.md",
+    "formal/scores.csv",
+    "formal/summary.json"
+  ],
+  "generation_sha256": "84138669872eb4be8bf5502677bdb7f3a352cfcd65e248997061f11fcb5e713a",
+  "raw_archives": {
+    "raw/formal/a0.tar.gz": "a70c825d94afe09dd4d15f6291ee5093ccc604433000f26651cc607c7289c7a9",
+    "raw/formal/a5.tar.gz": "ffba0de48f1b04a864b6fc62e781e54815215cd064f36ca61734d21a869db54c",
+    "raw/smoke/a0.tar.gz": "941d7b50745f02223b3aea69bc6d77c8d6a6f44822ef7dc6984f1b814b2e06e5",
+    "raw/smoke/a5.tar.gz": "64183f1f043c661fc93b941e28e6a5f877329b7df3ea38868a0786a6d1180004"
+  }
+}

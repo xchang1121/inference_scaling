@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "checks": 43588,
+  "failures": [],
+  "physical_search_units": 490,
+  "raw": {
+    "probe_calls": 81,
+    "probe_thinking_eos": 0,
+    "injected_root_calls": 924,
+    "immediate_injected_eos": 4,
+    "immediate_injected_close": 428,
+    "search_calls": 2487,
+    "thinking_eos": 22,
+    "candidate_answers": 1176,
+    "candidate_empty": 9,
+    "candidate_truncated": 0
+  }
+}
