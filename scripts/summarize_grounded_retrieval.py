@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import csv
 import hashlib
 import json
@@ -245,9 +245,19 @@ def summarize(snapshot, output, stage, gold_path=None):
         score=grade(r["answer_text"],gold[row["question_id"]]["answer"]) if row["question_id"] in gold else {"f1":None,"exact_match":None}
         gates=[e for u in used if u["unit_id"].endswith(":probe") for e in u["result"]["events"]]
         verdicts=row["search"].get("verdicts",[])
+        generated_by_purpose = Counter()
+        for call in calls:
+            generated_by_purpose[call["purpose"]] += len(call["token_ids"])
         graded.append({k:row[k] for k in ["question_id","cohort","seed","worker","arm","context","method","content"]}|score|
             {"work_tokens":work,"total_generated_tokens":work+extra_answer,"returned_answer_tokens":r["answer_tokens"],
              "auxiliary_tokens":aux,"seconds":sum(u["seconds"] for u in used),
+             "probe_generated_tokens":sum(len(c["token_ids"]) for u in used if u["unit_id"].endswith(":probe") for c in u["calls"]),
+             "search_thinking_tokens":generated_by_purpose["search"],
+             "candidate_answer_tokens":generated_by_purpose["leaf_answer"],
+             "verifier_tokens":generated_by_purpose["leaf_verify"],
+             "retrieval_auxiliary_tokens":generated_by_purpose["gap_plan"]+generated_by_purpose["support_check"],
+             "retained_thinking_tokens":r["retained_thinking_tokens"],
+             "discarded_confirmed_tokens":sum(len(e.get("discarded_confirmed_ids", [])) for e in gates),
              "native_pflops":sum(u.get("graph_execution",{}).get("estimated_dense_padded_flops",0) for u in used)/1e15,
              "gate_accepted":r["evidence_tokens"]>0,"prefix_reset":any("discarded_confirmed_ids" in e for e in gates),
              "invalid_extractor":sum(e.get("error") is not None for e in gates if e["kind"] == "grounded_evidence"),
@@ -282,7 +292,7 @@ def summarize(snapshot, output, stage, gold_path=None):
     summary=[]
     for (cohort,arm),values in sorted(groups.items()):
         summary.append({"cohort":cohort,"arm":arm,"conditions":len(values),"questions":len({r['question_id'] for r in values}),
-            **{k:average([r[k] for r in values if r[k] is not None]) for k in ["f1","exact_match","work_tokens","total_generated_tokens","returned_answer_tokens","auxiliary_tokens","seconds","native_pflops","gate_accepted","prefix_reset","search_steps","unused_budget"]},
+            **{k:average([r[k] for r in values if r[k] is not None]) for k in ["f1","exact_match","work_tokens","total_generated_tokens","returned_answer_tokens","auxiliary_tokens","seconds","native_pflops","gate_accepted","prefix_reset","search_steps","unused_budget","probe_generated_tokens","search_thinking_tokens","candidate_answer_tokens","verifier_tokens","retrieval_auxiliary_tokens","retained_thinking_tokens","discarded_confirmed_tokens"]},
             **{k:sum(r[k] for r in values) for k in ["empty_answer","eos_inside_thinking","immediate_thinking_end","immediate_eos","forced_thinking_end","answer_truncated","raw_thinking_eos","raw_first_token_close","invalid_extractor","invalid_verifiers","verifiers"]}})
     contrasts=[]
     comparisons=[("dynamic_verified_is","dynamic_legacy_sc"),("dynamic_verified_is","dynamic_anchor_sc"),
@@ -299,8 +309,13 @@ def summarize(snapshot, output, stage, gold_path=None):
             if diffs:contrasts.append({"cohort":cohort,"left":left,"right":right,**bootstrap(diffs)})
     failed={key:[k for k,v in checks.items() if not v] for key,checks in audits.items() if not all(checks.values())}
     audit={"passed":not failed,"checks":sum(len(x) for x in audits.values()),"failed":failed,"details":audits}
+    unique_generated = Counter()
+    for unit in all_units.values():
+        for call in unit["calls"]:
+            unique_generated[call["purpose"]] += len(call["token_ids"])
     unique_cost={"units":len(all_units),"conditions":len(graded),
         "generated_tokens":sum(len(c["token_ids"]) for u in all_units.values() for c in u["calls"]),
+        "generated_tokens_by_purpose":dict(sorted(unique_generated.items())),
         "unit_seconds":sum(u["seconds"] for u in all_units.values()),
         "native_pflops":sum(u.get("graph_execution",{}).get("estimated_dense_padded_flops",0) for u in all_units.values())/1e15}
     output.mkdir(parents=True,exist_ok=True)
@@ -315,6 +330,11 @@ def summarize(snapshot, output, stage, gold_path=None):
         "| Cohort | Arm | Questions | F1 % | Work | Total generated | Seconds | PFLOPs | Empty | Forced close |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in summary:
         text.append(f"| {r['cohort']} | {r['arm']} | {r['questions']} | {100*r['f1']:.3f} | {r['work_tokens']:.1f} | {r['total_generated_tokens']:.1f} | {r['seconds']:.2f} | {r['native_pflops']:.3f} | {r['empty_answer']} | {r['forced_thinking_end']} |")
+    text += ["", "## Realized token allocation", "", "Per-condition means. Probe tokens include main drafts and retrieval auxiliaries, so this column overlaps retrieval auxiliaries; do not sum those two columns. Candidate answers and verifiers are paid inside verified-IS work.", "",
+        "| Cohort | Arm | Probe total | Search thinking | Candidate answers | Verifiers | Retrieval auxiliaries | Discarded confirmed prefix |",
+        "|---|---|---:|---:|---:|---:|---:|---:|"]
+    for r in summary:
+        text.append(f"| {r['cohort']} | {r['arm']} | {r['probe_generated_tokens']:.1f} | {r['search_thinking_tokens']:.1f} | {r['candidate_answer_tokens']:.1f} | {r['verifier_tokens']:.1f} | {r['retrieval_auxiliary_tokens']:.1f} | {r['discarded_confirmed_tokens']:.1f} |")
     text += ["", "## Paired question bootstrap", "", "Differences and 95% intervals are F1 percentage points, descriptive and unadjusted.", ""]
     for r in contrasts:
         low,high=r["bootstrap_95"]

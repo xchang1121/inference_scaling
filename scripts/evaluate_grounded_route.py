@@ -72,7 +72,9 @@ def evaluate(snapshot, graded_path, registration, output):
     groups = defaultdict(list)
     for row in derived:
         groups[row['cohort'], row['arm']].append(row)
-    fields = ['f1', 'exact_match', 'work_tokens', 'total_generated_tokens', 'native_pflops', 'seconds', 'verified_branch']
+    fields = ['f1', 'exact_match', 'work_tokens', 'total_generated_tokens', 'native_pflops', 'seconds', 'verified_branch',
+        'probe_generated_tokens', 'search_thinking_tokens', 'candidate_answer_tokens', 'verifier_tokens',
+        'retrieval_auxiliary_tokens', 'retained_thinking_tokens', 'discarded_confirmed_tokens']
     sums = ['empty_answer', 'eos_inside_thinking', 'immediate_thinking_end', 'immediate_eos', 'forced_thinking_end', 'answer_truncated', 'invalid_extractor', 'invalid_verifiers', 'verifiers']
     summary = [{'cohort': c, 'arm': a, 'conditions': len(values), 'questions': len({r['question_id'] for r in values}),
         **{f: average([r[f] for r in values]) for f in fields}, **{f: sum(r[f] for r in values) for f in sums}}
