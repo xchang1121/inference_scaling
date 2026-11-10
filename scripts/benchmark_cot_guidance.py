@@ -68,7 +68,8 @@ def main():
                 "settings_sha256": hashlib.sha256(a.settings.read_bytes()).hexdigest()})
             raw = graph = tap = None
             try:
-                raw = load_backend(settings["ar"]["model"], settings["ar"]["engine"], seed=a.seeds[0], logprobs=5)
+                # Top-5 plus the existing tagged full-vocabulary SC transport slot.
+                raw = load_backend(settings["ar"]["model"], settings["ar"]["engine"], seed=a.seeds[0], logprobs=6)
                 graph, tap = GraphMeasurements(raw), DualStatistics(raw)
                 fmt, = thinking_format_from_backend(raw, output_settings_from_config(settings["ar"])).formats
                 close = tuple(fmt.end_token_ids)
@@ -124,7 +125,7 @@ def main():
                             root = (base+tuple(draft)+payload) if inline else (static_prompt(base,payload,ctrl.end_id,()) if payload else base)
                             common = carried if inline else None
                             for method in a.methods:
-                                identity = (tuple(root), method, terminal if inline else False)
+                                identity = (tuple(root), method, inline, terminal if inline else False)
                                 if identity in reuse:
                                     old = reuse[identity]
                                     write({**old, "context": context, "reused_from": old["unit_id"]})
