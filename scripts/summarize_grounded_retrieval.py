@@ -161,6 +161,11 @@ def audit_search(unit, seed, decode):
 def summarize(snapshot, output, stage, gold_path=None):
     gold = {x["id"]: x for x in read_jsonl(gold_path)} if gold_path else {}
     audits, all_rows, all_units, metadata = {}, [], {}, []
+    raw_stops = Counter(dict.fromkeys(['thinking_search_calls', 'thinking_search_calls_with_eos',
+        'search_calls_first_close', 'search_calls_first_eos', 'injected_root_search_calls',
+        'injected_root_first_close', 'injected_root_first_eos', 'candidate_answer_calls',
+        'empty_candidate_answer_calls', 'truncated_candidate_answer_calls'], 0))
+    stop_events = []
     for folder in sorted(snapshot.iterdir()):
         if not folder.is_dir() or not (folder/(stage+".jsonl")).exists():
             continue
@@ -191,10 +196,38 @@ def summarize(snapshot, output, stage, gold_path=None):
         for unit in [x for x in rows if x["kind"] == "execution_unit"]:
             uid = unit["unit_id"]
             full_id = folder.name+":"+uid
+            if full_id in all_units:
+                raise ValueError("duplicate native execution unit: "+full_id)
             all_units[full_id] = unit
             result, checks = unit["result"], {}
             for ci, call in enumerate(unit["calls"]):
                 ids = call["token_ids"]
+                purpose = call['purpose']
+                thinking = purpose in {'thinking', 'search'}
+                first_close = purpose == 'search' and bool(ids) and ids[0] == CLOSE
+                first_eos = purpose == 'search' and bool(ids) and ids[0] == EOS
+                at_root = purpose == 'search' and result['evidence_tokens'] > 0 and call['prefix_ids'] == (unit['detail'] or {}).get('root_ids')
+                empty_leaf = purpose == 'leaf_answer' and not decode(ids, True).strip()
+                truncated_leaf = purpose == 'leaf_answer' and len(ids) == call['max_new_tokens'] and EOS not in ids
+                for name, value in {
+                    'thinking_search_calls': thinking,
+                    'thinking_search_calls_with_eos': thinking and EOS in ids,
+                    'search_calls_first_close': first_close,
+                    'search_calls_first_eos': first_eos,
+                    'injected_root_search_calls': at_root,
+                    'injected_root_first_close': at_root and first_close,
+                    'injected_root_first_eos': at_root and first_eos,
+                    'candidate_answer_calls': purpose == 'leaf_answer',
+                    'empty_candidate_answer_calls': empty_leaf,
+                    'truncated_candidate_answer_calls': truncated_leaf,
+                }.items():
+                    raw_stops[name] += int(value)
+                if (thinking and EOS in ids) or first_close or empty_leaf or truncated_leaf:
+                    stop_events.append({'worker': folder.name, 'unit_id': uid, 'call_index': ci,
+                        'purpose': purpose, 'generated_tokens': len(ids), 'prefix_sha256': call['prefix_sha256'],
+                        'thinking_eos': thinking and EOS in ids, 'search_first_close': first_close,
+                        'search_first_eos': first_eos, 'at_injected_root': at_root,
+                        'empty_candidate_answer': empty_leaf, 'truncated_candidate_answer': truncated_leaf})
                 checks[f"call{ci}_hash"] = token_hash(call["prefix_ids"]) == call["prefix_sha256"]
                 checks[f"call{ci}_length"] = 0 <= len(ids) <= call["max_new_tokens"]
                 checks[f"call{ci}_context"] = len(call["prefix_ids"])+call["max_new_tokens"] <= 8192
@@ -316,6 +349,7 @@ def summarize(snapshot, output, stage, gold_path=None):
     unique_cost={"units":len(all_units),"conditions":len(graded),
         "generated_tokens":sum(len(c["token_ids"]) for u in all_units.values() for c in u["calls"]),
         "generated_tokens_by_purpose":dict(sorted(unique_generated.items())),
+        "raw_stop_diagnostics":dict(raw_stops),
         "unit_seconds":sum(u["seconds"] for u in all_units.values()),
         "native_pflops":sum(u.get("graph_execution",{}).get("estimated_dense_padded_flops",0) for u in all_units.values())/1e15}
     output.mkdir(parents=True,exist_ok=True)
@@ -323,6 +357,7 @@ def summarize(snapshot, output, stage, gold_path=None):
     result={"stage":stage,"audit_passed":not failed,"audit_checks":audit["checks"],"summary":summary,"contrasts":contrasts,"unique_execution":unique_cost,"metadata":metadata}
     (output/"summary.json").write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
     (output/"graded.jsonl").write_text("".join(json.dumps(x,ensure_ascii=False)+"\n" for x in graded),encoding="utf-8")
+    (output/"raw-stop-events.jsonl").write_text("".join(json.dumps(x)+"\n" for x in stop_events),encoding="utf-8")
     if summary:
         with (output/"summary.csv").open("w",encoding="utf-8",newline="") as f:
             writer=csv.DictWriter(f,fieldnames=list(summary[0]));writer.writeheader();writer.writerows(summary)
@@ -339,6 +374,11 @@ def summarize(snapshot, output, stage, gold_path=None):
     for r in contrasts:
         low,high=r["bootstrap_95"]
         text.append(f"- {r['cohort']}: {r['left']} − {r['right']}: {100*r['difference']:+.3f} [{100*low:+.3f}, {100*high:+.3f}], n={r['n_questions']}.")
+    text += ["", "## Stops in all executed calls", "",
+        "Each native execution unit is counted once, including unselected candidates. A first-token close in a later search call may follow a long existing prefix. The injected-root subset starts exactly at the immutable evidence/search boundary; it also includes static reference roots. Candidate-answer truncation is the deliberate answer cap, not thinking EOS. These are call diagnostics, not independent trials.", "",
+        "| Diagnostic | Count |", "|---|---:|"]
+    for key, value in raw_stops.items():
+        text.append(f"| {key} | {value} |")
     text += ["", f"Audits passed: {not failed}; checks: {audit['checks']}; unique execution units: {len(all_units)}."]
     (output/"REPORT.md").write_text("\n".join(text)+"\n",encoding="utf-8")
     print(json.dumps({"audit_passed":not failed,"checks":audit["checks"],"failures":failed,**unique_cost}))
