@@ -13,8 +13,9 @@ smoke. Subsequent B host-memory failures and an external job occupying B5 made
 that allocation unstable. A6/7 were tried after their model processes exited but
 failed device initialization while the old pair container remained running.
 The user then explicitly requested stopping the container on A0/1 and moving
-host198 experiments onto those two devices. The final planned workers are A0,
-A1 and B4, three isolated TP1 replicas. The A0/1 container was stopped as asked;
+host198 experiments onto those two devices. B4's next startup also failed a
+32-byte pinned-host allocation, so the final workers are A0 and A1, two isolated
+TP1 replicas,160 formal conditions each. The A0/1 container was stopped as asked;
 no other existing jobs or the shared main checkout are changed. Replicas improve
 experimental throughput, not the per-answer compute budget.
 
@@ -137,7 +138,9 @@ DEV execution, a second version constrained quotes to short facts and rejected
 URLs. Its native TRAIN_Q545 run still copied a nonliteral table row or an overlong
 paragraph, rejecting both static and dynamic evidence. Preserve both versions and
 all infrastructure failures. The final pre-formal correction replaces text copying
-with numbered source/span selection. Repeat all eight arms on A0, A1 and B4,
+with numbered source/span selection. Repeat all eight arms on A0 and A1,
 covering both TRAIN fixtures. No gold answer or fresh-model outcome is used for
 these formatting corrections. Formal assignments are fixed round-robin across
-the three workers before execution, with every question's seeds/arms together.
+the two workers before execution, with every question's seeds/arms together.
+The supplemental FORMAL-WORKER-PLAN.json overrides the initial three-worker
+WORKER-PLAN.json; generator source and prepared questions remain unchanged.

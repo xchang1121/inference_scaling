@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -175,6 +176,16 @@ def summarize(snapshot, output, stage, gold_path=None):
                 {(q,s,arm) for q in meta["cases"] for s in meta["seeds"] for arm in meta["arms"]}}
         vocabulary = json.loads((folder/"trace-tokenizer-subset.json").read_text(encoding="utf-8"))
         prepared = json.loads((folder/("prepared-"+stage+".json")).read_text(encoding="utf-8"))
+        frozen = json.loads((folder/"protocol/SOURCE-FROZEN.json").read_text(encoding="utf-8"))
+        audits[folder.name+":frozen_inputs"] = {
+            "prepared": hashlib.sha256((folder/("prepared-"+stage+".json")).read_bytes()).hexdigest() == meta["prepared_sha256"],
+            "settings": frozen["hashes"]["settings.json"] == meta["settings_sha256"],
+            "source": all(frozen["source_files"].get("source/"+n) == h for n,h in meta["source_hashes"].items()),
+            "worker": folder.name == meta["worker"],
+        }
+        if stage == "formal":
+            plan = json.loads((folder/"protocol/FORMAL-WORKER-PLAN.json").read_text(encoding="utf-8"))
+            audits[folder.name+":frozen_inputs"]["formal_assignment"] = meta["cases"] == plan["assignments"][folder.name] and meta["seeds"] == plan["seeds"]
         decode = Decoder(vocabulary)
         audits[folder.name+":tokenizer"] = {"same": vocabulary["tokenizer_sha256"] == prepared["tokenizer_hashes"]["tokenizer.json"]}
         for unit in [x for x in rows if x["kind"] == "execution_unit"]:
