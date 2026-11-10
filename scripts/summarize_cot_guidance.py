@@ -5,6 +5,7 @@ import argparse
 from collections import Counter, defaultdict
 import csv
 import gzip
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -19,6 +20,23 @@ from inference_scaling.shared.rng import SeedStream
 from inference_scaling.shared.sampling.conditional_is import RolloutEvaluation, select, select_metropolized, weigh
 
 EOS, CLOSE = 248046, 248069
+
+
+class Decoder:
+    def __init__(self, vocabulary):
+        assert vocabulary['decoder']['type']=='ByteLevel'
+        alphabet=list(range(33,127))+list(range(161,173))+list(range(174,256))
+        codes,extra=alphabet.copy(),0
+        for byte in range(256):
+            if byte not in alphabet:
+                alphabet.append(byte);codes.append(256+extra);extra+=1
+        self.mapping=dict(zip(map(chr,codes),alphabet,strict=True))
+        self.special=set(vocabulary['special_ids'])
+        self.vocab=vocabulary['vocab']
+
+    def __call__(self, ids, skip=False):
+        encoded=''.join(self.vocab[str(t)] for t in ids if not skip or t not in self.special)
+        return bytes(self.mapping[c] for c in encoded).decode('utf-8',errors='replace')
 
 
 def read(path):
@@ -49,6 +67,8 @@ def summarize(snapshot, output, gold_path, stage):
         check(len(done)==1 and done[0]['units']==expected==len(measurements),folder.name+':complete')
         check(not any(r['kind']=='failed' for r in rows),folder.name+':no_failure')
         prepared=json.loads((folder/('prepared-'+stage+'.json')).read_text(encoding='utf-8'))
+        decode=Decoder(json.loads((folder/('vocabulary-'+stage+'.json')).read_text(encoding='utf-8')))
+        check(hashlib.sha256((folder/('prepared-'+stage+'.json')).read_bytes()).hexdigest()==meta['prepared_sha256'],folder.name+':prepared_hash')
         base={c['id']:tuple(c['prompt_ids']) for c in prepared['cases']}
         evidence={r['question_id']:r for r in rows if r['kind']=='evidence'}
         probes={(r['question_id'],r['seed']):r for r in rows if r['kind']=='probe'}
@@ -123,6 +143,7 @@ def summarize(snapshot, output, gold_path, stage):
                 kept=fixed+candidates[mi].token_ids+candidates[mi].rollouts[ki].token_ids
             if audit.get('steps'):check(kept==tuple(row['candidates'][0]),uid+':final_IS_sequence')
             for i,answer in enumerate(row['answers']):
+                check(decode(answer['answer_ids'],True).strip()==answer['answer_text'],uid+f':answer{i}:decoded_text')
                 check(not answer['truncated'],uid+f':answer{i}:not_truncated')
                 check([t for c in answer['calls'] for t in c['token_ids']]==answer['answer_ids'],uid+f':answer{i}:ids')
                 suffix=tuple(row['candidates'][i])
@@ -153,7 +174,8 @@ def summarize(snapshot, output, gold_path, stage):
                     'packet_available':bool(packet),'injected':row['injected'],'answer_text':answer['answer_text'],
                     'answer_tokens':len(answer['answer_ids']),'empty':answer['empty_answer'],
                     'forced_thinking_end':answer['forced_thinking_end'],'eos_inside_thinking':answer['eos_inside_thinking'],
-                    'search_tokens':row['search_work']+row['probe_work'],'evidence_tokens':row['evidence_work'],
+                    'search_tokens':(len(row['candidates'][0]) if method=='single' else row['search_work'])+row['probe_work'],
+                    'physical_shared_search_tokens':row['search_work']+row['probe_work'],'evidence_tokens':row['evidence_work'],
                     'all_answer_tokens':sum(len(x['answer_ids']) for x in row['answers']),
                     'seconds':row['seconds'],'selected_index':i,'unit_id':row['unit_id']})
     check(bool(selected),'nonempty_results')
@@ -193,7 +215,7 @@ def summarize(snapshot, output, gold_path, stage):
     with (output/'scores.csv').open('w',newline='',encoding='utf-8') as f:
         writer=csv.DictWriter(f,fieldnames=list(selected[0]));writer.writeheader();writer.writerows(selected)
     text=['# CoT guidance: paired F1 comparison','',f"{len(packets)} questions; {sum(packets.values())} accepted evidence packets; {len(selected)} selected-answer views.",
-        '', 'F1 is lexical overlap with the reference answer. BoN selectors share the same candidate pool; single is a low-compute view.',
+        '', 'F1 is lexical overlap with the reference answer. BoN selectors share the same candidate pool; single is candidate 0 with its logical token cost, not a separately timed run. All eight BoN answers were generated for selector/oracle diagnostics; selected readout cost and total physical readout cost are separate columns in scores.csv.',
         '', '| Context | Method | F1 | Search tokens | Answer tokens | Empty | Forced thinking close |',
         '|---|---|---:|---:|---:|---:|---:|']
     for r in summary:text.append(f"| {r['context']} | {r['method']} | {r['f1']:.3f} | {r['mean_search_tokens']:.0f} | {r['mean_answer_tokens']:.0f} | {r['empty']} | {r['forced_thinking_end']} |")
