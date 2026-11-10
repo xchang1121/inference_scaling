@@ -184,3 +184,16 @@ Exploratory context diagnostics added during regression review count identical
 static/dynamic search roots and returned answers alongside their realized cost
 differences. They explain prefix resets and repeated answers; they are not extra
 quality endpoints and do not change the original arm comparisons.
+
+SC final-answer sampling uses a seed derived from the main-call counter. Dynamic
+probes change that counter even if prefix rollback produces the same search root
+and selected suffix as static retrieval. Therefore a shared question seed does
+not guarantee coupled final-answer draws across the SC arms. The context
+diagnostics record exact suffix equality, final-answer prefix equality and answer
+seeds at the first standalone answer chunk to identify this source of variation.
+SC answers retain the earlier controller's 32-token chunks; each verified leaf
+uses one call of up to512 tokens. Verified leaves instead key their answer seed
+to the suffix and reuse the selected cached answer. This distinction
+was documented by code inspection during the frozen run; no seed or generation
+logic was changed. With only two seeds, an SC answer difference from an identical
+prefix should not be interpreted as a retrieval-timing mechanism.

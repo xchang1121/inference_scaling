@@ -55,6 +55,7 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
             results.append(value)
             context_blocks[qid, row['seed'], row['method'], row['content']][row['context']] = {
                 'row': row, 'payload': injections[-1]['payload_ids'] if injections else [],
+                'answer_calls': [c for u in used for c in u['calls'] if c['purpose'] == 'answer'],
                 'generated_tokens': sum(len(c['token_ids']) for u in used for c in u['calls']),
                 'native_pflops': sum(u.get('graph_execution', {}).get('estimated_dense_padded_flops', 0) for u in used)/1e15,
                 'seconds': sum(u['seconds'] for u in used)}
@@ -68,9 +69,22 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
             static, dynamic = pair['static'], pair['dynamic']
             sr, dr = static['row'], dynamic['row']
             comparable = 'root_ids' in sr['search'] and 'root_ids' in dr['search']
+            suffix_comparable = 'selected_suffix_ids' in sr['search'] and 'selected_suffix_ids' in dr['search']
+            answer_comparable = bool(static['answer_calls'] and dynamic['answer_calls'])
+            sa = static['answer_calls'][0] if answer_comparable else None
+            da = dynamic['answer_calls'][0] if answer_comparable else None
+            same_answer_prefix = sa['prefix_ids'] == da['prefix_ids'] if answer_comparable else None
+            same_answer_seed = sa['seed'] == da['seed'] if answer_comparable else None
             context_pairs.append({'worker': folder.name, 'question_id': qid, 'cohort': sr['cohort'],
                 'seed': seed, 'method': method, 'content': content, 'search_roots_comparable': comparable,
                 'same_search_root': sr['search']['root_ids'] == dr['search']['root_ids'] if comparable else None,
+                'selected_suffixes_comparable': suffix_comparable,
+                'same_selected_suffix': sr['search']['selected_suffix_ids'] == dr['search']['selected_suffix_ids'] if suffix_comparable else None,
+                'first_answer_calls_comparable': answer_comparable,
+                'same_first_answer_prefix': same_answer_prefix,
+                'same_first_answer_seed': same_answer_seed,
+                'same_first_answer_prefix_different_seed': bool(same_answer_prefix and not same_answer_seed),
+                'first_answer_call_seeds': [sa['seed'], da['seed']] if answer_comparable else None,
                 'same_nonempty_reference': bool(static['payload']) and static['payload'] == dynamic['payload'],
                 'same_answer_tokens': sr['result']['answer_ids'] == dr['result']['answer_ids'],
                 'same_answer_text': sr['result']['answer_text'] == dr['result']['answer_text'],
@@ -108,10 +122,11 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
     for row in context_pairs:
         paired_groups[row['cohort'], row['method'], row['content']].append(row)
     result['context_comparisons'] = [{'cohort': c, 'method': m, 'content': t, 'condition_pairs': len(values),
-        **{field: sum(bool(r[field]) for r in values) for field in ['search_roots_comparable', 'same_search_root', 'same_nonempty_reference', 'same_answer_tokens', 'same_answer_text', 'dynamic_prefix_reset']},
+        **{field: sum(bool(r[field]) for r in values) for field in ['search_roots_comparable', 'same_search_root', 'selected_suffixes_comparable', 'same_selected_suffix', 'first_answer_calls_comparable', 'same_first_answer_prefix', 'same_first_answer_seed', 'same_first_answer_prefix_different_seed', 'same_nonempty_reference', 'same_answer_tokens', 'same_answer_text', 'dynamic_prefix_reset']},
         **{field: average([r[field] for r in values]) for field in ['dynamic_minus_static_generated_tokens', 'dynamic_minus_static_native_pflops', 'dynamic_minus_static_seconds']}}
         for (c, m, t), values in sorted(paired_groups.items())]
     result['limits'].append('Context comparisons are descriptive paired-condition diagnostics; identical answers do not prove equal accuracy, and seeds are not independent questions.')
+    result['limits'].append('Answer-prefix/seed comparisons cover the first standalone answer chunk, not cached verified leaf answers; SC answers use 32-token chunks. A shared question seed need not imply the same answer-call seed.')
     output.mkdir(parents=True, exist_ok=True)
     (output/'evidence-diagnostics.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     for name, values in [('evidence-conditions.jsonl', results), ('unique-gates.jsonl', gate_rows), ('fixed-case-review.jsonl', review), ('context-comparisons.jsonl', context_pairs)]:
