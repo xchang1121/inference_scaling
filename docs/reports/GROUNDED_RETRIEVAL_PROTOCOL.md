@@ -75,7 +75,9 @@ No answer labels or gold parent IDs participate in retrieval.
 
 A paid greedy extractor (224 tokens maximum) checks entity/edition/version and
 whether an exact contiguous excerpt supplies a requested fact, including relevant
-exceptions. It accepts at most one excerpt, packaged within the original 256-input
+exceptions. It requests at most50 words/500 characters without URLs or headings;
+the parser enforces at most64 words/600 characters and rejects URLs. It accepts at
+most one excerpt, packaged within the original 256-input
 token cap. Never truncate an accepted quote to fit; reject oversized/invalid
 outputs. The extractor checks every assumption in the confirmed prefix. If the
 prefix is unsafe, roll back to reasoning offset0 (a complete-step boundary).
@@ -117,3 +119,13 @@ retrieval quality checks and verification allocation; they do not establish that
 this untrained adaptation improves TechQA. The SC control isolates the new
 retrieval/allocation package; verified-vs-SC compares answer-scored search with
 thinking-scored search, including its extra generation cost.
+
+## Pre-formal smoke correction
+
+The first native smoke on TRAIN_Q559 exposed a literal-copy formatting failure:
+the extractor copied a very long download URL, exhausted its224-token output cap,
+and returned truncated JSON. The original run remains archived. Before any formal
+DEV execution, constrain quotes to short facts and reject URLs; repeat the six
+affected anchored/verified/noise arms on all four workers and both TRAIN fixtures.
+The two unchanged legacy arms are already exercised by the original smoke.
+No gold answer or fresh-model outcome is used for this formatting correction.

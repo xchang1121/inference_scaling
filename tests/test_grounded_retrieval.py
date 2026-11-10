@@ -39,6 +39,13 @@ def test_verdict_positive_coverage_requires_literal_source_support():
     assert verdict_reward(None, 100) < 0
 
 
+def test_evidence_rejects_long_url_despite_small_word_count():
+    text = "Use the fixed version described at https://example.com/"+"x"*100
+    assert parse_evidence(evidence_output(quote=text), [{"text": text}])[1] == "quote_contains_url"
+    text = "Use the fixed version " + "x"*601
+    assert parse_evidence(evidence_output(quote=text), [{"text": text}])[0] is None
+
+
 def test_question_retrieval_survives_wrong_draft_product_and_includes_solution_tail():
     raw = TextEngine()
     docs = [Document("right", "Mercury retry failure", "Mercury retry failure. "*30+BODY),
