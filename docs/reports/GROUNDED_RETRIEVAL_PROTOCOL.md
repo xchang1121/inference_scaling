@@ -167,3 +167,8 @@ logs at that time. Offline evaluation verifies these prefixes, the recorded
 regression-only model-unit IDs, identical paid probes and evidence roots, and
 all primary audits. This is a before-fresh registration, not a claim that the
 policy predates the regression observations or the original study.
+
+Exploratory context diagnostics added during regression review count identical
+static/dynamic search roots and returned answers alongside their realized cost
+differences. They explain prefix resets and repeated answers; they are not extra
+quality endpoints and do not change the original arm comparisons.

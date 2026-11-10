@@ -12,7 +12,7 @@ from summarize_grounded_retrieval import average, read_jsonl
 
 def diagnose(snapshot, gold_path, output, stage='formal'):
     gold = {x['id']: x for x in read_jsonl(gold_path)}
-    results, gate_rows, review = [], [], []
+    results, gate_rows, review, context_pairs = [], [], [], []
     fixed_fresh = {'DEV_Q016', 'DEV_Q008', 'DEV_Q022'}
     for folder in sorted(snapshot.iterdir()):
         if not folder.is_dir() or not (folder/(stage+'.jsonl')).exists():
@@ -20,6 +20,7 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
         rows = read_jsonl(folder/(stage+'.jsonl'))
         cases = {x['id']: x for x in json.loads((folder/('prepared-'+stage+'.json')).read_text(encoding='utf-8'))['cases']}
         units = {x['unit_id']: x for x in rows if x['kind'] == 'execution_unit'}
+        context_blocks = defaultdict(dict)
         for row in (r for r in rows if r['kind'] == 'measurement'):
             qid = row['question_id']
             parents = set(gold[qid]['document_ids'])
@@ -52,10 +53,29 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
                 'selected_verdict': verdict,
                 'gate_count': len(gates), 'evidence_present': bool(packet)})
             results.append(value)
+            context_blocks[qid, row['seed'], row['method'], row['content']][row['context']] = {
+                'row': row, 'payload': injections[-1]['payload_ids'] if injections else [],
+                'generated_tokens': sum(len(c['token_ids']) for u in used for c in u['calls']),
+                'native_pflops': sum(u.get('graph_execution', {}).get('estimated_dense_padded_flops', 0) for u in used)/1e15,
+                'seconds': sum(u['seconds'] for u in used)}
             if row['cohort'] == 'regression' or qid in fixed_fresh or stage == 'smoke':
                 review.append({**value, 'question': cases[qid]['question'], 'gold': gold[qid],
                     'answer': row['result']['answer_text'], 'evidence_metadata': packet,
                     'gate_events': gates})
+        for (qid, seed, method, content), pair in sorted(context_blocks.items()):
+            if set(pair) != {'static', 'dynamic'}:
+                continue
+            static, dynamic = pair['static'], pair['dynamic']
+            sr, dr = static['row'], dynamic['row']
+            comparable = 'root_ids' in sr['search'] and 'root_ids' in dr['search']
+            context_pairs.append({'worker': folder.name, 'question_id': qid, 'cohort': sr['cohort'],
+                'seed': seed, 'method': method, 'content': content, 'search_roots_comparable': comparable,
+                'same_search_root': sr['search']['root_ids'] == dr['search']['root_ids'] if comparable else None,
+                'same_nonempty_reference': bool(static['payload']) and static['payload'] == dynamic['payload'],
+                'same_answer_tokens': sr['result']['answer_ids'] == dr['result']['answer_ids'],
+                'same_answer_text': sr['result']['answer_text'] == dr['result']['answer_text'],
+                'dynamic_prefix_reset': any('discarded_confirmed_ids' in e for e in dr['result']['events']),
+                **{'dynamic_minus_static_'+field: dynamic[field]-static[field] for field in ['generated_tokens', 'native_pflops', 'seconds']}})
         for uid, unit in units.items():
             if not uid.endswith(':probe'):
                 continue
@@ -84,9 +104,17 @@ def diagnose(snapshot, gold_path, output, stage='formal'):
             'exposed_gold_parent_hit refers to anchored extractor sources; legacy arms have no such source list.',
             'Noise retains source IDs/titles in its matched wrapper; selected parent metadata is not real evidence.',
             'Unscored quote and verifier fields are zero in aggregate; use evidence_present and selected_verifier_valid as denominators.']}
+    paired_groups = defaultdict(list)
+    for row in context_pairs:
+        paired_groups[row['cohort'], row['method'], row['content']].append(row)
+    result['context_comparisons'] = [{'cohort': c, 'method': m, 'content': t, 'condition_pairs': len(values),
+        **{field: sum(bool(r[field]) for r in values) for field in ['search_roots_comparable', 'same_search_root', 'same_nonempty_reference', 'same_answer_tokens', 'same_answer_text', 'dynamic_prefix_reset']},
+        **{field: average([r[field] for r in values]) for field in ['dynamic_minus_static_generated_tokens', 'dynamic_minus_static_native_pflops', 'dynamic_minus_static_seconds']}}
+        for (c, m, t), values in sorted(paired_groups.items())]
+    result['limits'].append('Context comparisons are descriptive paired-condition diagnostics; identical answers do not prove equal accuracy, and seeds are not independent questions.')
     output.mkdir(parents=True, exist_ok=True)
     (output/'evidence-diagnostics.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
-    for name, values in [('evidence-conditions.jsonl', results), ('unique-gates.jsonl', gate_rows), ('fixed-case-review.jsonl', review)]:
+    for name, values in [('evidence-conditions.jsonl', results), ('unique-gates.jsonl', gate_rows), ('fixed-case-review.jsonl', review), ('context-comparisons.jsonl', context_pairs)]:
         (output/name).write_text(''.join(json.dumps(x, ensure_ascii=False)+'\n' for x in values), encoding='utf-8')
     print(json.dumps({k: result[k] for k in ['unique_gates', 'unique_accepted_gates', 'unique_gate_errors']}))
 
