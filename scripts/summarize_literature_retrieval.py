@@ -23,6 +23,28 @@ EOS,CLOSE=248046,248069
 BACKEND=SimpleNamespace(model_id='offline',tokenizer=SimpleNamespace(eos_token_id=EOS))
 
 
+def injection_stops(row):
+    """Selected-path stops at actual insertion boundaries, distinct from IS roots."""
+    h,arm,probe=row['handoff'],row['arm'],row['probe']
+    suffix=row['candidates'][0]
+    firsts=[];after_last=None
+    if h['injected_ids'] and arm.startswith(('static_','ircot')):
+        firsts=[probe['calls'][0]['token_ids'][:1]] if probe and probe['calls'] else [suffix[:1]]
+        reason=(probe['reason_ids'] if probe and not row['audit'].get('terminal_checkpoint') else [])+suffix
+        after_last=next((i for i,t in enumerate(reason) if t in {EOS,CLOSE}),len(reason))
+    elif h['injected_ids']:
+        events=h['events']
+        for i,event in enumerate(events):
+            if event['kind']!='injection':continue
+            subsequent=next((e for e in events[i+1:] if e['kind']=='thought'),None)
+            firsts.append(subsequent['token_ids'][:1] if subsequent else suffix[:1])
+            after_last=(subsequent['retained_tokens'] if subsequent else
+                next((j for j,t in enumerate(suffix) if t in {EOS,CLOSE}),len(suffix)))
+    return {'injection_episodes':len(firsts),'post_injection_immediate_close_events':sum(x==[CLOSE] for x in firsts),
+        'post_injection_immediate_eos_events':sum(x==[EOS] for x in firsts),
+        'thinking_after_last_injection':after_last}
+
+
 def audit_row(row,cfg,decode,noise,check):
     uid=row['unit_id'];arm=row['arm'];h=row['handoff'];probe=row['probe'];audit=row['audit']
     def ck(ok,label):check(ok,uid+':'+label)
@@ -156,6 +178,9 @@ def audit_row(row,cfg,decode,noise,check):
         'answer_tokens':answer_tokens,'injected_tokens':sum(map(len,h['injected_ids'])),
         'requested_prefix_tokens':requested_prefix_tokens,'retrieval_calls':len(retrievals),
         'retrieval_seconds':sum(e['seconds'] for e in retrievals),'seconds':row['seconds'],
+        'native_prefill_tokens':row['cost'].get('prefill_tokens',0),
+        'engine_requests':row['cost'].get('engine_requests',0),
+        'encoder_queries_truncated':sum(e.get('encoder_query_tokens',0)>512 for e in retrievals),
         **row['stage_seconds'],'empty':answer['empty_answer'],'truncated':answer['truncated'],
         'thinking_eos':answer['eos_inside_thinking'],'forced_thinking_end':answer['forced_thinking_end'],
         'raw_thinking_eos_calls':sum(EOS in c['token_ids'] for c in think_calls),
@@ -164,6 +189,7 @@ def audit_row(row,cfg,decode,noise,check):
         'controller_periodic_triggers':sum(e.get('trigger')=='periodic' for e in h['events']),
         'interim_length_caps':sum(len(c['token_ids'])>=c['max_new_tokens'] and c['finish_reason']=='length' for c in h['interim_calls']),
         'selected_immediate_close':suffix[:1]==[CLOSE],'selected_immediate_eos':suffix[:1]==[EOS],
+        'search_budget_stops':audit.get('stop')=='whole_pool_budget',**injection_stops(row),
         'insertion_count':len(h['injected_ids']),
         'forward_token_slots':row.get('graph_execution',{}).get('forward_token_slots',0),
         'max_search_call_tokens':max((len(c['token_ids']) for c in row['calls']),default=0)}
@@ -175,7 +201,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     frozen=json.loads(frozen_path.read_text());manifest=json.loads(manifest_path.read_text())
     expected_cases=set(manifest['smoke_ids'] if stage=='smoke' else manifest['fresh_ids'])
     expected_seeds={20261112} if stage=='smoke' else set(manifest['seeds'])
-    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[]
+    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[];setup=[]
     def check(ok,name):
         nonlocal checks
         checks+=1
@@ -187,6 +213,11 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
         if not path.exists():continue
         rows=read(path);meta=next(r for r in rows if r['kind']=='metadata');cfg=GuidanceConfig(**meta['config'])
         metadata.append(meta)
+        for engine in (r for r in rows if r['kind']=='engine'):
+            bank=engine['retrieval']['examples']
+            setup.append({'worker':meta.get('worker',folder.name),'fact_index_build_seconds':engine['fact_build_seconds'],
+                'example_index_build_seconds':bank['build_seconds'],'example_bank_entries':bank['entries'],
+                'encoder_model':bank['encoder']['model'],'encoder_revision':bank['encoder']['revision']})
         check(meta['config']==GuidanceConfig().__dict__,'unchanged_guidance_config')
         check(all(meta['source'].get(n)==h for n,h in frozen['files'].items()),'frozen_reader_source_hashes')
         check(set(meta['seeds'])==expected_seeds,'expected_seeds')
@@ -241,14 +272,17 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     baseline_seconds=mean(groups['direct'],'seconds')
     summary=[]
     numeric=['generation_tokens','controller_tokens','probe_tokens','search_tokens','answer_tokens','injected_tokens',
-        'requested_prefix_tokens','retrieval_calls','retrieval_seconds','seconds','controller_seconds','search_seconds','answer_seconds','forward_token_slots']
+        'requested_prefix_tokens','native_prefill_tokens','engine_requests','retrieval_calls','retrieval_seconds','seconds','controller_seconds','search_seconds','answer_seconds','forward_token_slots']
     counts=['empty','truncated','thinking_eos','forced_thinking_end','raw_thinking_eos_calls','raw_thought_close_calls',
-        'intercepted_thought_closes','controller_periodic_triggers','interim_length_caps','selected_immediate_close','selected_immediate_eos']
+        'intercepted_thought_closes','controller_periodic_triggers','interim_length_caps','selected_immediate_close','selected_immediate_eos','encoder_queries_truncated',
+        'search_budget_stops','injection_episodes','post_injection_immediate_close_events','post_injection_immediate_eos_events']
     for arm,rows in groups.items():
         summary.append({'arm':arm,'n':len(rows),'f1':mean(rows,'f1'),
             **{'mean_'+k:mean(rows,k) for k in numeric},**{k:sum(r[k] for r in rows) for k in counts},
             'latency_ratio_of_means':mean(rows,'seconds')/baseline_seconds,
             'geomean_paired_latency_ratio':math.exp(statistics.fmean(math.log(r['latency_ratio_vs_direct']) for r in rows)),
+            'mean_thinking_after_last_injection':statistics.fmean(r['thinking_after_last_injection'] for r in rows
+                if r['thinking_after_last_injection'] is not None) if any(r['thinking_after_last_injection'] is not None for r in rows) else None,
             'max_answer_tokens':max(r['answer_tokens'] for r in rows)})
     qmeans={a:{q:mean([r for r in rows if r['question_id']==q],'f1') for q in expected_cases} for a,rows in groups.items()}
     comparisons=[(a,'closed_is') for a in arms if a not in {'direct','closed_is'}]
@@ -256,7 +290,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     comparisons += [('static_facts','static_facts_noise'),('ircot','ircot_noise'),('static_examples','static_examples_noise'),('thinkretrieve','thinkretrieve_noise')]
     contrasts=[{'left':a,'right':b,**bootstrap(qmeans[a][q]-qmeans[b][q] for q in sorted(expected_cases))} for a,b in comparisons]
     result={'stage':stage,'questions':len(expected_cases),'seeds':sorted(expected_seeds),'measurements':len(all_rows),
-        'summary':summary,'contrasts':contrasts,'audit':audit,'noise_pairs':pair_notes}
+        'summary':summary,'contrasts':contrasts,'audit':audit,'noise_pairs':pair_notes,'setup_costs':setup}
     (output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     (output/'answers.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in all_rows),encoding='utf-8')
     with (output/'scores.csv').open('w',newline='',encoding='utf-8') as f:
@@ -266,13 +300,20 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
         '', '| Arm | F1 | Generated tokens | Retrieval seconds | End-to-end seconds | Latency / direct | Paired geometric ratio | Empty | Truncated |',
         '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
     for r in summary:text.append(f"| {r['arm']} | {r['f1']:.3f} | {r['mean_generation_tokens']:.1f} | {r['mean_retrieval_seconds']:.3f} | {r['mean_seconds']:.2f} | {r['latency_ratio_of_means']:.3f} | {r['geomean_paired_latency_ratio']:.3f} | {r['empty']} | {r['truncated']} |")
-    text+=['','## Generation and stop diagnostics','','| Arm | Controller tokens | Checkpoint tokens | IS/direct tokens | Answer tokens | Input injection tokens | Thought EOS outputs | Intercepted close | Immediate selected close | Forced close |',
+    text+=['','## Generation and stop diagnostics','','| Arm | Controller tokens | Checkpoint tokens | IS/direct tokens | Answer tokens | Input injection tokens | Thought EOS outputs | Intercepted close | Immediate IS suffix close | Forced close |',
         '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for r in summary:text.append(f"| {r['arm']} | {r['mean_controller_tokens']:.1f} | {r['mean_probe_tokens']:.1f} | {r['mean_search_tokens']:.1f} | {r['mean_answer_tokens']:.1f} | {r['mean_injected_tokens']:.1f} | {r['thinking_eos']} | {r['intercepted_thought_closes']} | {r['selected_immediate_close']} | {r['forced_thinking_end']} |")
+    text+=['','Immediate stops below are measured at actual insertion boundaries on the selected path. Several static packets form one insertion episode; ThinkRetrieve counts each sequential insertion separately. These differ from immediately closing an IS suffix after a checkpoint.',
+        '', '| Arm | Insertion episodes | Immediately close thinking | Immediate EOS | Mean thought tokens after last insertion |',
+        '|---|---:|---:|---:|---:|']
+    for r in summary:
+        after=r['mean_thinking_after_last_injection'];shown='—' if after is None else f'{after:.1f}'
+        text.append(f"| {r['arm']} | {r['injection_episodes']} | {r['post_injection_immediate_close_events']} | {r['post_injection_immediate_eos_events']} | {shown} |")
     text+=['','## Paired F1 differences','','Seeds are averaged within question; intervals are a descriptive 5,000-draw question-cluster bootstrap, without multiplicity adjustment.','']
     for c in contrasts:text.append(f"- {c['left']} − {c['right']}: {c['difference']:+.3f}, 95% CI [{c['bootstrap_95'][0]:+.3f}, {c['bootstrap_95'][1]:+.3f}].")
     text+=['',f"Audit: {checks} checks passed. Exact-length noise pairs: {len(pair_notes)-len(audit['noise_length_mismatches'])}/{len(pair_notes)}.",
         '', 'IRCoT uses a separate fresh reader; its noise control corrupts reader evidence only. ThinkRetrieve retains and extends its trace; its noise control follows its own evolving trace with matched packet lengths. Their F1/cost differences therefore compare complete adapted pipelines, not an isolated placement change.']
+    for r in setup:text+=['',f"One-time index construction on {r['worker']}: facts {r['fact_index_build_seconds']:.2f}s; {r['example_bank_entries']} complete worked examples {r['example_index_build_seconds']:.2f}s. These startup costs are excluded from per-question latency. Encoder: {r['encoder_model']} at {r['encoder_revision']}."]
     (output/'REPORT.md').write_text('\n'.join(text)+'\n',encoding='utf-8')
     print(json.dumps({'stage':stage,'questions':len(expected_cases),'measurements':len(all_rows),'audit':audit}))
 

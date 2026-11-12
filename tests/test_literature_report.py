@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from benchmark_literature_retrieval import ARMS, run_arm
-from summarize_literature_retrieval import audit_row, summarize
+from summarize_literature_retrieval import audit_row, injection_stops, summarize
 from test_literature_retrieval import Bank, Fake, Tap
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig
@@ -103,3 +103,18 @@ def test_complete_report_contains_all_paired_arms_and_latency(tmp_path):
     assert len(result['summary'])==11
     assert all(r['f1']==100 and r['mean_generation_tokens']>0 and r['geomean_paired_latency_ratio']>0 for r in result['summary'])
     assert not result['audit']['noise_length_mismatches']
+
+
+def test_insertion_stops_are_distinct_from_later_is_suffix_stops():
+    row={'arm':'static_facts','handoff':{'injected_ids':[[1,2]]},
+        'probe':{'calls':[{'token_ids':[65,66]}],'reason_ids':[65,66]},
+        'candidates':[[248069]],'audit':{}}
+    s=injection_stops(row)
+    assert s['injection_episodes']==1 and s['post_injection_immediate_close_events']==0
+    assert s['thinking_after_last_injection']==2
+    row={'arm':'thinkretrieve','probe':None,'candidates':[[248046]],'audit':{},
+        'handoff':{'injected_ids':[[1],[2]],'events':[{'kind':'injection'},
+            {'kind':'thought','token_ids':[248069],'retained_tokens':0},{'kind':'injection'}]}}
+    s=injection_stops(row)
+    assert s['injection_episodes']==2
+    assert s['post_injection_immediate_close_events']==s['post_injection_immediate_eos_events']==1
