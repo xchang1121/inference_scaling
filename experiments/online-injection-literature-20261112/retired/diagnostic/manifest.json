@@ -1,0 +1,8 @@
+[
+  {
+    "worker": "a3",
+    "path": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/online-injection-literature-20261112/diagnostic-snapshot-a3.tar.gz",
+    "bytes": 37870,
+    "sha256": "6a7b21ffe3886c011621f913a76be15ba8a8fa485bc870a488e8f3cceb590647"
+  }
+]

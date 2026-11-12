@@ -1,0 +1,687 @@
+unit_id,question_id,seed,arm,worker,answer_text,generation_tokens,controller_tokens,probe_tokens,search_tokens,answer_tokens,injected_tokens,requested_prefix_tokens,retrieval_calls,retrieval_seconds,seconds,native_prefill_tokens,engine_requests,encoder_queries_truncated,controller_seconds,search_seconds,answer_seconds,empty,truncated,thinking_eos,forced_thinking_end,raw_thinking_eos_calls,raw_thought_close_calls,intercepted_thought_closes,controller_periodic_triggers,interim_length_caps,selected_immediate_close,selected_immediate_eos,search_budget_stops,injection_episodes,post_injection_immediate_close_events,post_injection_immediate_eos_events,thinking_after_last_injection,insertion_count,forward_token_slots,max_search_call_tokens,f1,retrieved_gold_document,dynamic_query_added_gold_document,latency_ratio_vs_direct,generation_ratio_vs_direct
+TRAIN_Q545:20261112:direct,TRAIN_Q545,20261112,direct,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear
+
+### Root Cause
+
+When multiple Impact services (e.g., NXNM, NXOD, NXPM, NXPB, NXDPM) are simultaneously down, Impact's built-in **SelfMonitoring** generates one open SYSENT event per stopped service. These events typically share the same correlation-relevant fields:
+
+- **Node** – the Impact management station hostname/IP
+- **Severity** – often Stopped/Critical
+- **Specific/Dependency** – generic values that do not uniquely identify *which* service stopped
+
+When **one** service is restarted, Impact sends a single **resolution event** (specific = 0) for that service. The OMNIbus **GenericClear** automation correlates the incoming resolution event against open events using the common fields (primarily `Node` and event type). Because the open SelfMonitoring events for the *other* still-downed services share those same field values and the correlation does **not** isolate the specific service identifier, the GenericClear automation matches the single resolution event to **all** open SelfMonitoring events and clears them. The companion **DeleteClears** automation then removes all associated clear records, leaving no audit trail of the individual resolutions.
+
+### Why It Happens in 6.1.0 Specifically
+
+In this release the SelfMonitoring event generation populates the per-service identity (e.g., ""NXOD"", ""NXNM"") into a free-text **Attribute** or **Text** field rather than into a structured field that the GenericClear filter uses for its AND-based match. The standard GenericClear automation's correlation expression is essentially:
+
+```
+Node = <incoming.Node>
+AND Specific = 0        (resolution)
+AND <event-type/source match>
+```
+
+There is no term such as `AND Attribute = <specific-service-name>`, so the match set is too broad.
+
+### Resolution / Workaround
+
+1. **Tighten the GenericClear correlation (preferred operational fix):**
+   Modify the OMNIbus GenericClear (and DeleteClears) automation so that the correlation expression includes the service-specific field, for example:
+
+   ```
+   Node = <incoming.Node>
+   AND Specific = 0
+   AND Attribute = <incoming.Attribute>   -- e.g. ""NXOD"", ""NXNM""
+   ```
+
+   In OMNIbus, this is done by editing the **Correlate** step in the automation (or the underlying filter expression) to add the field that carries the unique service name into the match criteria.
+
+2. **Apply the IBM fix / APAR:**
+   IBM addressed the overly-broad correlation in a subsequent 6.1.x fix pack (the relevant APAR corrects the SelfMonitoring event structure so the service identifier is placed in a correlatable field, and updates the shipped GenericClear default to include it). Verify your 6.1.0 SP level and apply the latest available Service Pack / fix for Netcool/Impact and the corresponding OMNIbus automation updates.
+
+3. **Alternative – suppress Global Clear for SYSENT events:**
+   If modifying the automation is not immediately feasible, you can add a pre-filter so that SYSENT (SelfMonitoring) events bypass the generic GlobalClear path and instead go through a dedicated, service-aware correlation filter. This prevents a single resolution from sweeping unrelated open SYSENT events.
+
+### Verification
+
+After the fix, reproduce the scenario:
+
+1. Stop three or more Impact services (e.g., NXNM, NXOD, NXPM). Confirm three individual open SYSENT events appear in OMNIbus.
+2. Restart **only** NXOD.
+3. Confirm that **only** the NXOD SYSENT event is cleared and a single clear is recorded, while the NXNM and NXPM events remain open.
+
+### Key Technical Summary
+
+| Item | Detail |
+|---|---|
+| Product / Version | Netcool/Impact 6.1.0 (+ OMNIbus GenericClear / DeleteClears automations) |
+| Trigger | One restarted service sends a single resolution event while other services remain stopped |
+| Defect | GenericClear correlation is too broad (matches on Node + type only, not on the per-service identifier), so one resolution event clears all open SelfMonitoring events |
+| Fix | Add the service-specific field to the correlation expression, or apply the IBM fix pack that corrects both the event structure and the default automation |",1717,0,0,778,939,0,1100,0,0,87.29847737122327,1100,2,0,9.58004966378212e-06,39.472831160295755,47.825474918819964,False,False,False,False,0,1,0,0,0,False,False,False,0,0,0,,0,2816,778,12.9783693843594,,,1.0,1.0
+TRAIN_Q545:20261112:closed_is,TRAIN_Q545,20261112,closed_is,a3,"## Netcool/Impact 6.1.0 – OMNIbus GenericClear Incorrectly Clearing All SelfMonitoring Events
+
+### Problem
+
+In Netcool/Impact 6.1.0, when several Impact Services are stopped simultaneously, multiple **SelfMonitoring** warning events are generated in OMNIbus (one per service). When a **single** service is then restarted, the resulting resolution event triggers the **OMNIbus GenericClear** (and **DeleteClears**) automations, which match on the broad SelfMonitoring event criteria and consequently **clear or delete every SelfMonitoring event**, not just the one corresponding to the service that actually recovered.
+
+### Root Cause
+
+The GenericClear and DeleteClears automations in the Impact OMNIbus configuration use a condition that identifies the incoming event as a *resolution*-type event belonging to the SelfMonitoring class but **does not correlate on a per-service identifier** (e.g., the specific service name/ID or control file field). Because the match clause is:
+
+- `Type = Resolution`
+- `Class = SelfMonitoring`
+
+it is satisfied by the single resolution event regardless of which service backed it out, and the ""clear all matching open events"" logic sweeps up every open SelfMonitoring row in the target database.
+
+### Resolution / Fix
+
+1. **Apply the IBM fix for this defect in Impact 6.1.0.** The corrected automations add an additional correlation criterion so the clear/delete action only targets the open event whose service identifier (typically the `Node` or a dedicated `ServiceName`/`ControlFile` field populated by the Impact monitor) matches the identifier carried in the incoming resolution event.
+
+2. **If the fix is not yet available, modify the automation condition manually:**
+
+   - Open the OMNIbus automation (via the OMNIbus Administrator under *Automations → GenericClear* and *DeleteClears*).
+   - In the **Condition** (filter) of the *open-events* side of the correlation, add a match on the specific service field, e.g.:
+
+     ```
+     open_event.Node == resolution_event.Node
+     ```
+
+     (or the equivalent field that uniquely identifies the Impact service, such as `ServiceName`, `ControlFile`, or the dedicated impact monitor column).
+
+   - Ensure the resolution-side condition still contains `Type = Resolution AND Class = SelfMonitoring`.
+
+3. **Verify** by stopping two or more Impact services, confirming two (or more) warning events appear, then restarting only one and confirming that **only** the corresponding warning is cleared while the others remain open.
+
+### Key Technical Details
+
+| Item | Detail |
+|---|---|
+| Product / Version | Netcool/Impact 6.1.0 |
+| Affected automations | OMNIbus **GenericClear**, **DeleteClears** |
+| Event class involved | `SelfMonitoring` (Impact service-up / service-down) |
+| Trigger | Single-service resolution event |
+| Incorrect behaviour | All open `SelfMonitoring` events are cleared/deleted |
+| Required correlation field | Per-service identifier (e.g., `Node`, `ServiceName`, `ControlFile`) |
+| Fix mechanism | Tighten automation condition to match on the service-specific field, not just class + type |
+
+By adding the per-service correlation key to the automation's open-event filter, the GenericClear/DeleteClears logic is scoped to the single affected service, and the remaining SelfMonitoring events for still-stopped services are preserved.",1813,0,128,956,729,0,1637,0,0,62.5474074119702,1637,5,0,6.710179150104523e-06,25.45945775322616,37.08775506680831,False,False,False,False,0,3,0,0,0,False,False,False,0,0,0,,0,3448,336,15.319148936170212,,,0.7164776442319495,1.0559114735002912
+TRAIN_Q545:20261112:static_facts,TRAIN_Q545,20261112,static_facts,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear Automation
+
+### Problem
+
+In Netcool/Impact 6.1.0, when multiple Impact Services are stopped (each generating a SelfMonitoring ""Service stopped"" problem event in the ObjectServer), restarting **any one** of those Services generates a resolution (""Service started"") event that causes the OMNIbus **GenericClear** Automation to correlate with **all** SelfMonitoring problem events and set their Severity to 0. The **DeleteClears** Automation then removes those zero-severity events, making it appear as though *all* affected Services have recovered—even those that are still stopped.
+
+### Root Cause
+
+SelfMonitoring Service events do **not** populate the ObjectServer fields that the GenericClear Automation relies on to uniquely identify and correlate a specific Problem event with its matching Resolution event (e.g., fields like `EventID`, `Node`, `AlertString` in a service-specific way). Because the correlation fields are generic/identical across all SelfMonitoring events, any single resolution event matches **every** outstanding SelfMonitoring problem event, causing a blanket clear.
+
+### Resolution
+
+1. **Recommended – Apply Fix Pack 1 (FP1) or later for Netcool/Impact 6.1.0.** This corrects the SelfMonitoring event generation so that each event carries sufficient identifying detail in the correlation fields, allowing GenericClear to match only the specific problem event corresponding to the restarted service.
+
+2. **Workaround (if FP1 cannot be applied immediately):**
+   - Create a **PolicyActivator** that polls the ObjectServer at a rate **faster** than the GenericClear Automation interval.
+   - The policy should:
+     - Select open SelfMonitoring Service problem events.
+     - Parse the **Summary** field to extract the specific Service name.
+     - Append that Service name to the correlation field used by GenericClear (e.g., `AlertString` or a custom field), making each event uniquely identifiable.
+   - This ensures the GenericClear Automation can distinguish which problem event corresponds to which resolution event, preventing the indiscriminate clear.
+
+### Key Technical Details
+
+| Item | Detail |
+|---|---|
+| Affected product / version | Netcool/Impact 6.1.0 (pre-FP1) |
+| Components involved | SelfMonitoring (event source), OMNIbus ObjectServer, GenericClear Automation, DeleteClears Automation |
+| Correlation failure | Resolution event's correlation fields match all SelfMonitoring problem events, not just the one for the restarted service |
+| Observable symptom | All ""Service stopped"" events drop to Severity 0 and are deleted when *any single* service restarts |
+| Fix | Upgrade to **Netcool/Impact 6.1 Fix Pack 1** or apply the PolicyActivator workaround described above |",1312,0,128,582,602,654,4622,1,0.6912720748223364,50.33297389373183,4622,5,0,0.6914676371961832,18.8625435391441,30.778589183930308,False,False,False,False,0,3,0,0,0,False,False,False,1,0,0,294,3,5932,211,21.41119221411192,True,,0.5765618760989226,0.7641234711706465
+TRAIN_Q545:20261112:static_facts_noise,TRAIN_Q545,20261112,static_facts_noise,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear Automation
+
+### Problem Summary
+
+In IBM Netcool/Impact 6.1.0, the SelfMonitoring feature generates individual events (typically Severity 1–3) into OMNIbus when Impact services stop. Each event identifies the specific stopped service. When one of those services is subsequently restarted, Impact emits a corresponding **resolution event** (Severity 0 / ""clear""). The OMNIbus **GenericClear** and **DeleteClears** Automation rules are then supposed to clear *only* the matching open event.
+
+**Actual behavior:** The resolution event for the single restarted service is correlated by the GenericClear automation to **all** open SelfMonitoring ""service stopped"" events, causing them all to be cleared and then purged by DeleteClears—even though the other services remain down.
+
+### Root Cause
+
+The GenericClear automation matches incoming clear/resolution events against open events using a set of correlation fields (commonly `Node`, `Source`, `Component`, or a combination defined in the automation's `Where` clause). In the SelfMonitoring scenario:
+
+1. **Shared correlation fields** – All SelfMonitoring ""stopped"" events originate from the same Impact process on the same host, so fields such as `Source` (e.g., `Impact_SelfMonitor`), `Node`, or `Application` are **identical** across every event.
+2. **Insufficient discriminator** – The field that would uniquely identify *which* service stopped (typically `ServiceName`, `Component`, or the free-text `Detail`/`Summary` field) is **not included** in the GenericClear matching criteria, or the resolution event does not populate that field in a way the rule can compare.
+3. **Result** – The automation's `WHERE` clause is satisfied by every open SelfMonitoring event, so the single resolution event ""clears"" the entire set. DeleteClears then removes them from the event database.
+
+### Resolution / Workaround
+
+| Step | Detail |
+|------|--------|
+| **1. Tighten the GenericClear Automation** | Edit the GenericClear rule (OMNIbus → Administration → Automation → GenericClear) and add the service-identifying field to the correlation/`WHERE` clause. For example, require `ServiceName` (or `Component`, `Summary`, or the specific property name Impact uses to name the stopped service) to match in addition to `Source`/`Node`. |
+| **2. Verify resolution-event fields** | Capture or log the resolution event (OMNIbus Probe log, or add an automation that dumps all fields). Confirm which field carries the restarted-service identifier and that it is populated. If Impact does not set a dedicated `ServiceName` field, you may need to parse it from `Summary`/`Detail`. |
+| **3. Adjust the DeleteClears Automation** | Ensure DeleteClears only deletes events whose clear was performed by the *same* automation rule instance, and that it does not perform a broad sweep on cleared events sharing the same `Source`. |
+| **4. Apply interim/fix-pack** | Check IBM's APAR/Pear site for Netcool/Impact 6.1.0 fixes addressing SelfMonitoring event correlation. Later fix packs (6.1.1+) corrected the event-attribute mapping so that the resolution event carries a unique service key that the default GenericClear can match on. |
+| **5. Optional: custom automation** | If a fix pack is unavailable, create a dedicated automation rule **before** the GenericClear in the rule chain that specifically handles `Source = Impact_SelfMonitor` (or equivalent) events. Its `WHERE` clause should correlate on both `Source` **and** the service-specific field, then clear. Add a `NOT (Source = 'Impact_SelfMonitor')` guard in the GenericClear rule so it bypasses these events entirely. |
+
+### Key Technical Fields
+
+- **SelfMonitoring ""stopped"" event** – `Source = Impact_SelfMonitor` (or `IBM Impact`), `Sev ≥ 1`, `Summary/Detail` contains the stopped service name (e.g., `ImpAgent`, `ImpController`, `ImpDispatch`).
+- **Resolution event** – Same `Source`, `Sev = 0`, and the service identifier in the corresponding field. The GenericClear rule must compare this identifier explicitly.
+- **Automation chain order** – Custom rules execute before GenericClear; ensure the dedicated SelfMonitoring rule is placed first so the GenericClear never sees these pairs.
+
+By ensuring the clear-event correlation includes a **unique per-service discriminator** in addition to the shared source/host fields, the GenericClear automation will clear only the event corresponding to the restarted service, leaving the remaining ""service stopped"" SelfMonitoring events intact.
+
+*(Note: the retrieved reference passages provided do not contain Netcool/Impact product documentation and were treated as non-applicable source data.)*",2858,0,128,1685,1045,654,13807,1,0.6218824977986515,99.02153158606961,13807,11,0,0.6223567938432097,44.999048308003694,53.39978151069954,False,False,False,False,0,7,0,0,0,False,False,False,1,0,0,671,3,16661,512,12.538226299694188,True,,1.1342870410556631,1.6645311589982528
+TRAIN_Q545:20261112:ircot,TRAIN_Q545,20261112,ircot,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by GenericClear
+
+**Root Cause (APAR IV13297):**
+The `ALERTKEY` value generated for SelfMonitoring (Service) events does **not** include the specific service name or other service-identifying details. Because the GenericClear Automation in the ObjectServer correlates Problem and Resolution events strictly on the `ALERTKEY` field, a single resolution event (e.g., ""Service X started"") matches the identical `ALERTKEY` shared by *all* outstanding SelfMonitoring problem events (e.g., ""Service Y stopped,"" ""Service Z stopped""). The GenericClear Automation then clears every matching Problem event, and the subsequent DeleteClears Automation removes all corresponding clear records—even though only one service actually recovered.
+
+**Symptoms:**
+1. Service A is stopped → SelfMonitoring sends a problem event to the ObjectServer.
+2. Service B is stopped → a second problem event appears.
+3. Service B is restarted → SelfMonitoring sends a resolution (""Service started"") event.
+4. GenericClear Automation correlates on `ALERTKEY`, finds all events sharing that key, and **clears every SelfMonitoring problem event**, not just the one for the restarted service.
+
+**Fix:**
+
+- **Recommended:** Apply **IBM Tivoli Netcool/Impact V6.1.0 Fix Pack 1** (or any later fix pack). This patch updates the `ALERTKEY` generation logic for SelfMonitoring service events so that service-specific details are included, allowing GenericClear to uniquely correlate each problem with only its own resolution.
+
+- **Interim Workaround (if upgrading is not immediately possible):**
+  1. Create a **PolicyActivator** on the ObjectServer that polls at a rate *higher* (faster interval) than the GenericClear Automation.
+  2. In the associated **Policy**, for each incoming SelfMonitoring event:
+     - Extract the service name from the **Summary** field.
+     - Append that service name to the **Agent** field (or modify `ALERTKEY`) of the event.
+  3. This makes each event's correlation key unique per service, so GenericClear will clear only the single event whose resolution actually arrived.
+
+**Verification after fix:**
+After applying the fix or workaround, confirm that:
+- The `ALERTKEY` (or correlation field) differs for each distinct stopped service.
+- Restarting one service produces a clear for *only* that service's problem event.
+- Remaining ""Service stopped"" events persist until their own resolution arrives.
+
+**Reference:** APAR **IV13297** – ""ALERTKEY VALUE FOR SELFMONITORING (SERVICE) EVENTS DOES NOT INCLUDE SERVICE DETAILS, SO GENERICCLEAR CLEARS ALL SUCH EVENTS."" Fixed in Netcool/Impact V6.1.0 FP1.",1629,256,128,634,611,581,5218,3,1.3129817815497518,67.91857496788725,5218,7,0,14.854459409136325,21.85771876713261,31.205658243969083,False,False,False,False,0,3,0,0,0,False,False,False,1,0,0,244,3,6843,272,20.19704433497537,True,False,0.7780041188928648,0.9487478159580663
+TRAIN_Q545:20261112:ircot_noise,TRAIN_Q545,20261112,ircot_noise,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear
+
+**Root Cause**
+
+In Impact 6.1.0, SelfMonitoring events for stopped Impact Services are emitted into the event database with a shared set of correlation fields (e.g., the same `Source`, `SubscriptionName`, or a generic `Component` value such as ""Impact SelfMonitoring""). When one of the monitored Impact Services is restarted, a single resolution (clear) event is generated for that specific service. The **OMNIbus GenericClear** and **DeleteClears** Automations then fire, but their clear-matching criterion matches on those shared/generic fields rather than on a per-service unique identifier. As a result, instead of clearing only the event for the service that recovered, the automation clears **every** SelfMonitoring event in the database that shares the same broad field values.
+
+**Why It Happens Specifically in 6.1.0**
+
+- The SelfMonitoring JMS subscription in this release populates a limited set of fields in the event record. The service-level identifier (e.g., the exact Impact Service name such as `PROCCORE` or `PROCDATA`) is not placed in a field that the default GenericClear script uses as its primary match key.
+- The default OMNIbus `clear.log` / `deleteclears.log` scripts use a match on `Source` + `Component` (or equivalent), which is identical across all SelfMonitoring events, so one resolution cascades into a mass clear.
+
+**Technical Details of the Affected Automations**
+
+| Automation | Trigger | Default Match | Observed Behaviour |
+|---|---|---|---|
+| **GenericClear** | Any event with `Severity = 0` (Resolved/Recovering) | `Source = <shared value>` **AND** `Component = <shared value>` | Clears *all* outstanding SelfMonitoring events, not just the matching service |
+| **DeleteClears** | After GenericClear posts the resolution | Same broad criteria | Deletes the stale resolution rows for events that were never genuinely resolved |
+
+**Resolution / Workaround**
+
+1. **Customize the clear criterion** in the OMNIbus automation (`$OMNIHOME/etc/automation/genericclear/` directory or the equivalent config XML). Add the per-service field (e.g., `Detail` or `ImpactServiceName`, whichever 6.1.0 populates) to the match so the clear is scoped to the single service:
+   ```
+   ClearMatch = Source AND Component AND <ServiceField>
+   ```
+2. **Override the SelfMonitoring event field mapping** (in `impact.properties` or the JMS subscription configuration under `$IMPACT_HOME/etc/`) so each event carries a unique `Component` or `Detail` value equal to the specific Impact Service name (`PROCCORE`, `PROCDATA`, `WWWOTI`, etc.).
+3. **Suppress the DeleteClears automation** on the SelfMonitoring subscription until the GenericClear is corrected, to avoid deleting resolution records for services that are genuinely still down.
+4. If a fix is available from IBM (APAR / fix pack for 6.1.0), apply the relevant maintenance pack that tightens the SelfMonitoring clear logic to use the service-level key.
+
+**Key Point:** The problem is NOT that the services are actually all up; it is that the OMNIbus clear-matching logic is too coarse for the field set that 6.1.0 places on SelfMonitoring events, causing one legitimate resolution to wipe out all outstanding SelfMonitoring alarms.
+
+*(The retrieved source passages were literary scene descriptions and contained no Netcool/Impact technical data; the answer above is derived from the stated problem description and standard OMNIbus/Impact architecture.)*",2642,256,256,1330,800,581,9212,3,1.2834413023665547,99.96654109610245,9212,10,0,14.806627918966115,44.33488381560892,40.82445152616128,False,False,False,False,0,4,0,0,0,False,False,False,1,0,0,462,3,11848,512,14.70019342359768,True,False,1.1451120810619662,1.5387303436225976
+TRAIN_Q545:20261112:static_examples,TRAIN_Q545,20261112,static_examples,a3,"## Solution: Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear Automation
+
+**Problem:** When multiple SelfMonitoring events exist reporting stopped Impact Services, a single service restart generates a resolution event that the OMNIbus **GenericClear** (and **DeleteClears**) Automations use to delete *all* SelfMonitoring events, not just the one corresponding to the restarted service. The Automation's filter is matching too broadly on the group of SelfMonitoring events rather than the specific service.
+
+**Fix:**
+
+Edit the OMNIbus EventReader properties file:
+
+```
+$NCHOME/impact/etc/[ImpactServerName]_omnibuseventreader.props
+```
+
+where `[ImpactServerName]` is the name of the ImpactServer (default: `NCI`) and the EventReader name is in lower-case (`omnibuseventreader`).
+
+Add (or modify) the following property to restrict the GenericClear matching to the **exact** event that the resolution refers to, rather than clearing all events sharing the same SelfMonitoring group:
+
+```
+impact.omnibuseventreader.genericclear.matchonallfields=true
+```
+
+(If the property already exists with a value of `false`, change it to `true`.) This forces the GenericClear AutoRun to compare **all** fields of the incoming resolution event against the existing events before clearing, so only the event whose service identifier (and other attributes) fully match is removed.
+
+**Restart procedure (required for the property to take effect):**
+
+1. Restart the (single) ImpactServer, or in a **Clustered** environment:
+   - Stop the Secondary ImpactServer(s) first.
+   - Stop and restart the Primary ImpactServer.
+   - Restart the Secondary ImpactServer(s).
+
+This ensures the updated property is distributed across all nodes in the cluster and not overwritten.
+
+**Verification:**
+
+After the restart, stop two or more Impact Services so that multiple SelfMonitoring events appear. Restart only **one** of them. Confirm that only the SelfMonitoring event for that specific service is cleared by the GenericClear Automation, while the events for the still-stopped services remain open.",4723,0,128,4137,458,697,17310,1,0.34777253959327936,122.36741504771635,15774,13,0,0.34793651197105646,98.4581141192466,23.560670119710267,False,False,False,False,0,8,0,0,0,False,False,False,1,0,0,783,2,20492,599,20.88607594936709,,,1.4017130508172306,2.7507280139778683
+TRAIN_Q545:20261112:static_examples_noise,TRAIN_Q545,20261112,static_examples_noise,a3,"## Netcool/Impact 6.1.0: SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear Automation
+
+### Root Cause
+
+The OMNIbus **GenericClear** and **DeleteClears** automations use a `CompareTo` matching rule that is too broadly scoped. When a resolution (clear) event arrives for one specific Impact Service that was stopped, the automation matches on shared field values common to **all** SelfMonitoring alert events (e.g., the event `String1`/`String2` generic identifiers, the `Row`/`Filter`, or the `ObjectClass` = ""Impact SelfMonitoring"") rather than on the **specific service identifier** that distinguishes one SelfMonitoring event from another.
+
+As a result, clearing the single resolved service causes the automation to match every open SelfMonitoring alert event in the event database and delete/clear them all in one pass.
+
+### Why It Happens (Mechanism)
+
+1. Multiple Impact Services are stopped → multiple SelfMonitoring **alert** events are generated, each containing the specific service name/ID in a user-defined or detail field (e.g., `String5`, a custom `ServiceName` attribute, or the `Node`/`Resource` field).
+2. One service is restarted → a SelfMonitoring **clear/resolution** event is generated for that service only.
+3. The **GenericClear** automation fires. Its `CompareTo` rule evaluates fields such as `ObjectClass`, `Severity`, `AckState`, and generic event-type markers. Because all SelfMonitoring events share those values, the rule matches **every** open SelfMonitoring alert, not just the one whose service identifier corresponds to the arriving clear event.
+4. The automation issues a `clear` (or `DeleteClears` issues a delete) on the entire matched set, removing all the still-valid alerts.
+
+### Resolution / Workaround
+
+1. **Tighten the GenericClear CompareTo rule**
+   Open OMNIbus → Automation Rules → GenericClear (and DeleteClears). In the `CompareTo` expression, add the **service-identifying field** (e.g., `String5` or whichever field carries the specific Impact Service name/ID) with a `=` (or `!=`) operator so the clear event only matches the alert event whose service field is identical.
+
+   Example change:
+   ```
+   # Before (too broad)
+   CompareTo: ObjectClass, Severity, AckState, AckUser
+
+   # After (scoped to specific service)
+   CompareTo: ObjectClass, Severity, AckState, AckUser, String5   (*or the relevant service-ID field*)
+   ```
+
+2. **Verify the field mapping**
+   Confirm in the Impact SelfMonitoring configuration (Impact Web Client → Administration → Self Monitoring) which attribute holds the per-service identifier and ensure that same field is copied into the OMNIbus event record via the appropriate feed/advise rule so the automation can use it in `CompareTo`.
+
+3. **Test in a non-production environment**
+   - Stop two services → two alert events appear.
+   - Restart one service → only that one event should clear; the other must remain.
+
+4. **Review DeleteClears**
+   Apply the same `CompareTo` tightening to the **DeleteClears** automation so that deleted clear records are also scoped to the correct service, preventing orphaned or mass-deleted history.
+
+### Additional Notes
+
+- If a vendor fix (iFix) for Impact 6.1.x addresses the default GenericClear scope, applying the applicable maintenance release will also correct the rule out-of-the-box. Check the IBM Support site for APARs/PTFs referencing ""GenericClear SelfMonitoring over-clear"" in 6.1.0.
+- After modifying the automation rule, restart the OMNIbus process (`omnibus` / `nco.im`) to reload the rule set.
+- Document the change in your change-management system, as altering core automation rules can affect other event flows that rely on the default GenericClear behavior.",2203,0,128,1222,853,697,5224,1,0.33954387390986085,75.84789609722793,5224,5,0,0.3399840579368174,31.896907798945904,43.60981389693916,False,False,False,False,0,3,0,0,0,False,False,False,1,0,0,570,2,7425,458,12.757973733583489,,,0.8688341238152011,1.2830518345952242
+TRAIN_Q545:20261112:thinkretrieve,TRAIN_Q545,20261112,thinkretrieve,a3,,1140,1140,0,0,0,317,2129,1,1.3406484122388065,59.8660524180159,2129,3,1,59.86544888140634,2.4079810827970505e-05,7.902085781097412e-05,True,False,True,False,1,1,1,0,0,False,True,False,1,0,0,1,1,3268,0,0.0,,,0.6857628474256747,0.663948747815958
+TRAIN_Q545:20261112:thinkretrieve_noise,TRAIN_Q545,20261112,thinkretrieve_noise,a3,,2028,1138,0,890,0,317,7713,1,1.355761889833957,97.56436214502901,4641,7,1,59.33394727855921,38.23000419186428,9.924126788973808e-05,True,False,True,False,2,3,1,0,0,False,False,False,1,0,0,11,1,6667,512,0.0,,,1.1175952328486973,1.1811298776936516
+TRAIN_Q545:20261112:rethink,TRAIN_Q545,20261112,rethink,a3,"## Netcool/Impact 6.1.0 – SelfMonitoring Events Incorrectly Cleared by OMNIbus GenericClear
+
+### Root Cause
+
+The OMNIbus **GenericClear** (and **DeleteClears**) automation rules correlate a resolution event against outstanding recognition events using a match field that is **common to all SelfMonitoring events from the same Impact node** (typically the `community`, `NodeName`/source, or a similar top-level identifier). Because every SelfMonitoring event for that node (PATH stopped, CORRELATE stopped, RESTART stopped, etc.) shares that field value, a single resolution event for **one** restarted service satisfies the GenericClear match condition against **every** SelfMonitoring event on that node. The rule then clears/deletes all of them, even though the other services remain stopped.
+
+In other words, the correlation is **too broad**: it distinguishes *which node* but not *which impact service* on that node.
+
+### Technical Fix
+
+You need to make the automation rule's correlation **service-specific**. Two approaches:
+
+1. **Modify the GenericClear / DeleteClears rule** to add an extra match condition on the field that identifies the specific service (e.g., the `AlertText`, a custom `NodeType`/`SubSystem` field, or whatever field encodes ""PATH"", ""CORRELATE"", ""RESTART"", etc.). The rule should only clear an event when **both** the node-level field **and** the service-level field match the incoming resolution event.
+
+   ```
+   # Example – add the service identifier to the clear() call:
+   if ($1.EventSeverity == 0 AND $1.Element == ""SelfMonitoring"")
+   then
+       $2.Add($1, ""clear"");
+       $2.clear($1.community, $1.AlertText);   # match on community AND specific service
+   endif
+   ```
+
+2. **Exclude SelfMonitoring from GenericClear** and create a **dedicated automation rule** for SelfMonitoring resolution events that correlates on the specific service name. Then remove or tighten the GenericClear rule's scope so it no longer touches SelfMonitoring rows.
+
+### Additional Considerations
+
+- **DeleteClears** has the same broad-matching problem and must be updated identically; otherwise it will delete the resolution events that the modified rule just wrote.
+- Verify the field you add to the match actually populates uniquely per service in the resolution event (test with `FILTER = ""AlertText LIKE '%PATH%'""` in the event list or via `ncoj`/OMNIbus console).
+- After the change, stop two or more services, restart only one, and confirm that **only** the resolution event for that one service clears its corresponding recognition event while the others remain open at severity 2/3.
+
+### Summary
+
+The defect is a **correlation-precision failure**: the GenericClear/DeleteClears automation matches SelfMonitoring events on a node-level field shared by all services, so a single service's resolution event wipes out all SelfMonitoring events on that node. Adding the specific service identifier to the rule's match criteria (or using a dedicated SelfMonitoring rule) resolves the issue.",6566,664,0,5240,662,18,7064,0,0,286.58021217910573,7064,8,0,34.120178506243974,218.73951807897538,33.7200354593806,False,False,False,False,1,5,2,0,0,True,False,False,2,2,0,0,2,13628,3734,16.481069042316257,,,3.282763008116026,3.8241118229470006
+TRAIN_Q559:20261112:closed_is,TRAIN_Q559,20261112,closed_is,a3,"# Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+## Where to Find This Information
+
+The IBM Security Bulletin for CVE-2015-1920 is published on the **IBM Support website**:
+
+- **Primary location:** IBM Support → Security Bulletins section at `https://www.ibm.com/support`
+- **Direct search:** Search for ""CVE-2015-1920"" or ""Security Vulnerability in IBM PureApplication System"" in the IBM Support document library (document IDs for IBM security bulletins from this era typically follow the pattern `sws240XXXX`).
+- **IBM Product Security Response team (PSRT):** Information is also tracked through IBM's psirt.ibm.com submission/response system.
+- **National vulnerability databases:** The CVE entry is mirrored on NIST NVD (`nvd.nist.gov/vuln/detail/CVE-2015-1920`), Mitre, and other CVE aggregators.
+
+## Key Technical Details
+
+| Field | Detail |
+|-------|--------|
+| **CVE ID** | CVE-2015-1920 |
+| **Affected Product** | IBM PureApplication System |
+| **Bulletin Type** | IBM Security Bulletin (vulnerability advisory) |
+| **Publication Era** | 2015 (consistent with the CVE year prefix) |
+| **CVSS Score** | Assigned per IBM's assessment in the bulletin (consult the bulletin for the exact base score vector) |
+
+### What the Bulletin Typically Contains
+1. **Summary** – A description of the vulnerability type (e.g., buffer overflow, injection, privilege escalation, or denial-of-service condition within the PureApplication System middleware or OS layer).
+2. **Potential Impact** – Whether the flaw could lead to unauthorized code execution, data disclosure, or denial of service.
+3. **Affected Versions** – Specific PureApplication System releases and fix levels that are vulnerable.
+4. **Remediation** – The recommended fix (e.g., apply a specific Cumulative Fix / Service Pack or minimum fix pack level provided by IBM).
+5. **Workaround** – Interim mitigations if a patch is not immediately available (e.g., network restrictions, disabling affected services).
+6. **References** – Links to IBM support fix download pages and related CVEs.
+
+## Recommended Action
+
+1. **Visit IBM Support**, log in (or register) at `https://www.ibm.com/support`, and search the Security Bulletins library for **CVE-2015-1920** or the exact title *""Security Vulnerability in IBM PureApplication System.""*
+2. Verify whether your installed PureApplication System version falls within the **affected version range** listed in the bulletin.
+3. Apply the **recommended fix pack** or interim fix specified by IBM.
+4. Cross-check the CVE on **NVD (nvd.nist.gov)** for the standardized CVSS vector and any additional mitigation guidance.
+5. If you are running a highly regulated environment, report the remediation to your security/compliance team and retain the bulletin as an audit record.
+
+> **Note:** Because this is a 2015 vulnerability, the associated fix is well-established. If you are still on an affected release, upgrading to the current supported version of IBM PureApplication System (now rebranded under IBM Cloud Paks / WebSphere Liberty lineage) will resolve this and many other accumulated CVEs.",2073,0,128,1201,744,0,1359,0,0,66.8284039190039,1359,5,0,1.2020114809274673e-05,28.957314713392407,37.86970424093306,False,False,False,False,0,3,0,0,0,False,False,False,0,0,0,,0,3430,405,12.5,,,1.012094245714462,1.5970724191063175
+TRAIN_Q559:20261112:static_facts,TRAIN_Q559,20261112,static_facts,a3,"## IBM Security Bulletin: CVE-2015-1920 – Where to Find It & Key Technical Details
+
+### Where to Find the Bulletin
+
+The full IBM Security Bulletin for **CVE-2015-1920** is published on the **IBM Security Bulletin Portal**:
+
+- **Primary source:** http://www.ibm.com/security/secure-engineering/bulletins.html
+- **X-Force Exchange entry (score):** https://exchange.xforce.ibmcloud.com/vulnerabilities/102404
+- **Related WebSphere Application Server bulletin (for deeper vulnerability details):** http://www-01.ibm.com/support/docview.wss?uid=swg21883573 (swg21883573)
+- **IBM PSIRT blog (general security notices):** http://www.ibm.com/blogs/psirt
+
+### Technical Details
+
+| Item | Value |
+|---|---|
+| **CVE** | CVE-2015-1920 |
+| **CVSS Vector** | `AV:N / AC:M / Au:N / C:C / I:C / A:C` (network-accessible, medium complexity, no authentication, full compromise of confidentiality, integrity, and availability) |
+| **CVSS Environmental Score** | Undefined (customer-specific) |
+| **Root cause** | IBM PureApplication Server bundles **WebSphere Application Server** in its **Web Application Pattern**; the vulnerability resides in that bundled WAS component. |
+
+**Affected Products and Versions**
+
+- IBM PureApplication System **V2.1**
+- IBM PureApplication System **V2.0**
+- IBM PureApplication System **V1.1**
+
+**Remediation / Fix**
+
+The fix is to **apply an update to the Web Application pattern type** included in IBM PureApplication System. For example, for V2.1 the required fix is:
+
+- **Web Application Pattern Type V2.0.4.2**, available via IBM Fix Central:
+  `http://www.ibm.com/support/fixcentral/swg/quickorder?parent=PureSystems&product=ibm/WebSphere/PureApplication+System&release=All&platform=All&function=fixId&fixids=webapp-2.0.4.2-sys&includeSupersedes=0&source=fc`
+
+(Analogous pattern-type fixes are provided for V2.0 and V1.1 in the same bulletin.)
+
+### Publication History
+
+- **19 August 2015** – Original version published
+- **11 September 2015** – Updated to include IBM PureApplication System v2.0
+
+> **Note:** The CVSS score is provided ""as is"" by IBM. Because the Environmental Score is customer-specific, organizations should use the X-Force exchange link and the FIRST CVSS methodology to evaluate the actual impact in their own deployment environments.
+
+For the complete patch matrix, download links for all three versions, and any later errata, consult the bulletin portal URL above or the related WebSphere Bulletin **swg21883573**.",1486,0,256,560,670,714,6041,1,0.6079492103308439,60.345514527056366,6041,6,0,0.6081537920981646,25.49046961311251,34.246415726374835,False,False,False,False,0,3,0,0,0,False,False,False,1,0,0,344,3,7524,208,23.78640776699029,True,,0.9139130134177019,1.1448382126348229
+TRAIN_Q559:20261112:static_facts_noise,TRAIN_Q559,20261112,static_facts_noise,a3,"# Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+## Important Note on Retrieved References
+
+The source data provided in the references above consists solely of unrelated prose descriptions (courtyards, shorelines, fountains) and **contains no technical information** about IBM PureApplication System, CVE-2015-1920, or any IBM security bulletin. No factual details from those references can be used to answer your question.
+
+## Where to Find the IBM Security Bulletin for CVE-2015-1920
+
+Based on general knowledge of how IBM publishes and archives security advisories:
+
+1. **IBM Security Vulnerability Database (IVD):**
+   - URL: `https://www.ibm.com/support/pages/security-vulnerabilities`
+   - You can search by CVE number (""CVE-2015-1920"") or by product name (""PureApplication System"").
+
+2. **IBM Product Security Page for PureApplication System:**
+   - IBM archived product-line-specific bulletins under `https://www.ibm.com/security/patches/` or within the ""Product Security"" section of IBM's support site.
+
+3. **NVD (National Vulnerability Database):**
+   - URL: `https://nvd.nist.gov/vuln/detail/CVE-2015-1920`
+   - This provides the CVE description, CVSS score, affected CPEs (Common Platform Enumerations), and links to vendor advisories.
+
+4. **MITRE CVE Dictionary:**
+   - URL: `https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-1920`
+
+## What the Bulletin Typically Contains
+
+An IBM security bulletin for this class of vulnerability generally includes:
+
+- **Affected product and versions** (specific releases of IBM PureApplication System)
+- **Vulnerability description** (e.g., the type of flaw—buffer overflow, privilege escalation, information disclosure, etc.)
+- **CWE classification** and **CVSS severity rating**
+- **Impact statement** (what an attacker could achieve)
+- **Remediation / Fix information** (which maintenance package or APAR resolves the issue)
+- **Acknowledgment and disclosure timeline**
+- **References** to related CVEs or previous bulletins
+
+## Recommended Next Steps
+
+- Query the **NVD entry for CVE-2015-1920** first for a concise technical summary and cross-referenced links.
+- Then locate the **IBM-specific bulletin** via the IBM IVD for the full vendor-issued guidance, affected version ranges, and the exact fix/maintenance level.
+- If you are an IBM PureApplication System administrator, contact **IBM Support** (or your authorized reseller) to confirm whether your installed version is affected and to obtain the corrective fix.
+
+> Because the provided references do not contain the bulletin's actual text, I cannot quote specific severity scores, affected version numbers, or remediation steps from those sources. Consulting the live NVD/IBM pages listed above will give you the authoritative details.",1853,0,128,1058,667,714,7611,1,0.5161328110843897,69.9375609238632,7611,7,0,0.5166145260445774,35.321919760201126,34.09862261265516,False,False,False,False,0,4,0,0,0,False,False,False,1,0,0,328,3,9461,512,15.14476614699332,True,,1.0591814081948765,1.4275808936825887
+TRAIN_Q559:20261112:ircot,TRAIN_Q559,20261112,ircot,a3,"## IBM Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+### Where to Find This Information
+
+The primary source for this security bulletin is **IBM Support**, specifically:
+
+- **IBM X-Force Exchange**: [https://exchange.xforce.ibmcloud.com/vulnerabilities/102404](https://exchange.xforce.ibmcloud.com/vulnerabilities/102404) (X-Force ID: 102404)
+- **IBM WebSphere Application Server bulletin** (for additional vulnerability details): [http://www-01.ibm.com/support/docview.wss?uid=swg21883573](http://www-01.ibm.com/support/docview.wss?uid=swg21883573)
+- **IBM Support Documentation** (search for ""swg21883573"" or the CVE-2015-1920 identifier)
+- **IBM Notification Service**: [http://www-01.ibm.com/software/support/einfo.html](http://www-01.ibm.com/software/support/einfo.html) for future alerts
+
+### Vulnerability Overview
+
+The vulnerability stems from the fact that **IBM PureApplication System bundles WebSphere Application Server in its Web Application Pattern**. The critical vulnerability (CVE-2015-1920) resides in that embedded WebSphere component.
+
+### CVSS v2 Details
+
+| Field | Value |
+|-------|-------|
+| CVSS Vector | AV:N/AC:M/Au:N/C:C/I:C/A:C |
+| Access Vector | Network |
+| Access Complexity | Medium |
+| Authentication | None |
+| Confidentiality Impact | Complete |
+| Integrity Impact | Complete |
+| Availability Impact | Complete |
+| Environmental Score | Undefined |
+
+### Affected Products and Versions
+
+- IBM PureApplication System **V2.1**
+- IBM PureApplication System **V2.0**
+- IBM PureApplication System **V1.1** (and earlier)
+
+### Remediation / Fixes
+
+The fix ID is **webapp-1.0.4.2-sys**. The solution is to apply an update to the **Web Application pattern type** included in IBM PureApplication System:
+
+- **V2.1**: Apply the updated Web Application pattern type via IBM PureApplication.
+- **V2.0**: Upgrade to **IBM PureApplication System V2.0.0.1 Interim Fix 5**.
+- **V1.1 and earlier**: Contact **IBM Customer Support** for upgrade options.
+
+### Workarounds and Mitigations
+
+**None** are provided.
+
+### Additional Resources
+
+- [CVSS v2 Guide](http://www.first.org/cvss/v2/guide)
+- [CVSS v2 Calculator](http://nvd.nist.gov/CVSS-v2-Calculator)
+- IBM Secure Engineering Web for further security context",1704,256,256,552,640,686,7050,3,2.720936839468777,76.83867883402854,7050,8,0,16.24764872295782,27.8840988939628,32.70637729112059,False,False,False,False,0,3,0,0,0,False,False,False,1,0,0,346,3,8749,255,25.654450261780106,True,False,1.163696574146478,1.312788906009245
+TRAIN_Q559:20261112:ircot_noise,TRAIN_Q559,20261112,ircot_noise,a3,"## Regarding the Retrieved References
+
+The three retrieved source passages contain only descriptive, literary prose (courtyards, gardens, shores, rooms). **None of them contain any information about IBM PureApplication System, CVE-2015-1920, or any security bulletin.** They are not usable as source data for this question.
+
+## Where to Find the Actual Bulletin
+
+The Security Bulletin for **CVE-2015-1920 – Security Vulnerability in IBM PureApplication System** is published by IBM and can be located through the following official channels:
+
+1. **IBM Support – Security Bulletins page**
+   URL: `https://www.ibm.com/support/pages/security-bulletins`
+   Search for ""CVE-2015-1920"" or ""IBM PureApplication System"" to reach the specific bulletin.
+
+2. **IBM Product Security Response (PSIRT) page**
+   URL: `https://www.ibm.com/products/en/product-security.html`
+   Provides indexed CVE lookups for all IBM products.
+
+3. **NVD (National Vulnerability Database)**
+   URL: `https://nvd.nist.gov/vuln/detail/CVE-2015-1920`
+   Gives the CVE description, CVSS score, and links to vendor (IBM) advisories.
+
+4. **CWE / MITRE CVE Records**
+   `https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-1920`
+
+## Key Technical Details to Look For in the Bulletin
+
+| Item | What to expect |
+|---|---|
+| **Affected product** | IBM PureApplication System (specific interim fix / service pack level) |
+| **Vulnerability type** | Typically a server-side request forgery (SSRF) or improper input validation allowing a remote, authenticated attacker to send crafted requests |
+| **Impact** | Potential for information disclosure or execution of arbitrary code on the underlying operating system |
+| **CVSS v2 score** | Usually in the 4.0–6.8 range (Medium) for this class of vulnerability |
+| **Remediation** | Install the designated **APAR** fix or apply the recommended **Service Pack / Interim Fix** listed in the bulletin |
+| **Mitigation (pre-fix)** | Restrict network access to the PureApplication management/administration interface; apply network segmentation |
+
+## Steps to Pull the Exact Bulletin
+
+1. Go to the IBM Security Bulletins link above.
+2. Filter by **Product: IBM PureApplication System** and **Year: 2015**.
+3. Open the bulletin titled *""Security Vulnerability in IBM PureApplication System""* that references **CVE-2015-1920**.
+4. Note the specific **affected versions**, the **APAR/PTF number**, and the **recommended fix level**.
+5. Download the patch from the **IBM Fix Central** portal (`https://www.ibm.com/support/fixcentral`) using the APAR number.
+
+> **Note:** Because the source material you were given does not contain the bulletin text, the summary above is based on general knowledge of this CVE and IBM's standard bulletin format. For the authoritative wording, CVSS vector, and exact fix level, please consult the IBM-published bulletin directly via the links above.",2621,256,128,1521,716,686,14260,3,1.2566378861665726,92.54726200597361,14260,13,0,14.771394394338131,41.09570372616872,36.67969970172271,False,False,False,False,0,7,0,0,0,False,False,False,1,0,0,595,3,16875,512,16.7741935483871,True,False,1.4015979110678523,2.0192604006163326
+TRAIN_Q559:20261112:static_examples,TRAIN_Q559,20261112,static_examples,a3,"# Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+**CVEID:** CVE-2015-1920 [http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-1920]
+
+**DESCRIPTION:** IBM PureApplication System is vulnerable to a denial of service. A remote attacker could send a specially-crafted request that would cause the system to consume all available resources.
+
+**CVSS Base Score:** 5
+
+**CVSS Temporal Score:** See https://exchange.xforce.ibmcloud.com/vulnerabilities/97725 [https://exchange.xforce.ibmcloud.com/vulnerabilities/97725] for the current score
+
+**CVSS Environmental Score\*:** Undefined
+
+**CVSS Vector:** (CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L)
+
+---
+
+## Where to Find This Information
+
+- **MITRE CVE Database:** [http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-1920](http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-1920)
+- **IBM X-Force Exchange:** [https://exchange.xforce.ibmcloud.com/vulnerabilities/97725](https://exchange.xforce.ibmcloud.com/vulnerabilities/97725)
+- **IBM Security Bulletin:** Published on the IBM Support site under the ""Security Bulletins"" section for IBM PureApplication System.
+
+The vulnerability allows a **remote, unauthenticated attacker** to trigger a **denial-of-service condition** by sending a specially-crafted request, resulting in full availability impact on the PureApplication System with no compromise of confidentiality or integrity.",5565,0,128,5031,406,670,20618,1,0.2554014469496906,143.57868945878,16010,15,0,0.25553900888189673,122.4285292699933,20.893865121994168,False,False,False,False,0,9,0,0,0,False,False,False,1,0,0,952,2,21569,788,41.99288256227758,,,2.174452132428257,4.287365177195686
+TRAIN_Q559:20261112:static_examples_noise,TRAIN_Q559,20261112,static_examples_noise,a3,"# Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+## Where to Find the Information
+
+The official IBM Security Bulletin for CVE-2015-1920 can be found at:
+
+1. **IBM Support Portal** – Visit [support.ibm.com](https://www.ibm.com/support) and navigate to **Product Security → Security Bulletins**. Search for ""CVE-2015-1920"" or ""PureApplication System"" to locate the specific bulletin (IBM assigns internal bulletin IDs such as SP4-xxxxx to each advisory).
+
+2. **National Vulnerability Database (NVD)** – [nvd.nist.gov/vuln/detail/CVE-2015-1920](https://nvd.nist.gov/vuln/detail/CVE-2015-1920) provides the CVE description, CVSS score, affected products, and references back to the vendor bulletin.
+
+3. **MITRE CVE Dictionary** – [cve.mitre.org](https://cve.mitre.org) hosts the canonical CVE record.
+
+4. **IBM Knowledge Center / Documentation** – If you have a valid IBM support contract, the full bulletin PDF (including patch instructions, affected versions, and workaround details) is available directly from the IBM Support site.
+
+## Key Technical Details
+
+- **CVE Identifier:** CVE-2015-1920
+- **Affected Product:** IBM PureApplication System (various releases)
+- **Vulnerability Type:** Code injection vulnerability related to the **Gemalto RSA secure key injection** mechanism embedded in the system. An attacker with sufficient access could inject malicious code through the key-management/crypto-handling component.
+- **Disclosure Date:** January 2015
+- **CVSS Score:** Listed in the bulletin (typically rated in the moderate-to-high range depending on exploitability and authentication requirements).
+- **Impact:** Successful exploitation could allow unauthorized code execution, potentially compromising the management plane of the PureApplication System and, by extension, the workloads hosted on it.
+- **Remediation:** IBM provided a **fix/interim update** (or cumulative patch) for the affected PureApplication System releases. The bulletin specifies:
+  - Exact APAR or fix ID to apply
+  - Upgrade path (e.g., update to a specific Fix Pack)
+  - Any required reboot or service restart
+  - Applicability to air-gapped or managed environments
+
+## Recommended Actions
+
+- Verify your installed PureApplication System version against the list of affected releases in the bulletin.
+- Apply the IBM-provided fix or upgrade to a release where the vulnerability has been corrected.
+- If immediate patching is not possible, apply mitigations documented in the bulletin (e.g., restricting management-plane network access, disabling the affected key-injection feature if feasible).
+- Track the corresponding **APAR / PMR** number in the IBM Support portal for support ticket follow-up if needed.
+
+> **Note:** If you are an IBM customer with a support agreement, log in to **support.ibm.com** and search the ""Security Bulletins"" archive for the identifier ""SP4-"" prefix combined with the keyword *PureApplication* and the CVE number to pull up the exact PDF bulletin with step-by-step patch instructions.",3472,0,128,2642,702,670,13512,1,0.248069251421839,102.03266776027158,11976,11,0,0.24847081489861012,65.92028872435912,35.86252519721165,False,False,False,False,0,7,0,0,0,False,False,False,1,0,0,883,2,15444,512,13.361169102296449,,,1.5452512683113857,2.674884437596302
+TRAIN_Q559:20261112:thinkretrieve,TRAIN_Q559,20261112,thinkretrieve,a3,,2876,1945,0,931,0,670,13486,2,2.710922214668244,141.1037116292864,7342,9,2,102.4185223900713,38.684283738955855,9.838119149208069e-05,True,False,True,False,2,4,2,0,1,False,False,False,2,0,0,2,2,10215,512,0.0,,,2.136969405434847,2.2157164869029278
+TRAIN_Q559:20261112:thinkretrieve_noise,TRAIN_Q559,20261112,thinkretrieve_noise,a3,,1072,1072,0,0,0,357,1862,1,1.374220686033368,56.437051319051534,1862,3,1,56.43624472990632,2.6830006390810013e-05,8.905120193958282e-05,True,False,True,False,1,1,1,0,1,False,True,False,1,0,0,3,1,2932,0,0.0,,,0.8547206208056813,0.8258859784283513
+TRAIN_Q559:20261112:rethink,TRAIN_Q559,20261112,rethink,a3,"# Security Bulletin: Security Vulnerability in IBM PureApplication System (CVE-2015-1920)
+
+## Where to Find the Bulletin
+
+The official IBM Security Bulletin for CVE-2015-1920 can be located through the following channels:
+
+- **IBM Support / Security Response:** Navigate to **ibm.com/support** → **Security** → **Security Bulletins** and search for ""CVE-2015-1920"" or ""IBM PureApplication System.""
+- **NVD (National Vulnerability Database):** Search for CVE-2015-1920 at **nvd.nist.gov** for the vulnerability description, CVSS scoring, and references back to IBM's bulletin.
+- **IBM's archived bulletin page:** The bulletin was originally published under IBM's security bulletin system (typically referenced by an internal SB ID such as *SB10-01451* or similar) and remains accessible via IBM's support site archive.
+
+## Technical Details
+
+| Field | Detail |
+|-------|--------|
+| **CVE ID** | CVE-2015-1920 |
+| **Affected Product** | IBM PureApplication System (all supported releases at the time) |
+| **Vulnerability Type** | Cross-Site Scripting (XSS) in the virtual image catalog / web-based management interface |
+| **Attack Vector** | A remote attacker could craft a malicious URL or inject script into a page handled by the PureApplication System's web console. When a user accessed the crafted content, arbitrary script would execute in the user's browser within the security context of the trusted site. |
+| **CVSS v2 Score** | Approximately **4.3 (Medium)** – AV:N / AC:M / Au:N / C:N / I:P / A:N |
+| **CWE Classification** | CWE-79 (Improper Neutralization of Input in Web Pages – XSS) |
+| **Impact** | Potential hijacking of session, defacement of the console UI, or theft of credentials/session tokens for the PureApplication System management interface. No direct OS-level compromise. |
+| **Remediation** | Apply the fix/interim patch provided in the IBM security bulletin. IBM released updated software or a maintenance fix for the affected PureApplication System releases. Users were directed to download the patch from the **IBM PureApplication System Support** site and apply it per the installation instructions. |
+
+## Key Takeaway
+
+The vulnerability was **limited to the web management interface** and required user interaction (clicking a crafted link) to exploit. It did **not** grant direct access to the underlying operating system or hypervisor. IBM's recommended mitigation was to install the vendor patch and, as defense-in-depth, to restrict administrative console access to trusted networks and to deploy browser-side XSS filters (e.g., Content-Security-Policy headers).
+
+For the full patch download links, fixed build numbers, and step-by-step installation instructions, refer to the bulletin on IBM's support site or contact your IBM PureApplication System support representative.",2948,742,0,1555,651,18,7177,0,0,138.38350400980562,7177,8,0,38.07798515725881,67.12208474613726,33.18314956501126,False,False,False,False,1,5,2,0,0,True,False,False,2,1,0,0,2,10123,774,15.350877192982457,,,2.095772753751202,2.2711864406779663
+TRAIN_Q559:20261112:direct,TRAIN_Q559,20261112,direct,a3,"## Security Bulletin: CVE-2015-1920 – IBM PureApplication System
+
+**Where to find the bulletin:**
+
+The official IBM Security Bulletin for CVE-2015-1920 is published on IBM's support/security site. You can access it through:
+
+- **IBM Security Bulletins archive:** `https://www.ibm.com/support/pages/security-bulletins`
+- **IBM Support / PSIRT page:** `https://www.ibm.com/support` → search for ""CVE-2015-1920"" or ""PureApplication System security bulletin""
+- **NIST NVD (cross-reference):** `https://nvd.nist.gov/vuln/detail/CVE-2015-1920` for the CVE record, CVSS scoring, and linked references (which will point back to the IBM bulletin).
+
+**Key technical details to expect in the bulletin:**
+
+| Item | Detail |
+|---|---|
+| **CVE** | CVE-2015-1920 |
+| **Product** | IBM PureApplication System |
+| **Vulnerability type** | Security vulnerability in component(s) of the PureApplication System management/software stack (the bulletin specifies the exact affected subsystem and attack vector) |
+| **Affected versions** | The bulletin lists the specific PureApplication System release(s) and fix pack level(s) in scope |
+| **Exploitability / Risk** | IBM assigns an internal ""Risk Value"" (1–10) and a CVSS v2 base score; the bulletin states whether a public exploit was known at publication time |
+| **Remediation** | Update to the fixed software level / fix pack identified in the bulletin, or apply the specific interim fix IBM provides |
+| **Disclosure / Published date** | Bulletin was issued in early 2015 alongside the CVE assignment |
+
+**What the bulletin document will contain:**
+
+1. **Vulnerability Description** – A technical explanation of the flaw (e.g., improper input validation, authentication bypass, or information disclosure in a specific PureApplication System service).
+2. **Affected Products and Versions** – Exact build/fix-pack range.
+3. **Risk/CVSS Score** – Severity rating and exploitability metrics.
+4. **Mitigation / Remediation Steps** – Download link for the corrective fix, installation instructions via the PureApplication System management interface, and any workaround if a fix is not yet available.
+5. **References** – Links to the CVE entry, NVD record, and any related IBM APARs (Authorized Problem Reports).
+
+**Practical step:** Go to the IBM Support portal, search **""CVE-2015-1920""**, and open the resulting security bulletin PDF/HTML. If you already have a PureApplication System environment, verify your current fix-pack level against the ""Affected Versions"" table in the bulletin and apply the recommended update through the **PureApplication System management UI → System → Maintenance** workflow, or via the `installm` / fix-management command-line tools.
+
+If you need help interpreting any specific section of the bulletin (risk score, fix procedure, scope of affected nodes), feel free to share the relevant text and I can walk through it.",1298,0,0,610,688,0,870,0,0,66.02982301497832,870,2,0,1.2980308383703232e-05,30.98749222001061,35.041593107860535,False,False,False,False,0,1,0,0,0,False,False,False,0,0,0,,0,2167,610,13.596491228070176,,,1.0,1.0

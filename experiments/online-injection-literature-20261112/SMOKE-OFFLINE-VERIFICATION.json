@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "byte_identical": [
+    "answers.jsonl",
+    "audit.json",
+    "REPORT.md",
+    "scores.csv",
+    "summary.json"
+  ],
+  "generation_sha256": "4f287aed545dce571fbf291b1a860dc0446836b1ae7b945a62119569facea646"
+}

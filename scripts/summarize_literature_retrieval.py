@@ -322,7 +322,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     with (output/'scores.csv').open('w',newline='',encoding='utf-8') as f:
         w=csv.DictWriter(f,fieldnames=list(all_rows[0]));w.writeheader();w.writerows(all_rows)
     text=['# IRCoT / ThinkRetrieve: frozen IS reader','',f'{len(expected_cases)} questions, {len(expected_seeds)} seeds, {len(all_rows)} measurements.',
-        '', 'F1 is word overlap on a 0–100 scale. Equal total generation allowances; actual costs differ. All controller and discarded candidate generation is included. Direct means one ordinary thinking trajectory, with no retrieval or IS. Every latency is measured from a cold prefix cache; initial model/index loading and warm-up are excluded.',
+        '', 'F1 is word overlap on a 0–100 scale. All IS arms share a 65,536-token search/controller allowance and an 8,192-token retained-thinking cap; actual costs differ. All controller and discarded candidate generation is included. Direct uses one ordinary thinking trajectory capped at 8,192 tokens, with no retrieval or IS. Every arm has the same 16,384-token final-answer cap. Every latency is measured from a cold prefix cache; initial model/index loading and warm-up are excluded.',
         '', '| Arm | F1 | Generated tokens | Retrieval seconds | End-to-end seconds | Latency / direct | Paired geometric ratio | Empty | Truncated |',
         '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
     for r in summary:text.append(f"| {r['arm']} | {r['f1']:.3f} | {r['mean_generation_tokens']:.1f} | {r['mean_retrieval_seconds']:.3f} | {r['mean_seconds']:.2f} | {r['latency_ratio_of_means']:.3f} | {r['geomean_paired_latency_ratio']:.3f} | {r['empty']} | {r['truncated']} |")

@@ -1,0 +1,22 @@
+{
+  "baseline_commit": "d9caf9e74cdc076824bcda5d0899f164f1d16e59",
+  "files": {
+    "src/inference_scaling/arllm/algorithms/__init__.py": "42dc269e09672646dae986101c5f5c229adc08caab3f867cf671ce419dc145c2",
+    "src/inference_scaling/arllm/algorithms/candidates.py": "5ed588025787623e37ade66e439def02c42b7ee614d9ced0f2c507c974629112",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py": "18b9db92e4c30397a182f57ca24b3dc66f571bd55475e183ccdba632f56c6c89",
+    "src/inference_scaling/arllm/algorithms/config.py": "61d83bfa9c25292d018976e79fca44f03186b325e9809cc30043ee923d4f67d4",
+    "src/inference_scaling/arllm/algorithms/ensemble_mh.py": "b793489dc1ebd70711a381bfa41e1cd6d2932fdb514a84d4c21062ff5b4f2d6a",
+    "src/inference_scaling/arllm/algorithms/ensemble_schedule.py": "4f290c715e76bbb4ffbc09b93f63153ca15d29fea5b80fbcaf8962d832173804",
+    "src/inference_scaling/arllm/algorithms/mh.py": "e4cdada79bf9682a9fd0292f2ba2f107637724d37d2e12289bf7683517778807",
+    "src/inference_scaling/retrieval/cot_guidance.py": "b542f02805eb6f03ca59265590006e6d74b7e4e32860872406e3e4bc471bf286",
+    "src/inference_scaling/shared/rewards/__init__.py": "4328a6e4afb14aed031b239c300eaec6f0845984c92e21a1c764b33daf2650c4",
+    "src/inference_scaling/shared/rewards/consilience.py": "87f25dd7ff863b9a37015897fd9da43897b0574af8772a432927fc5132e32649",
+    "src/inference_scaling/shared/rewards/vote.py": "1cc70ed32a429a5081cba3ff91066a9e0331ad84dc282bf36f1a4d45a1658343",
+    "src/inference_scaling/shared/sampling/__init__.py": "f8289736598df5d533852e28a7d7c0a99e9970e27a6900495acc9294b766b06b",
+    "src/inference_scaling/shared/sampling/conditional_is.py": "ad9bf046d0547467297bc53fad69407b7ad103d6a33b2929ddc989b2a8d0d15d",
+    "src/inference_scaling/shared/sampling/importance.py": "66cc3981d62845debcdba1a40866ed980d5eb35e5a2f7cfb16d0eb1652af0ee1",
+    "src/inference_scaling/shared/sampling/mh.py": "5daf3ffa7a9011673692d11f260c1651e4136debe61fe4df52fd3c31246eaef1",
+    "src/inference_scaling/shared/sampling/nonself.py": "e17f34ee05122043474dfc40aef5bf73cb8306e4acdf21a363559da296d5616c",
+    "src/inference_scaling/shared/sampling/stratified.py": "6725587a40fd4db968b66c14f6be1b1f3ed8cb95e006ca8aa0213de074196de9"
+  }
+}

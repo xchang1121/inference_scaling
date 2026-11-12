@@ -1,0 +1,2861 @@
+{
+  "stage": "formal",
+  "questions": 16,
+  "seeds": [
+    20261112,
+    20261113
+  ],
+  "measurements": 352,
+  "summary": [
+    {
+      "arm": "direct",
+      "n": 32,
+      "f1": 9.401798739271614,
+      "mean_generation_tokens": 1465.90625,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 0.0,
+      "mean_search_tokens": 669.96875,
+      "mean_answer_tokens": 795.9375,
+      "mean_injected_tokens": 0.0,
+      "mean_requested_prefix_tokens": 948.09375,
+      "mean_native_prefill_tokens": 900.09375,
+      "mean_engine_requests": 2.0,
+      "mean_retrieval_calls": 0.0,
+      "mean_retrieval_seconds": 0.0,
+      "mean_seconds": 74.97547555799247,
+      "mean_controller_seconds": 1.2327320291660726e-05,
+      "mean_search_seconds": 34.22254848832381,
+      "mean_answer_seconds": 40.752472523075994,
+      "mean_forward_token_slots": 2365.0,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 32,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 0,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.0,
+      "geomean_paired_latency_ratio": 1.0,
+      "mean_thinking_after_last_injection": null,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 2420
+    },
+    {
+      "arm": "closed_is",
+      "n": 32,
+      "f1": 9.24478306725407,
+      "mean_generation_tokens": 3027.8125,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 136.0,
+      "mean_search_tokens": 2129.78125,
+      "mean_answer_tokens": 762.03125,
+      "mean_injected_tokens": 0.0,
+      "mean_requested_prefix_tokens": 4752.3125,
+      "mean_native_prefill_tokens": 4752.3125,
+      "mean_engine_requests": 9.21875,
+      "mean_retrieval_calls": 0.0,
+      "mean_retrieval_seconds": 0.0,
+      "mean_seconds": 92.45472010402591,
+      "mean_controller_seconds": 7.45413126423955e-06,
+      "mean_search_seconds": 53.44434799710871,
+      "mean_answer_seconds": 39.01014967398078,
+      "mean_forward_token_slots": 7776.4375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 178,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 0,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.2331328266469412,
+      "geomean_paired_latency_ratio": 1.2285241812261976,
+      "mean_thinking_after_last_injection": null,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1441
+    },
+    {
+      "arm": "static_facts",
+      "n": 32,
+      "f1": 14.481756922986499,
+      "mean_generation_tokens": 1813.875,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 142.6875,
+      "mean_search_tokens": 1127.96875,
+      "mean_answer_tokens": 543.21875,
+      "mean_injected_tokens": 672.5625,
+      "mean_requested_prefix_tokens": 6904.5,
+      "mean_native_prefill_tokens": 6520.5,
+      "mean_engine_requests": 6.5,
+      "mean_retrieval_calls": 1.0,
+      "mean_retrieval_seconds": 0.6046343135385541,
+      "mean_seconds": 60.849862091301475,
+      "mean_controller_seconds": 0.6048303798306733,
+      "mean_search_seconds": 32.259845733380644,
+      "mean_answer_seconds": 27.984435214631958,
+      "mean_forward_token_slots": 8331.84375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 127,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 0.8115968806924735,
+      "geomean_paired_latency_ratio": 0.7934795457936452,
+      "mean_thinking_after_last_injection": 423.90625,
+      "retrieved_gold_document_count": 16,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1081
+    },
+    {
+      "arm": "static_facts_noise",
+      "n": 32,
+      "f1": 9.06999611078026,
+      "mean_generation_tokens": 2566.65625,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 128.0,
+      "mean_search_tokens": 1736.1875,
+      "mean_answer_tokens": 702.46875,
+      "mean_injected_tokens": 672.5625,
+      "mean_requested_prefix_tokens": 9258.90625,
+      "mean_native_prefill_tokens": 8538.90625,
+      "mean_engine_requests": 8.09375,
+      "mean_retrieval_calls": 1.0,
+      "mean_retrieval_seconds": 0.5615759931097273,
+      "mean_seconds": 82.03712867057766,
+      "mean_controller_seconds": 0.5620401144260541,
+      "mean_search_seconds": 45.40215343271848,
+      "mean_answer_seconds": 36.07229721544718,
+      "mean_forward_token_slots": 11102.40625,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 159,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.0941861730123086,
+      "geomean_paired_latency_ratio": 1.099286825720809,
+      "mean_thinking_after_last_injection": 537.1875,
+      "retrieved_gold_document_count": 16,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1600
+    },
+    {
+      "arm": "ircot",
+      "n": 32,
+      "f1": 16.4840807759962,
+      "mean_generation_tokens": 2298.75,
+      "mean_controller_tokens": 254.09375,
+      "mean_probe_tokens": 138.1875,
+      "mean_search_tokens": 1374.0,
+      "mean_answer_tokens": 532.46875,
+      "mean_injected_tokens": 646.78125,
+      "mean_requested_prefix_tokens": 8964.90625,
+      "mean_native_prefill_tokens": 8340.90625,
+      "mean_engine_requests": 9.34375,
+      "mean_retrieval_calls": 3.0,
+      "mean_retrieval_seconds": 1.3144178453221684,
+      "mean_seconds": 80.77894455524802,
+      "mean_controller_seconds": 15.145701266461401,
+      "mean_search_seconds": 38.198874093577615,
+      "mean_answer_seconds": 27.433586648709024,
+      "mean_forward_token_slots": 10634.84375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 145,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.0774048974556574,
+      "geomean_paired_latency_ratio": 1.0704902529718325,
+      "mean_thinking_after_last_injection": 442.0625,
+      "retrieved_gold_document_count": 17,
+      "dynamic_query_added_gold_document_count": 5,
+      "max_answer_tokens": 1085
+    },
+    {
+      "arm": "ircot_noise",
+      "n": 32,
+      "f1": 8.927843246252575,
+      "mean_generation_tokens": 2795.0,
+      "mean_controller_tokens": 254.09375,
+      "mean_probe_tokens": 128.0,
+      "mean_search_tokens": 1689.59375,
+      "mean_answer_tokens": 723.3125,
+      "mean_injected_tokens": 646.78125,
+      "mean_requested_prefix_tokens": 10056.875,
+      "mean_native_prefill_tokens": 9384.875,
+      "mean_engine_requests": 10.09375,
+      "mean_retrieval_calls": 3.0,
+      "mean_retrieval_seconds": 1.278939318319317,
+      "mean_seconds": 95.8021574253653,
+      "mean_controller_seconds": 14.95542052492965,
+      "mean_search_seconds": 43.5746069161396,
+      "mean_answer_seconds": 37.27131324862421,
+      "mean_forward_token_slots": 12174.78125,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 160,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.2777799235333116,
+      "geomean_paired_latency_ratio": 1.297601383553224,
+      "mean_thinking_after_last_injection": 511.4375,
+      "retrieved_gold_document_count": 17,
+      "dynamic_query_added_gold_document_count": 5,
+      "max_answer_tokens": 1254
+    },
+    {
+      "arm": "static_examples",
+      "n": 32,
+      "f1": 10.171283687340239,
+      "mean_generation_tokens": 3085.90625,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 128.0,
+      "mean_search_tokens": 2305.71875,
+      "mean_answer_tokens": 652.1875,
+      "mean_injected_tokens": 485.125,
+      "mean_requested_prefix_tokens": 9522.3125,
+      "mean_native_prefill_tokens": 8418.3125,
+      "mean_engine_requests": 9.4375,
+      "mean_retrieval_calls": 1.0,
+      "mean_retrieval_seconds": 0.3479825622489443,
+      "mean_seconds": 91.5207762891514,
+      "mean_controller_seconds": 0.3481329395872308,
+      "mean_search_seconds": 57.6552793107694,
+      "mean_answer_seconds": 33.51640625325672,
+      "mean_forward_token_slots": 11500.625,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 187,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.2206761692143102,
+      "geomean_paired_latency_ratio": 1.1808098156629139,
+      "mean_thinking_after_last_injection": 649.34375,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1732
+    },
+    {
+      "arm": "static_examples_noise",
+      "n": 32,
+      "f1": 9.039558273188643,
+      "mean_generation_tokens": 3136.40625,
+      "mean_controller_tokens": 0.0,
+      "mean_probe_tokens": 132.0,
+      "mean_search_tokens": 2304.46875,
+      "mean_answer_tokens": 699.9375,
+      "mean_injected_tokens": 485.125,
+      "mean_requested_prefix_tokens": 9580.5,
+      "mean_native_prefill_tokens": 8524.5,
+      "mean_engine_requests": 9.40625,
+      "mean_retrieval_calls": 1.0,
+      "mean_retrieval_seconds": 0.3484185067063663,
+      "mean_seconds": 93.89056205058296,
+      "mean_controller_seconds": 0.348742546280846,
+      "mean_search_seconds": 57.6120206208725,
+      "mean_answer_seconds": 35.92890135847847,
+      "mean_forward_token_slots": 11657.28125,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 0,
+      "raw_thought_close_calls": 185,
+      "intercepted_thought_closes": 0,
+      "controller_periodic_triggers": 0,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 32,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.252283648110507,
+      "geomean_paired_latency_ratio": 1.2309536763350626,
+      "mean_thinking_after_last_injection": 632.65625,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1195
+    },
+    {
+      "arm": "thinkretrieve",
+      "n": 32,
+      "f1": 6.941232021054806,
+      "mean_generation_tokens": 2514.34375,
+      "mean_controller_tokens": 1583.84375,
+      "mean_probe_tokens": 0.0,
+      "mean_search_tokens": 558.9375,
+      "mean_answer_tokens": 371.5625,
+      "mean_injected_tokens": 485.0,
+      "mean_requested_prefix_tokens": 9335.96875,
+      "mean_native_prefill_tokens": 5879.96875,
+      "mean_engine_requests": 7.25,
+      "mean_retrieval_calls": 1.71875,
+      "mean_retrieval_seconds": 2.3066427032317733,
+      "mean_seconds": 120.41045730210317,
+      "mean_controller_seconds": 84.09153881878592,
+      "mean_search_seconds": 17.1839513128798,
+      "mean_answer_seconds": 19.13373126272927,
+      "mean_forward_token_slots": 8391.875,
+      "empty": 13,
+      "truncated": 0,
+      "thinking_eos": 13,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 35,
+      "raw_thought_close_calls": 114,
+      "intercepted_thought_closes": 54,
+      "controller_periodic_triggers": 1,
+      "interim_length_caps": 34,
+      "selected_immediate_close": 0,
+      "selected_immediate_eos": 9,
+      "encoder_queries_truncated": 39,
+      "search_budget_stops": 0,
+      "injection_episodes": 55,
+      "post_injection_immediate_close_events": 0,
+      "post_injection_immediate_eos_events": 2,
+      "latency_ratio_of_means": 1.60599791339726,
+      "geomean_paired_latency_ratio": 1.5544115334935746,
+      "mean_thinking_after_last_injection": 193.53125,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1251
+    },
+    {
+      "arm": "thinkretrieve_noise",
+      "n": 32,
+      "f1": 4.180239596021823,
+      "mean_generation_tokens": 2147.03125,
+      "mean_controller_tokens": 1394.875,
+      "mean_probe_tokens": 0.0,
+      "mean_search_tokens": 487.5625,
+      "mean_answer_tokens": 264.59375,
+      "mean_injected_tokens": 382.59375,
+      "mean_requested_prefix_tokens": 6870.46875,
+      "mean_native_prefill_tokens": 4950.46875,
+      "mean_engine_requests": 6.125,
+      "mean_retrieval_calls": 1.375,
+      "mean_retrieval_seconds": 1.8848746543226298,
+      "mean_seconds": 104.67236593490816,
+      "mean_controller_seconds": 73.79211853777815,
+      "mean_search_seconds": 17.12605267392064,
+      "mean_answer_seconds": 13.753532552800607,
+      "mean_forward_token_slots": 7095.28125,
+      "empty": 20,
+      "truncated": 0,
+      "thinking_eos": 20,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 39,
+      "raw_thought_close_calls": 90,
+      "intercepted_thought_closes": 43,
+      "controller_periodic_triggers": 1,
+      "interim_length_caps": 28,
+      "selected_immediate_close": 1,
+      "selected_immediate_eos": 13,
+      "encoder_queries_truncated": 32,
+      "search_budget_stops": 0,
+      "injection_episodes": 44,
+      "post_injection_immediate_close_events": 1,
+      "post_injection_immediate_eos_events": 3,
+      "latency_ratio_of_means": 1.3960880562064,
+      "geomean_paired_latency_ratio": 1.3556193701818018,
+      "mean_thinking_after_last_injection": 63.375,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1184
+    },
+    {
+      "arm": "rethink",
+      "n": 32,
+      "f1": 8.788077261374795,
+      "mean_generation_tokens": 1753.40625,
+      "mean_controller_tokens": 695.1875,
+      "mean_probe_tokens": 0.0,
+      "mean_search_tokens": 249.28125,
+      "mean_answer_tokens": 808.9375,
+      "mean_injected_tokens": 18.0,
+      "mean_requested_prefix_tokens": 4933.59375,
+      "mean_native_prefill_tokens": 4549.59375,
+      "mean_engine_requests": 6.375,
+      "mean_retrieval_calls": 0.0,
+      "mean_retrieval_seconds": 0.0,
+      "mean_seconds": 87.51775696607365,
+      "mean_controller_seconds": 36.02587535326893,
+      "mean_search_seconds": 10.080959902799805,
+      "mean_answer_seconds": 41.41039048063976,
+      "mean_forward_token_slots": 6301.84375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "raw_thinking_eos_calls": 3,
+      "raw_thought_close_calls": 164,
+      "intercepted_thought_closes": 63,
+      "controller_periodic_triggers": 1,
+      "interim_length_caps": 0,
+      "selected_immediate_close": 24,
+      "selected_immediate_eos": 0,
+      "encoder_queries_truncated": 0,
+      "search_budget_stops": 0,
+      "injection_episodes": 64,
+      "post_injection_immediate_close_events": 47,
+      "post_injection_immediate_eos_events": 0,
+      "latency_ratio_of_means": 1.1672851197639942,
+      "geomean_paired_latency_ratio": 1.1590285707179364,
+      "mean_thinking_after_last_injection": 66.78125,
+      "retrieved_gold_document_count": null,
+      "dynamic_query_added_gold_document_count": null,
+      "max_answer_tokens": 1507
+    }
+  ],
+  "contrasts": [
+    {
+      "left": "static_facts",
+      "right": "closed_is",
+      "difference": 5.236973855732428,
+      "bootstrap_95": [
+        2.5578294924599456,
+        8.363039536388317
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "static_facts_noise",
+      "right": "closed_is",
+      "difference": -0.17478695647381176,
+      "bootstrap_95": [
+        -1.6404048267308597,
+        0.8838468891383369
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "ircot",
+      "right": "closed_is",
+      "difference": 7.239297708742132,
+      "bootstrap_95": [
+        3.652779132053648,
+        11.188235991732098
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "ircot_noise",
+      "right": "closed_is",
+      "difference": -0.3169398210014963,
+      "bootstrap_95": [
+        -1.7117873002583197,
+        0.69314069451753
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "static_examples",
+      "right": "closed_is",
+      "difference": 0.9265006200861682,
+      "bootstrap_95": [
+        0.2628634840043137,
+        1.5898324799527073
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "static_examples_noise",
+      "right": "closed_is",
+      "difference": -0.205224794065427,
+      "bootstrap_95": [
+        -0.9409257974720333,
+        0.35296653834890346
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "thinkretrieve",
+      "right": "closed_is",
+      "difference": -2.3035510461992645,
+      "bootstrap_95": [
+        -4.133123251509656,
+        -0.5299680401073816
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "thinkretrieve_noise",
+      "right": "closed_is",
+      "difference": -5.0645434712322475,
+      "bootstrap_95": [
+        -7.293642750841424,
+        -3.052360625225252
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "rethink",
+      "right": "closed_is",
+      "difference": -0.4567058058792763,
+      "bootstrap_95": [
+        -1.4861838105637977,
+        0.40279802052765346
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "closed_is",
+      "right": "direct",
+      "difference": -0.15701567201754335,
+      "bootstrap_95": [
+        -0.8186722478429191,
+        0.45193312697395394
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "ircot",
+      "right": "static_facts",
+      "difference": 2.0023238530097043,
+      "bootstrap_95": [
+        -0.07207967794298542,
+        4.288600003015292
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "thinkretrieve",
+      "right": "static_examples",
+      "difference": -3.2300516662854326,
+      "bootstrap_95": [
+        -4.857026636945138,
+        -1.7004285692493102
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "thinkretrieve",
+      "right": "rethink",
+      "difference": -1.846845240319988,
+      "bootstrap_95": [
+        -3.667382869944626,
+        0.07036961650659371
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "difference": 5.411760812206239,
+      "bootstrap_95": [
+        2.2015823219907897,
+        9.524132295265897
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "ircot",
+      "right": "ircot_noise",
+      "difference": 7.556237529743629,
+      "bootstrap_95": [
+        3.702097026260211,
+        11.930718004725792
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "difference": 1.131725414151595,
+      "bootstrap_95": [
+        0.2675642269984596,
+        2.2257570680047585
+      ],
+      "n_questions": 16
+    },
+    {
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "difference": 2.760992425032983,
+      "bootstrap_95": [
+        -0.15292087028769896,
+        5.8446722718911435
+      ],
+      "n_questions": 16
+    }
+  ],
+  "audit": {
+    "passed": true,
+    "checks": 34518,
+    "failures": [],
+    "measurements": 352,
+    "final_truncated": 0,
+    "noise_pair_count": 128,
+    "noise_length_mismatches": [
+      {
+        "question_id": "DEV_Q025",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          364,
+          294
+        ],
+        "noise_lengths": [
+          364
+        ]
+      },
+      {
+        "question_id": "DEV_Q025",
+        "seed": 20261113,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          294,
+          364
+        ],
+        "noise_lengths": [
+          294
+        ]
+      },
+      {
+        "question_id": "DEV_Q048",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          268,
+          513
+        ],
+        "noise_lengths": [
+          268
+        ]
+      },
+      {
+        "question_id": "DEV_Q141",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          190,
+          251
+        ],
+        "noise_lengths": [
+          190
+        ]
+      },
+      {
+        "question_id": "DEV_Q158",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          335,
+          210
+        ],
+        "noise_lengths": [
+          335
+        ]
+      },
+      {
+        "question_id": "DEV_Q183",
+        "seed": 20261113,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          205,
+          243
+        ],
+        "noise_lengths": [
+          205
+        ]
+      },
+      {
+        "question_id": "DEV_Q213",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          280,
+          184
+        ],
+        "noise_lengths": [
+          280
+        ]
+      },
+      {
+        "question_id": "DEV_Q218",
+        "seed": 20261112,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          234,
+          245
+        ],
+        "noise_lengths": [
+          234
+        ]
+      },
+      {
+        "question_id": "DEV_Q218",
+        "seed": 20261113,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          234,
+          319
+        ],
+        "noise_lengths": [
+          234
+        ]
+      },
+      {
+        "question_id": "DEV_Q271",
+        "seed": 20261113,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          280,
+          335
+        ],
+        "noise_lengths": [
+          280
+        ]
+      },
+      {
+        "question_id": "DEV_Q290",
+        "seed": 20261113,
+        "left": "thinkretrieve",
+        "right": "thinkretrieve_noise",
+        "exact_packet_lengths": false,
+        "relevant_lengths": [
+          202,
+          319
+        ],
+        "noise_lengths": [
+          202
+        ]
+      }
+    ]
+  },
+  "noise_pairs": [
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        240,
+        240,
+        240
+      ],
+      "noise_lengths": [
+        240,
+        240,
+        240
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        389,
+        249
+      ],
+      "noise_lengths": [
+        389,
+        249
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        240,
+        210,
+        255
+      ],
+      "noise_lengths": [
+        240,
+        210,
+        255
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        389,
+        249
+      ],
+      "noise_lengths": [
+        389,
+        249
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        240,
+        240,
+        240
+      ],
+      "noise_lengths": [
+        240,
+        240,
+        240
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        389,
+        249
+      ],
+      "noise_lengths": [
+        389,
+        249
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        240,
+        238,
+        236
+      ],
+      "noise_lengths": [
+        240,
+        238,
+        236
+      ]
+    },
+    {
+      "question_id": "DEV_Q010",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        389,
+        498
+      ],
+      "noise_lengths": [
+        389,
+        498
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        230,
+        223,
+        230
+      ],
+      "noise_lengths": [
+        230,
+        223,
+        230
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        294,
+        179
+      ],
+      "noise_lengths": [
+        294,
+        179
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        230,
+        227,
+        243
+      ],
+      "noise_lengths": [
+        230,
+        227,
+        243
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        364,
+        294
+      ],
+      "noise_lengths": [
+        364
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        230,
+        223,
+        230
+      ],
+      "noise_lengths": [
+        230,
+        223,
+        230
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        294,
+        179
+      ],
+      "noise_lengths": [
+        294,
+        179
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        230,
+        223,
+        234
+      ],
+      "noise_lengths": [
+        230,
+        223,
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        294,
+        364
+      ],
+      "noise_lengths": [
+        294
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        228,
+        228,
+        191
+      ],
+      "noise_lengths": [
+        228,
+        228,
+        191
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        268,
+        242
+      ],
+      "noise_lengths": [
+        268,
+        242
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        228,
+        232,
+        236
+      ],
+      "noise_lengths": [
+        228,
+        232,
+        236
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        268,
+        513
+      ],
+      "noise_lengths": [
+        268
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        228,
+        228,
+        191
+      ],
+      "noise_lengths": [
+        228,
+        228,
+        191
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        268,
+        242
+      ],
+      "noise_lengths": [
+        268,
+        242
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        228,
+        191,
+        226
+      ],
+      "noise_lengths": [
+        228,
+        191,
+        226
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        268
+      ],
+      "noise_lengths": [
+        268
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        229
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        229
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        190,
+        197
+      ],
+      "noise_lengths": [
+        190,
+        197
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        221,
+        227
+      ],
+      "noise_lengths": [
+        229,
+        221,
+        227
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        190,
+        251
+      ],
+      "noise_lengths": [
+        190
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        229
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        229
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        190,
+        197
+      ],
+      "noise_lengths": [
+        190,
+        197
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        256
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        256
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        190,
+        197
+      ],
+      "noise_lengths": [
+        190,
+        197
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        221,
+        224,
+        221
+      ],
+      "noise_lengths": [
+        221,
+        224,
+        221
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        210,
+        317
+      ],
+      "noise_lengths": [
+        210,
+        317
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        221,
+        221,
+        238
+      ],
+      "noise_lengths": [
+        221,
+        221,
+        238
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        317,
+        210
+      ],
+      "noise_lengths": [
+        317,
+        210
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        221,
+        224,
+        221
+      ],
+      "noise_lengths": [
+        221,
+        224,
+        221
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        210,
+        317
+      ],
+      "noise_lengths": [
+        210,
+        317
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        221,
+        237,
+        145
+      ],
+      "noise_lengths": [
+        221,
+        237,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q154",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        210
+      ],
+      "noise_lengths": [
+        210
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        210
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        210
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        335,
+        153
+      ],
+      "noise_lengths": [
+        335,
+        153
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        145
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        335,
+        210
+      ],
+      "noise_lengths": [
+        335
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        210
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        210
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        335,
+        153
+      ],
+      "noise_lengths": [
+        335,
+        153
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        229,
+        243
+      ],
+      "noise_lengths": [
+        229,
+        229,
+        243
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        190,
+        164
+      ],
+      "noise_lengths": [
+        190,
+        164
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        225,
+        225,
+        147
+      ],
+      "noise_lengths": [
+        225,
+        225,
+        147
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        205
+      ],
+      "noise_lengths": [
+        243,
+        205
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        225,
+        147,
+        237
+      ],
+      "noise_lengths": [
+        225,
+        147,
+        237
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        357
+      ],
+      "noise_lengths": [
+        243,
+        357
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        225,
+        225,
+        147
+      ],
+      "noise_lengths": [
+        225,
+        225,
+        147
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        205
+      ],
+      "noise_lengths": [
+        243,
+        205
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        225,
+        147,
+        243
+      ],
+      "noise_lengths": [
+        225,
+        147,
+        243
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        205,
+        243
+      ],
+      "noise_lengths": [
+        205
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        220,
+        246,
+        209
+      ],
+      "noise_lengths": [
+        220,
+        246,
+        209
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        280,
+        532
+      ],
+      "noise_lengths": [
+        280,
+        532
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        220,
+        238,
+        145
+      ],
+      "noise_lengths": [
+        220,
+        238,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        280,
+        184
+      ],
+      "noise_lengths": [
+        280
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        220,
+        246,
+        209
+      ],
+      "noise_lengths": [
+        220,
+        246,
+        209
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        280,
+        532
+      ],
+      "noise_lengths": [
+        280,
+        532
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        220,
+        209,
+        145
+      ],
+      "noise_lengths": [
+        220,
+        209,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        280,
+        382
+      ],
+      "noise_lengths": [
+        280,
+        382
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        248,
+        248,
+        253
+      ],
+      "noise_lengths": [
+        248,
+        248,
+        253
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        140,
+        234
+      ],
+      "noise_lengths": [
+        140,
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        248,
+        241,
+        145
+      ],
+      "noise_lengths": [
+        248,
+        241,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        234,
+        245
+      ],
+      "noise_lengths": [
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        248,
+        248,
+        253
+      ],
+      "noise_lengths": [
+        248,
+        248,
+        253
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        140,
+        234
+      ],
+      "noise_lengths": [
+        140,
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        248,
+        253,
+        145
+      ],
+      "noise_lengths": [
+        248,
+        253,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        234,
+        319
+      ],
+      "noise_lengths": [
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        243,
+        225
+      ],
+      "noise_lengths": [
+        243,
+        243,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        239,
+        188
+      ],
+      "noise_lengths": [
+        239,
+        188
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        234,
+        145
+      ],
+      "noise_lengths": [
+        243,
+        234,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        335
+      ],
+      "noise_lengths": [
+        335
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        243,
+        225
+      ],
+      "noise_lengths": [
+        243,
+        243,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        239,
+        188
+      ],
+      "noise_lengths": [
+        239,
+        188
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        243,
+        236,
+        145
+      ],
+      "noise_lengths": [
+        243,
+        236,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q221",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        335
+      ],
+      "noise_lengths": [
+        335
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        173,
+        222,
+        222
+      ],
+      "noise_lengths": [
+        173,
+        222,
+        222
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        157,
+        292
+      ],
+      "noise_lengths": [
+        157,
+        292
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        173,
+        225,
+        222
+      ],
+      "noise_lengths": [
+        173,
+        225,
+        222
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        251,
+        157
+      ],
+      "noise_lengths": [
+        251,
+        157
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        173,
+        222,
+        222
+      ],
+      "noise_lengths": [
+        173,
+        222,
+        222
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        157,
+        292
+      ],
+      "noise_lengths": [
+        157,
+        292
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        173,
+        225,
+        145
+      ],
+      "noise_lengths": [
+        173,
+        225,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q244",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        251
+      ],
+      "noise_lengths": [
+        251
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        232,
+        232,
+        232
+      ],
+      "noise_lengths": [
+        232,
+        232,
+        232
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        153,
+        196
+      ],
+      "noise_lengths": [
+        153,
+        196
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        232,
+        217,
+        235
+      ],
+      "noise_lengths": [
+        232,
+        217,
+        235
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        336
+      ],
+      "noise_lengths": [
+        336
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        232,
+        232,
+        232
+      ],
+      "noise_lengths": [
+        232,
+        232,
+        232
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        153,
+        196
+      ],
+      "noise_lengths": [
+        153,
+        196
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        232,
+        221,
+        216
+      ],
+      "noise_lengths": [
+        232,
+        221,
+        216
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        280,
+        335
+      ],
+      "noise_lengths": [
+        280
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        165,
+        251
+      ],
+      "noise_lengths": [
+        229,
+        165,
+        251
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        192,
+        394
+      ],
+      "noise_lengths": [
+        192,
+        394
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        165,
+        225
+      ],
+      "noise_lengths": [
+        229,
+        165,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        192,
+        394
+      ],
+      "noise_lengths": [
+        192,
+        394
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        165,
+        251
+      ],
+      "noise_lengths": [
+        229,
+        165,
+        251
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        192,
+        394
+      ],
+      "noise_lengths": [
+        192,
+        394
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        229,
+        165,
+        225
+      ],
+      "noise_lengths": [
+        229,
+        165,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q281",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        192,
+        235
+      ],
+      "noise_lengths": [
+        192,
+        235
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        235,
+        235,
+        145
+      ],
+      "noise_lengths": [
+        235,
+        235,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        202,
+        319
+      ],
+      "noise_lengths": [
+        202,
+        319
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        235,
+        145,
+        145
+      ],
+      "noise_lengths": [
+        235,
+        145,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        202,
+        422
+      ],
+      "noise_lengths": [
+        202,
+        422
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        235,
+        235,
+        145
+      ],
+      "noise_lengths": [
+        235,
+        235,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        202,
+        319
+      ],
+      "noise_lengths": [
+        202,
+        319
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        235,
+        145,
+        231
+      ],
+      "noise_lengths": [
+        235,
+        145,
+        231
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        202,
+        319
+      ],
+      "noise_lengths": [
+        202
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        238,
+        231,
+        185
+      ],
+      "noise_lengths": [
+        238,
+        231,
+        185
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        250,
+        139
+      ],
+      "noise_lengths": [
+        250,
+        139
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        238,
+        231,
+        243
+      ],
+      "noise_lengths": [
+        238,
+        231,
+        243
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        251,
+        532
+      ],
+      "noise_lengths": [
+        251,
+        532
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        238,
+        231,
+        185
+      ],
+      "noise_lengths": [
+        238,
+        231,
+        185
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        250,
+        139
+      ],
+      "noise_lengths": [
+        250,
+        139
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        238,
+        231,
+        243
+      ],
+      "noise_lengths": [
+        238,
+        231,
+        243
+      ]
+    },
+    {
+      "question_id": "DEV_Q292",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        251
+      ],
+      "noise_lengths": [
+        251
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261112,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        253,
+        253,
+        225
+      ],
+      "noise_lengths": [
+        253,
+        253,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261112,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        164,
+        220
+      ],
+      "noise_lengths": [
+        164,
+        220
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261112,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        253,
+        234,
+        202
+      ],
+      "noise_lengths": [
+        253,
+        234,
+        202
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        324
+      ],
+      "noise_lengths": [
+        324
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261113,
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        253,
+        253,
+        225
+      ],
+      "noise_lengths": [
+        253,
+        253,
+        225
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261113,
+      "left": "static_examples",
+      "right": "static_examples_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        164,
+        220
+      ],
+      "noise_lengths": [
+        164,
+        220
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261113,
+      "left": "ircot",
+      "right": "ircot_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        253,
+        244,
+        145
+      ],
+      "noise_lengths": [
+        253,
+        244,
+        145
+      ]
+    },
+    {
+      "question_id": "DEV_Q296",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": true,
+      "relevant_lengths": [
+        164
+      ],
+      "noise_lengths": [
+        164
+      ]
+    }
+  ],
+  "setup_costs": [
+    {
+      "worker": "a3",
+      "fact_index_build_seconds": 36.36435140110552,
+      "example_index_build_seconds": 171.89173359191045,
+      "example_bank_entries": 136,
+      "encoder_model": "intfloat/e5-base-v2",
+      "encoder_revision": "f52bf8ec8c7124536f0efb74aca902b2995e5bcd"
+    }
+  ],
+  "jobs": [
+    {
+      "worker": "a3",
+      "seconds": 31958.956943035126,
+      "started": 1794468238.9531038,
+      "finished": 1794500197.9100468
+    }
+  ],
+  "total_generation_tokens": 851363,
+  "total_measured_pipeline_seconds": 31517.126622314565
+}

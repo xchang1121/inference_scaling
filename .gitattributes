@@ -33,3 +33,6 @@
 /experiments/online-injection-cot-bon-20261110/reports/*/scores.csv -diff -whitespace
 /experiments/online-injection-literature-20261112/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /experiments/online-injection-literature-20261112/reports/*/scores.csv -diff -whitespace
+# Preserve deterministic renderer output and the exact archived diagnostic script.
+/experiments/online-injection-literature-20261112/visuals/*.svg -diff -whitespace
+/experiments/online-injection-literature-20261112/tools/native_diagnostic.py -whitespace

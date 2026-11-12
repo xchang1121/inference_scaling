@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "checks": 2115,
+  "failures": [],
+  "measurements": 22,
+  "final_truncated": 0,
+  "noise_pair_count": 8,
+  "noise_length_mismatches": [
+    {
+      "question_id": "TRAIN_Q559",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        357,
+        313
+      ],
+      "noise_lengths": [
+        357
+      ]
+    }
+  ]
+}

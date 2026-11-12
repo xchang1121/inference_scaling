@@ -1,0 +1,164 @@
+{
+  "passed": true,
+  "checks": 34518,
+  "failures": [],
+  "measurements": 352,
+  "final_truncated": 0,
+  "noise_pair_count": 128,
+  "noise_length_mismatches": [
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        364,
+        294
+      ],
+      "noise_lengths": [
+        364
+      ]
+    },
+    {
+      "question_id": "DEV_Q025",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        294,
+        364
+      ],
+      "noise_lengths": [
+        294
+      ]
+    },
+    {
+      "question_id": "DEV_Q048",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        268,
+        513
+      ],
+      "noise_lengths": [
+        268
+      ]
+    },
+    {
+      "question_id": "DEV_Q141",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        190,
+        251
+      ],
+      "noise_lengths": [
+        190
+      ]
+    },
+    {
+      "question_id": "DEV_Q158",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        335,
+        210
+      ],
+      "noise_lengths": [
+        335
+      ]
+    },
+    {
+      "question_id": "DEV_Q183",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        205,
+        243
+      ],
+      "noise_lengths": [
+        205
+      ]
+    },
+    {
+      "question_id": "DEV_Q213",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        280,
+        184
+      ],
+      "noise_lengths": [
+        280
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261112,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        234,
+        245
+      ],
+      "noise_lengths": [
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q218",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        234,
+        319
+      ],
+      "noise_lengths": [
+        234
+      ]
+    },
+    {
+      "question_id": "DEV_Q271",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        280,
+        335
+      ],
+      "noise_lengths": [
+        280
+      ]
+    },
+    {
+      "question_id": "DEV_Q290",
+      "seed": 20261113,
+      "left": "thinkretrieve",
+      "right": "thinkretrieve_noise",
+      "exact_packet_lengths": false,
+      "relevant_lengths": [
+        202,
+        319
+      ],
+      "noise_lengths": [
+        202
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "verified_package_files": 83,
+  "byte_identical_reports": [
+    "smoke/answers.jsonl",
+    "smoke/audit.json",
+    "smoke/REPORT.md",
+    "smoke/scores.csv",
+    "smoke/summary.json",
+    "formal/answers.jsonl",
+    "formal/audit.json",
+    "formal/REPORT.md",
+    "formal/RESULTS_ZH.md",
+    "formal/scores.csv",
+    "formal/summary.json"
+  ],
+  "byte_identical_figures": [
+    "visuals/overview.png",
+    "visuals/overview.svg",
+    "visuals/PLOT-VERIFICATION.json",
+    "visuals/question_differences.csv",
+    "visuals/question_differences.png",
+    "visuals/question_differences.svg"
+  ],
+  "byte_identical_diagnostics": [
+    "diagnostics/empty_answers.csv",
+    "diagnostics/empty_answers.json",
+    "diagnostics/EMPTY_ANSWERS.md"
+  ],
+  "generation_sha256": "4f287aed545dce571fbf291b1a860dc0446836b1ae7b945a62119569facea646",
+  "raw_archives": {
+    "raw/formal/a3.tar.gz": "18e5ca07eb20fd9224c76e7c736d82a1be31f0ca834c270d3ede96852503ce33",
+    "raw/smoke/a3.tar.gz": "09112733df7f213aef3de7969c9f61b56966243a555a582bc12dc0182d667159"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "questions": 16,
+  "measurements": 352,
+  "plots": 2,
+  "matplotlib_version": "3.11.2",
+  "numpy_version": "2.5.4",
+  "input_sha256": {
+    "summary.json": "97518aa3ed692a5ff995aa6a912aaebdb51b6abc3bbe9b99442af42417ea7450",
+    "answers.jsonl": "cd32b60b7aad551a2028e387ad32bb819d6636ce32ac1512e09107b2a5c41279"
+  }
+}

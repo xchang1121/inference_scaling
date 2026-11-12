@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "checks": 2028,
+  "failures": [],
+  "measurements": 22,
+  "final_truncated": 0,
+  "noise_pair_count": 8,
+  "noise_length_mismatches": []
+}
