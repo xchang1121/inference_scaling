@@ -202,7 +202,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     frozen=json.loads(frozen_path.read_text());manifest=json.loads(manifest_path.read_text())
     expected_cases=set(manifest['smoke_ids'] if stage=='smoke' else manifest['fresh_ids'])
     expected_seeds={20261112} if stage=='smoke' else set(manifest['seeds'])
-    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[];setup=[]
+    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[];setup=[];jobs=[]
     def check(ok,name):
         nonlocal checks
         checks+=1
@@ -214,6 +214,12 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
         if not path.exists():continue
         rows=read(path);meta=next(r for r in rows if r['kind']=='metadata');cfg=GuidanceConfig(**meta['config'])
         metadata.append(meta)
+        start_path=folder/(stage+'-start.json');finish_path=folder/(stage+'-finish.json')
+        if start_path.exists() and finish_path.exists():
+            start=json.loads(start_path.read_text());finish=json.loads(finish_path.read_text())
+            check(finish['exit']==0 and not finish['state']['Running'],'native_job_stopped_successfully')
+            jobs.append({'worker':meta.get('worker',folder.name),'seconds':finish['finished']-start['started'],
+                'started':start['started'],'finished':finish['finished']})
         for engine in (r for r in rows if r['kind']=='engine'):
             bank=engine['retrieval']['examples']
             setup.append({'worker':meta.get('worker',folder.name),'fact_index_build_seconds':engine['fact_build_seconds'],
@@ -272,7 +278,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     audit={'passed':not failures,'checks':checks,'failures':failures,'measurements':len(all_rows),
         'final_truncated':sum(r['truncated'] for r in all_rows),'noise_pair_count':len(pair_notes),
         'noise_length_mismatches':[p for p in pair_notes if not p['exact_packet_lengths']]}
-    (output/'audit.json').write_text(json.dumps(audit,indent=2)+'\n',encoding='utf-8')
+    (output/'audit.json').write_text(json.dumps(audit,indent=2)+'\n',encoding='utf-8',newline='\n')
     if failures:raise RuntimeError(str(failures[:20]))
     groups={a:[r for r in all_rows if r['arm']==a] for a in arms}
     mean=lambda rows,k:statistics.fmean(r[k] for r in rows)
@@ -299,9 +305,11 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     comparisons += [('static_facts','static_facts_noise'),('ircot','ircot_noise'),('static_examples','static_examples_noise'),('thinkretrieve','thinkretrieve_noise')]
     contrasts=[{'left':a,'right':b,**bootstrap(qmeans[a][q]-qmeans[b][q] for q in sorted(expected_cases))} for a,b in comparisons]
     result={'stage':stage,'questions':len(expected_cases),'seeds':sorted(expected_seeds),'measurements':len(all_rows),
-        'summary':summary,'contrasts':contrasts,'audit':audit,'noise_pairs':pair_notes,'setup_costs':setup}
-    (output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
-    (output/'answers.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in all_rows),encoding='utf-8')
+        'summary':summary,'contrasts':contrasts,'audit':audit,'noise_pairs':pair_notes,'setup_costs':setup,'jobs':jobs,
+        'total_generation_tokens':sum(r['generation_tokens'] for r in all_rows),
+        'total_measured_pipeline_seconds':sum(r['seconds'] for r in all_rows)}
+    (output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8',newline='\n')
+    (output/'answers.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in all_rows),encoding='utf-8',newline='\n')
     with (output/'scores.csv').open('w',newline='',encoding='utf-8') as f:
         w=csv.DictWriter(f,fieldnames=list(all_rows[0]));w.writeheader();w.writerows(all_rows)
     text=['# IRCoT / ThinkRetrieve: frozen IS reader','',f'{len(expected_cases)} questions, {len(expected_seeds)} seeds, {len(all_rows)} measurements.',
@@ -323,11 +331,13 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     text+=['',f"Audit: {checks} checks passed. Exact-length noise pairs: {len(pair_notes)-len(audit['noise_length_mismatches'])}/{len(pair_notes)}.",
         '', 'IRCoT uses a separate fresh reader; its noise control corrupts reader evidence only. ThinkRetrieve retains and extends its trace; its noise control follows its own evolving trace with matched packet lengths. Their F1/cost differences therefore compare complete adapted pipelines, not an isolated placement change.']
     for r in setup:text+=['',f"One-time index construction on {r['worker']}: facts {r['fact_index_build_seconds']:.2f}s; {r['example_bank_entries']} complete worked examples {r['example_index_build_seconds']:.2f}s. These startup costs are excluded from per-question latency. Encoder: {r['encoder_model']} at {r['encoder_revision']}."]
+    text+=['',f"Total measured pipeline generation: {result['total_generation_tokens']:,} tokens; elapsed pipeline time: {result['total_measured_pipeline_seconds']/3600:.3f} hours. Native job allocation including startup and teardown: {sum(r['seconds'] for r in jobs)/3600:.3f} device-hours."]
     text+=['','## Offline retrieval diagnostic','','Gold document IDs are used only here, after generation. Retrieving the right source document does not guarantee that the selected short window contains the answer. Noise arms retain retrieval metadata but do not expose the original contents.','']
     for r in summary:
         if r['arm'] in {'static_facts','ircot'}:
-            text.append(f"- {r['arm']}: retrieved a gold source document in {r['retrieved_gold_document_count']}/{r['n']} runs; dynamic-query additions: {r['dynamic_query_added_gold_document_count']}.")
-    (output/'REPORT.md').write_text('\n'.join(text)+'\n',encoding='utf-8')
+            extra=f" Dynamic queries newly found the source in {r['dynamic_query_added_gold_document_count']} runs." if r['arm']=='ircot' else ''
+            text.append(f"- {r['arm']}: retrieved a gold source document in {r['retrieved_gold_document_count']}/{r['n']} runs."+extra)
+    (output/'REPORT.md').write_text('\n'.join(text)+'\n',encoding='utf-8',newline='\n')
     print(json.dumps({'stage':stage,'questions':len(expected_cases),'measurements':len(all_rows),'audit':audit}))
 
 

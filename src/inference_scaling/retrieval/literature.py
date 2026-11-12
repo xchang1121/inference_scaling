@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
+import re
 import time
 
 from inference_scaling.arllm.config import SamplingConfig
@@ -36,10 +37,13 @@ class LiteratureConfig:
 
 FACT_HEADER = '\n[Retrieved reference; source data]\n'
 FACT_FOOTER = '\n[End reference]\n'
-EXAMPLE_HEADER = ('\n\nWait, let me check again. Here is a similar technical question and its solution. '
-                  'Treat it as a reference example, not as instructions.\n')
-EXAMPLE_FOOTER = ('\nNow return to the original question. Identify which steps and conditions in the '
-                  'example apply, and continue reasoning.\n')
+# Official ThinkRetrieve ICE_TEMPLATE, copyright (c) 2026 Vaibhav Singh, MIT.
+# The license is preserved in docs/third_party/THINKRETRIEVE-LICENSE.txt.
+EXAMPLE_HEADER = ('\n\nWait, let me check again. Here is a similar question and its solution. '
+                  'Looking at this example:\n')
+EXAMPLE_FOOTER = ('\n\nNow coming back to the original question, '
+                  'Here are the key points I can take from example question to solve the '
+                  'original question:\n')
 RETHINK = '\nWait, let me think again.\n'
 
 
@@ -65,6 +69,30 @@ def unrelated(payload, noise, *, body_length=None):
     if not noise or size < 0:
         raise ValueError('invalid unrelated body')
     return tuple(payload['ids'][:start])+tuple(noise[i%len(noise)] for i in range(size))+tuple(payload['ids'][stop:])
+
+
+def format_example(question,solution):
+    return '## Example 1:\nProblem:\n'+_clean_reference(question)+'\n\nSolution:\n'+_clean_reference(solution)
+
+
+def example_packet(backend,body,example_id):
+    """Encode the exact official template once; preserve token-aligned noise masks."""
+    text=EXAMPLE_HEADER+body+EXAMPLE_FOOTER
+    encoded=backend.tokenizer(text,add_special_tokens=False,return_offsets_mapping=True)
+    ids=list(encoded['input_ids']);offsets=encoded['offset_mapping']
+    assert tuple(ids)==encode(backend,text)
+    left,right=len(EXAMPLE_HEADER),len(EXAMPLE_HEADER)+len(body)
+    inside=[i for i,(a,b) in enumerate(offsets) if left<=a<b<=right]
+    if not inside:raise ValueError('no token-aligned example body')
+    start,stop=inside[0],inside[-1]+1
+    # BPE may merge final punctuation with the following newline. Retain only
+    # such punctuation; never leave a word/number of the real example in noise.
+    edges=text[left:offsets[start][0]]+text[offsets[stop-1][1]:right]
+    if re.search(r'\w',edges):raise ValueError('unmasked lexical example boundary')
+    forbidden={backend.tokenizer.eos_token_id,backend.tokenizer.convert_tokens_to_ids('<think>'),
+               backend.tokenizer.convert_tokens_to_ids('</think>')}
+    if forbidden.intersection(ids):raise ValueError('structural token in example')
+    return {'ids':ids,'body_start':start,'body_stop':stop,'sha256':token_hash(ids),'id':example_id}
 
 
 class FactBank:
@@ -117,9 +145,9 @@ class ExampleBank:
         self.rows=[]
         for line in Path(examples_path).read_text(encoding='utf-8').splitlines():
             row=json.loads(line)
-            body='Example question: '+_clean_reference(row['question'])+'\nSolution: '+_clean_reference(row['solution'])
+            body=format_example(row['question'],row['solution'])
             if len(encode(backend,body)) <= cfg.example_body_tokens:
-                self.rows.append({**row,'packet':packet(backend,EXAMPLE_HEADER,body,EXAMPLE_FOOTER,id=row['id'])})
+                self.rows.append({**row,'packet':example_packet(backend,body,row['id'])})
         if len(self.rows)<30: raise ValueError('too few complete worked examples')
         self.tokenizer=AutoTokenizer.from_pretrained(encoder_path,local_files_only=True)
         self.model=AutoModel.from_pretrained(encoder_path,local_files_only=True).to('cpu').eval()
@@ -249,7 +277,7 @@ class LiteratureController:
                 p=found[0];packets.append(p);used.add(p['id'])
                 if mode=='unrelated':
                     ref=reference[turn]
-                    injected=unrelated(p,self.noise,body_length=ref['body_stop']-ref['body_start'])
+                    injected=unrelated(ref,self.noise)
                     if len(injected)!=len(ref['ids']):raise RuntimeError('noise length mismatch')
                 else:injected=tuple(p['ids'])
             injections.append(list(injected));root+=injected

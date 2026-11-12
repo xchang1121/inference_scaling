@@ -1,6 +1,7 @@
 # IRCoT / ThinkRetrieve with a frozen IS reader
 
-Frozen before native smoke and formal generation, 2026-11-12.
+Formal version 2, frozen after TRAIN-only engineering validation, 2026-11-12.
+Version 1 and its complete 22-run smoke are archived, never mixed into formal results.
 
 ## Question and scope
 
@@ -57,6 +58,18 @@ removed before continuation, following the official trace-based mechanism. A
 sampled EOS remains terminal and yields an explicit empty-answer event. This
 controller has a smaller insertion count and interval than the public library's
 8 / 6,144 defaults to reserve thinking and search capacity for the fixed IS.
+
+Version 2 uses the official `ICE_TEMPLATE` and `Example.format` text verbatim,
+encoding the complete packet once. Token offsets identify the example body for
+noise replacement; only boundary punctuation may remain outside that mask, never
+words or numbers. Noise uses the reference packet's outer tokens to match length
+exactly even when BPE merges punctuation with a following newline. The official
+MIT license is included. Version 1 had paraphrased this template. On both TRAIN
+fixtures its first post-example continuation emitted EOS. Cold-cache replay
+reproduced both failures; the official template yielded a normal 464-token
+continuation on one fixture and a 2-token/EOS continuation on the other. The
+change restores the published template without suppressing remaining EOS. No
+DEV output or smoke F1 was used to select or tune the template.
 
 Example retrieval uses E5-base-v2 joint-QA normalized embeddings and exact cosine
 search on CPU (equivalent to an exact normalized inner-product FAISS index).
