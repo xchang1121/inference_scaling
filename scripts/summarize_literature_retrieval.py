@@ -85,6 +85,9 @@ def audit_row(row,cfg,decode,noise,check):
         ck(payload==[t for p in h['injected_ids'] for t in p],'packet_variant')
     else:
         current=list(row['base_ids']);carried={k:[] for k in ('sc','cn','lp')}
+        ck([e['ids'] for e in h['events'] if e['kind']=='injection']==h['injected_ids'],'recorded_injections')
+        if arm=='thinkretrieve':
+            ck(h['injected_ids']==[p['ids'] for p in h['packets']],'real_example_payloads')
         thought_calls=iter(h['controller_calls']);answer_calls=iter(h['interim_calls'])
         interim_count=0
         for event in h['events']:
@@ -202,7 +205,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     frozen=json.loads(frozen_path.read_text());manifest=json.loads(manifest_path.read_text())
     expected_cases=set(manifest['smoke_ids'] if stage=='smoke' else manifest['fresh_ids'])
     expected_seeds={20261112} if stage=='smoke' else set(manifest['seeds'])
-    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[];setup=[];jobs=[]
+    failures=[];checks=0;all_rows=[];native_rows={};metadata=[];pair_notes=[];setup=[];jobs=[];noise_by_worker={}
     def check(ok,name):
         nonlocal checks
         checks+=1
@@ -232,6 +235,7 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
         measures=[r for r in rows if r['kind']=='measurement'];done=[r for r in rows if r['kind']=='completed']
         check(len(done)==1 and done[0]['units']==len(measures)==len(meta['cases'])*len(meta['seeds'])*len(meta['arms']),'native_complete')
         prepared_path=folder/('prepared-'+stage+'.json');prepared=json.loads(prepared_path.read_text(encoding='utf-8'))
+        noise_by_worker[meta.get('worker',folder.name)]=prepared['noise_ids']
         check(hashlib.sha256(prepared_path.read_bytes()).hexdigest()==meta['prepared_sha256'],'prepared_hash')
         decode=Decoder(json.loads((folder/('vocabulary-'+stage+'.json')).read_text(encoding='utf-8')))
         bases={c['id']:c['prompt_ids'] for c in prepared['cases']}
@@ -268,6 +272,11 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
                 if left=='ircot':check(a['handoff']['controller_calls']==b['handoff']['controller_calls'],f'{q}:{s}:matched_IRCoT_agent')
                 if left=='thinkretrieve':
                     check(matched or b['handoff']['terminal_eos'],f'{q}:{s}:TR_mismatch_requires_observed_terminal_EOS')
+                    reference=a['handoff']['packets'];actual=b['handoff']['injected_ids']
+                    check(len(actual)<=len(reference),f'{q}:{s}:TR_noise_reference_count')
+                    for i,ids in enumerate(actual[:len(reference)]):
+                        check(ids==list(unrelated(reference[i],noise_by_worker[b['worker']])),
+                            f'{q}:{s}:TR_noise_exact_payload_{i}')
     for r in all_rows:
         baseline=keyed.get((r['question_id'],r['seed'],'direct'))
         check(baseline is not None,'direct_baseline_present')
