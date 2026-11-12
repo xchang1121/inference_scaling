@@ -31,3 +31,5 @@
 /experiments/online-injection-cot-bon-20261110/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # CSV cells contain the exact sampled answer text, including its whitespace.
 /experiments/online-injection-cot-bon-20261110/reports/*/scores.csv -diff -whitespace
+/experiments/online-injection-literature-20261112/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/experiments/online-injection-literature-20261112/reports/*/scores.csv -diff -whitespace

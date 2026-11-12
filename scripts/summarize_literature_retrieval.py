@@ -197,7 +197,8 @@ def audit_row(row,cfg,decode,noise,check):
 
 def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     output.mkdir(parents=True,exist_ok=True)
-    gold={r['id']:r['answer'] for r in read(gold_path)}
+    gold_rows={r['id']:r for r in read(gold_path)}
+    gold={q:r['answer'] for q,r in gold_rows.items()}
     frozen=json.loads(frozen_path.read_text());manifest=json.loads(manifest_path.read_text())
     expected_cases=set(manifest['smoke_ids'] if stage=='smoke' else manifest['fresh_ids'])
     expected_seeds={20261112} if stage=='smoke' else set(manifest['seeds'])
@@ -234,6 +235,12 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
             except Exception as e:
                 check(False,r['unit_id']+':audit_exception:'+repr(e));continue
             s['f1']=100*grade(s['answer_text'],gold[s['question_id']])['f1']
+            fact_arm=s['arm'].startswith(('static_facts','ircot'))
+            gold_docs=set(gold_rows[s['question_id']].get('document_ids',[]))
+            retrieved=[p['id'].split('@',1)[0] for p in r['handoff']['packets']] if fact_arm else []
+            s['retrieved_gold_document']=bool(gold_docs.intersection(retrieved)) if fact_arm else None
+            s['dynamic_query_added_gold_document']=(bool(gold_docs.intersection(retrieved[1:]))
+                and not bool(gold_docs.intersection(retrieved[:1]))) if s['arm'].startswith('ircot') else None
             all_rows.append(s)
             check(r['unit_id'] not in native_rows,'unique_unit')
             native_rows[r['unit_id']]=r
@@ -283,6 +290,8 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
             'geomean_paired_latency_ratio':math.exp(statistics.fmean(math.log(r['latency_ratio_vs_direct']) for r in rows)),
             'mean_thinking_after_last_injection':statistics.fmean(r['thinking_after_last_injection'] for r in rows
                 if r['thinking_after_last_injection'] is not None) if any(r['thinking_after_last_injection'] is not None for r in rows) else None,
+            'retrieved_gold_document_count':sum(bool(r['retrieved_gold_document']) for r in rows) if arm.startswith(('static_facts','ircot')) else None,
+            'dynamic_query_added_gold_document_count':sum(bool(r['dynamic_query_added_gold_document']) for r in rows) if arm.startswith('ircot') else None,
             'max_answer_tokens':max(r['answer_tokens'] for r in rows)})
     qmeans={a:{q:mean([r for r in rows if r['question_id']==q],'f1') for q in expected_cases} for a,rows in groups.items()}
     comparisons=[(a,'closed_is') for a in arms if a not in {'direct','closed_is'}]
@@ -314,6 +323,10 @@ def summarize(snapshot,output,gold_path,stage,frozen_path,manifest_path):
     text+=['',f"Audit: {checks} checks passed. Exact-length noise pairs: {len(pair_notes)-len(audit['noise_length_mismatches'])}/{len(pair_notes)}.",
         '', 'IRCoT uses a separate fresh reader; its noise control corrupts reader evidence only. ThinkRetrieve retains and extends its trace; its noise control follows its own evolving trace with matched packet lengths. Their F1/cost differences therefore compare complete adapted pipelines, not an isolated placement change.']
     for r in setup:text+=['',f"One-time index construction on {r['worker']}: facts {r['fact_index_build_seconds']:.2f}s; {r['example_bank_entries']} complete worked examples {r['example_index_build_seconds']:.2f}s. These startup costs are excluded from per-question latency. Encoder: {r['encoder_model']} at {r['encoder_revision']}."]
+    text+=['','## Offline retrieval diagnostic','','Gold document IDs are used only here, after generation. Retrieving the right source document does not guarantee that the selected short window contains the answer. Noise arms retain retrieval metadata but do not expose the original contents.','']
+    for r in summary:
+        if r['arm'] in {'static_facts','ircot'}:
+            text.append(f"- {r['arm']}: retrieved a gold source document in {r['retrieved_gold_document_count']}/{r['n']} runs; dynamic-query additions: {r['dynamic_query_added_gold_document_count']}.")
     (output/'REPORT.md').write_text('\n'.join(text)+'\n',encoding='utf-8')
     print(json.dumps({'stage':stage,'questions':len(expected_cases),'measurements':len(all_rows),'audit':audit}))
 
