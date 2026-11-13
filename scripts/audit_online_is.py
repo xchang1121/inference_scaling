@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from summarize_cot_guidance import Decoder, read
 from inference_scaling.arllm.types import SequenceSample
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig, GuidanceLedger, search
+from inference_scaling.retrieval.ablation import static_prompt
 from inference_scaling.retrieval.literature import unrelated
 from inference_scaling.retrieval.online_is import OnlineRetrievalConfig
 from inference_scaling.retrieval.stepwise import token_hash
@@ -62,7 +63,21 @@ def audit_row(row, cfg, rcfg, decode, noise, eos, close, check):
     def ck(condition, label):
         check(condition, row['unit_id']+':'+label)
     root, selected = row['root_ids'], row['candidates'][0]
-    ck(root == row['base_ids'], 'original_prompt_only')
+    is_static = row['arm'].startswith('static_')
+    if is_static:
+        packets = row['static_packets']
+        ck(len(packets) == len(rcfg.positions), 'static_packet_count')
+        ck(len({p['id'] for p in packets}) == len(packets), 'static_distinct_windows')
+        injected = []
+        for p, retrieval in zip(packets, row['static_retrievals'], strict=True):
+            ck(len(p['ids']) == rcfg.packet_tokens and token_hash(p['ids']) == p['sha256'], 'static_packet_integrity')
+            ck(retrieval['query'] == row['question'] and retrieval['selected_ids'] == [p['id']], 'static_question_only_query')
+            injected.extend(unrelated(p, noise) if row['arm'].endswith('_noise') else p['ids'])
+        ck(injected == row['static_injected_ids'], 'static_content_variant')
+        ck(root == list(static_prompt(row['base_ids'], injected, eos, ())), 'static_user_prompt_placement')
+    else:
+        ck(root == row['base_ids'], 'original_prompt_only')
+        ck(not row.get('static_packets') and not row.get('static_injected_ids') and not row.get('static_retrievals'), 'no_hidden_static_evidence')
     ck(row['carried'] == {'sc': [], 'cn': [], 'lp': []}, 'no_fixed_thought_statistics')
     ck(row['presearch_work'] == 0, 'zero_presearch_generation')
     ck(sum(len(c['token_ids']) for c in row['calls']) == row['search_work'] <= cfg.search_tokens,
@@ -94,7 +109,7 @@ def audit_row(row, cfg, rcfg, decode, noise, eos, close, check):
         # No trigger may be missing after the corresponding thought boundary.
         terminal_at = next((i for i, t in enumerate(thought) if t in {eos, close}), len(thought))
         positions = [p for p in rcfg.positions if p <= terminal_at and (not final or p < len(thought))]
-        if row['arm'] in {'direct', 'closed_is'}:
+        if row['arm'] in {'direct', 'closed_is'} or is_static:
             positions = []
         ck([e['position'] for e in valid] == positions, 'all_trigger_positions')
         ck(len({e['packet']['id'] for e in valid}) == len(valid), 'no_repeated_window')
@@ -127,7 +142,7 @@ def audit_row(row, cfg, rcfg, decode, noise, eos, close, check):
                 ck(part['logical_prefix_ids'] == prefix, 'append_only_continuation')
                 ck(part['seed'] == logical['seed'] and part['uniform_offset'] == logical['uniform_offset']+produced, 'native_rng_offsets')
                 length = logical['max_new_tokens']-produced
-                if row['arm'] != 'closed_is':
+                if row['arm'] != 'closed_is' and not is_static:
                     next_position = next((p for p in rcfg.positions if p > len(prefix)-len(root)), None)
                     if next_position is not None:
                         length = min(length, next_position-(len(prefix)-len(root)))
@@ -156,7 +171,12 @@ def audit_row(row, cfg, rcfg, decode, noise, eos, close, check):
     ck(answer['empty_answer'] == (not answer['answer_text'].strip()), 'empty_flag')
     ck([t for c in answer['calls'] for t in c['token_ids']] == answer['answer_ids'], 'answer_concatenation')
     ck(len(answer['answer_ids']) <= cfg.answer_tokens, 'answer_budget')
-    ck(not answer['truncated'], 'no_final_truncation')
+    if answer['calls']:
+        last = answer['calls'][-1]
+        stopped = eos in last['token_ids'] or last['finish_reason'] in {'eos', 'eos_token', 'stop'}
+        ck(answer['truncated'] == (not stopped and len(answer['answer_ids']) == cfg.answer_tokens), 'recorded_final_truncation')
+    else:
+        ck(not answer['truncated'], 'no_readout_truncation_without_calls')
     if eos in selected:
         ck(not answer['calls'] and not answer['answer_ids'], 'no_EOS_repair')
     prefix = selected_physical+([] if selected[-1:] == [close] else [close])
@@ -168,7 +188,7 @@ def audit_row(row, cfg, rcfg, decode, noise, eos, close, check):
     ck(row['cost']['generated_tokens'] == row['total_generation_tokens'], 'native_counter')
     ck(all(row['cost'].get(k, 0) == 0 for k in ('scored_tokens', 'cancelled_requests', 'preemptions')), 'no_hidden_scoring')
     times = row['stage_seconds']
-    ck(times['search_seconds']+times['answer_seconds'] <= row['seconds']+1e-6, 'pipeline_timing')
+    ck(times['search_seconds']+times['answer_seconds']+times.get('static_retrieval_seconds', 0.) <= row['seconds']+1e-6, 'pipeline_timing')
     ck(0 <= times['materialization_seconds'] <= times['search_seconds'], 'retrieval_timing_subset')
 
 

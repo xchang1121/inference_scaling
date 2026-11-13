@@ -44,14 +44,32 @@ initiate an unused insertion exactly at the thinking-budget boundary. EOS and
 thinking-close are never suppressed, empty answers are retained, and truncation
 is recorded. No generated thought is moved into the immutable IS prompt.
 
-`scripts/benchmark_online_is.py` exposes direct, closed_is, online_is, and
-online_is_noise arms. The noise arm executes its own branch-local queries and
+`scripts/benchmark_online_is.py` exposes direct, closed_is, static_facts,
+static_facts_noise, online_is, and online_is_noise arms. Static arms retrieve two
+distinct windows from the original question, fix each packet to 256 tokens, and
+insert them before the user-message end. They also start IS from zero generated
+thinking tokens. Static-noise replaces every factual body with equal-length
+unrelated prose. Online noise executes its own branch-local queries and
 replaces every factual body token with unrelated prose at exactly the same
 packet size. Branches can terminate at different positions, so total evidence
 exposure need not match across arms; logs retain this difference. Index building,
 model warmup and cache reset are outside unit timing; per-branch retrieval and
 all generation are inside. This runner preserves the existing prepared data and
 model settings, with separate outputs from previous experiments.
+
+The metric run uses the same fixed 16 DEV questions and seeds 20261112/20261113:
+192 fresh runs, with all six arms for a question on the same worker and a cold
+prefix cache before each arm. Only A3 was both process-free and unbound at launch; all conditions use that
+worker. Other cards were occupied by processes or bound to other active containers. A separate 12-run
+TRAIN smoke validates all six arms before formal evaluation. No partial F1 is
+used to tune the generator. Report token-overlap F1, paired question-bootstrap
+differences, all generated tokens, pipeline latency relative to direct, actual
+evidence exposure, EOS, empty answers and truncation. Actual empty/truncated
+answers remain in the cohort and scoring; reaching the answer cap does not
+discard or rerun that condition or prevent other conditions from finishing.
+The 65536 search-token cap
+is identical across IS arms; direct is the one-trajectory reference with 8192
+thinking tokens. These are equal configured IS budgets, not equal realized cost.
 
 Example (native Linux environment):
 

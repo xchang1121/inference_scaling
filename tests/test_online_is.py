@@ -214,7 +214,7 @@ def test_benchmark_entrypoint_has_no_checkpoint_or_controller_generation(monkeyp
     assert result['calls'][0]['prefix_ids'] == case['prompt_ids']
 
 
-@pytest.mark.parametrize('arm', ['direct', 'closed_is', 'online_is', 'online_is_noise'])
+@pytest.mark.parametrize('arm', ['direct', 'closed_is', 'static_facts', 'static_facts_noise', 'online_is', 'online_is_noise'])
 def test_full_offline_replay_and_evidence_audit(arm, monkeypatch):
     from pathlib import Path
     import json
@@ -224,6 +224,8 @@ def test_full_offline_replay_and_evidence_audit(arm, monkeypatch):
     _, facts, template = make()
     backend = AnswerNative()
     case = {'id': 'test', 'question': 'Q', 'prompt_ids': list(template.root)}
+    if arm.startswith('static_'):
+        case['prompt_ids'] = [1, 900, 2, 900, 3]
     row = run_arm(backend, backend, facts, case, 7, arm, template.cfg,
         template.close, (40, 41), template.retrieval_cfg)
     row.update(unit_id='test', question='Q', seconds=100.,
@@ -244,3 +246,30 @@ def test_full_offline_replay_and_evidence_audit(arm, monkeypatch):
         assert any('selected_physical_context' in x for x in failures)
         assert any('branch_query' in x for x in failures)
         assert any('unchanged_IS_full_replay' in x for x in failures)
+
+
+@pytest.mark.parametrize('termination', ['eos', 'length'])
+def test_empty_and_truncated_answers_are_retained_and_auditable(termination, monkeypatch):
+    from pathlib import Path
+    import json
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'scripts'))
+    from benchmark_online_is import run_arm
+    from audit_online_is import audit_row
+    class CappedAnswer(AnswerNative):
+        def sample_batch(self, requests):
+            if all(901 in r.prefix for r in requests):
+                return [SequenceSample(tuple(r.prefix), (70,)*r.max_new_tokens, (-1.,)*r.max_new_tokens,
+                    r.sampling.policy_id, self.model_id, r.request_id, 'length') for r in requests]
+            return super().sample_batch(requests)
+    _, facts, template = make()
+    backend = Native(stop=1, eos=True) if termination == 'eos' else CappedAnswer()
+    row = run_arm(backend, backend, facts, {'id': 'test', 'question': 'Q', 'prompt_ids': list(template.root)},
+        7, 'closed_is', template.cfg, template.close, (), template.retrieval_cfg)
+    row.update(unit_id='test', question='Q', seconds=100., cost={'generated_tokens': row['total_generation_tokens']})
+    row = json.loads(json.dumps(row))
+    failures = []
+    audit_row(row, template.cfg, template.retrieval_cfg, lambda ids, skip=False: backend.decode(ids),
+        (), 900, 901, lambda ok, label: failures.append(label) if not ok else None)
+    assert not failures
+    assert row['answer']['empty_answer'] == (termination == 'eos')
+    assert row['answer']['truncated'] == (termination == 'length')

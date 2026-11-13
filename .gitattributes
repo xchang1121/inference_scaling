@@ -37,3 +37,6 @@
 /experiments/online-injection-literature-20261112/visuals/*.svg -diff -whitespace
 /experiments/online-injection-literature-20261112/tools/native_diagnostic.py -whitespace
 /experiments/online-injection-full-is-20261113/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/experiments/online-injection-full-is-metrics-20261113/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/experiments/online-injection-full-is-metrics-20261113/reports/scores.csv -diff -whitespace
+/experiments/online-injection-full-is-metrics-20261113/figures/*.svg -diff -whitespace

@@ -17,14 +17,15 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.retrieval.controller import _snapshot
+from inference_scaling.retrieval.ablation import static_prompt
 from inference_scaling.retrieval.corpus import Retriever
 from inference_scaling.retrieval.cot_guidance import DualStatistics, GuidanceConfig, finish_answer
-from inference_scaling.retrieval.literature import FactBank
-from inference_scaling.retrieval.online_is import OnlineRetrievalConfig, run_online_is
+from inference_scaling.retrieval.literature import FactBank, unrelated
+from inference_scaling.retrieval.online_is import OnlineRetrievalConfig, fixed_packet, run_online_is
 from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.shared.rng import SeedStream
 
-ARMS = ('direct', 'closed_is', 'online_is', 'online_is_noise')
+ARMS = ('direct', 'closed_is', 'static_facts', 'static_facts_noise', 'online_is', 'online_is_noise')
 
 
 def run_arm(raw, tap, facts, case, run_seed, arm, cfg, close, noise,
@@ -33,10 +34,27 @@ def run_arm(raw, tap, facts, case, run_seed, arm, cfg, close, noise,
         raise ValueError(arm)
     base = tuple(case['prompt_ids'])
     seed = SeedStream(run_seed).derive('question', case['id'])
+    root, static_packets, static_ids, static_retrievals = base, [], [], []
+    static_seconds = 0.
+    if arm.startswith('static_'):
+        started = time.perf_counter()
+        used = set()
+        for _ in retrieval_cfg.positions:
+            found, retrieval = facts.retrieve(case['question'], k=1, exclude=frozenset(used))
+            if not found:
+                raise RuntimeError('static evidence bank exhausted')
+            packet = fixed_packet(raw, found[0], retrieval_cfg.packet_tokens)
+            static_packets.append(packet)
+            static_retrievals.append(retrieval)
+            used.add(packet['id'])
+            static_ids.extend(unrelated(packet, noise) if arm.endswith('_noise') else packet['ids'])
+        root = static_prompt(base, tuple(static_ids), raw.tokenizer.eos_token_id, ())
+        static_seconds = time.perf_counter()-started
     if arm != 'direct':
-        result = run_online_is(raw, tap, base, close, seed, cfg,
+        result = run_online_is(raw, tap, root, close, seed, cfg,
             question=case['question'], facts=facts, noise=noise,
-            mode={'closed_is': 'closed', 'online_is': 'relevant', 'online_is_noise': 'noise'}[arm],
+            mode='closed' if arm.startswith('static_') else
+                {'closed_is': 'closed', 'online_is': 'relevant', 'online_is_noise': 'noise'}[arm],
             retrieval_cfg=retrieval_cfg)
     else:
         started = time.perf_counter()
@@ -61,7 +79,10 @@ def run_arm(raw, tap, facts, case, run_seed, arm, cfg, close, noise,
             'answer': answer, 'audit': {'method': 'direct', 'selection': {'direct': 0}},
             'stage_seconds': {'search_seconds': thinking_seconds,
                 'materialization_seconds': 0., 'answer_seconds': time.perf_counter()-started}}
+    result['stage_seconds']['static_retrieval_seconds'] = static_seconds
     return {'arm': arm, 'question_id': case['id'], 'seed': run_seed,
+            'static_packets': static_packets, 'static_injected_ids': static_ids,
+            'static_retrievals': static_retrievals,
             'base_ids': list(base), **result}
 
 
@@ -142,7 +163,7 @@ def main():
                                     if type(b0[k]) in (int, float) and type(b1[k]) in (int, float)},
                                 **graph.difference(g0), **result})
                             if result['answer']['truncated']:
-                                raise RuntimeError('final answer truncated: preserve the run')
+                                print(json.dumps({'unit': uid, 'final_truncated': True, 'retained': True}), flush=True)
                             if tap.rows:
                                 raise RuntimeError('unconsumed statistics')
                             completed += 1
