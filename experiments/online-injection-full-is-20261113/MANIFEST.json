@@ -1,0 +1,26 @@
+{
+  "files": {
+    "analysis/audit_online_is.py": "2d41c164ee06ba492cb41bb3e31b0a913314a4f505bab94f5d147feaad46bc76",
+    "analysis/summarize_cot_guidance.py": "07bc8193dcd106ed5aaa3df743833ec41dfd413ea6ee6f4a35ea3ab95f838e14",
+    "analysis/summarize_flare_gap.py": "cdc64108b395d8e8249903025981188b89e93963cdda7182224149325f16f6e1",
+    "analysis/test_online_is.py": "09a9fdbfc5b115be98169d6482e5f9ae3c82986ea07fff29a3f28d48d3c0523a",
+    "audit-smoke.json": "8043a2e8531aec1a65433d1c3d2b95d954dfc166b823eaf6ad704428ddbc9cf7",
+    "inputs/corpus-reference.json": "18b7ff1e253fa0ddc3bce8e13ddc68c3f255e7ddb35ad0f0f78fe8e0fe7c4685",
+    "inputs/FROZEN_IS.json": "c39704a61d16a80649eabfe85769b3b056694f783cc011a121d582087188f6ca",
+    "inputs/manifest.json": "80d81e71dd5e7e0f478df1ce4fbe021eda130175c9abb0053e1b85b985f7e264",
+    "inputs/settings.json": "146f7a19fa7908bf0080660e40560bc8076062a0a33a50d143ecc09299e53704",
+    "inputs/smoke-questions.jsonl": "dc182d927f22e7cd740f77b2743dc6d411fdf1f6bc64f99c1cd4162a879fd34d",
+    "local-validation.json": "e738700a9a377de5d3d11bda455380be6d3ac3d80f7b00a1762342c62a2aa15e",
+    "raw/smoke-a3.tar.gz": "41a3e880dc8e9d1fa38de4b73666ab8831f054b9788e3a8e6700ec6641ca15b0",
+    "raw/transfer-manifest.json": "8a5994d23831ad09fa2970625ffca59a5537b71aa0892aa3c0f8f7704344f6b0",
+    "README.md": "ecb9d664bd1e6c512e9e084b026d1d8dd763be19b1ef073cb20343446564dcb0",
+    "replay.py": "b0f83cb40074fd6c5afa1ae8b2dd49815e65fa0aa238c229584248fc0db2f08e",
+    "selected-paths.json": "3eec0fed226dd02d445e05dffe762aba002b85f71ca6c8da9402855f71376c3e",
+    "smoke-summary.json": "43712d90ff31d15fd17663bf667afa59b4823af376ca1ef3be491419773c50a0",
+    "source-frozen.tgz": "9108e0bd81ebeacbc0471f85b66d1d9208b5ea22186ffd5d17561f86f2aefb31",
+    "tools/collect.py": "a0fa9bd1079e596b36385db26a0fd375ab13dfc5e49ca58633a77ea01bdf716d",
+    "tools/deploy.py": "a38d596598c6d54ef97041d2bec0d80bdd8fc9b642dac878951f2aaac3a2bc0a",
+    "tools/launch.py": "a3df37cd9873108d6dd861c03d603c22f49883bd32daba2d0680b301e23051ca",
+    "tools/monitor_remote.py": "647dde363eda0bd6a18af9b361df6ed85c74be05a41d5bcf8bb179abd9596410"
+  }
+}

@@ -154,6 +154,12 @@ python -m pytest
 <a id="历史结果"></a>
 ## 历史实现与结果
 
+全程在线知识注入使用 [`scripts/benchmark_online_is.py`](scripts/benchmark_online_is.py)：
+从第一个思考 token 由原有分块 IS 接管，在各候选轨迹内部检索并追加证据，
+最终答案继承选中轨迹的上下文；不先生成固定思考前缀。
+具体参数、分支隔离和随机数续接方式见
+[`ONLINE_IS_PROTOCOL.md`](docs/reports/ONLINE_IS_PROTOCOL.md)。
+
 dLLM、训练及旧 IS 组合保存在[归档分支](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
 历史报告保留原配置与图片：[GSM8K 准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、
 [Qwen3 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)、[RTX 3090 执行成本](docs/reports/RTX3090_ROLLOUT_INFRA.md)、

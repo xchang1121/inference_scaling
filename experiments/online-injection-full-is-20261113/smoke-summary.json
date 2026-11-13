@@ -1,0 +1,42 @@
+[
+  {
+    "arm": "direct",
+    "runs": 2,
+    "mean_generated_tokens": 1507.5,
+    "mean_seconds": 82.15018567093648,
+    "retrieval_events": 0,
+    "selected_injections": 0,
+    "empty": 0,
+    "truncated": 0
+  },
+  {
+    "arm": "closed_is",
+    "runs": 2,
+    "mean_generated_tokens": 2903.0,
+    "mean_seconds": 102.03099704370834,
+    "retrieval_events": 0,
+    "selected_injections": 0,
+    "empty": 0,
+    "truncated": 0
+  },
+  {
+    "arm": "online_is",
+    "runs": 2,
+    "mean_generated_tokens": 4101.5,
+    "mean_seconds": 133.0000181456562,
+    "retrieval_events": 10,
+    "selected_injections": 3,
+    "empty": 0,
+    "truncated": 0
+  },
+  {
+    "arm": "online_is_noise",
+    "runs": 2,
+    "mean_generated_tokens": 4204.5,
+    "mean_seconds": 124.42364203324541,
+    "retrieval_events": 11,
+    "selected_injections": 3,
+    "empty": 0,
+    "truncated": 0
+  }
+]

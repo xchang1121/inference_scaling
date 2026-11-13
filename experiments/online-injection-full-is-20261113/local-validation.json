@@ -1,0 +1,13 @@
+{
+  "frozen_files_verified": 17,
+  "tests": {
+    "online_and_guidance": 25,
+    "original_conditional_is": 14
+  },
+  "ruff": "passed",
+  "generation_archive_sha256": "9108e0bd81ebeacbc0471f85b66d1d9208b5ea22186ffd5d17561f86f2aefb31",
+  "generation_source_sha256": {
+    "src/inference_scaling/retrieval/online_is.py": "8fd665e2054fa471fbd809771f2095b56940f57415e683243df84d891ae03dd0",
+    "scripts/benchmark_online_is.py": "aecce891bceec72cc48a14dcd0512048d8c6406c0ade83b68b7a10f57a5ee0c8"
+  }
+}
