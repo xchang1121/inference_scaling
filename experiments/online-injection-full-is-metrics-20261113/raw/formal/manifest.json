@@ -1,0 +1,8 @@
+[
+  {
+    "worker": "a3",
+    "path": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/online-injection-full-is-metrics-20261113/formal-snapshot-a3.tar.gz",
+    "bytes": 28590865,
+    "sha256": "22c3e4f5e4f2ec6a4e85b9c708ac00ef5af9555a9a057903d6d57dc3adcb0dfa"
+  }
+]

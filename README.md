@@ -159,6 +159,8 @@ python -m pytest
 最终答案继承选中轨迹的上下文；不先生成固定思考前缀。
 具体参数、分支隔离和随机数续接方式见
 [`ONLINE_IS_PROTOCOL.md`](docs/reports/ONLINE_IS_PROTOCOL.md)。
+16 道 DEV 题、两个种子、六组共 192 次运行的[正式指标与配对分析](experiments/online-injection-full-is-metrics-20261113/reports/RESULTS_ZH.md)
+及[原始记录和离线重放](experiments/online-injection-full-is-metrics-20261113/README.md)已归档。
 
 dLLM、训练及旧 IS 组合保存在[归档分支](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
 历史报告保留原配置与图片：[GSM8K 准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、

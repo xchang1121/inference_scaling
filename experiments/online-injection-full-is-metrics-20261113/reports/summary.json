@@ -1,0 +1,473 @@
+{
+  "questions": 16,
+  "seeds": [
+    20261112,
+    20261113
+  ],
+  "measurements": 192,
+  "arms": [
+    {
+      "arm": "direct",
+      "n": 32,
+      "f1": 9.401798739271614,
+      "f1_question_bootstrap_95": [
+        6.534798184443721,
+        12.526634621466341
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 1465.90625,
+      "mean_search_tokens": 669.96875,
+      "mean_answer_tokens": 795.9375,
+      "mean_seconds": 75.13795795287297,
+      "mean_retrieval_seconds": 0.0,
+      "mean_selected_injected_tokens": 0.0,
+      "mean_retrieval_calls": 0.0,
+      "mean_native_prefill_tokens": 900.09375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 1.0,
+      "latency_relative_direct": 1.0,
+      "paired_latency_geomean_relative_direct": 1.0
+    },
+    {
+      "arm": "closed_is",
+      "n": 32,
+      "f1": 8.938228204802098,
+      "f1_question_bootstrap_95": [
+        6.50379573430101,
+        11.710280543369471
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 4319.40625,
+      "mean_search_tokens": 3552.0625,
+      "mean_answer_tokens": 767.34375,
+      "mean_seconds": 111.67677246626408,
+      "mean_retrieval_seconds": 6.489460065495223e-05,
+      "mean_selected_injected_tokens": 0.0,
+      "mean_retrieval_calls": 0.0,
+      "mean_native_prefill_tokens": 5599.84375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 2.946577415847705,
+      "latency_relative_direct": 1.486289693104363,
+      "paired_latency_geomean_relative_direct": 1.3250583595732917
+    },
+    {
+      "arm": "static_facts",
+      "n": 32,
+      "f1": 14.701801308399665,
+      "f1_question_bootstrap_95": [
+        10.061169769938525,
+        20.103143627770617
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 2326.625,
+      "mean_search_tokens": 1790.625,
+      "mean_answer_tokens": 536.0,
+      "mean_seconds": 67.19058411223523,
+      "mean_retrieval_seconds": 1.1659705440397374,
+      "mean_selected_injected_tokens": 512.0,
+      "mean_retrieval_calls": 2.0,
+      "mean_native_prefill_tokens": 6219.375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 1.587158114647509,
+      "latency_relative_direct": 0.8942295737445728,
+      "paired_latency_geomean_relative_direct": 0.8212935486555895
+    },
+    {
+      "arm": "static_facts_noise",
+      "n": 32,
+      "f1": 8.799196261260745,
+      "f1_question_bootstrap_95": [
+        6.800903868358354,
+        10.825329658230455
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 2919.90625,
+      "mean_search_tokens": 2198.0,
+      "mean_answer_tokens": 721.90625,
+      "mean_seconds": 86.21100312254566,
+      "mean_retrieval_seconds": 1.1612901318294462,
+      "mean_selected_injected_tokens": 512.0,
+      "mean_retrieval_calls": 2.0,
+      "mean_native_prefill_tokens": 7794.84375,
+      "empty": 0,
+      "truncated": 0,
+      "thinking_eos": 0,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 1.9918778912362234,
+      "latency_relative_direct": 1.1473695249559188,
+      "paired_latency_geomean_relative_direct": 1.1434845012117945
+    },
+    {
+      "arm": "online_is",
+      "n": 32,
+      "f1": 12.519732978179885,
+      "f1_question_bootstrap_95": [
+        7.38058630919287,
+        19.084632002649087
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 3529.0,
+      "mean_search_tokens": 2859.6875,
+      "mean_answer_tokens": 669.3125,
+      "mean_seconds": 111.64886805148853,
+      "mean_retrieval_seconds": 5.259030916829943,
+      "mean_selected_injected_tokens": 384.0,
+      "mean_retrieval_calls": 4.6875,
+      "mean_native_prefill_tokens": 7978.0625,
+      "empty": 3,
+      "truncated": 0,
+      "thinking_eos": 2,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 2.4073845104350977,
+      "latency_relative_direct": 1.4859183173638477,
+      "paired_latency_geomean_relative_direct": 1.3288506400404323
+    },
+    {
+      "arm": "online_is_noise",
+      "n": 32,
+      "f1": 8.646544519680553,
+      "f1_question_bootstrap_95": [
+        6.43077250806685,
+        11.175932819140918
+      ],
+      "exact_match_percent": 0.0,
+      "mean_generated_tokens": 4159.59375,
+      "mean_search_tokens": 3396.5,
+      "mean_answer_tokens": 763.09375,
+      "mean_seconds": 122.39465856508468,
+      "mean_retrieval_seconds": 5.166351074600243,
+      "mean_selected_injected_tokens": 416.0,
+      "mean_retrieval_calls": 4.9375,
+      "mean_native_prefill_tokens": 8897.6875,
+      "empty": 1,
+      "truncated": 0,
+      "thinking_eos": 1,
+      "forced_thinking_end": 0,
+      "tokens_relative_direct": 2.8375578247244664,
+      "latency_relative_direct": 1.6289324583701281,
+      "paired_latency_geomean_relative_direct": 1.5467697797119717
+    }
+  ],
+  "paired_f1": [
+    {
+      "left": "online_is",
+      "right": "closed_is",
+      "difference": 3.5815047733777883,
+      "bootstrap_95": [
+        -0.011029795317712587,
+        8.030182498292799
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": 0.10201547742198214,
+        "DEV_Q025": 4.67624786579877,
+        "DEV_Q048": 0.15920195399614268,
+        "DEV_Q141": -1.7537067015986212,
+        "DEV_Q154": 1.4190230057191755,
+        "DEV_Q158": 25.695536793693506,
+        "DEV_Q183": 4.39339311941899,
+        "DEV_Q213": 1.8220987202281629,
+        "DEV_Q218": -1.823277707685456,
+        "DEV_Q221": 1.4280867412635525,
+        "DEV_Q244": -1.983840121909603,
+        "DEV_Q271": -0.011233487434399336,
+        "DEV_Q281": 7.30463575452932,
+        "DEV_Q290": 22.193714676766334,
+        "DEV_Q292": -6.466021673158671,
+        "DEV_Q296": 0.14820195699543093
+      },
+      "wins_ties_losses": [
+        11,
+        0,
+        5
+      ]
+    },
+    {
+      "left": "online_is",
+      "right": "static_facts",
+      "difference": -2.1820683302197796,
+      "bootstrap_95": [
+        -4.576422246207301,
+        0.05577898650359417
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": -1.4182409856077478,
+        "DEV_Q025": -6.985509370422913,
+        "DEV_Q048": -1.1943717635148152,
+        "DEV_Q141": -1.7410035272881919,
+        "DEV_Q154": -1.2294203279640623,
+        "DEV_Q158": 5.769131450806697,
+        "DEV_Q183": -11.653750159875386,
+        "DEV_Q213": -0.1251443261496723,
+        "DEV_Q218": -2.695884951010235,
+        "DEV_Q221": -0.06455785729499608,
+        "DEV_Q244": -4.931792148286994,
+        "DEV_Q271": 0.18024142379115693,
+        "DEV_Q281": -3.9528951885173953,
+        "DEV_Q290": 6.0220363599287,
+        "DEV_Q292": -10.799519988855128,
+        "DEV_Q296": -0.09241192325549008
+      },
+      "wins_ties_losses": [
+        3,
+        0,
+        13
+      ]
+    },
+    {
+      "left": "online_is",
+      "right": "online_is_noise",
+      "difference": 3.873188458499332,
+      "bootstrap_95": [
+        0.21761936564734402,
+        8.459450783486758
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": 0.8398265993766865,
+        "DEV_Q025": 4.115255156966915,
+        "DEV_Q048": 1.2344673074645882,
+        "DEV_Q141": -0.9423796976604262,
+        "DEV_Q154": 2.581849998609968,
+        "DEV_Q158": 27.316259117181097,
+        "DEV_Q183": 3.5213905832126007,
+        "DEV_Q213": 2.6921946290047956,
+        "DEV_Q218": -1.8687853839956738,
+        "DEV_Q221": 1.2100048956193326,
+        "DEV_Q244": -3.345220395240465,
+        "DEV_Q271": -0.648493429975995,
+        "DEV_Q281": 7.725059968305757,
+        "DEV_Q290": 22.811936955596117,
+        "DEV_Q292": -5.4500555598356595,
+        "DEV_Q296": 0.17770459135967398
+      },
+      "wins_ties_losses": [
+        11,
+        0,
+        5
+      ]
+    },
+    {
+      "left": "static_facts",
+      "right": "static_facts_noise",
+      "difference": 5.902605047138921,
+      "bootstrap_95": [
+        2.249466882064711,
+        10.273784238841492
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": 1.31786383535459,
+        "DEV_Q025": 11.284869344455766,
+        "DEV_Q048": 1.0634243754955612,
+        "DEV_Q141": 0.5672061457924249,
+        "DEV_Q154": 3.7752909987925936,
+        "DEV_Q158": 28.605871984387946,
+        "DEV_Q183": 14.741748731896514,
+        "DEV_Q213": 2.2274082937770965,
+        "DEV_Q218": 0.9282915756998178,
+        "DEV_Q221": 0.4890504556304949,
+        "DEV_Q244": 0.33785406915529315,
+        "DEV_Q271": -2.408273759426197,
+        "DEV_Q281": 13.580010562712175,
+        "DEV_Q290": 16.498229871297315,
+        "DEV_Q292": 1.2278548796495867,
+        "DEV_Q296": 0.2049793895517531
+      },
+      "wins_ties_losses": [
+        15,
+        0,
+        1
+      ]
+    },
+    {
+      "left": "static_facts",
+      "right": "closed_is",
+      "difference": 5.763573103597568,
+      "bootstrap_95": [
+        2.7086958145448174,
+        9.162873523224734
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": 1.52025646302973,
+        "DEV_Q025": 11.661757236221682,
+        "DEV_Q048": 1.353573717510958,
+        "DEV_Q141": -0.012703174310429333,
+        "DEV_Q154": 2.648443333683238,
+        "DEV_Q158": 19.92640534288681,
+        "DEV_Q183": 16.047143279294374,
+        "DEV_Q213": 1.9472430463778352,
+        "DEV_Q218": 0.8726072433247789,
+        "DEV_Q221": 1.4926445985585486,
+        "DEV_Q244": 2.9479520263773913,
+        "DEV_Q271": -0.19147491122555627,
+        "DEV_Q281": 11.257530943046715,
+        "DEV_Q290": 16.171678316837635,
+        "DEV_Q292": 4.333498315696458,
+        "DEV_Q296": 0.240613880250921
+      },
+      "wins_ties_losses": [
+        14,
+        0,
+        2
+      ]
+    },
+    {
+      "left": "online_is_noise",
+      "right": "closed_is",
+      "difference": -0.2916836851215437,
+      "bootstrap_95": [
+        -0.6720399161119566,
+        0.12356678880755778
+      ],
+      "n_questions": 16,
+      "question_deltas": {
+        "DEV_Q010": -0.7378111219547043,
+        "DEV_Q025": 0.5609927088318547,
+        "DEV_Q048": -1.0752653534684455,
+        "DEV_Q141": -0.811327003938195,
+        "DEV_Q154": -1.1628269928907926,
+        "DEV_Q158": -1.6207223234875947,
+        "DEV_Q183": 0.8720025362063892,
+        "DEV_Q213": -0.8700959087766327,
+        "DEV_Q218": 0.04550767631021779,
+        "DEV_Q221": 0.21808184564421995,
+        "DEV_Q244": 1.3613802733308622,
+        "DEV_Q271": 0.6372599425415957,
+        "DEV_Q281": -0.4204242137764378,
+        "DEV_Q290": -0.6182222788297818,
+        "DEV_Q292": -1.0159661133230111,
+        "DEV_Q296": -0.029502634364243052
+      },
+      "wins_ties_losses": [
+        6,
+        0,
+        10
+      ]
+    }
+  ],
+  "stage": "formal",
+  "audit": {
+    "passed": true,
+    "checks": 36437
+  },
+  "identities": [
+    {
+      "worker": "a3",
+      "source": {
+        "src/inference_scaling/__main__.py": "cd6bc90c1f1919ae3916f3bea3391a8f37548633cbb2230dbda7f3ade8debd31",
+        "src/inference_scaling/__init__.py": "1e93a0ed79a848127eb62a6cfcbb524f25c2f1daef544d59aad23cf36737fa91",
+        "src/inference_scaling/app/rewards.py": "714a350677e3f845eec63d408e1d856cffbe1d86a42c257e60d9348609fa46bf",
+        "src/inference_scaling/app/ar.py": "58c1dd472bd87921deb9a66fc8c0f42b68fe87ff88d4ec0c0c9f500453abf4fe",
+        "src/inference_scaling/app/run.py": "b17cb978e250a0841588b0e07f79910d294dfac9aabbf3ee0d9fdade40d8de06",
+        "src/inference_scaling/app/__init__.py": "5273504ac56855636d4d3dba569c7b54a9d00b6a275ec9c54f62877efa275bb1",
+        "src/inference_scaling/app/settings.py": "eb8e3e1bee7aa8b7e9284e905993f5f12340dc8bae266b7c398e0e4ab7a1f4ce",
+        "src/inference_scaling/app/records.py": "c8cd2feaf32bc093472b4197a2ec1b2e3b52da1d24adc357d0db2773c51f73ba",
+        "src/inference_scaling/app/cli.py": "83f50feb73186b6c84a380cfa4948bcf8874887fa6624d6c95b8e1b473e1d36c",
+        "src/inference_scaling/arllm/config.py": "d4d91cd9fb04bf83667ad75e1f0ae4a7411ea9b8813f31d518fe1bcab808591e",
+        "src/inference_scaling/arllm/output.py": "2914f44e3732cb6c462e1251726c61da32796cc554390972a1d627f75baf5a16",
+        "src/inference_scaling/arllm/__init__.py": "6710050d6489ed63b1bdde0998b1620e01f9f22d21260769e167af9ce81082c0",
+        "src/inference_scaling/arllm/scope.py": "a5d4f5fd5cc3d37c6ba138c4d58f553adb6856292e170d0beb2fe497fbde51cc",
+        "src/inference_scaling/arllm/types.py": "7fed3cf3509e371bd7db8008b7a7eed939b381e38d8aaf5f2201969da53616aa",
+        "src/inference_scaling/retrieval/online_is.py": "8fd665e2054fa471fbd809771f2095b56940f57415e683243df84d891ae03dd0",
+        "src/inference_scaling/retrieval/corpus.py": "0161aefed77333435f23c2014c8bded63eb60f9f76255846b06e0490c2acd45b",
+        "src/inference_scaling/retrieval/stepwise.py": "8d4d6736f379756e994fb62140f9566ce646ee825650dcee38d1605b83dc789c",
+        "src/inference_scaling/retrieval/literature.py": "064405ee8c4eb3a75c1cec705969dbc6caccf6c467a487248f0abb6a71a75699",
+        "src/inference_scaling/retrieval/cot_guidance.py": "b542f02805eb6f03ca59265590006e6d74b7e4e32860872406e3e4bc471bf286",
+        "src/inference_scaling/retrieval/scaled.py": "a3294918e03d6bb925208922c6dc86fc9e4b8d6a20fc26b644e7d3084f303332",
+        "src/inference_scaling/retrieval/__init__.py": "b41a903d220e2d539fa841abda68233aa71198d4f8d81ac52ea47ee46cfec4ad",
+        "src/inference_scaling/retrieval/grounded_route.py": "488d287157ec9e4a5059a7f156c81bf80e12d08d453983bd9141e1398ff145d8",
+        "src/inference_scaling/retrieval/controller.py": "1b46d7e0d4b6644bceba9874f4966a01821ce78cc20968ef65de23cd56116f37",
+        "src/inference_scaling/retrieval/triggers.py": "1f955e5b375ece474fc26b99babf16f6a2aafd7c74d16b9d03cea3a17db6be0d",
+        "src/inference_scaling/retrieval/grounded.py": "573a10c64c74966a1d6895efef96cb0dccef8be018e8dfda79009344a7118508",
+        "src/inference_scaling/retrieval/ablation.py": "a14cbb67889c3bfc72d2e02de5c7d86e6ac6b6059bdd12fa70bfec34fd294cc8",
+        "src/inference_scaling/datasets/base.py": "983dfdb2662e9490d9511956af1eb268b75e9f8b4755f52a4b3c695b6d9833b0",
+        "src/inference_scaling/datasets/math500.py": "3708131c1f22b5ce1584afe17ff00bde5d12582f2b04925a6cf705f2d277e464",
+        "src/inference_scaling/datasets/__init__.py": "2619098ebcd673fc1c0910036c3f039363c309a7b2047c8a34bd8069b66204f3",
+        "src/inference_scaling/datasets/gsm8k.py": "9e084f5f0558316f8da6e5f0607afd3dd29be8ee0b69be409127863f89f8d96c",
+        "src/inference_scaling/shared/config.py": "faf8d6895a9563f42aff07d5880f4770ac85a17dfbc29c4390de566e78fba439",
+        "src/inference_scaling/shared/metrics.py": "1f5bf13c2fddebaf8f01dfcbdd27728937af71b0beb3f91214c28bb1dbbfdf14",
+        "src/inference_scaling/shared/compute.py": "c24b1adfc863a78becdd931869fa4bc19c96c9cf9ea0031363d6be185b59645a",
+        "src/inference_scaling/shared/__init__.py": "368d43b7dd00bfcf6e0fcd019bd7fa753bac2f4d07eac61d21bf5c6358a09580",
+        "src/inference_scaling/shared/types.py": "e2a87e135bc0a74a9fadd2713c263aea9afc6d5b705b958df9c11b1d22a30a5e",
+        "src/inference_scaling/shared/rng.py": "990bf3b0ed1d8403c266278ce74a1197c53816a424d63a20f6d08717887b28f5",
+        "src/inference_scaling/serve/reasoner.py": "301bae1171ae24363a4e2a430a675535fd8c8ffbcf3c39782638c82b2eec01b5",
+        "src/inference_scaling/serve/server.py": "f5556d8f58fa3fe00de4f45e106bb4834f908751d1091afdc1e9f36990b49318",
+        "src/inference_scaling/serve/__main__.py": "b26e192f5edf600bb9b39735b204cda7af53dfc3c9facd52b4dd7c04694c4d1a",
+        "src/inference_scaling/serve/__init__.py": "2cffef346c5c209cc975b14c33cdaa5065fc60633b4c9d361f2fbbd9bfe72753",
+        "src/inference_scaling/serve/protocol.py": "52c38654a5362de6012313c7ecbb46af08c9d1283ae46bec4a89516607392c85",
+        "src/inference_scaling/arllm/algorithms/config.py": "61d83bfa9c25292d018976e79fca44f03186b325e9809cc30043ee923d4f67d4",
+        "src/inference_scaling/arllm/algorithms/ensemble_mh.py": "b793489dc1ebd70711a381bfa41e1cd6d2932fdb514a84d4c21062ff5b4f2d6a",
+        "src/inference_scaling/arllm/algorithms/candidates.py": "5ed588025787623e37ade66e439def02c42b7ee614d9ced0f2c507c974629112",
+        "src/inference_scaling/arllm/algorithms/ensemble_schedule.py": "4f290c715e76bbb4ffbc09b93f63153ca15d29fea5b80fbcaf8962d832173804",
+        "src/inference_scaling/arllm/algorithms/__init__.py": "42dc269e09672646dae986101c5f5c229adc08caab3f867cf671ce419dc145c2",
+        "src/inference_scaling/arllm/algorithms/conditional_is.py": "18b9db92e4c30397a182f57ca24b3dc66f571bd55475e183ccdba632f56c6c89",
+        "src/inference_scaling/arllm/algorithms/mh.py": "e4cdada79bf9682a9fd0292f2ba2f107637724d37d2e12289bf7683517778807",
+        "src/inference_scaling/arllm/backends/vllm_ascend_worker.py": "155b648dd95755c367274690f67f5b710e7755e802237ccafe5edcecce80889e",
+        "src/inference_scaling/arllm/backends/vllm_statistics.py": "4007dcf425689e4991e4d6859cd94dcaca55d29386a33a69e0388cfeb8c20f59",
+        "src/inference_scaling/arllm/backends/kv_cache.py": "aabcbb1ec7f8984a685fd1e7327ec897bfe981229060b7bd673bada81da2ba4d",
+        "src/inference_scaling/arllm/backends/vllm_backend.py": "69d58d7f2ddd3d4f050aca3c739890bfbd421d80286d07c5eac0038e17ecabdb",
+        "src/inference_scaling/arllm/backends/scheduling.py": "dc628c1a25f9df1814759c2e883a3b5ad0c7a7496d48140744883a7366251cfe",
+        "src/inference_scaling/arllm/backends/vllm_fused_worker.py": "3dbda192e38391e7bdd72be4427d7971aaf7dbfcb6e6979b4745bd6801ed5573",
+        "src/inference_scaling/arllm/backends/loader.py": "280dc6b1691d9b89d6718b93d45e8d2578039b714d0132a3ca9dc45882408fc7",
+        "src/inference_scaling/arllm/backends/stopping.py": "bcc5ac80f93479627cd99faa05e08dfbf27e930bca269ba432fa506eeddb007a",
+        "src/inference_scaling/arllm/backends/streaming.py": "c6695d6a8c6a244521c4d843f4fbeaf9233db1268389500aaba971fb8228a7b5",
+        "src/inference_scaling/arllm/backends/__init__.py": "f64642cef4c81025e8c0f45a2378a2a728c789b0e9c6ca8098cc2237e5fb6244",
+        "src/inference_scaling/arllm/backends/transformers_backend.py": "fca9b34585d678d2e9931c98b0e862eac0f362caf0c7e9e88eef53b1f7c09da0",
+        "src/inference_scaling/arllm/backends/replay.py": "33e894f768fd12925f03472401edcc2c4dd49b3dc789819d23367364c6789a5e",
+        "src/inference_scaling/arllm/backends/vllm_sampling.py": "e30dad639f8b0c923dfbbf9a4c9ff881f33d434614a909dbad507673443d660e",
+        "src/inference_scaling/arllm/backends/causal_scoring.py": "ae77c0ae05606dde734af7d43ae42c7c5998aaa32e77f6e57b1294b473a09a31",
+        "src/inference_scaling/arllm/backends/statistics.py": "8b1907e3c3b5b6c3637712940eaf897d3000ddfd0a76a4a833efcaaa0905b49a",
+        "src/inference_scaling/arllm/backends/batching.py": "c10ae56f812da276a1dd5cd59f8db30bbb0c1e1f936b8c0741cb0ebd129b3a95",
+        "src/inference_scaling/arllm/backends/thinking_budget.py": "b8ff4e8228d3ae17d3d84153397d37612642ca0edc771482fcb7c1dd269d0d45",
+        "src/inference_scaling/arllm/rewards/intrinsic.py": "3fb2ba206e3519480bffd1cfce34c51e5fd69f6431c2c6ff1209a8d947d5bd08",
+        "src/inference_scaling/arllm/rewards/__init__.py": "59ab703374df8892be44aa54d81a93fdf34a511d66ca6d7971c83f90a305a3d1",
+        "src/inference_scaling/shared/model/thinking.py": "6580ec9a2cbe7fbf8bac7a46dffe9c5d40337ec6c71006e0c233cc63dc1f36c4",
+        "src/inference_scaling/shared/model/output.py": "5799c3bc82438c3115c04e9e0eb67181e1e862cac013aa2602e490996512cb8e",
+        "src/inference_scaling/shared/model/prompting.py": "11cac68332c6dd311ccb6415dec166fbc874ef621393a08649d056109029c4c2",
+        "src/inference_scaling/shared/model/generation.py": "c264b68e2af219632e40042d5e253dada4e38c05d1673fe59d49f22647f21208",
+        "src/inference_scaling/shared/model/__init__.py": "b9da3d5930ae53fa51b534591c4f093f9430a9e04600c2a4e8e1a24e7cb79a01",
+        "src/inference_scaling/shared/model/loading.py": "06251a594909b065a146f5b0624afdd2595bb9f3fe2f5ce74d4150e3d037eade",
+        "src/inference_scaling/shared/sampling/stratified.py": "6725587a40fd4db968b66c14f6be1b1f3ed8cb95e006ca8aa0213de074196de9",
+        "src/inference_scaling/shared/sampling/importance.py": "66cc3981d62845debcdba1a40866ed980d5eb35e5a2f7cfb16d0eb1652af0ee1",
+        "src/inference_scaling/shared/sampling/__init__.py": "f8289736598df5d533852e28a7d7c0a99e9970e27a6900495acc9294b766b06b",
+        "src/inference_scaling/shared/sampling/nonself.py": "e17f34ee05122043474dfc40aef5bf73cb8306e4acdf21a363559da296d5616c",
+        "src/inference_scaling/shared/sampling/conditional_is.py": "ad9bf046d0547467297bc53fad69407b7ad103d6a33b2929ddc989b2a8d0d15d",
+        "src/inference_scaling/shared/sampling/mh.py": "5daf3ffa7a9011673692d11f260c1651e4136debe61fe4df52fd3c31246eaef1",
+        "src/inference_scaling/shared/rewards/consilience.py": "87f25dd7ff863b9a37015897fd9da43897b0574af8772a432927fc5132e32649",
+        "src/inference_scaling/shared/rewards/__init__.py": "4328a6e4afb14aed031b239c300eaec6f0845984c92e21a1c764b33daf2650c4",
+        "src/inference_scaling/shared/rewards/vote.py": "1cc70ed32a429a5081cba3ff91066a9e0331ad84dc282bf36f1a4d45a1658343",
+        "scripts/benchmark_online_is.py": "97413a8f618b5b4512591c5d23eb28ca56486385fd0e7b8c9a6e11640a25208b"
+      },
+      "settings_sha256": "146f7a19fa7908bf0080660e40560bc8076062a0a33a50d143ecc09299e53704",
+      "prepared_sha256": "2ad1026e24bbbef1b71ac5a71fa32254bc88b58f73e09f138b8dbc70091f1a34",
+      "model_id": "/cache/models/Qwen3.8-27B;revision=1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "raw_sha256": "00a1a7a4ba170469fe6b434f939b9188a534ab7784f2817d6673334ae7ab4208"
+    }
+  ],
+  "setup": [
+    {
+      "worker": "a3",
+      "job_seconds": 18645.081289052963,
+      "pipeline_seconds": 18376.315016655717,
+      "index_seconds": 37.281958741135895,
+      "container_stopped": true
+    }
+  ],
+  "total_generated_tokens": 599054,
+  "total_pipeline_hours": 5.104531949071032,
+  "total_device_hours": 5.179189246959156,
+  "online_noise_equal_exposure_pairs": 18,
+  "online_noise_total_pairs": 32
+}

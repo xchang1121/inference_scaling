@@ -1,0 +1,9 @@
+{
+  "source_commit": "02cd9d6",
+  "cpu_tests": 46,
+  "ruff": "passed",
+  "frozen_IS_files_verified": 17,
+  "online_adapter_unchanged": true,
+  "generation_archive_sha256": "c20064f56db178ebd2fcc02d0662a8451e951288678c195970f9f27b7511fe6e",
+  "native_validation": "recorded separately in audit-smoke.json and reports"
+}
