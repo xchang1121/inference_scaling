@@ -162,6 +162,12 @@ python -m pytest
 16 道 DEV 题、两个种子、六组共 192 次运行的[正式指标与配对分析](experiments/online-injection-full-is-metrics-20261113/reports/RESULTS_ZH.md)
 及[原始记录和离线重放](experiments/online-injection-full-is-metrics-20261113/README.md)已归档。
 
+后续六种在线检索/注入策略与两组基线共完成256次配对运行，见
+[逐题结果](experiments/online-injection-smart-is-20261114/reports/RESULTS_ZH.md)与
+[空答案、证据窗口及续写行为的轨迹诊断](experiments/online-injection-smart-is-20261114/DISCUSSION_ZH.md)。
+本轮静态注入F1仍最高；第一人称续接未出现空答案，但成本增加，六种新策略均未显示稳定优于原在线的F1收益。
+方案与阈值见[探索协议](docs/reports/SMART_ONLINE_IS_PROTOCOL.md)，原IS算法和参数保持不变。
+
 dLLM、训练及旧 IS 组合保存在[归档分支](https://github.com/xchang1121/inference_scaling/tree/archive/legacy-dllm-training-is)。
 历史报告保留原配置与图片：[GSM8K 准确率](docs/reports/GSM8K_3090_ALIGNED_RESULTS.md)、
 [Qwen3 思考模式](docs/reports/QWEN3_MATH500_REASONING.md)、[RTX 3090 执行成本](docs/reports/RTX3090_ROLLOUT_INFRA.md)、

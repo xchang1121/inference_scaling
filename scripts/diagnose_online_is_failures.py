@@ -15,7 +15,7 @@ out=a.output
 out.mkdir(parents=True,exist_ok=True)
 folder=a.snapshot
 from summarize_cot_guidance import Decoder, read
-decode = Decoder(json.loads((folder/'vocabulary-formal.json').read_text()))
+decode = Decoder(json.loads((folder/'vocabulary-formal.json').read_text(encoding='utf-8')))
 rows = [r for r in read(folder/'formal.jsonl') if r['kind']=='measurement']
 indexed = {(r['question_id'],r['seed'],r['arm']):r for r in rows}
 scores = {(r['question_id'],r['seed'],r['arm']):r for r in json.loads((base/'reports/records.json').read_text(encoding='utf-8'))}
@@ -116,7 +116,7 @@ lines += ['', '13/16 道题在线 F1 较低；最大的负向差异来自 Q183�
           '5. **词F1受答案冗长度影响。** 在线平均答案669token，静态536token；Q183静态约337–365token，在线442–677token。F1偏好与短参考答案重叠的简短输出，不能直接当语义正确率。Q158在线较高F1主要来自重复参数定义，它还断言引号必需，而参考段本身不支持此断言；不能把该分数上涨直接视作事实正确性改进。','',
           '## 值得保留的在线能力与下一轮测试','',
           'Q218在线检索能找出MQ版本回退的相关APAR，而原静态查询命中了GPFS文档；这说明思考扩展查询也有价值。问题约束检索应保留受控的动态查询，而不是完全退回固定查询。',
-          '后续四组方案依次检验继续推理提示、原问题占优的双查询融合和窗口去重、句末优先注入、后一次检索的不确定性门控。原IS参数、SC评分和EOS处理保留，避免靠补答掩盖失败。',
+          '后续方案检验继续推理提示、原问题占优的双查询融合和窗口去重、句末优先注入、后一次检索的不确定性门控，以及未完成第一人称句续接和提前供证。原IS参数、SC评分和EOS处理保留，避免靠补答掩盖失败。',
           '本诊断与方案均使用了已有DEV数据，因此下一轮仍应标注为开发集探索；若要得出泛化结论，需要另外冻结未查看的测试集。','']
 (out/'BASELINE_DIAGNOSIS_ZH.md').write_text('\n'.join(lines),encoding='utf-8',newline='\n')
 print(json.dumps({'questions':len(paired),'empty_pair_contribution':empty_contribution,'near_injection_terminations':len(near)}))

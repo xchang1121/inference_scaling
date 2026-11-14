@@ -44,3 +44,4 @@
 /experiments/online-injection-smart-is-20261114/reports/scores.csv -diff -whitespace
 /experiments/online-injection-smart-is-20261114/figures/*.svg -diff -whitespace
 /experiments/online-injection-smart-is-20261114/baseline-analysis/*.txt -diff -whitespace
+/experiments/online-injection-smart-is-20261114/selected-case-studies.txt -diff -whitespace

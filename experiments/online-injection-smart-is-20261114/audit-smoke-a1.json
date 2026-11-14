@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "checks": 4235,
+  "failures": [],
+  "units": 16,
+  "stage": "smoke",
+  "quality_scored": false,
+  "generated_tokens": 32316,
+  "empty_answers": 1,
+  "truncated_answers": 0,
+  "retrieval_events": 53,
+  "selected_injections": 17
+}

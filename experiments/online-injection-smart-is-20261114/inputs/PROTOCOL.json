@@ -1,0 +1,60 @@
+{
+  "name": "Smarter online IS retrieval exploration",
+  "baseline_commit": "018ba19",
+  "arms": [
+    "static_facts",
+    "online_is",
+    "resume",
+    "anchored",
+    "boundary",
+    "adaptive",
+    "bridge",
+    "early"
+  ],
+  "cases": [
+    "DEV_Q281",
+    "DEV_Q213",
+    "DEV_Q290",
+    "DEV_Q221",
+    "DEV_Q010",
+    "DEV_Q048",
+    "DEV_Q183",
+    "DEV_Q154",
+    "DEV_Q292",
+    "DEV_Q141",
+    "DEV_Q244",
+    "DEV_Q025",
+    "DEV_Q271",
+    "DEV_Q296",
+    "DEV_Q158",
+    "DEV_Q218"
+  ],
+  "smoke_cases": [
+    "TRAIN_Q545",
+    "TRAIN_Q559"
+  ],
+  "seeds": [
+    20261112,
+    20261113
+  ],
+  "workers": [
+    "a0",
+    "a1",
+    "a3"
+  ],
+  "formal_units": 256,
+  "smoke_units": 48,
+  "partition": "Strided question partition across three free cards; all arms and seeds of each question on one card; baseline arms rerun.",
+  "policies": {
+    "resume": "Original query and 128/512 positions; append explicit continuation instruction after each 256-token packet.",
+    "anchored": "Resume format, fixed 128/512; remove answer-format boilerplate from query; 0.75 question-only +0.25 branch-aware reciprocal rank fusion, k8 each, RRF constant20; exclude >50% overlapping previous source windows.",
+    "boundary": "Anchored retrieval + continuation; check generated prefixes at64/96/128/160 then320/352/.../544, inject at first sentence/newline boundary or deadline; maximum one per phase.",
+    "adaptive": "Boundary policy; early evidence as above, late insertion only if last32-token mean surprisal>=0.8 nats or uncertainty phrase in recent256tokens; otherwise skip.",
+    "bridge": "Original query and128/512 positions; unchanged256-token evidence followed by an unfinished first-person reasoning sentence instead of the imperative resume instruction.",
+    "early": "Same first-person bridge and original query as bridge, moved to32/256 generated tokens to ground the candidate before long unsupported speculation."
+  },
+  "limits": "All original IS parameters, source files and model settings unchanged. Max2 evidence packets; continuation instruction is additional input cost. No EOS suppression, repair or retry; retain empty/truncated answers.",
+  "inference": "Exploratory followup on already inspected DEV set; not heldout validation. Policies frozen after ungraded TRAIN integration smoke, before DEV quality scoring.",
+  "confounds": "Boundary variants change sampling segmentation and therefore backend offset-derived RNG; no claim of identical random streams. Incremental variants alter more than one factor. No confidence interval adjusted for multiple comparisons.",
+  "pilot_revision": "Two additional arms introduced after TRAIN-only pilot showed imperative resume ended in EOS on TRAIN_Q545. The original six conditions are retained. No formal DEV runs occurred before this revision; failed startup and36-unit pilot will be archived."
+}

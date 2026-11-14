@@ -1,0 +1,47 @@
+{
+  "passed": true,
+  "quality_scored": false,
+  "units": 36,
+  "checks": 9390,
+  "workers": [
+    {
+      "passed": true,
+      "checks": 3130,
+      "failures": [],
+      "units": 12,
+      "stage": "smoke",
+      "quality_scored": false,
+      "generated_tokens": 19285,
+      "empty_answers": 1,
+      "truncated_answers": 0,
+      "retrieval_events": 34,
+      "selected_injections": 11
+    },
+    {
+      "passed": true,
+      "checks": 3130,
+      "failures": [],
+      "units": 12,
+      "stage": "smoke",
+      "quality_scored": false,
+      "generated_tokens": 19285,
+      "empty_answers": 1,
+      "truncated_answers": 0,
+      "retrieval_events": 34,
+      "selected_injections": 11
+    },
+    {
+      "passed": true,
+      "checks": 3130,
+      "failures": [],
+      "units": 12,
+      "stage": "smoke",
+      "quality_scored": false,
+      "generated_tokens": 19285,
+      "empty_answers": 1,
+      "truncated_answers": 0,
+      "retrieval_events": 34,
+      "selected_injections": 11
+    }
+  ]
+}

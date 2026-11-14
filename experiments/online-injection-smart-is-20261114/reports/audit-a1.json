@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "checks": 28899,
+  "failures": [],
+  "units": 80,
+  "stage": "formal",
+  "quality_scored": false,
+  "generated_tokens": 206040,
+  "empty_answers": 8,
+  "truncated_answers": 0,
+  "retrieval_events": 298,
+  "selected_injections": 92
+}

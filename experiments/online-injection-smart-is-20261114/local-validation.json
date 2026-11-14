@@ -1,0 +1,11 @@
+{
+  "cpu_tests": 52,
+  "ruff": "passed",
+  "generation_archive_sha256": "1001388c0692204d5720e5e915f3153846c6d81d266890cbd1bf72b7a637938b",
+  "frozen_IS_files_verified": 17,
+  "original_online_unchanged": true,
+  "failed_native_attempt": "Initial runner signature mismatch before any measurements; preserved in raw/smoke-failed-v1; fixed and regression-tested.",
+  "native_validation": "Recorded separately in audit-smoke files and formal reports",
+  "source_commit": "4130958",
+  "pilot_revision": "Six-arm ungraded TRAIN pilot retained; bridge and early added before any formal DEV generation. All eight arms revalidated."
+}

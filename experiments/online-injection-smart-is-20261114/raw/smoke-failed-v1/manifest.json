@@ -1,0 +1,20 @@
+[
+  {
+    "worker": "a0",
+    "path": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/online-injection-smart-is-20261114/smoke-snapshot-a0.tar.gz",
+    "bytes": 22167,
+    "sha256": "010559345c49f8d0aafc4f0feec620b6768d551625abe4a39c028f8f99916c4c"
+  },
+  {
+    "worker": "a1",
+    "path": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/online-injection-smart-is-20261114/smoke-snapshot-a1.tar.gz",
+    "bytes": 22028,
+    "sha256": "3e409d9bfff7bb29b395db4a0546b1505ea46b565ad671002262edd9bcab4064"
+  },
+  {
+    "worker": "a3",
+    "path": "/data/disk/changxiangyu/agentic_scaling/deployment/ascend/online-injection-smart-is-20261114/smoke-snapshot-a3.tar.gz",
+    "bytes": 22032,
+    "sha256": "67e277c2086639e97de113a4a0e388e23ee5d39b533157f620cf23a4ce87ed02"
+  }
+]

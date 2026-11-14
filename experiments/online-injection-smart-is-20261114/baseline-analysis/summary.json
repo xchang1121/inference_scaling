@@ -1,0 +1,1074 @@
+[
+  {
+    "q": "DEV_Q010",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 8.108108108108109,
+    "thought_tokens": 377,
+    "answer_tokens": 668,
+    "empty": false,
+    "packets": [
+      "swg21317981.txt@192-384",
+      "swg21317981.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "ating the database with the correct encoding, re-run the database setup/transfer\n\nLet me provide a clear, technical answer addressing the question.\n</think>"
+  },
+  {
+    "q": "DEV_Q010",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 7.421875,
+    "thought_tokens": 471,
+    "answer_tokens": 935,
+    "empty": false,
+    "packets": [
+      "swg21317981.txt@192-384"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " set\n\nThe proper fix is to recreate the Oracle database with the correct character set parameters.\n\nLet me structure a clear, technical answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q010",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 9.813084112149532,
+    "thought_tokens": 322,
+    "answer_tokens": 796,
+    "empty": false,
+    "packets": [
+      "swg21317981.txt@192-384",
+      "swg21317981.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " the Oracle database to UTF8 (or one of the other accepted values).\n\nLet me provide a clear, technical answer addressing the question.\n</think>"
+  },
+  {
+    "q": "DEV_Q010",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 7.662835249042145,
+    "thought_tokens": 543,
+    "answer_tokens": 961,
+    "empty": false,
+    "packets": [
+      "swg21317981.txt@192-384",
+      "swg21317981.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " (UTF8, AL16UTF16, AL32UTF8, UTFE).\n\nLet me structure a clear answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q025",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 21.78988326848249,
+    "thought_tokens": 143,
+    "answer_tokens": 507,
+    "empty": false,
+    "packets": [
+      "swg21959588.txt@0-192",
+      "swg21959588.txt@192-377"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "erts, -alias, -keystore, -storepass, and -file parameters.\n\nLet me construct a clear, complete answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q025",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 13.975903614457833,
+    "thought_tokens": 698,
+    "answer_tokens": 770,
+    "empty": false,
+    "packets": [
+      "swg21959588.txt@0-192",
+      "swg21959588.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "\n   - Certificate management section\n   - Import the certificate\n\nLet me provide a comprehensive answer based on what I know about this topic.\n</think>"
+  },
+  {
+    "q": "DEV_Q025",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 16.3265306122449,
+    "thought_tokens": 195,
+    "answer_tokens": 625,
+    "empty": false,
+    "packets": [
+      "swg21959588.txt@0-192",
+      "swg21959588.txt@192-377"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "'s likely \"changeit\" which is the default cacerts password, or the actual store password)\n\nLet me structure a clear answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q025",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 10.16949152542373,
+    "thought_tokens": 1076,
+    "answer_tokens": 1015,
+    "empty": false,
+    "packets": [
+      "swg21959588.txt@0-192",
+      "swg21959588.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " management interface or through the agent's own keystore management.\n\nLet me provide a practical, well-structured answer covering the main approaches.\n</think>"
+  },
+  {
+    "q": "DEV_Q048",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 3.992015968063872,
+    "thought_tokens": 1019,
+    "answer_tokens": 1009,
+    "empty": false,
+    "packets": [
+      "swg21440410.txt@0-192",
+      "swg21440410.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "URLRequest Queued\n\nI should be transparent that the provided references don't contain this specific information and guide the user on where to find it.\n</think>"
+  },
+  {
+    "q": "DEV_Q048",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 2.511773940345369,
+    "thought_tokens": 129,
+    "answer_tokens": 1350,
+    "empty": false,
+    "packets": [
+      "swg1IZ64862.txt@288-480"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "\n\nFor the ITM IIS agent, the key areas of data collection include:\n\n1. **Website Details** - This typically involves information</think>"
+  },
+  {
+    "q": "DEV_Q048",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 3.50109409190372,
+    "thought_tokens": 660,
+    "answer_tokens": 911,
+    "empty": false,
+    "packets": [
+      "swg21440410.txt@0-192",
+      "swg21440410.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "oding context) and then provide the counter information from general IIS knowledge, noting that the specific ITM documentation would be the authoritative source.\n</think>"
+  },
+  {
+    "q": "DEV_Q048",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 2.5925925925925926,
+    "thought_tokens": 511,
+    "answer_tokens": 1035,
+    "empty": false,
+    "packets": [
+      "swg1IZ17024.txt@0-192"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " the W3SVC, IIS Web Server, and WWW Service objects.\n\nLet me provide a thorough, well-organized answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q141",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 13.305613305613306,
+    "thought_tokens": 388,
+    "answer_tokens": 676,
+    "empty": false,
+    "packets": [
+      "swg22008456.txt@96-288",
+      "swg22008456.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " exports). The newline characters are replaced with spaces, causing all lines to appear on a single line.\n\nLet me formulate a clear answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q141",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 11.308562197092083,
+    "thought_tokens": 609,
+    "answer_tokens": 879,
+    "empty": false,
+    "packets": [
+      "swg1IV14580.txt@96-288",
+      "swg21478025.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " ability to distinguish line spacing\n- Font characteristics affect line break detection\n- Post-processing solutions\n\nLet me structure a clear, helpful answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q141",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 12.419700214132762,
+    "thought_tokens": 573,
+    "answer_tokens": 617,
+    "empty": false,
+    "packets": [
+      "swg22008456.txt@96-288",
+      "swg22008456.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " a known application behavior and suggest potential workarounds.\n\nLet me craft a clear answer that addresses the question directly using the reference data.\n</think>"
+  },
+  {
+    "q": "DEV_Q141",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 10.934744268077601,
+    "thought_tokens": 810,
+    "answer_tokens": 797,
+    "empty": false,
+    "packets": [
+      "swg22008456.txt@96-288",
+      "swg22004314.txt@0-192"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " for proper CR-LF or line break settings)\n\nThis is a general technical troubleshooting question. Let me provide a helpful, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q154",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 21.11801242236025,
+    "thought_tokens": 486,
+    "answer_tokens": 590,
+    "empty": false,
+    "packets": [
+      "swg21588811.txt@96-288",
+      "swg21610689.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "- The corrupted .type file cannot be loaded by the GUI, making the DataType appear \"empty\"\n\nLet me formulate a clear answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q154",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 18.51179673321234,
+    "thought_tokens": 720,
+    "answer_tokens": 667,
+    "empty": false,
+    "packets": [
+      "swg21588811.txt@96-288",
+      "swg21588811.txt@192-384"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "parameters\" - making it a large, complex section that is more susceptible to partial writes.\n\nLet me compose a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q154",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 20.98765432098765,
+    "thought_tokens": 556,
+    "answer_tokens": 613,
+    "empty": false,
+    "packets": [
+      "swg21588811.txt@96-288",
+      "swg21610689.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " .type files for missing properties)\n4. How to resolve (manual rebuild while cluster is shutdown, compare with similar .type files)\n</think>"
+  },
+  {
+    "q": "DEV_Q154",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 21.135029354207436,
+    "thought_tokens": 693,
+    "answer_tokens": 661,
+    "empty": false,
+    "packets": [
+      "swg21588811.txt@96-288",
+      "swg21588811.txt@192-384"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " effectively incomplete\n5. Resolution involves manual reconstruction of the missing property while the cluster is stopped\n\nLet me write a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q158",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 42.63959390862944,
+    "thought_tokens": 614,
+    "answer_tokens": 238,
+    "empty": false,
+    "packets": [
+      "swg21960062.txt@5280-5472",
+      "swg21960062.txt@5184-5376"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " to be used as separator\" and explicitly accepts an empty (blank) value. No quoting requirement is specified in the documentation for this parameter.\n</think>"
+  },
+  {
+    "q": "DEV_Q158",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 31.496062992125985,
+    "thought_tokens": 129,
+    "answer_tokens": 333,
+    "empty": false,
+    "packets": [
+      "swg21960062.txt@5184-5376"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "\n\nWithout specific source facts provided in the prompt, I need to reason about what's commonly known. In many configuration contexts, when you define a</think>"
+  },
+  {
+    "q": "DEV_Q158",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 44.559585492227974,
+    "thought_tokens": 572,
+    "answer_tokens": 236,
+    "empty": false,
+    "packets": [
+      "swg21960062.txt@5280-5472",
+      "swg21960062.txt@5184-5376"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " mentioned for this parameter (unlike FILTER_VALUE which explicitly states \"without any additional quotes\").\n\nLet me provide a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q158",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 67.24137931034483,
+    "thought_tokens": 129,
+    "answer_tokens": 101,
+    "empty": false,
+    "packets": [
+      "swg21960062.txt@5280-5472"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " referring to:\n1. A configuration file for a scripting engine\n2. An API parameter for a token-based system\n3. A specific</think>"
+  },
+  {
+    "q": "DEV_Q183",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 23.645320197044335,
+    "thought_tokens": 215,
+    "answer_tokens": 365,
+    "empty": false,
+    "packets": [
+      "swg21607690.txt@96-288",
+      "swg21607690.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "0/where-do-you-download-the-mttrapd-probe-release-20/\n\nLet me provide a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q183",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 13.397129186602871,
+    "thought_tokens": 804,
+    "answer_tokens": 677,
+    "empty": false,
+    "packets": [
+      "swg21964179.txt@0-184",
+      "swg21607690.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " a clear, direct answer about what the MTTrapd probe is, that a support guide exists, and where to typically find such documentation.\n</think>"
+  },
+  {
+    "q": "DEV_Q183",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 24.864864864864867,
+    "thought_tokens": 205,
+    "answer_tokens": 337,
+    "empty": false,
+    "packets": [
+      "swg21607690.txt@96-288",
+      "swg21607690.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " higher.\n- The guide covers configuration, troubleshooting, and testing the probe's behavior.\n\nLet me formulate a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q183",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 11.805555555555555,
+    "thought_tokens": 537,
+    "answer_tokens": 442,
+    "empty": false,
+    "packets": [
+      "swg21607690.txt@96-288",
+      "swg21607690.txt@192-306"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "MTTrapd support guide\" or \"MTTrapd.\"\n\nLet me provide a clear, helpful answer about where to find this documentation.\n</think>"
+  },
+  {
+    "q": "DEV_Q213",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 10.144927536231885,
+    "thought_tokens": 421,
+    "answer_tokens": 374,
+    "empty": false,
+    "packets": [
+      "swg21974687.txt@0-192",
+      "swg1IO22899.txt@384-576"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " redefine/recreate the search template natively in ICN rather than trying to convert it.\n\nLet me formulate a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q213",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 10.140845070422536,
+    "thought_tokens": 383,
+    "answer_tokens": 521,
+    "empty": false,
+    "packets": [
+      "swg21648471.txt@0-174"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " search templates, you would need to manually recreate them in ICN.\n\nLet me structure a clear, direct answer with the technical details.\n</think>"
+  },
+  {
+    "q": "DEV_Q213",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 10.358565737051793,
+    "thought_tokens": 409,
+    "answer_tokens": 336,
+    "empty": false,
+    "packets": [
+      "swg21974687.txt@0-192",
+      "swg1IO22899.txt@384-576"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " but with known limitations (refinements not applying properly in ICN for MS Office).\n\nLet me formulate a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q213",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 10.112359550561797,
+    "thought_tokens": 408,
+    "answer_tokens": 536,
+    "empty": false,
+    "packets": [
+      "swg21648471.txt@0-174"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " would need to **recreate** it manually in ICN.\n\nLet me structure a clear, directly-answering final response.\n</think>"
+  },
+  {
+    "q": "DEV_Q218",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 5.0113895216400905,
+    "thought_tokens": 957,
+    "answer_tokens": 723,
+    "empty": false,
+    "packets": [
+      "swg1IT10548.txt@576-768",
+      "swg1IT10548.txt@672-864"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " MQ issue - they're about GPFS. I'll note this but provide the technical explanation based on how PureApplication System MQ patterns work.\n</think>"
+  },
+  {
+    "q": "DEV_Q218",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 7.027027027027027,
+    "thought_tokens": 1075,
+    "answer_tokens": 583,
+    "empty": false,
+    "packets": [
+      "swg1IT15252.txt@96-288",
+      "swg1IT06605.txt@96-288"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " add/update the MQ 8.0.0.4 package in the storehouse.\n\nLet me formulate a clear, complete answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q218",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 7.4074074074074066,
+    "thought_tokens": 1116,
+    "answer_tokens": 565,
+    "empty": false,
+    "packets": [
+      "swg1IT10548.txt@576-768",
+      "swg1IT10548.txt@672-864"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " component in the PaaS system's repository not matching the version displayed in the pattern editor.\n\nLet me write a clear, helpful answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q218",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 0.0,
+    "thought_tokens": 129,
+    "answer_tokens": 2,
+    "empty": true,
+    "packets": [
+      "swg1IT15252.txt@96-288"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " gets deployed is determined by the MQ virtual product that is available in the pattern library at deployment time. \n\nThe key issue here is:\n\n1</think>"
+  },
+  {
+    "q": "DEV_Q221",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 6.9478908188585615,
+    "thought_tokens": 415,
+    "answer_tokens": 632,
+    "empty": false,
+    "packets": [
+      "swg21661534.txt@0-192",
+      "swg21661534.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " the answer to:\n1. Directly address the question\n2. Include the technical details from the references\n3. Provide actionable steps\n</think>"
+  },
+  {
+    "q": "DEV_Q221",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 5.797101449275362,
+    "thought_tokens": 129,
+    "answer_tokens": 1040,
+    "empty": false,
+    "packets": [
+      "swg21454982.txt@192-384"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": ". Corrupted Java installation, incompatible Java version, or corrupted JVM files can cause silent crashes.\n\n2. **Corrupted workspace**: The Eclipse</think>"
+  },
+  {
+    "q": "DEV_Q221",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 6.2953995157385,
+    "thought_tokens": 493,
+    "answer_tokens": 625,
+    "empty": false,
+    "packets": [
+      "swg21661534.txt@0-192",
+      "swg21661534.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " relevant technical detail from the references\n3. Provides practical troubleshooting steps based on the source data\n4. Is direct and doesn't repeat analysis\n</think>"
+  },
+  {
+    "q": "DEV_Q221",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 7.317073170731707,
+    "thought_tokens": 129,
+    "answer_tokens": 822,
+    "empty": false,
+    "packets": [
+      "swg21454982.txt@192-384"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "Corrupted preferences/workspace** - The workspace or preferences files may be corrupted.\n\n3. **Insufficient memory** - The JVM heap size may</think>"
+  },
+  {
+    "q": "DEV_Q244",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 8.484848484848486,
+    "thought_tokens": 126,
+    "answer_tokens": 253,
+    "empty": false,
+    "packets": [
+      "swg21959867.txt@0-139",
+      "swg21578276.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " - `-C` - clears the failed resource action\n\nThe references are consistent in their instructions. Let me provide a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q244",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 6.8686868686868685,
+    "thought_tokens": 453,
+    "answer_tokens": 928,
+    "empty": false,
+    "packets": [
+      "swg21977871.txt@96-288"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " failure --reset <node> <resource> <op>` — resets a specific failure record\n\nLet me structure a clear, complete answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q244",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 8.24742268041237,
+    "thought_tokens": 210,
+    "answer_tokens": 310,
+    "empty": false,
+    "packets": [
+      "swg21959867.txt@0-139",
+      "swg21578276.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "The flag order can vary (both orders are shown in the references).\n\nI'll provide a clear, direct answer with the technical details.\n</think>"
+  },
+  {
+    "q": "DEV_Q244",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 0.0,
+    "thought_tokens": 129,
+    "answer_tokens": 0,
+    "empty": true,
+    "packets": [
+      "swg21959867.txt@0-139"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": true,
+    "selected_tail": " typically refers to resource errors - when a resource fails to start, stop, or perform some operation. These errors are stored in the CRM's C<|im_end|>"
+  },
+  {
+    "q": "DEV_Q271",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 7.392996108949417,
+    "thought_tokens": 723,
+    "answer_tokens": 764,
+    "empty": false,
+    "packets": [
+      "swg21690251.txt@1440-1632",
+      "swg21690251.txt@768-960"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " of building a file\n- How to reference it in FieldScript\n- Whether it improves recognition (yes, for postal code fields specifically)\n</think>"
+  },
+  {
+    "q": "DEV_Q271",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 7.968127490039841,
+    "thought_tokens": 853,
+    "answer_tokens": 1242,
+    "empty": false,
+    "packets": [
+      "swg27047578.txt@864-1056",
+      "swg21690251.txt@1440-1632"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " connections in Taskmaster, not through FieldScript actions per se\n4. Whether Parascript helps recognition - yes, through constraints and validation logic\n</think>"
+  },
+  {
+    "q": "DEV_Q271",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 6.685236768802229,
+    "thought_tokens": 696,
+    "answer_tokens": 1085,
+    "empty": false,
+    "packets": [
+      "swg21690251.txt@1440-1632",
+      "swg21690251.txt@768-960"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " are no trailing spaces or carriage return issues\n- The file path in the field definition should be correct\n\nLet me provide a comprehensive answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q271",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 6.470588235294119,
+    "thought_tokens": 630,
+    "answer_tokens": 1096,
+    "empty": false,
+    "packets": [
+      "swg27047578.txt@864-1056",
+      "swg1LO46238.txt@1632-1824"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " reference)\n5. Whether Parascript helps with recognition (yes, as post-processing)\n\nLet me write a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q281",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 19.230769230769234,
+    "thought_tokens": 132,
+    "answer_tokens": 151,
+    "empty": false,
+    "packets": [
+      "swg21975568.txt@0-192",
+      "swg21975568.txt@96-224"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": ", and Menus tabs contain required fields. Make sure all these fields have a value.\n\nLet me formulate a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q281",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 12.389380530973451,
+    "thought_tokens": 129,
+    "answer_tokens": 169,
+    "empty": false,
+    "packets": [
+      "swg21975568.txt@0-192"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " to the desktop configuration - if no modifications are detected, the save buttons remain disabled since there is nothing to save.\n\n2. The user may</think>"
+  },
+  {
+    "q": "DEV_Q281",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 13.740458015267176,
+    "thought_tokens": 168,
+    "answer_tokens": 189,
+    "empty": false,
+    "packets": [
+      "swg21975568.txt@0-192",
+      "swg21975568.txt@96-224"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": ", and Menus tabs contain required fields. Make sure all these fields have a value.\n\nLet me compose a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q281",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 12.676056338028168,
+    "thought_tokens": 294,
+    "answer_tokens": 225,
+    "empty": false,
+    "packets": [
+      "swg21975568.txt@0-192"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "us) and ensure all required fields have values populated.\n\nLet me provide a clear, direct answer addressing the question with the technical details.\n</think>"
+  },
+  {
+    "q": "DEV_Q290",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 31.016042780748666,
+    "thought_tokens": 205,
+    "answer_tokens": 246,
+    "empty": false,
+    "packets": [
+      "swg21967756.txt@0-192",
+      "swg21967756.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": ".3.0, you need to use the latest patch first.\n\nSo the answer is clearly: No, it is not supported.\n</think>"
+  },
+  {
+    "q": "DEV_Q290",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 36.12903225806451,
+    "thought_tokens": 129,
+    "answer_tokens": 184,
+    "empty": false,
+    "packets": [
+      "swg21967756.txt@0-192"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " JBoss is installed as a Windows Service (using the JBoss Windows Service wrapper), there can be issues with ITCAM's ability to properly</think>"
+  },
+  {
+    "q": "DEV_Q290",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 23.236514522821576,
+    "thought_tokens": 207,
+    "answer_tokens": 330,
+    "empty": false,
+    "packets": [
+      "swg21967756.txt@0-192",
+      "swg21967756.txt@96-288"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": ", or 6.3.0, you need to use the latest patch first.\n\nLet me formulate a clear, direct answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q290",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 30.16759776536313,
+    "thought_tokens": 129,
+    "answer_tokens": 234,
+    "empty": false,
+    "packets": [
+      "swg21967756.txt@0-192"
+    ],
+    "selected_events": 1,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "AM supports monitoring a JBoss server that is running as a Windows Service (i.e., registered as a Windows service rather than running as a standalone</think>"
+  },
+  {
+    "q": "DEV_Q292",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 16.018306636155607,
+    "thought_tokens": 312,
+    "answer_tokens": 634,
+    "empty": false,
+    "packets": [
+      "swg21672570.txt@0-192",
+      "swg21566663.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "NRCE0241E errors related to E_ACCESS_DENIED.\n\nLet me provide a clear, direct technical answer addressing the issue.\n</think>"
+  },
+  {
+    "q": "DEV_Q292",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 0.0,
+    "thought_tokens": 514,
+    "answer_tokens": 0,
+    "empty": true,
+    "packets": [
+      "swg22000930.txt@0-192",
+      "swg22000930.txt@96-284"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": true,
+    "selected_tail": " page may not properly query the storage components.\n\nCommon fixes:\n- Check that all CPE/FileNet services are running\n- Verify\n<|im_end|>"
+  },
+  {
+    "q": "DEV_Q292",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 15.250544662309368,
+    "thought_tokens": 209,
+    "answer_tokens": 703,
+    "empty": false,
+    "packets": [
+      "swg21672570.txt@0-192",
+      "swg21566663.txt@0-192"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " Devices\") and Storage Area showing unavailable.\n\nLet me construct a proper technical answer addressing the question directly with the relevant details from the sources.\n</think>"
+  },
+  {
+    "q": "DEV_Q292",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 9.669811320754718,
+    "thought_tokens": 729,
+    "answer_tokens": 1403,
+    "empty": false,
+    "packets": [
+      "swg27045596.txt@480-620",
+      "swg1PJ40526.txt@192-384"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": "- What these components represent\n- Common root causes\n- Diagnostic steps\n- Resolution steps\n\nLet me write a comprehensive but focused answer.\n</think>"
+  },
+  {
+    "q": "DEV_Q296",
+    "seed": 20261112,
+    "arm": "static_facts",
+    "f1": 3.3333333333333335,
+    "thought_tokens": 756,
+    "answer_tokens": 551,
+    "empty": false,
+    "packets": [
+      "swg21698762.txt@96-288",
+      "swg21698762.txt@192-384"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " me structure my answer to directly address the question, acknowledge the limitations of the provided references, and give the most accurate technical answer I can.\n</think>"
+  },
+  {
+    "q": "DEV_Q296",
+    "seed": 20261112,
+    "arm": "online_is",
+    "f1": 3.8620689655172415,
+    "thought_tokens": 773,
+    "answer_tokens": 1066,
+    "empty": false,
+    "packets": [
+      "swg27018890.txt@192-384",
+      "swg21698892.txt@192-384"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " \"Data Sources\" section where you can specify which data source is used for the Document Store vs. the Process Database vs. other components.\n</think>"
+  },
+  {
+    "q": "DEV_Q296",
+    "seed": 20261113,
+    "arm": "static_facts",
+    "f1": 4.584527220630372,
+    "thought_tokens": 688,
+    "answer_tokens": 493,
+    "empty": false,
+    "packets": [
+      "swg21698762.txt@96-288",
+      "swg21698762.txt@192-384"
+    ],
+    "selected_events": 0,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " internal Document Store is not supported with DB2 pureScale.\n\nLet me frame my answer around what can be determined and the practical solution.\n</think>"
+  },
+  {
+    "q": "DEV_Q296",
+    "seed": 20261113,
+    "arm": "online_is",
+    "f1": 3.870967741935484,
+    "thought_tokens": 835,
+    "answer_tokens": 744,
+    "empty": false,
+    "packets": [
+      "swg21698892.txt@192-384",
+      "swg21474367.txt@0-192"
+    ],
+    "selected_events": 2,
+    "generated_reference_headers": 0,
+    "eos_inside_thinking": false,
+    "selected_tail": " DB2 instance\n- Alternatively, pre-create the document store schema and skip the initialization step\n\nLet me formulate a clear, complete answer.\n</think>"
+  }
+]

@@ -1,0 +1,794 @@
+DEV_Q010
+We transferred the database to an external database on our Portal 8.5 environment and now seeing errors, EJPDB0085W and EJPFD0016E in the logs
+
+
+
+After transferring the Portal database we seeing the following....
+
+     [3/1/16 6:22:19:481 CST] 00000071 DataStoreServ W com.ibm.wps.services.
+     datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The
+     character encoding of the database is not UTF-8.
+     [3/1/16 6:22:19:528 CST] 00000071 Servlet       E com.ibm.wps.engine.
+     Servlet init EJPFD0016E: Initialization of service failed.
+                                      com.ibm.wps.util.DataBackendException:
+     EJPDB0160E: The sanity checks of the database layer failed.
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     checkCorrectSetup(DataStoreServiceImpl.java:712)
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     init(DataStoreServiceImpl.java:288)
+
+...
+
+     [3/1/16 6:22:19:824 CST] 00000071 DatabaseInsig W com.ibm.wps.datastore.
+     dbinsight.DatabaseInsight checkCharacterEncodingForOracle EJPDB0166W:
+     The character encoding of database domain [[Domain: jcr]] is not
+     correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in
+     parameter section [NLS_DATABASE_PARAMETERS] where expected values only
+     can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+\
+
+In the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.
+
+GOLD
+At this point there is no way to salvage the database in its current state. The entire Portal database must be dropped and recreated using the specifications provided in the InfoCenter at this link: 
+
+
+http://publib.boulder.ibm.com/infocenter/wpdoc/v6r1m0/topic/com.ibm.wp.e [http://publib.boulder.ibm.com/infocenter/wpdoc/v6r1m0/index.jsp?topic=/com.ibm.wp.ent.doc/config/aix_oracle_create_db.html]
+
+================================================================================
+20261112 static_facts F1=8.1081 thinking=377 answer=668 empty=False
+SELECTED PHYSICAL THINKING
+The user is asking about errors EJPDB0085W and EJPFD0016E after transferring a database to an external database on a Portal 8.5 environment. Let me analyze the error messages:
+
+1. **EJPDB0085W**: The character encoding of the database is not UTF-8.
+2. **EJPFD0016E**: Initialization of service failed.
+3. **EJPDB0160E**: The sanity checks of the database layer failed.
+4. **EJPDB0166W**: The character encoding of database domain [[Domain: jcr]] is not correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in parameter section [NLS_DATABASE_PARAMETERS] where expected values only can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+
+The root cause is clear: The new Oracle database was created with the wrong character encoding. It's set to WE8MSWIN1252 (Windows-1252, a Western character set) instead of one of the required UTF-8 compatible character sets (UTF8, AL16UTF16, AL32UTF8, UTFE).
+
+The solution involves:
+1. Recreating the Oracle database with the correct character encoding (AL32UTF8 is the standard choice for Oracle databases)
+2. The NLS_CHARACTERSET must be set to one of: UTF8, AL16UTF16, AL32UTF8, or UTFE
+3. After recreating the database with the correct encoding, re-run the database setup/transfer
+
+Let me provide a clear, technical answer addressing the question.
+</think>
+ANSWER
+## Root Cause: Incorrect Oracle Database Character Encoding
+
+The errors you're seeing are all stemming from a single problem: **the new external Oracle database was created with the wrong character encoding**.
+
+The critical log line confirms this:
+
+> **EJPDB0166W:** The character encoding of database domain [[Domain: jcr]] is not correct. The value **[WE8MSWIN1252]** is set for key **[NLS_CHARACTERSET]** in parameter section **[NLS_DATABASE_PARAMETERS]** where expected values only can contain one of **[[UTF8, AL16UTF16, AL32UTF8, UTFE]]**.
+
+Portal 8.5 requires the database character set to be a UTF-8–compatible value. Your database was created with **WE8MSWIN1252** (a Windows Western–1252 codepage), which Portal's sanity check rejects, causing the cascade:
+
+- **EJPDB0085W** – character encoding is not UTF-8 (warning raised during `checkCorrectSetup`)
+- **EJPDB0160E** – the sanity checks of the database layer failed
+- **EJPFD0016E** – the WPS Servlet initialization fails because the DataStore service never came up
+
+## Resolution
+
+1. **Recreate (or rebuild) the Oracle database** with a supported character set. The standard choice is **AL32UTF8**:
+
+   ```sql
+   CREATE DATABASE new_portal_db
+     ...
+     NATIONAL CHARACTER SET AL32UTF8
+     CHARACTER SET AL32UTF8;
+   ```
+
+   If you must use an existing instance, verify the setting:
+   ```sql
+   SELECT * FROM NLS_DATABASE_PARAMETERS;
+   ```
+   `NLS_CHARACTERSET` must return one of **UTF8, AL16UTF16, AL32UTF8, or UTFE**. If it does not, the database cannot be corrected in place—you must create a new database with the proper encoding.
+
+2. **Re-point Portal to the new database.** Update the JDBC data source / Datasource properties in WebSphere (or your CMS/XML configuration) with the new DB name and reconnect.
+
+3. **Run the database configuration/replication tool again** to load the Portal schema into the new database:
+   ```
+   <portal_install_root>/bin/wsadmin.sh -lang jython -f setupPortalDBPreferences.py
+   ```
+   (or the equivalent `config_portaldb` / `replicate` step for your environment).
+
+4. **Restart Portal** and confirm that `EJPDB0085W`, `EJPDB0160E`, and `EJPFD0016E` no longer appear in `SystemOut.log`.
+
+### Key Takeaway
+There is no Portal-side configuration that can override this check. The fix is entirely on the **database side**: the Oracle instance's `NLS_CHARACTERSET` must be a UTF-8–compatible value. A `WE8MSWIN1252` database will always trigger this failure, regardless of any Portal or WebSphere tuning.
+ANSWER TOKEN TAIL ' failure, regardless of any Portal or WebSphere tuning.<|im_end|>'
+INJECTED PACKETS
+swg21317981.txt@192-384
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+swg21317981.txt@96-288
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+Sphere® Portal, you attempt to start WebSphere_Portal and receives this error message, "EJPDB0160E: The sanity checks of the database layer failed". 
+
+SYMPTOM
+The entire error message and stack trace will appear like this in the SystemOut.log: 
+
+=======================================================================================
+
+[8/19/08 15:51:50:788 EDT] 0000001e DataStoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+STEP 0
+{"generated_length_before": 0, "selected_index": 1, "completion_index": 0, "retained_candidate": false, "rollout_evaluations_performed": 3, "forward_token_slots": 4239, "sampling_plan": [512, 3, 2], "candidate_indices": null, "reserved": 47616, "work": 1248, "candidates": [{"length": 484, "tail": " set (AL32UTF8).\n\nLet me structure the answer clearly.\n</think>", "log_weight": 80.20373274524759, "rollouts": [{"length": 0, "tail": "", "reward": 20.050933186311898}]}, {"length": 377, "tail": " setup/transfer\n\nLet me provide a clear, technical answer addressing the question.\n</think>", "log_weight": 81.87380354455176, "rollouts": [{"length": 0, "tail": "", "reward": 20.46845088613794}]}, {"length": 387, "tail": "2UTF8, UTFE\n\nLet me provide a clear, technical answer.\n</think>", "log_weight": 81.1912665095354, "rollouts": [{"length": 0, "tail": "", "reward": 20.29781662738385}]}]}
+
+================================================================================
+20261112 online_is F1=7.4219 thinking=471 answer=935 empty=False
+SELECTED PHYSICAL THINKING
+The user is asking about errors they're seeing after transferring a WebSphere Portal 8.5 database to an external Oracle database. Let me analyze the errors:
+
+1. **EJPDB0085W**: The character encoding of the database is not UTF-8.
+2. **EJPFD0016E**: Initialization of service failed due to DataBackendException.
+3. **EJPDB0160E**: The sanity checks of the database layer failed.
+4. **EJPDB0166W**: The character encoding of database domain [[Domain: jcr]] is
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+cor
+
+The key issue is clear from the logs: The Oracle database was created/configured with `WE8MSWIN1252` as the `NLS_CHARACTERSET`, but WebSphere Portal 8.5 requires a UTF-8 compatible character set (UTF8, AL16UTF16, AL32UTF8, or UTFE).
+
+The solution involves:
+1. Recreating the Oracle database with a UTF-8 compliant character set
+2. Or, if that's not feasible, the NLS parameters need to be set correctly
+
+Let me provide a comprehensive answer addressing the root cause and solution.
+
+The root cause: After transferring the Portal database to the external Oracle database, the Oracle instance's `NLS_CHARACTERSET` is set to `WE8MSWIN1252` instead of a UTF-8 compatible encoding. Portal 8.5 requires the database to use UTF8, AL16UTF16, AL32UTF8, or UTFE as the character set.
+
+The solution:
+- Recreate the Oracle database with `NLS_CHARACTERSET = UTF8` (or AL32UTF8)
+- If the database has already been created with the wrong character set, it typically needs to be recreated since NLS_CHARACTERSET cannot be changed after database creation
+- Alternatively, in some cases, you can use `ALTER DATABASE ... SET NATIONAL CHARACTER SET` but this only changes AL16UTF16/AL32UTF8, not the base character set
+
+The proper fix is to recreate the Oracle database with the correct character set parameters.
+
+Let me structure a clear, technical answer.
+</think>
+ANSWER
+## Root Cause
+
+The errors are all manifestations of a single problem: **your external Oracle database was created with `NLS_CHARACTERSET` set to `WE8MSWIN1252` instead of a UTF-8–compatible encoding.** WebSphere Portal 8.5 mandates that the underlying database use one of the following character sets:
+
+- `UTF8`
+- `AL16UTF16`
+- `AL32UTF8`
+- `UTFE`
+
+The log line that pinpoints the exact misconfiguration is:
+
+```
+EJPDB0166W: The character encoding of database domain [[Domain: jcr]] is
+not correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET]
+in parameter section [NLS_DATABASE_PARAMETERS] where expected values only
+can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+```
+
+Because the sanity check (`DataStoreServiceImpl.checkCorrectSetup`) fails, Portal cannot initialise the JCR/DB2-oracle data layer, which cascades into `EJPDB0160E` and `EJPFD0016E`.
+
+## Resolution
+
+### 1. Recreate the Oracle database with a UTF-8 character set
+
+`NLS_CHARACTERSET` **cannot be altered** on an existing Oracle database; it is fixed at creation time. You must drop and recreate the database (or the entire Oracle instance if it is dedicated to Portal) specifying the correct parameters:
+
+```sql
+-- In DBCA or via sqlplus during CREATE DATABASE
+CREATE DATABASE portaldb
+  ...
+  character set UTF8
+  national character set AL16UTF16;
+```
+
+Or, when using **DBCA** (Database Configuration Assistant), under the *Character Sets* section, select **UTF8** for both the database and national character sets.
+
+If using an **init parameter file** or **spfile**, confirm:
+
+```
+*.NLS_CHARACTERSET=WE8MSWIN1252   ← wrong; remove or never set this
+```
+
+Only the national character set (`NLS_NCHAR_CHARACTERSET`) can be set explicitly in the parameter file, and it should be `AL16UTF16` or `AL32UTF8`. The database character set is determined solely at `CREATE DATABASE` time.
+
+### 2. Re-import / re-transfer the Portal data
+
+After the correctly-encoded database is up, re-run the database transfer/import (via the `ConfigEngine` task or the standard DB2→Oracle export/import) so that all JCR and portal tables are populated against the UTF-8 instance.
+
+### 3. Verify before restarting Portal
+
+```sql
+SELECT parameter_value FROM v$NLS_PARAMETERS WHERE parameter = 'NLS_CHARACTERSET';
+-- Expected: UTF8  (or AL32UTF8)
+
+SELECT parameter_value FROM v$NLS_PARAMETERS WHERE parameter = 'NLS_NCHAR_CHARACTERSET';
+-- Expected: AL16UTF16  (or AL32UTF8)
+```
+
+### 4. Restart Portal
+
+Stop the WebSphere application server, then start it. The `DataStoreServiceImpl` sanity check should now pass and the `EJPDB0085W` / `EJPDB0160E` / `EJPFD0016E` errors will no longer appear.
+
+### 5. (Optional) Confirm in the WAS Admin Console
+
+Under **Servers → Server Types → WebSphere application servers → <server> → WebSphere portal system → Datastore**, you can re-run the data-store health check to confirm the encoding is accepted.
+
+## Why this happened
+
+When the Portal database was transferred to the new external Oracle instance, the target Oracle database was originally provisioned (likely on Windows) with the default `WE8MSWIN1252` character set. The transfer itself succeeded at the byte level, but Portal's post-transfer integrity validation caught the encoding mismatch and refused to continue, because all JCR node names, content, and metadata assume UTF-8 semantics.
+
+> **Key takeaway:** For any Oracle database that will host WebSphere Portal, always create it with `NLS_CHARACTERSET = UTF8` (or `AL32UTF8`). There is no in-place fix; the database must be recreated with the correct encoding.
+ANSWER TOKEN TAIL '; the database must be recreated with the correct encoding.<|im_end|>'
+INJECTED PACKETS
+swg21317981.txt@192-384
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+EVENT 1 AT 128
+QUERY
+We transferred the database to an external database on our Portal 8.5 environment and now seeing errors, EJPDB0085W and EJPFD0016E in the logs
+
+
+
+After transferring the Portal database we seeing the following....
+
+     [3/1/16 6:22:19:481 CST] 00000071 DataStoreServ W com.ibm.wps.services.
+     datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The
+     character encoding of the database is not UTF-8.
+     [3/1/16 6:22:19:528 CST] 00000071 Servlet       E com.ibm.wps.engine.
+     Servlet init EJPFD0016E: Initialization of service failed.
+                                      com.ibm.wps.util.DataBackendException:
+     EJPDB0160E: The sanity checks of the database layer failed.
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     checkCorrectSetup(DataStoreServiceImpl.java:712)
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     init(DataStoreServiceImpl.java:288)
+
+...
+
+     [3/1/16 6:22:19:824 CST] 00000071 DatabaseInsig W com.ibm.wps.datastore.
+     dbinsight.DatabaseInsight checkCharacterEncodingForOracle EJPDB0166W:
+     The character encoding of database domain [[Domain: jcr]] is not
+     correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in
+     parameter section [NLS_DATABASE_PARAMETERS] where expected values only
+     can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+\
+
+In the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.
+The user is asking about errors they're seeing after transferring a WebSphere Portal 8.5 database to an external Oracle database. Let me analyze the errors:
+
+1. **EJPDB0085W**: The character encoding of the database is not UTF-8.
+2. **EJPFD0016E**: Initialization of service failed due to DataBackendException.
+3. **EJPDB0160E**: The sanity checks of the database layer failed.
+4. **EJPDB0166W**: The character encoding of database domain [[Domain: jcr]] is
+STEP 0
+{"generated_length_before": 0, "selected_index": 1, "completion_index": 0, "retained_candidate": false, "rollout_evaluations_performed": 5, "forward_token_slots": 13903, "sampling_plan": [512, 3, 2], "candidate_indices": null, "reserved": 47616, "work": 3805, "candidates": [{"length": 512, "tail": "ServiceImpl.java:288)\n[End reference]\n[Retrieved reference;", "log_weight": 55.09044461992738, "rollouts": [{"length": 748, "tail": "End reference]]</onttribuand initialization of the web container.\n\n[End reference]\n</think>", "reward": 11.0827509324829}, {"length": 657, "tail": "UTF8 (but this has restrictions and risks)\n\nLet me structure the answer clearly.\n</think>", "reward": 13.945895294620566}]}, {"length": 471, "tail": " the correct character set parameters.\n\nLet me structure a clear, technical answer.\n</think>", "log_weight": 73.8174791863624, "rollouts": [{"length": 0, "tail": "", "reward": 18.4543697965906}]}, {"length": 512, "tail": "MSWIN1252** instead of one of the required UTF-8 compatible enc", "log_weight": 65.68068936097687, "rollouts": [{"length": 167, "tail": " Portal should start without these errors.\n\nLet me provide a clear, direct technical answer.\n</think>", "reward": 16.593425008047998}, {"length": 738, "tail": " changing the parameter file is not recommended for production.\n\nLet me structure my answer clearly.\n</think>", "reward": 14.36866270054618}]}]}
+
+================================================================================
+20261113 static_facts F1=9.8131 thinking=322 answer=796 empty=False
+SELECTED PHYSICAL THINKING
+The user is asking about errors EJPDB0085W and EJPFD0016E that appeared after transferring a database to an external database on a Portal 8.5 environment.
+
+From the logs, the key issue is clear:
+- EJPDB0085W: The character encoding of the database is not UTF-8.
+- EJPFD0016E: Initialization of service failed.
+- EJPDB0160E: The sanity checks of the database layer failed.
+- EJPDB0166W: The character encoding of database domain [[Domain: jcr]] is not correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in parameter section [NLS_DATABASE_PARAMETERS] where expected values only can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+
+So the root cause is that the external Oracle database is configured with WE8MSWIN1252 character encoding, but WebSphere Portal requires UTF-8 compatible character sets (UTF8, AL16UTF16, AL32UTF8, UTFE).
+
+The solution is to change the Oracle database character encoding to one of the acceptable values. Since this is after a database transfer, the user needs to modify the NLS_CHARACTERSET parameter in the Oracle database to UTF8 (or one of the other accepted values).
+
+Let me provide a clear, technical answer addressing the question.
+</think>
+ANSWER
+## Root Cause
+
+The errors **EJPDB0085W**, **EJPFD0016E**, and **EJPDB0160E** are all symptoms of a single underlying problem: **your external Oracle database is using an unsupported character encoding.**
+
+The log line that pinpoints the issue is:
+
+```
+EJPDB0166W: The character encoding of database domain [[Domain: jcr]] is not correct.
+The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in parameter section
+[NLS_DATABASE_PARAMETERS] where expected values only can contain one of
+[[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+```
+
+The transferred Oracle database is configured with **WE8MSWIN1252** (Windows-1252 / Western European). WebSphere Portal 8.5 requires the database character set to be one of **UTF8, AL16UTF16, AL32UTF8, or UTFE**. Because the sanity check (`DataStoreServiceImpl.checkCorrectSetup`) fails, the data-store service cannot initialize, which cascades into the `EJPFD0016E` initialization failure.
+
+## Resolution
+
+You need to change the Oracle database's `NLS_CHARACTERSET` to **UTF8**. Because this is an **external database** that was the target of a transfer, there are two practical paths:
+
+### Option A – Recreate the Oracle database with the correct character set (recommended for a fresh target)
+1. Drop the current external Oracle database (or create a new one).
+2. Create the database with:
+   ```sql
+   CREATE DATABASE myportaldb
+     NLS_CHARACTERSET = 'UTF8'
+     NLS_NCHAR_CHARACTERSET = 'AL16UTF16';
+   ```
+3. Re-run the **Database Transfer** utility (or `db2 export`/`imp` as appropriate) to reload the Portal schema into the new UTF-8 database.
+4. Update the **dacl-config.xml** (or the equivalent Portal XML config) so that the `NLS_DATABASE_PARAMETERS` section lists `NLS_CHARACTERSET = UTF8` for the `jcr` domain.
+5. Restart WebSphere Portal.
+
+### Option B – If you must keep the existing database (less ideal)
+- You **cannot** simply run `ALTER DATABASE CHARACTER SET` on an existing Oracle database; the character set is fixed at creation time.
+- The only workaround would be to:
+  1. Export all Portal-related tables to flat files (e.g., `EXPDP`/`IMPDP` with a transformation, or SQL\*Plus `SET MARKUP` export).
+  2. Create a new Oracle database with `NLS_CHARACTERSET = UTF8`.
+  3. Import the data into the new database, verifying that no multi-byte corruption occurs during the WE8MSWIN1252 → UTF8 conversion.
+  4. Point Portal at the new database and restart.
+
+### Verification
+After the change, confirm the character set before starting Portal:
+
+```sql
+SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET';
+-- Expected result: UTF8
+```
+
+Then restart Portal and verify that **EJPDB0085W / EJPFD0016E / EJPDB0160E** no longer appear in `SystemOut.log`.
+
+> **Key point:** This is not a Portal bug or a transfer-format problem—it is a database-level character-encoding mismatch. Portal 8.5 will not start until the `NLS_CHARACTERSET` satisfies UTF-8 compatibility.
+ANSWER TOKEN TAIL 'NLS_CHARACTERSET` satisfies UTF-8 compatibility.<|im_end|>'
+INJECTED PACKETS
+swg21317981.txt@192-384
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+swg21317981.txt@96-288
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+Sphere® Portal, you attempt to start WebSphere_Portal and receives this error message, "EJPDB0160E: The sanity checks of the database layer failed". 
+
+SYMPTOM
+The entire error message and stack trace will appear like this in the SystemOut.log: 
+
+=======================================================================================
+
+[8/19/08 15:51:50:788 EDT] 0000001e DataStoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+STEP 0
+{"generated_length_before": 0, "selected_index": 2, "completion_index": 0, "retained_candidate": false, "rollout_evaluations_performed": 3, "forward_token_slots": 4185, "sampling_plan": [512, 3, 2], "candidate_indices": null, "reserved": 47616, "work": 1194, "candidates": [{"length": 380, "tail": " approved encoding) as the character set.\n\nLet me formulate a clear answer.\n</think>", "log_weight": 81.71113266353557, "rollouts": [{"length": 0, "tail": "", "reward": 20.42778316588389}]}, {"length": 492, "tail": "E (service initialization failure).\n\nLet me provide a clear, direct answer.\n</think>", "log_weight": 78.28292377417539, "rollouts": [{"length": 0, "tail": "", "reward": 19.570730943543847}]}, {"length": 322, "tail": " accepted values).\n\nLet me provide a clear, technical answer addressing the question.\n</think>", "log_weight": 81.80143017635167, "rollouts": [{"length": 0, "tail": "", "reward": 20.450357544087918}]}]}
+
+================================================================================
+20261113 online_is F1=7.6628 thinking=543 answer=961 empty=False
+SELECTED PHYSICAL THINKING
+The user is asking about errors in an IBM WebSphere Portal 8.5 environment after transferring the database to an external database. The errors are:
+
+1. EJPDB0085W: The character encoding of the database is not UTF-8.
+2. EJPFD0016E: Initialization of service failed.
+3. EJPDB0160E: The sanity checks of the database layer failed.
+4. EJPDB0166W: The character encoding of database domain [[Domain: jcr]] is not correct. The value [WE8MSWIN1
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+252 is set for key [NLS_CHARACTERSET] in parameter section [NLS_DATABASE_PARAMETERS] where expected values only can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+
+The core issue is clear: The external Oracle database has its NLS_CHARACTERSET set to WE8MSWIN1252 (Windows-1252/ISO-8859-1), but IBM WebSphere Portal 8.5 requires the database character encoding to be UTF-8. The acceptable values are UTF8, AL16UTF16, AL32UTF8, or UTFE.
+
+The solution involves:
+1. Dropping and recreating the Oracle database (or the specific tablespaces) with UTF8 character set, OR
+2. Changing the character set of the existing database (which is complex in Oracle and may require using ALTER DATABASE ... CHARACTER SET or using the DBCA to recreate).
+
+For Oracle, changing the character set is typically done via:
+- Using the DBCA to create a new database with UTF8 character set
+- Or using `ALTER DATABASE ... CHARACTER SET` (only works if no data has been inserted yet, or with EXTENDED option)
+- Or migrating the data to a new UTF8 database
+
+Since they "transferred" the database, they likely migrated data from one Oracle instance to another, but the target database was created with the wrong character set (WE8MSWIN1252 instead of UTF8).
+
+The fix:
+1. The external Oracle database must be recreated with UTF8 (UTF8, AL16UTF16, or AL32UTF8) character set.
+2. Then re-migrate/restore the data.
+3. Ensure the NLS_CHARACTERSET parameter is set to one of the accepted
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+Sphere® Portal, you attempt to start WebSphere_Portal and receives this error message, "EJPDB0160E: The sanity checks of the database layer failed". 
+
+SYMPTOM
+The entire error message and stack trace will appear like this in the SystemOut.log: 
+
+=======================================================================================
+
+[8/19/08 15:51:50:788 EDT] 0000001e DataStoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+ values (UTF8, AL16UTF16, AL32UTF8, UTFE).
+
+Let me structure a clear answer.
+</think>
+ANSWER
+## Root Cause
+
+Both **EJPDB0085W** and **EJPFD0016E** are symptoms of the same underlying problem shown by **EJPDB0166W**: your external Oracle database has its character set set to **WE8MSWIN1252**, but WebSphere Portal 8.5 mandates a UTF-8–family encoding. The Portal data-store sanity check (`DataStoreServiceImpl.checkCorrectSetup`) finds that the `NLS_CHARACTERSET` parameter under `[NLS_DATABASE_PARAMETERS]` is not one of the accepted values **UTF8, AL16UTF16, AL32UTF8, or UTFE**, so it aborts initialization (→ EJPFD0016E).
+
+## Resolution
+
+The external Oracle instance must be rebuilt (or its character set changed) to use a UTF-8–family character set, then the Portal schema data re-loaded.
+
+### Option A – Recreate the Oracle database with UTF8 (recommended)
+
+1. **Create a new Oracle PDB/CDB or instance** using DBCA (or the equivalent `create database` script) with:
+
+   ```
+   CHARACTER SET  = UTF8          (or AL32UTF8)
+   NATIONAL CHARACTER SET = AL16UTF16
+   ```
+
+   Verify after creation:
+
+   ```sql
+   SELECT parameter, value
+   FROM   nls_database_parameters
+   WHERE  parameter IN ('NLS_CHARACTERSET','NLS_NCHAR_CHARACTERSET');
+   -- NLS_CHARACTERSET must return UTF8 (or AL16UTF16 / AL32UTF8 / UTFE)
+   ```
+
+2. **Restore / import the Portal schema data** (JCR, ICDB, VMDB, IBSSDB, WAADB, etc.) from the export you took before the transfer, using `impdp`/`expdp` (Data Pump) or `sqlplus` SQL\*Loader. Data Pump in 12c+ performs implicit character-set conversion, so the previous WE8MSWIN1252 data will be converted to UTF8 on load.
+
+3. **Associate the Portal database in the administrative console** (or `ManageRegistryProcess` if the migration was done that way) pointing to the new UTF8 instance.
+
+### Option B – In-place character-set conversion (only if the DB is still empty or you accept downtime)
+
+If the data has already been loaded into the WE8MSWIN1252 instance and you cannot recreate it:
+
+```sql
+SHUTDOWN IMMEDIATE;
+STARTUP MOUNT EXCLUSIVE;
+ALTER DATABASE CHARACTER SET UTF8 EXTENDED;   -- 12c+ only
+ALTER DATABASE OPEN;
+```
+
+> **Caveat:** `EXTENDED` is required when data already exists. Oracle will validate every row; validation can take a long time and will fail if any existing data cannot be represented in UTF8. This is riskier than Option A and is not the approach IBM documents for this error.
+
+### Post-fix verification
+
+After the character set is corrected and data re-loaded:
+
+1. Restart the Portal node (or the entire node if it was in a failed-init state).
+2. Confirm in `SystemOut.log` that **EJPDB0085W**, **EJPDB0166W**, **EJPDB0160E**, and **EJPFD0016E** no longer appear.
+3. Open the Portal page (`/wps/portal`) and verify content, search, and composite applications render correctly.
+4. Optionally run the Portal data-store integrity check via the administrative console under **System → ManagePortal** to confirm the JCR domain is healthy.
+
+## Why this happened
+
+During the external-DB transfer the target Oracle instance was (re)created with the OS-default character set (WE8MSWIN1252 = Windows-1252/ISO-8859-1) rather than explicitly specifying `UTF8`. Portal 8.5 hard-fails at startup if the JCR (and by extension the other Portal) databases do not report an accepted UTF-8-family `NLS_CHARACTERSET`, which is exactly what the stack trace in `DataStoreServiceImpl.checkCorrectSetup` → `init` shows. Correcting the character set to **UTF8** (or AL32UTF8) and re-loading the data resolves both EJPDB0085W and the downstream EJPFD0016E initialization failure.
+ANSWER TOKEN TAIL ' EJPFD0016E initialization failure.<|im_end|>'
+INJECTED PACKETS
+swg21317981.txt@192-384
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+StoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm.wps.util.DataBackendException: EJPDB0160E: The sanity checks of the database layer failed.
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.checkCorrectSetup(DataStoreServiceImpl.java:669)
+at com.ibm.wps.services.datastore.DataStoreServiceImpl.init(DataStoreServiceImpl.java:288)
+at com.ibm.wps.services.Service.init(Service.java:107)
+at com.ibm.wps.services.Service.init
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+swg21317981.txt@96-288
+
+[Retrieved reference; source data]
+IBM 'EJPDB0160E: The sanity checks of the database layer failed' error occurs during startup after successful database transfer - United States
+Sphere® Portal, you attempt to start WebSphere_Portal and receives this error message, "EJPDB0160E: The sanity checks of the database layer failed". 
+
+SYMPTOM
+The entire error message and stack trace will appear like this in the SystemOut.log: 
+
+=======================================================================================
+
+[8/19/08 15:51:50:788 EDT] 0000001e DataStoreServ W com.ibm.wps.services.datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The character encoding of the database is not UTF-8.
+[8/19/08 15:51:50:822 EDT] 0000001e Servlet E com.ibm.wps.engine.Servlet init EJPFD0016E: Initialization of service failed.
+com.ibm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[End reference]
+
+EVENT 2 AT 128
+QUERY
+We transferred the database to an external database on our Portal 8.5 environment and now seeing errors, EJPDB0085W and EJPFD0016E in the logs
+
+
+
+After transferring the Portal database we seeing the following....
+
+     [3/1/16 6:22:19:481 CST] 00000071 DataStoreServ W com.ibm.wps.services.
+     datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The
+     character encoding of the database is not UTF-8.
+     [3/1/16 6:22:19:528 CST] 00000071 Servlet       E com.ibm.wps.engine.
+     Servlet init EJPFD0016E: Initialization of service failed.
+                                      com.ibm.wps.util.DataBackendException:
+     EJPDB0160E: The sanity checks of the database layer failed.
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     checkCorrectSetup(DataStoreServiceImpl.java:712)
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     init(DataStoreServiceImpl.java:288)
+
+...
+
+     [3/1/16 6:22:19:824 CST] 00000071 DatabaseInsig W com.ibm.wps.datastore.
+     dbinsight.DatabaseInsight checkCharacterEncodingForOracle EJPDB0166W:
+     The character encoding of database domain [[Domain: jcr]] is not
+     correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in
+     parameter section [NLS_DATABASE_PARAMETERS] where expected values only
+     can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+\
+
+In the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.
+The user is asking about errors in an IBM WebSphere Portal 8.5 environment after transferring the database to an external database. The errors are:
+
+1. EJPDB0085W: The character encoding of the database is not UTF-8.
+2. EJPFD0016E: Initialization of service failed.
+3. EJPDB0160E: The sanity checks of the database layer failed.
+4. EJPDB0166W: The character encoding of database domain [[Domain: jcr]] is not correct. The value [WE8MSWIN1
+EVENT 5 AT 512
+QUERY
+We transferred the database to an external database on our Portal 8.5 environment and now seeing errors, EJPDB0085W and EJPFD0016E in the logs
+
+
+
+After transferring the Portal database we seeing the following....
+
+     [3/1/16 6:22:19:481 CST] 00000071 DataStoreServ W com.ibm.wps.services.
+     datastore.DataStoreServiceImpl checkCorrectSetup EJPDB0085W: The
+     character encoding of the database is not UTF-8.
+     [3/1/16 6:22:19:528 CST] 00000071 Servlet       E com.ibm.wps.engine.
+     Servlet init EJPFD0016E: Initialization of service failed.
+                                      com.ibm.wps.util.DataBackendException:
+     EJPDB0160E: The sanity checks of the database layer failed.
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     checkCorrectSetup(DataStoreServiceImpl.java:712)
+                     at com.ibm.wps.services.datastore.DataStoreServiceImpl.
+     init(DataStoreServiceImpl.java:288)
+
+...
+
+     [3/1/16 6:22:19:824 CST] 00000071 DatabaseInsig W com.ibm.wps.datastore.
+     dbinsight.DatabaseInsight checkCharacterEncodingForOracle EJPDB0166W:
+     The character encoding of database domain [[Domain: jcr]] is not
+     correct. The value [WE8MSWIN1252] is set for key [NLS_CHARACTERSET] in
+     parameter section [NLS_DATABASE_PARAMETERS] where expected values only
+     can contain one of [[UTF8, AL16UTF16, AL32UTF8, UTFE]].
+\
+
+In the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.
+AL32UTF8, or UTFE.
+
+The solution involves:
+1. Dropping and recreating the Oracle database (or the specific tablespaces) with UTF8 character set, OR
+2. Changing the character set of the existing database (which is complex in Oracle and may require using ALTER DATABASE ... CHARACTER SET or using the DBCA to recreate).
+
+For Oracle, changing the character set is typically done via:
+- Using the DBCA to create a new database with UTF8 character set
+- Or using `ALTER DATABASE ... CHARACTER SET` (only works if no data has been inserted yet, or with EXTENDED option)
+- Or migrating the data to a new UTF8 database
+
+Since they "transferred" the database, they likely migrated data from one Oracle instance to another, but the target database was created with the wrong character set (WE8MSWIN1252 instead of UTF8).
+
+The fix:
+1. The external Oracle database must be recreated with UTF8 (UTF8, AL16UTF16, or AL32UTF8) character set.
+2. Then re-migrate/restore the data.
+3. Ensure the NLS_CHARACTERSET parameter is set to one of the accepted
+STEP 0
+{"generated_length_before": 0, "selected_index": 2, "completion_index": 0, "retained_candidate": false, "rollout_evaluations_performed": 6, "forward_token_slots": 15886, "sampling_plan": [512, 3, 2], "candidate_indices": null, "reserved": 47616, "work": 2770, "candidates": [{"length": 512, "tail": " DB2 databases. IBM Lotus Notes and the WorkPlace XT system use the same worklist", "log_weight": 56.01655497960177, "rollouts": [{"length": 426, "tail": " database creation which sets the correct NLS parameters.\n\nLet me structure a clear answer.\n</think>", "reward": 14.177183989908551}, {"length": 2, "tail": "\n</think>", "reward": 12.441769984730502}]}, {"length": 512, "tail": " or specific procedures).\n   - Options:\n     a. Recreate the database with", "log_weight": 68.79512567085054, "rollouts": [{"length": 443, "tail": " portal database properties if needed\n4. Restart Portal\n\nLet me write a comprehensive answer.\n</think>", "reward": 16.83806924999885}, {"length": 335, "tail": "SET must be one of the four listed values.\n\nLet me structure my answer clearly.\n</think>", "reward": 17.34064143656557}]}, {"length": 512, "tail": ".\n3. Ensure the NLS_CHARACTERSET parameter is set to one of the accepted", "log_weight": 71.5417530886893, "rollouts": [{"length": 14, "tail": " values.\n\nLet me provide a clear, comprehensive answer.\n</think>", "reward": 17.88979077657064}, {"length": 14, "tail": " values.\n\nLet me structure a clear, complete answer.\n</think>", "reward": 17.881008645920527}]}]}
+STEP 1
+{"generated_length_before": 512, "selected_index": 1, "completion_index": 0, "retained_candidate": true, "rollout_evaluations_performed": 2, "forward_token_slots": 3063, "sampling_plan": [512, 3, 2], "candidate_indices": null, "reserved": 36864, "work": 45, "candidates": [{"length": 14, "tail": " values.\n\nLet me provide a clear, comprehensive answer.\n</think>", "log_weight": 71.55916310628255, "rollouts": [{"length": 0, "tail": "", "reward": 17.88979077657064}]}, {"length": 31, "tail": "32UTF8, UTFE).\n\nLet me structure a clear answer.\n</think>", "log_weight": 71.12388412362975, "rollouts": [{"length": 0, "tail": "", "reward": 17.780971030907438}]}, {"length": 14, "tail": " values.\n\nLet me provide a clear, direct answer.\n</think>", "log_weight": 71.53012733096168, "rollouts": [{"length": 0, "tail": "", "reward": 17.88253183274042}]}]}
