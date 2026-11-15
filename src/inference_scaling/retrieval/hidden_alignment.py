@@ -14,12 +14,14 @@ from inference_scaling.retrieval.linear_probe import fingerprint
 from inference_scaling.retrieval.probe_features import FEATURE_SCHEMA
 
 
-def fit_alignment(features, targets, *, alpha=10., provenance=None):
+def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=None):
     x, y = np.asarray(features, dtype=np.float64), np.asarray(targets, dtype=np.float64)
     if x.ndim != 2 or x.shape[1] != 128 or y.shape != (len(x), 768) or len(x) < 2:
         raise ValueError('alignment requires paired128-dimensional hidden and768-dimensional document vectors')
     if not np.isfinite(x).all() or not np.isfinite(y).all() or not math.isfinite(alpha) or alpha <= 0:
         raise ValueError('invalid alignment training data or regularization')
+    if type(input_rank) is not int or not 1 <= input_rank <= 128:
+        raise ValueError('input rank must be an integer in1..128')
     norms = np.linalg.norm(y, axis=1)
     if (norms < 1e-12).any():
         raise ValueError('zero target vector')
@@ -27,12 +29,26 @@ def fit_alignment(features, targets, *, alpha=10., provenance=None):
     center, scale = x.mean(0), x.std(0)
     scale[scale < 1e-8] = 1.
     z, intercept = (x-center)/scale, y.mean(0)
-    weights = np.linalg.solve(z.T@z+alpha*np.eye(128), z.T@(y-intercept))
+    if input_rank == 128:
+        weights = np.linalg.solve(z.T@z+alpha*np.eye(128), z.T@(y-intercept))
+    else:
+        # This function sees only its training fold. Fold scaling and PCA must
+        # never be fitted on validation examples, even without their labels.
+        _, _, right = np.linalg.svd(z, full_matrices=False)
+        effective_rank = min(input_rank, len(x)-1)
+        basis = right[:effective_rank].T
+        reduced = z@basis
+        weights = basis@np.linalg.solve(reduced.T@reduced+alpha*np.eye(effective_rank),
+                                       reduced.T@(y-intercept))
     model = {'version': 1, 'kind': 'hidden_document_ridge', 'feature_schema': FEATURE_SCHEMA,
         'input_dimensions': 128, 'output_dimensions': 768, 'alpha': alpha,
         'center': center.tolist(), 'scale': scale.tolist(), 'weights': weights.tolist(),
         'intercept': intercept.tolist(), 'training_rows': len(x), 'provenance': provenance or {},
         'target_scope': 'probe_train source-document centroid in frozen E5 space; not answer quality'}
+    if input_rank != 128:
+        model['input_pca'] = {'requested_rank': input_rank, 'effective_rank': effective_rank,
+                             'fit_scope': 'training rows after training-only normalization',
+                             'deployment': 'basis multiplied into128x768 weights'}
     model['sha256'] = fingerprint(model)
     return model
 
