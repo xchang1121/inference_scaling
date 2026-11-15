@@ -82,12 +82,17 @@ def main():
     need_signals = all_modes != {'none'}
     hidden_dimensions = 513 if multilayer else 128 if 'hidden' in all_modes else 0
     attention_topk = 16 if 'attention' in all_modes else 0
+    attention_geometry = batch.get('attention_geometry')
+    if attention_geometry is not None:
+        from inference_scaling.retrieval.attention_capture import validate_attention_batch
+        attention_schema = validate_attention_batch(batch)
     if need_signals:
         if multilayer:
             from inference_scaling.arllm.backends import vllm_backend
             vllm_backend._ASCEND_WORKER = 'inference_scaling.retrieval.multilayer_signals_worker.MultilayerSignalWorker'
         else:
-            select_signal_worker(hidden=bool(hidden_dimensions), attention=bool(attention_topk))
+            select_signal_worker(hidden=bool(hidden_dimensions), attention=bool(attention_topk),
+                                 attention_geometry=attention_geometry)
     with a.output.open('x', encoding='utf-8') as stream:
         def write(row):
             stream.write(json.dumps(clean(row), ensure_ascii=False, allow_nan=False)+'\n')
@@ -101,10 +106,11 @@ def main():
         try:
             if need_signals:
                 settings['ar']['engine']['vllm']['engine_kwargs']['max_logprobs'] = (
-                    600 if multilayer else 160 if hidden_dimensions else 45 if attention_topk else 10)
+                    600 if multilayer else 160 if hidden_dimensions else 64 if attention_geometry else 45 if attention_topk else 10)
             raw = load_backend(settings['ar']['model'], settings['ar']['engine'], seed=batch['seeds'][0], logprobs=6)
             if need_signals:
-                signals = InternalSignals(raw, hidden_dimensions=hidden_dimensions, attention_topk=attention_topk)
+                signals = InternalSignals(raw, hidden_dimensions=hidden_dimensions, attention_topk=attention_topk,
+                                          attention_geometry=attention_geometry)
             graph, tap = GraphMeasurements(raw), DualStatistics(raw)
             journal = NativeJournal(raw, tap, a.output.with_name(a.output.stem+'-native.jsonl'))
             controller_tap = TuningTap(tap, signals) if need_signals else tap
@@ -189,6 +195,8 @@ def main():
                             'state_offset': -1}
                         if multilayer:
                             result['signal_collection']['schema'] = SCHEMA
+                        if attention_geometry is not None:
+                            result['signal_collection']['attention_geometry'] = attention_schema
                         elapsed, after = time.perf_counter()-started, _snapshot(raw)
                         write({'kind': 'measurement', 'config_id': config['id'], 'seconds': elapsed,
                                'native_journal_io_seconds': journal.io_seconds-journal_io0,
