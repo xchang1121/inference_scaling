@@ -71,7 +71,7 @@ def main():
     if worker_mode not in {'none', 'distribution', 'hidden', 'attention', 'multilayer'}:
         raise ValueError('unknown diagnostic worker')
     all_modes = set(modes) | {worker_mode}
-    multilayer = 'multilayer' in all_modes
+    multilayer = 'multilayer' in all_modes or any(c.get('collect_signals') == 'multilayer' for c in batch['configs'])
     if multilayer:
         from inference_scaling.retrieval.multilayer_capture import SCHEMA, validate_diagnostic_batch
         validate_diagnostic_batch(batch)
