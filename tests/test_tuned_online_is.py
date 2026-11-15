@@ -30,6 +30,32 @@ def test_default_policy_is_exact_original_controller():
     assert [e['injected_ids'] for e in old.events] == [e['injected_ids'] for e in new.events]
 
 
+def test_legacy_anchored_fusion_preserves_question_in_both_queries():
+    from inference_scaling.retrieval.smart_online_is import retrieve_anchored
+    backend, ledger = make(TuningPolicy(query='anchored', anchor_context='question_tail', overlap=.5))
+    ledger.question = 'Product issue\n\nIn the final answer, be direct.'
+    branch = (7, 8, 9)
+    tail = backend.decode(branch, skip_special_tokens=True).strip()
+    expected, log = retrieve_anchored(Facts(), ledger.question, tail, set())
+    found, actual, query = ledger.retrieve(branch, set())
+    assert found == expected
+    assert [c['query'] for c in actual['components']] == log['queries']
+    assert actual['rrf_scores'] == log['weights']
+    assert query == 'Product issue\n'+tail
+
+
+def test_legacy_anchored_configuration_matches_original_native_requests():
+    from test_smart_online_is import make as make_smart
+    _, _, old = make_smart('anchored')
+    _, new = make(TuningPolicy(query='anchored', anchor_context='question_tail',
+                              overlap=.5, continuation='resume'))
+    left, = old.sample_batch([request(old, count=640)])
+    right, = new.sample_batch([request(new, count=640)])
+    assert left == right
+    assert old.native_calls == new.native_calls
+    assert old.materialize(left.token_ids) == new.materialize(right.token_ids)
+
+
 @pytest.mark.parametrize(('trigger','threshold','expected'),
     [('surprisal',.5,2),('surprisal',1.5,0),('lowprob',.1,0),('scdrop',.1,0)])
 def test_causal_statistic_gates(trigger, threshold, expected):
@@ -120,6 +146,7 @@ def test_eos_does_not_trigger_posthumous_evidence():
 
 @pytest.mark.parametrize('policy', [TuningPolicy(), TuningPolicy(trigger='surprisal', threshold=.5),
                                    TuningPolicy(continuation='bridge'), TuningPolicy(query='anchored'),
+                                   TuningPolicy(query='anchored', anchor_context='question_tail'),
                                    TuningPolicy(query='sentence'),TuningPolicy(query='sentence_anchored')])
 def test_offline_audit_replays_gates_and_detects_tampering(policy):
     import copy

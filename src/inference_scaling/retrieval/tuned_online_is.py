@@ -26,6 +26,7 @@ class TuningPolicy:
     query: str = 'concat'
     query_tail: int = 256
     question_weight: float = .75
+    anchor_context: str = 'tail'
     candidates: int = 8
     overlap: float = 1.0
     packet_tokens: int = 256
@@ -51,6 +52,8 @@ class TuningPolicy:
             raise ValueError('unsupported trigger')
         if self.query not in {'concat','question','anchored','uncertain','attention','sentence','sentence_anchored'}:
             raise ValueError('unsupported query')
+        if self.anchor_context not in {'tail', 'question_tail'}:
+            raise ValueError('unsupported anchored context')
         if self.format not in {'original','plain','quoted','source'}:
             raise ValueError('unsupported evidence format')
         if self.continuation not in {'none','resume','bridge','custom'}:
@@ -211,11 +214,14 @@ class TunedOnlineLedger(OnlineISLedger):
         if p.query in {'sentence','sentence_anchored'}:
             step=last_complete_step(tail)
             query=step if p.query=='sentence' else question+'\n'+step
+        if p.query == 'anchored' and p.anchor_context == 'question_tail':
+            query = question+'\n'+tail
         if p.query != 'anchored':
             found, log = self.facts.retrieve(query, k=p.candidates, exclude=frozenset(used))
         else:
             left, a = self.facts.retrieve(question, k=p.candidates, exclude=frozenset(used))
-            right, b = self.facts.retrieve(tail or question, k=p.candidates, exclude=frozenset(used))
+            context_query = question+'\n'+tail if p.anchor_context == 'question_tail' else tail or question
+            right, b = self.facts.retrieve(context_query, k=p.candidates, exclude=frozenset(used))
             scores, payloads = {}, {}
             for weight, hits in ((p.question_weight, left), (1-p.question_weight, right)):
                 for rank, hit in enumerate(hits, 1):

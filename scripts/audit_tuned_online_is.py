@@ -82,6 +82,8 @@ def audit_tuned_row(row, cfg, decode, eos, close, check, *, document_vectors=Non
         if p.query in {'sentence','sentence_anchored'}:
             step=last_complete_step(tail)
             query=step if p.query=='sentence' else clean_question(row['question'])+'\n'+step
+        if p.query == 'anchored' and p.anchor_context == 'question_tail':
+            query = clean_question(row['question'])+'\n'+tail
         if auxiliary:
             query = auxiliary[1](d) or query
         retrieval = d['retrieval']
@@ -91,7 +93,9 @@ def audit_tuned_row(row, cfg, decode, eos, close, check, *, document_vectors=Non
             scores = {}
             components = retrieval['components']
             ck(len(components) == 2, 'two_query_fusion')
-            ck([c['query'] for c in components] == [clean_question(row['question']), tail or clean_question(row['question'])], 'fusion_queries')
+            question = clean_question(row['question'])
+            context_query = question+'\n'+tail if p.anchor_context == 'question_tail' else tail or question
+            ck([c['query'] for c in components] == [question, context_query], 'fusion_queries')
             for weight, component in zip((p.question_weight,1-p.question_weight),components,strict=True):
                 for rank, name in enumerate(component['selected_ids'],1):
                     scores[name] = scores.get(name,0)+weight/(20+rank)
