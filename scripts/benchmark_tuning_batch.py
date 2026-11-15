@@ -98,14 +98,20 @@ def main():
             controller_tap = TuningTap(tap, signals) if need_signals else tap
             close = (raw.tokenizer.convert_tokens_to_ids('</think>'),)
             prepared = json.loads(a.prepared.read_text())
-            indices, banks = {}, {}
+            indices, banks, example_banks = {}, {}, {}
             document_vectors=DocumentVectors(a.document_vectors) if a.document_vectors else None
             for config in batch['configs']:
                 if 'example_policy' in config:
                     if not a.examples or not a.encoder:
                         raise ValueError('example corpus and encoder required')
-                    banks[config['id']] = ExampleBank(raw,a.examples,a.encoder,LiteratureConfig(**config.get('fact_config',{})))
+                    example_cfg=LiteratureConfig(**config.get('fact_config',{}))
+                    key=json.dumps(asdict(example_cfg),sort_keys=True)
+                    reused_from=example_banks[key][0] if key in example_banks else None
+                    if reused_from is None:
+                        example_banks[key]=(config['id'],ExampleBank(raw,a.examples,a.encoder,example_cfg))
+                    banks[config['id']] = example_banks[key][1]
                     write({'kind':'example_bank','config_id':config['id'],'manifest':banks[config['id']].manifest,
+                           'reused_from_config_id':reused_from,
                            'examples_sha256':hashlib.sha256(a.examples.read_bytes()).hexdigest()})
                     continue
                 kind = config.get('retriever', 'bm25')
