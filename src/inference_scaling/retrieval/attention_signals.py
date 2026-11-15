@@ -1,7 +1,7 @@
 """Reconstruct actual grouped-query softmax weights from a native paged KV cache."""
 
 
-def reconstruct_attention(query, keys, values, output, *, topk=16):
+def reconstruct_attention(query, keys, values, output, *, topk=16, head_pooling='all'):
     import torch
     if query.ndim != 2 or keys.ndim != 3 or values.shape != keys.shape:
         raise ValueError('expected Q[heads,dim] and K/V[length,kv_heads,dim]')
@@ -14,7 +14,13 @@ def reconstruct_attention(query, keys, values, output, *, topk=16):
     rebuilt = torch.einsum('hgl,lhd->hgd',weights,values.float()).reshape_as(query)
     error = (rebuilt-output.float()).norm()/output.float().norm().clamp_min(1e-8)
     normalization = (weights.sum(-1)-1).abs().max()
-    average = weights.mean(dim=(0,1))
+    if head_pooling == 'all':
+        average = weights.mean(dim=(0,1))
+    else:
+        from inference_scaling.retrieval.attention_geometry import head_indices
+        indices = head_indices(query.shape[0], head_pooling)
+        # Reconstruction error above still covers EVERY head, including unselected heads.
+        average = weights.reshape(query.shape[0], length)[list(indices)].mean(dim=0)
     scores, indices = average.topk(min(topk,length))
     # Short-prefix padding has zero mass and remains a valid physical index.
     if length < topk:

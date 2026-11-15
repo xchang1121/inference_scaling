@@ -6,6 +6,7 @@ from inference_scaling.retrieval.internal_signals import install_distribution_si
 class RetrievalSignalWorker(AscendLogprobWorker):
     hidden_dimensions = 0
     attention_topk = 0
+    attention_geometry = None
 
     def init_device(self):
         super().init_device()
@@ -15,7 +16,8 @@ class RetrievalSignalWorker(AscendLogprobWorker):
         if eos is None or close is None or close == tokenizer.unk_token_id:
             raise RuntimeError('missing native terminal token IDs')
         install_distribution_signals(self.model_runner.sampler,
-                                     self.model_config.get_vocab_size(), eos, close, self.hidden_dimensions, self.attention_topk)
+                                     self.model_config.get_vocab_size(), eos, close, self.hidden_dimensions, self.attention_topk,
+                                     self.attention_geometry)
 
 
 class HiddenSignalWorker(RetrievalSignalWorker):
@@ -58,6 +60,8 @@ controls. This avoids stale Python hooks during graph replay. Reconstruction is
 read-only, and P@V must match the real pre-output-gate attention result.
 """
     attention_topk = 16
+    attention_layer = 63
+    head_pooling = 'all'
 
     def load_model(self, *args, **kwargs):
         super().load_model(*args, **kwargs)
@@ -65,9 +69,9 @@ read-only, and P@V must match the real pre-output-gate attention result.
         from inference_scaling.retrieval.attention_signals import reconstruct_attention
         runner = self.model_runner
         matches = [(name,mod) for name,mod in runner.model.named_modules()
-                   if name.endswith('layers.63.self_attn') and hasattr(mod,'attn')]
+                   if name.endswith(f'layers.{self.attention_layer}.self_attn') and hasattr(mod,'attn')]
         if len(matches) != 1:
-            raise RuntimeError('expected exactly one layer-63 full-attention module')
+            raise RuntimeError(f'expected exactly one layer-{self.attention_layer} full-attention module')
         parent = matches[0][1]
         attn = parent.attn
         if getattr(attn.impl,'sliding_window',None) is not None or getattr(attn.impl,'sinks',None) is not None:
@@ -89,7 +93,7 @@ read-only, and P@V must match the real pre-output-gate attention result.
 
         def logits(hidden_states, *inner_args, **inner_kwargs):
             metadata = getattr(runner.input_batch,'sampling_metadata',None)
-            enabled = getattr(metadata,'max_num_logprobs',None) == 10+2*self.attention_topk+3
+            enabled = getattr(metadata,'max_num_logprobs',None) == 10+2*self.attention_topk+3+(4 if self.attention_geometry is not None else 0)
             if enabled:
                 n = runner.input_batch.num_reqs
                 if hidden_states.shape[0] != n:
@@ -111,10 +115,37 @@ read-only, and P@V must match the real pre-output-gate attention result.
                     blocks = table[i,:(length+keys.shape[1]-1)//keys.shape[1]].long()
                     k = keys.index_select(0,blocks).reshape(-1,parent.num_kv_heads,parent.head_dim)[:length]
                     v = values.index_select(0,blocks).reshape(-1,parent.num_kv_heads,parent.head_dim)[:length]
-                    rows.append(reconstruct_attention(queries[i],k,v,outputs[i],topk=self.attention_topk))
+                    row = reconstruct_attention(queries[i],k,v,outputs[i],topk=self.attention_topk,
+                                                head_pooling=self.head_pooling)
+                    if self.attention_geometry is not None:
+                        from inference_scaling.retrieval.attention_geometry import HEAD_CODES, decode_geometry, head_indices
+                        tags = [self.attention_layer, HEAD_CODES[self.head_pooling], parent.num_heads,
+                                len(head_indices(parent.num_heads, self.head_pooling))]
+                        decode_geometry(tags, self.attention_geometry)
+                        row = torch.cat((row, row.new_tensor(tags)))
+                    rows.append(row)
                 runner.sampler._retrieval_attention = torch.stack(rows)
             else:
                 runner.sampler._retrieval_attention = None
             return original_logits(hidden_states,*inner_args,**inner_kwargs)
 
         runner.model.compute_logits = logits
+
+
+class TaggedAttention63Worker(AttentionSignalWorker):
+    attention_geometry = 'layer63-all'
+
+
+class TaggedAttention31Worker(AttentionSignalWorker):
+    attention_geometry = 'layer31-all'
+    attention_layer = 31
+
+
+class TaggedAttentionEvenWorker(AttentionSignalWorker):
+    attention_geometry = 'layer63-even'
+    head_pooling = 'even'
+
+
+class TaggedAttentionOddWorker(AttentionSignalWorker):
+    attention_geometry = 'layer63-odd'
+    head_pooling = 'odd'

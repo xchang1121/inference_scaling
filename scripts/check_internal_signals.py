@@ -15,6 +15,7 @@ from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
 from inference_scaling.retrieval.cot_guidance import DualStatistics
 from inference_scaling.retrieval.internal_signals import InternalSignals, select_signal_worker
+from inference_scaling.retrieval.attention_geometry import GEOMETRIES, geometry
 
 
 def main():
@@ -24,13 +25,19 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--hidden', action='store_true')
     p.add_argument('--attention', action='store_true')
+    p.add_argument('--attention-geometry', choices=GEOMETRIES)
     a = p.parse_args()
+    if a.attention_geometry is not None and (not a.attention or a.hidden):
+        p.error('--attention-geometry requires only --attention')
     from test_internal_signals import check_tensor_truth
     check_tensor_truth()
+    if a.attention_geometry is not None:
+        from test_attention_geometry import check_attention_geometry_truth
+        check_attention_geometry_truth()
     settings = load_settings(a.settings)
     cases = json.loads(a.prepared.read_text())['cases'][:2]
     assert len(cases) == 2 and all(c['id'].startswith('TRAIN_') for c in cases)
-    select_signal_worker(hidden=a.hidden,attention=a.attention)
+    select_signal_worker(hidden=a.hidden,attention=a.attention,attention_geometry=a.attention_geometry)
     raw = tap = signals = None
     with a.output.open('x', encoding='utf-8') as stream:
         def write(row):
@@ -43,7 +50,8 @@ def main():
                 settings['ar']['engine']['vllm']['engine_kwargs']['max_logprobs'] = 160 if a.hidden else 64
             raw = load_backend(settings['ar']['model'], settings['ar']['engine'], seed=20261115, logprobs=12)
             signals = InternalSignals(raw, hidden_dimensions=128 if a.hidden else 0,
-                                      attention_topk=16 if a.attention else 0)
+                                      attention_topk=16 if a.attention else 0,
+                                      attention_geometry=a.attention_geometry)
             tap = DualStatistics(raw)
             close = raw.tokenizer.convert_tokens_to_ids('</think>')
             write({'kind': 'engine', 'model_id': raw.model_id, 'settings': engine_settings(raw),
@@ -53,7 +61,11 @@ def main():
                                        'layer': 'final normalized hidden state before LM head'} if a.hidden else None,
                    'attention_features': {'layer':63,'topk':16,'head_pooling':'mean of all heads',
                        'source':'native post-RoPE Q, full paged K/V; P@V checked against actual attention output',
-                       'capture_copies':'present in both OFF and ON controls'} if a.attention else None,
+                       'capture_copies':'present in both OFF and ON controls',
+                       **({'geometry_name': a.attention_geometry, 'geometry_schema': geometry(a.attention_geometry),
+                           'layer': geometry(a.attention_geometry)['layer'],
+                           'head_pooling': geometry(a.attention_geometry)['head_pooling']}
+                          if a.attention_geometry is not None else {})} if a.attention else None,
                    'source': {str(f.relative_to(Path(__file__).resolve().parents[1])):
                               hashlib.sha256(f.read_bytes()).hexdigest()
                               for f in Path(__file__).resolve().parents[1].joinpath('src').rglob('*.py')}})

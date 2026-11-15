@@ -13,12 +13,18 @@ SIGNAL_TAGS = {-2: 'entropy', -3: 'top2_gap', -4: 'p_eos', -5: 'p_think_end'}
 DIAGNOSTIC_LOGPROBS = 10  # top 5 + SC + four diagnostics
 
 
-def install_distribution_signals(sampler, vocabulary_size, eos_id, close_id, hidden_dimensions=0, attention_topk=0):
+def install_distribution_signals(sampler, vocabulary_size, eos_id, close_id, hidden_dimensions=0, attention_topk=0,
+                                 attention_geometry=None):
     import torch
     if getattr(sampler, '_retrieval_signals_installed', False):
         raise RuntimeError('diagnostics already installed')
     original = sampler.gather_logprobs
-    attention_dimensions = 2*attention_topk+3 if attention_topk else 0
+    if attention_geometry is not None:
+        from inference_scaling.retrieval.attention_geometry import geometry
+        geometry(attention_geometry)
+        if not attention_topk or hidden_dimensions:
+            raise ValueError('tagged attention requires separate attention collection')
+    attention_dimensions = (2*attention_topk+3+(4 if attention_geometry is not None else 0)) if attention_topk else 0
 
     def gather(logprobs, num_logprobs, token_ids):
         if num_logprobs != DIAGNOSTIC_LOGPROBS+hidden_dimensions+attention_dimensions:
@@ -61,7 +67,13 @@ def install_distribution_signals(sampler, vocabulary_size, eos_id, close_id, hid
     sampler._retrieval_signals_installed = True
 
 
-def unpack_signals(positions, tokens, vocabulary_size, hidden_dimensions=0, attention_topk=0):
+def unpack_signals(positions, tokens, vocabulary_size, hidden_dimensions=0, attention_topk=0,
+                   attention_geometry=None):
+    if attention_geometry is not None:
+        from inference_scaling.retrieval.attention_geometry import geometry
+        geometry(attention_geometry)
+        if not attention_topk or hidden_dimensions:
+            raise ValueError('tagged attention requires separate attention collection')
     if positions is None or len(positions) != len(tokens):
         raise RuntimeError('diagnostic row length mismatch')
     flat = hasattr(positions, 'start_indices')
@@ -101,6 +113,13 @@ def unpack_signals(positions, tokens, vocabulary_size, hidden_dimensions=0, atte
             signal['attention'] = {'indices':[int(v) for v in indices], 'weights':weights,
                                    'prefix_tokens':int(length), 'relative_output_error':error,
                                    'normalization_error':normalization, 'layer':63}
+            if attention_geometry is not None:
+                from inference_scaling.retrieval.attention_geometry import decode_geometry
+                tags = [float(row.pop(-2000-(2*attention_topk+3)-j)) for j in range(4)]
+                if not all(isfinite(v) for v in tags):
+                    raise RuntimeError('nonfinite native attention geometry tags')
+                schema = decode_geometry(tags, attention_geometry)
+                signal['attention'].update(layer=schema['layer'], geometry=schema)
         if any(k < -1 for k in row):
             raise RuntimeError('unknown diagnostic slot')
         clean.append(row)
@@ -110,7 +129,12 @@ def unpack_signals(positions, tokens, vocabulary_size, hidden_dimensions=0, atte
 
 class InternalSignals:
     """Install before DualStatistics. Toggle only between completed batches."""
-    def __init__(self, backend, hidden_dimensions=0, attention_topk=0):
+    def __init__(self, backend, hidden_dimensions=0, attention_topk=0, attention_geometry=None):
+        if attention_geometry is not None:
+            from inference_scaling.retrieval.attention_geometry import geometry
+            geometry(attention_geometry)
+            if not attention_topk or hidden_dimensions:
+                raise ValueError('tagged attention requires separate attention collection')
         self.backend, self.enabled, self.rows = backend, False, {}
         self.params = backend._sampling_params
         self.parse = backend._sample_from_output
@@ -121,7 +145,7 @@ class InternalSignals:
             if self.enabled and request.statistic is not None:
                 if request.statistic.top_k != 5 or result.logprobs != 6:
                     raise ValueError('diagnostics require top-5 plus scalar SC')
-                result.logprobs = DIAGNOSTIC_LOGPROBS+hidden_dimensions+(2*attention_topk+3 if attention_topk else 0)
+                result.logprobs = DIAGNOSTIC_LOGPROBS+hidden_dimensions+(2*attention_topk+3 if attention_topk else 0)+(4 if attention_geometry is not None else 0)
                 self.pending.add(request.request_id)
             return result
 
@@ -129,7 +153,7 @@ class InternalSignals:
             if request.request_id in self.pending:
                 completion = instance._completion(output)
                 clean, signals = unpack_signals(completion.logprobs, completion.token_ids,
-                                                len(instance.tokenizer), hidden_dimensions, attention_topk)
+                                                len(instance.tokenizer), hidden_dimensions, attention_topk, attention_geometry)
                 if attention_topk and any(s['attention']['prefix_tokens'] != len(request.prefix)+j
                                           for j,s in enumerate(signals)):
                     raise RuntimeError('attention prefix/request alignment failure')
@@ -152,10 +176,16 @@ class InternalSignals:
         self.backend._sample_from_output = self.parse
 
 
-def select_signal_worker(*, hidden=False, attention=False):
+def select_signal_worker(*, hidden=False, attention=False, attention_geometry=None):
     """Opt-in scoped process entry point; no production source is modified."""
     from inference_scaling.arllm.backends import vllm_backend
     if hidden and attention:
         raise ValueError('validate hidden and attention workers separately first')
     cls = 'AttentionSignalWorker' if attention else 'HiddenSignalWorker' if hidden else 'RetrievalSignalWorker'
+    if attention_geometry is not None:
+        from inference_scaling.retrieval.attention_geometry import geometry, WORKERS
+        geometry(attention_geometry)
+        if not attention or hidden:
+            raise ValueError('tagged attention requires separate attention collection')
+        cls = WORKERS[attention_geometry]
     vllm_backend._ASCEND_WORKER = 'inference_scaling.retrieval.internal_signals_worker.'+cls
