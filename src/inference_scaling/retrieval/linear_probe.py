@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from inference_scaling.retrieval.probe_features import EVIDENCE_SCHEMA,pooled_feature_schema
+from inference_scaling.retrieval.probe_features import EVIDENCE_SCHEMA,pooled_feature_schema,validate_feature_schema
 
 
 def indices(target,mode):
@@ -46,7 +46,8 @@ def fit_probe(features,targets,*,target,mode='all',alpha=10.,provenance=None,poo
 
 def predict_probe(model,features):
     if model['sha256']!=fingerprint(model):raise ValueError('probe artifact hash mismatch')
-    if model['feature_schema']!=pooled_feature_schema(model['feature_schema'].get('pool')) or model['indices']!=indices(model['target'],model['mode']):
+    validate_feature_schema(model['feature_schema'])
+    if model['indices']!=indices(model['target'],model['mode']):
         raise ValueError('probe schema mismatch')
     if len(features)!=model['dimension'] or not all(math.isfinite(v) for v in features):
         raise ValueError('invalid inference features')

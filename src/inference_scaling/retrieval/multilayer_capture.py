@@ -52,3 +52,28 @@ def validate_diagnostic_batch(batch):
         policy = config.get('policy', {})
         if policy.get('trigger', 'fixed') not in {'fixed', 'never'} or policy.get('query', 'concat') != 'concat':
             raise ValueError('multilayer diagnostic requires a signal-independent policy')
+
+
+def validate_multilayer_batch(batch):
+    """Separate opt-in layer policies from the unchanged diagnostic validator."""
+    if batch.get('multilayer_policy') is not True:
+        return validate_diagnostic_batch(batch)
+    if batch.get('diagnostic_worker') != 'multilayer':
+        raise ValueError('layer policy requires an explicit multilayer worker')
+    from inference_scaling.retrieval.probe_online_is import ProbePolicy
+    learned = 0
+    for config in batch['configs']:
+        if config.get('collect_signals') != 'multilayer' or config['arm'] != 'tuned_online':
+            raise ValueError('every layer policy/control must collect the same multilayer schema')
+        if any(key in config for key in ('auxiliary_policy','alignment_policy','gap_policy','example_policy')):
+            raise ValueError('layer policy cannot mix other signal consumers')
+        policy = config.get('policy', {})
+        if policy.get('trigger','fixed') not in {'fixed','never'} or policy.get('query','concat') not in {'concat','question'}:
+            raise ValueError('layer policy requires fixed checkpoints and concat/question retrieval')
+        if 'probe_policy' in config:
+            model = ProbePolicy(**config['probe_policy']).model
+            if model['feature_schema'].get('version') != 2 or policy.get('trigger','fixed') != 'fixed':
+                raise ValueError('layer policy requires an explicit captured-layer model')
+            learned += 1
+    if not learned:
+        raise ValueError('use the diagnostic route for batches without learned layer policies')

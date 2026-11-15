@@ -27,13 +27,27 @@ def prediction_matches(recorded, replayed, threshold, *, risk=False):
 
 def prepare_probe_audit(row,cfg,decode,eos,close,ck):
     p=ProbePolicy(**row['probe_policy']);features={}
+    layer=p.model['feature_schema'].get('capture_layer')
+    if layer is not None:
+        from inference_scaling.retrieval.multilayer_capture import SCHEMA
+        collection=row.get('signal_collection',{})
+        ck(collection == {'requested':'multilayer','hidden_dimensions':513,'attention_topk':0,
+            'hidden_source':'multilayer_diagnostic','projection_seed':2026111502,
+            'state_offset':-1,'schema':SCHEMA}, 'probe_multilayer_collection_identity')
+        for call in row['native_calls']:
+            signals=call.get('internal_signals',[])
+            ck(len(signals)==len(call['token_ids']), 'probe_multilayer_complete_native_signals')
+            for signal in signals:
+                v=signal.get('hidden_projection',[])
+                ck(len(v)==513 and all(math.isfinite(x) for x in v) and v[512]==0,
+                    'probe_multilayer_all_native_alignment')
     def resolve(d):
         n=d['observed_native_calls'];native=row['native_calls'][:n]
         proxy=SimpleNamespace(root=tuple(row['root_ids']),native_calls=native,
             tap=SimpleNamespace(history={c['request_id']:c['internal_signals'] for c in native}))
         proxy.recent=MethodType(TunedOnlineLedger.recent,proxy)
         pool=p.model['feature_schema']['pool']
-        values=prefix_features(proxy.recent(d['branch_ids'],pool),pool=pool);features[d['branch_sha256']]=values
+        values=prefix_features(proxy.recent(d['branch_ids'],pool),pool=pool,capture_layer=layer);features[d['branch_sha256']]=values
         value=predict_probe(p.model,values) if p.model['target']=='knowledge' else None
         if value is not None:
             recorded=d['signal']['prediction']
