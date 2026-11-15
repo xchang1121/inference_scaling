@@ -10,6 +10,27 @@ SCHEMA = {
 }
 
 
+def recapture_batches(plan):
+    """Bound one-token recapture work and preserve explicit repeat/layout identity."""
+    from inference_scaling.retrieval.stepwise import token_hash
+    items = plan['items']
+    if plan['kind'] == 'multilayer_prefix_recapture_pilot':
+        valid = plan['version'] in (1, 2) and len(items) == 4
+        size = 4
+    else:
+        valid = (plan['kind'] == 'multilayer_prefix_recapture_pool' and plan['version'] == 3
+                 and plan.get('pool') == 32 and len(items) == 64 and plan.get('batch_size') == 4)
+        size = 4
+    if not valid or plan['repeats'] != 2 or plan['labels_added'] != 0 or plan['independent_groups_added'] != 0:
+        raise ValueError('unsupported or unbounded recapture plan')
+    if len({i['prefix_sha256'] for i in items}) != len(items) or not all(
+            i['question_id'].startswith('TRAIN_') and token_hash(i['prefix_ids']) == i['prefix_sha256'] for i in items):
+        raise ValueError('duplicate, non-TRAIN or corrupt causal prefix')
+    return [(repeat, start//size, ordered[start:start+size])
+            for repeat, ordered in enumerate((items, items[::-1]))
+            for start in range(0, len(items), size)]
+
+
 def validate_diagnostic_batch(batch):
     """Prevent passing concatenated layers into existing final-only policies."""
     if batch.get('diagnostic_worker', 'none') not in {'none', 'multilayer'}:
