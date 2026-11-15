@@ -147,6 +147,7 @@ def test_eos_does_not_trigger_posthumous_evidence():
 @pytest.mark.parametrize('policy', [TuningPolicy(), TuningPolicy(trigger='surprisal', threshold=.5),
                                    TuningPolicy(continuation='bridge'), TuningPolicy(query='anchored'),
                                    TuningPolicy(query='anchored', anchor_context='question_tail'),
+                                   TuningPolicy(format='document'),
                                    TuningPolicy(query='sentence'),TuningPolicy(query='sentence_anchored')])
 def test_offline_audit_replays_gates_and_detects_tampering(policy):
     import copy

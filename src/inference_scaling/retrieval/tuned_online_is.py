@@ -54,7 +54,7 @@ class TuningPolicy:
             raise ValueError('unsupported query')
         if self.anchor_context not in {'tail', 'question_tail'}:
             raise ValueError('unsupported anchored context')
-        if self.format not in {'original','plain','quoted','source'}:
+        if self.format not in {'original','plain','quoted','source','document'}:
             raise ValueError('unsupported evidence format')
         if self.continuation not in {'none','resume','bridge','custom'}:
             raise ValueError('unsupported continuation')
@@ -238,7 +238,8 @@ class TunedOnlineLedger(OnlineISLedger):
             return fixed_packet(self.backend, original, p.packet_tokens)
         body = self.backend.decode(tuple(original['ids'][original['body_start']:original['body_stop']]), skip_special_tokens=False)
         headers = {'plain': ('\n\n','\n\n'), 'quoted': ('\nSource excerpt:\n"','"\n'),
-                   'source': ('\nSource: '+original.get('source', original['id'])+'\n','\n')}
+                   'source': ('\nSource: '+original.get('source', original['id'])+'\n','\n'),
+                   'document': ('\nDocument: '+original['id']+'\n','\n')}
         header, footer = headers[p.format]
         payload = packet(self.backend, header, body, footer, id=original['id'], source=original.get('source',''))
         return fixed_packet(self.backend, payload, p.packet_tokens)
