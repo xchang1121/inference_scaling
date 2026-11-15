@@ -24,7 +24,7 @@ def command(args, **kwargs):
 
 
 def inspect(name):
-    return json.loads(command(['docker', 'inspect', name]))[0]
+    return json.loads(command(['docker', 'inspect', name], stderr=subprocess.PIPE))[0]
 
 
 def inventory():
@@ -33,7 +33,14 @@ def inventory():
     free = {int(x) for x in re.findall(r'No running processes found in NPU (\d+)', text)}
     reserved = set()
     for name in command(['docker', 'ps', '--format', '{{.Names}}']).split():
-        item = inspect(name)
+        try:
+            item = inspect(name)
+        except subprocess.CalledProcessError as error:
+            # A listed ephemeral container can disappear before inspect. Only
+            # this explicit absence is safe to skip; other failures stay closed.
+            if error.returncode == 1 and 'No such object:' in (error.stderr or ''):
+                continue
+            raise
         devices = {int(d['PathOnHost'].removeprefix('/dev/davinci'))
                    for d in item['HostConfig']['Devices'] or []
                    if re.fullmatch(r'/dev/davinci\d+', d['PathOnHost'])}
@@ -59,7 +66,12 @@ def acquire(lockdir, spec):
                 lock.close()
                 continue
             # Recheck after acquiring the persistent lease, before container start.
-            if device not in inventory()[0]:
+            try:
+                still_available = device in inventory()[0]
+            except BaseException:
+                lock.close()
+                raise
+            if not still_available:
                 lock.close()
                 continue
             return device, lock, before
@@ -113,13 +125,18 @@ def main():
             raise RuntimeError('immutable job already started; inspect it, never relaunch')
         save()
         lease = None
-        while lease is None:
-            lease = acquire(ROOT/'deployment/ascend/npu-leases', spec)
-            if lease is None:
-                if time.time()-state['queued_at'] > spec.get('queue_timeout', 300):
-                    save(phase='no_capacity', finished_at=time.time())
-                    return
-                time.sleep(15)
+        try:
+            while lease is None:
+                lease = acquire(ROOT/'deployment/ascend/npu-leases', spec)
+                if lease is None:
+                    if time.time()-state['queued_at'] > spec.get('queue_timeout', 300):
+                        save(phase='no_capacity', finished_at=time.time())
+                        return
+                    time.sleep(15)
+        except BaseException as error:
+            save(phase='allocation_failed', finished_at=time.time(), error=repr(error),
+                 leased_seconds=0, lease_released=True, container_created=False)
+            raise
         device, lock, before = lease
         name = f'agentic-scaling-{OWNER}-tune-{job_id}'
         created = False
