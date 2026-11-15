@@ -1,5 +1,6 @@
 """Replay learned gate and evidence predictions using only observed prefix rows."""
 from types import SimpleNamespace,MethodType
+import math
 from audit_probe_pairs import evidence_features_match
 
 from inference_scaling.retrieval.probe_online_is import ProbePolicy
@@ -7,6 +8,21 @@ from inference_scaling.retrieval.linear_probe import predict_probe
 from inference_scaling.retrieval.probe_features import prefix_features,evidence_features
 from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger,overlaps
 from inference_scaling.retrieval.stepwise import token_hash
+
+
+def prediction_matches(recorded, replayed, threshold, *, risk=False):
+    """Allow at most two FP64 ULPs, and never a changed threshold decision.
+
+    A native ARM64 numpy dot versus Windows replay differed by one ULP with
+    identical inputs. Keep that trace; reject larger drift, nonfinite values,
+    or even a one-ULP crossing of a gate. Features/artifact hashes remain exact.
+    """
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (recorded, replayed, threshold)):
+        return False
+    if abs(recorded-replayed) > 2*max(math.ulp(recorded), math.ulp(replayed)):
+        return False
+    return ((recorded <= threshold) == (replayed <= threshold)) if risk else (
+        (recorded >= threshold) == (replayed >= threshold))
 
 
 def prepare_probe_audit(row,cfg,decode,eos,close,ck):
@@ -19,6 +35,10 @@ def prepare_probe_audit(row,cfg,decode,eos,close,ck):
         pool=p.model['feature_schema']['pool']
         values=prefix_features(proxy.recent(d['branch_ids'],pool),pool=pool);features[d['branch_sha256']]=values
         value=predict_probe(p.model,values) if p.model['target']=='knowledge' else None
+        if value is not None:
+            recorded=d['signal']['prediction']
+            ck(prediction_matches(recorded,value,p.threshold),'probe_numeric_prediction_and_same_gate')
+            value=recorded
         return value is None or value>=p.threshold,{'probe_features':values,'prediction':value,'model_sha256':p.model['sha256']}
 
     def rank(d,ranked,used,default):
@@ -38,7 +58,8 @@ def prepare_probe_audit(row,cfg,decode,eos,close,ck):
             # Replay the actual validated runtime inputs, preserving its libm rounding.
             value=predict_probe(p.model,features[d['branch_sha256']]+t['evidence_features'])
             keep=value<=p.threshold if p.model['target']=='risk' else value>=p.threshold
-            ck(t['prediction']==value and t['accepted']==keep,'probe_prediction_and_gate')
+            ck(prediction_matches(t['prediction'],value,p.threshold,risk=p.model['target']=='risk')
+               and t['accepted']==keep,'probe_prediction_and_gate')
             if keep:accepted.append((value if p.model['target']=='risk' else -value,t['id']))
         chosen=min(accepted)[1] if accepted else None
         ck(trial['chosen_id']==chosen,'probe_chosen_evidence')
