@@ -11,7 +11,7 @@ from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.retrieval.attention_policy import attention_feature
 
 
-def audit_tuned_row(row, cfg, decode, eos, close, check):
+def audit_tuned_row(row, cfg, decode, eos, close, check, *, document_vectors=None):
     def ck(ok, label):
         check(ok, row['unit_id']+':'+label)
     p = TuningPolicy(**row['policy'])
@@ -33,6 +33,10 @@ def audit_tuned_row(row, cfg, decode, eos, close, check):
         from audit_probe_online_is import prepare_probe_audit
         ck(auxiliary is None,'single_learned_controller')
         auxiliary = prepare_probe_audit(row,cfg,decode,eos,close,ck)
+    if 'alignment_policy' in row:
+        from audit_aligned_online_is import prepare_alignment_audit
+        ck(auxiliary is None,'single_alignment_controller')
+        auxiliary=prepare_alignment_audit(row,cfg,decode,eos,close,ck,document_vectors)
     ck(root == row['base_ids'], 'question_only_root')
     ck(not row['static_packets'] and not row['static_injected_ids'], 'no_hidden_static_context')
     ck(row['presearch_work'] == 0 and row['carried'] == {'sc': [], 'cn': [], 'lp': []}, 'from_token_zero')
@@ -107,10 +111,12 @@ def audit_tuned_row(row, cfg, decode, eos, close, check):
         ck(e['position'] == position and e['query'] == query and e['retrieval'] == retrieval, 'event_decision_identity')
         payload = e['packet']
         ck(payload['id'] == chosen and token_hash(payload['ids']) == payload['sha256'], 'chosen_packet_integrity')
-        ck(len(payload['ids']) == p.packet_tokens, 'packet_budget')
+        variable_example = 'example_policy' in row and not row['example_policy'].get('pad_to_budget', True)
+        packet_length = len(payload['ids'])
+        ck(0 < packet_length <= p.packet_tokens if variable_example else packet_length == p.packet_tokens, 'packet_budget')
         continuation = {'none':'','resume':RESUME,'bridge':BRIDGE,'custom':p.continuation_text}[p.continuation]
-        ck(e['injected_ids'][:p.packet_tokens] == payload['ids'], 'packet_prefix')
-        ck(decode(e['injected_ids'][p.packet_tokens:]) == continuation, 'exact_continuation')
+        ck(e['injected_ids'][:packet_length] == payload['ids'], 'packet_prefix')
+        ck(decode(e['injected_ids'][packet_length:]) == continuation, 'exact_continuation')
         ck(not {eos,close}.intersection(e['injected_ids']), 'no_structural_injection')
 
     def physical(logical, ids, final=False):

@@ -42,10 +42,14 @@ def inventory():
     return sorted((free & healthy) - reserved), text
 
 
-def acquire(lockdir):
+def acquire(lockdir, spec):
     lockdir.mkdir(exist_ok=True, parents=True)
     with (lockdir/'allocation.lock').open('a') as allocation:
         fcntl.flock(allocation, fcntl.LOCK_EX)
+        memory = {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()}
+        if (memory['MemFree'] < spec.get('minimum_host_free_kib', 32*1024*1024)
+                or memory['MemAvailable'] < spec.get('minimum_host_available_kib', 64*1024*1024)):
+            return None
         available, before = inventory()
         for device in available:
             lock = (lockdir/f'npu-{device}.lock').open('a')
@@ -110,7 +114,7 @@ def main():
         save()
         lease = None
         while lease is None:
-            lease = acquire(ROOT/'deployment/ascend/npu-leases')
+            lease = acquire(ROOT/'deployment/ascend/npu-leases', spec)
             if lease is None:
                 if time.time()-state['queued_at'] > spec.get('queue_timeout', 300):
                     save(phase='no_capacity', finished_at=time.time())
@@ -136,7 +140,8 @@ def main():
                    '--label', f'inference_scaling.owner={OWNER}',
                    '--label', f'inference_scaling.task={TASK}',
                    '--label', f'inference_scaling.job={job_id}',
-                   '-e', 'OMP_NUM_THREADS=4', '-e', 'VLLM_WORKER_MULTIPROC_METHOD=spawn']
+                   '-e', 'OMP_NUM_THREADS=4', '-e', 'VLLM_WORKER_MULTIPROC_METHOD=spawn',
+                   '-e', f'TUNING_NPU_DEVICE={device}']
             for dp in [f'/dev/davinci{device}', '/dev/davinci_manager', '/dev/devmm_svm', '/dev/hisi_hdc']:
                 cmd += ['--device', dp+':'+dp]
             for mount in old['Mounts']:

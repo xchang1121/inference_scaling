@@ -11,6 +11,7 @@ class ExamplePolicy:
     answer_tokens: int = 128
     work_tokens: int = 8192
     require_complete_answer: bool = False
+    pad_to_budget: bool = True
 
     def __post_init__(self):
         if min(self.answer_tokens, self.work_tokens) < 1:
@@ -57,6 +58,8 @@ class ExampleOnlineLedger(TunedOnlineLedger):
     def format_packet(self, original):
         if len(original['ids']) > self.policy.packet_tokens:
             raise ValueError('worked solution must remain complete')
+        if not self.example_policy.pad_to_budget:
+            return {**original, 'original_packet_tokens':len(original['ids'])}
         newline = tuple(self.backend.encode('\n', add_special_tokens=False))
         if len(newline) != 1:
             raise ValueError('example padding needs a single newline token')

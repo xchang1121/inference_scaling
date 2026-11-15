@@ -24,7 +24,7 @@ class Examples:
         return [p],{'query':'query: '+question+'\nsolution: '+interim,'selected_ids':[name],'seconds':0.}
 
 
-@pytest.mark.parametrize('mode',['valid','oversized','budget','require_complete'])
+@pytest.mark.parametrize('mode',['valid','unpadded','oversized','budget','require_complete'])
 def test_example_causal_answer_whole_solution_and_cost(mode):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
     from audit_tuned_online_is import audit_tuned_row
@@ -33,19 +33,19 @@ def test_example_causal_answer_whole_solution_and_cost(mode):
     result=run_tuned_is(b,b,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
         question='Q',facts=Examples(b,mode=='oversized'),policy=TuningPolicy(),
         example_policy=ExamplePolicy(answer_tokens=16,work_tokens=8 if mode=='budget' else 2000,
-                                     require_complete_answer=mode=='require_complete'))
+                                     require_complete_answer=mode=='require_complete',pad_to_budget=mode!='unpadded'))
     row=json.loads(json.dumps({'unit_id':'synthetic','question':'Q','question_id':'synthetic','seed':1,
         'base_ids':[1,2],'static_packets':[],'static_injected_ids':[],
         'cost':{'generated_tokens':result['total_generation_tokens']},**result}))
     assert b.requests[0].prefix==(1,2)
-    assert bool(row['events'])==(mode=='valid')
+    assert bool(row['events'])==(mode in {'valid','unpadded'})
     def audit(target):
         failures=[]
         audit_tuned_row(target,cfg,lambda ids,skip=False:b.decode(ids,skip_special_tokens=skip),900,901,
                         lambda ok,label:failures.append(label) if not ok else None)
         return failures
     assert not audit(row)
-    if mode=='valid':
+    if mode in {'valid','unpadded'}:
         broken=copy.deepcopy(row)
         broken['auxiliary_calls'][0]['prefix_ids'][-1]=123
         assert any('exact_auxiliary_prefix' in f for f in audit(broken))

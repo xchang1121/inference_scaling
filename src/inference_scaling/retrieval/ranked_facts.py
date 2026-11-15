@@ -16,11 +16,13 @@ class FactRanking:
     rank_constant: float = 20.
     max_windows_per_parent: int = 0
     clean_query: bool = False
+    window_kind: str = 'bm25'
 
     def __post_init__(self):
         if not 0<=self.parent_weight<=1 or not math.isfinite(self.rank_constant) or self.rank_constant<0:
             raise ValueError('invalid rank fusion')
         if self.max_windows_per_parent<0:raise ValueError('invalid per-parent window cap')
+        if self.window_kind not in {'bm25','char','hybrid'}:raise ValueError('invalid window ranker')
 
 
 def rank_windows(parents,windows,policy,exclude):
@@ -57,7 +59,7 @@ class RankedFactBank(FactBank):
                 stop=min(start+cfg.window_tokens,len(ids))
                 windows.append(Document(f'{doc.id}@{start}-{stop}',doc.title,b.decode(ids[start:stop],skip_special_tokens=False),doc.source))
                 if stop==len(ids):break
-        hits=Retriever(windows,kind='bm25').search(retrieval_query,k=len(windows)) if windows else []
+        hits=Retriever(windows,kind=self.ranking.window_kind).search(retrieval_query,k=len(windows)) if windows else []
         by_id={h.document.id:h for h in hits}
         parent_ids=[h.document.id for h in parents];window_ids=[h.document.id for h in hits]
         ranked,scores=rank_windows(parent_ids,window_ids,self.ranking,exclude)
@@ -70,5 +72,6 @@ class RankedFactBank(FactBank):
             p.update(ids=head+list(body)+tail,body_stop=len(head)+len(body));p['sha256']=token_hash(p['ids'])
             result.append(p)
         return result,{'query':query,'retrieval_query':retrieval_query,'parent_ids':parent_ids,
+            'window_ranker':self.ranking.window_kind,
             'window_ranked_ids':window_ids,'fusion_scores':scores,'selected_ids':[p['id'] for p in result],
             'seconds':time.perf_counter()-started}

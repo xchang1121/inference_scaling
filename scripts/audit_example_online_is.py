@@ -59,6 +59,8 @@ def prepare_example_audit(row,cfg,decode,eos,close,ck):
             actual=row['events'][d['event_id']]['packet']
             ck(actual['ids'][:len(original['ids'])]==original['ids'],'whole_worked_solution_preserved')
             ck(actual['body_start']==original['body_start'] and actual['body_stop']==original['body_stop'],'whole_example_body_bounds')
+            if not p.pad_to_budget:
+                ck(actual['ids']==original['ids'],'unpadded_example_exact')
         return chosen
 
     def finish():ck(consumed==list(range(len(calls))),'all_example_auxiliary_charged')

@@ -37,7 +37,7 @@ def main():
     p=argparse.ArgumentParser()
     for name in ('settings','prepared','output','batch','corpus'):p.add_argument('--'+name,type=Path,required=True)
     a=p.parse_args();batch=json.loads(a.batch.read_text());cfg=GuidanceConfig()
-    assert len(batch['configs'])==1 and len(batch['seeds'])==1 and 1<=len(batch['cases'])<=2
+    assert len(batch['configs'])==1 and len(batch['seeds'])==1 and 1<=len(batch['cases'])<=4
     assert all(c['id'].startswith('TRAIN_') and c['cohort']=='probe_train' for c in batch['cases'])
     config=batch['configs'][0];position=config.get('position',128)
     assert position in (128,256,512) and config.get('packet_tokens',256) in (128,256,384,512)

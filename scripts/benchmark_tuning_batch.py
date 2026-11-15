@@ -27,6 +27,8 @@ from inference_scaling.retrieval.gap_online_is import GapPolicy
 from inference_scaling.retrieval.example_online_is import ExamplePolicy
 from inference_scaling.retrieval.ranked_facts import FactRanking,RankedFactBank
 from inference_scaling.retrieval.probe_online_is import ProbePolicy
+from inference_scaling.retrieval.aligned_online_is import AlignmentPolicy
+from inference_scaling.retrieval.hidden_alignment import DocumentVectors
 from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TuningTap, run_tuned_is
 from inference_scaling.shared.rng import SeedStream
 
@@ -40,6 +42,7 @@ def main():
     p.add_argument('--corpus', type=Path, required=True)
     p.add_argument('--examples', type=Path)
     p.add_argument('--encoder', type=Path)
+    p.add_argument('--document-vectors',type=Path)
     a = p.parse_args()
     batch = json.loads(a.batch.read_text())
     expected = len(batch['cases'])*len(batch['configs'])*len(batch['seeds'])
@@ -56,7 +59,7 @@ def main():
             raise ValueError('unknown signal collection mode')
         if config.get('auxiliary_policy', {}).get('method') == 'seakr':
             return 'hidden'
-        if 'probe_policy' in config:return 'hidden'
+        if 'probe_policy' in config or 'alignment_policy' in config:return 'hidden'
         if config.get('policy', {}).get('trigger') == 'dragin' or config.get('policy', {}).get('query') == 'attention':
             return 'attention'
         return mode if mode != 'none' else ('distribution' if config.get('policy', {}).get('trigger')
@@ -96,6 +99,7 @@ def main():
             close = (raw.tokenizer.convert_tokens_to_ids('</think>'),)
             prepared = json.loads(a.prepared.read_text())
             indices, banks = {}, {}
+            document_vectors=DocumentVectors(a.document_vectors) if a.document_vectors else None
             for config in batch['configs']:
                 if 'example_policy' in config:
                     if not a.examples or not a.encoder:
@@ -145,7 +149,9 @@ def main():
                                     if 'auxiliary_policy' in config else None,
                                 gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None,
                                 example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None,
-                                probe_policy=ProbePolicy(**config['probe_policy']) if 'probe_policy' in config else None)
+                                probe_policy=ProbePolicy(**config['probe_policy']) if 'probe_policy' in config else None,
+                                alignment_policy=AlignmentPolicy(**config['alignment_policy']) if 'alignment_policy' in config else None,
+                                document_vectors=document_vectors)
                             result.update(arm=config['arm'], question_id=case['id'], seed=seed,
                                           base_ids=list(case['prompt_ids']), static_packets=[],
                                           static_injected_ids=[], static_retrievals=[])
