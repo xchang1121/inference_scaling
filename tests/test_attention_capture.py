@@ -46,3 +46,24 @@ def test_mismatched_settings_and_wrong_signal_schema_rejected():
         config['auxiliary_policy'] = {'method': 'seakr'}
     with pytest.raises(ValueError):
         validate_attention_batch(altered)
+
+
+def test_explicit_bounded_repeats_preserve_every_control_setting():
+    repeated = batch()
+    repeated['attention_repeats'] = 2
+    repeated['configs'] += [dict(c, id=c['id']+'-repeat') for c in copy.deepcopy(repeated['configs'])]
+    assert validate_attention_batch(repeated)['layer'] == 31
+    for key, value in [('attention_repeats', True), ('attention_repeats', 3),
+                       ('attention_repeats', 1), ('family', 'dragin')]:
+        altered = copy.deepcopy(repeated)
+        altered[key] = value
+        with pytest.raises(ValueError):
+            validate_attention_batch(altered)
+    altered = copy.deepcopy(repeated)
+    altered['configs'][3]['policy']['positions'] = [32]
+    with pytest.raises(ValueError):
+        validate_attention_batch(altered)
+    altered = copy.deepcopy(repeated)
+    altered['configs'][2]['collect_signals'] = 'attention'
+    with pytest.raises(ValueError):
+        validate_attention_batch(altered)
