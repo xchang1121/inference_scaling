@@ -1,6 +1,7 @@
 import copy
 from dataclasses import asdict,replace
 import json
+import math
 from pathlib import Path
 import sys
 from types import SimpleNamespace,MethodType
@@ -63,3 +64,22 @@ def test_prefix_features_exclude_future_and_pair_audit_rejects_seed_or_feature_l
     assert any('causal_hidden_features' in f for f in audit(bad))
     bad=copy.deepcopy(pairs);bad[1]['auxiliary_calls'][0]['request']['seed']+=1
     assert any('paired_suffix_rng_budget' in f for f in audit(bad))
+
+
+def test_evidence_audit_tolerates_only_two_ulp_log1p_rounding():
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+    from audit_probe_pairs import evidence_features_match
+    windows=[.5,.25,.2,.1,0.,.25,.8,4.554892901364101]
+    linux=windows.copy();linux[7]=4.554892901364102
+    assert evidence_features_match(linux,windows)
+    linux[7]=math.nextafter(linux[7],math.inf)
+    assert evidence_features_match(linux,windows)
+    linux[7]=math.nextafter(linux[7],math.inf)
+    assert not evidence_features_match(linux,windows)
+    for index in range(7):
+        changed=windows.copy();changed[index]=math.nextafter(changed[index],math.inf)
+        assert not evidence_features_match(changed,windows)
+    for value in (math.inf,math.nan,-math.inf):
+        changed=windows.copy();changed[7]=value
+        assert not evidence_features_match(changed,windows)
+    assert not evidence_features_match(windows[:-1],windows)

@@ -1,5 +1,6 @@
 """Replay learned gate and evidence predictions using only observed prefix rows."""
 from types import SimpleNamespace,MethodType
+from audit_probe_pairs import evidence_features_match
 
 from inference_scaling.retrieval.probe_online_is import ProbePolicy
 from inference_scaling.retrieval.linear_probe import predict_probe
@@ -32,8 +33,9 @@ def prepare_probe_audit(row,cfg,decode,eos,close,ck):
             ck(packet['id']==t['id'] and token_hash(packet['ids'])==packet['sha256'],'probe_candidate_identity')
             ck(len(packet['ids'])==row['policy']['packet_tokens'],'probe_actual_packet_budget')
             evidence=evidence_features(row['question'],d['retrieval']['query'],packet,decode)
-            ck(t['evidence_features']==evidence,'probe_causal_evidence_features')
-            value=predict_probe(p.model,features[d['branch_sha256']]+evidence)
+            ck(evidence_features_match(t['evidence_features'],evidence),'probe_causal_evidence_features')
+            # Replay the actual validated runtime inputs, preserving its libm rounding.
+            value=predict_probe(p.model,features[d['branch_sha256']]+t['evidence_features'])
             keep=value<=p.threshold if p.model['target']=='risk' else value>=p.threshold
             ck(t['prediction']==value and t['accepted']==keep,'probe_prediction_and_gate')
             if keep:accepted.append((value if p.model['target']=='risk' else -value,t['id']))

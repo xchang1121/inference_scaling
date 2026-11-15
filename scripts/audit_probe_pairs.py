@@ -8,6 +8,15 @@ from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.shared.rng import SeedStream
 
 
+def evidence_features_match(recorded, rebuilt):
+    """Only libm log1p may differ by at most two binary64 ULPs across hosts."""
+    if len(recorded) != 8 or len(rebuilt) != 8 or recorded[:7] != rebuilt[:7]:
+        return False
+    left, right = recorded[7], rebuilt[7]
+    return (math.isfinite(left) and math.isfinite(right)
+            and abs(left-right) <= 2*max(math.ulp(left), math.ulp(right)))
+
+
 def audit_probe_pair(baseline,pairs,cfg,decode,eos,close,check):
     def ck(ok,label):check(ok,baseline['question_id']+':probe:'+label)
     ck({p['arm'] for p in pairs}=={'none','evidence'} and len(pairs)==2,'complete_intervention_pair')
@@ -22,8 +31,8 @@ def audit_probe_pair(baseline,pairs,cfg,decode,eos,close,check):
         ck(r['question_id']==baseline['question_id'] and r['seed']==baseline['seed'],'same_question_seed')
         ck(r['decision']==decision and r['branch_ids']==branch and r['base_ids']==baseline['root_ids'],'first_observed_prefix')
         ck(r['features']==features and r['feature_schema']==FEATURE_SCHEMA,'causal_hidden_features')
-        ck(r['evidence_schema']==EVIDENCE_SCHEMA and r['evidence_features']==evidence_features(
-            baseline['question'],r['retrieval']['query'],r['packet'],decode),'causal_evidence_features')
+        ck(r['evidence_schema']==EVIDENCE_SCHEMA and evidence_features_match(r['evidence_features'], evidence_features(
+            baseline['question'],r['retrieval']['query'],r['packet'],decode)),'causal_evidence_features')
         ck(r['pair_seed']==paired_seed,'same_pair_seed')
         ck(r['packet']==pairs[0]['packet'] and r['retrieval']==pairs[0]['retrieval'],'same_retrieved_candidate')
         injected=[] if r['arm']=='none' else r['packet']['ids']
