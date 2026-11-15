@@ -16,7 +16,8 @@ def prepare_probe_audit(row,cfg,decode,eos,close,ck):
         proxy=SimpleNamespace(root=tuple(row['root_ids']),native_calls=native,
             tap=SimpleNamespace(history={c['request_id']:c['internal_signals'] for c in native}))
         proxy.recent=MethodType(TunedOnlineLedger.recent,proxy)
-        values=prefix_features(proxy.recent(d['branch_ids'],32));features[d['branch_sha256']]=values
+        pool=p.model['feature_schema']['pool']
+        values=prefix_features(proxy.recent(d['branch_ids'],pool),pool=pool);features[d['branch_sha256']]=values
         value=predict_probe(p.model,values) if p.model['target']=='knowledge' else None
         return value is None or value>=p.threshold,{'probe_features':values,'prediction':value,'model_sha256':p.model['sha256']}
 

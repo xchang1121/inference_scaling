@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from inference_scaling.retrieval.probe_features import FEATURE_SCHEMA,EVIDENCE_SCHEMA
+from inference_scaling.retrieval.probe_features import EVIDENCE_SCHEMA,pooled_feature_schema
 
 
 def indices(target,mode):
@@ -21,7 +21,8 @@ def fingerprint(model):
     return hashlib.sha256(json.dumps(payload,sort_keys=True,allow_nan=False,separators=(',',':')).encode()).hexdigest()
 
 
-def fit_probe(features,targets,*,target,mode='all',alpha=10.,provenance=None):
+def fit_probe(features,targets,*,target,mode='all',alpha=10.,provenance=None,pool=32):
+    schema=pooled_feature_schema(pool)
     if not math.isfinite(alpha) or alpha<=0:raise ValueError('positive ridge regularization required')
     x=np.asarray(features,dtype=np.float64);y=np.asarray(targets,dtype=np.float64)
     dimension=134 if target=='knowledge' else 142
@@ -33,7 +34,7 @@ def fit_probe(features,targets,*,target,mode='all',alpha=10.,provenance=None):
     z=(x-center)/scale;intercept=float(y.mean())
     weights=np.linalg.solve(z.T@z+alpha*np.eye(z.shape[1]),z.T@(y-intercept))
     model={'version':1,'target':target,'mode':mode,'alpha':alpha,'indices':select,'dimension':dimension,
-        'feature_schema':FEATURE_SCHEMA,'evidence_schema':EVIDENCE_SCHEMA if target!='knowledge' else None,
+        'feature_schema':schema,'evidence_schema':EVIDENCE_SCHEMA if target!='knowledge' else None,
         'center':center.tolist(),'scale':scale.tolist(),'weights':weights.tolist(),'intercept':intercept,
         'target_min':float(y.min()),'target_max':float(y.max()),'training_rows':len(y),
         'provenance':provenance or {},'prediction_semantics':{'knowledge':'predicted reference-proxy shortfall of no-evidence local suffix; exact formula in provenance',
@@ -45,7 +46,7 @@ def fit_probe(features,targets,*,target,mode='all',alpha=10.,provenance=None):
 
 def predict_probe(model,features):
     if model['sha256']!=fingerprint(model):raise ValueError('probe artifact hash mismatch')
-    if model['feature_schema']!=FEATURE_SCHEMA or model['indices']!=indices(model['target'],model['mode']):
+    if model['feature_schema']!=pooled_feature_schema(model['feature_schema'].get('pool')) or model['indices']!=indices(model['target'],model['mode']):
         raise ValueError('probe schema mismatch')
     if len(features)!=model['dimension'] or not all(math.isfinite(v) for v in features):
         raise ValueError('invalid inference features')
@@ -70,7 +71,8 @@ def mlp_loss_grad(z,y,w1,b1,w2,b2,penalty):
     return loss,[z.T@dh+2*penalty*w1,dh.sum(0),hidden.T@d+2*penalty*w2,np.array(d.sum())]
 
 
-def fit_mlp_probe(features,targets,*,target,mode='all',alpha=.1,width=8,epochs=300,seed=20261115,provenance=None):
+def fit_mlp_probe(features,targets,*,target,mode='all',alpha=.1,width=8,epochs=300,seed=20261115,provenance=None,pool=32):
+    schema=pooled_feature_schema(pool)
     if alpha<=0 or not math.isfinite(alpha) or width not in (8,16) or epochs<1:
         raise ValueError('invalid MLP configuration')
     x=np.asarray(features,dtype=np.float64);y=np.asarray(targets,dtype=np.float64)
@@ -92,7 +94,7 @@ def fit_mlp_probe(features,targets,*,target,mode='all',alpha=.1,width=8,epochs=3
             params[i]-=.01*(moments[i]/(1-.9**epoch))/(np.sqrt(variances[i]/(1-.999**epoch))+1e-8)
     model={'version':1,'architecture':'tanh_mlp','target':target,'mode':mode,'alpha':alpha,'width':width,
         'epochs':epochs,'seed':seed,'learning_rate':.01,'optimizer':'full_batch_Adam','indices':select,'dimension':dimension,
-        'feature_schema':FEATURE_SCHEMA,'evidence_schema':EVIDENCE_SCHEMA if target!='knowledge' else None,
+        'feature_schema':schema,'evidence_schema':EVIDENCE_SCHEMA if target!='knowledge' else None,
         'center':center.tolist(),'scale':scale.tolist(),'w1':params[0].tolist(),'b1':params[1].tolist(),
         'w2':params[2].tolist(),'b2':float(params[3]),'training_rows':len(y),'training_curve':curve,
         'provenance':provenance or {},'prediction_semantics':'unbounded local suffix surrogate score; not calibrated probability'}

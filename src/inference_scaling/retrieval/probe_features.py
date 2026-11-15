@@ -24,6 +24,12 @@ FEATURE_SCHEMA={'version':1,'hidden_source':'final_normalized_pre_lm_head','hidd
     'state_offset':-1,'dimension':134}
 
 
+def pooled_feature_schema(pool=32):
+    if type(pool) is not int or pool not in (8,16,32,64,128):
+        raise ValueError('unsupported causal feature pooling window')
+    return {**FEATURE_SCHEMA,'pool':pool}
+
+
 EVIDENCE_SCHEMA={'version':1,'dimension':8,'names':['question_coverage','query_coverage','question_jaccard',
     'query_jaccard','identifier_coverage','body_length_1024','nonpadding_fraction','log1p_retrieval_score']}
 

@@ -18,10 +18,11 @@ from inference_scaling.shared.rng import SeedStream
 
 @pytest.mark.parametrize(('target','threshold','injected'),[('knowledge',.2,True),('knowledge',.8,False),
     ('value',.2,True),('value',.8,False),('risk',.8,True),('risk',.2,False)])
-def test_learned_gate_and_evidence_policy_remain_causal_replayable(target,threshold,injected):
+@pytest.mark.parametrize('pool',[8,32,128])
+def test_learned_gate_and_evidence_policy_remain_causal_replayable(target,threshold,injected,pool):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
     from audit_tuned_online_is import audit_tuned_row
-    model=fit_probe(np.zeros((4,134 if target=='knowledge' else 142)),np.full(4,.5),target=target)
+    model=fit_probe(np.zeros((4,134 if target=='knowledge' else 142)),np.full(4,.5),target=target,pool=pool)
     b=FeaturesNative();cfg=replace(GuidanceConfig(),thinking_tokens=640,answer_tokens=1024,context_tokens=8192)
     result=run_tuned_is(b,b,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,question='Q',
         facts=TextFacts(b),policy=TuningPolicy(),probe_policy=ProbePolicy(model,threshold))

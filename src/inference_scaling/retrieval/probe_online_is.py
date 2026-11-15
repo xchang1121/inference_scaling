@@ -3,7 +3,7 @@ from dataclasses import dataclass,asdict
 import math
 
 from inference_scaling.retrieval.linear_probe import predict_probe,fingerprint
-from inference_scaling.retrieval.probe_features import prefix_features,evidence_features
+from inference_scaling.retrieval.probe_features import prefix_features,evidence_features,pooled_feature_schema
 from inference_scaling.retrieval.smart_online_is import clean_question
 from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger,overlaps
@@ -19,6 +19,8 @@ class ProbePolicy:
         if not math.isfinite(self.threshold) or self.evidence_candidates<1:raise ValueError('invalid probe policy')
         if self.model['sha256']!=fingerprint(self.model):raise ValueError('probe model hash mismatch')
         if self.model['target'] not in {'knowledge','value','risk'}:raise ValueError('unsupported learned target')
+        if self.model['feature_schema']!=pooled_feature_schema(self.model['feature_schema'].get('pool')):
+            raise ValueError('unsupported probe feature schema')
 
 
 class ProbeOnlineLedger(TunedOnlineLedger):
@@ -29,7 +31,8 @@ class ProbeOnlineLedger(TunedOnlineLedger):
         self.probe_policy=probe_policy;self.probe_features={}
 
     def decision_signal(self,branch,text,physical):
-        features=prefix_features(self.recent(branch,32));p=self.probe_policy
+        p=self.probe_policy;pool=p.model['feature_schema']['pool']
+        features=prefix_features(self.recent(branch,pool),pool=pool)
         self.probe_features[token_hash(branch)]=features
         value=predict_probe(p.model,features) if p.model['target']=='knowledge' else None
         return value is None or value>=p.threshold,{'probe_features':features,'prediction':value,'model_sha256':p.model['sha256']}

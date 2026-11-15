@@ -3,7 +3,7 @@ import copy
 import numpy as np
 import pytest
 
-from inference_scaling.retrieval.linear_probe import fit_probe,predict_probe
+from inference_scaling.retrieval.linear_probe import fit_probe,predict_probe,fingerprint
 
 
 def test_probe_fits_predictive_signal_and_rejects_corrupt_artifact():
@@ -24,3 +24,11 @@ def test_value_probe_uses_evidence_features_with_hidden_subset():
     base=np.zeros(142);left=predict_probe(model,base.tolist());base[134]=1
     assert predict_probe(model,base.tolist())>left+.4
     assert not set(range(128,134)).intersection(model['indices'])
+
+
+def test_pooling_schema_rejects_other_capture_changes():
+    x=np.zeros((4,134));model=fit_probe(x,np.ones(4),target='knowledge',pool=16)
+    assert model['feature_schema']['pool']==16 and predict_probe(model,x[0])==1
+    for key,value in [('pool',17),('hidden_source','unvalidated_middle_layer'),('state_offset',0)]:
+        bad=copy.deepcopy(model);bad['feature_schema'][key]=value;bad['sha256']=fingerprint(bad)
+        with pytest.raises(ValueError):predict_probe(bad,x[0])
