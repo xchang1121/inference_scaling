@@ -10,6 +10,8 @@ import time
 from benchmark_flare_gap import clean, render
 from benchmark_is_gpu import GraphMeasurements, engine_settings, reset_cache
 from benchmark_online_is import run_arm
+from benchmark_smart_online_is import run_arm as run_legacy_arm
+from inference_scaling.retrieval.smart_online_is import VARIANTS as LEGACY_VARIANTS
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.backends.loader import load_backend, close_backend
 from inference_scaling.arllm.config import SamplingConfig
@@ -162,7 +164,8 @@ def main():
                                           base_ids=list(case['prompt_ids']), static_packets=[],
                                           static_injected_ids=[], static_retrievals=[])
                         else:
-                            result = run_arm(raw, controller_tap, banks[config['id']], case, seed, config['arm'], cfg,
+                            runner = run_legacy_arm if config['arm'] in LEGACY_VARIANTS else run_arm
+                            result = runner(raw, controller_tap, banks[config['id']], case, seed, config['arm'], cfg,
                                              close, prepared['noise_ids'], OnlineRetrievalConfig(**ret))
                         if need_signals:
                             for call in result['native_calls']:
