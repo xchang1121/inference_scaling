@@ -148,6 +148,7 @@ def test_eos_does_not_trigger_posthumous_evidence():
                                    TuningPolicy(continuation='bridge'), TuningPolicy(query='anchored'),
                                    TuningPolicy(query='anchored', anchor_context='question_tail'),
                                    TuningPolicy(format='document'),
+                                   TuningPolicy(trigger='lowprob', statistic_content_only=True, threshold=0),
                                    TuningPolicy(query='sentence'),TuningPolicy(query='sentence_anchored')])
 def test_offline_audit_replays_gates_and_detects_tampering(policy):
     import copy
@@ -173,9 +174,44 @@ def test_offline_audit_replays_gates_and_detects_tampering(policy):
                         900,901,lambda ok,label:failures.append(label) if not ok else None)
         return failures
     assert not audit(row)
+    if policy.statistic_content_only:
+        broken = copy.deepcopy(row)
+        broken['decisions'][0]['signal']['content_tokens'] += 1
+        assert any('gate_replay' in x for x in audit(broken))
     broken = copy.deepcopy(row)
     broken['decisions'][0]['triggered'] = not broken['decisions'][0]['triggered']
     assert any('gate_replay' in x for x in audit(broken))
     broken = copy.deepcopy(row)
     broken['events'][0]['injected_ids'][0] += 1
     assert any('packet_prefix' in x for x in audit(broken))
+
+
+@pytest.mark.parametrize(('trigger', 'expected'), [('lowprob', .5), ('surprisal', 1.05),
+                                                  ('entropy', 2.), ('margin', .6)])
+def test_content_statistic_excludes_stopwords_and_punctuation_from_denominator(trigger, expected):
+    from types import SimpleNamespace
+    pieces = {1: ' the', 2: ',', 3: ' APAR', 4: ' 64'}
+    rows = [{'token': i, 'lp': lp, 'entropy': ent, 'top2_gap': gap}
+            for i, lp, ent, gap in [(1,-9.,9.,0.), (2,-8.,8.,0.), (3,-2.,3.,.2), (4,-.1,1.,.6)]]
+    proxy = SimpleNamespace(policy=TuningPolicy(trigger=trigger, threshold=.4, statistic_content_only=True),
+                            recent=lambda branch,count:rows,
+                            backend=SimpleNamespace(decode=lambda ids,**kw: ''.join(pieces[i] for i in ids)))
+    gate, signal = TunedOnlineLedger.signal(proxy, (1,2,3,4), '')
+    assert gate and signal['value'] == pytest.approx(expected)
+    assert signal['window_tokens'] == 4 and signal['content_tokens'] == 2
+    rows[:] = rows[:2]
+    gate, signal = TunedOnlineLedger.signal(proxy, (1,2), '')
+    assert gate is False and signal['value'] is None and signal['insufficient_content']
+    assert signal['window_tokens'] == 2 and signal['content_tokens'] == 0
+
+
+@pytest.mark.parametrize('trigger', ['fixed', 'hybrid', 'scdrop', 'dragin', 'risk'])
+def test_content_filter_rejects_unimplemented_statistics(trigger):
+    with pytest.raises(ValueError, match='supported window statistic'):
+        TuningPolicy(trigger=trigger, statistic_content_only=True)
+
+
+@pytest.mark.parametrize('value', [0, 1, 'false', None])
+def test_content_filter_requires_boolean(value):
+    with pytest.raises(ValueError, match='boolean'):
+        TuningPolicy(statistic_content_only=value)

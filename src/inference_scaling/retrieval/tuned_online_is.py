@@ -12,7 +12,7 @@ from inference_scaling.retrieval.online_is import OnlineISLedger, OnlineRetrieva
 from inference_scaling.retrieval.smart_online_is import boundary, clean_question, BRIDGE, RESUME
 from inference_scaling.retrieval.stepwise import token_hash, step_char_boundaries
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.retrieval.attention_policy import attention_feature
+from inference_scaling.retrieval.attention_policy import attention_feature, content_piece
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class TuningPolicy:
     wait_for_boundary: bool = False
     boundary_deadlines: tuple[int, ...] = (160, 544)
     low_probability: float = .2
+    statistic_content_only: bool = False
     sc_reference: str = 'previous'
     rule_pattern: str = r'\b(?:unknown|unsure|uncertain|perhaps|maybe|version|error|command|APAR|CVE)\b'
     rule_tail: int = 512
@@ -48,6 +49,10 @@ class TuningPolicy:
     attention_expand_words: bool = True
 
     def __post_init__(self):
+        if type(self.statistic_content_only) is not bool:
+            raise ValueError('statistic_content_only must be boolean')
+        if self.statistic_content_only and self.trigger not in {'lowprob', 'surprisal', 'entropy', 'margin'}:
+            raise ValueError('content filtering requires a supported window statistic')
         if self.trigger not in {'never','fixed','boundary','surprisal','lowprob','scdrop','rule','hybrid','entropy','margin','risk','dragin'}:
             raise ValueError('unsupported trigger')
         if self.query not in {'concat','question','anchored','uncertain','attention','sentence','sentence_anchored'}:
@@ -180,6 +185,14 @@ class TunedOnlineLedger(OnlineISLedger):
                      values['low_fraction'] >= p.hybrid_low_fraction,
                      sc_drop is not None and sc_drop > p.hybrid_sc_drop, values['rule_match']]
             return (any(gates) if p.hybrid_mode == 'any' else all(gates)), values
+        window_tokens = len(rows)
+        content_metadata = {}
+        if p.statistic_content_only:
+            rows = [r for r in rows if content_piece(r['token'], self.backend.decode)]
+            content_metadata = {'content_tokens': len(rows), 'content_filter': 'decoded_piece_v1'}
+            if not rows:
+                return False, {'value': None, 'window_tokens': window_tokens,
+                               **content_metadata, 'insufficient_content': True}
         if p.trigger == 'surprisal':
             value = -math.fsum(r['lp'] for r in rows)/len(rows)
         elif p.trigger == 'lowprob':
@@ -197,7 +210,7 @@ class TunedOnlineLedger(OnlineISLedger):
             # Only a feature of the last observed predictive distribution;
             # this is NOT claimed to be the distribution after the last token.
             return value <= p.threshold, {'value': value, 'state_offset': -1}
-        return value >= p.threshold, {'value': value, 'window_tokens': len(rows)}
+        return value >= p.threshold, {'value': value, 'window_tokens': window_tokens, **content_metadata}
 
     def retrieve(self, branch, used):
         p = self.policy
