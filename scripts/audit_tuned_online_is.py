@@ -25,6 +25,14 @@ def audit_tuned_row(row, cfg, decode, eos, close, check):
         from audit_gap_online_is import prepare_gap_audit
         ck(auxiliary is None,'single_paid_controller')
         auxiliary = prepare_gap_audit(row,cfg,decode,eos,close,ck)
+    if 'example_policy' in row:
+        from audit_example_online_is import prepare_example_audit
+        ck(auxiliary is None,'single_paid_controller')
+        auxiliary = prepare_example_audit(row,cfg,decode,eos,close,ck)
+    if 'probe_policy' in row:
+        from audit_probe_online_is import prepare_probe_audit
+        ck(auxiliary is None,'single_learned_controller')
+        auxiliary = prepare_probe_audit(row,cfg,decode,eos,close,ck)
     ck(root == row['base_ids'], 'question_only_root')
     ck(not row['static_packets'] and not row['static_injected_ids'], 'no_hidden_static_context')
     ck(row['presearch_work'] == 0 and row['carried'] == {'sc': [], 'cn': [], 'lp': []}, 'from_token_zero')

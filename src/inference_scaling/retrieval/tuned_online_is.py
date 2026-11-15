@@ -289,9 +289,9 @@ class TunedOnlineLedger(OnlineISLedger):
         return tuple(physical), event_ids
 
 
-def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, policy, auxiliary_policy=None, gap_policy=None):
+def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, policy, auxiliary_policy=None, gap_policy=None, example_policy=None, probe_policy=None):
     cls, extra = TunedOnlineLedger, {}
-    if auxiliary_policy is not None and gap_policy is not None:
+    if sum(v is not None for v in (auxiliary_policy, gap_policy, example_policy, probe_policy)) > 1:
         raise ValueError('choose one paid auxiliary controller')
     if auxiliary_policy is not None:
         from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryOnlineLedger
@@ -299,6 +299,12 @@ def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, polic
     if gap_policy is not None:
         from inference_scaling.retrieval.gap_online_is import GapOnlineLedger
         cls, extra = GapOnlineLedger, {'gap_policy':gap_policy}
+    if example_policy is not None:
+        from inference_scaling.retrieval.example_online_is import ExampleOnlineLedger
+        cls, extra = ExampleOnlineLedger, {'example_policy':example_policy}
+    if probe_policy is not None:
+        from inference_scaling.retrieval.probe_online_is import ProbeOnlineLedger
+        cls, extra = ProbeOnlineLedger, {'probe_policy':probe_policy}
     ledger = cls(backend, tap, root, close, SeedStream(seed).derive('search'), cfg,
                  question=question, facts=facts, mode='relevant', policy=policy, **extra)
     started = time.perf_counter()
@@ -312,7 +318,7 @@ def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, polic
     for call in ledger.native_calls:
         if call['request_id'] in getattr(tap, 'history', {}):
             call['internal_signals'] = tap.history[call['request_id']]
-    auxiliary = ledger.auxiliary_result() if auxiliary_policy is not None or gap_policy is not None else {}
+    auxiliary = ledger.auxiliary_result() if extra else {}
     return {'policy': asdict(policy), 'root_ids': list(root), 'carried': ledger.carried,
             'candidates': candidates, 'calls': ledger.calls, 'native_calls': ledger.native_calls,
             'events': ledger.events, 'decisions': ledger.decisions, 'selected_event_ids': events,

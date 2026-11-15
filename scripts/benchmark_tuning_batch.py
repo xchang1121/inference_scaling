@@ -18,12 +18,15 @@ from inference_scaling.retrieval.ablation import SYSTEM
 from inference_scaling.retrieval.controller import _snapshot
 from inference_scaling.retrieval.corpus import Retriever
 from inference_scaling.retrieval.cot_guidance import DualStatistics, GuidanceConfig
-from inference_scaling.retrieval.literature import FactBank, LiteratureConfig
+from inference_scaling.retrieval.literature import FactBank, ExampleBank, LiteratureConfig
 from inference_scaling.retrieval.online_is import OnlineRetrievalConfig
 from inference_scaling.retrieval.internal_signals import InternalSignals, select_signal_worker
 from inference_scaling.retrieval.native_journal import NativeJournal
 from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
 from inference_scaling.retrieval.gap_online_is import GapPolicy
+from inference_scaling.retrieval.example_online_is import ExamplePolicy
+from inference_scaling.retrieval.ranked_facts import FactRanking,RankedFactBank
+from inference_scaling.retrieval.probe_online_is import ProbePolicy
 from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TuningTap, run_tuned_is
 from inference_scaling.shared.rng import SeedStream
 
@@ -35,6 +38,8 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--batch', type=Path, required=True)
     p.add_argument('--corpus', type=Path, required=True)
+    p.add_argument('--examples', type=Path)
+    p.add_argument('--encoder', type=Path)
     a = p.parse_args()
     batch = json.loads(a.batch.read_text())
     expected = len(batch['cases'])*len(batch['configs'])*len(batch['seeds'])
@@ -51,6 +56,7 @@ def main():
             raise ValueError('unknown signal collection mode')
         if config.get('auxiliary_policy', {}).get('method') == 'seakr':
             return 'hidden'
+        if 'probe_policy' in config:return 'hidden'
         if config.get('policy', {}).get('trigger') == 'dragin' or config.get('policy', {}).get('query') == 'attention':
             return 'attention'
         return mode if mode != 'none' else ('distribution' if config.get('policy', {}).get('trigger')
@@ -91,12 +97,21 @@ def main():
             prepared = json.loads(a.prepared.read_text())
             indices, banks = {}, {}
             for config in batch['configs']:
+                if 'example_policy' in config:
+                    if not a.examples or not a.encoder:
+                        raise ValueError('example corpus and encoder required')
+                    banks[config['id']] = ExampleBank(raw,a.examples,a.encoder,LiteratureConfig(**config.get('fact_config',{})))
+                    write({'kind':'example_bank','config_id':config['id'],'manifest':banks[config['id']].manifest,
+                           'examples_sha256':hashlib.sha256(a.examples.read_bytes()).hexdigest()})
+                    continue
                 kind = config.get('retriever', 'bm25')
                 if kind not in indices:
                     indices[kind] = Retriever.from_jsonl(a.corpus, kind=kind)
-                banks[config['id']] = FactBank(raw, indices[kind], LiteratureConfig(**config.get('fact_config', {})))
+                bank_cls=RankedFactBank if 'fact_ranking' in config else FactBank
+                extra={'ranking':FactRanking(**config['fact_ranking'])} if 'fact_ranking' in config else {}
+                banks[config['id']] = bank_cls(raw, indices[kind], LiteratureConfig(**config.get('fact_config', {})),**extra)
             write({'kind': 'engine', 'model_id': raw.model_id, 'config': engine_settings(raw),
-                   'corpus_sha256': next(iter(indices.values())).fingerprint})
+                   'corpus_sha256': next(iter(indices.values())).fingerprint if indices else None})
             warm_prefix = render(raw.tokenizer, settings['ar'], SYSTEM, batch['cases'][0]['question'], True)
             started = time.perf_counter()
             warm, = raw.sample_batch([GenerationRequest(warm_prefix, 64,
@@ -128,7 +143,9 @@ def main():
                                 question=case['question'], facts=banks[config['id']], policy=policy,
                                 auxiliary_policy=AuxiliaryPolicy(**config['auxiliary_policy'])
                                     if 'auxiliary_policy' in config else None,
-                                gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None)
+                                gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None,
+                                example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None,
+                                probe_policy=ProbePolicy(**config['probe_policy']) if 'probe_policy' in config else None)
                             result.update(arm=config['arm'], question_id=case['id'], seed=seed,
                                           base_ids=list(case['prompt_ids']), static_packets=[],
                                           static_injected_ids=[], static_retrievals=[])
