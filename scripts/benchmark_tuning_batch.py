@@ -57,7 +57,7 @@ def main():
     raw = tap = graph = signals = journal = None
     def signal_mode(config):
         mode = config.get('collect_signals', 'none')
-        if mode not in {'none', 'distribution', 'hidden', 'attention'}:
+        if mode not in {'none', 'distribution', 'hidden', 'attention', 'multilayer'}:
             raise ValueError('unknown signal collection mode')
         if config.get('auxiliary_policy', {}).get('method') == 'seakr':
             return 'hidden'
@@ -68,16 +68,24 @@ def main():
                                           in {'entropy','margin','risk'} else 'none')
     modes = [signal_mode(c) for c in batch['configs']]
     worker_mode = batch.get('diagnostic_worker', 'none')
-    if worker_mode not in {'none', 'distribution', 'hidden', 'attention'}:
+    if worker_mode not in {'none', 'distribution', 'hidden', 'attention', 'multilayer'}:
         raise ValueError('unknown diagnostic worker')
     all_modes = set(modes) | {worker_mode}
+    multilayer = 'multilayer' in all_modes
+    if multilayer:
+        from inference_scaling.retrieval.multilayer_capture import SCHEMA, validate_diagnostic_batch
+        validate_diagnostic_batch(batch)
     if {'hidden', 'attention'} <= all_modes:
         raise ValueError('hidden and attention require separately validated workers')
     need_signals = all_modes != {'none'}
-    hidden_dimensions = 128 if 'hidden' in all_modes else 0
+    hidden_dimensions = 513 if multilayer else 128 if 'hidden' in all_modes else 0
     attention_topk = 16 if 'attention' in all_modes else 0
     if need_signals:
-        select_signal_worker(hidden=bool(hidden_dimensions), attention=bool(attention_topk))
+        if multilayer:
+            from inference_scaling.arllm.backends import vllm_backend
+            vllm_backend._ASCEND_WORKER = 'inference_scaling.retrieval.multilayer_signals_worker.MultilayerSignalWorker'
+        else:
+            select_signal_worker(hidden=bool(hidden_dimensions), attention=bool(attention_topk))
     with a.output.open('x', encoding='utf-8') as stream:
         def write(row):
             stream.write(json.dumps(clean(row), ensure_ascii=False, allow_nan=False)+'\n')
@@ -91,7 +99,7 @@ def main():
         try:
             if need_signals:
                 settings['ar']['engine']['vllm']['engine_kwargs']['max_logprobs'] = (
-                    160 if hidden_dimensions else 45 if attention_topk else 10)
+                    600 if multilayer else 160 if hidden_dimensions else 45 if attention_topk else 10)
             raw = load_backend(settings['ar']['model'], settings['ar']['engine'], seed=batch['seeds'][0], logprobs=6)
             if need_signals:
                 signals = InternalSignals(raw, hidden_dimensions=hidden_dimensions, attention_topk=attention_topk)
@@ -175,8 +183,10 @@ def main():
                         result['signal_collection'] = {'requested': signal_mode(config),
                             'hidden_dimensions': hidden_dimensions if need_signals and signals.enabled else 0,
                             'attention_topk': attention_topk if need_signals and signals.enabled else 0,
-                            'hidden_source': 'final_normalized_pre_lm_head', 'projection_seed': 2026111502,
+                            'hidden_source': 'multilayer_diagnostic' if multilayer else 'final_normalized_pre_lm_head', 'projection_seed': 2026111502,
                             'state_offset': -1}
+                        if multilayer:
+                            result['signal_collection']['schema'] = SCHEMA
                         elapsed, after = time.perf_counter()-started, _snapshot(raw)
                         write({'kind': 'measurement', 'config_id': config['id'], 'seconds': elapsed,
                                'native_journal_io_seconds': journal.io_seconds-journal_io0,
