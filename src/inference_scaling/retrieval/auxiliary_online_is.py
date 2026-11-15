@@ -2,7 +2,8 @@
 from dataclasses import dataclass, asdict
 import math
 
-from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler, draft_confidence, hidden_disagreement
+from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler, draft_confidence
+from inference_scaling.retrieval.auxiliary_capture import layer_block, policy_disagreement
 from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger, overlaps
 from inference_scaling.retrieval.stepwise import token_hash
 
@@ -21,6 +22,7 @@ class AuxiliaryPolicy:
     evidence_candidates: int = 0
     evidence_tokens: int = 32
     evidence_ceiling: float = 2.0
+    capture_layer: int | str | None = None
 
     def __post_init__(self):
         if self.method not in {'flare','seakr'} or self.metric not in {'cosine','variance','logvolume'}:
@@ -37,13 +39,17 @@ class AuxiliaryPolicy:
             raise ValueError('invalid evidence trial parameters')
         if self.evidence_candidates and self.method != 'seakr':
             raise ValueError('hidden evidence trials require SeaKR')
+        if self.capture_layer is not None:
+            layer_block(self.capture_layer)
+            if self.method != 'seakr':
+                raise ValueError('captured auxiliary layers require SeaKR')
 
 
 def auxiliary_feature(policy, calls, backend):
     if policy.method == 'flare':
         feature = draft_confidence(calls[0], backend, low_probability=policy.low_probability)
         return feature['low_fraction'] >= policy.threshold, feature
-    feature = hidden_disagreement(calls, tail=policy.hidden_tail, metric=policy.metric, ridge=policy.ridge)
+    feature = policy_disagreement(policy, calls)
     return feature['distinct_paths'] > 1 and feature['value'] >= policy.threshold, feature
 
 
@@ -104,7 +110,7 @@ class AuxiliaryOnlineLedger(TunedOnlineLedger):
                     count=p.samples,tokens=p.evidence_tokens)
                 if calls is None:
                     raise RuntimeError('reserved evidence budget unexpectedly exhausted')
-                feature = hidden_disagreement(calls,tail=p.hidden_tail,metric=p.metric,ridge=p.ridge)
+                feature = policy_disagreement(p, calls)
                 trials.append({'id':candidate['id'],'packet':payload,'injected_ids':list(injected),
                                'aux_ids':[c['aux_id'] for c in calls],'feature':feature})
         accepted = [t for t in trials if t['feature']['value'] <= p.evidence_ceiling]
@@ -115,8 +121,13 @@ class AuxiliaryOnlineLedger(TunedOnlineLedger):
         return next((h for h in found if h['id'] == chosen),None),log,query
 
     def auxiliary_result(self):
-        return {'auxiliary_policy':asdict(self.auxiliary_policy), 'auxiliary_calls':self.auxiliary.calls,
+        policy = asdict(self.auxiliary_policy)
+        captured = policy['capture_layer'] is not None
+        if not captured:
+            policy.pop('capture_layer')
+        return {'auxiliary_policy':policy, 'auxiliary_calls':self.auxiliary.calls,
                 'auxiliary_work':self.auxiliary.work,
                 'adaptation':'candidate-local paid lookahead, discarded drafts never committed to IS; '
-                             'final-normalized hidden features; equal-sized evidence sample pools; '
-                             'uncertainty ranking is not a correctness oracle or paper reproduction'}
+                    + ('explicit real captured-layer hidden features; ' if captured else 'final-normalized hidden features; ')
+                    + 'equal-sized evidence sample pools; '
+                    'uncertainty ranking is not a correctness oracle or paper reproduction'}

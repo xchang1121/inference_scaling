@@ -5,7 +5,8 @@ import math
 from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy, auxiliary_feature
 from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.retrieval.auxiliary_signals import hidden_disagreement
+from inference_scaling.retrieval.auxiliary_capture import policy_disagreement, validate_captured_rows
+from inference_scaling.retrieval.multilayer_capture import SCHEMA
 from inference_scaling.retrieval.tuned_online_is import overlaps
 from inference_scaling.retrieval.smart_online_is import BRIDGE, RESUME
 
@@ -13,6 +14,16 @@ from inference_scaling.retrieval.smart_online_is import BRIDGE, RESUME
 def prepare_auxiliary_audit(row, cfg, decode, eos, close, ck):
     p = AuxiliaryPolicy(**row['auxiliary_policy'])
     calls, consumed = row['auxiliary_calls'], []
+    if p.capture_layer is not None:
+        collection = row.get('signal_collection', {})
+        ck(collection == {'requested': 'multilayer', 'hidden_dimensions': 513, 'attention_topk': 0,
+            'hidden_source': 'multilayer_diagnostic', 'projection_seed': 2026111502,
+            'state_offset': -1, 'schema': SCHEMA}, 'auxiliary_capture_schema')
+        for call in calls + row['native_calls']:
+            validate_captured_rows(call.get('internal_signals'), call['token_ids'])
+            ck(True, 'auxiliary_capture_all_rows_finite_aligned')
+    elif p.method == 'seakr' and row.get('signal_collection'):
+        ck(row['signal_collection']['hidden_dimensions'] == 128, 'legacy_auxiliary_hidden_dimensions')
     ck([c['aux_id'] for c in calls] == list(range(len(calls))), 'auxiliary_unique_ids')
     ck(sum(len(c['token_ids']) for c in calls) == row['auxiliary_work'] <= p.work_tokens, 'auxiliary_total_budget')
     seed = SeedStream(SeedStream(row['seed']).derive('question',row['question_id'])).derive('search')
@@ -102,7 +113,7 @@ def prepare_auxiliary_audit(row, cfg, decode, eos, close, ck):
             ck(decode(t['injected_ids'][budget:],False) == continuation,'trial_exact_continuation')
             ck(not {eos,close}.intersection(t['injected_ids']),'trial_no_structural_injection')
             validate_group(group,d['branch_ids'],base+t['injected_ids'],'seakr_evidence:'+t['id'],p.evidence_tokens,p.samples)
-            feature = hidden_disagreement(group,tail=p.hidden_tail,metric=p.metric,ridge=p.ridge)
+            feature = policy_disagreement(p, group)
             ck(t['feature'] == feature,'trial_hidden_feature_replay')
             if feature['value'] <= p.evidence_ceiling:
                 accepted.append((feature['value'],t['id']))

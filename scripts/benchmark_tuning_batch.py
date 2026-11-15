@@ -60,7 +60,7 @@ def main():
         if mode not in {'none', 'distribution', 'hidden', 'attention', 'multilayer'}:
             raise ValueError('unknown signal collection mode')
         if config.get('auxiliary_policy', {}).get('method') == 'seakr':
-            return 'hidden'
+            return 'multilayer' if config['auxiliary_policy'].get('capture_layer') is not None else 'hidden'
         if 'probe_policy' in config:
             return 'multilayer' if config['probe_policy']['model']['feature_schema'].get('capture_layer') is not None else 'hidden'
         if 'alignment_policy' in config:return 'hidden'
@@ -73,10 +73,16 @@ def main():
     if worker_mode not in {'none', 'distribution', 'hidden', 'attention', 'multilayer'}:
         raise ValueError('unknown diagnostic worker')
     all_modes = set(modes) | {worker_mode}
-    multilayer = bool(batch.get('multilayer_policy')) or 'multilayer' in all_modes or any(c.get('collect_signals') == 'multilayer' for c in batch['configs'])
+    auxiliary_layer = bool(batch.get('multilayer_auxiliary')) or any(
+        c.get('auxiliary_policy', {}).get('capture_layer') is not None for c in batch['configs'])
+    multilayer = auxiliary_layer or bool(batch.get('multilayer_policy')) or 'multilayer' in all_modes or any(c.get('collect_signals') == 'multilayer' for c in batch['configs'])
     if multilayer:
         from inference_scaling.retrieval.multilayer_capture import SCHEMA, validate_multilayer_batch
-        validate_multilayer_batch(batch)
+        if auxiliary_layer:
+            from inference_scaling.retrieval.auxiliary_capture import validate_auxiliary_batch
+            validate_auxiliary_batch(batch)
+        else:
+            validate_multilayer_batch(batch)
     if {'hidden', 'attention'} <= all_modes:
         raise ValueError('hidden and attention require separately validated workers')
     need_signals = all_modes != {'none'}
