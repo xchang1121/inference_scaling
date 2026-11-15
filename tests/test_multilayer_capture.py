@@ -58,6 +58,20 @@ def test_recapture_refuses_duplicate_or_corrupt_prefix():
     plan['items'][1] = deepcopy(plan['items'][0])
     with pytest.raises(ValueError):
         recapture_batches(plan)
+
+
+def test_recapture_four_existing_observations_and_missing_state_guard():
+    plan = recapture_plan()
+    plan['version'] = 4
+    plan['source_pairs'] = [{'job':f'job{n}', 'question_id':f'TRAIN_Q{n}', 'position':128} for n in range(4)]
+    plan['items'] = [{'question_id':p['question_id'], 'source_job':p['job'],
+                      'observed_branch_position':at,'prefix_ids':[n,at], 'prefix_sha256':token_hash([n,at])}
+                     for n,p in enumerate(plan['source_pairs']) for at in range(96,128)]
+    batches = recapture_batches(plan)
+    assert len(batches) == 64 and sum(len(items) for _,_,items in batches) == 256
+    plan['items'][0]['observed_branch_position'] = 95
+    with pytest.raises(ValueError):
+        recapture_batches(plan)
     plan = recapture_plan()
     plan['items'][0]['prefix_ids'].append(99)
     with pytest.raises(ValueError):

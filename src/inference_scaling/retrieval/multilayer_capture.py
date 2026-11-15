@@ -18,8 +18,16 @@ def recapture_batches(plan):
         valid = plan['version'] in (1, 2) and len(items) == 4
         size = 4
     else:
-        valid = (plan['kind'] == 'multilayer_prefix_recapture_pool' and plan['version'] == 3
-                 and plan.get('pool') == 32 and len(items) == 64 and plan.get('batch_size') == 4)
+        valid = (plan['kind'] == 'multilayer_prefix_recapture_pool' and plan['version'] in (3,4)
+                 and plan.get('pool') == 32 and plan.get('batch_size') == 4
+                 and (len(items) == 64 if plan['version'] == 3 else 64 <= len(items) <= 128 and len(items)%32 == 0))
+        if plan['version'] == 4:
+            pairs = plan.get('source_pairs', [])
+            valid = valid and 2 <= len(pairs) <= 4 and len(items) == 32*len(pairs)
+            valid = valid and len({(p['job'],p['question_id']) for p in pairs}) == len(pairs)
+            for pair in pairs:
+                group = [i for i in items if i.get('source_job') == pair['job'] and i['question_id'] == pair['question_id']]
+                valid = valid and [i['observed_branch_position'] for i in group] == list(range(pair['position']-32,pair['position']))
         size = 4
     if not valid or plan['repeats'] != 2 or plan['labels_added'] != 0 or plan['independent_groups_added'] != 0:
         raise ValueError('unsupported or unbounded recapture plan')
