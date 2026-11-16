@@ -1,0 +1,2739 @@
+{
+  "as_of_utc": "2026-11-16T01:54:08.659151+00:00",
+  "scope": "Compact publication checkpoint. Full raw trajectories remain in the local study archive; this snapshot alone does not replace raw replay.",
+  "study_complete": false,
+  "selection_opened": false,
+  "test_opened": false,
+  "active_npu_jobs": [],
+  "cost": {
+    "released_jobs": 181,
+    "failed_released_jobs": 8,
+    "recorded_leased_device_hours": 67.26322118865119,
+    "failed_leased_device_hours": 0.6129013954268562,
+    "native_counter_jobs": 148
+  },
+  "coverage_snapshot_note": "Counts from audited TRAIN inventory; a configuration count is not a completion or efficacy criterion.",
+  "families": {
+    "static": {
+      "distinct_configs": 17,
+      "audited_units": 84,
+      "distinct_questions": 10
+    },
+    "online_fixed": {
+      "distinct_configs": 11,
+      "audited_units": 52,
+      "distinct_questions": 10
+    },
+    "format": {
+      "distinct_configs": 16,
+      "audited_units": 68,
+      "distinct_questions": 10
+    },
+    "resume": {
+      "distinct_configs": 10,
+      "audited_units": 58,
+      "distinct_questions": 10
+    },
+    "anchored": {
+      "distinct_configs": 12,
+      "audited_units": 48,
+      "distinct_questions": 8
+    },
+    "boundary": {
+      "distinct_configs": 10,
+      "audited_units": 42,
+      "distinct_questions": 6
+    },
+    "surprisal": {
+      "distinct_configs": 10,
+      "audited_units": 42,
+      "distinct_questions": 6
+    },
+    "lowprob": {
+      "distinct_configs": 14,
+      "audited_units": 72,
+      "distinct_questions": 10
+    },
+    "scdrop": {
+      "distinct_configs": 10,
+      "audited_units": 42,
+      "distinct_questions": 10
+    },
+    "hybrid": {
+      "distinct_configs": 11,
+      "audited_units": 44,
+      "distinct_questions": 8
+    },
+    "bridge": {
+      "distinct_configs": 10,
+      "audited_units": 56,
+      "distinct_questions": 10
+    },
+    "early": {
+      "distinct_configs": 11,
+      "audited_units": 54,
+      "distinct_questions": 10
+    },
+    "flare": {
+      "distinct_configs": 9,
+      "audited_units": 30,
+      "distinct_questions": 6
+    },
+    "gap": {
+      "distinct_configs": 9,
+      "audited_units": 30,
+      "distinct_questions": 6
+    },
+    "ircot": {
+      "distinct_configs": 8,
+      "audited_units": 40,
+      "distinct_questions": 10
+    },
+    "thinkretrieve": {
+      "distinct_configs": 9,
+      "audited_units": 36,
+      "distinct_questions": 6
+    },
+    "distribution": {
+      "distinct_configs": 10,
+      "audited_units": 42,
+      "distinct_questions": 10
+    },
+    "dragin": {
+      "distinct_configs": 9,
+      "audited_units": 36,
+      "distinct_questions": 8
+    },
+    "seakr": {
+      "distinct_configs": 15,
+      "audited_units": 60,
+      "distinct_questions": 6
+    },
+    "knowledge_probe": {
+      "distinct_configs": 13,
+      "audited_units": 48,
+      "distinct_questions": 10
+    },
+    "value_probe": {
+      "distinct_configs": 15,
+      "audited_units": 68,
+      "distinct_questions": 6
+    },
+    "risk": {
+      "distinct_configs": 9,
+      "audited_units": 30,
+      "distinct_questions": 6
+    },
+    "hidden_retrieval": {
+      "distinct_configs": 11,
+      "audited_units": 42,
+      "distinct_questions": 10
+    }
+  },
+  "frozen_is_files": {
+    "src/inference_scaling/arllm/algorithms/__init__.py": "42dc269e09672646dae986101c5f5c229adc08caab3f867cf671ce419dc145c2",
+    "src/inference_scaling/arllm/algorithms/candidates.py": "5ed588025787623e37ade66e439def02c42b7ee614d9ced0f2c507c974629112",
+    "src/inference_scaling/arllm/algorithms/conditional_is.py": "18b9db92e4c30397a182f57ca24b3dc66f571bd55475e183ccdba632f56c6c89",
+    "src/inference_scaling/arllm/algorithms/config.py": "61d83bfa9c25292d018976e79fca44f03186b325e9809cc30043ee923d4f67d4",
+    "src/inference_scaling/arllm/algorithms/ensemble_mh.py": "b793489dc1ebd70711a381bfa41e1cd6d2932fdb514a84d4c21062ff5b4f2d6a",
+    "src/inference_scaling/arllm/algorithms/ensemble_schedule.py": "4f290c715e76bbb4ffbc09b93f63153ca15d29fea5b80fbcaf8962d832173804",
+    "src/inference_scaling/arllm/algorithms/mh.py": "e4cdada79bf9682a9fd0292f2ba2f107637724d37d2e12289bf7683517778807",
+    "src/inference_scaling/retrieval/cot_guidance.py": "b542f02805eb6f03ca59265590006e6d74b7e4e32860872406e3e4bc471bf286",
+    "src/inference_scaling/shared/rewards/__init__.py": "4328a6e4afb14aed031b239c300eaec6f0845984c92e21a1c764b33daf2650c4",
+    "src/inference_scaling/shared/rewards/consilience.py": "87f25dd7ff863b9a37015897fd9da43897b0574af8772a432927fc5132e32649",
+    "src/inference_scaling/shared/rewards/vote.py": "1cc70ed32a429a5081cba3ff91066a9e0331ad84dc282bf36f1a4d45a1658343",
+    "src/inference_scaling/shared/sampling/__init__.py": "f8289736598df5d533852e28a7d7c0a99e9970e27a6900495acc9294b766b06b",
+    "src/inference_scaling/shared/sampling/conditional_is.py": "ad9bf046d0547467297bc53fad69407b7ad103d6a33b2929ddc989b2a8d0d15d",
+    "src/inference_scaling/shared/sampling/importance.py": "66cc3981d62845debcdba1a40866ed980d5eb35e5a2f7cfb16d0eb1652af0ee1",
+    "src/inference_scaling/shared/sampling/mh.py": "5daf3ffa7a9011673692d11f260c1651e4136debe61fe4df52fd3c31246eaef1",
+    "src/inference_scaling/shared/sampling/nonself.py": "e17f34ee05122043474dfc40aef5bf73cb8306e4acdf21a363559da296d5616c",
+    "src/inference_scaling/shared/sampling/stratified.py": "6725587a40fd4db968b66c14f6be1b1f3ed8cb95e006ca8aa0213de074196de9"
+  },
+  "local_frozen_byte_identity_passed": true,
+  "validation": {
+    "local_cpu_passed": 564,
+    "remote_tensor_backend_tests_passed": 73,
+    "counts_overlap": true,
+    "resolved_local_subprocess_import_test": true,
+    "pytest_script_search_path_fixed": true,
+    "ruff_passed": true,
+    "example_matches_frozen_train_manifest": true,
+    "markdown_link_checks_passed": true,
+    "optional_math_verify_tests_not_run": 2,
+    "new_captured_alignment_native_policy_validated": false
+  },
+  "pending_full_collection": [
+    "multilayer-knowledge-transfer-02",
+    "multilayer-risk-broader-03"
+  ],
+  "recent_answer_review_pending": [
+    "bridge-format-06a",
+    "alignment-cohort-04",
+    "format-body-transfer-08",
+    "resume-separator-06"
+  ],
+  "jobs": [
+    {
+      "job": "alignment-cohort-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1994.459706068039,
+      "audit": {
+        "passed": true,
+        "checks": 5887,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "2f7599a0ea748775cc21b4dfa2be6f2c9d0d10cf75f60e9b1e67ae27b8349702",
+        "check_labels_sha256": "67e97c334cb43d96263e8381bbf431eef1e9d8d7fad2facf0bcd377fbf2901b9"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "alignment-fusion-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2084.3032398223877,
+      "audit": {
+        "passed": true,
+        "checks": 3448,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "c5c168f40bdb744afcecf504cb45e9f4c843f9412db2fa0234d2765b50e6a6ab"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "alignment-parent-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2244.8678319454193,
+      "audit": {
+        "passed": true,
+        "checks": 4904,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "5f9a3d5046d8af6be43951a7d36f416ccf6ec43bd3500af70fab99be8c6c712a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "alignment-rank-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1593.4851970672607,
+      "audit": {
+        "passed": true,
+        "checks": 4958,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "bd12ad077e46e9aa6e2afb46360317e3ed1e137c28d2312f9ab2b71942717205",
+        "check_labels_sha256": "5baf1032731c1d0cbba30b9196f4ddd371b8f02ab58bd2bf718a9a9f53182feb"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "anchored-candidates-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1414.6819550991058,
+      "audit": {
+        "passed": true,
+        "checks": 3760,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "2a5648ee5a4556fef904feefe951bcabae9887f9178dfee0c833017edf17b2b3",
+        "check_labels_sha256": "182e441dadc7c043a03177a776b4b1c8c48651525513440751cec38a5bca3c6a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "anchored-components-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 869.1037821769714,
+      "audit": {
+        "passed": true,
+        "checks": 1647,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "4e57a6916befbd2bc84dc4466b2e93d0a7a2a9101ec3f7d564e859a2dcdf12f6"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "anchored-overlap-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1214.6917026042938,
+      "audit": {
+        "passed": true,
+        "checks": 3620,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "6673574c5ed0bafccfee79d78e11a6413a1099fd5b6debf0d957ebda2b9e3708",
+        "check_labels_sha256": "ef4c7295486bd383a1747a3eabb6dde1dae745ab3c9b23d7bde9a0e46d4168eb"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "anchored-retriever-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1016.4193589687347,
+      "audit": {
+        "passed": true,
+        "checks": 2095,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "f912543a14d0cc6bc55e90ee536e13a9bc03382685eb74f101d7996234b23813"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "anchored-weight-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1106.6571798324585,
+      "audit": {
+        "passed": true,
+        "checks": 3721,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "7e8bc8dca933a90df00bf3e6fb3b998038799fb044b213fe378d25f06a954862"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-even-full-10",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1558.5775790214539,
+      "audit": {
+        "passed": true,
+        "checks": 3147,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "9d5c894da9ae3252d5bee635cea0fafe04b02495d724b35c9a879616f876893a",
+        "check_labels_sha256": "f42288b1101989b2556fc20649333412514195a991271a854e30ccc0472ccd78"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-even-source-09",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 322.8645164966583,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-geometry-final-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 312.4461877346039,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-geometry-middle-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 210.21885681152344,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-middle-full-08",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1519.4271130561829,
+      "audit": {
+        "passed": true,
+        "checks": 3080,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "9308dcdcb22d8c9872ef4dc481dacffeb6334c4d099f74759fd6cd979b38b134",
+        "check_labels_sha256": "b54c82c18e8830a2c2aaea175b28539937767c422d0cffb254d52bca08b357b5"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-middle-source-07",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 206.98407101631165,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-native-final-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1026.213297843933,
+      "audit": {
+        "passed": true,
+        "checks": 1544,
+        "failures": [],
+        "units": 4,
+        "raw_sha256": "2d20fe2c0a0b42117a123b5708b6b2e21d8f44078ab9288e29476b88e9b61685",
+        "check_labels_sha256": "73296548c102133101c4d684d8c60ff5bc7b1cd23474a37134083e383971b98e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-native-is-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 944.5518052577972,
+      "audit": {
+        "passed": true,
+        "checks": 1795,
+        "failures": [],
+        "units": 4,
+        "raw_sha256": "e82ae1f0fd4ffc5ad949dca1651b5b2319c442551f8eba611de1bee6d8d08426"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-native-repeat-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1025.7701125144958,
+      "audit": {
+        "passed": true,
+        "checks": 1544,
+        "failures": [],
+        "units": 4,
+        "raw_sha256": "2839bdb43ed2164dfffbddcc9da9da0b574a3eb661f64ad94df8409a892a1099",
+        "check_labels_sha256": "73296548c102133101c4d684d8c60ff5bc7b1cd23474a37134083e383971b98e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-odd-full-12",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1528.2984700202942,
+      "audit": {
+        "passed": true,
+        "checks": 3080,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "273ad3cc5486845bafc530930b2e1b970570735f2b74ddf93f7a040b25bc6b7b",
+        "check_labels_sha256": "b54c82c18e8830a2c2aaea175b28539937767c422d0cffb254d52bca08b357b5"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "attention-odd-source-11",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 212.282288312912,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-repeat-source-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 318.32032084465027,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-signals-v1",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 355.7914228439331,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "attention-withinrun-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1555.648633480072,
+      "audit": {
+        "passed": true,
+        "checks": 3080,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "0a0992aa2b63ef0b9aa24d82c9a2589fd59d36ec4a8b04ab0665af1096782833",
+        "check_labels_sha256": "b54c82c18e8830a2c2aaea175b28539937767c422d0cffb254d52bca08b357b5"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "auxiliary-layer-calibration-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 358.9463016986847,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "auxiliary-layer-source-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 356.4779508113861,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "auxiliary-multilayer-short-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 330.09015440940857,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "boundary-cadence-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 943.1865375041962,
+      "audit": {
+        "passed": true,
+        "checks": 9066,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "128ced774a989c6cd39c612f195504bce09836f66e96cde76b866d6d634fbbbf"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "boundary-format-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1452.9203431606293,
+      "audit": {
+        "passed": true,
+        "checks": 6996,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "d4709bc88eafdbd2517d8702e78069655c7416822c1d6eed2cc844bdb337381b",
+        "check_labels_sha256": "37b332d04b4daba5c00dee3a0272a0fd40d9d5d9b727ec04d6255aa4448d96da"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "boundary-retriever-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1172.8538446426392,
+      "audit": {
+        "passed": true,
+        "checks": 8229,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "a7b65bf0619333e0ac9e14cc285e1d41213203059f71a5da0d8aa3b3eb3b126c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "boundary-timing-01",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 381.1257200241089,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "boundary-timing-01b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1318.6458246707916,
+      "audit": {
+        "passed": true,
+        "checks": 5755,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "bc62ebd32589743ca2b30b8e4bc57bd96b904999f6ef56d203ca0fb22d779e4e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "bridge-closure-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1141.1665811538696,
+      "audit": {
+        "passed": true,
+        "checks": 2127,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "31c76b5ecf60b5e341a9957f62a84a21333890bd8867b1233606deaab62802e8"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "bridge-format-06",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 92.77354884147644,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "bridge-format-06a",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1300.29079079628,
+      "audit": {
+        "passed": true,
+        "checks": 3144,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "39f22f381e3c9b3bb61e348e738bb29cfa2808fcd2c485b59a41480f5c7b3fd8",
+        "check_labels_sha256": "9b9d8cae3e4fb6af90a2fd7675c430e1718bcb854996e677d23be7d7e84aeb42"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "bridge-retriever-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 877.8127384185791,
+      "audit": {
+        "passed": true,
+        "checks": 2901,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "c3dc425de94d5dbaf6558c981a928beb3762f0800714ba9d06388bd2c8f0ff2e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "bridge-timing-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 910.3442435264587,
+      "audit": {
+        "passed": true,
+        "checks": 2688,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "72e7d8e9c9d2775b3a4fb631b845bcfba2ff175d7687a6ab12dc6e184ef7b84d",
+        "check_labels_sha256": "45841b2b56b98de98a06f90600022033beb1a43ad671f47f7ed89ef624620965"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "bridge-transfer-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 904.0962829589844,
+      "audit": {
+        "passed": true,
+        "checks": 2849,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "075403247f2572483cd33eb449e60735c88afe337ad73553fceb0bd043a007b4"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "content-filter-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 952.1428406238556,
+      "audit": {
+        "passed": true,
+        "checks": 1607,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "f74d81d9471c2b31050455751c9d5b12dc984e9f60173f737d64939deda2cebe",
+        "check_labels_sha256": "111aca5eb1b6d4ff6a62b40d2aefb8180ecd4580d4961273953a345fbe1ca9fa"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "continuation-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1416.7742881774902,
+      "audit": {
+        "passed": true,
+        "checks": 2339,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "9d659b33449f15a0028a44a30fa5159c62a64a5e3dedf318bda9e780e0e76218"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "distribution-content-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2856.1631033420563,
+      "audit": {
+        "passed": true,
+        "checks": 6155,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "66744eb842f633489c45e59d18cde999a2d0f674b3db5abb69e987980bcc7f7f",
+        "check_labels_sha256": "683cf37338a80fae91c655c2c0d1508b9003e65499e0ea440bbc3fbb206aa90c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "distribution-margin-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1864.279108762741,
+      "audit": {
+        "passed": true,
+        "checks": 4546,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "8eddb1b5368a0c075850d1c711f643f41633a20807edca432bfa14a9a3adac37"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "distribution-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1148.2810850143433,
+      "audit": {
+        "passed": true,
+        "checks": 2516,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "cc9166fce13513987d1bc2a7c07e13b8db17dd7662af8c4979d47a3c1158d945"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "distribution-window-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1711.3285892009735,
+      "audit": {
+        "passed": true,
+        "checks": 3773,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "5711b92601961498eaaf145df0478983266e6fc2e948b5e01761e2ae13db6479",
+        "check_labels_sha256": "76f84764110621cc7d337d39b9d64fbdaecc802e7ac65593ee2a09324c322157"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "dragin-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1297.5347096920013,
+      "audit": {
+        "passed": true,
+        "checks": 2420,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "416ddeaa2eee8b8e0cc8435ddc1bcc62ceb4e16b31a2da930ebc445761ebe9e2"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "dragin-query-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1694.5027513504028,
+      "audit": {
+        "passed": true,
+        "checks": 2663,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "41099e9747f095cbdf88896245f79048854cdd1d48877540c5b187fa2707e386"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "dragin-retriever-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2689.3175055980682,
+      "audit": {
+        "passed": true,
+        "checks": 6074,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "0e41c5108f8dcdd685c1cd32425fceae512ee80aea2346b9b3893fe87861b0f0",
+        "check_labels_sha256": "219b4cca8de264e6045969f0c4743820467fba7d96e6cfd24c771a20eaa41a36"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "dragin-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1433.479317188263,
+      "audit": {
+        "passed": true,
+        "checks": 2551,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "2edf9ed6952dbe06da8e5cb36ab401fd733dccebdc907d5056aba857b0980a7c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "dragin-window-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2179.7809479236603,
+      "audit": {
+        "passed": true,
+        "checks": 4392,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "aa2bd4b21721adc7161ff8370b78a89076f9e91673fedf578d697dc8633c05e3"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "e5-corpus-index-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 258.86004877090454,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "e5-native-index-smoke-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 33.923320293426514,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "early-continuation-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 956.5689067840576,
+      "audit": {
+        "passed": true,
+        "checks": 3602,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "3b2b80a1cef4c50df8c50285e7b397ddc708afb8ec3e387583c98370f9f2c5db"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "early-distance-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1162.9093554019928,
+      "audit": {
+        "passed": true,
+        "checks": 3254,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "d87d25a4b4fa14fb07a94e29dfa4099bd23274066ed899266ee3b0067b92155d",
+        "check_labels_sha256": "beb14ab18c171b7cc18a1345d6a07c3a1be29e5d03cfbe07d63544188b421d93"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "early-format-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1108.8151316642761,
+      "audit": {
+        "passed": true,
+        "checks": 3175,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "cfa7e61fe2bb062f1161bf3ce64cf31c99f2978c5c9160a0dcd8ec261cb29086",
+        "check_labels_sha256": "96de509390dd25bf4e18dba57c8d8bd232bd89c5417599a2a9302b33ad852383"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "early-position-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1071.9526789188385,
+      "audit": {
+        "passed": true,
+        "checks": 2920,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "3f1b24396901340ee5547c1e4b14afa16566a097a9b0f2cec559c4272479950c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "early-retriever-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2330.776188850403,
+      "audit": {
+        "passed": true,
+        "checks": 6079,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "db7a6291ec67b52905daa7e3e48a63069e38db29d5407f1d0c877c2171def96a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "example-answer-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1794.2000167369843,
+      "audit": {
+        "passed": true,
+        "checks": 3070,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "af4b875c789ea86341d60f3c786bfacc3b2e35af7edb269cd8a4f463b6b3331f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "example-completion-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2460.347686767578,
+      "audit": {
+        "passed": true,
+        "checks": 5672,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "e8a98075c063fd7960a0edb5189e3d3e777f6c10e3d4fd25e2d908f31eaef198"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "example-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1479.968722820282,
+      "audit": {
+        "passed": true,
+        "checks": 2688,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "f7d25a62011448fae5407083a6533cebef789ce3e31001eaa35423333f6ed927"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "example-padding-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2020.0864434242249,
+      "audit": {
+        "passed": true,
+        "checks": 3563,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "91ce7aa732e7f000f946db393ce360da3c246afdda5671ad989affdad49a787a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "example-timing-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2178.0567219257355,
+      "audit": {
+        "passed": true,
+        "checks": 4555,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "6b96bef620939e15a235b37f6a66491a2155cfe3e58a2955b070c6faf8346339",
+        "check_labels_sha256": "a2c21d43dce142bc137d35b99f54da66badde0a496fd8d3776db1a049adae140"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "flare-probability-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2173.516211748123,
+      "audit": {
+        "passed": true,
+        "checks": 6144,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "c52b8064106afdc47ba90ba927a6dadfe1aa3e444b874a1651bad8372f9e0dcf",
+        "check_labels_sha256": "352c15569f7b927691f40ed4f27102a7f5c0c0e79da052658966e3b5e2ad0c35"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "flare-query-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1336.0485785007477,
+      "audit": {
+        "passed": true,
+        "checks": 3461,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "2649055f45a6f8a3d9c1c0642b511c65bc37d4c9d83e8e25ff6296dc73acb221"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "flare-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1513.6795165538788,
+      "audit": {
+        "passed": true,
+        "checks": 3482,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "7d561e402589fba560dc688d1fce31f81d2d12d54f301eb1a180248ea2bf531b"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "flare-transfer-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1448.9342930316925,
+      "audit": {
+        "passed": true,
+        "checks": 3285,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "13bb165ffea195484ba59768b5545c77e6e9864158f9ebb2455630ccf229b979"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-01",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 128.03228378295898,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "format-01b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1040.045248746872,
+      "audit": {
+        "passed": true,
+        "checks": 2155,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "b399969a842c20a6d50bd3cfe6cc7365440a095596c2e22c2b45126084936b5f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-attribution-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 987.9691185951233,
+      "audit": {
+        "passed": true,
+        "checks": 2479,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "434f076019c6e819caaea65018a2ebe68300aa0c4f243305a1a99620a02bf3d9"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-body-transfer-08",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2259.8705463409424,
+      "audit": {
+        "passed": true,
+        "checks": 5075,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "ff5da85fe391c9d292e65c55654fbd020284f6bd3852a1e01fa2c79f8b9dd8e0",
+        "check_labels_sha256": "8132e66718b673347a4309c80fc26a743c9a1f6c90b596579be01feff8f9e3cd"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "format-broader-07",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1849.0384449958801,
+      "audit": {
+        "passed": true,
+        "checks": 5062,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "640e7beafcb4c069d471e43dbf2c62a7e621812ad4c6423c8f84899dc6c93683",
+        "check_labels_sha256": "95beca2f059fdad08871c3f283bd5b2b927b66774478f670913d8e1c056f8a67"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-header-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1125.804361820221,
+      "audit": {
+        "passed": true,
+        "checks": 2447,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "cf2def4db014b2e1cab1d9bd4d340474e53343d2eceb371ca6bf103da909dbd1"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-single-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 894.0335412025452,
+      "audit": {
+        "passed": true,
+        "checks": 2568,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "3e558207d4c52119339568c1b80096976ab45c3fd679e52277773bca3acc5559"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-transfer-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 840.986555814743,
+      "audit": {
+        "passed": true,
+        "checks": 1960,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "5beeeb40548db089ee54adafb4149b8f4d03efb4973c590bb0ae9e7135d5bbc0"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "format-transfer-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1790.3076794147491,
+      "audit": {
+        "passed": true,
+        "checks": 4399,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "daad9121b995afa259dad3c825ace38e11eac1c978d8ac2499b6bb9f609ba742",
+        "check_labels_sha256": "ff07d594465c99eaa67756a6c265be5e79cda833f3e76ad3cdf0ab677bce1989"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "gap-completion-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1372.5994277000427,
+      "audit": {
+        "passed": true,
+        "checks": 4109,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "c221d73865eab48390d44618f2434bc27f5a1033b9447ba9c088805987e90c1f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "gap-context-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1963.4344177246094,
+      "audit": {
+        "passed": true,
+        "checks": 8469,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "53bcc6aee990eb499c00493cb0b3e1573c9f0a8d3732e332a5ab313ef7c25615",
+        "check_labels_sha256": "10c58a838459f237caff534f42916ca09caa4b2b371bbd9ec175932d4666cf50"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "gap-draft-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1441.596914768219,
+      "audit": {
+        "passed": true,
+        "checks": 4273,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "357192aa91efd1e5984b36d638fba2fb75724400024ea2198db52d896b079a70"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "gap-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1242.0240533351898,
+      "audit": {
+        "passed": true,
+        "checks": 3503,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "b1618cde920375c8f9558d9fb9cad693fc423a31a0b7c5edab92077a5c86253e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "gap-support-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1797.8476285934448,
+      "audit": {
+        "passed": true,
+        "checks": 4561,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "29a9cfb3450ba19d31c1bb02d9650598497a35856305e03c74dfc2d0dfd74ee9"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "hidden-native-is-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 913.3832638263702,
+      "audit": {
+        "passed": true,
+        "checks": 1397,
+        "failures": [],
+        "units": 4,
+        "raw_sha256": "2dc42939f37be1c3ac362407a2fa6b1eef43e92ec239d6121f9343d556fa4e27"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "hidden-signals-v1",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 358.9752311706543,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "hidden-signals-v2",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 330.8846263885498,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "ircot-cadence-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2068.796373128891,
+      "audit": {
+        "passed": true,
+        "checks": 6092,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "4e334aebc04ad9c057e915272d596254c8515a96bb54a5fb83329fbab19f6891"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "ircot-query-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1192.2409536838531,
+      "audit": {
+        "passed": true,
+        "checks": 2601,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "be4a8669d7a6598a21bd0a9a8dcac9b23dad036500e1d06269aca652e97e9c07"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "ircot-query-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2830.7512295246124,
+      "audit": {
+        "passed": true,
+        "checks": 9166,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "3649c2dc465adb262ed787604e30ceee77b6b7228e8251a25e6ebbbd487f378d",
+        "check_labels_sha256": "a13336e0de8416ef0eaf20044e30ea18e333e52da2e183e9e54007fb7c43d967"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "ircot-retriever-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2702.7324018478394,
+      "audit": {
+        "passed": true,
+        "checks": 10302,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "2a97f44e3fb17ca725d35d23b4590c3635a171c756545c2144191c215206bd12"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "knowledge-models-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2745.981157541275,
+      "audit": {
+        "passed": true,
+        "checks": 6299,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "1f6025a1b224192cc9bb6874e39f8a62917c48bf4cde9cee00ab0da8ce1f41dd",
+        "check_labels_sha256": "03b5ab2ae4dec00516b5958e2670055d549c8613ce801c9a86e3f578186370c3"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "knowledge-probe-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2407.117241382599,
+      "audit": {
+        "passed": true,
+        "checks": 5267,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "5d1032c739b5d9977d8158f1edc0046c127ce59841e486379814f058a0edb03c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "knowledge-retriever-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1699.989590883255,
+      "audit": {
+        "passed": true,
+        "checks": 4544,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "510077cc84e7d12e750dfe68c5aa43a376c2ca99bfa1914f4008e00da3d2a324",
+        "check_labels_sha256": "db6c18f7a3866c305185f8d7eef23c308828b76072af17c0ba313aada2a3c08d"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "knowledge-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2250.3569872379303,
+      "audit": {
+        "passed": true,
+        "checks": 4568,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "e02b8a6ac19da7ddb73f492cff4927c486b127d17492bc9661d355b474c6b6ac"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lookahead-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1406.2843306064606,
+      "audit": {
+        "passed": true,
+        "checks": 3498,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "ebb8a2132b2ab819557aa0c9db99eb717b2fef2eea7a6bfdfcbf98eb2ba43650"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-cadence-07",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2058.497951030731,
+      "audit": {
+        "passed": true,
+        "checks": 10772,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "ec298048b44c2fb3d669679005e1c3cff1a974c36dd64621d5dc1692c72f59a8",
+        "check_labels_sha256": "a3fde042431446a7154591bf3d594580e54604fdb51a994ca954d4a759619a83"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-content-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2309.3742225170135,
+      "audit": {
+        "passed": true,
+        "checks": 5728,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "158a7ffd2e074cf73077af0a5ba06cd7883e77501b8d51edcb0a328fab0bb03e",
+        "check_labels_sha256": "4d7b87889d6f1b7f69e99e5d1c75804d8843caa3a231ed0d02131b9784f48d57"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-probability-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2047.976138830185,
+      "audit": {
+        "passed": true,
+        "checks": 4907,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "344f04f50bc3e64ce19c1d0be6f40282a6e82c7b1fcddf4722ede7fd5aaf8f30"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-query-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2421.2945263385773,
+      "audit": {
+        "passed": true,
+        "checks": 5855,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "a45e279ce85430e20d35802952ff7d381a119cfcf18b56f95b228e301c71f9fb",
+        "check_labels_sha256": "d22e6a2d9b65eb725bd534ad53ff65fb5474295a7258feb12e368e24f4251245"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-retriever-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1783.9555821418762,
+      "audit": {
+        "passed": true,
+        "checks": 4445,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "f81b9f6a5f334a5966e3406b43a765312985dd5c976fa4bb1c6de3d63c8becf8",
+        "check_labels_sha256": "5961ed90a41a8bce954dab53b8873bb274950a143c4cbce6b1207a28a0c2bed5"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "lowprob-threshold-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1862.3266243934631,
+      "audit": {
+        "passed": true,
+        "checks": 5381,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "17998e62bb6a959e371e240f525dbf7da065501d3bf1ab27717c895893e96c0d"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-knowledge-policy-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1387.5158081054688,
+      "audit": {
+        "passed": true,
+        "checks": 17817,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "1029f3adde9dab40c8bb9fe2a455d66b6ea271e265b6650c70c78f36b0e9ff81",
+        "check_labels_sha256": "d62ebf7ed7d6d6f42ddcf21536e39188df571811893c13bf428c80bb78c1c157"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-knowledge-transfer-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1703.04265832901,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-mechanism-01b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 348.3309109210968,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-native-is-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1059.1934616565704,
+      "audit": {
+        "passed": true,
+        "checks": 1792,
+        "failures": [],
+        "units": 4,
+        "raw_sha256": "03d7e8eb2c9f63709bb2b4fa6d108741babed40cb4883ddeb5ee590ae0bc9f30"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-pilot-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 217.23549818992615,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-recapture-pool-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 391.88569831848145,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-recapture-train-07",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 460.6885771751404,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-08",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 427.23597407341003,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-09",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 469.76033878326416,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-10",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 314.5299217700958,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-11",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 334.38008069992065,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-12",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 307.393723487854,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-recapture-train-13",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 305.9415445327759,
+      "audit": null,
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-repeat-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1653.339498758316,
+      "audit": {
+        "passed": true,
+        "checks": 3080,
+        "failures": [],
+        "units": 8,
+        "raw_sha256": "87236c0e12f07d607814dccecedb9f7f8a9a1bff698522979977b004e7599611"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-risk-broader-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2033.7298257350922,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "multilayer-risk-policy-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1532.7476975917816,
+      "audit": {
+        "passed": true,
+        "checks": 23279,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "6ee0d53498099ac3c9291b77793715b0387900f29316c37d8327d52597f143ec",
+        "check_labels_sha256": "f47215a48aaf47de58ee58bb9bba3c73fccd71535fb724c8a865c6865bf459c0",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 23279,
+          "failures": [
+            "TRAIN_Q334:20261115:risk-layer16-015:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-layer16-015:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-final-015:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-final-015:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-final-015:probe_prediction_and_gate"
+          ],
+          "units": 6,
+          "raw_sha256": "6ee0d53498099ac3c9291b77793715b0387900f29316c37d8327d52597f143ec",
+          "check_labels_sha256": "f47215a48aaf47de58ee58bb9bba3c73fccd71535fb724c8a865c6865bf459c0"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 23279,
+          "exact_predictions": 24,
+          "diagnosed_architectures": [
+            "tanh_mlp"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "d21310d9104ae711006f70949e6ef7dff134bde3422bad072ae11945a143ece2"
+        }
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-risk-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1647.6231606006622,
+      "audit": {
+        "passed": true,
+        "checks": 35808,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "289b1541f1988dfe5b4d3f010a13240cf1b1c3a983d780b55dff24e1ef43345b",
+        "check_labels_sha256": "d28e2286916fa3d6304339d84e0feb1d267768b73bc1a8876ce372e0f85a7821",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 35808,
+          "failures": [
+            "TRAIN_Q334:20261115:risk-layer16-0.15:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-layer16-0.15:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-layer16-0.17:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:risk-layer16-0.2:probe_prediction_and_gate"
+          ],
+          "units": 6,
+          "raw_sha256": "289b1541f1988dfe5b4d3f010a13240cf1b1c3a983d780b55dff24e1ef43345b",
+          "check_labels_sha256": "d28e2286916fa3d6304339d84e0feb1d267768b73bc1a8876ce372e0f85a7821"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 35808,
+          "exact_predictions": 35,
+          "diagnosed_architectures": [
+            "tanh_mlp"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "cdf3513f4853f6f125ea848ada50355e0b7f62f531571be4d28c0c3e113985bc"
+        }
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-value-policy-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1561.3052551746368,
+      "audit": {
+        "passed": true,
+        "checks": 20607,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "561aec34b1a15c40dccc3441066e63daf3bb6b28eb8a901710371cc7a12b6485",
+        "check_labels_sha256": "628e306872d4a2b43e78e34b3a652b326781db171b11d1b9afb72e605466e792",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 20607,
+          "failures": [
+            "TRAIN_Q334:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q334:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q417:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q417:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q417:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q417:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q417:20261115:value-layer32-repeat0:probe_prediction_and_gate"
+          ],
+          "units": 6,
+          "raw_sha256": "561aec34b1a15c40dccc3441066e63daf3bb6b28eb8a901710371cc7a12b6485",
+          "check_labels_sha256": "628e306872d4a2b43e78e34b3a652b326781db171b11d1b9afb72e605466e792"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 20607,
+          "exact_predictions": 42,
+          "diagnosed_architectures": [
+            "tanh_mlp"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "092981e0008860295fcc0ed08b44c2a8ebe2901dfc2f47fdbc840268620eb472"
+        }
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "multilayer-value-transfer-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1767.8048379421234,
+      "audit": {
+        "passed": true,
+        "checks": 28548,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "6c3125c8cf809667e480fee4bfd85a29937c16f3e50db8c9e23448c7c3192caf",
+        "check_labels_sha256": "6e1d34dcc5fde2b5c2b2812a1141a1fa8513a36ebe9bb53a001c89cd9bdb74ad",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 28548,
+          "failures": [
+            "TRAIN_Q005:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-layer32-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-final-repeat0:probe_prediction_and_gate",
+            "TRAIN_Q014:20261115:value-final-repeat0:probe_prediction_and_gate"
+          ],
+          "units": 12,
+          "raw_sha256": "6c3125c8cf809667e480fee4bfd85a29937c16f3e50db8c9e23448c7c3192caf",
+          "check_labels_sha256": "6e1d34dcc5fde2b5c2b2812a1141a1fa8513a36ebe9bb53a001c89cd9bdb74ad"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 28548,
+          "exact_predictions": 78,
+          "diagnosed_architectures": [
+            "tanh_mlp"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "c050077280e32c20e7936dee2068f646bfadc68dcb3bcb2b13dfdc2a9d3e5839"
+        }
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "online-broader-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2282.4060397148132,
+      "audit": {
+        "passed": true,
+        "checks": 5394,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "2c02f4ef622ff238f63d8645e3a743ab888c08bf98cf6d2e62de7a102287358e",
+        "check_labels_sha256": "9ae81e3b1965efe256c0bdb5d86d517064fb4e961fea6834767667b960fc7297"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "online-count-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1533.5813159942627,
+      "audit": {
+        "passed": true,
+        "checks": 4053,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "644ec6fe64baddb977fd3789a6f53b0ccd8569d7113d1372ab0044e5be029067"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "online-gate-01",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 735.8152852058411,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "online-gate-01b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1510.051097393036,
+      "audit": {
+        "passed": true,
+        "checks": 4387,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "ef722a092e2b827cb73b43871c22c7609858ebd3c2cb5c119d846039fead0314"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "online-packet-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1722.6679639816284,
+      "audit": {
+        "passed": true,
+        "checks": 4915,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "644e8222d07849b9d25097e21a8fa3878e7cd4f416b6f45863e4c4f1bf053634"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "online-position-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1097.0686795711517,
+      "audit": {
+        "passed": true,
+        "checks": 2742,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "91c0c3f7b600a923e9c04f4c7a1ad8e3dc266c7ffc374fc14fb4876dc15db56a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "online-repro-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1219.02765750885,
+      "audit": {
+        "passed": true,
+        "checks": 2147,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "8f9f1f0d4ef5ba01cba5fe445a4ddfa91403d7463ec177d15cbb8bc7b737df3b"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pair-mechanism-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 925.4582753181458,
+      "audit": {
+        "passed": true,
+        "checks": 873,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "0b10212a884b2b48799d6f7474c6c7476db02433488c05fd14f3102828f1a76c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "probe-pairs-train-02",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 135.93819737434387,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-02b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1498.3286542892456,
+      "audit": {
+        "passed": true,
+        "checks": 1939,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "7817e41b954bf2d26bcfd2942fe59ef574733e08d3e46d1476f50abed93fa242"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "probe-pairs-train-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1150.9270515441895,
+      "audit": {
+        "passed": true,
+        "checks": 1449,
+        "failures": [],
+        "units": 10,
+        "raw_sha256": "36037d411c12567c905e7893e0e0f7767e7f679436a8d969796ba1fb0f81056f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "probe-pairs-train-04",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 351.06223344802856,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-04b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1755.1803317070007,
+      "audit": {
+        "passed": true,
+        "checks": 2051,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "7abc77c4883ad578de64d27877ad99c48871951e2a2120546388d9f9463b84ee"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1412.729308128357,
+      "audit": {
+        "passed": true,
+        "checks": 1839,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "e2ac866d23cf51d0f8e49c1b174868c4043f63fe5dc7e0ab62ebb5294d4e6f63"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "probe-pairs-train-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 983.1128709316254,
+      "audit": {
+        "passed": true,
+        "checks": 1644,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "8e88067793242807701da42314e1df998e39e0cb39aad64425b673ceb8ee6be6"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "probe-pairs-train-07b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1612.0984892845154,
+      "audit": {
+        "passed": true,
+        "checks": 1918,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "515a664393834fd551e9e6127e357c57a23fb9c152580b49a0a64a72f48d75f8"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-08",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1887.810925245285,
+      "audit": {
+        "passed": true,
+        "checks": 1993,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "5eb06efab0de92644ec25083c4afb889b0566fa21f0357cbd68490aacdb30353"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-10",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2377.0982854366302,
+      "audit": {
+        "passed": true,
+        "checks": 2467,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "345d2d56ea993dfff5bb8a79bc3f31a1e92ee50d6ba62b0fa204b0398b2ee1b1"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-11",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1355.337257862091,
+      "audit": {
+        "passed": true,
+        "checks": 1602,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "601a0183ecabcee50ae016256a9ff84cd0ff74f45df594b2f5a979a68e2b25a4"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-pairs-train-12",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1403.8874185085297,
+      "audit": {
+        "passed": true,
+        "checks": 1939,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "ed336586f9eb9c8129899ba9b15e8cbb911a8453fbcb6ecde0be5dd67471f6b8"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-repeat-09",
+      "phase": "failed",
+      "lease_released": true,
+      "leased_seconds": 22.72252368927002,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "probe-repeat-09b",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1448.5236928462982,
+      "audit": {
+        "passed": true,
+        "checks": 1939,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "fb793bd1871cff997f799fa474ac80164cdbb25d7f1833b8fee49e1cf4bdedfe"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "resume-broader-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1483.8079664707184,
+      "audit": {
+        "passed": true,
+        "checks": 3744,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "142a1586e55da1f132672ceef7490d61834b8c746b128b780ea08aa7504aaebc",
+        "check_labels_sha256": "33b319a96cfb490eb87f584b1dca7091fd3dc980d4a9b86faac8a2b6d17c80d8"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "resume-retriever-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1485.0861132144928,
+      "audit": {
+        "passed": true,
+        "checks": 4375,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "192ab7dbc1eedd892e9ee41e22216b9b8ac86aa9b0584793e859d9d1ae2c776e",
+        "check_labels_sha256": "ae147824c27affa4a83578c45164e9a0c8f686ff0f0c916adbff7db9ad6c9f3e"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "resume-separator-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1003.0855741500854,
+      "audit": {
+        "passed": true,
+        "checks": 3005,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "5d583b9857de4c98c7c2405df5bb825c785b8dda2e513907d3bf186686b033ce",
+        "check_labels_sha256": "00cfae02d2454c23cf4d8846cb2289f2f48b8969305e8ed661b09d5f74873c1d"
+      },
+      "interpretation_present": false
+    },
+    {
+      "job": "resume-transfer-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 972.6978240013123,
+      "audit": {
+        "passed": true,
+        "checks": 3434,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "9548b7b9464f062080bb3271511bec9da41864ab7a52f0905cbaeebc0664e6f0"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "resume-wording-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 888.5019810199738,
+      "audit": {
+        "passed": true,
+        "checks": 1535,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "a7c7a8597ebe44687d556d47a08af8aa67ca1ede8cc2f87c237c077bb3e6ca5f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "risk-probe-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2332.9813361167908,
+      "audit": {
+        "passed": true,
+        "checks": 5593,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "d312b7550ae87c7502918e52017b7e4df876f96175fd6ed91c01cd24839b8f8a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "risk-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1471.4304134845734,
+      "audit": {
+        "passed": true,
+        "checks": 4663,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "be5e31fa7ffe9258cc766f643834ca05376f9493dbccd23240c35cc43a322aaa"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "rule-cadence-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1964.7789497375488,
+      "audit": {
+        "passed": true,
+        "checks": 6216,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "2bfa12fc358ede7592cd5a8b59b8f5182a0c24454d8c830a9d617a21bb9282cf",
+        "check_labels_sha256": "f8b59914069ef6560e351f3c0a1f3d96c8ada87d68ac3879fed8b2c951d77a21"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "rule-cues-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1641.490695476532,
+      "audit": {
+        "passed": true,
+        "checks": 4702,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "3e948296e332afd162f5d7a66795715efa79531f35b2ff32669faa675353f5a0"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "rule-hybrid-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1674.131504535675,
+      "audit": {
+        "passed": true,
+        "checks": 4765,
+        "failures": [],
+        "units": 10,
+        "raw_sha256": "f231cc910905a461ba974386e07a88bab40d24e8f83fae02fe5cf7dfc76c5f09"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "rule-retriever-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2295.2686138153076,
+      "audit": {
+        "passed": true,
+        "checks": 5536,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "167b5c8ba57f0dd47afb74aca1e954c65ebf8ee58b8f118d860d3c5cedf657cb",
+        "check_labels_sha256": "cdb4c93be0043e639311246c01c6e5d570c71ddcdbc2b1e5c94bcb22dd85abe6"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "scdrop-cadence-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1807.4776680469513,
+      "audit": {
+        "passed": true,
+        "checks": 6259,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "822deab58157ed0602451786707d0190a58ab7d70cb6b20ae8d60c9077290db9",
+        "check_labels_sha256": "c8832f2889435b1abed27bc6dab372d24285e7f6645f5a77758168f431bd3f71"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "scdrop-reference-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1727.4496035575867,
+      "audit": {
+        "passed": true,
+        "checks": 5017,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "ee9a7c0726e18611dc4b824c77e12299ef8edd1e90ffb92ee264c72137c46010"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "scdrop-retriever-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1508.6843786239624,
+      "audit": {
+        "passed": true,
+        "checks": 3964,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "52da2b71b5ca96293e16466dde08704df6700fc05bfb43aa5a47e3347b3d68e7",
+        "check_labels_sha256": "9ee9c613d1912f5f1ac398510d9ba510d7774daf294916111f62b4fc66ddb78b"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "scdrop-threshold-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1056.3012809753418,
+      "audit": {
+        "passed": true,
+        "checks": 2848,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "9bf0218343307282dac4c8a4c21de379c9ec1d1472163db715e5f52275e1f49f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-evidence-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1953.0521025657654,
+      "audit": {
+        "passed": true,
+        "checks": 7414,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "87bd2a5994c6cedbf4a9d171aa67fc9d6df12b9bd2cfea2c3a308e669cf5d169"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-evidence-06-retry1",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2665.7229764461517,
+      "audit": {
+        "passed": true,
+        "checks": 17137,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "8676c5683cfa5445e5bcf498a6b072f8dac0d21324462405044f72f335a51551",
+        "check_labels_sha256": "4ec5084ee838c50b1203d9add1b971c8f24551a238eb807a750d965bd5ffc3dd"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-layer-policy-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2039.2548406124115,
+      "audit": {
+        "passed": true,
+        "checks": 8501,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "724d686a59d523692fee64672a587e8513c7101ad32f3fea78627031e7ea23e6",
+        "check_labels_sha256": "b02dac0148213adc128d6c1959e2d4d4739c5db37996c0cd7e7015589d0f99f9"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-layer-transfer-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1946.5431485176086,
+      "audit": {
+        "passed": true,
+        "checks": 13759,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "a329bbf11731faf64f927972107eee384ec23433952cbe41e7c1a33716343745",
+        "check_labels_sha256": "773b2c8444b6321436fd3e640a3ae6a07c48bdbf50742678ee1703ca2f7456a8"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-samples-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2275.8955409526825,
+      "audit": {
+        "passed": true,
+        "checks": 9278,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "91e7d3241f09e572563695a94ff7cb2306f34ac49b23a2449ecd8d71da45a0b9"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-tail-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2054.5964093208313,
+      "audit": {
+        "passed": true,
+        "checks": 13740,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "8af990981cab7d52276db57ccebed67825634007fbdfe6dcf139ffae24d98315"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "seakr-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1444.9179739952087,
+      "audit": {
+        "passed": true,
+        "checks": 4140,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "f9278a2c14892fead97db7deb244b2857e79422d41e5dce9d63b103a5a73002b"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "signals-a-v1",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 349.2159285545349,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "signals-b-v1",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 410.97362875938416,
+      "audit": null,
+      "interpretation_present": false
+    },
+    {
+      "job": "static-broader-10",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1372.7445268630981,
+      "audit": {
+        "passed": true,
+        "checks": 2536,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "75ed6db6d6e2eb427662c639e330b220bd95639ca1f89846925b224ee9002d30"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-coverage-08",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 795.4727597236633,
+      "audit": {
+        "passed": true,
+        "checks": 952,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "2ac770cae853ac573ab426c7cfd1e89c33f5827c2d296f876a4c29ca33613e57"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-diversity-11",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1421.6946692466736,
+      "audit": {
+        "passed": true,
+        "checks": 2416,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "b32521c0257422f9e1a21d2abc7a32877dde0b178fddb2ecf4a60ac7ec24e36f",
+        "check_labels_sha256": "d90115095d3655220c7adff78f218fe65f66a8c118db7c6c9fc8fcc9d8eb652d"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-length-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 992.2227988243103,
+      "audit": {
+        "passed": true,
+        "checks": 1367,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "8e9206abd2d33c8ee4b5d6797c26dedb7532d5b5d6d20c4080d5155b7c755ca6"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-parent-fusion-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 882.2583091259003,
+      "audit": {
+        "passed": true,
+        "checks": 1588,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "30cf1326e20e6a66c8a00aa0407677df1074177c500f4fea5a9c238a5ea9f6dd"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-parentcap-12",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1359.3656914234161,
+      "audit": {
+        "passed": true,
+        "checks": 2620,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "45539bd663558cd9c2de82a739fffb958dcee9c639b10a8496d45c81d9e39365",
+        "check_labels_sha256": "fcf909c37c687716c47135c7aa08ada242755d90de08f3f20f0cebb100da39d0"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-parents-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1047.299881696701,
+      "audit": {
+        "passed": true,
+        "checks": 1260,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "27247dde7473d07cd4294f37e79f6c3f6f87865dc656ed2a2e7f7fa2349862b6"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-transfer-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 962.5357973575592,
+      "audit": {
+        "passed": true,
+        "checks": 1200,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "af7f6115108f5343ddb1588b1f43c30dc9ff1243d5921a5394059906067b3ef1"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-transfer-07",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 703.6170334815979,
+      "audit": {
+        "passed": true,
+        "checks": 756,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "31bd0a46548f7855fa23b25b178ad2b220ba470c9e91f81f47055e757747ebae"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-window-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1152.3339629173279,
+      "audit": {
+        "passed": true,
+        "checks": 1393,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "be93777bf6ba485f335bbb18695bdc8e2ca5368190020c6917191fc9419a3ca0"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "static-window-fusion-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 820.1444611549377,
+      "audit": {
+        "passed": true,
+        "checks": 1320,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "330a1e5f9c0a7cc4282daca1d90bc5d099333671250de20b7b4b1b2603af7f7c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "surprisal-cooldown-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1278.9071624279022,
+      "audit": {
+        "passed": true,
+        "checks": 7794,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "ede06ddcc3b30223f0f7a5952a3d35d47496e934f6788030e39e8a0d13810d11"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "surprisal-retriever-04",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2116.2870721817017,
+      "audit": {
+        "passed": true,
+        "checks": 14417,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "189cefb73aefa380b734e49c12b0d68b1d419a838895273e26b457d1751c9635",
+        "check_labels_sha256": "dab49876f3f12532be3365f358607d22eef1ca018d7b2193c63b5720ce85d79f"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "surprisal-threshold-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1109.2347025871277,
+      "audit": {
+        "passed": true,
+        "checks": 2359,
+        "failures": [],
+        "units": 6,
+        "raw_sha256": "177e039efd6973c3727d01982eba188db8f9b8dd4a7968f2d8f689cac4b75d0a"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "surprisal-window-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1435.1424779891968,
+      "audit": {
+        "passed": true,
+        "checks": 4166,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "eb8af0ae4edbd6591ad1e45d3e903439694d16f9edb1ce164d33fa4ff4e6021d"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "value-evidence-03",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1506.2237792015076,
+      "audit": {
+        "passed": true,
+        "checks": 4627,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "bcaa6c1b2dd6e8d7670372edf1c720d1ddd11f8f6d3934573c30f91b047ef80c"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "value-pooling-05",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1293.3109130859375,
+      "audit": {
+        "passed": true,
+        "checks": 4200,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "0681ebd4d0acf9cf37e5b3b2415cc4f9c30223c298e8c30f6a8318b57a2c2a0e",
+        "check_labels_sha256": "54ed97c85cf9feef2650d7ee34f9c392be08eb9e316e0aaef05a5cf88b0d16b2",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 4200,
+          "failures": [
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q005:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:linear-pool32:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:linear-pool32:probe_prediction_and_gate",
+            "TRAIN_Q008:20261115:linear-pool32:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:mlp8-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear-pool32:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear-pool128:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear-pool128:probe_prediction_and_gate"
+          ],
+          "units": 12,
+          "raw_sha256": "0681ebd4d0acf9cf37e5b3b2415cc4f9c30223c298e8c30f6a8318b57a2c2a0e",
+          "check_labels_sha256": "54ed97c85cf9feef2650d7ee34f9c392be08eb9e316e0aaef05a5cf88b0d16b2"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 4200,
+          "exact_predictions": 94,
+          "diagnosed_architectures": [
+            "linear",
+            "tanh_mlp"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "32f92f00922f07ddeb8575b51a252d084e04a64c3ea151a04474ef874a956636"
+        }
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "value-probe-01",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2452.8110699653625,
+      "audit": {
+        "passed": true,
+        "checks": 5936,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "0badc0103994051e641c396c3c96558ac322bca1acaeca8391cc78982874e0c8"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "value-threshold-02",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 2157.1675267219543,
+      "audit": {
+        "passed": true,
+        "checks": 5880,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "bf5c0cbe22699b5024adf70ae21da2579949b13ecf999473dfc6c834a004e48b"
+      },
+      "interpretation_present": true
+    },
+    {
+      "job": "value-threshold-06",
+      "phase": "complete",
+      "lease_released": true,
+      "leased_seconds": 1617.4249875545502,
+      "audit": {
+        "passed": true,
+        "checks": 4154,
+        "failures": [],
+        "units": 12,
+        "raw_sha256": "f3e9238ca1f76aebebb4af4f5c8952854a30026c73892d0fd7d1d4ee3556eed4",
+        "check_labels_sha256": "5da71868470a8e3bad8cf33c5398ba34a46ae93a705c79cbeab168b612349522",
+        "local_windows_audit": {
+          "passed": false,
+          "checks": 4154,
+          "failures": [
+            "TRAIN_Q013:20261115:linear128-threshold0.04:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.04:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.04:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.04:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.0:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.0:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.02:probe_prediction_and_gate",
+            "TRAIN_Q013:20261115:linear128-threshold0.02:probe_prediction_and_gate"
+          ],
+          "units": 12,
+          "raw_sha256": "f3e9238ca1f76aebebb4af4f5c8952854a30026c73892d0fd7d1d4ee3556eed4",
+          "check_labels_sha256": "5da71868470a8e3bad8cf33c5398ba34a46ae93a705c79cbeab168b612349522"
+        },
+        "native_cpu_resolution": {
+          "method": "Full same-platform frozen CPU replay with exact prediction equality",
+          "native_checks": 4154,
+          "exact_predictions": 92,
+          "diagnosed_architectures": [
+            "linear"
+          ],
+          "scope": "Only diagnosed linear/MLP numeric replay failures; frozen policy binding, all local gates unchanged, all other local checks pass. Original failed audit preserved; no tolerance change.",
+          "proof_sha256": "eb800fe6efbe214444aa4c06ed33033a47869cfb5a7dc831843a9037148720c6"
+        }
+      },
+      "interpretation_present": true
+    }
+  ]
+}

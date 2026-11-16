@@ -1,5 +1,4 @@
 """Experiment guards: private data, deterministic submissions, paired modes and resumes."""
-import importlib.util
 import json
 import sys
 from pathlib import Path

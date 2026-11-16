@@ -1,0 +1,37 @@
+{
+  "id": "train-baselines-example",
+  "purpose": "Small TRAIN schema example with historical defaults; not a selected best configuration.",
+  "cases": [
+    {
+      "id": "TRAIN_Q005",
+      "question": "What happened to load.rules FAQ example?\n\nThe load.rules maths function example rules file does not appear to be available anymore?\n\nIn the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.",
+      "dataset": "techqa",
+      "category": "technical_qa",
+      "cohort": "tuning"
+    },
+    {
+      "id": "TRAIN_Q008",
+      "question": "Is the Requisite Pro (ReqPro) feature/plugin supported with a 64-bit RAD/RSA(4WS) 851+ installation\n\nIs the Requisite Pro (ReqPro) feature/plugin supported with a 64-bit install of RAD/RSA(4WS) 851?\n\nIn the final answer, directly address the question and include the necessary technical details. Avoid repeating the analysis.",
+      "dataset": "techqa",
+      "category": "technical_qa",
+      "cohort": "tuning"
+    }
+  ],
+  "seeds": [
+    20261115
+  ],
+  "configs": [
+    {
+      "id": "closed-is",
+      "arm": "closed_is"
+    },
+    {
+      "id": "static-facts",
+      "arm": "static_facts"
+    },
+    {
+      "id": "online-is",
+      "arm": "online_is"
+    }
+  ]
+}

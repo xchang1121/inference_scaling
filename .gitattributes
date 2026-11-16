@@ -1,6 +1,12 @@
 *.sh text eol=lf
 *.bash text eol=lf
 
+# Retrieval/audit source identities must survive Windows/Unix checkout unchanged.
+# Historical frozen IS kernel bytes retain their existing checkout convention.
+/src/inference_scaling/retrieval/*.py text eol=lf
+/scripts/**/*.py text eol=lf
+/tests/**/*.py text eol=lf
+
 # Preserve audit hashes across Windows and Unix checkouts.
 /experiments/qwen38-20261106/** -text
 /experiments/qwen38-20261106/full/* -diff

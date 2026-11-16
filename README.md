@@ -5,6 +5,10 @@ CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/infe
 
 本分支增加[技术文档在线知识注入实验](docs/online_injection.md)：外部自动触发检索、推理中追加资料、位置对照与配对评测。已完成[首轮 312 份回答的结果与复核](docs/reports/ONLINE_INJECTION_PILOT.md)。
 
+当前 IS+retrieve 代码与运行入口见[实现指南](docs/is_retrieve.md)，包括候选内检索、可配置控制器、
+内部信号、分层投影及因果审计。[23 家族调优仍在进行](docs/reports/RETRIEVAL_TUNING_STATUS.md)，
+独立选择和最终评估尚未开启；新增能力不自动替换历史默认或代表已选出的最佳策略。
+
 ## 快速开始
 
 在已安装兼容 vLLM + vllm-ascend 的环境中：

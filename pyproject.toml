@@ -48,7 +48,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
-pythonpath = ["src", "."]
+pythonpath = ["src", "scripts", "."]
 testpaths = ["tests"]
 
 [tool.ruff]
