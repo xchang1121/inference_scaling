@@ -6,8 +6,9 @@ CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/infe
 本分支增加[技术文档在线知识注入实验](docs/online_injection.md)：外部自动触发检索、推理中追加资料、位置对照与配对评测。已完成[首轮 312 份回答的结果与复核](docs/reports/ONLINE_INJECTION_PILOT.md)。
 
 当前 IS+retrieve 代码与运行入口见[实现指南](docs/is_retrieve.md)，包括候选内检索、可配置控制器、
-内部信号、分层投影及因果审计。[23 家族调优仍在进行](docs/reports/RETRIEVAL_TUNING_STATUS.md)，
-独立选择和最终评估尚未开启；新增能力不自动替换历史默认或代表已选出的最佳策略。
+内部信号及因果审计。[研究报告](docs/reports/RETRIEVAL_TUNING_STATUS.md)直接展示 training-free 方案的 F1、
+分阶段时延及相对 Base 倍率。实验已按用户要求停止，独立选择和最终评估尚未开启；
+学习型 probe/gate 和检索投影不符合完全 training-free 约束，仅保留为历史实现。
 
 ## 快速开始
 
@@ -109,6 +110,7 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
+| [Training-free RAG + IS：F1 与分阶段时延](docs/reports/RETRIEVAL_TUNING_STATUS.md) | 两轮共 448 次已有测量；基础对照静态 RAG + IS 为 14.70 F1、0.89× Base 时延，动态为 12.52、1.49×；含动态扩展图、计量口径及开发集限制 |
 | [无 effort 提示的预算与注入格式对照](docs/reports/ONLINE_INJECTION_ABLATION.md) | 三档预算、十四条件共 336 条轨迹；同长度无关正文仍可立即关闭 thinking，去包装可转为 thinking 内 EOS；中途注入相对静态 RAG 的主要质量差区间包含 0 |
 | [在线知识注入：触发、位置与检索对照](docs/reports/ONLINE_INJECTION_PILOT.md) | 十三方法共 312 份回答；TechQA 8 题固定 32-token BM25 F1 为 22.4%，闭卷 13.0%，估算计算量 1.744 倍；含官方规则格式影响与缓存复现失败记录 |
 | [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |

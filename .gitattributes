@@ -50,4 +50,7 @@
 /experiments/online-injection-smart-is-20261114/reports/scores.csv -diff -whitespace
 /experiments/online-injection-smart-is-20261114/figures/*.svg -diff -whitespace
 /experiments/online-injection-smart-is-20261114/baseline-analysis/*.txt -diff -whitespace
+# Preserve exported chart/data bytes and matplotlib SVG path formatting.
+/docs/reports/assets/training-free-rag-is/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/docs/reports/assets/training-free-rag-is/*.svg -diff -whitespace
 /experiments/online-injection-smart-is-20261114/selected-case-studies.txt -diff -whitespace

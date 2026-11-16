@@ -1,12 +1,14 @@
 # IS + retrieve：代码入口与验证边界
 
+> 2026-11-16 约束纠正：用户要求完全 training-free。下文学习型 probe/gate、监督 ridge 隐藏状态检索投影（含分层版本）不符合要求，已从合规研究候选中排除；相关代码与说明仅保留为历史实现记录。冻结主模型不能使这些方法成为 training-free，固定随机压缩也不能代替跨表示空间的语义对齐。用户已停止实验，本指南不是继续执行的授权。
+
 当前实现从第一个思考 token 开始运行原 IS，在每条候选内部检索并追加资料。
 主模型权重、IS 搜索与选择算法保持不变。检索控制器负责时机、查询、证据和续接，
 不要求模型先生成 tool call。完整约定见 [原在线 IS 协议](reports/ONLINE_IS_PROTOCOL.md)。
 
-这份指南对应当前研究分支的统一代码。各方法仍在 TRAIN 上分阶段调优，
-独立配置选择与最终评估尚未开启；“最新代码”不代表已选出质量最优策略。
-[最新研究状态](reports/RETRIEVAL_TUNING_STATUS.md)与[冻结调优协议](reports/RETRIEVAL_TUNING_PROTOCOL.md)
+这份指南对应当前研究分支的统一代码。实验已停止，独立配置选择与最终评估尚未开启；
+“最新代码”不代表已选出质量最优策略。
+[F1、分阶段时延与 Base 倍率图表](reports/RETRIEVAL_TUNING_STATUS.md)与[纠正后的调优协议](reports/RETRIEVAL_TUNING_PROTOCOL.md)
 记录证据、失败及后续工作。通用服务的默认参数与本研究的固定参数分别管理。
 
 ## 应从哪个入口开始
