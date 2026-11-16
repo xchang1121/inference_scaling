@@ -11,10 +11,11 @@ from pathlib import Path
 import numpy as np
 
 from inference_scaling.retrieval.linear_probe import fingerprint
-from inference_scaling.retrieval.probe_features import FEATURE_SCHEMA
+from inference_scaling.retrieval.probe_features import pooled_feature_schema, validate_feature_schema
 
 
-def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=None):
+def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=None,
+                  pool=32, capture_layer=None):
     x, y = np.asarray(features, dtype=np.float64), np.asarray(targets, dtype=np.float64)
     if x.ndim != 2 or x.shape[1] != 128 or y.shape != (len(x), 768) or len(x) < 2:
         raise ValueError('alignment requires paired128-dimensional hidden and768-dimensional document vectors')
@@ -22,6 +23,7 @@ def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=No
         raise ValueError('invalid alignment training data or regularization')
     if type(input_rank) is not int or not 1 <= input_rank <= 128:
         raise ValueError('input rank must be an integer in1..128')
+    schema = pooled_feature_schema(pool, capture_layer=capture_layer)
     norms = np.linalg.norm(y, axis=1)
     if (norms < 1e-12).any():
         raise ValueError('zero target vector')
@@ -40,7 +42,7 @@ def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=No
         reduced = z@basis
         weights = basis@np.linalg.solve(reduced.T@reduced+alpha*np.eye(effective_rank),
                                        reduced.T@(y-intercept))
-    model = {'version': 1, 'kind': 'hidden_document_ridge', 'feature_schema': FEATURE_SCHEMA,
+    model = {'version': 1, 'kind': 'hidden_document_ridge', 'feature_schema': schema,
         'input_dimensions': 128, 'output_dimensions': 768, 'alpha': alpha,
         'center': center.tolist(), 'scale': scale.tolist(), 'weights': weights.tolist(),
         'intercept': intercept.tolist(), 'training_rows': len(x), 'provenance': provenance or {},
@@ -54,8 +56,7 @@ def fit_alignment(features, targets, *, alpha=10., input_rank=128, provenance=No
 
 
 def project_hidden(model, hidden):
-    if model['sha256'] != fingerprint(model) or model['feature_schema'] != FEATURE_SCHEMA:
-        raise ValueError('alignment hash or feature schema mismatch')
+    validate_alignment_model(model)
     x = np.asarray(hidden, dtype=np.float64)
     center, scale, weights, intercept = (np.asarray(model[k], dtype=np.float64)
                                         for k in ('center', 'scale', 'weights', 'intercept'))
@@ -69,6 +70,15 @@ def project_hidden(model, hidden):
     if not np.isfinite(norm) or norm < 1e-12:
         raise ValueError('degenerate projected query')
     return vector/norm
+
+
+def validate_alignment_model(model):
+    if model['sha256'] != fingerprint(model):
+        raise ValueError('alignment hash mismatch')
+    if (model.get('version') != 1 or model.get('kind') != 'hidden_document_ridge'
+            or model.get('input_dimensions') != 128 or model.get('output_dimensions') != 768):
+        raise ValueError('unsupported alignment model schema')
+    validate_feature_schema(model['feature_schema'])
 
 
 class DocumentVectors:

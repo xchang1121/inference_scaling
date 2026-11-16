@@ -56,6 +56,8 @@ def validate_diagnostic_batch(batch):
 
 def validate_multilayer_batch(batch):
     """Separate opt-in layer policies from the unchanged diagnostic validator."""
+    if batch.get('multilayer_alignment') is True:
+        return validate_alignment_batch(batch)
     if batch.get('multilayer_policy') is not True:
         return validate_diagnostic_batch(batch)
     if batch.get('diagnostic_worker') != 'multilayer':
@@ -77,3 +79,23 @@ def validate_multilayer_batch(batch):
             learned += 1
     if not learned:
         raise ValueError('use the diagnostic route for batches without learned layer policies')
+
+
+def validate_alignment_batch(batch):
+    """Explicit captured-layer alignment, separate from probe and auxiliary gates."""
+    if (batch.get('multilayer_alignment') is not True or batch.get('diagnostic_worker') != 'multilayer'
+            or batch.get('multilayer_policy') or batch.get('multilayer_auxiliary')
+            or 'attention_geometry' in batch or not batch.get('configs')):
+        raise ValueError('captured alignment requires its own explicit multilayer batch')
+    from inference_scaling.retrieval.aligned_online_is import AlignmentPolicy
+    for config in batch['configs']:
+        if (config.get('collect_signals') != 'multilayer' or config['arm'] != 'tuned_online'
+                or 'alignment_policy' not in config or any(k in config for k in
+                    ('auxiliary_policy','probe_policy','gap_policy','example_policy'))):
+            raise ValueError('every captured alignment arm must use the same worker and an explicit alignment model')
+        policy = config.get('policy', {})
+        if policy.get('trigger','fixed') != 'fixed' or policy.get('query','concat') not in {'concat','question'}:
+            raise ValueError('captured alignment requires fixed checkpoints and concat/question queries')
+        model = AlignmentPolicy(**config['alignment_policy']).model
+        if model['feature_schema'].get('version') != 2:
+            raise ValueError('captured alignment requires a captured-layer feature schema')

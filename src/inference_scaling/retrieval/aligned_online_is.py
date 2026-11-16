@@ -3,8 +3,7 @@ from dataclasses import asdict,dataclass
 from types import SimpleNamespace
 
 from inference_scaling.retrieval.corpus import Hit
-from inference_scaling.retrieval.hidden_alignment import project_hidden
-from inference_scaling.retrieval.linear_probe import fingerprint
+from inference_scaling.retrieval.hidden_alignment import project_hidden, validate_alignment_model
 from inference_scaling.retrieval.probe_features import prefix_features
 from inference_scaling.retrieval.smart_online_is import clean_question
 from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger,overlaps
@@ -20,7 +19,7 @@ class AlignmentPolicy:
     def __post_init__(self):
         if not 0<=self.dense_weight<=1 or self.candidate_documents<1:
             raise ValueError('invalid hidden retrieval fusion')
-        if self.model['sha256']!=fingerprint(self.model):raise ValueError('alignment model hash mismatch')
+        validate_alignment_model(self.model)
 
 
 def fuse_documents(dense,lexical,weight):
@@ -43,7 +42,9 @@ class AlignedOnlineLedger(TunedOnlineLedger):
         if set(self.documents_by_id)!=set(document_vectors.ids):raise ValueError('corpus/index document set mismatch')
 
     def decision_signal(self,branch,text,physical):
-        features=prefix_features(self.recent(branch,32));p=self.alignment_policy
+        p=self.alignment_policy
+        schema=p.model['feature_schema'];pool=schema['pool']
+        features=prefix_features(self.recent(branch,pool),pool=pool,capture_layer=schema.get('capture_layer'))
         vector=project_hidden(p.model,features[:128])
         self.hidden_queries[token_hash(branch)]=vector
         return True,{'probe_features':features,'projected_query':vector.tolist(),'model_sha256':p.model['sha256']}
@@ -65,6 +66,11 @@ class AlignedOnlineLedger(TunedOnlineLedger):
         return (found[0] if found else None),log,query
 
     def auxiliary_result(self):
+        schema=self.alignment_policy.model['feature_schema']
+        adaptation='supervised final hidden128-to-E5768 ridge; full document heads truncated512tokens; window matching remains lexical'
+        if schema.get('capture_layer') is not None or schema['pool'] != 32:
+            adaptation=('supervised explicit hidden128-to-E5768 ridge; layer='+str(schema.get('capture_layer','final'))
+                        +'; causal pool='+str(schema['pool'])+'; full document heads truncated512tokens; window matching remains lexical')
         return {'alignment_policy':asdict(self.alignment_policy),
             'document_vector_sha256':self.document_vectors.sha256,
-            'adaptation':'supervised final hidden128-to-E5768 ridge; full document heads truncated512tokens; window matching remains lexical'}
+            'adaptation':adaptation}

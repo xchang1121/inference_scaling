@@ -63,7 +63,8 @@ def main():
             return 'multilayer' if config['auxiliary_policy'].get('capture_layer') is not None else 'hidden'
         if 'probe_policy' in config:
             return 'multilayer' if config['probe_policy']['model']['feature_schema'].get('capture_layer') is not None else 'hidden'
-        if 'alignment_policy' in config:return 'hidden'
+        if 'alignment_policy' in config:
+            return 'multilayer' if config['alignment_policy']['model']['feature_schema'].get('capture_layer') is not None else 'hidden'
         if config.get('policy', {}).get('trigger') == 'dragin' or config.get('policy', {}).get('query') == 'attention':
             return 'attention'
         return mode if mode != 'none' else ('distribution' if config.get('policy', {}).get('trigger')
