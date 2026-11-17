@@ -309,9 +309,9 @@ class TunedOnlineLedger(OnlineISLedger):
         return tuple(physical), event_ids
 
 
-def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, policy, auxiliary_policy=None, gap_policy=None, example_policy=None, probe_policy=None, alignment_policy=None, document_vectors=None):
+def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, policy, auxiliary_policy=None, gap_policy=None, example_policy=None):
     cls, extra = TunedOnlineLedger, {}
-    if sum(v is not None for v in (auxiliary_policy, gap_policy, example_policy, probe_policy, alignment_policy)) > 1:
+    if sum(v is not None for v in (auxiliary_policy, gap_policy, example_policy)) > 1:
         raise ValueError('choose one paid auxiliary controller')
     if auxiliary_policy is not None:
         from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryOnlineLedger
@@ -322,12 +322,6 @@ def run_tuned_is(backend, tap, root, close, seed, cfg, *, question, facts, polic
     if example_policy is not None:
         from inference_scaling.retrieval.example_online_is import ExampleOnlineLedger
         cls, extra = ExampleOnlineLedger, {'example_policy':example_policy}
-    if probe_policy is not None:
-        from inference_scaling.retrieval.probe_online_is import ProbeOnlineLedger
-        cls, extra = ProbeOnlineLedger, {'probe_policy':probe_policy}
-    if alignment_policy is not None:
-        from inference_scaling.retrieval.aligned_online_is import AlignedOnlineLedger
-        cls, extra = AlignedOnlineLedger, {'alignment_policy':alignment_policy,'document_vectors':document_vectors}
     ledger = cls(backend, tap, root, close, SeedStream(seed).derive('search'), cfg,
                  question=question, facts=facts, mode='relevant', policy=policy, **extra)
     started = time.perf_counter()

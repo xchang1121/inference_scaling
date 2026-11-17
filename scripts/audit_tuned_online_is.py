@@ -11,7 +11,7 @@ from inference_scaling.retrieval.stepwise import token_hash
 from inference_scaling.retrieval.attention_policy import attention_feature
 
 
-def audit_tuned_row(row, cfg, decode, eos, close, check, *, document_vectors=None):
+def audit_tuned_row(row, cfg, decode, eos, close, check):
     def ck(ok, label):
         check(ok, row['unit_id']+':'+label)
     p = TuningPolicy(**row['policy'])
@@ -29,14 +29,6 @@ def audit_tuned_row(row, cfg, decode, eos, close, check, *, document_vectors=Non
         from audit_example_online_is import prepare_example_audit
         ck(auxiliary is None,'single_paid_controller')
         auxiliary = prepare_example_audit(row,cfg,decode,eos,close,ck)
-    if 'probe_policy' in row:
-        from audit_probe_online_is import prepare_probe_audit
-        ck(auxiliary is None,'single_learned_controller')
-        auxiliary = prepare_probe_audit(row,cfg,decode,eos,close,ck)
-    if 'alignment_policy' in row:
-        from audit_aligned_online_is import prepare_alignment_audit
-        ck(auxiliary is None,'single_alignment_controller')
-        auxiliary=prepare_alignment_audit(row,cfg,decode,eos,close,ck,document_vectors)
     ck(root == row['base_ids'], 'question_only_root')
     ck(not row['static_packets'] and not row['static_injected_ids'], 'no_hidden_static_context')
     ck(row['presearch_work'] == 0 and row['carried'] == {'sc': [], 'cn': [], 'lp': []}, 'from_token_zero')

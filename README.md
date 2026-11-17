@@ -8,7 +8,7 @@ CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/infe
 当前 IS+retrieve 代码与运行入口见[实现指南](docs/is_retrieve.md)，包括候选内检索、可配置控制器、
 内部信号及因果审计。[研究报告](docs/reports/RETRIEVAL_TUNING_STATUS.md)直接展示 training-free 方案的 F1、
 分阶段时延及相对 Base 倍率。实验已按用户要求停止，独立选择和最终评估尚未开启；
-学习型 probe/gate 和检索投影不符合完全 training-free 约束，仅保留为历史实现。
+学习型 probe/gate、监督检索投影及其训练入口已从当前代码删除；历史结果与成本记录保留。
 
 ## 快速开始
 
@@ -154,7 +154,8 @@ python -m pytest
 ```
 
 源码分为 `app/`（入口与记录）、`datasets/`（提示和判分）、`arllm/`（算法与后端）、`shared/`（公共概率核与模型工具）。
-`online-speculation/` 是独立项目；日常运行数据保存在 Git 忽略的 `results/` 中，已归档分析材料位于 `experiments/`。
+`online-speculation` 已完整拆到独立分支 `codex/online-speculation`，该分支根目录即原子项目，保留其提交历史。
+日常运行数据保存在 Git 忽略的 `results/` 中，已归档分析材料位于 `experiments/`。
 
 <a id="历史实现"></a>
 <a id="历史结果"></a>

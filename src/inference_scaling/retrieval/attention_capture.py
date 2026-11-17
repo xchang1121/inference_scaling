@@ -8,7 +8,7 @@ def validate_attention_batch(batch):
     if type(repeats) is not int or repeats not in (1, 2):
         raise ValueError('attention diagnostics permit one or two explicit repetitions')
     if (batch.get('family') != 'engineering' or batch.get('diagnostic_worker') != 'attention'
-            or batch.get('multilayer_policy') or len(batch.get('cases', [])) != 2
+            or len(batch.get('cases', [])) != 2
             or len(batch.get('seeds', [])) != 1 or len(batch.get('configs', [])) != 2*repeats):
         raise ValueError('tagged attention currently requires two-case OFF/ON engineering pairs')
     configs = batch['configs']
@@ -20,8 +20,7 @@ def validate_attention_batch(batch):
         raise ValueError('attention controls must have identical policy and evidence settings')
     for config in configs:
         if (config['arm'] != 'tuned_online' or any(k in config for k in
-                ('attention_geometry', 'auxiliary_policy', 'probe_policy', 'alignment_policy',
-                 'gap_policy', 'example_policy'))):
+                ('attention_geometry', 'auxiliary_policy', 'gap_policy', 'example_policy'))):
             raise ValueError('tagged attention diagnostic cannot mix policy consumers')
         policy = config.get('policy', {})
         if policy.get('trigger', 'fixed') != 'fixed' or policy.get('query', 'concat') != 'concat':

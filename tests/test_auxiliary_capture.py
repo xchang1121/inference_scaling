@@ -70,26 +70,22 @@ def batch():
 def test_explicit_batch_has_separate_guard():
     value = batch()
     validate_auxiliary_batch(value)
-    from inference_scaling.retrieval.multilayer_capture import validate_multilayer_batch
+    from inference_scaling.retrieval.multilayer_capture import validate_diagnostic_batch
     with pytest.raises(ValueError):
-        validate_multilayer_batch(value)
+        validate_diagnostic_batch(value)
 
 
-@pytest.mark.parametrize('defect', ['flag', 'probe_flag', 'worker', 'legacy_layer', 'legacy_mode', 'probe', 'trigger', 'query'])
+@pytest.mark.parametrize('defect', ['flag', 'worker', 'legacy_layer', 'legacy_mode', 'trigger', 'query'])
 def test_reject_mixed_batch_routes(defect):
     value = batch()
     if defect == 'flag':
         value.pop('multilayer_auxiliary')
-    elif defect == 'probe_flag':
-        value['multilayer_policy'] = True
     elif defect == 'worker':
         value['diagnostic_worker'] = 'hidden'
     elif defect == 'legacy_layer':
         value['configs'][0]['auxiliary_policy'].pop('capture_layer')
     elif defect == 'legacy_mode':
         value['configs'][0]['collect_signals'] = 'hidden'
-    elif defect == 'probe':
-        value['configs'][0]['probe_policy'] = {}
     elif defect == 'trigger':
         value['configs'][0]['policy']['trigger'] = 'entropy'
     elif defect == 'query':

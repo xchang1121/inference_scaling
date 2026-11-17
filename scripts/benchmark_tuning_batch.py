@@ -28,9 +28,6 @@ from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
 from inference_scaling.retrieval.gap_online_is import GapPolicy
 from inference_scaling.retrieval.example_online_is import ExamplePolicy
 from inference_scaling.retrieval.ranked_facts import FactRanking,RankedFactBank
-from inference_scaling.retrieval.probe_online_is import ProbePolicy
-from inference_scaling.retrieval.aligned_online_is import AlignmentPolicy
-from inference_scaling.retrieval.hidden_alignment import DocumentVectors
 from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TuningTap, run_tuned_is
 from inference_scaling.shared.rng import SeedStream
 
@@ -44,7 +41,6 @@ def main():
     p.add_argument('--corpus', type=Path, required=True)
     p.add_argument('--examples', type=Path)
     p.add_argument('--encoder', type=Path)
-    p.add_argument('--document-vectors',type=Path)
     a = p.parse_args()
     batch = json.loads(a.batch.read_text())
     expected = len(batch['cases'])*len(batch['configs'])*len(batch['seeds'])
@@ -61,10 +57,6 @@ def main():
             raise ValueError('unknown signal collection mode')
         if config.get('auxiliary_policy', {}).get('method') == 'seakr':
             return 'multilayer' if config['auxiliary_policy'].get('capture_layer') is not None else 'hidden'
-        if 'probe_policy' in config:
-            return 'multilayer' if config['probe_policy']['model']['feature_schema'].get('capture_layer') is not None else 'hidden'
-        if 'alignment_policy' in config:
-            return 'multilayer' if config['alignment_policy']['model']['feature_schema'].get('capture_layer') is not None else 'hidden'
         if config.get('policy', {}).get('trigger') == 'dragin' or config.get('policy', {}).get('query') == 'attention':
             return 'attention'
         return mode if mode != 'none' else ('distribution' if config.get('policy', {}).get('trigger')
@@ -76,14 +68,14 @@ def main():
     all_modes = set(modes) | {worker_mode}
     auxiliary_layer = bool(batch.get('multilayer_auxiliary')) or any(
         c.get('auxiliary_policy', {}).get('capture_layer') is not None for c in batch['configs'])
-    multilayer = auxiliary_layer or bool(batch.get('multilayer_policy')) or 'multilayer' in all_modes or any(c.get('collect_signals') == 'multilayer' for c in batch['configs'])
+    multilayer = auxiliary_layer or 'multilayer' in all_modes
     if multilayer:
-        from inference_scaling.retrieval.multilayer_capture import SCHEMA, validate_multilayer_batch
+        from inference_scaling.retrieval.multilayer_capture import SCHEMA, validate_diagnostic_batch
         if auxiliary_layer:
             from inference_scaling.retrieval.auxiliary_capture import validate_auxiliary_batch
             validate_auxiliary_batch(batch)
         else:
-            validate_multilayer_batch(batch)
+            validate_diagnostic_batch(batch)
     if {'hidden', 'attention'} <= all_modes:
         raise ValueError('hidden and attention require separately validated workers')
     need_signals = all_modes != {'none'}
@@ -124,7 +116,6 @@ def main():
             close = (raw.tokenizer.convert_tokens_to_ids('</think>'),)
             prepared = json.loads(a.prepared.read_text())
             indices, banks, example_banks = {}, {}, {}
-            document_vectors=DocumentVectors(a.document_vectors) if a.document_vectors else None
             for config in batch['configs']:
                 if 'example_policy' in config:
                     if not a.examples or not a.encoder:
@@ -179,10 +170,7 @@ def main():
                                 auxiliary_policy=AuxiliaryPolicy(**config['auxiliary_policy'])
                                     if 'auxiliary_policy' in config else None,
                                 gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None,
-                                example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None,
-                                probe_policy=ProbePolicy(**config['probe_policy']) if 'probe_policy' in config else None,
-                                alignment_policy=AlignmentPolicy(**config['alignment_policy']) if 'alignment_policy' in config else None,
-                                document_vectors=document_vectors)
+                                example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None)
                             result.update(arm=config['arm'], question_id=case['id'], seed=seed,
                                           base_ids=list(case['prompt_ids']), static_packets=[],
                                           static_injected_ids=[], static_retrievals=[])

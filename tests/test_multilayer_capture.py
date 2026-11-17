@@ -1,7 +1,6 @@
 from copy import deepcopy
 import pytest
-from inference_scaling.retrieval.multilayer_capture import validate_diagnostic_batch, recapture_batches
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.multilayer_capture import validate_diagnostic_batch
 
 
 def batch():
@@ -18,61 +17,10 @@ def test_diagnostic_pair():
 
 
 @pytest.mark.parametrize('key,value', [('collect_signals','hidden'), ('collect_signals','attention'),
-    ('probe_policy',{}), ('alignment_policy',{}), ('auxiliary_policy',{}), ('arm','closed_is'),
+    ('auxiliary_policy',{}), ('arm','closed_is'),
     ('policy',{'trigger':'seakr'}), ('policy',{'query':'attention'})])
 def test_reject_incompatible_consumer(key, value):
     config = batch()
     config['configs'][1][key] = value
     with pytest.raises(ValueError):
         validate_diagnostic_batch(config)
-
-
-def recapture_plan():
-    return {'kind':'multilayer_prefix_recapture_pool', 'version':3, 'pool':32, 'batch_size':4,
-            'repeats':2, 'labels_added':0, 'independent_groups_added':0,
-            'items':[{'question_id':'TRAIN_Q010', 'prefix_ids':[1,n],
-                      'prefix_sha256':token_hash([1,n])} for n in range(64)]}
-
-
-def test_recapture_repeat_order_and_cost_identity():
-    plan = recapture_plan()
-    batches = recapture_batches(plan)
-    assert len(batches) == 32 and len({(r,b) for r,b,_ in batches}) == 32
-    for repeat in (0,1):
-        flat = [item for r,_,items in batches if r == repeat for item in items]
-        assert flat == (plan['items'] if repeat == 0 else plan['items'][::-1])
-    assert all(len(items) == 4 for _,_,items in batches)
-
-
-@pytest.mark.parametrize('field,value', [('repeats',3), ('batch_size',64), ('pool',128),
-                                       ('labels_added',1), ('version',4)])
-def test_recapture_refuses_unbounded_or_new_labels(field, value):
-    plan = recapture_plan()
-    plan[field] = value
-    with pytest.raises(ValueError):
-        recapture_batches(plan)
-
-
-def test_recapture_refuses_duplicate_or_corrupt_prefix():
-    plan = recapture_plan()
-    plan['items'][1] = deepcopy(plan['items'][0])
-    with pytest.raises(ValueError):
-        recapture_batches(plan)
-
-
-def test_recapture_four_existing_observations_and_missing_state_guard():
-    plan = recapture_plan()
-    plan['version'] = 4
-    plan['source_pairs'] = [{'job':f'job{n}', 'question_id':f'TRAIN_Q{n}', 'position':128} for n in range(4)]
-    plan['items'] = [{'question_id':p['question_id'], 'source_job':p['job'],
-                      'observed_branch_position':at,'prefix_ids':[n,at], 'prefix_sha256':token_hash([n,at])}
-                     for n,p in enumerate(plan['source_pairs']) for at in range(96,128)]
-    batches = recapture_batches(plan)
-    assert len(batches) == 64 and sum(len(items) for _,_,items in batches) == 256
-    plan['items'][0]['observed_branch_position'] = 95
-    with pytest.raises(ValueError):
-        recapture_batches(plan)
-    plan = recapture_plan()
-    plan['items'][0]['prefix_ids'].append(99)
-    with pytest.raises(ValueError):
-        recapture_batches(plan)

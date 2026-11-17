@@ -1,6 +1,6 @@
 # IS + retrieve：代码入口与验证边界
 
-> 2026-11-16 约束纠正：用户要求完全 training-free。下文学习型 probe/gate、监督 ridge 隐藏状态检索投影（含分层版本）不符合要求，已从合规研究候选中排除；相关代码与说明仅保留为历史实现记录。冻结主模型不能使这些方法成为 training-free，固定随机压缩也不能代替跨表示空间的语义对齐。用户已停止实验，本指南不是继续执行的授权。
+> 2026-11-17：当前 IS＋检索代码只保留 training-free 实现。学习型 probe/gate、监督 ridge/PCA 检索投影、训练标签采集及相关入口和测试已删除。历史测量、失败与成本记录保留。实验仍停止，本指南不是继续执行的授权。
 
 当前实现从第一个思考 token 开始运行原 IS，在每条候选内部检索并追加资料。
 主模型权重、IS 搜索与选择算法保持不变。检索控制器负责时机、查询、证据和续接，
@@ -20,7 +20,6 @@
 | 固定历史六策略 | [benchmark_smart_online_is.py](../scripts/benchmark_smart_online_is.py) | 保留历史定义，供默认版与调优版对照 |
 | 内部统计开关验证 | [check_internal_signals.py](../scripts/check_internal_signals.py) | 分布、最终隐藏状态、注意力；限定短请求证明 |
 | 实际中间层验证 | [check_multilayer_signals.py](../scripts/check_multilayer_signals.py) | 16/32/48 层及最终层的 8 请求 OFF/ON 检查 |
-| TRAIN 局部配对标签 | [collect_probe_pairs.py](../scripts/collect_probe_pairs.py) | 同前缀无证据/有证据后缀，不能当作完整 IS 因果收益 |
 | 设备租约与回收 | [leased_npu_job.py](../scripts/leased_npu_job.py) | 检查设备进程和容器占用、持锁、失败后回收 |
 
 [六次运行的示例批次](../examples/retrieval/tuning-baselines.json)包含两道已用于调优的 TRAIN 题，
@@ -50,11 +49,9 @@ runner 的 TRAIN 字段检查不替代完整数据隔离清单。不要把 DEV/t
 | 文档与窗口排序 | [ranked_facts.py](../src/inference_scaling/retrieval/ranked_facts.py) | 文档/窗口融合、词项清理、每文档片段上限 |
 | 辅助生成与表示分歧 | [auxiliary_online_is.py](../src/inference_scaling/retrieval/auxiliary_online_is.py) | FLARE/IRCoT/SeaKR 适配及独立辅助成本 |
 | 支持检查与示例 | [gap_online_is.py](../src/inference_scaling/retrieval/gap_online_is.py)、[example_online_is.py](../src/inference_scaling/retrieval/example_online_is.py) | 证据缺口与真实训练示例；不伪造参考思考链 |
-| 学习型 gate | [probe_online_is.py](../src/inference_scaling/retrieval/probe_online_is.py) | 知识需求、局部证据收益、位置风险；模型及特征 schema 校验 |
-| 隐藏状态检索投影 | [hidden_alignment.py](../src/inference_scaling/retrieval/hidden_alignment.py)、[aligned_online_is.py](../src/inference_scaling/retrieval/aligned_online_is.py) | TRAIN 监督 ridge 投影到冻结 E5 文档空间，再与词法排序融合 |
 
 `arm="tuned_online"` 接受 `policy`、`fact_config`、`fact_ranking` 等配置。
-辅助、支持检查、示例、probe、alignment 控制器一次只选一种。参数名与合法范围以对应 dataclass 为准；
+辅助、支持检查、示例控制器一次只选一种。参数名与合法范围以对应 dataclass 为准；
 修改检索参数不应改写 `GuidanceConfig`。本研究固定 M=3、K=2、block=512、SC 温度 0.25，
 原 IS 从空生成状态开始，已固定块不会回滚。
 
@@ -63,22 +60,12 @@ runner 的 TRAIN 字段检查不替代完整数据隔离清单。不要把 DEV/t
 自然 EOS、空答案、截断和被丢弃候选全部保留。后端按 offset 派生续接随机流，
 改变请求分段或批次布局不保证与未分段生成逐 token 相同。
 
-## 分层投影的新增能力
+## 冻结模型的内部统计
 
-`fit_alignment(..., pool=32, capture_layer=None)` 保留原最终层默认路径。
-显式 `capture_layer=16/32/48/"final"` 使用 513 维采集中的指定 128 维块，
-`pool` 支持 8/16/32/64/128 个已观察因果位置。训练与部署必须使用同一 schema。
-这里的 `"final"` 指多层 worker 的最终块，与历史 128 维 worker 的模型来源分开记录。
-
-完整批次必须显式设置 `multilayer_alignment=true`、`diagnostic_worker="multilayer"`，
-所有配置使用 `collect_signals="multilayer"` 和带捕获层 schema 的 `alignment_policy.model`。
-与 probe/辅助控制器混用会被拒绝。另需提供与模型 provenance 一致的 `--document-vectors`。
-审计检查每条原生信号的尺寸、有限值、对齐诊断值及实际使用的因果池化特征。
-
-这一能力已通过 CPU 因果重放和旧模型投影兼容性验证；新分层投影策略尚未完成真实 NPU 的
-短证明及完整 IS 验证。必须先绑定新源码的证明再用于质量实验，不能拿旧源码证明代替。
-离线 28 组交叉验证中，层 48/pool32 仅 1/28 组在前 64 文档命中，pool16 全部为零，
-尚不支持层优胜或检索质量改善结论。
+保留概率分布、注意力与实际中间层采集，用于固定规则和 SeaKR 表示分歧统计。
+中间层采集使用固定随机投影，不拟合权重，也不映射到 E5 语义空间。
+`multilayer_auxiliary` 使用显式层选择的 SeaKR；普通多层诊断使用固定触发策略。
+TRAIN 与 `probe_train` 是既有数据分组标识，保留以维持隔离边界，不表示当前代码进行参数训练。
 
 ## 审计与结果解释
 

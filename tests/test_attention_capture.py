@@ -16,7 +16,7 @@ def batch():
 def test_only_matched_injecting_engineering_pair():
     assert validate_attention_batch(batch())['layer'] == 31
     for key, value in [('family', 'dragin'), ('diagnostic_worker', 'multilayer'),
-                       ('multilayer_policy', True), ('cases', ['a']), ('seeds', [1, 2])]:
+                       ('cases', ['a']), ('seeds', [1, 2])]:
         altered = batch()
         altered[key] = value
         with pytest.raises(ValueError):

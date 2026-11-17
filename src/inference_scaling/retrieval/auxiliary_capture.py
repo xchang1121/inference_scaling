@@ -45,9 +45,9 @@ def policy_disagreement(policy, calls):
 
 
 def validate_auxiliary_batch(batch):
-    """Keep auxiliary-layer policies separate from learned probes and diagnostics."""
+    """Validate frozen-model auxiliary sampling with explicit captured layers."""
     from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
-    if (batch.get('multilayer_auxiliary') is not True or batch.get('multilayer_policy')
+    if (batch.get('multilayer_auxiliary') is not True
             or batch.get('attention_geometry') is not None or batch.get('family') != 'seakr'
             or batch.get('diagnostic_worker') != 'multilayer'):
         raise ValueError('explicit separate multilayer auxiliary batch and worker required')
@@ -56,7 +56,7 @@ def validate_auxiliary_batch(batch):
         raise ValueError('auxiliary layer batches require bounded TRAIN cases and configurations')
     for config in batch['configs']:
         if (config['arm'] != 'tuned_online' or config.get('collect_signals') != 'multilayer'
-                or any(k in config for k in ('probe_policy', 'alignment_policy', 'gap_policy', 'example_policy'))):
+                or any(k in config for k in ('gap_policy', 'example_policy'))):
             raise ValueError('all auxiliary layer configurations need the same captured schema')
         policy = AuxiliaryPolicy(**config.get('auxiliary_policy', {}))
         layer_block(policy.capture_layer)
