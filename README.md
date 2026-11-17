@@ -144,7 +144,8 @@ python -m pytest
 ```
 
 源码分为 `app/`（入口与记录）、`datasets/`（提示和判分）、`arllm/`（算法与后端）、`shared/`（公共概率核与模型工具）。
-`online-speculation/` 是独立项目；日常运行数据保存在 Git 忽略的 `results/` 中，已归档分析材料位于 `experiments/`。
+`online-speculation` 已完整移至[独立分支 `codex/online-speculation`](https://github.com/xchang1121/inference_scaling/tree/codex/online-speculation)，保留原项目文件及提交历史。
+日常运行数据保存在 Git 忽略的 `results/` 中，已归档分析材料位于 `experiments/`。
 
 <a id="历史实现"></a>
 <a id="历史结果"></a>
