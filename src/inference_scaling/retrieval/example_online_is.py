@@ -2,8 +2,8 @@
 from dataclasses import asdict, dataclass
 
 from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler
-from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.online_is import OnlineISLedger
+from inference_scaling.retrieval.common import token_hash
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class ExamplePolicy:
             raise ValueError('positive example retrieval budgets required')
 
 
-class ExampleOnlineLedger(TunedOnlineLedger):
+class ExampleOnlineLedger(OnlineISLedger):
     def __init__(self, *args, example_policy, **kwargs):
         super().__init__(*args, **kwargs)
         if self.policy.trigger != 'fixed' or self.policy.query != 'concat' or self.policy.format != 'original':

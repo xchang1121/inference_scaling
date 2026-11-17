@@ -1,5 +1,7 @@
 # 技术文档的在线检索与推理中注入
 
+> 历史实验说明：早期控制器和专用执行脚本已于 2026-11-17 删除。当前代码与入口见 [IS＋检索实现指南](is_retrieve.md)；下述命令对应清理前的历史版本。
+
 本分支实现外部控制的 context intervention：控制器读取已生成的推理，在检查点完成请求，检索本地文档，将证据 token 追加到原始 token 前缀，再提交续写。模型不接收工具定义，也不需要生成检索指令。入口为 `inference_scaling.retrieval.OnlineInjectionController`；基准脚本为 `scripts/benchmark_injection.py`。
 
 已完成[首轮 312 条 pilot](reports/ONLINE_INJECTION_PILOT.md)及[无 effort 提示的三档预算与注入格式对照，336 条](reports/ONLINE_INJECTION_ABLATION.md)。后者使用 `scripts/benchmark_injection_ablation.py`，独立设置回答上限，保留自然关闭、预算强制关闭和 thinking 内 EOS。关于更智能的触发、查询和插入边界，见[论文与接入取舍](reports/ADAPTIVE_RETRIEVAL_OPTIONS.md)。

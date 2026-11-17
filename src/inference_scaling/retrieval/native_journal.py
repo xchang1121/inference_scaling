@@ -4,7 +4,7 @@ import json
 import os
 import time
 
-from inference_scaling.retrieval.controller import _snapshot
+from inference_scaling.retrieval.common import _snapshot
 
 
 class NativeJournal:

@@ -1,4 +1,4 @@
-from inference_scaling.retrieval.ranked_facts import FactRanking,rank_windows
+from inference_scaling.retrieval.evidence import FactRanking,rank_windows
 
 
 def test_parent_fusion_can_recover_first_parent_and_cap_duplicate_windows():

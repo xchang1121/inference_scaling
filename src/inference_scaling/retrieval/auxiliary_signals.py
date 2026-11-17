@@ -11,8 +11,8 @@ import time
 
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
-from inference_scaling.retrieval.controller import _snapshot
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.common import _snapshot
+from inference_scaling.retrieval.common import token_hash
 from inference_scaling.shared.rng import SeedStream
 
 

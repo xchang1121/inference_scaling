@@ -125,14 +125,3 @@ class Retriever:
         else:
             scores = self._bm25(query) if self.kind == "bm25" else self._char(query)
         return [Hit(self.documents[i], scores[i]) for i in rank(scores)[:k]]
-
-
-def build_query(question: str, generated_text: str, *, kind: str = "hybrid", max_terms: int = 96) -> str:
-    if kind not in {"question", "recent", "hybrid"}:
-        raise ValueError("query kind must be question, recent, or hybrid")
-    recent = re.split(r"[\n.!?]", generated_text.strip())
-    recent_text = " ".join(part for part in recent[-3:] if part.strip())
-    if kind == "hybrid":
-        # Preserve API/product/version scope even after a long reasoning prefix.
-        return " ".join(terms(question)[:max_terms//2] + terms(recent_text)[-(max_terms-max_terms//2):])
-    return " ".join(terms(question if kind == "question" else recent_text)[-max_terms:])

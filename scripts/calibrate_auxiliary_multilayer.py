@@ -16,7 +16,7 @@ from inference_scaling.retrieval.cot_guidance import DualStatistics, GuidanceCon
 from inference_scaling.retrieval.internal_signals import InternalSignals
 from inference_scaling.retrieval.multilayer_capture import SCHEMA
 from inference_scaling.retrieval.native_journal import NativeJournal
-from inference_scaling.retrieval.tuned_online_is import TuningTap
+from inference_scaling.retrieval.online_is import TuningTap
 from inference_scaling.shared.rng import SeedStream
 
 

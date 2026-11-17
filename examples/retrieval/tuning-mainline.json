@@ -1,6 +1,6 @@
 {
-  "id": "train-baselines-example",
-  "purpose": "Small TRAIN schema example with historical defaults; not a selected best configuration.",
+  "id": "train-mainline-example",
+  "purpose": "Unified candidate-local IS retrieval schema example; not a selected best configuration.",
   "cases": [
     {
       "id": "TRAIN_Q005",
@@ -22,16 +22,29 @@
   ],
   "configs": [
     {
-      "id": "closed-is",
-      "arm": "closed_is"
+      "id": "fixed",
+      "arm": "tuned_online",
+      "policy": {
+        "trigger": "fixed"
+      }
     },
     {
-      "id": "static-facts",
-      "arm": "static_facts"
+      "id": "anchored",
+      "arm": "tuned_online",
+      "policy": {
+        "query": "anchored",
+        "anchor_context": "question_tail",
+        "overlap": 0.5,
+        "continuation": "resume"
+      }
     },
     {
-      "id": "online-is",
-      "arm": "online_is"
+      "id": "surprisal",
+      "arm": "tuned_online",
+      "policy": {
+        "trigger": "surprisal",
+        "threshold": 1.5
+      }
     }
   ]
 }

@@ -2,58 +2,38 @@ from dataclasses import replace
 
 import pytest
 
-from test_online_is import Native, Facts, request
+from retrieval_fixtures import Native, Facts, request
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig, search
-from inference_scaling.retrieval.online_is import OnlineISLedger
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TunedOnlineLedger
+from inference_scaling.retrieval.online_is import TuningPolicy, OnlineISLedger
 
 
-def make(policy, backend=None, original=False):
+def make(policy, backend=None):
     backend = backend or Native(stop=600)
     cfg = replace(GuidanceConfig(), thinking_tokens=640, answer_tokens=1024, context_tokens=8192)
-    kwargs = dict(question='Original issue', facts=Facts(), mode='relevant')
-    cls = OnlineISLedger if original else TunedOnlineLedger
-    if not original:
-        kwargs['policy'] = policy
-    ledger = cls(backend, backend, (1,2), (901,), 17, cfg, **kwargs)
+    ledger = OnlineISLedger(backend, backend, (1,2), (901,), 17, cfg,
+                            question='Original issue', facts=Facts(), policy=policy)
     return backend, ledger
 
 
-def test_default_policy_is_exact_original_controller():
-    _, old = make(None, original=True)
-    _, new = make(TuningPolicy())
-    left, = old.sample_batch([request(old, count=640)])
-    right, = new.sample_batch([request(new, count=640)])
-    assert left == right
-    assert old.materialize(left.token_ids) == new.materialize(right.token_ids)
-    assert old.native_calls == new.native_calls
-    assert [e['injected_ids'] for e in old.events] == [e['injected_ids'] for e in new.events]
-
-
-def test_legacy_anchored_fusion_preserves_question_in_both_queries():
-    from inference_scaling.retrieval.smart_online_is import retrieve_anchored
-    backend, ledger = make(TuningPolicy(query='anchored', anchor_context='question_tail', overlap=.5))
-    ledger.question = 'Product issue\n\nIn the final answer, be direct.'
-    branch = (7, 8, 9)
-    tail = backend.decode(branch, skip_special_tokens=True).strip()
-    expected, log = retrieve_anchored(Facts(), ledger.question, tail, set())
-    found, actual, query = ledger.retrieve(branch, set())
-    assert found == expected
-    assert [c['query'] for c in actual['components']] == log['queries']
-    assert actual['rrf_scores'] == log['weights']
-    assert query == 'Product issue\n'+tail
-
-
-def test_legacy_anchored_configuration_matches_original_native_requests():
-    from test_smart_online_is import make as make_smart
-    _, _, old = make_smart('anchored')
-    _, new = make(TuningPolicy(query='anchored', anchor_context='question_tail',
-                              overlap=.5, continuation='resume'))
-    left, = old.sample_batch([request(old, count=640)])
-    right, = new.sample_batch([request(new, count=640)])
-    assert left == right
-    assert old.native_calls == new.native_calls
-    assert old.materialize(left.token_ids) == new.materialize(right.token_ids)
+@pytest.mark.parametrize(('policy', 'expected'), [
+    (TuningPolicy(), '82fc589ff0ca3c1ca27865b28ce90098ff850620699841289310617c96195384'),
+    (TuningPolicy(query='anchored', anchor_context='question_tail', overlap=.5, continuation='resume'),
+     '1784a3ebb648c60d686993efd5020e5d503e6035103794c45169d7504af37c65'),
+    (TuningPolicy(trigger='never'), 'd84ef419aa37ef1890a0969a52219561b924c01038cb10ed1ae39f98dee50e30'),
+    (TuningPolicy(trigger='surprisal', threshold=.5),
+     'e48f9c6bb82a35cd5d122f3615635718e04c97bbfe51a2dd61346719f9acb693'),
+])
+def test_unified_ledger_matches_pre_refactor_trajectories(policy, expected):
+    """Fingerprints captured from 0063f45 before consolidating the controllers."""
+    import hashlib
+    import json
+    _, ledger = make(policy)
+    sample, = ledger.sample_batch([request(ledger, count=640)])
+    trajectory = [list(sample.token_ids), list(sample.token_logprobs), ledger.native_calls,
+                  ledger.events, ledger.decisions, ledger.materialize(sample.token_ids),
+                  ledger.statistics(sample.token_ids)]
+    actual = hashlib.sha256(json.dumps(trajectory, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    assert actual == expected
 
 
 @pytest.mark.parametrize(('trigger','threshold','expected'),
@@ -99,24 +79,21 @@ def test_initial_and_previous_sc_references_detect_different_changes():
         proxy = SimpleNamespace(policy=TuningPolicy(trigger='scdrop', sc_reference=reference,
                                                     threshold=.1),
                                 recent=lambda branch, count: rows[-count:])
-        result, _ = TunedOnlineLedger.signal(proxy, tuple(range(96)), '')
+        result, _ = OnlineISLedger.signal(proxy, tuple(range(96)), '')
         assert result == expected
 
 
-def test_hybrid_matches_old_initial_reference_or_rule():
+def test_hybrid_combines_sc_decline_with_other_gates():
     from types import SimpleNamespace
-    from inference_scaling.retrieval.triggers import TriggerConfig
-    old = TriggerConfig(kind='hybrid')
-    p = TuningPolicy(trigger='hybrid', sc_reference='initial', low_probability=old.low_probability,
-                     rule_pattern=old.pattern, rule_tail=800)
+    p = TuningPolicy(trigger='hybrid', sc_reference='initial', low_probability=.2,
+                     rule_tail=800)
     lp, sc = [-.1]*96, [10.]*32+[8.]*64
     proxy = SimpleNamespace(policy=p, recent=lambda branch,count:
                             [{'sc':s,'lp':v} for s,v in zip(sc[-count:],lp[-count:])])
-    got, _ = TunedOnlineLedger.signal(proxy, tuple(range(96)), '')
-    expected, _ = old.decide(generated=96,last_attempt=-1,text='',logprobs=lp,statistics_values=sc)
-    assert got == expected is True
+    got, _ = OnlineISLedger.signal(proxy, tuple(range(96)), '')
+    assert got is True
     proxy.policy = replace(p, hybrid_mode='all')
-    assert TunedOnlineLedger.signal(proxy, tuple(range(96)), '')[0] is False
+    assert OnlineISLedger.signal(proxy, tuple(range(96)), '')[0] is False
 
 
 def test_never_control_preserves_checkpoint_splitting_without_retrieving():
@@ -129,7 +106,7 @@ def test_never_control_preserves_checkpoint_splitting_without_retrieving():
 
 def test_frozen_is_and_token_zero_are_retained():
     backend, ledger = make(TuningPolicy(trigger='surprisal'), Native(stop=140))
-    _, audit = search(ledger, 'is_block_sc')
+    _, audit = search(ledger)
     assert backend.requests[0].prefix == (1,2)
     assert audit['config']['candidate_count'] == 3
     assert audit['config']['rollout_count'] == 2
@@ -155,14 +132,14 @@ def test_offline_audit_replays_gates_and_detects_tampering(policy):
     import json
     from pathlib import Path
     import sys
-    from test_smart_online_is import ReadableNative
-    from inference_scaling.retrieval.tuned_online_is import run_tuned_is
+    from retrieval_fixtures import ReadableNative
+    from inference_scaling.retrieval.online_is import run_online_is
     from inference_scaling.shared.rng import SeedStream
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
     from audit_tuned_online_is import audit_tuned_row
     backend = ReadableNative(stop=180, eos=True)
     cfg = replace(GuidanceConfig(), thinking_tokens=640, answer_tokens=1024, context_tokens=8192)
-    result = run_tuned_is(backend, backend, (1,2), (901,), SeedStream(1).derive('question','synthetic'),
+    result = run_online_is(backend, backend, (1,2), (901,), SeedStream(1).derive('question','synthetic'),
                           cfg, question='Q', facts=Facts(), policy=policy)
     row = {'unit_id':'synthetic', 'arm':'tuned_online', 'question':'Q', 'question_id':'synthetic',
            'seed':1, 'base_ids':[1,2], 'static_packets':[], 'static_injected_ids':[],
@@ -196,11 +173,11 @@ def test_content_statistic_excludes_stopwords_and_punctuation_from_denominator(t
     proxy = SimpleNamespace(policy=TuningPolicy(trigger=trigger, threshold=.4, statistic_content_only=True),
                             recent=lambda branch,count:rows,
                             backend=SimpleNamespace(decode=lambda ids,**kw: ''.join(pieces[i] for i in ids)))
-    gate, signal = TunedOnlineLedger.signal(proxy, (1,2,3,4), '')
+    gate, signal = OnlineISLedger.signal(proxy, (1,2,3,4), '')
     assert gate and signal['value'] == pytest.approx(expected)
     assert signal['window_tokens'] == 4 and signal['content_tokens'] == 2
     rows[:] = rows[:2]
-    gate, signal = TunedOnlineLedger.signal(proxy, (1,2), '')
+    gate, signal = OnlineISLedger.signal(proxy, (1,2), '')
     assert gate is False and signal['value'] is None and signal['insufficient_content']
     assert signal['window_tokens'] == 2 and signal['content_tokens'] == 0
 

@@ -6,12 +6,12 @@ import sys
 
 import pytest
 
-from test_online_is import Facts
-from test_smart_online_is import ReadableNative
+from retrieval_fixtures import Facts
+from retrieval_fixtures import ReadableNative
 from inference_scaling.retrieval.attention_policy import attention_feature
 from inference_scaling.retrieval.attention_policy import query_text
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, run_tuned_is
+from inference_scaling.retrieval.online_is import TuningPolicy, run_online_is
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -64,7 +64,7 @@ def test_attention_controller_replays_full_IS_and_rejects_changed_attention():
     backend=AttentionNative()
     cfg=replace(GuidanceConfig(),thinking_tokens=640,answer_tokens=1024,context_tokens=8192)
     policy=TuningPolicy(trigger='dragin',query='attention',threshold=.1,attention_content_only=False)
-    result=run_tuned_is(backend,backend,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
+    result=run_online_is(backend,backend,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
                         question='Q',facts=Facts(),policy=policy)
     row=json.loads(json.dumps({'unit_id':'synthetic','arm':'tuned_online','question':'Q',
         'question_id':'synthetic','seed':1,'base_ids':[1,2],'static_packets':[],

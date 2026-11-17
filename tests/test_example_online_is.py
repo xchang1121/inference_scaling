@@ -6,11 +6,11 @@ import sys
 
 import pytest
 
-from test_smart_online_is import ReadableNative
+from retrieval_fixtures import ReadableNative
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig
 from inference_scaling.retrieval.example_online_is import ExamplePolicy
-from inference_scaling.retrieval.literature import packet
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy,run_tuned_is
+from inference_scaling.retrieval.evidence import packet
+from inference_scaling.retrieval.online_is import TuningPolicy,run_online_is
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -30,7 +30,7 @@ def test_example_causal_answer_whole_solution_and_cost(mode):
     from audit_tuned_online_is import audit_tuned_row
     b=ReadableNative(stop=180,eos=True)
     cfg=replace(GuidanceConfig(),thinking_tokens=640,answer_tokens=1024,context_tokens=8192)
-    result=run_tuned_is(b,b,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
+    result=run_online_is(b,b,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
         question='Q',facts=Examples(b,mode=='oversized'),policy=TuningPolicy(),
         example_policy=ExamplePolicy(answer_tokens=16,work_tokens=8 if mode=='budget' else 2000,
                                      require_complete_answer=mode=='require_complete',pad_to_budget=mode!='unpadded'))

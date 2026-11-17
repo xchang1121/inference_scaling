@@ -3,12 +3,13 @@
 自回归语言模型的 training-free 推理扩展。当前主线为 **Qwen3.8-27B、昇腾 vLLM、思考段 IS**。
 CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/inference.json)，默认值与数据集无关。
 
-本分支增加[技术文档在线知识注入实验](docs/online_injection.md)：外部自动触发检索、推理中追加资料、位置对照与配对评测。已完成[首轮 312 份回答的结果与复核](docs/reports/ONLINE_INJECTION_PILOT.md)。
+本分支保留统一的候选内 IS＋检索实现：外部策略在各候选推理中触发检索并追加资料。
+[早期在线知识注入实验](docs/online_injection.md)及[首轮结果](docs/reports/ONLINE_INJECTION_PILOT.md)作为历史记录保留。
 
 当前 IS+retrieve 代码与运行入口见[实现指南](docs/is_retrieve.md)，包括候选内检索、可配置控制器、
 内部信号及因果审计。[研究报告](docs/reports/RETRIEVAL_TUNING_STATUS.md)直接展示 training-free 方案的 F1、
 分阶段时延及相对 Base 倍率。实验已按用户要求停止，独立选择和最终评估尚未开启；
-学习型 probe/gate、监督检索投影及其训练入口已从当前代码删除；历史结果与成本记录保留。
+训练入口、早期独立对照及重复控制器已删除；历史结果与成本记录保留。
 
 ## 快速开始
 
@@ -161,7 +162,7 @@ python -m pytest
 <a id="历史结果"></a>
 ## 历史实现与结果
 
-全程在线知识注入使用 [`scripts/benchmark_online_is.py`](scripts/benchmark_online_is.py)：
+当前统一入口为 [`scripts/benchmark_tuning_batch.py`](scripts/benchmark_tuning_batch.py)：
 从第一个思考 token 由原有分块 IS 接管，在各候选轨迹内部检索并追加证据，
 最终答案继承选中轨迹的上下文；不先生成固定思考前缀。
 具体参数、分支隔离和随机数续接方式见

@@ -4,9 +4,9 @@ import math
 
 from inference_scaling.retrieval.gap_online_is import GapPolicy, PLAN_SYSTEM, SUPPORT_SYSTEM, checker_text
 from inference_scaling.retrieval.auxiliary_signals import draft_confidence
-from inference_scaling.retrieval.smart_online_is import clean_question
-from inference_scaling.retrieval.stepwise import parse_plan,parse_support,token_hash
-from inference_scaling.retrieval.tuned_online_is import overlaps
+from inference_scaling.retrieval.common import clean_question
+from inference_scaling.retrieval.common import parse_plan,parse_support,token_hash
+from inference_scaling.retrieval.online_is import overlaps
 from inference_scaling.shared.rng import SeedStream
 
 

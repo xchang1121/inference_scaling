@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_online_is import Native
+from retrieval_fixtures import Native
 from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.retrieval.native_journal import NativeJournal

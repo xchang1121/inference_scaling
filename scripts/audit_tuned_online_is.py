@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import math
 import types
 
-from audit_online_is import ReplayLedger, canonical, same_search_record
+from retrieval_replay import ReplayLedger, canonical, same_search_record
 from inference_scaling.retrieval.cot_guidance import search
-from inference_scaling.retrieval.smart_online_is import boundary, clean_question, BRIDGE, RESUME
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TunedOnlineLedger, overlaps, last_complete_step
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.common import boundary, clean_question, BRIDGE, RESUME
+from inference_scaling.retrieval.online_is import TuningPolicy, OnlineISLedger, overlaps, last_complete_step
+from inference_scaling.retrieval.common import token_hash
 from inference_scaling.retrieval.attention_policy import attention_feature
 
 
@@ -52,9 +52,9 @@ def audit_tuned_row(row, cfg, decode, eos, close, check):
                                 backend=SimpleNamespace(decode=lambda ids,skip_special_tokens=True:decode(ids,skip_special_tokens)),
                                 tap=SimpleNamespace(history={c['request_id']:c['internal_signals']
                                     for c in native[:n] if 'internal_signals' in c}))
-        proxy.recent = types.MethodType(TunedOnlineLedger.recent, proxy)
+        proxy.recent = types.MethodType(OnlineISLedger.recent, proxy)
         if eligible:
-            eligible, reason = auxiliary[0](d) if auxiliary else TunedOnlineLedger.signal(proxy, branch, text)
+            eligible, reason = auxiliary[0](d) if auxiliary else OnlineISLedger.signal(proxy, branch, text)
         if p.wait_for_boundary:
             eligible = eligible and (boundary(text) or position in p.boundary_deadlines)
         ck(d['boundary'] == boundary(text), 'boundary_predicate')
@@ -167,7 +167,7 @@ def audit_tuned_row(row, cfg, decode, eos, close, check):
     ck(sorted(indices) == list(range(len(native))), 'native_calls_charged_once')
     ck(sum(len(c['token_ids']) for c in native) == row['search_work'] <= cfg.search_tokens, 'search_work')
     replay = ReplayLedger(row,cfg,eos,close)
-    candidates, audit = search(replay,'is_block_sc')
+    candidates, audit = search(replay)
     ck(next(replay.recorded,None) is None, 'all_IS_calls_replayed')
     ck(canonical(candidates) == row['candidates'], 'selected_candidates_replayed')
     ck(same_search_record(canonical(audit),canonical(row['audit'])), 'frozen_IS_replayed')

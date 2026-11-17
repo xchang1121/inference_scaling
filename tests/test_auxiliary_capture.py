@@ -9,7 +9,7 @@ from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
 from inference_scaling.retrieval.auxiliary_signals import hidden_disagreement
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig
 from inference_scaling.retrieval.multilayer_capture import SCHEMA
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, run_tuned_is
+from inference_scaling.retrieval.online_is import TuningPolicy, run_online_is
 from inference_scaling.shared.rng import SeedStream
 from test_auxiliary_multilayer import calls
 from test_auxiliary_online_is import HiddenNative, TwoFacts
@@ -107,7 +107,7 @@ def test_full_candidate_local_layer_gate_trials_cost_and_audit():
     from audit_tuned_online_is import audit_tuned_row
     backend = CapturedNative()
     cfg = replace(GuidanceConfig(), thinking_tokens=640, answer_tokens=1024, context_tokens=8192)
-    result = run_tuned_is(backend, backend, (1, 2), (901,), SeedStream(1).derive('question', 'synthetic'), cfg,
+    result = run_online_is(backend, backend, (1, 2), (901,), SeedStream(1).derive('question', 'synthetic'), cfg,
         question='Q', facts=TwoFacts(), policy=TuningPolicy(),
         auxiliary_policy=AuxiliaryPolicy(method='seakr', capture_layer=32, draft_tokens=16,
             threshold=0., work_tokens=1000, evidence_candidates=2, evidence_tokens=16))

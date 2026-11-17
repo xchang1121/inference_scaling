@@ -6,11 +6,11 @@ import sys
 
 import pytest
 
-from test_online_is import Facts
-from test_smart_online_is import ReadableNative
+from retrieval_fixtures import Facts
+from retrieval_fixtures import ReadableNative
 from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
 from inference_scaling.retrieval.cot_guidance import GuidanceConfig
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, run_tuned_is
+from inference_scaling.retrieval.online_is import TuningPolicy, run_online_is
 from inference_scaling.shared.rng import SeedStream
 
 
@@ -41,7 +41,7 @@ def test_paid_lookahead_is_separate_from_frozen_IS_and_fully_replayable(method,t
     from audit_tuned_online_is import audit_tuned_row
     backend = HiddenNative()
     cfg = replace(GuidanceConfig(),thinking_tokens=640,answer_tokens=1024,context_tokens=8192)
-    result = run_tuned_is(backend,backend,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
+    result = run_online_is(backend,backend,(1,2),(901,),SeedStream(1).derive('question','synthetic'),cfg,
         question='Q',facts=TwoFacts(),policy=TuningPolicy(),
         auxiliary_policy=AuxiliaryPolicy(method=method,draft_tokens=16,threshold=0.,work_tokens=work,
                                          evidence_candidates=trials,evidence_tokens=16))

@@ -3,10 +3,10 @@ from dataclasses import asdict, dataclass
 import json
 
 from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler, draft_confidence
-from inference_scaling.retrieval.literature import encode
-from inference_scaling.retrieval.smart_online_is import clean_question
-from inference_scaling.retrieval.stepwise import parse_plan, parse_support, token_hash
-from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger, overlaps
+from inference_scaling.retrieval.evidence import encode
+from inference_scaling.retrieval.common import clean_question
+from inference_scaling.retrieval.common import parse_plan, parse_support, token_hash
+from inference_scaling.retrieval.online_is import OnlineISLedger, overlaps
 
 PLAN_SYSTEM = ('Check whether a provisional technical reasoning step needs an external fact. '
     'Do not retrieve for restating the question, general logic, or facts already supported by references. '
@@ -49,7 +49,7 @@ class GapPolicy:
             raise ValueError('invalid gap probability threshold')
 
 
-class GapOnlineLedger(TunedOnlineLedger):
+class GapOnlineLedger(OnlineISLedger):
     def __init__(self,*args,gap_policy,**kwargs):
         super().__init__(*args,**kwargs)
         if self.policy.trigger!='fixed' or self.policy.query not in {'concat','question'}:

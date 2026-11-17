@@ -1,21 +1,25 @@
-"""Frozen short evidence, preserved reasoning, and complete-pool suffix search.
-
-Experiment-local adapters leave the production backend and earlier studies intact.
-"""
+"""Statistics, complete-pool block-SC IS and selected-trajectory answer readout."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 import math
 import types
 
 from inference_scaling.arllm.algorithms.conditional_is import ConditionalISAdapter
 from inference_scaling.arllm.algorithms.config import ConditionalISConfig
 from inference_scaling.arllm.config import SamplingConfig
-from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
-from inference_scaling.retrieval.scaled import pool_upper_bound
-from inference_scaling.retrieval.stepwise import step_char_boundaries, token_hash
-from inference_scaling.shared.rewards.consilience import confidence_windows
+from inference_scaling.arllm.types import GenerationRequest
+from inference_scaling.retrieval.common import token_hash
 from inference_scaling.shared.rng import SeedStream
+
+
+def pool_upper_bound(config, fixed, carried):
+    """Reserve a whole tree before generating; terminal leaves can only cost less."""
+    remaining = config.total_length-fixed
+    width = min(config.block_size, remaining)
+    fresh = config.candidate_count-int(carried)
+    return (fresh*(width+config.rollout_count*(remaining-width))
+            + int(carried)*(config.rollout_count-1)*(remaining-width))
 
 
 @dataclass(frozen=True)
@@ -25,10 +29,6 @@ class GuidanceConfig:
     answer_tokens: int = 16384
     answer_chunk: int = 4096
     search_tokens: int = 65536
-    evidence_tokens: int = 256
-    probe_tokens: int = 512
-    probe_minimum: int = 64
-    candidates: int = 8
     is_candidates: int = 3
     rollouts: int = 2
     block_tokens: int = 512
@@ -67,73 +67,18 @@ class DualStatistics:
         self.backend._sample_from_output = self.original
 
 
-def trajectory_score(sc, cn, lp, kind):
-    if not sc:
-        return 0.0
-    if not (len(sc) == len(cn) == len(lp)):
-        raise ValueError("unaligned trajectory statistics")
-    if kind == "sc":
-        return math.fsum(sc)/len(sc)
-    if kind == "consilience":
-        return confidence_windows(cn).score
-    if kind == "logprob":
-        return math.fsum(lp)/len(lp)
-    raise ValueError(kind)
-
-
-def completed_boundary(backend, ids, minimum):
-    """Earliest complete step at/after minimum; never re-tokenize retained text."""
-    text = backend.decode(tuple(ids), skip_special_tokens=False)
-    positions = step_char_boundaries(text)
-    for n in range(minimum, len(ids)+1):
-        prefix = backend.decode(tuple(ids[:n]), skip_special_tokens=False)
-        if text.startswith(prefix) and any(at <= len(prefix) and not text[at:len(prefix)].strip() for at in positions):
-            return n
-    return None
-
-
 class GuidanceLedger:
     supports_streaming_generation = False
 
-    def __init__(self, backend, tap, root, close, seed, cfg, *, carried=None, reward="sc", cap=None):
+    def __init__(self, backend, tap, root, close, seed, cfg, *, cap=None):
         self.backend, self.tap, self.root = backend, tap, tuple(root)
         self.close, self.seed, self.cfg = tuple(close), seed, cfg
         self.eos, self.model_id = backend.tokenizer.eos_token_id, backend.model_id
         self.sampling = SamplingConfig(eos_token_id=self.eos)
         self.calls, self.work = [], 0
         self.cap = cfg.search_tokens if cap is None else cap
-        self.carried = carried or {"sc": [], "cn": [], "lp": []}
-        self.reward_kind = reward
+        self.carried = {"sc": [], "cn": [], "lp": []}
 
-    def sample_batch(self, requests):
-        if sum(r.max_new_tokens for r in requests) > self.cap-self.work:
-            raise RuntimeError("incomplete candidate pool would exceed search cap")
-        jobs = []
-        for request in requests:
-            if tuple(request.prefix[:len(self.root)]) != self.root:
-                raise RuntimeError("evidence/root changed within search epoch")
-            if len(request.prefix)+request.max_new_tokens+len(self.close)+self.cfg.answer_tokens > self.cfg.context_tokens:
-                raise RuntimeError("insufficient context reserved for full final answer")
-            jobs.append(replace(request, statistic=TokenStatistic(request.sampling, top_k=5),
-                                stop_sequences=(self.close,), intermediate_events=False))
-        samples = self.backend.sample_batch(jobs)
-        if len(samples) != len(jobs):
-            raise RuntimeError("missing sample")
-        for job, sample in zip(jobs, samples, strict=True):
-            sc, cn = self.tap.take(job, sample)
-            if len(sample.token_ids) > job.max_new_tokens:
-                raise RuntimeError("overlong sample")
-            self.work += len(sample.token_ids)
-            self.calls.append({"request_id": job.request_id, "seed": job.seed,
-                "prefix_ids": list(job.prefix), "prefix_sha256": token_hash(job.prefix),
-                "max_new_tokens": job.max_new_tokens, "token_ids": list(sample.token_ids),
-                "lp": list(sample.token_logprobs), "sc": list(sc), "cn": list(cn),
-                "finish_reason": sample.finish_reason})
-        return samples
-
-    def request(self, length, index, prefix=()):
-        return GenerationRequest(self.root+tuple(prefix), length, self.sampling,
-            SeedStream(self.seed).derive("candidate", index), f"{self.seed}:candidate:{index}")
 
     def statistics(self, completion):
         ids = tuple(completion)
@@ -156,39 +101,25 @@ class GuidanceLedger:
             raise RuntimeError("missing trajectory statistic")
         return {k: list(self.carried[k])+values[k] for k in values}
 
-    def scores(self, completions, kind):
-        result = []
-        for ids in completions:
-            values = self.statistics(ids)
-            result.append(trajectory_score(values["sc"], values["cn"], values["lp"], kind))
-        return tuple(result)
 
     def reward(self, prompt, completions):
         if tuple(prompt) != self.root:
             raise RuntimeError("reward root mismatch")
-        return self.scores(completions, self.reward_kind)
+        result = []
+        for ids in completions:
+            sc = self.statistics(ids)["sc"]
+            result.append(math.fsum(sc)/len(sc) if sc else 0.0)
+        return tuple(result)
 
 
-def search(ledger, method):
+def search(ledger):
+    method = "is_block_sc"
     cfg = ledger.cfg
     horizon = cfg.thinking_tokens-len(ledger.carried["sc"])
-    if method == "bon":
-        samples = ledger.sample_batch([ledger.request(horizon, i) for i in range(cfg.candidates)])
-        candidates = [tuple(s.token_ids) for s in samples]
-        scores = {k: ledger.scores(candidates, k) for k in ("sc", "consilience", "logprob")}
-        selection = {"single": 0, **{"bon_"+k: max(range(len(candidates)), key=lambda i: (v[i], -i)) for k,v in scores.items()}}
-        return candidates, {"method": method, "scores": scores, "selection": selection}
-    selection, reward = {
-        "is_sir_sc": ("sir", "sc"),
-        "is_met_sc": ("metropolized", "sc"),
-        "is_block_sc": ("block_metropolized", "sc"),
-        "is_block_consilience": ("block_metropolized", "consilience"),
-    }[method]
-    ledger.reward_kind = reward
     config = ConditionalISConfig(candidate_count=cfg.is_candidates, rollout_count=cfg.rollouts,
         block_size=cfg.block_tokens, total_length=horizon,
-        reward_temperature=.25 if reward == "sc" else 2., block_first=True,
-        exploration_schedule="fixed", selection_ready=False, selection=selection)
+        reward_temperature=.25, block_first=True,
+        exploration_schedule="fixed", selection_ready=False, selection="block_metropolized")
     adapter = ConditionalISAdapter(backend=ledger, prompt=ledger.root, config=config,
         sampling=ledger.sampling, reward=ledger.reward)
     state, records = adapter.initial_state, []
@@ -206,72 +137,6 @@ def search(ledger, method):
     return [tuple(state.token_ids)], {"method": method, "config": asdict(config), "steps": records,
         "fixed_tokens": state.fixed, "reward": state.reward,
         "stop": "terminal" if adapter.is_terminal(state) else "whole_pool_budget", "selection": {method: 0}}
-
-
-def checkpoint(backend, tap, root, close, seed, cfg):
-    """Both placements branch after the same complete-step stopping policy."""
-    ledger = GuidanceLedger(backend,tap,root,close,seed,cfg,cap=cfg.probe_tokens)
-    draft, boundary, terminal = [], None, False
-    while len(draft) < cfg.probe_tokens:
-        sample, = ledger.sample_batch([ledger.request(min(128,cfg.probe_tokens-len(draft)),len(ledger.calls),draft)])
-        draft.extend(sample.token_ids)
-        boundary = completed_boundary(backend,draft,cfg.probe_minimum)
-        stop = next((i for i,t in enumerate(draft) if t in {backend.tokenizer.eos_token_id,close[0]}),len(draft))
-        if boundary is not None and boundary <= stop:
-            break
-        if stop < len(draft):
-            terminal = True
-            break
-    if boundary is not None:
-        draft = draft[:boundary]
-    elif not terminal:
-        draft = []
-    return {"probe_root_ids":list(root),"probe_root_sha256":token_hash(root),"calls":ledger.calls,"work":ledger.work,
-        "reason_ids":draft,"boundary":boundary,"terminal":terminal,"statistics":ledger.statistics(draft)}
-
-
-def finish_answers(backend, root, suffixes, close, cfg, seeds):
-    """Batch independent final readouts, preserving each trajectory's own RNG keys."""
-    if len(suffixes) == 1:
-        return [finish_answer(backend,root,suffixes[0],close,cfg,seeds[0])]
-    eos,close=backend.tokenizer.eos_token_id,tuple(close)
-    prefixes,results,done=[],[],[]
-    for suffix in map(tuple,suffixes):
-        early=eos in suffix
-        natural=bool(close) and suffix[-len(close):]==close
-        prefixes.append(tuple(root)+suffix+(() if natural else close))
-        results.append({"answer_text":"","answer_ids":[],"calls":[],"empty_answer":True,
-            "eos_inside_thinking":early,"truncated":False,"forced_thinking_end":not natural and not early})
-        done.append(early)
-    sampling=SamplingConfig(eos_token_id=eos)
-    while not all(done):
-        jobs,indices=[],[]
-        for i,result in enumerate(results):
-            if done[i]:continue
-            count=min(cfg.answer_chunk,cfg.answer_tokens-len(result['answer_ids']))
-            prefix=prefixes[i]+tuple(result['answer_ids'])
-            if count<=0 or len(prefix)+count>cfg.context_tokens:
-                raise RuntimeError('answer context exhausted')
-            jobs.append(GenerationRequest(prefix,count,sampling,
-                SeedStream(seeds[i]).derive('answer',len(result['calls'])),
-                f'{seeds[i]}:answer:{i}:{len(result["calls"])}',intermediate_events=False))
-            indices.append(i)
-        samples=backend.sample_batch(jobs)
-        for i,request,sample in zip(indices,jobs,samples,strict=True):
-            result=results[i]
-            result['calls'].append({'seed':request.seed,'prefix_sha256':token_hash(request.prefix),
-                'max_new_tokens':request.max_new_tokens,'token_ids':list(sample.token_ids),'finish_reason':sample.finish_reason})
-            result['answer_ids'].extend(sample.token_ids)
-            if eos in sample.token_ids or sample.finish_reason in {'eos','eos_token','stop'}:
-                done[i]=True
-            elif not sample.token_ids:
-                raise RuntimeError('answer generation made no progress')
-            elif len(result['answer_ids'])>=cfg.answer_tokens:
-                done[i]=True;result['truncated']=True
-    for result in results:
-        result['answer_text']=backend.decode(tuple(result['answer_ids']),skip_special_tokens=True).strip()
-        result['empty_answer']=not bool(result['answer_text'])
-    return results
 
 
 def finish_answer(backend, root, suffix, close, cfg, seed):

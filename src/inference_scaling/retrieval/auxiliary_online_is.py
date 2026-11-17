@@ -4,8 +4,8 @@ import math
 
 from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler, draft_confidence
 from inference_scaling.retrieval.auxiliary_capture import layer_block, policy_disagreement
-from inference_scaling.retrieval.tuned_online_is import TunedOnlineLedger, overlaps
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.online_is import OnlineISLedger, overlaps
+from inference_scaling.retrieval.common import token_hash
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ def auxiliary_feature(policy, calls, backend):
     return feature['distinct_paths'] > 1 and feature['value'] >= policy.threshold, feature
 
 
-class AuxiliaryOnlineLedger(TunedOnlineLedger):
+class AuxiliaryOnlineLedger(OnlineISLedger):
     def __init__(self, *args, auxiliary_policy, **kwargs):
         super().__init__(*args, **kwargs)
         if self.policy.trigger != 'fixed' or self.policy.query not in {'concat','question'}:
@@ -92,7 +92,7 @@ class AuxiliaryOnlineLedger(TunedOnlineLedger):
     def retrieve_by_hidden_trials(self, branch, used):
         p = self.auxiliary_policy
         tail = self.backend.decode(branch[-self.policy.query_tail:],skip_special_tokens=True).strip()
-        from inference_scaling.retrieval.smart_online_is import clean_question
+        from inference_scaling.retrieval.common import clean_question
         query = clean_question(self.question) if self.policy.query == 'question' else self.question+'\n'+tail
         found, log = self.facts.retrieve(query,k=self.policy.candidates,exclude=frozenset(used))
         found = [h for h in found if not any(overlaps(h['id'],old,self.policy.overlap) for old in used)][:p.evidence_candidates]

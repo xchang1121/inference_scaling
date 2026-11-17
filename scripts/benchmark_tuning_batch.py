@@ -7,35 +7,30 @@ import json
 import os
 import time
 
-from benchmark_flare_gap import clean, render
+from retrieval_runtime import clean, render
 from benchmark_is_gpu import GraphMeasurements, engine_settings, reset_cache
-from benchmark_online_is import run_arm
-from benchmark_smart_online_is import run_arm as run_legacy_arm
-from inference_scaling.retrieval.smart_online_is import VARIANTS as LEGACY_VARIANTS
 from inference_scaling.app.settings import load_settings
 from inference_scaling.arllm.backends.loader import load_backend, close_backend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import GenerationRequest
-from inference_scaling.retrieval.ablation import SYSTEM
-from inference_scaling.retrieval.controller import _snapshot
+from inference_scaling.retrieval.common import SYSTEM
+from inference_scaling.retrieval.common import _snapshot
 from inference_scaling.retrieval.corpus import Retriever
 from inference_scaling.retrieval.cot_guidance import DualStatistics, GuidanceConfig
-from inference_scaling.retrieval.literature import FactBank, ExampleBank, LiteratureConfig
-from inference_scaling.retrieval.online_is import OnlineRetrievalConfig
+from inference_scaling.retrieval.evidence import FactBank, ExampleBank, EvidenceConfig
 from inference_scaling.retrieval.internal_signals import InternalSignals, select_signal_worker
 from inference_scaling.retrieval.native_journal import NativeJournal
 from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy
 from inference_scaling.retrieval.gap_online_is import GapPolicy
 from inference_scaling.retrieval.example_online_is import ExamplePolicy
-from inference_scaling.retrieval.ranked_facts import FactRanking,RankedFactBank
-from inference_scaling.retrieval.tuned_online_is import TuningPolicy, TuningTap, run_tuned_is
+from inference_scaling.retrieval.evidence import FactRanking
+from inference_scaling.retrieval.online_is import TuningPolicy, TuningTap, run_online_is
 from inference_scaling.shared.rng import SeedStream
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--settings', type=Path, required=True)
-    p.add_argument('--prepared', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--batch', type=Path, required=True)
     p.add_argument('--corpus', type=Path, required=True)
@@ -114,13 +109,12 @@ def main():
             journal = NativeJournal(raw, tap, a.output.with_name(a.output.stem+'-native.jsonl'))
             controller_tap = TuningTap(tap, signals) if need_signals else tap
             close = (raw.tokenizer.convert_tokens_to_ids('</think>'),)
-            prepared = json.loads(a.prepared.read_text())
             indices, banks, example_banks = {}, {}, {}
             for config in batch['configs']:
                 if 'example_policy' in config:
                     if not a.examples or not a.encoder:
                         raise ValueError('example corpus and encoder required')
-                    example_cfg=LiteratureConfig(**config.get('fact_config',{}))
+                    example_cfg=EvidenceConfig(**config.get('fact_config',{}))
                     key=json.dumps(asdict(example_cfg),sort_keys=True)
                     reused_from=example_banks[key][0] if key in example_banks else None
                     if reused_from is None:
@@ -133,9 +127,8 @@ def main():
                 kind = config.get('retriever', 'bm25')
                 if kind not in indices:
                     indices[kind] = Retriever.from_jsonl(a.corpus, kind=kind)
-                bank_cls=RankedFactBank if 'fact_ranking' in config else FactBank
                 extra={'ranking':FactRanking(**config['fact_ranking'])} if 'fact_ranking' in config else {}
-                banks[config['id']] = bank_cls(raw, indices[kind], LiteratureConfig(**config.get('fact_config', {})),**extra)
+                banks[config['id']] = FactBank(raw, indices[kind], EvidenceConfig(**config.get('fact_config', {})),**extra)
             write({'kind': 'engine', 'model_id': raw.model_id, 'config': engine_settings(raw),
                    'corpus_sha256': next(iter(indices.values())).fingerprint if indices else None})
             warm_prefix = render(raw.tokenizer, settings['ar'], SYSTEM, batch['cases'][0]['question'], True)
@@ -159,25 +152,17 @@ def main():
                             controller_tap.history.clear()
                         before, g0, journal_io0 = _snapshot(raw), graph.snapshot(), journal.io_seconds
                         started = time.perf_counter()
-                        ret = dict(config.get('retrieval_config', {}))
-                        if 'positions' in ret:
-                            ret['positions'] = tuple(ret['positions'])
-                        if config['arm'] == 'tuned_online':
-                            policy = TuningPolicy(**config.get('policy', {}))
-                            result = run_tuned_is(raw, controller_tap, tuple(case['prompt_ids']), close,
-                                SeedStream(seed).derive('question', case['id']), cfg,
-                                question=case['question'], facts=banks[config['id']], policy=policy,
-                                auxiliary_policy=AuxiliaryPolicy(**config['auxiliary_policy'])
-                                    if 'auxiliary_policy' in config else None,
-                                gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None,
-                                example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None)
-                            result.update(arm=config['arm'], question_id=case['id'], seed=seed,
-                                          base_ids=list(case['prompt_ids']), static_packets=[],
-                                          static_injected_ids=[], static_retrievals=[])
-                        else:
-                            runner = run_legacy_arm if config['arm'] in LEGACY_VARIANTS else run_arm
-                            result = runner(raw, controller_tap, banks[config['id']], case, seed, config['arm'], cfg,
-                                             close, prepared['noise_ids'], OnlineRetrievalConfig(**ret))
+                        policy = TuningPolicy(**config.get('policy', {}))
+                        result = run_online_is(raw, controller_tap, tuple(case['prompt_ids']), close,
+                            SeedStream(seed).derive('question', case['id']), cfg,
+                            question=case['question'], facts=banks[config['id']], policy=policy,
+                            auxiliary_policy=AuxiliaryPolicy(**config['auxiliary_policy'])
+                                if 'auxiliary_policy' in config else None,
+                            gap_policy=GapPolicy(**config['gap_policy']) if 'gap_policy' in config else None,
+                            example_policy=ExamplePolicy(**config['example_policy']) if 'example_policy' in config else None)
+                        result.update(arm='tuned_online', question_id=case['id'], seed=seed,
+                                      base_ids=list(case['prompt_ids']), static_packets=[],
+                                      static_injected_ids=[], static_retrievals=[])
                         if need_signals:
                             for call in result['native_calls']:
                                 if call['request_id'] in controller_tap.history:

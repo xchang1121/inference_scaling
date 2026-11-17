@@ -2,7 +2,7 @@
 import math
 
 from inference_scaling.retrieval.example_online_is import ExamplePolicy
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.common import token_hash
 from inference_scaling.shared.rng import SeedStream
 
 

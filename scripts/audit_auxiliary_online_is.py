@@ -3,12 +3,12 @@ from types import SimpleNamespace
 import math
 
 from inference_scaling.retrieval.auxiliary_online_is import AuxiliaryPolicy, auxiliary_feature
-from inference_scaling.retrieval.stepwise import token_hash
+from inference_scaling.retrieval.common import token_hash
 from inference_scaling.shared.rng import SeedStream
 from inference_scaling.retrieval.auxiliary_capture import policy_disagreement, validate_captured_rows
 from inference_scaling.retrieval.multilayer_capture import SCHEMA
-from inference_scaling.retrieval.tuned_online_is import overlaps
-from inference_scaling.retrieval.smart_online_is import BRIDGE, RESUME
+from inference_scaling.retrieval.online_is import overlaps
+from inference_scaling.retrieval.common import BRIDGE, RESUME
 
 
 def prepare_auxiliary_audit(row, cfg, decode, eos, close, ck):

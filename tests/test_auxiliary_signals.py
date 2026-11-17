@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from test_online_is import Native
+from retrieval_fixtures import Native
 from inference_scaling.retrieval.auxiliary_signals import AuxiliarySampler, hidden_disagreement, draft_confidence
 
 
