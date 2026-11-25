@@ -22,6 +22,78 @@ from math import fsum, isfinite, log
 
 SCALAR_STATISTICS_KEY = "inference_scaling_scalar_self_certainty"
 SELF_CERTAINTY_SLOT = -1
+_V2_SCALAR_SAMPLER_CLASSES: dict[type, type] = {}
+
+
+def _install_v2_gpu_scalar_statistics(sampler, vocabulary_size: int) -> None:
+    """Install pre-mask scalar statistics on vLLM >=0.30 GPU V2 Sampler."""
+    import torch
+
+    base_cls = type(sampler)
+    wrapper_cls = _V2_SCALAR_SAMPLER_CLASSES.get(base_cls)
+    if wrapper_cls is None:
+        class _ScalarV2Sampler(base_cls):  # type: ignore[misc,valid-type]
+            def apply_sampling_params(self, *args, **kwargs):
+                out = super().apply_sampling_params(*args, **kwargs)
+                skip_mask = bool(kwargs.get("skip_top_k_top_p", False))
+                if not skip_mask and len(args) >= 10:
+                    skip_mask = bool(args[9])
+                pending_k = getattr(self, "_scalar_pending_k", None)
+                vocab = int(getattr(self, "_scalar_vocab_size", 0))
+                if skip_mask and pending_k is not None and vocab > 0 and out.shape[-1] >= vocab:
+                    f = out[..., :vocab].float()
+                    lse = torch.logsumexp(f, dim=-1, keepdim=True)
+                    certainty = (lse - f.mean(dim=-1, keepdim=True) - log(vocab)).clamp_min(0.0)
+                    k_extra = max(0, pending_k - 1)
+                    if k_extra > 0:
+                        top_vals, top_ids = f.topk(min(k_extra, vocab), dim=-1)
+                        top_lps = top_vals - lse
+                    else:
+                        top_ids = top_lps = None
+                    self._scalar_pending_pre_mask = (certainty, top_ids, top_lps)
+                return out
+
+            def __call__(self, logits, input_batch):
+                dims = self.get_logprobs_dims(input_batch.idx_mapping_np)
+                num_lp = int(dims[0]) if dims is not None else 0
+                self._scalar_pending_k = num_lp if num_lp >= 1 else None
+                self._scalar_pending_pre_mask = None
+                try:
+                    result = super().__call__(logits, input_batch)
+                finally:
+                    pending = getattr(self, "_scalar_pending_pre_mask", None)
+                    self._scalar_pending_pre_mask = None
+                    self._scalar_pending_k = None
+                if pending is not None and result.logprobs_tensors is not None:
+                    certainty, top_ids, top_lps = pending
+                    lp = result.logprobs_tensors
+                    if certainty.shape[0] == lp.logprob_token_ids.shape[0]:
+                        ids0 = lp.logprob_token_ids[:, :1]
+                        vals0 = lp.logprobs[:, :1]
+                        slot = torch.full_like(ids0, SELF_CERTAINTY_SLOT)
+                        cert_col = certainty.to(dtype=vals0.dtype)
+                        k_extra = max(0, lp.logprob_token_ids.shape[-1] - 2)
+                        if k_extra > 0 and top_ids is not None and top_ids.shape[-1] >= k_extra:
+                            new_ids = torch.cat((ids0, slot, top_ids[:, :k_extra].to(dtype=ids0.dtype)), dim=-1)
+                            new_vals = torch.cat((vals0, cert_col, top_lps[:, :k_extra].to(dtype=vals0.dtype)), dim=-1)
+                        elif k_extra > 0:
+                            new_ids = torch.cat((ids0, slot, lp.logprob_token_ids[:, 1 : 1 + k_extra]), dim=-1)
+                            new_vals = torch.cat((vals0, cert_col, lp.logprobs[:, 1 : 1 + k_extra]), dim=-1)
+                        else:
+                            new_ids = torch.cat((ids0, slot), dim=-1)
+                            new_vals = torch.cat((vals0, cert_col), dim=-1)
+                        result.logprobs_tensors = lp._replace(logprob_token_ids=new_ids, logprobs=new_vals)
+                return result
+
+        _ScalarV2Sampler.__name__ = f"Scalar{base_cls.__name__}"
+        _V2_SCALAR_SAMPLER_CLASSES[base_cls] = _ScalarV2Sampler
+        wrapper_cls = _ScalarV2Sampler
+
+    sampler._scalar_vocab_size = int(vocabulary_size)
+    sampler._scalar_pending_k = None
+    sampler._scalar_pending_pre_mask = None
+    sampler.__class__ = wrapper_cls
+    sampler._scalar_self_certainty_installed = True
 
 
 def install_scalar_statistics(sampler, vocabulary_size: int) -> None:
@@ -29,6 +101,9 @@ def install_scalar_statistics(sampler, vocabulary_size: int) -> None:
     import torch
 
     if getattr(sampler, "_scalar_self_certainty_installed", False):
+        return
+    if not hasattr(sampler, "gather_logprobs") and hasattr(sampler, "apply_sampling_params") and hasattr(sampler, "get_logprobs_dims"):
+        _install_v2_gpu_scalar_statistics(sampler, vocabulary_size)
         return
     original_gather = sampler.gather_logprobs
     sampler._pending_pre_mask = None

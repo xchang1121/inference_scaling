@@ -83,6 +83,60 @@ def test_gpu_worker_selected_for_scalar_self_certainty_on_cuda(monkeypatch) -> N
     assert getattr(sampler, "_scalar_self_certainty_installed", False) is True
 
 
+def test_v2_gpu_sampler_pre_mask_scalar_statistics() -> None:
+    Payload = namedtuple("Payload", "logprob_token_ids logprobs selected_token_ranks")
+
+    class FakeV2Sampler:
+        def __init__(self, num_lp: int):
+            self._num_lp = num_lp
+
+        def get_logprobs_dims(self, idx_mapping_np):
+            return (self._num_lp, 0) if self._num_lp > 0 else None
+
+        def apply_sampling_params(self, logits, *args, skip_top_k_top_p: bool = False):
+            return logits / 0.8
+
+        def __call__(self, logits, input_batch):
+            pre = self.apply_sampling_params(logits, skip_top_k_top_p=True)
+            masked = pre.clone()
+            masked[:, 2:] = float("-inf")
+            sampled = torch.tensor([0, 1], dtype=torch.int64)
+            logp = torch.log_softmax(masked, dim=-1)
+            ids = torch.zeros((2, 1 + self._num_lp), dtype=torch.int64)
+            vals = torch.zeros((2, 1 + self._num_lp), dtype=torch.float32)
+            ids[:, 0] = sampled
+            vals[:, 0] = logp.gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+            return SimpleNamespace(logprobs_tensors=Payload(ids, vals, torch.zeros((2,), dtype=torch.int64)))
+
+    raw = torch.tensor([[2.0, 0.5, -1.0, -2.5], [-0.5, 1.8, 0.2, -1.2]], dtype=torch.float32)
+    scaled = raw / 0.8
+    expected_kl = (torch.logsumexp(scaled, dim=-1) - scaled.mean(dim=-1) - math.log(4)).tolist()
+    expected_top2 = (-torch.topk(torch.log_softmax(scaled, dim=-1), 2, dim=-1).values.mean(dim=-1)).tolist()
+    batch = SimpleNamespace(idx_mapping_np=[0, 1])
+
+    sampler_sc = FakeV2Sampler(num_lp=1)
+    install_scalar_statistics(sampler_sc, 4)
+    out_sc = sampler_sc(raw, batch).logprobs_tensors
+    flat_sc = FlatLogprobs(
+        [0, 2], [2, 4],
+        out_sc.logprob_token_ids.reshape(-1).tolist(),
+        out_sc.logprobs.reshape(-1).tolist(),
+    )
+    _, sc_vals = scalar_generated_logprobs(flat_sc, (0, 1), None)
+    assert sc_vals == pytest.approx(tuple(expected_kl), abs=1e-5)
+
+    sampler_cons = FakeV2Sampler(num_lp=3)
+    install_scalar_statistics(sampler_cons, 4)
+    out_cons = sampler_cons(raw, batch).logprobs_tensors
+    flat_cons = FlatLogprobs(
+        [0, 4], [4, 8],
+        out_cons.logprob_token_ids.reshape(-1).tolist(),
+        out_cons.logprobs.reshape(-1).tolist(),
+    )
+    _, cons_vals = scalar_generated_logprobs(flat_cons, (0, 1), 2)
+    assert cons_vals == pytest.approx(tuple(expected_top2), abs=1e-5)
+
+
 def test_pre_mask_scalar_statistics_stay_finite_and_exact_under_top_k_top_p() -> None:
     Payload = namedtuple("Payload", "logprob_token_ids logprobs selected_token_ranks")
 
