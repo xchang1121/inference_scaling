@@ -187,6 +187,14 @@ SUITES: dict[str, list[dict[str, Any]]] = {
                            "exploration_schedule": "adaptive", "selection_ready": False,
                            "selection": "block_metropolized", "pilot_gate": True, "pilot_tokens": None,
                            "selective_lookahead": True, "straggler_pruning": True, "adaptive_temperature": True}),
+        _arm("adapt_k2_sc_t08",
+             reward="self_certainty",
+             sampling={"temperature": 0.8, "top_p": 0.95, "top_k": 20},
+             reward_overrides={"aggregation": "mean", "incomplete_penalty": 1.5},
+             is_overrides={"candidate_count": 4, "rollout_count": 2, "block_size": 1024,
+                           "exploration_schedule": "adaptive", "selection_ready": False,
+                           "selection": "block_metropolized", "pilot_gate": True, "pilot_tokens": None,
+                           "selective_lookahead": True, "straggler_pruning": True, "adaptive_temperature": True}),
     ],
     # Suite 3: Fast compact comparison (for quick Colab GPU / TP=2 vs TP=4 / concurrency checks).
     "quick_pareto": [
