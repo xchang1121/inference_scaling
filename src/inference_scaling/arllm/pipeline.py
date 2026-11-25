@@ -112,6 +112,7 @@ def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, thin
             window_fraction=float(settings.get("window_fraction", 0.2)),
             final_weight=float(settings.get("final_weight", 0.5)),
             skip_fraction=float(settings.get("skip_fraction", 0.05)),
+            temperature_normalized=bool(settings.get("temperature_normalized", False)),
             **span,
         )
     else:

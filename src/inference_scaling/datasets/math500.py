@@ -6,6 +6,7 @@ import json
 import multiprocessing as mp
 import random
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -71,22 +72,33 @@ class MathJudge:
         self.timeout_seconds = timeout_seconds
         self._process: Any = None
         self._connection: Any = None
+        self._lock = threading.Lock()
+
+    def _close_unlocked(self) -> None:
+        if self._process is not None:
+            if self._process.is_alive():
+                self._process.terminate()
+            self._process.join(timeout=self.timeout_seconds)
+            self._process.close()
+            self._connection.close()
+            self._process = self._connection = None
 
     def _request(self, operation: str, *values: str) -> Any:
-        if self._process is None:
-            context = mp.get_context("spawn")
-            self._connection, child = context.Pipe()
-            self._process = context.Process(target=_judge_worker, args=(child,), daemon=True)
-            self._process.start()
-            child.close()
-        self._connection.send((operation, values))
-        if not self._connection.poll(self.timeout_seconds):
-            self.close()
-            raise TimeoutError("math answer evaluation timed out")
-        success, result = self._connection.recv()
-        if not success:
-            raise ValueError(result)
-        return result
+        with self._lock:
+            if self._process is None:
+                context = mp.get_context("spawn")
+                self._connection, child = context.Pipe()
+                self._process = context.Process(target=_judge_worker, args=(child,), daemon=True)
+                self._process.start()
+                child.close()
+            self._connection.send((operation, values))
+            if not self._connection.poll(self.timeout_seconds):
+                self._close_unlocked()
+                raise TimeoutError("math answer evaluation timed out")
+            success, result = self._connection.recv()
+            if not success:
+                raise ValueError(result)
+            return result
 
     def grade(self, prediction: str, reference: str) -> dict[str, bool]:
         return self._request("grade", prediction, reference)
@@ -98,13 +110,8 @@ class MathJudge:
         return self._request("parse", text)
 
     def close(self) -> None:
-        if self._process is not None:
-            if self._process.is_alive():
-                self._process.terminate()
-            self._process.join(timeout=self.timeout_seconds)
-            self._process.close()
-            self._connection.close()
-            self._process = self._connection = None
+        with self._lock:
+            self._close_unlocked()
 
 
 @dataclass(frozen=True)

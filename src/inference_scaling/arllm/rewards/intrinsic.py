@@ -134,6 +134,8 @@ class SelfCertaintyReward(TokenStatisticReward):
     window_fraction: float = 0.2
     final_weight: float = 0.5
     skip_fraction: float = 0.05
+    # Multiply KL by score_temperature so pairwise reward gaps stay scale-invariant across sampling temperatures T.
+    temperature_normalized: bool = False
 
     def __post_init__(self) -> None:
         TokenStatisticReward.__post_init__(self)
@@ -153,20 +155,23 @@ class SelfCertaintyReward(TokenStatisticReward):
     def reduce(self, values: Sequence[float]) -> float:
         if not all(isfinite(value) for value in values):
             raise ValueError("Self-Certainty requires finite confidences")
+        scale = float(self.statistic.policy.temperature) if self.temperature_normalized else 1.0
         if self.aggregation == "mean":
-            return fsum(values) / len(values)
+            return scale * (fsum(values) / len(values))
         skipped = min(len(values) - 1, int(len(values) * self.skip_fraction))
         body = values[skipped:]
         if self.aggregation == "tail_mean":
             count = max(1, int(len(body) * self.tail_fraction))
-            return fsum(sorted(body)[:count]) / count
+            return scale * (fsum(sorted(body)[:count]) / count)
         window = max(1, int(len(body) * self.window_fraction))
         body_mean = fsum(body) / len(body)
         final_mean = fsum(body[-window:]) / window
-        return (1.0 - self.final_weight) * body_mean + self.final_weight * final_mean
+        return scale * ((1.0 - self.final_weight) * body_mean + self.final_weight * final_mean)
 
     def describe(self) -> dict[str, object]:
         description: dict[str, object] = {"source": "model_self_certainty", **TokenStatisticReward.describe(self)}
+        if self.temperature_normalized:
+            description["temperature_normalized"] = True
         if self.aggregation != "mean":
             description["aggregation"] = self.aggregation
             description["skip_fraction"] = self.skip_fraction

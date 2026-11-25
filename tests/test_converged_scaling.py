@@ -235,6 +235,104 @@ def test_self_certainty_and_consilience_refinements_and_incomplete_penalty() -> 
     assert c_pen((), complete_seq) == pytest.approx(9.0 - 8.0)
     assert c_pen((), incomplete_seq) == pytest.approx((9.0 - 0.0) - 1.5)
 
+    # temperature_normalized scales Self-Certainty by score_temperature so pairwise gaps stay invariant to T.
+    stat_t07 = TokenStatistic(SamplingConfig(temperature=0.7))
+    sc_tnorm = SelfCertaintyReward(backend, stat_t07, scope="full", temperature_normalized=True)
+    assert sc_tnorm((), (3, 4)) == pytest.approx(0.7 * 8.5)
+    assert sc_tnorm.describe()["temperature_normalized"] is True
+
+
+def test_adaptive_v2_stage2_forecast_and_final_pool_straggler_pruning() -> None:
+    from inference_scaling.arllm.algorithms.conditional_is import forecast_candidate_count
+
+    cfg = ConditionalISConfig(
+        candidate_count=4, rollout_count=2, block_size=1024, total_length=12288,
+        reward_temperature=0.25, block_first=False, exploration_schedule="adaptive",
+        selection="block_metropolized",
+    )
+    # Low dispersion across unused Stage-1 groups -> Stage 2 skipped (0 fresh suffixes).
+    flat_obs = ((1, 2, 4096, 10.0), (1, 2, 4096, 10.01), (2, 2, 4096, 10.02), (3, 1, 4096, 10.01))
+    assert forecast_candidate_count(flat_obs, 1024, cfg, SeedStream(1)) == 0
+    # High dispersion across unused Stage-1 groups -> Stage 2 capped strictly at M-1 = 3.
+    wide_obs = ((1, 2, 8192, 10.0), (2, 2, 8192, 14.0), (3, 1, 8192, 6.0))
+    fanout = forecast_candidate_count(wide_obs, 1024, cfg, SeedStream(1))
+    assert 1 <= fanout <= cfg.candidate_count - 1
+
+    # Verify Stage 2 (final_pool) straggler pruning actually aborts a runaway Stage-2 suffix!
+    # Pick a seed whose Stage-2 length_window draw gives a wide upper bound (~1.9x) so the runaway crosses threshold_len.
+    seed_s2 = next(
+        s for s in range(1, 100)
+        if float(SeedStream(s).generator("conditional_is", 1, "length_window").random()) > 0.85
+    )
+    stage2_straggler_seed = SeedStream(seed_s2).derive("conditional_is", 1, "candidate", 1)
+
+    step0_seeds = {SeedStream(seed_s2).derive("conditional_is", 0, "candidate", i): i for i in range(4)}
+
+    class Stage2StragglerEngine(DeltaEngine):
+        async def generate(self, *, prompt, sampling_params, request_id, **kwargs):
+            import asyncio
+            params = sampling_params
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            is_s2_runaway = params.seed == stage2_straggler_seed
+            # Step 0 prefixes finish at len=100 (suffix=96); Stage-2 fast peers finish at 96 (> min_len), runaway loops to 256.
+            target_len = min(
+                params.max_tokens,
+                256 if is_s2_runaway else (96 if len(prompt["prompt_token_ids"]) > 1 else 100),
+            )
+            tok_lp = -3.0 if is_s2_runaway else -0.1
+            step0_idx = step0_seeds.get(params.seed, 0)
+            body_tok = 4 if (len(prompt["prompt_token_ids"]) == 1 and step0_idx % 2 == 0) else 3
+            try:
+                for offset in range(target_len):
+                    await asyncio.sleep(0.0005 if is_s2_runaway else 0.0001)
+                    tok = 2 if (not is_s2_runaway and offset + 1 == target_len) else body_tok
+                    finished = offset + 1 == target_len or tok in params.stop_token_ids
+                    pos = FlatLogprobs([([tok, 3], [tok_lp, tok_lp])])
+                    yield SimpleNamespace(
+                        request_id=request_id, num_cached_tokens=0, finished=finished,
+                        outputs=[SimpleNamespace(token_ids=[tok], logprobs=pos,
+                                                 finish_reason=("stop" if tok in params.stop_token_ids else "length")
+                                                 if finished else None)],
+                    )
+                    if finished:
+                        break
+            finally:
+                self.active -= 1
+
+    engine = Stage2StragglerEngine(stream_interval=1)
+    backend = backend_for(engine)
+    backend.configure_scheduler(SchedulerConfig(max_in_flight=8))
+    stat = TokenStatistic(SamplingConfig(), top_k=1)
+    recorder = StatisticRecorder(backend, stat)
+
+    def prefix_score(_prompt, prefix):
+        vals = recorder.recorded_statistics((1,), prefix, stat)
+        if vals is None:
+            return None
+        # Give Step 0 distinct group rewards so dispersion >= 0.15 triggers Stage 2.
+        distinct = 1.5 if 4 in prefix[:4] else 0.0
+        return -sum(vals) / len(vals) + distinct
+
+    def full_reward(_prompt, seqs):
+        return [prefix_score((1,), s) or 0.0 for s in seqs]
+
+    try:
+        cfg_s2 = ConditionalISConfig(
+            candidate_count=4, rollout_count=1, block_size=4, total_length=256,
+            reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
+            selection="block_metropolized", pilot_gate=False, straggler_pruning=True,
+        )
+        res = run_conditional_is(
+            recorder, (1,), cfg_s2, full_reward, SeedStream(seed_s2),
+            sampling=SamplingConfig(eos_token_id=2), prefix_reward=prefix_score,
+        )
+        assert len(res.steps) == 2
+        assert engine.aborted  # Stage-2 runaway suffix was aborted cleanly!
+        assert len(res.token_ids) == 100
+    finally:
+        backend.close()
+
 
 def test_calibrate_reward_temperature_bounds_ess_and_is_symmetric() -> None:
     # Already healthy spread: unchanged.

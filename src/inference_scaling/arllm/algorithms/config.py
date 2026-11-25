@@ -97,7 +97,7 @@ class ConditionalISConfig:
     selective_lookahead: bool = True
     straggler_pruning: bool = True
     adaptive_temperature: bool = True
-    # Optional escalation horizon for pilot_gate; None anchors directly to block_size (B).
+    # Optional escalation horizon for pilot_gate; None defaults to block_size // 2 (B / 2).
     pilot_tokens: int | None = None
 
     def __post_init__(self) -> None:

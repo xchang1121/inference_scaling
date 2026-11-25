@@ -2,13 +2,13 @@
 
 Roots keep running while K-1 siblings branch at the fixed checkpoint. The retained
 complete sequence is reused without rescoring. Under ``exploration_schedule="adaptive"``:
-1. A B-anchored pilot gate runs candidate 0 first up to ``pilot_tokens`` (default ``B``);
+1. A B-anchored pilot gate runs candidate 0 first up to ``pilot_tokens`` (default ``B // 2``);
    cleanly finished short thoughts exit immediately at 1x cost, while harder problems
    reuse candidate 0's prefix seamlessly and launch candidates ``1..M-1`` in parallel.
 2. When ``K > 1``, unbiased selective K-lookahead allocates ``K`` rollouts to the top
    ``ceil(M/2)`` prefixes (scored purely from prefix tokens up to ``B``) and ``1`` to the rest.
-3. Stagnation-only straggler pruning aborts runaway loops (>2.5x median completed length
-   and >3B tokens while trailing median reward) without biasing normal-length rollouts.
+3. Stagnation-only straggler pruning aborts runaway loops on both Stage 1 and Stage 2
+   when they substantially exceed median completed length and 2B while trailing median reward.
 4. ESS-bounded reward-temperature calibration keeps pool weights well-conditioned across tasks.
 """
 
@@ -98,7 +98,8 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
     remaining = config.total_length - state.fixed
     width = min(config.block_size, remaining)
     pilot_active = adaptive and first_pool and config.pilot_gate and candidate_count > 1 and width < remaining
-    pilot_width = min(config.pilot_tokens if config.pilot_tokens is not None else width, width)
+    default_pilot = min(width, max(1, width // 2))
+    pilot_width = min(config.pilot_tokens if config.pilot_tokens is not None else default_pilot, width)
     selective_k = adaptive and first_pool and config.selective_lookahead and rollout_count > 1
     minimum_length = None
     length_limit = remaining
@@ -223,11 +224,11 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         evaluations += len(items)
 
     def prune_stagnating_stragglers():
-        """Abort extreme runaway rollouts (>2.5x median completed length & >3B) that trail median reward."""
+        """Abort extreme runaway rollouts that substantially outrun completed peers while trailing median reward."""
         if not straggler_guard or not pilot_escalated:
             return
         done_groups = len(clean_completed_lengths)
-        min_required = 2 if final_pool else max(2, ceil(candidate_count / 2))
+        min_required = 1 if final_pool else max(2, ceil(candidate_count / 2))
         if done_groups < min_required:
             return
         all_lengths = [length for group_lens in clean_completed_lengths.values() for length in group_lens]
@@ -236,21 +237,34 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             return
         med_len = median(all_lengths)
         med_reward = median(all_rewards)
-        threshold_len = max(3 * width, int(2.5 * med_len))
+        # Anchor floor to block size B (state.fixed on Stage 2 where width == remaining).
+        block_anchor = min(state.fixed, width) if final_pool and state.fixed > 0 else width
+        if final_pool:
+            threshold_len = (
+                max(2 * block_anchor, int(1.75 * med_len))
+                if done_groups == 1
+                else max(2 * block_anchor, int(1.5 * med_len))
+            )
+        else:
+            threshold_len = max(2 * block_anchor, int(2.0 * med_len))
         assert adapter.prefix_reward is not None
         for key in list(routes):
             if key in finished or key in cancelled:
                 continue
             idx, rollout, is_root = routes[key]
-            # Never prune before block B is known on Step 0 (ensures selective K & group structure remain intact).
-            if blocks[idx] is None:
+            # On Step 0, wait until block B is known so selective K and group structure stay intact.
+            # On Stage 2 (final_pool), blocks[idx] stays None until completion, so read the root buffer directly.
+            if not final_pool and blocks[idx] is None:
                 continue
             buf = buffers.get(key)
             if not buf:
                 continue
-            blk = blocks[idx]
-            assert blk is not None
-            obs_seq = tuple(buf) if is_root else blk.token_ids + tuple(buf)
+            if is_root:
+                obs_seq = tuple(buf)
+            else:
+                blk = blocks[idx]
+                assert blk is not None
+                obs_seq = blk.token_ids + tuple(buf)
             if len(obs_seq) < threshold_len:
                 continue
             proxy = adapter.prefix_reward(prompt, fixed + obs_seq)
@@ -270,8 +284,9 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
             blocks[0] = carried_block
             leaves[0][0] = RolloutEvaluation(state.token_ids[end:], state.reward, state.reward / config.reward_temperature)
             planned_rollouts[0] = 1 if carried_block.finish_reason != "length" or end >= len(state.token_ids) else rollout_count
-            clean_completed_lengths.setdefault(0, []).append(len(state.token_ids) - state.fixed)
-            clean_completed_rewards.setdefault(0, []).append(state.reward)
+            if len(state.token_ids) < config.total_length:
+                clean_completed_lengths.setdefault(0, []).append(len(state.token_ids) - state.fixed)
+                clean_completed_rewards.setdefault(0, []).append(state.reward)
         if pilot_active:
             pilot_job = request(0, 0, (), length_limit, root=True)
             session.submit([pilot_job], phase="prefix", checkpoint=pilot_width)
@@ -506,7 +521,7 @@ def evaluate_candidates(adapter: ConditionalISAdapter, state: RetainedSequence, 
         # ESS-bounded dynamic reward temperature calibration in adaptive mode.
         if adaptive and config.adaptive_temperature and len(canonical) >= 2 and not selection_ready:
             raw_groups = [[item.reward for item in group] for group in canonical]
-            tau_eff = calibrate_reward_temperature(raw_groups, config.reward_temperature)
+            tau_eff = calibrate_reward_temperature(raw_groups, config.reward_temperature, min_ess=1.5)
             if tau_eff != config.reward_temperature:
                 canonical = [
                     [replace(item, log_weight=item.reward / tau_eff) for item in group]

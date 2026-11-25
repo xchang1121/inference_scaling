@@ -63,6 +63,7 @@ SCHEMA: dict[str, Any] = {
             OptionalKey("final_weight"): float,
             OptionalKey("skip_fraction"): float,
             OptionalKey("incomplete_penalty"): float,
+            OptionalKey("temperature_normalized"): bool,
         },
         "consilience": {
             "temperature": float,

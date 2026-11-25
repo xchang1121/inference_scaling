@@ -128,8 +128,9 @@ def forecast_candidate_count(observations: tuple[tuple[int, int, int, float], ..
     if config.final_pool_limit is not None:
         full = min(full, config.final_pool_limit)
     if config.exploration_schedule == "adaptive":
-        # Bound Stage-2 fanout relative to external M so long proofs cannot blow up FLOPs.
-        full = min(full, max(1, 2 * (config.candidate_count - 1)))
+        # Bound Stage-2 fanout to at most M-1 fresh suffixes (total pool <= M)
+        # so long proofs stay within a predictable ~2M-scale compute envelope.
+        full = min(full, max(1, config.candidate_count - 1))
     unused = list(groups.values())
     if not full or len(unused) < 2:
         # A single auxiliary group cannot estimate variation between prefixes.
@@ -141,6 +142,12 @@ def forecast_candidate_count(observations: tuple[tuple[int, int, int, float], ..
     seconds = [fsum(exp(2 * (value - peak)) for value in group) / len(group) for group in unused]
     mean, second = fsum(means) / len(unused), fsum(seconds) / len(unused)
     dispersion = max(0., min(1., 1 - mean * mean / second))
+    if config.exploration_schedule == "adaptive":
+        # Skip Stage 2 when unused Stage-1 candidates are already tightly clustered;
+        # otherwise scale Stage-2 fresh suffixes smoothly in [1, M-1] by dispersion.
+        if dispersion < 0.15:
+            return 0
+        return max(1, ceil(full * dispersion))
     minimum = min(full, config.candidate_count - 1)
     expected = minimum + ceil((full - minimum) * dispersion)
     return full if float(seeds.generator("conditional_is", "final_pool_gate").random()) < expected / full else 0
