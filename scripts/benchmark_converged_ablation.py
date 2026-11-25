@@ -184,9 +184,26 @@ SUITES: dict[str, list[dict[str, Any]]] = {
 }
 
 
-def apply_arm(family: ARFamily, arm: dict[str, Any], base_settings: dict[str, Any]) -> None:
-    """Switch algorithm, reward, sampling, and IS config on an already-loaded ARFamily."""
+def apply_arm(
+    family: ARFamily,
+    arm: dict[str, Any],
+    base_settings: dict[str, Any],
+    *,
+    is_coding: bool = False,
+) -> None:
+    """Switch algorithm, reward, sampling, domain prompt/budget, and IS config on one loaded ARFamily."""
     ar = copy.deepcopy(base_settings["ar"])
+    if is_coding:
+        ar["max_new_tokens"] = 8192
+        ar["thinking"]["reasoning_effort"] = "low"
+        ar["prompt"]["system"] = (
+            "You are an expert Python programmer. You will be given a question (problem specification) "
+            "and will generate a correct Python program that matches the specification and passes all tests."
+        )
+    else:
+        ar["max_new_tokens"] = 12288
+        ar["thinking"]["reasoning_effort"] = "medium"
+        ar["prompt"]["system"] = None
     if arm["sampling"] is not None:
         ar["sampling"].update(arm["sampling"])
     if arm["finish_sampling"] is not None:
@@ -195,64 +212,78 @@ def apply_arm(family: ARFamily, arm: dict[str, Any], base_settings: dict[str, An
         ar["output"].pop("finish_sampling", None)
     if arm["is_overrides"]:
         ar["algorithms"]["is"].update(arm["is_overrides"])
-    family.ar = ar
+    from inference_scaling.shared.model.thinking import resolve_thinking
+    resolved_ar, resolved_thinking = resolve_thinking(ar)
+    family.ar = resolved_ar
+    family.thinking = resolved_thinking
+    family.max_new_tokens = resolved_ar["max_new_tokens"]
     family.choices = SimpleNamespace(algorithm=arm["algorithm"], model="ar", reward=arm["reward"])
-    family.config = ar["algorithms"][arm["algorithm"]]
+    family.config = resolved_ar["algorithms"][arm["algorithm"]]
     if arm["reward"] is None:
         family.reward_settings = None
     else:
         r_cfg = copy.deepcopy(base_settings["rewards"][arm["reward"]])
         r_cfg.update(arm["reward_overrides"])
         # Keep score_temperature synchronized with global sampling temperature for on-device scalar statistics.
-        r_cfg["score_temperature"] = float(ar["sampling"]["temperature"])
+        r_cfg["score_temperature"] = float(resolved_ar["sampling"]["temperature"])
         family.reward_settings = r_cfg
 
 
-def load_benchmark_dataset(args: argparse.Namespace, settings: dict[str, Any]):
-    if args.dataset in {"humanevalplus", "livecodebench", "coding"}:
-        if not args.manifest:
+def load_one_dataset(
+    name: str,
+    settings: dict[str, Any],
+    *,
+    manifest: Path | None = None,
+    dataset_path: Path | None = None,
+    shard: int = 0,
+    shards: int = 1,
+    limit: int | None = None,
+    skip: int | None = None,
+):
+    if name in {"humanevalplus", "livecodebench", "coding"}:
+        if not manifest:
             raise ValueError("--manifest is required for coding datasets")
-        ds = PublicCodingDataset(args.manifest, shard=args.shard, shards=args.shards)
-        if args.dataset != "coding":
-            filtered = tuple(p for p in ds.problems if p.metadata["dataset"] == args.dataset)
+        ds = PublicCodingDataset(manifest, shard=shard, shards=shards)
+        if name != "coding":
+            filtered = tuple(p for p in ds.problems if p.metadata["dataset"] == name)
             ds = SimpleNamespace(
-                name=args.dataset, oracle=False, problems=filtered, rows=ds.rows,
+                name=name, oracle=False, problems=filtered, rows=ds.rows,
                 source_sha256=ds.source_sha256, prompt=ds.prompt, grade=ds.grade, close=lambda: None,
             )
-        if args.limit is not None:
+        if limit is not None:
             ds = SimpleNamespace(
-                name=ds.name, oracle=ds.oracle, problems=tuple(ds.problems[:args.limit]),
+                name=ds.name, oracle=ds.oracle, problems=tuple(ds.problems[:limit]),
                 rows=ds.rows, source_sha256=ds.source_sha256, prompt=ds.prompt, grade=ds.grade, close=lambda: None,
             )
         return ds, True
-    if args.dataset == "math500":
+    if name == "math500":
         cfg = copy.deepcopy(settings["datasets"]["math500"])
-        if args.dataset_path:
-            cfg["path"] = str(args.dataset_path)
+        if dataset_path:
+            cfg["path"] = str(dataset_path)
             cfg["download"] = False
-        if args.limit is not None:
-            cfg["selection"]["count"] = args.limit
-        if args.skip is not None:
-            cfg["selection"]["skip"] = args.skip
+        if limit is not None:
+            cfg["selection"]["count"] = limit
+        if skip is not None:
+            cfg["selection"]["skip"] = skip
         return MATH500(cfg), False
-    if args.dataset == "gsm8k":
+    if name == "gsm8k":
         cfg = copy.deepcopy(settings["datasets"]["gsm8k"])
-        if args.dataset_path:
-            cfg["path"] = str(args.dataset_path)
+        if dataset_path:
+            cfg["path"] = str(dataset_path)
             cfg["download"] = False
-        if args.limit is not None:
-            cfg["selection"]["count"] = args.limit
+        if limit is not None:
+            cfg["selection"]["count"] = limit
         return GSM8K(cfg), False
-    raise ValueError(f"unsupported dataset: {args.dataset}")
+    raise ValueError(f"unsupported dataset: {name}")
 
 
 def summarize_results(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    by_arm: dict[str, list[dict[str, Any]]] = {}
+    by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
         if row.get("kind") == "measurement" and row.get("status") == "complete":
-            by_arm.setdefault(row["mode"], []).append(row)
+            by_key.setdefault((row.get("dataset", "unknown"), row["mode"]), []).append(row)
     summary: dict[str, Any] = {}
-    for arm_name, items in by_arm.items():
+    for (ds_name, arm_name), items in sorted(by_key.items()):
         n = len(items)
         secs = [r["seconds"] for r in items]
         slots = [r["cost"]["forward_token_slots"] for r in items if r.get("cost") and r["cost"].get("forward_token_slots") is not None]
@@ -263,7 +294,7 @@ def summarize_results(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if (steps := r.get("trace", {}).get("steps")) and len(steps) == 1
             and len(steps[0].get("candidate_log_weights", [])) == 1
         )
-        summary[arm_name] = {
+        summary.setdefault(ds_name, {})[arm_name] = {
             "n": n,
             "correct": sum(bool(x) for x in graded) if graded else None,
             "accuracy": (sum(bool(x) for x in graded) / len(graded)) if graded else None,
@@ -284,7 +315,8 @@ def main() -> None:
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument("--suite", choices=sorted(SUITES), required=True)
     parser.add_argument("--arms", nargs="*", help="optional subset of arm names inside --suite")
-    parser.add_argument("--dataset", choices=("humanevalplus", "livecodebench", "coding", "math500", "gsm8k"), required=True)
+    parser.add_argument("--dataset", choices=("humanevalplus", "livecodebench", "coding", "math500", "gsm8k"))
+    parser.add_argument("--datasets", nargs="*", help="multi-dataset spec like gsm8k:16 humanevalplus:24 livecodebench:16 math500:16")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--dataset-path", type=Path)
     parser.add_argument("--shard", type=int, default=0)
@@ -295,6 +327,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    if not args.dataset and not args.datasets:
+        parser.error("provide either --dataset or --datasets")
+
     settings = load_settings(args.settings)
     validate_settings(settings)
     arms = SUITES[args.suite]
@@ -304,22 +339,43 @@ def main() -> None:
         if not arms:
             raise ValueError("no matching arms selected")
 
-    dataset, is_coding = load_benchmark_dataset(args, settings)
-    if not dataset.problems:
+    dataset_specs: list[tuple[str, int | None]] = []
+    if args.datasets:
+        for spec in args.datasets:
+            if ":" in spec:
+                ds_name, lim = spec.split(":", 1)
+                dataset_specs.append((ds_name, int(lim)))
+            else:
+                dataset_specs.append((spec, args.limit))
+    else:
+        dataset_specs.append((args.dataset, args.limit))
+
+    loaded_datasets = [
+        (ds_name, *load_one_dataset(
+            ds_name, settings, manifest=args.manifest, dataset_path=args.dataset_path,
+            shard=args.shard, shards=args.shards, limit=lim, skip=args.skip,
+        ))
+        for ds_name, lim in dataset_specs
+    ]
+    total_problems = sum(len(ds.problems) for _, ds, _ in loaded_datasets)
+    if total_problems == 0:
         raise ValueError("empty problem set")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     existing = read_jsonl(args.output)
-    done = {(r["problem_id"], r["mode"]) for r in existing if r.get("kind") == "measurement" and r.get("status") == "complete"}
-    expected = len(dataset.problems) * len(arms)
+    done = {
+        (r.get("dataset"), r["problem_id"], r["mode"])
+        for r in existing if r.get("kind") == "measurement" and r.get("status") == "complete"
+    }
+    expected = total_problems * len(arms)
     if len(done) >= expected:
         print(json.dumps({"kind": "already_complete", "summary": summarize_results(existing)}, indent=2), flush=True)
         return
 
-    # Initialize ARFamily with a neutral valid choice; per-arm configs are swapped via apply_arm().
+    # Load the 27B engine ONCE and reuse it across all datasets and arms.
     init_settings = copy.deepcopy(settings)
     init_settings["ar"]["algorithms"]["is"]["selection_ready"] = False
-    family = ARFamily(init_settings, SimpleNamespace(algorithm="sample", model="ar", reward=None), dataset)
+    family = ARFamily(init_settings, SimpleNamespace(algorithm="sample", model="ar", reward=None), loaded_datasets[0][1])
     lock = threading.Lock()
     try:
         family.load()
@@ -335,90 +391,98 @@ def main() -> None:
                 write({
                     "kind": "metadata",
                     "suite": args.suite,
-                    "dataset": args.dataset,
+                    "datasets": [{ds_name: [p.id for p in ds.problems]} for ds_name, ds, _ in loaded_datasets],
                     "arms": [a["name"] for a in arms],
                     "settings": settings,
                     "capabilities": family.pipeline.capabilities().to_dict() if family.pipeline else {},
                     "execution_config": family.execution_config(),
-                    "problems": [p.id for p in dataset.problems],
                     "concurrency": args.concurrency,
                 })
 
-            # Short warmup on problem 0 so graphs/caches are ready before timed runs.
+            # Short warmup on first problem so graphs/caches are ready before timed runs.
+            first_ds, first_is_coding = loaded_datasets[0][1], loaded_datasets[0][2]
+            family.dataset = first_ds
+            apply_arm(family, arms[0], settings, is_coding=first_is_coding)
             saved_max = family.max_new_tokens
             try:
                 family.max_new_tokens = 64
-                apply_arm(family, arms[0], settings)
-                family.solve(dataset.problems[0], SeedStream(SeedStream(settings["run"]["seed"]).derive("warmup", 0)))
+                family.solve(first_ds.problems[0], SeedStream(SeedStream(settings["run"]["seed"]).derive("warmup", 0)))
             finally:
                 family.max_new_tokens = saved_max
 
-            def run_one(problem, arm):
-                seed = SeedStream(settings["run"]["seed"]).derive("ablation-benchmark", problem.id, 0)
-                t0 = time.perf_counter()
-                solved = family.solve(problem, SeedStream(seed))
-                elapsed = time.perf_counter() - t0
-                answer_text = solved["answer_text"]
-                row: dict[str, Any] = {
-                    "kind": "measurement",
-                    "status": "complete",
-                    "problem_id": problem.id,
-                    "dataset": problem.metadata.get("dataset", args.dataset) if isinstance(problem.metadata, dict) else args.dataset,
-                    "mode": arm["name"],
-                    "seed": seed,
-                    "seconds": elapsed,
-                    "prompt_tokens": solved["prompt_tokens"],
-                    "output_tokens": solved["output"]["tokens"],
-                    "thinking_status": solved["output"]["thinking_status"],
-                    "length_exhausted": solved["output"]["length_exhausted"],
-                    "selected_reward": solved["reward"],
-                    "cost": solved["cost"],
-                    "fallbacks": solved["fallbacks"],
-                    "trace": solved["trace"],
-                }
-                if is_coding:
-                    code = extract_code(answer_text)
-                    row["submitted_code"] = code
-                    row["submission_sha256"] = digest(code)
-                    row["parseable"] = bool(code)
-                    row["correct"] = None
-                else:
-                    grade = dataset.grade(answer_text, problem)
-                    row["answer"] = grade.answer
-                    row["parseable"] = grade.parseable
-                    row["correct"] = grade.correct
-                return row
+            for ds_name, dataset, is_coding in loaded_datasets:
+                family.dataset = dataset
 
-            for arm in arms:
-                pending_problems = [p for p in dataset.problems if (p.id, arm["name"]) not in done]
-                if not pending_problems:
-                    continue
-                apply_arm(family, arm, settings)
-                arm_t0 = time.perf_counter()
-                if args.concurrency <= 1:
-                    for problem in pending_problems:
-                        row = run_one(problem, arm)
-                        write(row)
-                        done.add((problem.id, arm["name"]))
-                        print(json.dumps({
-                            "mode": arm["name"], "problem_id": problem.id, "seconds": round(row["seconds"], 2),
-                            "tokens": row["output_tokens"], "correct": row["correct"],
-                            "done": len(done), "expected": expected,
-                        }), flush=True)
-                else:
-                    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-                        futures = {pool.submit(run_one, p, arm): p for p in pending_problems}
-                        for future in as_completed(futures):
-                            row = future.result()
+                def run_one(problem, arm, _ds=dataset, _ds_name=ds_name, _is_coding=is_coding):
+                    seed = SeedStream(settings["run"]["seed"]).derive("ablation-benchmark", problem.id, 0)
+                    t0 = time.perf_counter()
+                    solved = family.solve(problem, SeedStream(seed))
+                    elapsed = time.perf_counter() - t0
+                    answer_text = solved["answer_text"]
+                    actual_ds = problem.metadata.get("dataset", _ds_name) if isinstance(problem.metadata, dict) else _ds_name
+                    row: dict[str, Any] = {
+                        "kind": "measurement",
+                        "status": "complete",
+                        "problem_id": problem.id,
+                        "dataset": actual_ds,
+                        "mode": arm["name"],
+                        "seed": seed,
+                        "seconds": elapsed,
+                        "prompt_tokens": solved["prompt_tokens"],
+                        "output_tokens": solved["output"]["tokens"],
+                        "thinking_status": solved["output"]["thinking_status"],
+                        "length_exhausted": solved["output"]["length_exhausted"],
+                        "selected_reward": solved["reward"],
+                        "cost": solved["cost"],
+                        "fallbacks": solved["fallbacks"],
+                        "trace": solved["trace"],
+                    }
+                    if _is_coding:
+                        code = extract_code(answer_text)
+                        row["submitted_code"] = code
+                        row["submission_sha256"] = digest(code)
+                        row["parseable"] = bool(code)
+                        row["correct"] = None
+                    else:
+                        grade = _ds.grade(answer_text, problem)
+                        row["answer"] = grade.answer
+                        row["parseable"] = grade.parseable
+                        row["correct"] = grade.correct
+                    return row
+
+                for arm in arms:
+                    pending_problems = [
+                        p for p in dataset.problems
+                        if ((p.metadata.get("dataset", ds_name) if isinstance(p.metadata, dict) else ds_name), p.id, arm["name"]) not in done
+                    ]
+                    if not pending_problems:
+                        continue
+                    apply_arm(family, arm, settings, is_coding=is_coding)
+                    arm_t0 = time.perf_counter()
+                    if args.concurrency <= 1:
+                        for problem in pending_problems:
+                            row = run_one(problem, arm)
                             write(row)
-                            done.add((row["problem_id"], arm["name"]))
+                            done.add((row["dataset"], problem.id, arm["name"]))
                             print(json.dumps({
-                                "mode": arm["name"], "problem_id": row["problem_id"], "seconds": round(row["seconds"], 2),
-                                "tokens": row["output_tokens"], "correct": row["correct"],
-                                "done": len(done), "expected": expected,
+                                "dataset": row["dataset"], "mode": arm["name"], "problem_id": problem.id,
+                                "seconds": round(row["seconds"], 2), "tokens": row["output_tokens"],
+                                "correct": row["correct"], "done": len(done), "expected": expected,
                             }), flush=True)
-                write({"kind": "arm_complete", "mode": arm["name"], "wall_seconds": time.perf_counter() - arm_t0,
-                       "concurrency": args.concurrency})
+                    else:
+                        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                            futures = {pool.submit(run_one, p, arm): p for p in pending_problems}
+                            for future in as_completed(futures):
+                                row = future.result()
+                                write(row)
+                                done.add((row["dataset"], row["problem_id"], arm["name"]))
+                                print(json.dumps({
+                                    "dataset": row["dataset"], "mode": arm["name"], "problem_id": row["problem_id"],
+                                    "seconds": round(row["seconds"], 2), "tokens": row["output_tokens"],
+                                    "correct": row["correct"], "done": len(done), "expected": expected,
+                                }), flush=True)
+                    write({"kind": "arm_complete", "dataset": ds_name, "mode": arm["name"],
+                           "wall_seconds": time.perf_counter() - arm_t0, "concurrency": args.concurrency})
 
             all_rows = read_jsonl(args.output)
             summary = summarize_results(all_rows)
@@ -426,7 +490,8 @@ def main() -> None:
             print(json.dumps({"kind": "summary", "summary": summary}, indent=2), flush=True)
     finally:
         family.close()
-        dataset.close()
+        for _, ds, _ in loaded_datasets:
+            ds.close()
 
 
 if __name__ == "__main__":
