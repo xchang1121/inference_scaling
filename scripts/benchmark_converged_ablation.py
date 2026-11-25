@@ -452,6 +452,8 @@ def main() -> None:
     # Load the 27B engine ONCE and reuse it across all datasets and arms.
     init_settings = copy.deepcopy(settings)
     init_settings["ar"]["algorithms"]["is"]["selection_ready"] = False
+    if args.concurrency > 1:
+        init_settings["ar"]["engine"]["continuous_batching"]["workers"] = args.concurrency
     family = ARFamily(init_settings, SimpleNamespace(algorithm="sample", model="ar", reward=None), loaded_datasets[0][1])
     lock = threading.Lock()
     grade_lock = threading.Lock()
@@ -538,6 +540,7 @@ def main() -> None:
                         continue
                     apply_arm(family, arm, settings, is_coding=is_coding)
                     arm_t0 = time.perf_counter()
+                    arm_cost_before = family.cost_snapshot()
                     if args.concurrency <= 1:
                         for problem in pending_problems:
                             row = run_one(problem, arm)
@@ -560,8 +563,16 @@ def main() -> None:
                                     "seconds": round(row["seconds"], 2), "tokens": row["output_tokens"],
                                     "correct": row["correct"], "done": len(done), "expected": expected,
                                 }), flush=True)
-                    write({"kind": "arm_complete", "dataset": ds_name, "mode": arm["name"],
-                           "wall_seconds": time.perf_counter() - arm_t0, "concurrency": args.concurrency})
+                    arm_cost_after = family.cost_snapshot()
+                    write({
+                        "kind": "arm_complete", "dataset": ds_name, "mode": arm["name"],
+                        "wall_seconds": time.perf_counter() - arm_t0, "concurrency": args.concurrency,
+                        "arm_forward_token_slots": arm_cost_after["forward_token_slots"] - arm_cost_before["forward_token_slots"],
+                        "arm_flops": arm_cost_after["flops"] - arm_cost_before["flops"],
+                        "arm_unmeasured_work_events": (
+                            arm_cost_after["unmeasured_work_events"] - arm_cost_before["unmeasured_work_events"]
+                        ),
+                    })
 
             all_rows = read_jsonl(args.output)
             summary = summarize_results(all_rows)
