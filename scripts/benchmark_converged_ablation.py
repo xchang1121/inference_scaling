@@ -405,6 +405,7 @@ def main() -> None:
     init_settings["ar"]["algorithms"]["is"]["selection_ready"] = False
     family = ARFamily(init_settings, SimpleNamespace(algorithm="sample", model="ar", reward=None), loaded_datasets[0][1])
     lock = threading.Lock()
+    grade_lock = threading.Lock()
     try:
         family.load()
         write_mode = "a" if args.output.exists() else "w"
@@ -472,7 +473,8 @@ def main() -> None:
                         row["parseable"] = bool(code)
                         row["correct"] = None
                     else:
-                        grade = _ds.grade(answer_text, problem)
+                        with grade_lock:
+                            grade = _ds.grade(answer_text, problem)
                         row["answer"] = grade.answer
                         row["parseable"] = grade.parseable
                         row["correct"] = grade.correct
