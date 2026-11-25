@@ -117,23 +117,15 @@ def test_v2_gpu_sampler_pre_mask_scalar_statistics() -> None:
     sampler_sc = FakeV2Sampler(num_lp=1)
     install_scalar_statistics(sampler_sc, 4)
     out_sc = sampler_sc(raw, batch).logprobs_tensors
-    flat_sc = FlatLogprobs(
-        [0, 2], [2, 4],
-        out_sc.logprob_token_ids.reshape(-1).tolist(),
-        out_sc.logprobs.reshape(-1).tolist(),
-    )
-    _, sc_vals = scalar_generated_logprobs(flat_sc, (0, 1), None)
+    rows_sc = [(ids.tolist(), vals.tolist()) for ids, vals in zip(out_sc.logprob_token_ids, out_sc.logprobs)]
+    _, sc_vals = scalar_generated_logprobs(FlatLogprobs(rows_sc), (0, 1), None)
     assert sc_vals == pytest.approx(tuple(expected_kl), abs=1e-5)
 
     sampler_cons = FakeV2Sampler(num_lp=3)
     install_scalar_statistics(sampler_cons, 4)
     out_cons = sampler_cons(raw, batch).logprobs_tensors
-    flat_cons = FlatLogprobs(
-        [0, 4], [4, 8],
-        out_cons.logprob_token_ids.reshape(-1).tolist(),
-        out_cons.logprobs.reshape(-1).tolist(),
-    )
-    _, cons_vals = scalar_generated_logprobs(flat_cons, (0, 1), 2)
+    rows_cons = [(ids.tolist(), vals.tolist()) for ids, vals in zip(out_cons.logprob_token_ids, out_cons.logprobs)]
+    _, cons_vals = scalar_generated_logprobs(FlatLogprobs(rows_cons), (0, 1), 2)
     assert cons_vals == pytest.approx(tuple(expected_top2), abs=1e-5)
 
 

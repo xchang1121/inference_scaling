@@ -18,6 +18,7 @@ and top-K Consilience finite and exact under any global sampling policy.
 from __future__ import annotations
 
 from math import fsum, isfinite, log
+from typing import Any
 
 
 SCALAR_STATISTICS_KEY = "inference_scaling_scalar_self_certainty"
@@ -50,13 +51,13 @@ def _install_v2_gpu_scalar_statistics(sampler, vocabulary_size: int) -> None:
                         top_lps = top_vals - lse
                     else:
                         top_ids = top_lps = None
-                    self._scalar_pending_pre_mask = (certainty, top_ids, top_lps)
+                    self._scalar_pending_pre_mask: tuple[Any, Any, Any] | None = (certainty, top_ids, top_lps)
                 return out
 
             def __call__(self, logits, input_batch):
                 dims = self.get_logprobs_dims(input_batch.idx_mapping_np)
                 num_lp = int(dims[0]) if dims is not None else 0
-                self._scalar_pending_k = num_lp if num_lp >= 1 else None
+                self._scalar_pending_k: int | None = num_lp if num_lp >= 1 else None
                 self._scalar_pending_pre_mask = None
                 try:
                     result = super().__call__(logits, input_batch)
