@@ -121,7 +121,7 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     assert reply.scaling["stopping_reason"] == "stop"
     assert reply.scaling["reward"] == settings["run"]["reward"] == "self_certainty"
     assert reply.scaling["reward_config"] == settings["rewards"]["self_certainty"]
-    assert reply.scaling["selection"] == "sir"
+    assert reply.scaling["selection"] == "block_metropolized"
     seeded = replace(prepared, seed=17)
     offset = len(backend.batches)
     first = reasoner.generate(seeded)
@@ -162,6 +162,7 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
 def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(block_first) -> None:
     settings = _batch_settings()
     settings["run"]["reward"] = "consilience"
+    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, block_first=block_first,
                                              exploration_schedule="fixed")
     backend = _ChatBackend()
@@ -186,6 +187,7 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
 
 def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monkeypatch) -> None:
     settings = _batch_settings()
+    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, exploration_schedule="fixed")
     settings["serve"]["max_seconds"] = 0.5
     backend = _ChatBackend()
@@ -201,6 +203,7 @@ def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monke
 
 def test_reasoner_default_uses_logical_stopping_even_when_time_passes(monkeypatch) -> None:
     settings = _batch_settings()
+    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
     settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, exploration_schedule="fixed")
     assert settings["serve"]["max_seconds"] is None
     reasoner = Reasoner(settings, _ChatBackend())

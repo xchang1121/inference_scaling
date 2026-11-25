@@ -43,16 +43,24 @@
   },
   "rewards": {
     "verifier": {"temperature": 0.1, "source": "dataset", "pool_size": 8},
-    "self_certainty": {"temperature": 0.25, "score_temperature": 1.0, "scope": "thinking"},
+    "self_certainty": {
+      "temperature": 0.25,
+      "score_temperature": 0.7,
+      "scope": "thinking",
+      "aggregation": "mean",
+      "incomplete_penalty": 1.5,
+      "temperature_normalized": true
+    },
     "consilience": {
       "temperature": 2.0,
-      "score_temperature": 1.0,
+      "score_temperature": 0.7,
       "scope": "thinking",
       "top_k": 5,
       "window_fraction": 0.2,
       "window_tokens": null,
       "skip_fraction": 0.05,
-      "initial_penalty": 3.0
+      "initial_penalty": 1.5,
+      "incomplete_penalty": 2.0
     }
   },
   "ar": {
@@ -76,10 +84,7 @@
       "cache_dir": null,
       "local_files_only": false,
       "trust_remote_code": false,
-      "token_penalty": {
-        "words": ["wait", "hmm", "alternatively", "actually", "however", "but", "maybe", "perhaps"],
-        "strength": 1.0
-      }
+      "token_penalty": null
     },
     "engine": {
       "backend": "vllm",
@@ -99,11 +104,11 @@
       "vllm": {
         "asynchronous": true,
         "async_scheduling": null,
-        "stream_interval": 32,
+        "stream_interval": 8,
         "flat_logprobs": true,
         "tensor_parallel_size": 1,
         "data_parallel_size": 1,
-        "gpu_memory_utilization": 0.92,
+        "gpu_memory_utilization": 0.88,
         "max_num_seqs": 32,
         "max_num_batched_tokens": 16384,
         "quantization": null,
@@ -140,7 +145,7 @@
       "starts_in_thinking": null,
       "sampling_scope": "thinking"
     },
-    "sampling": {"temperature": 1.0, "top_p": 1.0, "top_k": null},
+    "sampling": {"temperature": 0.7, "top_p": 0.95, "top_k": 20},
     "algorithms": {
       "sample": {},
       "greedy": {},
@@ -151,7 +156,7 @@
         "execution": "batch",
         "initialization": "iid",
         "stratified_updates": false,
-          "nonself_updates": false,
+        "nonself_updates": false,
         "block_size": 1024,
         "steps_per_block": 3,
         "iterations": null,
@@ -172,12 +177,17 @@
       },
       "is": {
         "candidate_count": 4,
-        "rollout_count": 1,
+        "rollout_count": 2,
         "block_size": 1024,
         "block_first": false,
-        "exploration_schedule": "two_stage",
-        "selection_ready": true,
-        "selection": "sir"
+        "exploration_schedule": "adaptive",
+        "selection_ready": false,
+        "selection": "block_metropolized",
+        "pilot_gate": true,
+        "selective_lookahead": true,
+        "straggler_pruning": true,
+        "adaptive_temperature": true,
+        "pilot_tokens": null
       }
     }
   },

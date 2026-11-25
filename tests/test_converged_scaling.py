@@ -512,7 +512,7 @@ def test_serve_per_request_scaling_overrides_and_health_capabilities() -> None:
     reasoner = Reasoner(settings, backend)
     caps = reasoner.capabilities()
     assert caps["exploration_schedule"] == "adaptive"
-    assert caps["defaults"] == {"candidate_count": 4, "rollout_count": 1, "block_size": 1024}
+    assert caps["defaults"] == {"candidate_count": 4, "rollout_count": 2, "block_size": 1024}
     prepared = reasoner.prepare(conv)
     assert prepared.scaling_overrides == ScalingOverrides(3, 2, 1)
     reply = reasoner.generate(prepared)
@@ -525,3 +525,53 @@ def test_serve_per_request_scaling_overrides_and_health_capabilities() -> None:
     broken["ar"]["algorithms"]["is"]["selection_ready"] = True
     with pytest.raises(SettingsError, match="adaptive"):
         validate_settings(broken)
+
+
+def test_settings_env_var_override(tmp_path, monkeypatch) -> None:
+    import json
+    from inference_scaling.app.settings import SETTINGS_ENV_VAR
+
+    custom = copy.deepcopy(load_settings())
+    custom["serve"]["server"]["port"] = 8123
+    preset = tmp_path / "preset.json"
+    preset.write_text(json.dumps(custom), encoding="utf-8")
+    monkeypatch.setenv(SETTINGS_ENV_VAR, str(preset))
+    loaded = load_settings()
+    assert loaded["serve"]["server"]["port"] == 8123
+
+
+def test_all_hardware_presets_pass_strict_schema_validation() -> None:
+    presets_dir = Path(__file__).resolve().parents[1] / "settings" / "presets"
+    expected = {
+        "ascend_910b3_tp2.json",
+        "cuda_gpu_bf16.json",
+        "cuda_gpu_fp8.json",
+        "cuda_gpu_24g_mxfp4.json",
+        "openai_remote.json",
+    }
+    found = {p.name for p in presets_dir.glob("*.json")}
+    assert expected.issubset(found)
+
+    loaded = {}
+    for name in sorted(expected):
+        cfg = load_settings(presets_dir / name)
+        validate_settings(cfg)
+        assert cfg["ar"]["model"]["token_penalty"] is None
+        assert cfg["ar"]["sampling"] == {"temperature": 0.7, "top_p": 0.95, "top_k": 20}
+        is_cfg = cfg["ar"]["algorithms"]["is"]
+        assert is_cfg["exploration_schedule"] == "adaptive"
+        assert is_cfg["selection_ready"] is False
+        assert is_cfg["selection"] == "block_metropolized"
+        loaded[name] = cfg
+
+    assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["device"] == "npu"
+    assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["tensor_parallel_size"] == 2
+    assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["gpu_memory_utilization"] == 0.88
+    assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["stream_interval"] == 8
+    assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["device"] == "cuda"
+    assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["vllm"]["scalar_self_certainty"] is True
+    assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["quantization"] == "fp8"
+    assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["engine"]["vllm"]["quantization"] == "mxfp4"
+    assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"]["block_size"] == 832
+    assert loaded["openai_remote.json"]["ar"]["engine"]["backend"] == "openai"
+    assert loaded["openai_remote.json"]["run"]["reward"] == "consilience"

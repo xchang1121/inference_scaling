@@ -1,6 +1,6 @@
 # 设置文件
 
-所有入口从仓库根目录读取 `settings/inference.json`。模型、长度、奖励和执行参数共用同一来源。
+所有入口默认从仓库根目录读取 `settings/inference.json`，也支持通过环境变量 `INFERENCE_SCALING_SETTINGS` 或服务参数 `python -m inference_scaling.serve --settings <路径>` 切换至 `settings/presets/` 下的开箱硬件预设（`ascend_910b3_tp2.json`、`cuda_gpu_bf16.json`、`cuda_gpu_fp8.json`、`cuda_gpu_24g_mxfp4.json`、`openai_remote.json`）。模型、长度、奖励和执行参数共用同一来源。
 [`app/settings.py`](../src/inference_scaling/app/settings.py) 严格校验字段名称与类型，错误在加载模型前报出。
 标注为“对象”的字段原样传给对应库。
 下表中的数值是仓库提供的文件中的取值。
@@ -112,10 +112,11 @@ Self-Certainty 奖励温度沿用配置（默认 0.25），Consilience 默认 2�
 | `verifier.temperature` | 数 | verifier 的温度，两种来源共用 |
 | `verifier.source` | `dataset` \| `vote` | `dataset`：数据集判定器对照参考答案（oracle），正确为 1，否则为 0；数据集没有参考答案时改为 `vote`。`vote`：与模型自身答案一致的比例，不读参考答案 |
 | `verifier.pool_size` | 整数 | 投票时 `is`/`mh` 的冻结样本池大小；奖励为池中与该答案一致的比例。`best_of_n` 不用池：候选之间投票，得票最多的答案胜出，平票在最高票候选中按种子随机选一个 |
-| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度；评分分布温度；评分范围（默认 `thinking`，缺少完整思考段时回退到全序列并记录原因）。取评分段上全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$ 的均值。vLLM 使用下述 Ascend 标量路径、GPU 融合路径或 `exact_scoring = "transformers"` |
-| `consilience.temperature` / `score_temperature` | 数 | 奖励温度；计算 top-$`K`$ 置信度所用的温度 |
+| `self_certainty.temperature` / `score_temperature` / `scope` | 数 / 数 / `thinking` \| `full` | 奖励温度（默认 `0.25`）；评分分布温度（默认 `0.7`）；评分范围（默认 `thinking`，缺少完整思考段时回退到全序列并记录原因）。取评分段上全词表 $`D_{\mathrm{KL}}(U\Vert p_t)`$。vLLM 使用跨平台预掩码标量路径（昇腾/CUDA 均支持）、GPU 融合路径或 `exact_scoring = "transformers"` |
+| `self_certainty.aggregation` / `incomplete_penalty` / `temperature_normalized` | `mean` \| `tail_mean` \| `final_window` / 数 / 布尔 | 可选细化字段：默认 `mean`、`incomplete_penalty=1.5`（对未闭合思考施加惩罚）、`temperature_normalized=true`（将 KL 乘以 `score_temperature`，使奖励差值相对采样温度尺度不变）；另可选 `tail_fraction`、`window_fraction`、`final_weight`、`skip_fraction` |
+| `consilience.temperature` / `score_temperature` | 数 | 奖励温度（默认 `2.0`）；计算 top-$`K`$ 置信度所用的温度（默认 `0.7`） |
 | `consilience.scope` | `thinking` \| `full` | 只评思考段（缺少完整思考段时回退到全序列并记录原因）或评全序列 |
-| `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty` 倍首段均值 |
+| `consilience.top_k` / `window_fraction` / `window_tokens` / `skip_fraction` / `initial_penalty` / `incomplete_penalty` | 整数 / 数 / 整数或 `null` / 数 / 数 / 数 | 置信度窗口：跳过开头 `skip_fraction`，首段与末段各取 `window_fraction`（或固定 `window_tokens`），分数为末段均值减 `initial_penalty`（默认 `1.5`）倍首段均值；可选 `incomplete_penalty`（默认 `2.0`）对未闭合思考扣分 |
 
 `self_certainty` 与 `consilience` 读取自回归模型的概率，只用于 `--model ar`。
 
@@ -173,7 +174,7 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `backend` | `transformers` \| `vllm` | 执行引擎 |
+| `backend` | `transformers` \| `vllm` \| `openai` | 执行引擎；`openai` 通过标准 `/v1/completions` 连接外部 vLLM / SGLang / MindIE 服务（配合 `ar.engine.openai` 与 `consilience` 奖励） |
 | `device` / `dtype` | 字符串 | Transformers 设备与精度；vLLM 使用 `dtype`，精确评分后端同时使用两者 |
 | `context_window` | 正整数或 `null` | 输入与输出合计的上下文上限，同时用作 vLLM 的 `max_model_len`；`null` 使用引擎/模型声明值。每个请求扣除实际输入长度后计算可生成空间 |
 
@@ -198,7 +199,7 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | --- | --- | --- |
 | `asynchronous` | 布尔 | 异步引擎（原生连续批处理）或同步引擎 |
 | `async_scheduling` | 布尔或 `null` | 引擎内部的 CPU/GPU 异步调度，与 `asynchronous` 接口选项分开；默认 `null`，由 vLLM 按模型和设备决定。融合统计模式要求 `false` 或 `null`，实际生效值记录在 `engine_execution` |
-| `stream_interval` | 正整数 | 默认 `32`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付，减少 Python 输出开销。K>1 的前缀通知因分批最多额外等待 `stream_interval−1` 个 token（队列等待另计）；较短的块可设为 `1`。多 token 停止标记仍由外层增量检测，可能产生边界后的额外解码 |
+| `stream_interval` | 正整数 | 默认 `8`；vLLM 保留首 token 与完成通知，其余增量按此 token 间隔交付。在 `K>1` 与长尾剪枝开启时，`8` 较 `32`/`64` 显著加快前缀就绪释放与停滞检测，且对短题无额外延迟开销；较短的块可设为 `1` |
 | `flat_logprobs` | 布尔 | 默认 `true`；直接读取 vLLM 的扁平概率数组，避开逐 token 概率对象，Consilience 的 top-K 归约公式不变；`false` 使用原字典格式作对照 |
 | `tensor_parallel_size` / `data_parallel_size` | 整数 | 模型切分卡数 / 引擎数据并行副本数 |
 | `gpu_memory_utilization` | 数 | 引擎使用的设备内存比例 |
@@ -206,7 +207,7 @@ Transformers 与异步 vLLM 的 beam search 在每条 beam 上执行相同的边
 | `quantization` / `enforce_eager` / `max_lora_rank` | 字符串或 `null` / 布尔 / 整数 | 量化方案 / 强制 eager 执行 / 适配器最大秩 |
 | `enable_prefix_caching` | 布尔 | 前缀缓存 |
 | `fused_logprobs` | 布尔 | 在采样的同一步 logits 上另读出温度 1 的模型下选中 token 的对数概率与分布相对均匀分布的 KL 散度（见[算法说明](methods/ALGORITHMS.md#infra-fused-logprobs)）：`mh_power` 省去基础模型重评分，`self_certainty` 在生成时记录。支持 NVIDIA 的同步和异步接口；需要 vLLM 0.26.x，关闭 vLLM 的内部异步调度，不能与 `token_penalty` 同用；Ascend 不支持此融合 worker |
-| `scalar_self_certainty` | 布尔 | 默认 `true`，用于当前昇腾配置。Ascend V1 在处理后的完整 log-probability 上计算全词表 KL，经原生异步输出返回标量；不增加模型前向，支持 token penalty。评分策略须与完整支持集采样一致；与 `fused_logprobs`、beam search 不兼容。硬掩码导致无限 KL 时显式报错；当前适配要求 `enable_reduce_sample=false`。CUDA 或 beam search 需显式关闭此项并选择支持所需统计量的后端 |
+| `scalar_self_certainty` | 布尔 | 默认 `true`，同时支持昇腾（`AscendLogprobWorker`）与 NVIDIA CUDA（`GPULogprobWorker`，兼容 vLLM 0.25–0.26 V1 与 0.30–0.34+ GPU V2 采样器）。在 top-k/top-p 掩码前的完整分布上直接归约全词表 KL 与 top-K 均值，经原生异步输出返回标量；无额外评分前向，兼容 `top_p`/`top_k` 与词表惩罚，要求 `score_temperature == sampling.temperature`。与 `fused_logprobs`、beam search 不兼容 |
 | `exact_scoring` | `none` \| `transformers` | 用同一份权重的 Transformers 副本精确评分（生成时读不到的 Consilience 统计量与其他策略的对数概率需要） |
 | `parameter_count` | 整数或 `null` | 计算量统计用的参数量；`null` 时从本地 safetensors 读取，跳过纯文本生成不运行的视觉编码器与多 token 预测（MTP）头 |
 | `engine_kwargs` | 对象 | 其他引擎参数；不能覆盖上述字段，也不能开启 speculative decoding 或关闭引擎统计（`disable_log_stats`，抢占计数依赖它） |
@@ -242,7 +243,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `output.thinking_mode` | `auto` \| `enabled` \| `disabled` | 思考模式；`enabled` 时未完成的思考没有最终答案（评测文本为空） |
 | `output.thinking_start_text` / `thinking_end_text` / `starts_in_thinking` | 字符串或 `null` / 字符串或 `null` / 布尔或 `null` | 显式的思考段标记；为 `null` 时从 tokenizer 词表与 chat template 识别 |
 | `output.sampling_scope` | `full` \| `thinking` | `mh`、`mh_power`、`is` 在完整输出或思考段上采样；思考段结束后由基础模型生成最终内容。读取答案文本的 `verifier` 会回退到 `full` 并记录原因 |
-| `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 基础策略。`mh`、`mh_power`、`is` 的目标需要完整支持集（`top_p = 1`、`top_k = null`） |
+| `sampling.temperature` / `top_p` / `top_k` | 数 / 数 / 整数或 `null` | 全局采样策略，默认 `temperature=0.7`、`top_p=0.95`、`top_k=20`。仅 `mh`、`mh_power` 及 `fixed` IS 要求完整支持集（`top_p = 1`、`top_k = null`）；`adaptive` 与 `two_stage` IS 配合预掩码标量统计支持截断核采样。可选 `output.finish_sampling` 可独立配置最终答案采样策略 |
 
 ### `ar.algorithms`
 
@@ -265,30 +266,29 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
-| `is.candidate_count` / `rollout_count` / `block_size` | 首轮候选数 M、每候选补全数 K 与块长 B，默认 4 / 1 / 1024；两阶段模式在后续轮次重分配探索预算。块长在输出上限处截短 |
-| `is.exploration_schedule` | 默认 `two_stage`：将首轮后的探索合并为一个完整后缀池，按未选 rollout 的长度与权重分配预算，并限制并发容量及长度区间。`fixed` 保留为显式选项与 CPU 参考。[100 题对照](reports/QWEN38_IS_SELECTION.md)用于默认方案选择，未建立跨任务及长预算的普遍优势。见[两阶段探索](methods/ALGORITHMS.md#is-two-stage) |
-| `is.selection_ready` | 默认 `true`：首轮以完整组权重和固定随机优先级提前选择，末轮复用固定 SIR 随机数；未完成权重由缓存前缀估计，存在选择偏差。仅支持流式 `two_stage`、`block_first=false` 和可读取缓存前缀分数的奖励。`false` 等待完整权重；非流式后端、verifier 或完整池选择核需关闭此项。见[选择条件](methods/ALGORITHMS.md#is-selection-ready) |
-| `is.selection` | 默认 `sir`；`metropolized` 对完整 rollout 索引做一次 Metropolized 更新，`block_metropolized` 先合并同块质量再选择补全。两个可选核均要求 `selection_ready=false`，不额外生成或评分；端到端成本仍会因后续选中轨迹改变。见[选择核](methods/ALGORITHMS.md#is-metropolized)。旧设置文件省略此字段时按 `sir` 读取 |
+| `is.candidate_count` / `rollout_count` / `block_size` | 外部主要规模参数 M、K、B，默认 `4 / 2 / 1024`（低成本可选 `K=1`，昇腾页对齐可选 `B=1536`，24GB L4 `mxfp4` 页对齐可选 `B=832`）；HTTP 服务支持按请求 `scaling` 字段动态覆盖 |
+| `is.exploration_schedule` | 默认 `adaptive`：启用 `B//2` 动态试探门控（`pilot_gate`）、选择性前瞻（`selective_lookahead`）、两阶段长尾停滞剪枝（`straggler_pruning`）、ESS 自适应奖励温度（`adaptive_temperature`）与 Stage-2 `M-1` 候选上限；要求 `selection_ready=false`、`block_first=false`。`two_stage` 与 `fixed` 保留为显式对照选项；详见[收敛版实测报告](reports/CONVERGED_IS_NPU_GPU_RESULTS.md) |
+| `is.selection_ready` | 默认 `false`（等待全部有效候选，消除提前选择偏差）。设 `true` 仅用于历史 `two_stage + sir` 快速对照 |
+| `is.selection` | 默认 `block_metropolized`（先合并同块质量再做 Metropolized 选择）；`sir` 与 `metropolized` 保留为可选核。Metropolized 核要求 `selection_ready=false` |
 | `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
 
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
 
-仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，当前取值如下。同组字段省略重复前缀；
-详细含义与后端约束见上文，默认算法的选择依据见[100 题对照](reports/QWEN38_IS_SELECTION.md)。
+仅预设 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)，当前取值如下（详见[收敛版实测报告](reports/CONVERGED_IS_NPU_GPU_RESULTS.md)）：
 
 | 设置 | 当前值 |
 | --- | --- |
-| `run.reward` | `self_certainty`；思考段均值，奖励温度 0.25、评分温度 1 |
+| `run.reward` | `self_certainty`；思考段温度归一化全词表 KL 均值，奖励温度 `0.25`、评分温度 `0.7`、`incomplete_penalty=1.5` |
 | `ar.model` | 固定权重版本，BF16；首次下载约 55.6 GB |
-| `ar.model.token_penalty` | wait、hmm、alternatively、actually、however、but、maybe、perhaps，强度 1 |
-| `ar.engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16` |
-| `ar.engine.vllm` | 内存比例 0.92、最多 32 条序列、调度 token 上限 16384；Ascend 全词表标量统计开启 |
+| `ar.model.token_penalty` | `null`（Wave B1 880 组配对验证关闭后效果最佳） |
+| `ar.engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16`（NVIDIA GPU 与远程 OpenAI 见 `settings/presets/*.json`） |
+| `ar.engine.vllm` | 内存比例 `0.88`、`stream_interval=8`、最多 32 条序列、调度 token 上限 16384；跨平台预掩码标量统计开启 |
 | `ar.engine.continuous_batching.workers` | 1；并发 IS 使用请求级成本归属 |
 | `ar.engine.context_window` / `ar.max_new_tokens` | 均为 `null`，分别读取原生上下文与剩余生成空间 |
 | `ar.thinking` / `ar.output` | 默认 xhigh、131072 思考预算；启用思考、IS/MH 作用于思考段 |
-| `ar.sampling` | 温度 1、完整支持集 |
-| `ar.algorithms.is` | M=4、K=1、B=1024；`two_stage`、`selection_ready=true`、`sir`、`block_first=false` |
+| `ar.sampling` | `temperature=0.7`、`top_p=0.95`、`top_k=20` |
+| `ar.algorithms.is` | M=4、K=2、B=1024；`adaptive`、`selection_ready=false`、`block_metropolized`、`block_first=false` |
 | `ar.algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新，均匀后缀；重放与提前拒绝关闭 |
 
 部署时按设备容量设置 TP/DP，校验权重、缓存、原生上下文与并发的总内存需求。

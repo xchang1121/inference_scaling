@@ -1,33 +1,36 @@
 # inference_scaling
 
-自回归语言模型的 training-free 推理扩展。当前主线为 **Qwen3.8-27B、昇腾 vLLM、思考段 IS**。
-CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/inference.json)，默认值与数据集无关。
+自回归语言模型的 training-free 推理扩展。当前主线为 **Qwen3.8-27B、跨 NPU/GPU vLLM 与远程 OpenAI 引擎、思考段自适应条件 IS**。
+算法侧（`arllm/pipeline.py`）与服务侧（`serve/reasoner.py`、`serve/server.py`）完全收敛分层；CLI、HTTP 服务和性能评测共用 [`settings/inference.json`](settings/inference.json) 或 `settings/presets/*.json` 硬件预设。
 
 ## 快速开始
 
-在已安装兼容 vLLM + vllm-ascend 的环境中：
+在已安装兼容 vLLM（昇腾 `vllm-ascend` 或 NVIDIA CUDA `vllm`）的环境中：
 
 ```bash
 python -m pip install -e ".[serve,evaluation]"
-python -m inference_scaling.serve                 # OpenAI / Anthropic 兼容服务
-python -m inference_scaling --dataset math500     # 批量评测
+python -m inference_scaling.serve                                                # 读取默认 settings/inference.json
+python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json   # 昇腾 910B3 TP=2 开箱预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json      # 80GB+ NVIDIA GPU BF16 预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json # 24GB 单卡 L4/4090 在线 mxfp4 预设
+INFERENCE_SCALING_SETTINGS=settings/presets/ascend_910b3_tp2.json python -m inference_scaling --dataset math500
 ```
 
-启动前设置权重路径和 `ar.engine.vllm.tensor_parallel_size`。卡数、上下文与并发需满足设备内存容量，
-部署步骤见[服务文档](src/inference_scaling/serve/README.md)。
+启动前设置权重路径和 `ar.engine.vllm.tensor_parallel_size`（或直接使用 `settings/presets/` 中对应硬件预设）。卡数、上下文与并发需满足设备内存容量，
+部署步骤见[服务文档](src/inference_scaling/serve/README.md)，完整 NPU/GPU 四基准实测见[收敛版 Adaptive IS 实测报告](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md)。
 
 | 通用默认 | 设置 |
 | --- | --- |
-| 奖励 | `run.reward = "self_certainty"`；思考段全词表 KL 均值 |
-| 奖励温度 / 评分温度 | 0.25 / 1 |
-| IS 首轮 | M=4、K=1、B=1024，`block_first=false` |
-| 后续探索 | `two_stage`；复用完整 rollout，再分配末轮候选 |
-| 选择 | `sir`，`selection_ready=true` |
-| 概率统计 | Ascend `scalar_self_certainty=true`，无额外模型评分前向 |
-| 采样 | 温度 1、完整词表；保留配置中的 8 词惩罚 |
+| 奖励 | `run.reward = "self_certainty"`（温度归一化全词表 KL 均值 + `incomplete_penalty=1.5`）；`consilience`（`initial_penalty=1.5, incomplete_penalty=2.0`）可作跨引擎替代 |
+| 奖励温度 / 评分温度 | `0.25` / `0.7`（与全局采样温度一致） |
+| 外部 IS 规模参数 | `M=4`、`K=2`、`B=1024`（`block_first=false`；可在请求 `scaling` 字段按次覆盖，低成本可选 `K=1`，昇腾页对齐可选 `B=1536`） |
+| 内部动态调度 | `exploration_schedule = "adaptive"`：`B//2` 试探门控 + 选择性前瞻 + 两阶段停滞剪枝 + ESS 自适应奖励温度 |
+| 选择核 | `block_metropolized`，`selection_ready = false` |
+| 概率统计 | 跨平台预掩码标量统计 `scalar_self_certainty = true`（昇腾与 NVIDIA vLLM 0.25–0.34+ 均无额外评分前向） |
+| 全局采样 | `temperature = 0.7`、`top_p = 0.95`、`top_k = 20`、`token_penalty = null` |
+| 引擎默认 | `gpu_memory_utilization = 0.88`、`stream_interval = 8`、`enforce_eager = false`、`enable_prefix_caching = true`、`max_concurrent_requests = 4` |
 
-提前选择用缓存前缀估计未完成权重，存在选择偏差。设 `selection_ready=false` 可等待完整权重；
-完整池 Metropolized 选择保留为显式选项。[算法与适用条件](docs/methods/ALGORITHMS.md#alg-conditional-is)
+`two_stage`、`fixed` 与 `sir` / `selection_ready=true` 均保留为显式选项以便历史复现。[算法与适用条件](docs/methods/ALGORITHMS.md#alg-conditional-is)
 
 ### 长度与采样配置
 
@@ -103,6 +106,7 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
+| [收敛版 Adaptive IS：跨基准帕累托与 NPU/GPU 正交引擎实测](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md) | Wave B1（880 组）锁定 `token_penalty=null, T=0.7, p=0.95, k=20`（89.90% vs 86.15%）；Wave B2 13 臂 × 88 题配对中 Adaptive IS v2（`self_certainty` 与改进 `consilience`）均达 **88.02%**（LiveCodeBench 最高 79.2%，MATH-500 最高 91.7%）；含昇腾 910B3 与 Colab L4 24GB 引擎实测与 5 套硬件预设 |
 | [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |
 | [100 题选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md) | Base / 快速 Consilience IS / 默认 Self-Certainty IS：92% / 93% / 94%。按块 SC K=2 为 95%，比快速 SC 耗时约多 20%、FLOPs 多 75%；准确率差区间包含 0 |
 | [IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md) | 同环境的 TP2/TP4、IS/Base 时延比、思考与内容 TTFT，以及输出吞吐 |

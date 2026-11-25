@@ -5,10 +5,10 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice=auto/none`、`stream`、`reasoning_effort` |
-| `POST /v1/messages` | Anthropic 格式，支持 `tools`、`stream`、`thinking`、`output_config.effort` |
+| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice=auto/none`、`stream`、`reasoning_effort`、请求级 `scaling: {candidate_count, rollout_count, block_size}` |
+| `POST /v1/messages` | Anthropic 格式，支持 `tools`、`stream`、`thinking`、`output_config.effort`、请求级 `scaling` |
 | `POST /v1/messages/count_tokens` | Anthropic 的 token 计数 |
-| `GET /v1/models`、`GET /health` | 模型名与健康检查 |
+| `GET /v1/models`、`GET /health` | 模型名、健康检查与引擎/算法能力自省（`capabilities`） |
 
 ## 一个请求的处理
 
@@ -31,16 +31,10 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 与 `usage.completion_tokens` 中最终保留输出的长度分开。取消、评分计数缺失或期间发生引擎抢占时，
 不完整的成本及生成量标为 `null`，避免跨客户端混算。
 
-默认 `ar.algorithms.is.exploration_schedule="two_stage"` 首轮使用 M=4/K=1/B=1024，再按未选 rollout 的长度与权重决定
-末轮候选数。末轮最多占用已配置的在途容量，并使用保留序列的随机长度区间。`fixed` 保留为 CPU 参考；
-默认奖励与选择配置依据[100 题对照](../../../docs/reports/QWEN38_IS_SELECTION.md)确定；多卡服务性能见[结果与适用范围](../../../docs/reports/QWEN38_IS_SERVING.md)。
-`scaling.sampling_plans` 记录各轮实际 `(B, M, K)`，`final_pool_limit` 记录容量限制；
-末轮 M=1 表示直接复用已有序列，无新请求。见[两阶段探索](../../../docs/methods/ALGORITHMS.md#is-two-stage)。
-
-默认 `selection_ready=true` 使用已有前缀统计近似未完成权重，在完整候选已满足选择条件时取消其余请求。
-首轮保持预设 B，仅收齐原定补全的组可以入选；末轮允许直接选回完整参考序列。
-关闭时等待全部有效候选。该近似存在选择偏差，详见[提前选择](../../../docs/methods/ALGORITHMS.md#is-selection-ready)；
-仅读取缓存统计，额外模型评分调用数为零。
+服务层（`serve/reasoner.py`、`serve/server.py`）作为薄协议适配层调用收敛后的算法管道 `arllm/pipeline.py`（`ScalingPipeline`）。
+默认配置 `ar.algorithms.is.exploration_schedule="adaptive"` 使用外部规模参数 `M=4/K=2/B=1024`、`selection="block_metropolized"`、`selection_ready=false`，内部自动调度 `B//2` 试探门控、选择性前瞻、两阶段长尾剪枝与 ESS 自适应奖励温度；
+客户端可通过请求体可选字段 `scaling` 覆盖单次请求的 `candidate_count`（M）、`rollout_count`（K）、`block_size`（B）。
+`GET /health` 与响应中的 `scaling.engine_capabilities` 暴露当前推理引擎能力矩阵。完整跨基准与硬件调优结果见[收敛版实测报告](../../../docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md)。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
 提前选择开启时交付中间增量以估计未完成权重。关闭后，K=1 只向算法交付完成结果，内部仍保留首 token 的预填充进度通知；K>1 保留分支所需的前缀事件。
@@ -60,10 +54,15 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 `hcclGetRootInfo` / `ra init` 错误；补齐容器内用户后，四卡通信和模型加载通过。部署时先检查设备可见性和
 小张量 HCCL 通信，再加载模型。相关故障说明见 [vllm-ascend #9490](https://github.com/vllm-project/vllm-ascend/issues/9490)。
 
-## 2. 配置
+## 2. 配置与硬件预设
 
-服务只读取 `settings/inference.json`：`ar` 提供模型、长度、模板、引擎、采样与 IS 参数，
-`run.reward` 选择奖励（`self_certainty` 或 `consilience`），`rewards` 提供其参数，`run.seed` 提供根种子，`serve` 提供 HTTP 参数。
+服务默认读取 `settings/inference.json`，也可通过 `--settings <path>` 或环境变量 `INFERENCE_SCALING_SETTINGS` 直接选用 `settings/presets/` 下的开箱硬件预设：
+- 昇腾 910B3 TP=2：`settings/presets/ascend_910b3_tp2.json`（`TP=2, gpu_memory_utilization=0.88, stream_interval=8, max_concurrent_requests=4`）
+- 80GB+ NVIDIA GPU BF16：`settings/presets/cuda_gpu_bf16.json`
+- 40–96GB NVIDIA GPU 在线 FP8：`settings/presets/cuda_gpu_fp8.json`
+- 单卡 24GB NVIDIA GPU 在线 `mxfp4`：`settings/presets/cuda_gpu_24g_mxfp4.json`（`B=832, context_window=8192, c=2`）
+- 外部 OpenAI `/v1/completions` 引擎：`settings/presets/openai_remote.json`（`backend="openai", reward="consilience"`）
+
 字段说明见 [SETTINGS.md](../../../docs/SETTINGS.md#serve)。
 
 部署参数：
@@ -72,11 +71,12 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | --- | --- | --- |
 | `ar.model.path` / `local_files_only` | 本地权重目录 / `true` | 启动时不联网 |
 | `ar.engine.vllm.tensor_parallel_size` | 卡数，如 `2` | BF16 权重约 54 GB，64 GB 卡单卡几乎没有缓存空间 |
-| `ar.engine.vllm.gpu_memory_utilization` | 默认 `0.92` | 结合设备容量、上下文与并发校验 |
-| `ar.engine.vllm.fused_logprobs` / `scalar_self_certainty` | `false` / `true` | Ascend 随生成计算全词表 KL 标量，不增加评分前向；保留原生异步调度与词表惩罚 |
+| `ar.engine.vllm.gpu_memory_utilization` | 默认 `0.88` | 昇腾 910B3 64 GB 下跨重启 100% 稳定；NVIDIA 80GB+ 可设 `0.90` |
+| `ar.engine.vllm.stream_interval` | 默认 `8` | 加速 `K>1` 分支释放与长尾剪枝触发，短题无额外延迟开销 |
+| `ar.engine.vllm.fused_logprobs` / `scalar_self_certainty` | `false` / `true` | 跨平台（昇腾/CUDA）预掩码全词表 KL 标量，无额外评分前向，兼容 `top_p`/`top_k` 与原生异步调度 |
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
-| `ar.engine.vllm.enable_prefix_caching` | 默认 `true` | 复用共享前缀；混合缓存兼容性异常时关闭并复核输出 |
-| `ar.algorithms.is` | M=4、K=1、B=1024、`block_first=false`、`two_stage`、`selection_ready=true`、`sir` | 评测与服务共用的首轮设置；末轮复用已有 rollout 并按预算构造完整后缀池 |
+| `ar.engine.vllm.enable_prefix_caching` | 默认 `true` | 复用共享前缀，多分支 IS 节省约 13%–14% 前向槽位 |
+| `ar.algorithms.is` | M=4、K=2、B=1024、`adaptive`、`selection_ready=false`、`block_metropolized` | 外部仅需关注 M/K/B；内部自动试探门控、选择性前瞻与停滞剪枝 |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
 `ar.max_new_tokens=null` 使用剩余上下文作为生成总长，`ar.engine.context_window=null` 读取模型/引擎配置；
@@ -98,7 +98,7 @@ thinking 与最终内容的合计长度；同时传入时须相等，非法值�
 在仓库根目录启动（按相对路径读 `settings/`）：
 
 ```bash
-ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve
+ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json
 ```
 
 ```bash

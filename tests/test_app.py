@@ -18,10 +18,17 @@ def test_cli_defaults_and_reward_rules(monkeypatch) -> None:
     assert choices == Choices("is", "ar", "self_certainty", "gsm8k") and output == Path("results")
     settings = load_settings()
     assert settings["ar"]["algorithms"]["is"] == {
-        "candidate_count": 4, "rollout_count": 1, "block_size": 1024, "block_first": False,
-        "exploration_schedule": "two_stage", "selection_ready": True, "selection": "sir",
+        "candidate_count": 4, "rollout_count": 2, "block_size": 1024, "block_first": False,
+        "exploration_schedule": "adaptive", "selection_ready": False, "selection": "block_metropolized",
+        "pilot_gate": True, "selective_lookahead": True, "straggler_pruning": True,
+        "adaptive_temperature": True, "pilot_tokens": None,
     }
-    assert settings["rewards"]["self_certainty"] == {"temperature": 0.25, "score_temperature": 1.0, "scope": "thinking"}
+    assert settings["rewards"]["self_certainty"] == {
+        "temperature": 0.25, "score_temperature": 0.7, "scope": "thinking",
+        "aggregation": "mean", "incomplete_penalty": 1.5, "temperature_normalized": True,
+    }
+    assert settings["ar"]["model"]["token_penalty"] is None
+    assert settings["ar"]["sampling"] == {"temperature": 0.7, "top_p": 0.95, "top_k": 20}
     assert settings["ar"]["engine"]["vllm"]["scalar_self_certainty"]
     settings["run"]["reward"] = "consilience"
     monkeypatch.setattr("inference_scaling.app.cli.load_settings", lambda: settings)
@@ -122,9 +129,12 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     settings["ar"]["model"].update(path=str(model), revision=None, weight_sha256=None)
     # The fake backend computes any token statistic, as the Transformers engine does.
     settings["ar"]["engine"].update(backend="transformers", device="cpu")
+    settings["ar"]["sampling"].update(temperature=1.0, top_p=1.0, top_k=None)
+    settings["rewards"]["self_certainty"]["score_temperature"] = 1.0
+    settings["rewards"]["consilience"]["score_temperature"] = 1.0
     settings["rewards"]["verifier"]["pool_size"] = 3
     settings["ar"]["algorithms"]["is"].update(candidate_count=2, rollout_count=1, block_size=2,
-                                             exploration_schedule="fixed", selection_ready=False)
+                                             exploration_schedule="fixed", selection_ready=False, selection="sir")
     monkeypatch.setattr("inference_scaling.app.ar.load_backend", lambda *args, **kwargs: ThinkingBackend())
     return settings
 

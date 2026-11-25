@@ -87,7 +87,7 @@ def test_async_vllm_uses_its_public_signature_and_shares_files_with_the_exact_sc
     assert kwargs["engine_kwargs"] == {**engine["vllm"]["engine_kwargs"], "max_logprobs": 16}
     assert kwargs["enable_fused_logprobs"] is False
     assert kwargs["scalar_self_certainty"] is True
-    assert kwargs["flat_logprobs"] is True and kwargs["stream_interval"] == 32
+    assert kwargs["flat_logprobs"] is True and kwargs["stream_interval"] == 8
     assert kwargs["async_scheduling"] is None
 
 
