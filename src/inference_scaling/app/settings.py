@@ -11,10 +11,12 @@ Field meanings are documented in ``docs/SETTINGS.md``.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 SETTINGS_PATH = Path("settings/inference.json")
+SETTINGS_ENV_VAR = "INFERENCE_SCALING_SETTINGS"
 
 
 class OptionalKey(str):
@@ -286,9 +288,12 @@ def check(value: Any, spec: Any, path: str) -> None:
         raise SettingsError(f"{path} must be {_describe(spec)}, not {value!r}")
 
 
-def load_settings(path: Path = SETTINGS_PATH) -> dict[str, Any]:
+def load_settings(path: Path | None = None) -> dict[str, Any]:
+    if path is None:
+        override = os.environ.get(SETTINGS_ENV_VAR)
+        path = Path(override) if override else SETTINGS_PATH
     if not path.is_file():
-        raise SettingsError(f"{path} does not exist; run from the repository root")
+        raise SettingsError(f"{path} does not exist; run from the repository root or set {SETTINGS_ENV_VAR}")
     settings = json.loads(path.read_text(encoding="utf-8"))
     run = settings.get("run", {})
     if isinstance(run, dict):

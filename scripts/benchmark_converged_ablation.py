@@ -213,6 +213,7 @@ SUITES: dict[str, list[dict[str, Any]]] = {
     ],
     # Suite 4: Adaptive IS v2 (temperature-normalized SC + B/2 pilot + Stage-2 pruning & M-1 cap).
     "adaptive_v2": [
+        _arm("base", algorithm="sample", reward=None),
         _arm("adapt_v2_k1_sc",
              reward="self_certainty",
              reward_overrides={"aggregation": "mean", "incomplete_penalty": 1.5, "temperature_normalized": True},

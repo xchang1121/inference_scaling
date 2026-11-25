@@ -182,12 +182,20 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
     return app
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    from pathlib import Path
     import uvicorn
 
     from inference_scaling.app.settings import load_settings
     from inference_scaling.serve.reasoner import Reasoner
-    settings = load_settings()
+
+    parser = argparse.ArgumentParser(prog="python -m inference_scaling.serve",
+                                     description="OpenAI / Anthropic compatible inference-scaling HTTP server.")
+    parser.add_argument("--settings", type=Path, default=None,
+                        help="Path to settings JSON or hardware preset (default: settings/inference.json or INFERENCE_SCALING_SETTINGS)")
+    args = parser.parse_args(argv)
+    settings = load_settings(args.settings)
     serve = settings["serve"]
     reasoner = Reasoner(settings)
     reasoner.load()
