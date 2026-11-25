@@ -1,15 +1,18 @@
-"""Construct the configured autoregressive backend from the ``ar`` settings."""
+"""Pluggable loader registry constructing the configured autoregressive backend."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from inference_scaling.arllm.backends.openai_backend import OpenAIBackend
+from inference_scaling.arllm.backends.scheduling import SchedulerConfig
 from inference_scaling.arllm.backends.transformers_backend import TransformersBackend
 from inference_scaling.arllm.backends.vllm_backend import AsyncVLLMBackend, VLLMBackend
-from inference_scaling.arllm.backends.scheduling import SchedulerConfig
 from inference_scaling.shared.model.loading import resolve_checkpoint_path
+
+BackendLoader = Callable[[Mapping[str, Any], Mapping[str, Any], int, int], Any]
 
 
 def _identity(model: Mapping[str, Any]) -> dict[str, Any]:
@@ -49,18 +52,13 @@ def _transformers(path: str, identity: Mapping[str, Any], model: Mapping[str, An
     )
 
 
-def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: int, logprobs: int) -> Any:
-    """Load ``ar.model`` on ``ar.engine``.
+def _load_transformers(model: Mapping[str, Any], engine: Mapping[str, Any], seed: int, logprobs: int) -> TransformersBackend:
+    del seed, logprobs
+    return _transformers(str(model["path"]), _identity(model), model, engine)
 
-    ``logprobs`` is the largest number of per-token log-probabilities the
-    algorithm requests (beam search); vLLM's limit is raised to cover it. With
-    ``vllm.exact_scoring = "transformers"`` a Transformers copy of the model
-    scores sequences exactly.
-    """
 
+def _load_vllm(model: Mapping[str, Any], engine: Mapping[str, Any], seed: int, logprobs: int) -> VLLMBackend:
     identity = _identity(model)
-    if engine["backend"] == "transformers":
-        return _transformers(str(model["path"]), identity, model, engine)
     vllm = engine["vllm"]
     if vllm["stream_interval"] < 1:
         raise ValueError("vllm.stream_interval must be positive")
@@ -126,8 +124,60 @@ def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: i
         raise
 
 
+def _load_openai(model: Mapping[str, Any], engine: Mapping[str, Any], seed: int, logprobs: int) -> OpenAIBackend:
+    del seed, logprobs
+    options = engine.get("openai") or {}
+    base_url = options.get("base_url")
+    if not base_url:
+        raise ValueError("ar.engine.openai.base_url is required when backend='openai'")
+    return OpenAIBackend.from_config(
+        base_url=str(base_url),
+        model=str(options.get("model") or model["path"]),
+        tokenizer_name_or_path=str(model["tokenizer"] or model["path"]),
+        tokenizer_revision=model["tokenizer_revision"] if model["tokenizer"] is not None else model["revision"],
+        tokenizer_kwargs=dict(model["tokenizer_kwargs"]),
+        cache_dir=model["cache_dir"],
+        local_files_only=bool(model["local_files_only"]),
+        trust_remote_code=bool(model["trust_remote_code"]),
+        parameter_count=options.get("parameter_count"),
+        api_key=options.get("api_key"),
+        timeout_seconds=float(options.get("timeout_seconds", 600.0)),
+        max_workers=int(options.get("max_workers", 16)),
+        token_penalty=model["token_penalty"],
+        extra_body=options.get("extra_body"),
+    )
+
+
+BACKEND_REGISTRY: dict[str, BackendLoader] = {
+    "transformers": _load_transformers,
+    "vllm": _load_vllm,
+    "openai": _load_openai,
+}
+
+
+def register_backend(name: str, factory: BackendLoader) -> None:
+    """Register a custom autoregressive backend factory by name."""
+    if not name or not isinstance(name, str):
+        raise ValueError("backend name must be a nonempty string")
+    BACKEND_REGISTRY[name] = factory
+
+
+def registered_backends() -> tuple[str, ...]:
+    return tuple(sorted(BACKEND_REGISTRY))
+
+
+def load_backend(model: Mapping[str, Any], engine: Mapping[str, Any], *, seed: int, logprobs: int) -> Any:
+    """Load ``ar.model`` on ``ar.engine`` via the pluggable backend registry."""
+
+    name = str(engine["backend"])
+    factory = BACKEND_REGISTRY.get(name)
+    if factory is None:
+        raise ValueError(f"unknown backend {name!r}; registered backends: {', '.join(registered_backends())}")
+    return factory(model, engine, seed, logprobs)
+
+
 def close_backend(backend: Any | None) -> None:
-    """Close vLLM processes/threads when present; safe for other backends."""
+    """Close engine processes/threads when present; safe for other backends."""
 
     if backend is None:
         return
@@ -141,4 +191,4 @@ def close_backend(backend: Any | None) -> None:
             close_backend(scoring_backend)
 
 
-__all__ = ["close_backend", "load_backend"]
+__all__ = ["BACKEND_REGISTRY", "BackendLoader", "close_backend", "load_backend", "register_backend", "registered_backends"]

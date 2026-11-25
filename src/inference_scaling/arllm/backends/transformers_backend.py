@@ -187,6 +187,21 @@ class TransformersBackend:
     def model_id(self) -> str:
         return self._model_id
 
+    def capabilities(self):
+        from inference_scaling.arllm.backends.capabilities import EngineCapabilities
+        return EngineCapabilities(
+            backend="transformers",
+            device=str(self.device),
+            streaming=False,
+            native_continuous_batching=False,
+            native_token_stops=True,
+            scalar_self_certainty=False,
+            pre_mask_statistics=True,
+            exact_scoring=True,
+            constrained_beam_search=True,
+            sampling_constraints=False,
+        )
+
     def close(self) -> None:
         """Release the model reference after all dispatchers have stopped."""
         with self._model_lock:

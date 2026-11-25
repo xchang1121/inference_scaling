@@ -134,8 +134,12 @@ def create_app(reasoner: Any, serve: dict[str, Any]) -> Any:
             await asyncio.gather(pending, return_exceptions=True)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> dict[str, Any]:
+        payload: dict[str, Any] = {"status": "ok"}
+        caps = getattr(reasoner, "capabilities", None)
+        if callable(caps):
+            payload["capabilities"] = caps()
+        return payload
 
     @app.get("/v1/models")
     async def models() -> dict[str, Any]:

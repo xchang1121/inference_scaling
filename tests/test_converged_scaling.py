@@ -1,0 +1,383 @@
+"""Tests for the converged engine/worker, reward refinements, adaptive IS, and serve layer."""
+
+from __future__ import annotations
+
+from collections import namedtuple
+import copy
+import importlib.util
+import math
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from inference_scaling.app.settings import SettingsError, load_settings, validate_settings
+from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
+from inference_scaling.arllm.algorithms.config import ConditionalISConfig
+from inference_scaling.arllm.backends.capabilities import EngineCapabilities, backend_capabilities
+from inference_scaling.arllm.backends import loader
+from inference_scaling.arllm.backends.openai_backend import OpenAIBackend
+from inference_scaling.arllm.backends.scheduling import SchedulerConfig
+from inference_scaling.arllm.backends.statistics import StatisticRecorder
+from inference_scaling.arllm.backends.vllm_backend import VLLMBackend, _engine_worker
+from inference_scaling.arllm.backends.vllm_statistics import (
+    SCALAR_STATISTICS_KEY,
+    install_scalar_statistics,
+    scalar_generated_logprobs,
+)
+from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
+from inference_scaling.arllm.pipeline import ScalingOverrides
+from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward
+from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
+from inference_scaling.serve.protocol import ProtocolError, anthropic_conversation, openai_conversation
+from inference_scaling.serve.reasoner import Reasoner
+from inference_scaling.shared.model.output import ThinkingFormat, ThinkingParser
+from inference_scaling.shared.rng import SeedStream
+from inference_scaling.shared.sampling.conditional_is import calibrate_reward_temperature
+from inference_scaling.shared.types import pointwise
+from tests.tabular import TabularAutoregressiveBackend
+from tests.test_serve import _ChatBackend
+from tests.test_streaming_vllm import DeltaEngine, backend_for
+from tests.test_vllm_backend import FlatLogprobs, _SamplingParams
+
+
+def test_gpu_worker_selected_for_scalar_self_certainty_on_cuda(monkeypatch) -> None:
+    platform = SimpleNamespace(device_type="cuda")
+    monkeypatch.setitem(sys.modules, "vllm.platforms", SimpleNamespace(current_platform=platform))
+    arguments = {"logprobs_mode": "processed_logprobs", "additional_config": {SCALAR_STATISTICS_KEY: True}}
+    with _engine_worker(arguments, False) as selected:
+        assert selected["worker_cls"] == "inference_scaling.arllm.backends.vllm_gpu_worker.GPULogprobWorker"
+    with pytest.raises(ValueError, match="cannot be combined"), _engine_worker(arguments, True):
+        pass
+
+    class TopSampler:
+        logprobs_mode = "raw_logprobs"
+
+    class FakeSampler:
+        logprobs_mode = "raw_logprobs"
+
+        def __init__(self):
+            self.topk_topp_sampler = TopSampler()
+            self.gather_logprobs = lambda lp, n, ids: None
+
+    sampler = FakeSampler()
+    runner = SimpleNamespace(sampler=sampler)
+
+    class FakeGPUWorker:
+        model_config = SimpleNamespace(logprobs_mode="processed_logprobs", get_vocab_size=lambda: 7)
+        vllm_config = SimpleNamespace(additional_config={SCALAR_STATISTICS_KEY: True})
+
+        def init_device(self):
+            self.model_runner = runner
+
+    monkeypatch.setitem(sys.modules, "vllm.v1.sample.sampler", SimpleNamespace(Sampler=FakeSampler))
+    monkeypatch.setitem(sys.modules, "vllm.v1.worker.gpu_worker", SimpleNamespace(Worker=FakeGPUWorker))
+    source = Path(__file__).resolve().parents[1] / "src/inference_scaling/arllm/backends/vllm_gpu_worker.py"
+    spec = importlib.util.spec_from_file_location("gpu_worker_contract_test", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.GPULogprobWorker().init_device()
+    assert sampler.logprobs_mode == sampler.topk_topp_sampler.logprobs_mode == "processed_logprobs"
+    assert getattr(sampler, "_scalar_self_certainty_installed", False) is True
+
+
+def test_pre_mask_scalar_statistics_stay_finite_and_exact_under_top_k_top_p() -> None:
+    Payload = namedtuple("Payload", "logprob_token_ids logprobs selected_token_ranks")
+
+    def fake_gather(logprobs, count, token_ids):
+        if count == 0:
+            return Payload(token_ids[:, None], logprobs.gather(-1, token_ids[:, None]), torch.ones(len(token_ids), dtype=torch.int32))
+        values, ids = logprobs.topk(count, dim=-1)
+        return Payload(
+            torch.cat((token_ids[:, None], ids), dim=1),
+            torch.cat((logprobs.gather(-1, token_ids[:, None]), values), dim=1),
+            torch.ones(len(token_ids), dtype=torch.int32),
+        )
+
+    class FakeTopKTopP:
+        def forward(self, logits, generators, k, p):
+            # Simulate hard masking: keep only top-2 tokens, mask rest to -inf.
+            masked = logits.clone()
+            threshold = masked.topk(2, dim=-1).values[:, -1:]
+            masked = masked.masked_fill(masked < threshold, float("-inf"))
+            return masked.argmax(dim=-1), masked.log_softmax(dim=-1)
+
+    class FakeSampler:
+        def __init__(self):
+            self.topk_topp_sampler = FakeTopKTopP()
+            self.gather_logprobs = fake_gather
+
+        def forward(self, logits, metadata):
+            sampled, processed_lp = self.topk_topp_sampler.forward(logits, {}, metadata.top_k, metadata.top_p)
+            return self.gather_logprobs(processed_lp, metadata.max_num_logprobs, sampled)
+
+    sampler = FakeSampler()
+    install_scalar_statistics(sampler, 7)
+    logits = torch.tensor([[4.0, 2.0, 1.0, 0.5, -0.5, -1.0, -2.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+    pre_lp = logits.log_softmax(dim=-1)
+    expected_sc = (-pre_lp.mean(dim=-1) - math.log(7)).tolist()
+    expected_top3 = (-pre_lp.topk(3, dim=-1).values.mean(dim=-1)).tolist()
+
+    # Even though top_k=2 masks 5 tokens to -inf in processed_lp, pre-mask SC and top-3 are finite & exact!
+    meta_sc = SimpleNamespace(max_num_logprobs=1, top_k=torch.tensor([2, 2]), top_p=torch.tensor([0.95, 0.95]))
+    out_sc = sampler.forward(logits.clone(), meta_sc)
+    rows_sc = [(ids.tolist(), vals.tolist()) for ids, vals in zip(out_sc.logprob_token_ids, out_sc.logprobs)]
+    decoded_lp, decoded_sc = scalar_generated_logprobs(FlatLogprobs(rows_sc), (0, 0), None)
+    assert decoded_sc == pytest.approx(expected_sc, abs=1e-5)
+    assert all(math.isfinite(v) for v in decoded_lp)
+
+    meta_top3 = SimpleNamespace(max_num_logprobs=4, top_k=torch.tensor([2, 2]), top_p=torch.tensor([0.95, 0.95]))
+    out_top3 = sampler.forward(logits.clone(), meta_top3)
+    rows_top3 = [(ids.tolist(), vals.tolist()) for ids, vals in zip(out_top3.logprob_token_ids, out_top3.logprobs)]
+    decoded_lp2, decoded_top3 = scalar_generated_logprobs(FlatLogprobs(rows_top3), (0, 0), 3)
+    assert decoded_top3 == pytest.approx(expected_top3, abs=1e-5)
+    assert decoded_lp2 == pytest.approx(decoded_lp, abs=1e-6)
+
+    # Backend.records accepts truncated sampling policies when scalar_self_certainty=True and temperature matches.
+    backend = VLLMBackend(None, SimpleNamespace(bos_token_id=None), model_id="fake", parameter_count=7,
+                          sampling_params_factory=_SamplingParams, scalar_self_certainty=True)
+    stat = TokenStatistic(SamplingConfig(temperature=0.8))
+    assert backend.records(stat, SamplingConfig(temperature=0.8, top_p=0.95, top_k=20))
+    assert not backend.records(stat, SamplingConfig(temperature=1.0, top_p=0.95, top_k=20))
+
+
+def test_self_certainty_and_consilience_refinements_and_incomplete_penalty() -> None:
+    class FixedConf:
+        model_id = "m"
+
+        def __init__(self, values):
+            self.values = values
+
+        def token_statistics(self, requests, statistic):
+            return [tuple(self.values[tok] for tok in cont) for req in requests for cont in req.continuations]
+
+    # Tokens: 10(skip), 1(low), 2(low), 8(high), 9(high); 90=<think>, 91=</think>
+    backend = FixedConf({10: 5.0, 1: 1.0, 2: 2.0, 3: 8.0, 4: 9.0, 90: 0.0, 91: 0.0})
+    full_stat = TokenStatistic(SamplingConfig())
+    top_stat = TokenStatistic(SamplingConfig(), 2)
+    parser = ThinkingParser((ThinkingFormat((91,), (90,)),))
+
+    # tail_mean focuses on lowest 50% after skipping 20% (skip index 0 -> body=[1, 2, 8, 9], lowest 2 -> mean(1,2)=1.5)
+    sc_tail = SelfCertaintyReward(backend, full_stat, scope="full", aggregation="tail_mean",
+                                  tail_fraction=0.5, skip_fraction=0.2)
+    assert sc_tail((), (10, 1, 2, 3, 4)) == pytest.approx(1.5)
+    # Length-invariance check on repeating trajectory (with skip=0).
+    sc_tail0 = SelfCertaintyReward(backend, full_stat, scope="full", aggregation="tail_mean",
+                                   tail_fraction=0.5, skip_fraction=0.0)
+    assert sc_tail0((), (1, 2, 3, 4)) == pytest.approx(sc_tail0((), (1, 2, 3, 4, 1, 2, 3, 4)))
+
+    # final_window blends body mean (mean(1,2,8,9)=5.0) and final 50% (mean(8,9)=8.5) with weight 0.5 -> 6.75.
+    sc_win = SelfCertaintyReward(backend, full_stat, scope="full", aggregation="final_window",
+                                 window_fraction=0.5, final_weight=0.5, skip_fraction=0.2)
+    assert sc_win((), (10, 1, 2, 3, 4)) == pytest.approx(6.75)
+    assert sc_win.describe()["aggregation"] == "final_window"
+
+    # incomplete_penalty penalizes unclosed thinking trajectories in batch(), NOT complete ones.
+    sc_pen = SelfCertaintyReward(backend, full_stat, thinking_format=parser, scope="thinking", incomplete_penalty=2.0)
+    complete_seq = (90, 3, 4, 91)  # thinking=[3,4] -> mean 8.5, no penalty
+    incomplete_seq = (90, 3, 4)    # fallback to full=[90,3,4] -> mean (0+8+9)/3 - 2.0
+    scores = sc_pen.batch((), (complete_seq, incomplete_seq))
+    assert scores[0] == pytest.approx(8.5)
+    assert scores[1] == pytest.approx((0.0 + 8.0 + 9.0) / 3.0 - 2.0)
+    assert sc_pen.describe()["incomplete_penalty"] == 2.0
+
+    # Consilience also supports incomplete_penalty cleanly.
+    c_pen = ConsilienceReward(backend, top_stat, thinking_format=parser, scope="thinking",
+                              window_tokens=1, skip_fraction=0.0, initial_penalty=1.0, incomplete_penalty=1.5)
+    assert c_pen((), complete_seq) == pytest.approx(9.0 - 8.0)
+    assert c_pen((), incomplete_seq) == pytest.approx((9.0 - 0.0) - 1.5)
+
+
+def test_calibrate_reward_temperature_bounds_ess_and_is_symmetric() -> None:
+    # Already healthy spread: unchanged.
+    assert calibrate_reward_temperature([[1.0], [1.2], [1.4], [1.6]], 0.5) == 0.5
+    # Extreme spread causing ESS collapse (< 1.35): raises effective temperature.
+    raised = calibrate_reward_temperature([[0.0], [0.0], [0.0], [10.0]], 0.25)
+    assert 0.25 < raised <= 1.0
+    # Flat cluster causing near-uniform ESS (> 0.85 * M): lowers effective temperature.
+    lowered = calibrate_reward_temperature([[1.00], [1.01], [1.02], [1.03]], 2.0)
+    assert 1.0 <= lowered < 2.0
+    # Permutation invariance and equal-reward safety.
+    assert calibrate_reward_temperature([[10.0], [0.0], [0.0], [0.0]], 0.25) == pytest.approx(raised)
+    assert math.isfinite(calibrate_reward_temperature([[2.0], [2.0], [2.0], [2.0]], 0.5))
+
+
+def test_adaptive_is_pilot_gate_early_exits_and_escalates_cleanly() -> None:
+    # Case 1: Easy problem — EOS token (2) appears immediately at length 1 < B=4.
+    easy_backend = TabularAutoregressiveBackend({(): (0.0, 0.0, 1.0)}, fallback=(0.0, 0.0, 1.0))
+    cfg = ConditionalISConfig(
+        candidate_count=4, rollout_count=2, block_size=4, total_length=12,
+        reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
+        selection="block_metropolized", pilot_gate=True, selective_lookahead=True,
+    )
+    res_easy = run_conditional_is(
+        easy_backend, (), cfg, pointwise(lambda _p, g: float(len(g))), SeedStream(7),
+        sampling=SamplingConfig(eos_token_id=2),
+    )
+    assert len(res_easy.steps) == 1
+    assert res_easy.steps[0].rollout_evaluations_performed == 1
+    assert len(res_easy.steps[0].candidates) == 1
+    assert res_easy.token_ids == (2,)
+
+    # Case 2: Hard problem — runs full length 10 > B=3, escalates pilot + runs unbiased selective K!
+    hard_backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
+    stat = TokenStatistic(SamplingConfig(), top_k=1)
+    recorder = StatisticRecorder(hard_backend, stat)
+    reward = ConsilienceReward(recorder, stat, scope="full", window_tokens=1, skip_fraction=0.0, initial_penalty=0.0)
+    cfg_hard = ConditionalISConfig(
+        candidate_count=4, rollout_count=2, block_size=3, total_length=10,
+        reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
+        selection="block_metropolized", pilot_gate=True, selective_lookahead=True,
+    )
+    res_hard = run_conditional_is(
+        recorder, (), cfg_hard, reward.batch, SeedStream(13),
+        sampling=SamplingConfig(temperature=0.8, top_p=0.95, top_k=2),
+        prefix_reward=reward.cached_prefix,
+    )
+    # Step 0 should have M=4 candidates; selective K=2 assigns 2 rollouts to ceil(4/2)=2 prefixes and 1 to the other 2 -> 6 total!
+    step0 = res_hard.steps[0]
+    assert len(step0.candidates) == 4
+    rollout_counts = sorted(len(c.rollouts) for c in step0.candidates)
+    assert rollout_counts == [1, 1, 2, 2]
+    assert step0.rollout_evaluations_performed == 6
+
+
+def test_adaptive_is_streaming_straggler_pruning_aborts_runaway_loop() -> None:
+    straggler_seed = SeedStream(9).derive("conditional_is", 0, "candidate", 1)
+
+    # Build a streaming engine where candidate 1 runs very long (len=96) with low confidence while others finish cleanly at len=5.
+    class AsymmetricDeltaEngine(DeltaEngine):
+        async def generate(self, *, prompt, sampling_params, request_id, **kwargs):
+            import asyncio
+            params = sampling_params
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            is_straggler = params.seed == straggler_seed
+            target_len = min(params.max_tokens, 96 if is_straggler else 5)
+            tok_lp = -3.0 if is_straggler else -0.1  # lower reward (-3.0 vs -0.1) on straggler!
+            try:
+                for offset in range(target_len):
+                    await asyncio.sleep(0.002 if is_straggler else 0.0005)
+                    tok = 2 if (not is_straggler and offset + 1 == target_len) else 3
+                    finished = offset + 1 == target_len or tok in params.stop_token_ids
+                    pos = FlatLogprobs([([tok, 3], [tok_lp, tok_lp])])
+                    yield SimpleNamespace(
+                        request_id=request_id, num_cached_tokens=0, finished=finished,
+                        outputs=[SimpleNamespace(token_ids=[tok], logprobs=pos,
+                                                 finish_reason=("stop" if tok in params.stop_token_ids else "length")
+                                                 if finished else None)],
+                    )
+                    if finished:
+                        break
+            finally:
+                self.active -= 1
+
+    engine = AsymmetricDeltaEngine(stream_interval=1)
+    backend = backend_for(engine)
+    backend.configure_scheduler(SchedulerConfig(max_in_flight=8))
+    stat = TokenStatistic(SamplingConfig(), top_k=1)
+    recorder = StatisticRecorder(backend, stat)
+
+    def prefix_score(_prompt, prefix):
+        vals = recorder.recorded_statistics((1,), prefix, stat)
+        return None if vals is None else -sum(vals) / len(vals)
+
+    def full_reward(_prompt, seqs):
+        return [prefix_score((1,), s) or 0.0 for s in seqs]
+
+    try:
+        cfg = ConditionalISConfig(
+            candidate_count=4, rollout_count=1, block_size=4, total_length=96,
+            reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
+            selection="block_metropolized", pilot_gate=False, straggler_pruning=True,
+        )
+        res = run_conditional_is(
+            recorder, (1,), cfg, full_reward, SeedStream(9),
+            sampling=SamplingConfig(eos_token_id=2), prefix_reward=prefix_score,
+        )
+        assert engine.aborted  # The runaway straggler (candidate 1) was pruned!
+        assert len(res.token_ids) == 5
+    finally:
+        backend.close()
+
+
+def test_openai_backend_and_pluggable_registry() -> None:
+    calls = []
+
+    def fake_transport(path, payload):
+        calls.append((path, payload))
+        return {
+            "choices": [{
+                "token_ids": [4, 2],
+                "finish_reason": "stop",
+                "logprobs": {
+                    "tokens": ["4", "2"],
+                    "token_logprobs": [-0.2, -0.3],
+                    "top_logprobs": [{"4": -0.2, "5": -1.2}, {"2": -0.3, "5": -1.3}],
+                },
+            }]
+        }
+
+    tok = SimpleNamespace(encode=lambda s, add_special_tokens=True: [1, 2], decode=lambda ids, skip_special_tokens=True: "ok")
+    backend = OpenAIBackend(
+        base_url="http://127.0.0.1:9999", model="qwen", tokenizer=tok,
+        parameter_count=100, token_penalty=TokenPenalty((5,), 1.0), transport=fake_transport,
+    )
+    try:
+        caps = backend_capabilities(backend)
+        assert caps == EngineCapabilities(
+            backend="openai", device="remote", streaming=False,
+            native_continuous_batching=True, native_token_stops=True,
+            scalar_self_certainty=False, pre_mask_statistics=False,
+            exact_scoring=False, constrained_beam_search=False, sampling_constraints=False,
+        )
+        stat = TokenStatistic(SamplingConfig(), top_k=2)
+        sample = backend.sample_batch([GenerationRequest((1,), 4, SamplingConfig(eos_token_id=2), 7, "req1", statistic=stat)])[0]
+        assert sample.token_ids == (4, 2) and sample.finish_reason == "eos"
+        assert sample.token_statistics == pytest.approx((0.7, 0.8))
+        assert calls[0][1]["logit_bias"] == {"5": -1.0}
+        assert backend.snapshot().generated_tokens == 2
+        assert "openai" in loader.registered_backends()
+    finally:
+        backend.close()
+
+
+def test_serve_per_request_scaling_overrides_and_health_capabilities() -> None:
+    conv = openai_conversation({
+        "messages": [{"role": "user", "content": "hi"}],
+        "scaling": {"candidate_count": 3, "rollout_count": 2, "block_size": 1},
+    })
+    assert conv.scaling == {"candidate_count": 3, "rollout_count": 2, "block_size": 1}
+    assert anthropic_conversation({
+        "messages": [{"role": "user", "content": "hi"}], "max_tokens": 32,
+        "scaling": {"candidate_count": 2},
+    }).scaling == {"candidate_count": 2}
+    with pytest.raises(ProtocolError, match="unknown scaling"):
+        openai_conversation({"messages": [], "scaling": {"foo": 1}})
+    with pytest.raises(ProtocolError, match="positive integer"):
+        openai_conversation({"messages": [], "scaling": {"candidate_count": 0}})
+
+    settings = copy.deepcopy(load_settings())
+    settings["ar"]["algorithms"]["is"].update(selection_ready=False, exploration_schedule="adaptive", selection="block_metropolized")
+    settings["ar"]["output"]["finish_sampling"] = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
+    validate_settings(settings)
+
+    backend = _ChatBackend()
+    reasoner = Reasoner(settings, backend)
+    caps = reasoner.capabilities()
+    assert caps["exploration_schedule"] == "adaptive"
+    assert caps["defaults"] == {"candidate_count": 4, "rollout_count": 1, "block_size": 1024}
+    prepared = reasoner.prepare(conv)
+    assert prepared.scaling_overrides == ScalingOverrides(3, 2, 1)
+    reply = reasoner.generate(prepared)
+    assert (reply.scaling["candidate_count"], reply.scaling["rollout_count"], reply.scaling["block_size"]) == (3, 2, 1)
+    assert "engine_capabilities" in reply.scaling
+
+    # Validate invalid adaptive + selection_ready conflict in settings.
+    broken = copy.deepcopy(settings)
+    broken["ar"]["algorithms"]["is"]["selection"] = "sir"
+    broken["ar"]["algorithms"]["is"]["selection_ready"] = True
+    with pytest.raises(SettingsError, match="adaptive"):
+        validate_settings(broken)

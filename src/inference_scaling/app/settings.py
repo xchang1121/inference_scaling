@@ -2,8 +2,10 @@
 
 ``settings/inference.json`` (relative to the working directory) holds every
 behavior parameter; the command line only chooses the algorithm, model family,
-reward and dataset. A missing key, an unknown key or a value of the wrong type
-is an error. Field meanings are documented in ``docs/SETTINGS.md``.
+reward and dataset. A missing required key, an unknown key or a value of the
+wrong type is an error. Optional keys (marked with :class:`OptionalKey`) are
+type-checked whenever present while keeping existing settings files compatible.
+Field meanings are documented in ``docs/SETTINGS.md``.
 """
 
 from __future__ import annotations
@@ -14,14 +16,20 @@ from typing import Any
 
 SETTINGS_PATH = Path("settings/inference.json")
 
-# A schema node is a dict (exact keys), a one-element list (array of that
-# node), a tuple (alternatives), a frozenset (allowed strings), ``None``, a
-# scalar type, or ``dict`` for a free-form object passed through unchanged.
+
+class OptionalKey(str):
+    """Dictionary schema key that may be omitted, but is strictly validated when present."""
+
+
+# A schema node is a dict (exact required keys + optional OptionalKey entries),
+# a one-element list (array of that node), a tuple (alternatives), a frozenset
+# (allowed strings), ``None``, a scalar type, or ``dict`` for a free-form object.
 _Choices = frozenset
 _NULLABLE_INT = (int, None)
 _NULLABLE_STR = (str, None)
 # Weight file name -> SHA-256, enforced when given.
 _PINS = (dict, None)
+_SAMPLING_SPEC = {"temperature": float, "top_p": float, "top_k": _NULLABLE_INT}
 
 SCHEMA: dict[str, Any] = {
     "run": {"reward": _Choices({"verifier", "self_certainty", "consilience"}),
@@ -45,7 +53,17 @@ SCHEMA: dict[str, Any] = {
     },
     "rewards": {
         "verifier": {"temperature": float, "source": _Choices({"dataset", "vote"}), "pool_size": int},
-        "self_certainty": {"temperature": float, "score_temperature": float, "scope": _Choices({"thinking", "full"})},
+        "self_certainty": {
+            "temperature": float,
+            "score_temperature": float,
+            "scope": _Choices({"thinking", "full"}),
+            OptionalKey("aggregation"): _Choices({"mean", "tail_mean", "final_window"}),
+            OptionalKey("tail_fraction"): float,
+            OptionalKey("window_fraction"): float,
+            OptionalKey("final_weight"): float,
+            OptionalKey("skip_fraction"): float,
+            OptionalKey("incomplete_penalty"): float,
+        },
         "consilience": {
             "temperature": float,
             "score_temperature": float,
@@ -55,6 +73,7 @@ SCHEMA: dict[str, Any] = {
             "window_tokens": _NULLABLE_INT,
             "skip_fraction": float,
             "initial_penalty": float,
+            OptionalKey("incomplete_penalty"): float,
         },
     },
     "ar": {
@@ -78,7 +97,7 @@ SCHEMA: dict[str, Any] = {
             "token_penalty": (None, {"words": [str], "strength": float}),
         },
         "engine": {
-            "backend": _Choices({"transformers", "vllm"}),
+            "backend": _Choices({"transformers", "vllm", "openai"}),
             "device": str,
             "dtype": str,
             "context_window": _NULLABLE_INT,
@@ -112,6 +131,15 @@ SCHEMA: dict[str, Any] = {
                 "parameter_count": _NULLABLE_INT,
                 "engine_kwargs": dict,
             },
+            OptionalKey("openai"): (None, {
+                "base_url": str,
+                OptionalKey("model"): _NULLABLE_STR,
+                OptionalKey("api_key"): _NULLABLE_STR,
+                OptionalKey("timeout_seconds"): float,
+                OptionalKey("max_workers"): int,
+                OptionalKey("parameter_count"): _NULLABLE_INT,
+                OptionalKey("extra_body"): dict,
+            }),
             "continuous_batching": {
                 "workers": int,
                 "max_batch_size": int,
@@ -135,8 +163,9 @@ SCHEMA: dict[str, Any] = {
             "thinking_end_text": _NULLABLE_STR,
             "starts_in_thinking": (bool, None),
             "sampling_scope": _Choices({"full", "thinking"}),
+            OptionalKey("finish_sampling"): (None, _SAMPLING_SPEC),
         },
-        "sampling": {"temperature": float, "top_p": float, "top_k": _NULLABLE_INT},
+        "sampling": _SAMPLING_SPEC,
         "algorithms": {
             "sample": {},
             "greedy": {},
@@ -171,9 +200,14 @@ SCHEMA: dict[str, Any] = {
                 "rollout_count": int,
                 "block_size": int,
                 "block_first": bool,
-                "exploration_schedule": _Choices({"fixed", "two_stage"}),
+                "exploration_schedule": _Choices({"fixed", "two_stage", "adaptive"}),
                 "selection_ready": bool,
                 "selection": _Choices({"sir", "metropolized", "block_metropolized"}),
+                OptionalKey("pilot_gate"): bool,
+                OptionalKey("selective_lookahead"): bool,
+                OptionalKey("straggler_pruning"): bool,
+                OptionalKey("adaptive_temperature"): bool,
+                OptionalKey("pilot_tokens"): _NULLABLE_INT,
             },
         },
     },
@@ -221,11 +255,15 @@ def check(value: Any, spec: Any, path: str) -> None:
     if isinstance(spec, dict):
         if not isinstance(value, dict):
             raise SettingsError(f"{path} must be an object")
-        missing, unknown = sorted(spec.keys() - value.keys()), sorted(value.keys() - spec.keys())
+        required = {str(key) for key in spec if not isinstance(key, OptionalKey)}
+        allowed = {str(key): child for key, child in spec.items()}
+        missing = sorted(required - value.keys())
+        unknown = sorted(value.keys() - allowed.keys())
         if missing or unknown:
             raise SettingsError(f"{path}: missing keys {missing}, unknown keys {unknown}")
-        for key, child in spec.items():
-            check(value[key], child, f"{path}.{key}")
+        for key, child in allowed.items():
+            if key in value:
+                check(value[key], child, f"{path}.{key}")
         return
     if isinstance(spec, list):
         if not isinstance(value, list):
@@ -272,8 +310,16 @@ def validate_settings(settings: dict[str, Any]) -> None:
 
     check(settings, SCHEMA, "settings")
     ar = settings["ar"]
-    if ar["algorithms"]["is"]["selection_ready"] and ar["algorithms"]["is"]["selection"] != "sir":
+    is_cfg = ar["algorithms"]["is"]
+    if is_cfg["selection_ready"] and is_cfg["selection"] != "sir":
         raise SettingsError("Metropolized selection requires selection_ready=false")
+    if is_cfg["exploration_schedule"] == "adaptive":
+        if is_cfg["selection_ready"]:
+            raise SettingsError("adaptive exploration_schedule uses stagnation pruning; set selection_ready=false")
+        if is_cfg["block_first"]:
+            raise SettingsError("adaptive exploration_schedule requires block_first=false")
+    if is_cfg.get("pilot_tokens") is not None and is_cfg["pilot_tokens"] <= 0:
+        raise SettingsError("ar.algorithms.is.pilot_tokens must be positive or null")
     if ar["max_new_tokens"] is not None and ar["max_new_tokens"] <= 0:
         raise SettingsError("ar.max_new_tokens must be positive")
     context = ar["engine"]["context_window"]
@@ -309,4 +355,4 @@ def validate_settings(settings: dict[str, Any]) -> None:
             raise SettingsError(str(error)) from error
 
 
-__all__ = ["SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]
+__all__ = ["OptionalKey", "SCHEMA", "SETTINGS_PATH", "SettingsError", "check", "load_settings", "validate_settings"]

@@ -2,6 +2,8 @@
 
 Candidate zero reuses the current block, completion and reward. Batch and
 streaming execution share the same tree and complete-weight selection.
+Supports ``fixed``, ``two_stage``, and ``adaptive`` exploration schedules
+parameterized externally by ``(M, K, B)``.
 """
 
 from __future__ import annotations
@@ -114,7 +116,7 @@ def forecast_candidate_count(observations: tuple[tuple[int, int, int, float], ..
     groups: dict[int, list[float]] = {}
     for index, planned, observed_length, log_weight in observations:
         groups.setdefault(index, []).append(log_weight)
-        multiplicity = config.rollout_count // planned
+        multiplicity = max(1, config.rollout_count // max(1, planned))
         length = max(0, observed_length - fixed)
         rounds = (length + config.block_size - 1) // config.block_size
         suffix_sum = rounds * length - config.block_size * rounds * (rounds - 1) // 2
@@ -125,6 +127,9 @@ def forecast_candidate_count(observations: tuple[tuple[int, int, int, float], ..
     full = work_sum // length_sum if length_sum else 0
     if config.final_pool_limit is not None:
         full = min(full, config.final_pool_limit)
+    if config.exploration_schedule == "adaptive":
+        # Bound Stage-2 fanout relative to external M so long proofs cannot blow up FLOPs.
+        full = min(full, max(1, 2 * (config.candidate_count - 1)))
     unused = list(groups.values())
     if not full or len(unused) < 2:
         # A single auxiliary group cannot estimate variation between prefixes.
@@ -168,7 +173,7 @@ def run_conditional_is(
         record, state = adapter.step(state, len(steps), seeds)
         if on_commit is not None:
             on_commit(state.token_ids[:state.fixed])
-        if (not steps and config.exploration_schedule == "two_stage"
+        if (not steps and config.exploration_schedule in {"two_stage", "adaptive"}
                 and config.candidate_count > 1 and not adapter.is_terminal(state)):
             count = (state.next_candidate_count if state.next_candidate_count is not None
                      else _final_candidate_count(record, state.fixed, config, seeds))

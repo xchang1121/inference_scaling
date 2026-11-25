@@ -39,6 +39,7 @@ from packaging.version import Version
 
 from inference_scaling.shared.compute import dense_forward_flops
 from inference_scaling.shared.rng import SeedStream
+from inference_scaling.arllm.backends.capabilities import EngineCapabilities
 from inference_scaling.arllm.config import SamplingConfig, TokenPenalty
 from inference_scaling.arllm.backends.vllm_statistics import SCALAR_STATISTICS_KEY, scalar_generated_logprobs
 from inference_scaling.arllm.types import (AutoregressiveBackend, GenerationRequest, ScoreRequest, SequenceSample, TokenSequence,
@@ -55,6 +56,7 @@ _PROTECTED_ENGINE_KWARGS = frozenset({
 
 _FUSED_WORKER = "inference_scaling.arllm.backends.vllm_fused_worker.FusedLogprobWorker"
 _ASCEND_WORKER = "inference_scaling.arllm.backends.vllm_ascend_worker.AscendLogprobWorker"
+_GPU_WORKER = "inference_scaling.arllm.backends.vllm_gpu_worker.GPULogprobWorker"
 # Per request, the fused worker's base log-probabilities and Self-Certainty of the generated tokens.
 FusedValues = tuple[tuple[float, ...], tuple[float, ...]]
 # Token-only generation without speculative decoding runs neither a vision tower nor a multi-token-prediction head.
@@ -65,22 +67,26 @@ _UNUSED_TENSOR = re.compile(r"(?:^|\.)(?:visual|vision_tower|vision_model|mtp)\.
 def _engine_worker(engine_arguments: dict[str, Any], fused: bool):
     """Select the sampling adapter before workers and graphs are initialized.
 
-    Ascend's V1 runner may ignore the requested log-probability mode. The
-    adapter sets both samplers without changing the native generation path.
-    The optional fused GPU worker requires synchronous internal sampling.
+    Ascend's V1 runner may ignore the requested log-probability mode, and CUDA
+    scalar Self-Certainty uses the unified ``GPULogprobWorker`` so both NPU and
+    GPU share asynchronous scheduling, streaming, and pre-mask scalar statistics.
+    The optional legacy fused GPU worker requires synchronous internal sampling.
     """
 
     from vllm.platforms import current_platform
 
     scalar = (engine_arguments.get("additional_config") or {}).get(SCALAR_STATISTICS_KEY, False)
-    if scalar and (current_platform.device_type != "npu" or fused):
-        raise ValueError("scalar Self-Certainty requires the Ascend processed-logprob worker, without fused_logprobs")
+    if scalar and fused:
+        raise ValueError("scalar Self-Certainty and fused_logprobs cannot be combined")
     if current_platform.device_type == "npu":
         if fused:
             raise ValueError("fused log-probabilities are unsupported on Ascend")
         yield {**engine_arguments, "worker_cls": _ASCEND_WORKER}
         return
     if not fused:
+        if scalar:
+            yield {**engine_arguments, "worker_cls": _GPU_WORKER}
+            return
         yield engine_arguments
         return
     installed = Version(importlib.metadata.version("vllm"))
@@ -487,7 +493,7 @@ class VLLMBackend:
         with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             engine = LLM(**arguments)
         return cls(engine, tokenizer, fused_logprobs=fused_logprobs,
-                   initial_strata=arguments.get("worker_cls") == _ASCEND_WORKER, **options)
+                   initial_strata=arguments.get("worker_cls") in {_ASCEND_WORKER, _GPU_WORKER}, **options)
 
     def _initial_strata_rpc(self, method: str, entries: Any) -> Any:
         with self._engine_lock:
@@ -847,12 +853,18 @@ class VLLMBackend:
         return results
 
     def records(self, statistic: TokenStatistic, sampling: SamplingConfig) -> bool:
-        """Top-K and Ascend scalar statistics use the actual sampling policy.
+        """Top-K and scalar statistics read the temperature-scaled model policy.
 
-        The GPU fused worker separately reads the unpenalized model at temperature 1.
+        With ``scalar_self_certainty``, both Ascend and GPU workers reduce the
+        pre-mask full-vocabulary logits (after ``logit_bias`` and temperature),
+        so Self-Certainty and top-K Consilience stay exact even under top-p/top-k
+        sampling as long as the sampling temperature matches ``statistic.policy``.
+        The legacy GPU fused worker separately reads the unpenalized model at T=1.
         """
 
-        if statistic.top_k is not None or self._scalar_self_certainty:
+        if self._scalar_self_certainty:
+            return sampling.temperature == statistic.policy.temperature
+        if statistic.top_k is not None:
             return statistic.matches(sampling)
         return self._fused_logprobs and self._penalty is None and statistic.policy.temperature == 1
 
@@ -897,6 +909,26 @@ class VLLMBackend:
             if preemptions is not None:
                 self._preemptions = preemptions
             return VLLMBackendSnapshot(**{name: getattr(self, "_" + name) for name in VLLMBackendSnapshot.__dataclass_fields__})
+
+    def capabilities(self) -> EngineCapabilities:
+        device = "unknown"
+        try:
+            from vllm.platforms import current_platform
+            device = str(getattr(current_platform, "device_type", "unknown"))
+        except Exception:
+            pass
+        return EngineCapabilities(
+            backend="vllm",
+            device=device,
+            streaming=bool(getattr(self, "supports_streaming_generation", False)),
+            native_continuous_batching=bool(getattr(self, "supports_native_continuous_batching", False)),
+            native_token_stops=self.supports_native_token_stops,
+            scalar_self_certainty=self._scalar_self_certainty,
+            pre_mask_statistics=self._scalar_self_certainty,
+            exact_scoring=self._scoring_backend is not None,
+            constrained_beam_search=bool(getattr(self, "supports_constrained_beam_search", False)),
+            sampling_constraints=self._initial_strata_supported,
+        )
 
     def execution_config(self) -> dict[str, Any]:
         """Effective settings; graph eligibility does not establish actual capture or execution."""
@@ -1107,7 +1139,7 @@ class AsyncVLLMBackend(VLLMBackend):
         with _engine_worker(engine_arguments, fused_logprobs) as arguments:
             return cls(None, tokenizer, engine_factory=lambda: AsyncLLM.from_engine_args(AsyncEngineArgs(**arguments)),
                        fused_logprobs=fused_logprobs, streaming_output_kind=RequestOutputKind.DELTA,
-                       initial_strata=arguments.get("worker_cls") == _ASCEND_WORKER, **options)
+                       initial_strata=arguments.get("worker_cls") in {_ASCEND_WORKER, _GPU_WORKER}, **options)
 
     def _initial_strata_rpc(self, method: str, entries: Any) -> Any:
         async def call():

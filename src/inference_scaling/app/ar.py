@@ -4,6 +4,9 @@
 algorithm inside the configured sampling scope and finishes the answer after a
 thinking segment. Per-problem costs are backend counter deltas by phase:
 ``reward`` (the verifier's vote pool), ``search`` (the algorithm) and ``finish``.
+
+Shared Conditional IS / reward / scope orchestration lives in
+:mod:`inference_scaling.arllm.pipeline`, keeping CLI runs and HTTP serving converged.
 """
 
 from __future__ import annotations
@@ -22,9 +25,9 @@ from inference_scaling.app.records import (
     importance_trace,
     weight_hashes,
 )
-from inference_scaling.app.rewards import Reward, best_of_n, memoized, verifier_reward
+from inference_scaling.app.rewards import Reward, best_of_n, verifier_reward
 from inference_scaling.arllm.algorithms.conditional_is import run_conditional_is
-from inference_scaling.arllm.algorithms.config import ConditionalISConfig, MHConfig
+from inference_scaling.arllm.algorithms.config import MHConfig
 from inference_scaling.arllm.algorithms.ensemble_mh import run_ensemble_mh
 from inference_scaling.arllm.algorithms.mh import MHChainResult, run_mh_chain
 from inference_scaling.arllm.backends.batching import ContinuousBatchingBackend
@@ -33,9 +36,18 @@ from inference_scaling.arllm.backends.statistics import StatisticRecorder
 from inference_scaling.arllm.backends.thinking_budget import budgeted_backend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.output import output_settings_from_config, thinking_format_from_backend
-from inference_scaling.arllm.rewards.intrinsic import ConsilienceReward, SelfCertaintyReward, TokenStatisticReward
+from inference_scaling.arllm.pipeline import (
+    CONFIDENCE_REWARDS,
+    ScalingPipeline,
+    conditional_is_config,
+    confidence_reward,
+    confidence_statistic,
+    finish_sampling_from_config,
+    sampling_policy_from_config,
+)
+from inference_scaling.arllm.rewards.intrinsic import TokenStatisticReward
 from inference_scaling.arllm.scope import SamplingScope
-from inference_scaling.arllm.types import GenerationRequest, TokenStatistic
+from inference_scaling.arllm.types import GenerationRequest
 from inference_scaling.datasets.base import Dataset, Problem
 from inference_scaling.shared.model.generation import generation_budget
 from inference_scaling.shared.model.loading import (
@@ -50,10 +62,8 @@ from inference_scaling.shared.types import TokenSequence
 
 # Algorithms that sample inside the thinking scope when it is configured.
 SCOPED = frozenset({"mh", "mh_power", "is"})
-# Algorithms whose target reweights the full-support base policy.
-FULL_SUPPORT = frozenset({"mh", "mh_power", "is"})
-# Rewards that read how decided the model's next-token distributions are.
-CONFIDENCE_REWARDS = frozenset({"self_certainty", "consilience"})
+# Algorithms whose off-policy likelihood ratio requires full support.
+FULL_SUPPORT = frozenset({"mh", "mh_power"})
 
 
 @dataclass(frozen=True)
@@ -73,43 +83,6 @@ def _kept_reward(step: Any) -> float:
     return float(step.selected.rollouts[step.completion_index].reward)
 
 
-def confidence_statistic(kind: str, settings: Mapping[str, Any]) -> TokenStatistic:
-    """The token statistic that the ``kind`` confidence reward reads."""
-
-    return TokenStatistic(SamplingConfig(temperature=float(settings["score_temperature"])),
-                          int(settings["top_k"]) if kind == "consilience" else None)
-
-
-def confidence_reward(kind: str, settings: Mapping[str, Any], backend: Any, thinking_format: Any) -> Reward:
-    """Self-Certainty or Consilience of the statistic that ``backend`` (a ``StatisticRecorder``) records."""
-
-    statistic = backend.statistic
-    span = {"thinking_format": thinking_format if settings["scope"] == "thinking" else None, "scope": settings["scope"]}
-    model = SelfCertaintyReward(backend, statistic, **span) if kind == "self_certainty" else ConsilienceReward(
-        backend, statistic, window_fraction=float(settings["window_fraction"]), window_tokens=settings["window_tokens"],
-        skip_fraction=float(settings["skip_fraction"]), initial_penalty=float(settings["initial_penalty"]), **span)
-    return Reward(float(settings["temperature"]), memoized(model.batch), model.describe(), model)
-
-
-def conditional_is_config(config: Mapping[str, Any], reward: Reward, *, total_length: int,
-                          backend: Any | None = None) -> ConditionalISConfig:
-    """The initial exploration budget and schedule shared by CLI and service."""
-
-    schedule = str(config.get("exploration_schedule", "fixed"))
-    scheduler = getattr(backend, "scheduler_config", None)
-    if schedule != "two_stage" or not getattr(backend, "supports_streaming_generation", False):
-        scheduler = None
-    return ConditionalISConfig(
-        candidate_count=int(config["candidate_count"]), rollout_count=int(config["rollout_count"]),
-        block_size=min(int(config["block_size"]), total_length), total_length=total_length,
-        reward_temperature=reward.temperature, block_first=bool(config["block_first"]),
-        exploration_schedule=schedule,
-        final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
-        selection_ready=bool(config.get("selection_ready", False)),
-        selection=str(config.get("selection", "sir")),
-    )
-
-
 class ARFamily:
     name = "ar"
 
@@ -126,7 +99,10 @@ class ARFamily:
         if self.workers < 1:
             raise ValueError("ar.engine.continuous_batching.workers must be positive")
         sampling = self.ar["sampling"]
-        if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
+        needs_full_support = choices.algorithm in FULL_SUPPORT or (
+            choices.algorithm == "is" and self.config.get("exploration_schedule", "fixed") == "fixed"
+        )
+        if needs_full_support and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
         if choices.algorithm == "mh":
             size = self.config.get("ensemble_size", 1)
@@ -151,20 +127,19 @@ class ARFamily:
                 raise ValueError(f"ar.algorithms.{choices.algorithm}.{option} needs the transformers engine, which "
                                  "samples from request uniform streams and reports reference log-probabilities")
         vllm = engine["vllm"]
-        # The Ascend adapter reduces the actual sampling distribution on device.
-        # The older GPU fused worker instead reads raw logits at temperature 1.
+        # Both Ascend and CUDA scalar workers reduce the full-vocabulary pre-mask logits on device.
         scalar = engine["backend"] == "vllm" and vllm["scalar_self_certainty"]
         if scalar and choices.algorithm == "beam":
             raise ValueError("beam search requires scalar_self_certainty=false")
         if choices.reward == "self_certainty" and engine["backend"] == "vllm" and vllm["exact_scoring"] == "none" and not (
                 (vllm["fused_logprobs"] and float(settings["rewards"]["self_certainty"]["score_temperature"]) == 1)
-                or (scalar and float(settings["rewards"]["self_certainty"]["score_temperature"]) == float(sampling["temperature"])
-                    and float(sampling["top_p"]) == 1 and sampling["top_k"] is None)):
+                or (scalar and float(settings["rewards"]["self_certainty"]["score_temperature"]) == float(sampling["temperature"]))):
             raise ValueError("self_certainty reads the whole next-token distribution; on vLLM set "
-                             "scalar_self_certainty (Ascend, matching full-support sampling), "
+                             "scalar_self_certainty (NPU/GPU, matching score_temperature), "
                              "fused_logprobs (GPU, score_temperature 1), or exact_scoring = transformers")
         self.raw: Any = None
         self.backend: Any = None
+        self.pipeline: ScalingPipeline | None = None
         self._direct_slots = 0
         self._cost_lock = threading.Lock()
 
@@ -179,6 +154,8 @@ class ARFamily:
         """Resolved checkpoint files and their hashes; the configured weight hash is enforced."""
 
         model = self.ar["model"]
+        if self.ar["engine"]["backend"] == "openai":
+            return {"base": {"path": str(model["path"]), "backend": "openai"}}
         directory = self._resolve(str(model["path"]), model["revision"])
         identity: dict[str, Any] = {
             "path": str(model["path"]), "resolved": str(directory),
@@ -200,7 +177,7 @@ class ARFamily:
         logprobs = 2 * int(self.config["num_beams"]) if self.choices.algorithm == "beam" else 0
         self.raw = load_backend(self.ar["model"], engine, seed=self.seed, logprobs=logprobs)
         self.backend = self.raw
-        # AsyncLLM schedules concurrent requests itself.
+        # AsyncLLM and OpenAI servers schedule concurrent requests natively.
         if self.workers > 1 and not getattr(self.raw, "supports_native_continuous_batching", False):
             batching = engine["continuous_batching"]
             self.backend = ContinuousBatchingBackend(
@@ -208,6 +185,7 @@ class ARFamily:
                 max_batch_tokens=int(batching["max_batch_tokens"]),
                 batch_wait_seconds=float(batching["batch_wait_seconds"]),
             )
+        self.pipeline = ScalingPipeline(self.raw, self.backend)
         self.eos = self.raw.tokenizer.eos_token_id
         self.describer = SamplingScope.from_config(self.raw, self.ar, active=False)
         self.thinking_format = thinking_format_from_backend(self.raw, output_settings_from_config(self.ar))
@@ -231,7 +209,7 @@ class ARFamily:
         if self.backend is not None and self.backend is not self.raw:
             self.backend.close()
         close_backend(self.raw)
-        self.raw = self.backend = None
+        self.raw = self.backend = self.pipeline = None
         release_accelerator_memory()
 
     # One problem ----------------------------------------------------------------------
@@ -248,14 +226,13 @@ class ARFamily:
         return str(info["content_text"])
 
     def _scope(self, prompt: TokenSequence) -> SamplingScope:
-        algorithm, reward = self.choices.algorithm, self.choices.reward
-        scope = SamplingScope.from_config(self.raw, self.ar, active=algorithm in SCOPED).for_prompt(prompt)
-        # Text rewards and full-scope confidence rewards read the whole sequence.
-        if scope.scope == "thinking" and (
-            reward == "verifier" or (reward in CONFIDENCE_REWARDS and self.reward_settings["scope"] == "full")
-        ):
-            scope = scope.full_fallback("reward_uses_full_sequence")
-        return scope
+        assert self.pipeline is not None
+        return self.pipeline.build_scope(
+            prompt, self.ar,
+            active=self.choices.algorithm in SCOPED,
+            reward_kind=self.choices.reward,
+            reward_settings=self.reward_settings,
+        )
 
     def _reward(self, task: _Task) -> Reward | None:
         kind, settings = self.choices.reward, self.reward_settings
@@ -287,9 +264,8 @@ class ARFamily:
         budget = generation_budget(self.max_new_tokens, len(prompt), [self.raw],
                                    context_window=self.ar["engine"]["context_window"], thinking=self.thinking)
         maximum = int(budget["effective_max_new_tokens"])
-        sampling = self.ar["sampling"]
-        policy = SamplingConfig(temperature=float(sampling["temperature"]), top_p=float(sampling["top_p"]),
-                                top_k=sampling["top_k"], eos_token_id=self.eos)
+        policy = sampling_policy_from_config(self.ar["sampling"], self.eos)
+        finish_policy = finish_sampling_from_config(self.ar, policy)
         scope = self._scope(prompt)
         meter = Meter({"base": self.raw} if self.workers == 1 else {})
         measured = RequestMeter(self.backend, meter, self.raw.parameter_count)
@@ -304,7 +280,7 @@ class ARFamily:
         with meter.phase("search"):
             tokens, trace, value = getattr(self, "_" + algorithm)(task, reward, meter)
         with meter.phase("finish"):
-            tokens, info = scope.finish(bounded, prompt, tokens, max_new_tokens=maximum, sampling=policy,
+            tokens, info = scope.finish(bounded, prompt, tokens, max_new_tokens=maximum, sampling=finish_policy,
                                         seed=seeds.derive(algorithm, problem.id, "final-content"))
         fallbacks = [info["sampling_fallback_reason"]] if info["sampling_fallback_reason"] else []
         confidence = getattr(reward, "model", None)
@@ -446,4 +422,4 @@ class ARFamily:
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 
-__all__ = ["ARFamily", "conditional_is_config", "confidence_reward", "confidence_statistic"]
+__all__ = ["ARFamily", "CONFIDENCE_REWARDS", "conditional_is_config", "confidence_reward", "confidence_statistic"]

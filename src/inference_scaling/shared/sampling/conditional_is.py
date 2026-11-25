@@ -159,5 +159,58 @@ def select_metropolized(candidates: Sequence[ConditionalCandidate], seeds: SeedS
     return labels[chosen]
 
 
-__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation", "select",
-           "select_metropolized", "weigh"]
+def calibrate_reward_temperature(
+    reward_groups: Sequence[Sequence[float]],
+    base_temperature: float,
+    *,
+    min_scale: float = 0.5,
+    max_scale: float = 4.0,
+    min_ess: float = 1.35,
+    max_ess_fraction: float = 0.85,
+) -> float:
+    """Calibrate an effective reward temperature keeping candidate ESS in a healthy band.
+
+    Symmetric (permutation-invariant) over candidate groups. Returns
+    ``base_temperature`` unchanged whenever its effective sample size is already
+    inside ``[min(min_ess, 0.7 * M), max_ess_fraction * M]``.
+    """
+    m = len(reward_groups)
+    if m < 2 or any(not group for group in reward_groups):
+        return base_temperature
+
+    def ess(tau: float) -> float:
+        group_logs = [logmeanexp([value / tau for value in group]) for group in reward_groups]
+        weights = normalize_log_weights(group_logs)
+        denom = fsum(w * w for w in weights)
+        return 1.0 / denom if denom > 0 else float(m)
+
+    low_target = min(min_ess, 0.7 * m)
+    high_target = max(low_target, max_ess_fraction * m)
+    ess_base = ess(base_temperature)
+    if low_target <= ess_base <= high_target:
+        return base_temperature
+    if ess_base < low_target:
+        lo, hi = base_temperature, base_temperature * max_scale
+        if ess(hi) <= low_target:
+            return hi
+        for _ in range(24):
+            mid = 0.5 * (lo + hi)
+            if ess(mid) < low_target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
+    lo, hi = base_temperature * min_scale, base_temperature
+    if ess(lo) >= high_target:
+        return lo
+    for _ in range(24):
+        mid = 0.5 * (lo + hi)
+        if ess(mid) > high_target:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation",
+           "calibrate_reward_temperature", "select", "select_metropolized", "weigh"]
