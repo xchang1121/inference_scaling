@@ -570,14 +570,21 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["tensor_parallel_size"] == 2
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["gpu_memory_utilization"] == 0.88
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["stream_interval"] == 8
+    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["run"]["reward"] == "consilience"
     assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
     assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
     assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["block_size"] == 1536
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["device"] == "cuda"
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["vllm"]["scalar_self_certainty"] is True
     assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["quantization"] == "fp8"
+    assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["context_window"] == 16384
+    assert loaded["cuda_gpu_fp8.json"]["serve"]["server"]["max_concurrent_requests"] == 2
+    assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["engine_kwargs"]["quantization_config"]["ignore"] == [
+        "re:.*visual.*", "re:.*lm_head.*",
+    ]
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["engine"]["vllm"]["quantization"] == "mxfp4"
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"]["block_size"] == 832
+    assert loaded["cuda_gpu_multistage_smc.json"]["run"]["reward"] == "consilience"
     assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
     assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
     assert loaded["openai_remote.json"]["ar"]["engine"]["backend"] == "openai"

@@ -1,6 +1,6 @@
 # 设置文件
 
-所有入口默认从仓库根目录读取 `settings/inference.json`，也支持通过环境变量 `INFERENCE_SCALING_SETTINGS` 或服务参数 `python -m inference_scaling.serve --settings <路径>` 切换至 `settings/presets/` 下的开箱硬件预设（`ascend_910b3_tp2.json`、`cuda_gpu_bf16.json`、`cuda_gpu_fp8.json`、`cuda_gpu_24g_mxfp4.json`、`openai_remote.json`）。模型、长度、奖励和执行参数共用同一来源。
+所有入口默认从仓库根目录读取 `settings/inference.json`，也支持通过环境变量 `INFERENCE_SCALING_SETTINGS` 或服务参数 `python -m inference_scaling.serve --settings <路径>` 切换至 `settings/presets/` 下的 7 套开箱硬件预设（`ascend_910b3_tp2.json`、`ascend_910b3_tp2_multistage_smc.json`、`cuda_gpu_bf16.json`、`cuda_gpu_multistage_smc.json`、`cuda_gpu_fp8.json`、`cuda_gpu_24g_mxfp4.json`、`openai_remote.json`）。模型、长度、奖励和执行参数共用同一来源。
 [`app/settings.py`](../src/inference_scaling/app/settings.py) 严格校验字段名称与类型，错误在加载模型前报出。
 标注为“对象”的字段原样传给对应库。
 下表中的数值是仓库提供的文件中的取值。

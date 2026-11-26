@@ -9,10 +9,12 @@
 
 ```bash
 python -m pip install -e ".[serve,evaluation]"
-python -m inference_scaling.serve                                                # 读取默认 settings/inference.json
-python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json   # 昇腾 910B3 TP=2 开箱预设
-python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json      # 80GB+ NVIDIA GPU BF16 预设
-python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json # 24GB 单卡 L4/4090 在线 mxfp4 预设
+python -m inference_scaling.serve                                                             # 读取默认 settings/inference.json
+python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json           # 昇腾 910B3 TP=2 均衡预设
+python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2_multistage_smc.json # 昇腾多阶段 Block-SMC 冠军预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json              # 80–96GB NVIDIA GPU BF16 均衡预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_multistage_smc.json    # 80–96GB GPU 多阶段 Block-SMC 预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json         # 24GB 单卡 L4/4090 在线 mxfp4 预设
 INFERENCE_SCALING_SETTINGS=settings/presets/ascend_910b3_tp2.json python -m inference_scaling --dataset math500
 ```
 
@@ -106,7 +108,7 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
-| [收敛版 Adaptive IS：跨基准帕累托与 NPU/GPU 正交引擎实测](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md) | Wave B1（880 组）锁定 `token_penalty=null, T=0.7, p=0.95, k=20`（89.90% vs 86.15%）；Wave B2 13 臂 × 88 题配对中 Adaptive IS v2（`self_certainty` 与改进 `consilience`）均达 **88.02%**（LiveCodeBench 最高 79.2%，MATH-500 最高 91.7%）；含昇腾 910B3 与 Colab L4 24GB 引擎实测与 5 套硬件预设 |
+| [收敛版 Adaptive IS 与多阶段 Block-SMC：跨基准帕累托与 NPU/GPU 实测](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md) | Wave B1（880 组）锁定 `token_penalty=null, T=0.7, p=0.95, k=20`（89.90% vs 86.15%）；Wave B2 13 臂 × 88 题 Adaptive IS v2 达 **88.02%**；多阶段多维度 Block-SMC 8 臂 × 48 难题中 `prog_s4_m8_k2_p2_cons` 达 **85.42%（41/48，+2/-0 零退化，LCB 79.2% / MATH 91.7%）**；覆盖昇腾 910B3 与 Blackwell 96GB / A100-40GB / L4 24GB 三档 GPU 及 7 套开箱预设 |
 | [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |
 | [100 题选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md) | Base / 快速 Consilience IS / 默认 Self-Certainty IS：92% / 93% / 94%。按块 SC K=2 为 95%，比快速 SC 耗时约多 20%、FLOPs 多 75%；准确率差区间包含 0 |
 | [IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md) | 同环境的 TP2/TP4、IS/Base 时延比、思考与内容 TTFT，以及输出吞吐 |

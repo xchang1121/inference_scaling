@@ -1,6 +1,6 @@
 {
   "run": {
-    "reward": "self_certainty",
+    "reward": "consilience",
     "seed": 20260808,
     "draws": 1,
     "hash_cache_dir": ".cache/artifact_hashes"

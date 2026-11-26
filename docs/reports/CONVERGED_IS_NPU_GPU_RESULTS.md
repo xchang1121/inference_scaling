@@ -1,6 +1,6 @@
-# Qwen3.8-27B 收敛版 Adaptive IS：跨基准帕累托与 NPU/GPU 正交引擎实测报告
+# Qwen3.8-27B 收敛版 Adaptive IS 与多阶段多维度 Block-SMC：跨基准帕累托与 NPU/GPU 实测报告
 
-本报告汇总基于 `Qwen/Qwen3.8-27B`（BF16 权重 `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`，纯文本参数量 `26,895,998,464`，无任何外部草稿模型或外部奖励/验证模型）在 **昇腾 910B3（TP=2，64 GB HBM × 2）** 与 **NVIDIA L4（单卡 23 GB，vLLM 0.34.0）** 上的系统消融与工程验证结果。
+本报告汇总基于 `Qwen/Qwen3.8-27B`（BF16 权重 `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`，纯文本参数量 `26,895,998,464`，无任何外部草稿模型或外部奖励/验证模型）在 **昇腾 910B3（TP=2，64 GB HBM × 2）** 以及 **三档 NVIDIA CUDA GPU（RTX PRO 6000 Blackwell 96 GB BF16、A100-SXM4-40GB FP8/MXFP4、L4 23 GB MXFP4，vLLM 0.34.0）** 上的系统消融、多维度 Scaling Law 与工程验证结果。
 
 ---
 
@@ -26,7 +26,11 @@
      - **昇腾长推理页对齐档 — `adapt_v2_k2_b1536`（外部设 `B=1536`）**：对齐昇腾混合 Mamba/Attention `1536`-token KV 页，MATH-500 L5 达 **`91.7%`（`22/24`, `+2/-0`, 未闭合仅 `4.2%`）**，同时 MATH-500 槽位降 **`17.8%`**、HumanEval+ 槽位降 **`24.7%`**。
 3. **NPU / GPU 正交硬件与推理引擎最优配置**：
    - **昇腾 910B3（TP=2，BF16）**：强制开启 ACLGraph（`enforce_eager=false`，关闭会慢 **5.74×–5.99×**）、开启前缀缓存（`enable_prefix_caching=true`，多分支 IS 省 **13%–14%** 前向槽位）、**`stream_interval=8`**（较旧默认 `32` 提速 **12.1%**、槽位省 **6.8%**，较 `64` 提速 **16.2%**）、`gpu_memory_utilization=0.88`、`max_concurrent_requests=4`（MATH-500 吞吐拐点 `29.7 q/hr = 2.83×`，GSM8K `969 q/hr = 3.16×`）。
-   - **NVIDIA CUDA GPU（含单卡 24 GB L4 实测）**：统一 `GPULogprobWorker` 同时支持 vLLM 0.25–0.26 V1 与 vLLM 0.30–0.34+ GPU V2 采样器，开启 `scalar_self_certainty=true` + `async_scheduling=true` + CUDA Graph（`enforce_eager=false`）；单卡 24 GB 通过在线 `mxfp4` Marlin 量化（`ignore: ["re:.*visual.*", "re:.*lm_head.*"]`，无需外部模型）仅占 `17.39 GiB` 显存即可运行 `Qwen3.8-27B`，并发 `c=4` 纯推理提速 `1.80×`；混合 GDN/Attention 架构不可设 `kv_cache_dtype="fp8"`。
+   - **NVIDIA CUDA GPU（覆盖 Blackwell 96 GB BF16 / A100-40GB FP8 & MXFP4 / L4 23 GB MXFP4）**：统一 `GPULogprobWorker` 同时支持 vLLM 0.25–0.26 V1 与 vLLM 0.30–0.34+ GPU V2 采样器，开启 `scalar_self_certainty=true` + `async_scheduling=true` + CUDA Graph（`enforce_eager=false`）；单卡 96 GB BF16 解码速率与双卡昇腾 910B3 TP=2 持平；40 GB 单卡上在线 `mxfp4` Marlin 比 `fp8` 提供 **4.09× KV 容量**（`175,182` vs `42,850` tokens）并提速 **1.75×–2.0×**，是 40 GB 上运行大宽度 `M=8` / Block-SMC 的最优方案；单卡 24 GB 通过 `mxfp4` 仅占 `17.39 GiB` 显存即可运行 27B；混合 GDN/Attention 架构不可设 `kv_cache_dtype="fp8"`。
+4. **多阶段多维度 Block-SMC Scaling Law（实验五，昇腾 910B3 全 8 臂 × 48 难题 + 三档 NVIDIA GPU 验证）**：
+   - 仅拉深单链多阶段（`P=1`）或盲目增宽（`M=8, P=1`）在高难度题上会出现**赢家诅咒与后期单链坍缩**（48 题宏平均反而从 `81.25%` 降至 `77.08%–79.17%`）。
+   - 引入 **多粒子块级 SMC（`beam_particles = P = 2`，系统重采样 + 精确父粒子质量守恒）** 在完全相同计算预算下消除过早坍缩，48 题宏平均跃升 **`+4.16 pp`**（`79.17% → 83.33%`）且总槽位与墙钟反而减少 **`4.0% / 3.8%`**。
+   - **BF16 精度下多阶段最优冠军为 `prog_s4_m8_k2_p2_cons`（`P=2` Block-SMC + `consilience`）**：48 题宏平均达 **`85.42%`（`41/48`，配对 `+2/-0` 零退化）**，LiveCodeBench **`79.2%`（`+8.4 pp`，`+2/-0`，斜率 `+2.58 pp/倍增`）**、MATH-500 L5 **`91.7%`（`22/24`，`+0/-0`）**，且较同规模 `self_certainty` Block-SMC 再省 **`13.1%` 槽位与 `9.0%` 墙钟**；而在 4-bit `mxfp4` 量化下全词表 `self_certainty` 抗量化噪声更稳健。
 
 ---
 
@@ -138,20 +142,96 @@
 
 ---
 
-## 6. 开箱即用硬件预设与启动方式
+## 6. 实验五：多阶段多维度 Scaling Law 实测（NPU 全 8 臂 × 48 难题 + 三档 NVIDIA GPU）
 
-所有预设均位于 `settings/presets/` 并通过严格 Schema 校验，可通过 `--settings` 或环境变量 `INFERENCE_SCALING_SETTINGS` 一键切换：
+为突破固定二阶段在长思维链上的扩展上限，我们在 `exploration_schedule = "progressive"` 中沿四个正交维度联合扩展条件重要性采样：
 
-| 预设文件 | 适用硬件与引擎 | 关键差异配置 | 启动示例 |
-| --- | --- | --- | --- |
-| `settings/presets/ascend_910b3_tp2.json` | 昇腾 910B3 × 2 (BF16) | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, ACLGraph+PrefixCache ON, `c=4` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json` |
-| `settings/presets/cuda_gpu_bf16.json` | 80–96 GB NVIDIA GPU (H100 / A100-80G / Blackwell) | `device="cuda"`, BF16 `TP=1`, `GPULogprobWorker`, `async_scheduling=true`, `stream_interval=8`, `c=4` | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json` |
-| `settings/presets/cuda_gpu_fp8.json` | 40–96 GB NVIDIA GPU (L40S / A100-40G / H100) | 在线 `quantization="fp8"`（无外部模型），`context_window=32768`, `c=4` | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_fp8.json` |
-| `settings/presets/cuda_gpu_24g_mxfp4.json` | 单卡 24 GB NVIDIA GPU (Colab L4 / RTX 4090) | 在线 `mxfp4` Marlin（忽略 visual/lm_head），`context_window=8192`, `B=832`, `c=2` | `VLLM_MARLIN_USE_ATOMIC_ADD=1 python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json` |
-| `settings/presets/openai_remote.json` | 任意外部 vLLM / SGLang / MindIE `/v1/completions` 服务 | `backend="openai"`, `reward="consilience"`（`initial_penalty=1.5, incomplete_penalty=2.0`） | `python -m inference_scaling.serve --settings settings/presets/openai_remote.json` |
+1. **阶段深度 $S$（几何递进检查点）**：前缀检查点按 $B_s = \gamma^s B$（默认 $\gamma = 2.0, S_{\max} = 4$）几何扩张，仅对长程难题逐级深入，避免线性切块的二次计算爆炸与频繁前缀破坏；
+2. **候选宽度 $M$**：控制每阶段并发探索的候选块数量（`M=4 → 8`）；
+3. **衰减前瞻深度 $K_s$**：按 $K_s = \max(1, \lceil K / 2^s \rceil)$ 将 `K=4` 等高预算前瞻集中投入高熵前期分叉，后期平滑收敛至 `1`；
+4. **粒子多样性 $P$（Multi-Particle Block-SMC）**：`beam_particles = P >= 1` 维护 $P$ 条活跃前缀粒子，结合系统重采样（Systematic Resampling）与精确父粒子质量守恒修正 $-\log(\text{surviving\_children}_p)$，所有粒子在同一异步流式会话中并发前向展开。
 
-HTTP 服务请求支持按请求外部覆盖 `(M, K, B)`，例如在 `/v1/chat/completions` 或 `/v1/messages` 请求体中传入：
+所有实验固定全局最优采样（`T=0.7, top_p=0.95, top_k=20, token_penalty=null`）、`context_window=16384`、`stream_interval=8`、`enable_prefix_caching=true`，LiveCodeBench 输出全部在离线无网 CPU 沙箱中统一判题。
+
+### 6.1 昇腾 910B3（TP=2，BF16）全 8 臂 × 48 难题主表
+
+环境：昇腾 910B3 TP=2（BF16，`vllm-ascend:v0.23.0rc1`，`gpu_memory_utilization=0.88`，`c=3`），48 题高难配对（LiveCodeBench 24 题 + MATH-500 Level-5 24 题，共 **384 次完整推理**）。
+
+| 模式（规模维度） | LCB (24 题) | LCB `+W/-L` | LCB 槽位 (`ScaleX`) | LCB 墙钟 (`WallX`) | MATH-500 (24 题) | MATH `+W/-L` | MATH 槽位 (`ScaleX`) | MATH 墙钟 (`WallX`) | **48 题宏平均** | 总槽位 (`ScaleX`) | 总墙钟 (`WallX`) | 宏平均斜率 (`pp/2×`) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `base` | 70.8% (17/24) | - | 87,079 (1.00×) | 1095.7s (1.00×) | 91.7% (22/24) | - | 89,450 (1.00×) | 1126.7s (1.00×) | **81.25%** (39/48) | 176,529 (1.00×) | 2222s (1.00×) | 0.00 |
+| `adapt_2stage_m4_k2` | 66.7% (16/24) | `+0/-1` | 434,556 (4.99×) | 1833.0s (1.67×) | 91.7% (22/24) | `+0/-0` | 545,812 (6.10×) | 2613.6s (2.32×) | **79.17%** (38/48) | 980,368 (5.55×) | 4447s (2.00×) | -0.84 |
+| `prog_s4_m4_k2_p1`（仅拉深 $S=4$） | 70.8% (17/24) | `+1/-1` | 461,687 (5.30×) | 2013.7s (1.84×) | 83.3% (20/24) | `+0/-2` | 703,701 (7.87×) | 4133.4s (3.67×) | **77.08%** (37/48) | 1,165,388 (6.60×) | 6147s (2.77×) | -1.53 |
+| `prog_s4_m4_k2_b1536`（$S=4$ + 页对齐 $B=1536$） | 70.8% (17/24) | `+1/-1` | 426,417 (4.90×) | 1812.1s (1.65×) | 87.5% (21/24) | `+0/-1` | 569,705 (6.37×) | 3291.1s (2.92×) | **79.17%** (38/48) | 996,122 (5.64×) | 5103s (2.30×) | -0.83 |
+| `prog_s4_m8_k2_p1`（拉宽 $M=8, P=1$） | 70.8% (17/24) | `+2/-2` | 967,361 (11.11×) | 2465.3s (2.25×) | 87.5% (21/24) | `+0/-1` | 1,446,761 (16.17×) | 4792.3s (4.25×) | **79.17%** (38/48) | 2,414,122 (13.68×) | 7258s (3.27×) | -0.55 |
+| `prog_s4_m4_k4_p1`（衰减前瞻 $K=4\to2\to1$） | **75.0% (18/24)** | **`+1/-0`** | 666,243 (7.65×) | 2098.5s (1.92×) | 87.5% (21/24) | `+0/-1` | 1,053,009 (11.77×) | 3411.4s (3.03×) | **81.25%** (39/48) | 1,719,252 (9.74×) | 5510s (2.48×) | +0.00 |
+| `prog_s4_m8_k2_p2`（**Block-SMC $P=2$, SC**） | **79.2% (19/24)** | **`+2/-0`** | 960,249 (11.03×) | 2461.4s (2.25×) | 87.5% (21/24) | `+0/-1` | 1,356,446 (15.16×) | 4520.4s (4.01×) | **83.33%** (40/48) | 2,316,695 (13.12×) | 6982s (3.14×) | +0.56 |
+| **`prog_s4_m8_k2_p2_cons`（Block-SMC $P=2$, Cons）** | **79.2% (19/24)** | **`+2/-0`** | **815,922 (9.37×)** | **2160.9s (1.97×)** | **91.7% (22/24)** | **`+0/-0`** | **1,197,587 (13.39×)** | **4196.6s (3.72×)** | **85.42% (41/48)** | **2,013,509 (11.41×)** | **6357s (2.86×)** | **+1.19** |
+
+*注：LiveCodeBench 单库斜率（`pp / 算力倍增`）：`prog_s4_m4_k4_p1` = **`+1.42`**、`prog_s4_m8_k2_p2` = **`+2.41`**、**`prog_s4_m8_k2_p2_cons` = `+2.58`（最高）**。*
+
+### 6.2 四维扩展机理与关键实证发现
+
+1. **为什么单链多阶段（$P=1$）与盲目拉宽（$M=8, P=1$）会触顶退化？**
+   - 在 `prog_s4_m8_k2_p1` 中，LiveCodeBench 虽解出 2 道难题（`lcb/3801`、`lcb/abc395_e`），却同时在 2 道题上回退（`lcb/abc391_e`、`lcb/abc391_g`，`+2/-2`）；在 `prog_s4_m4_k2_p1` 中，MATH-500 也在 `geometry/229` 与 `intermediate_algebra/1197` 回退（`-2`）。根因在于无验证器奖励存在有限样本噪声：单链在早期一旦将唯一前缀锁定到局部过度自信的死胡同，后续多阶段只能在错误分支上继续投入算力。
+2. **多粒子 Block-SMC（$P=1 \to 2$）带来“零算力开销”的显著精度跃升**：
+   - 在完全相同的总预算（$M=8, K=2, S_{\max}=4$）下将单链 $P=1$ 升级为双粒子 Block-SMC（$P=2$）：LiveCodeBench 全部保留了 2 道新增解题（`lcb/3801`、`lcb/abc395_e`）并**彻底清零 2 道回退（`+2/-0`，`70.8% → 79.2%`）**；48 题宏平均提升 **`+4.16 pp`**（`79.17% → 83.33%`），同时因为两条粒子可更早结束有效思考，总前向槽位反而**下降 `4.0%`**（`2,414,122 → 2,316,695`）、总墙钟**下降 `3.8%`**（`7258s → 6982s`）。
+3. **BF16 精度下 `Consilience` 为何在多阶段 Block-SMC 中全面超越 `Self-Certainty`？**
+   - 随着阶段推进至 Stage 2–3，已提交的共享前缀长度 $c_s$ 增长至 `3k–7k` tokens。全序列均值的 `Self-Certainty` 差值会被共享前缀按 $|v| / (c_s + |v|)$ 稀释；而 `Consilience` 取“末段窗口置信度 − 加权首段窗口置信度”，天然抵消相同共享前缀的常数偏置，从而在后期保留锐利的分支判别力。实测中，`prog_s4_m8_k2_p2_cons` 额外挽回 `intermediate_algebra/960.json`，实现 **48 题零退化（`+2/-0`，`85.42%`）**，且相比同预算 `self_certainty` Block-SMC 槽位再降 **`13.1%`**、墙钟再降 **`9.0%`**。
+4. **昇腾 1536-token 页对齐与衰减前瞻 $K=4\to2\to1$**：
+   - 在多阶段模式下，`prog_s4_m4_k2_b1536` 相比 `B=1024` 宏平均提升 **`+2.09 pp`**（`79.17%` vs `77.08%`）、总槽位省 **`14.5%`**、总墙钟快 **`17.0%`**；在 LiveCodeBench 上槽位（`426,417`）与墙钟（`1812.1s`）甚至均低于 2 阶段 `adapt_2stage_m4_k2`（`434,556` / `1833.0s`）且多解 1 题。
+   - `prog_s4_m4_k4_p1` 凭借首阶段 $K=4$ 降低奖励方差，在 LiveCodeBench 上也实现零退化提升（`75.0%`, `+1/-0`），但跨两库综合收益与扩展效率仍弱于 $P=2$ Block-SMC。
+
+### 6.3 NVIDIA CUDA 三档 GPU 跨硬件多维度验证
+
+为验证算法与引擎配置在不同 NVIDIA GPU 架构、显存容量与量化精度下的可迁移性，我们在 **RTX PRO 6000 Blackwell 96 GB（G4，BF16）** 与 **A100-SXM4-40GB（在线 `fp8` W8A16 Marlin 与在线 `mxfp4` W4A16 Marlin）** 上基于 `vllm 0.34.0`（`context_window=16384, stream_interval=8, async_scheduling=true, scalar_self_certainty=true, c=4`）执行了多维度对比。
+
+#### A. NVIDIA A100-SXM4-40GB（`mxfp4` Marlin，KV 容量 `175,182 tokens / 14.12 GiB`，`c=4`）
+
+| 基准 | 模式 | 准确率 | vs Base (`+W/-L`) | 前向槽位 (`ScaleX`) | 总墙钟 (`WallX`) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| **MATH-500 L5 (12 题)** | `base` | 91.7% (11/12) | - | 33,671 (1.00×) | 196.1s (1.00×) |
+| **MATH-500 L5 (12 题)** | `adapt_2stage_m4_k2` | 91.7% (11/12) | `+0/-0` | 257,229 (7.64×) | 561.0s (2.86×) |
+| **MATH-500 L5 (12 题)** | `prog_s4_m4_k2_p1` | 91.7% (11/12) | `+0/-0` | 320,709 (9.52×) | 808.8s (4.13×) |
+| **MATH-500 L5 (12 题)** | `prog_s4_m8_k2_p1` | 91.7% (11/12) | `+0/-0` | 533,092 (15.83×) | 1188.5s (6.06×) |
+| **MATH-500 L5 (12 题)** | `prog_s4_m4_k4_p1` | 91.7% (11/12) | `+0/-0` | 443,170 (13.16×) | 922.3s (4.70×) |
+| **MATH-500 L5 (12 题)** | **`prog_s4_m8_k2_p2` (`self_certainty`)** | **91.7% (11/12)** | **`+0/-0`** | 737,675 (21.91×) | 1427.2s (7.28×) |
+| **MATH-500 L5 (12 题)** | `prog_s4_m8_k2_p2_cons` (`consilience`) | 83.3% (10/12) | `+0/-1` (`1197`) | 584,945 (17.37×, `-20.7%`) | 1299.1s (6.63×) |
+| **LiveCodeBench (共 10 题配对)** | `base` | 80.0% (8/10；全 12 题 9/12) | - | 62,842 (1.00×；12 题总 75,825) | 累计 705.6s（12 题墙钟 282.5s） |
+| **LiveCodeBench (共 10 题配对)** | `adapt_2stage_m4_k2` | 80.0% (8/10；全 12 题 9/12) | `+1/-1` (`W=arc195_a, L=abc393_f`) | 138,755 (2.21×；12 题总 237,185) | 累计 1061.7s（12 题墙钟 404.4s） |
+| **LiveCodeBench (共 10 题配对)** | **`prog_s4_m4_k2_p1`** | **90.0% (9/10)** | **`+1/-0` (`W=arc195_a`)** | **200,969 (3.20×)** | **累计 1239.8s（1.76×）** |
+
+#### B. 硬件/精度横向对比：40 GB `fp8` KV 抢占拐点与 96 GB Blackwell BF16 对照（MATH-500 L5 同 12 题）
+
+| GPU 平台与精度 | KV 缓存容量 | `base` (准确率 / 槽位 / 墙钟) | `adapt_2stage_m4_k2` | `prog_s4_m4_k2_p1` | 关键工程结论 |
+| --- | --- | --- | --- | --- | --- |
+| **Blackwell 96 GB (G4, BF16)** | `349,713 tok` (`31.44 GiB`) | `11/12 (91.7%)` / `37,227` / `477.4s` | `11/12 (91.7%)` / `257,392` / `1022.5s` | `10/10 (100% 完成)`；难题耗时降 `29%–47%`（如 `870`: `391.7s→208.1s`） | 单卡 BF16 并发 `c=4` 单流速率 `~25.8 tok/s`，与双卡昇腾 910B3 TP=2（`~26.2 tok/s`）基本持平 |
+| **A100-40GB (`fp8` W8A16 Marlin)** | `42,850 tok` (`3.47 GiB`) | `10/12 (83.3%)` / `33,896` / `342.4s` | **`11/12 (+8.3 pp)`** / `231,911` / `1115.9s` | **`11/12 (+8.3 pp)`** / `288,102` / `1419.5s` | `fp8` 仅剩 `2.62×` 16k 并发，在 `M=8, c=4` 下触发严重 KV 抢占；**40 GB 上 `fp8` 必须将 `context_window` 限至 `16384`、并发限至 `c=2`** |
+| **A100-40GB (`mxfp4` W4A16 Marlin)** | **`175,182 tok` (`14.12 GiB`)** | `11/12 (91.7%)` / `33,671` / **`196.1s` (`1.75×`↑)** | `11/12 (91.7%)` / `257,229` / **`561.0s` (`1.99×`↑)** | `11/12 (91.7%)` / `320,709` / **`808.8s` (`1.76×`↑)** | 同卡切 `mxfp4` 使 KV 容量扩大 **4.09×**、消除 `M=8, P=2, c=4` 抢占（短题 `737` 由 `356s` 降至 `35.2s`） |
+
+#### C. 精度-奖励部署选择规则（重要工程结论）
+
+- **全精度 BF16 / FP8 / 远程 OpenAI 引擎**（昇腾 910B3 TP=2、H100 / A100-80G / Blackwell 96 GB）：多阶段 Block-SMC 优先使用 **`consilience`**（既抵消长共享前缀稀释，又省 13% 算力并在 48 题上实现零退化 `85.42%`）；
+- **4-bit `mxfp4` 权重量化**（A100-40GB / L4 24 GB）：极低比特量化会在 top-5 局部概率上引入微小扰动，全词表平均 KL 的 **`self_certainty`** 在 6 个扩展臂上保持 `11/12` 零波动，优于 `consilience`（`10/12`），因此 4-bit 量化部署保持 `reward = "self_certainty"`。
+
+---
+
+## 7. 开箱即用硬件预设与启动方式
+
+所有 7 套预设均位于 `settings/presets/` 并通过严格 Schema 校验，可通过 `--settings` 或环境变量 `INFERENCE_SCALING_SETTINGS` 一键切换：
+
+| 预设文件 | 适用硬件与场景 | 推荐算法与奖励 | 关键引擎配置 | 启动示例 |
+| --- | --- | --- | --- | --- |
+| `settings/presets/ascend_910b3_tp2.json` | 昇腾 910B3 × 2 (BF16，均衡默认) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, ACLGraph+PrefixCache ON, `c=4` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json` |
+| `settings/presets/ascend_910b3_tp2_multistage_smc.json` | 昇腾 910B3 × 2 (BF16，高难多维扩展冠军) | **`progressive` Block-SMC** (`M=8, K=2, B=1536, S=4, P=2`), **`consilience`** | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, 1536 页对齐, `c=2` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2_multistage_smc.json` |
+| `settings/presets/cuda_gpu_bf16.json` | 80–96 GB NVIDIA GPU (H100 / A100-80G / Blackwell，均衡默认) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | `device="cuda"`, BF16 `TP=1`, `GPULogprobWorker`, `async_scheduling=true`, `stream_interval=8`, `c=4` | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json` |
+| `settings/presets/cuda_gpu_multistage_smc.json` | 80–96 GB NVIDIA GPU (BF16，高难多维扩展冠军) | **`progressive` Block-SMC** (`M=8, K=2, B=1024, S=4, P=2`), **`consilience`** | `device="cuda"`, BF16 `TP=1`, `async_scheduling=true`, `stream_interval=8`, `c=2`（4-bit 量化建议改 `self_certainty`） | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_multistage_smc.json` |
+| `settings/presets/cuda_gpu_fp8.json` | 40–96 GB NVIDIA GPU (A100-40G / L40S / H100) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | 在线 `fp8`（忽略 visual/lm_head），40 GB 安全默认 `context_window=16384, c=2`（≥48 GB 可放宽至 `32768, c=4`；40 GB 跑 `M=8`/SMC 建议改 `mxfp4`） | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_fp8.json` |
+| `settings/presets/cuda_gpu_24g_mxfp4.json` | 单卡 24 GB NVIDIA GPU (Colab L4 / RTX 4090) | `adaptive` (`M=4, K=2, B=832`), `self_certainty` | 在线 `mxfp4` Marlin（忽略 visual/lm_head），`context_window=8192`, `B=832`, `c=2` | `VLLM_MARLIN_USE_ATOMIC_ADD=1 python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json` |
+| `settings/presets/openai_remote.json` | 任意外部 vLLM / SGLang / MindIE `/v1/completions` 服务 | `adaptive` (`M=4, K=2, B=1024`), `consilience` | `backend="openai"`, 仅需 top-5 logprobs，可切换 `progressive` + `beam_particles=2` | `python -m inference_scaling.serve --settings settings/presets/openai_remote.json` |
+
+HTTP 服务请求支持按请求外部覆盖核心维度 `(M, K, B)` 以及可选的 `max_stages`、`beam_particles`，例如在 `/v1/chat/completions` 或 `/v1/messages` 请求体中传入：
 
 ```json
-{"scaling": {"candidate_count": 4, "rollout_count": 1, "block_size": 1536}}
+{"scaling": {"candidate_count": 8, "rollout_count": 2, "block_size": 1536, "max_stages": 4, "beam_particles": 2}}
 ```

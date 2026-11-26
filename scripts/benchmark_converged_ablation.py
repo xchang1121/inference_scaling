@@ -532,11 +532,20 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     existing = read_jsonl(args.output)
+    wanted_keys = {
+        (ds_name, p.id, arm["name"])
+        for ds_name, ds, _ in loaded_datasets
+        for p in ds.problems
+        for arm in arms
+    }
     done = {
         (r.get("dataset"), r["problem_id"], r["mode"])
-        for r in existing if r.get("kind") == "measurement" and r.get("status") == "complete"
+        for r in existing
+        if r.get("kind") == "measurement"
+        and r.get("status") == "complete"
+        and (r.get("dataset"), r["problem_id"], r["mode"]) in wanted_keys
     }
-    expected = total_problems * len(arms)
+    expected = len(wanted_keys)
     if len(done) >= expected:
         print(json.dumps({"kind": "already_complete", "summary": summarize_results(existing)}, indent=2), flush=True)
         return
