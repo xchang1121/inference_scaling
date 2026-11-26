@@ -1,0 +1,207 @@
+{
+  "run": {
+    "reward": "self_certainty",
+    "seed": 20260808,
+    "draws": 1,
+    "hash_cache_dir": ".cache/artifact_hashes"
+  },
+  "datasets": {
+    "gsm8k": {
+      "path": "data/gsm8k/test.jsonl",
+      "download": true,
+      "source": {
+        "url": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl",
+        "sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14",
+        "rows": 1319
+      },
+      "selection": {"count": 32, "seed": 20260808},
+      "prompt_template": "{question}\n\nSolve the problem step by step. End your response with exactly `#### <number>`, where <number> is the final numeric answer."
+    },
+    "math500": {
+      "path": "data/math500/test.jsonl",
+      "download": true,
+      "source": {
+        "repository": "HuggingFaceH4/MATH-500",
+        "revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+        "filename": "test.jsonl"
+      },
+      "selection": {
+        "seed": 20260911,
+        "minimum_level": 5,
+        "excluded_ids": [
+          "test/prealgebra/954.json", "test/precalculus/1133.json",
+          "test/algebra/1082.json", "test/counting_and_probability/913.json",
+          "test/precalculus/1291.json", "test/intermediate_algebra/1210.json",
+          "test/number_theory/847.json", "test/intermediate_algebra/1555.json"
+        ],
+        "skip": 8,
+        "count": 64
+      },
+      "prompt_template": "{question}\nPlease reason step by step, and put your final answer within \\boxed{}.",
+      "judge_timeout_seconds": 20
+    }
+  },
+  "rewards": {
+    "verifier": {"temperature": 0.1, "source": "dataset", "pool_size": 8},
+    "self_certainty": {
+      "temperature": 0.25,
+      "score_temperature": 0.7,
+      "scope": "thinking",
+      "aggregation": "mean",
+      "incomplete_penalty": 1.5,
+      "temperature_normalized": true
+    },
+    "consilience": {
+      "temperature": 2.0,
+      "score_temperature": 0.7,
+      "scope": "thinking",
+      "top_k": 5,
+      "window_fraction": 0.2,
+      "window_tokens": null,
+      "skip_fraction": 0.05,
+      "initial_penalty": 1.5,
+      "incomplete_penalty": 2.0
+    }
+  },
+  "ar": {
+    "max_new_tokens": null,
+    "thinking": {
+      "reasoning_effort": null,
+      "budget_tokens": null,
+      "default_effort": "xhigh",
+      "default_budget_tokens": 131072,
+      "effort_budgets": {"low": 4096, "medium": 16384, "xhigh": 262144},
+      "effort_aliases": {"none": null, "minimal": "low", "high": "xhigh", "max": "xhigh"}
+    },
+    "model": {
+      "path": "Qwen/Qwen3.8-27B",
+      "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "weight_sha256": null,
+      "adapter": null,
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "tokenizer_kwargs": {},
+      "cache_dir": null,
+      "local_files_only": false,
+      "trust_remote_code": false,
+      "token_penalty": null
+    },
+    "engine": {
+      "backend": "vllm",
+      "device": "cuda",
+      "dtype": "bfloat16",
+      "context_window": null,
+      "transformers": {
+        "attn_implementation": "sdpa",
+        "device_map": null,
+        "model_kwargs": {},
+        "max_score_batch_size": 12,
+        "score_chunk_size": 256,
+        "prefix_cache_mib": 4096,
+        "in_place_kv": true,
+        "cuda_graphs": false
+      },
+      "vllm": {
+        "asynchronous": true,
+        "async_scheduling": true,
+        "stream_interval": 8,
+        "flat_logprobs": true,
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.9,
+        "max_num_seqs": 32,
+        "max_num_batched_tokens": 16384,
+        "quantization": null,
+        "enforce_eager": false,
+        "enable_prefix_caching": true,
+        "max_lora_rank": 16,
+        "fused_logprobs": false,
+        "scalar_self_certainty": true,
+        "exact_scoring": "none",
+        "parameter_count": null,
+        "engine_kwargs": {"enable_chunked_prefill": true, "language_model_only": true}
+      },
+      "continuous_batching": {
+        "workers": 1,
+        "max_batch_size": 24,
+        "max_batch_tokens": 12288,
+        "batch_wait_seconds": 0.01
+      },
+      "rollout_scheduler": {
+        "enabled": true,
+        "max_in_flight": 32,
+        "max_prefill_tokens": 16384,
+        "kv_high_watermark": 0.9,
+        "aging_seconds": 2.0,
+        "tail_prefill_tokens": 4096,
+        "policy": "fair_lpt"
+      }
+    },
+    "prompt": {"system": null, "format": "auto", "chat_template_kwargs": {}},
+    "output": {
+      "thinking_mode": "enabled",
+      "thinking_start_text": null,
+      "thinking_end_text": null,
+      "starts_in_thinking": null,
+      "sampling_scope": "thinking"
+    },
+    "sampling": {"temperature": 0.7, "top_p": 0.95, "top_k": 20},
+    "algorithms": {
+      "sample": {},
+      "greedy": {},
+      "beam": {"num_beams": 8},
+      "best_of_n": {"samples": 8},
+      "mh": {
+        "ensemble_size": 1,
+        "execution": "batch",
+        "initialization": "iid",
+        "stratified_updates": false,
+        "nonself_updates": false,
+        "block_size": 1024,
+        "steps_per_block": 3,
+        "iterations": null,
+        "suffix_schedule": "uniform",
+        "proposal": "base",
+        "frozen_history": {"samples": 8, "mixture": 0.25},
+        "suffix_replay": false
+      },
+      "mh_power": {
+        "alpha": 4.0,
+        "proposal_temperature": 0.25,
+        "block_size": 1024,
+        "steps_per_block": 3,
+        "iterations": null,
+        "suffix_schedule": "uniform",
+        "suffix_replay": false,
+        "early_rejection": false
+      },
+      "is": {
+        "candidate_count": 8,
+        "rollout_count": 2,
+        "block_size": 1024,
+        "block_first": false,
+        "exploration_schedule": "progressive",
+        "selection_ready": false,
+        "selection": "block_metropolized",
+        "pilot_gate": true,
+        "selective_lookahead": true,
+        "straggler_pruning": true,
+        "adaptive_temperature": true,
+        "pilot_tokens": null,
+        "max_stages": 4,
+        "block_growth": 2.0,
+        "beam_particles": 2
+      }
+    }
+  },
+  "serve": {
+    "server": {
+      "host": "0.0.0.0",
+      "port": 8000,
+      "served_model_name": "qwen3.8-27b-is",
+      "max_concurrent_requests": 2,
+      "keepalive_seconds": 10.0
+    },
+    "max_seconds": null
+  }
+}

@@ -544,9 +544,11 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
     presets_dir = Path(__file__).resolve().parents[1] / "settings" / "presets"
     expected = {
         "ascend_910b3_tp2.json",
+        "ascend_910b3_tp2_multistage_smc.json",
         "cuda_gpu_bf16.json",
         "cuda_gpu_fp8.json",
         "cuda_gpu_24g_mxfp4.json",
+        "cuda_gpu_multistage_smc.json",
         "openai_remote.json",
     }
     found = {p.name for p in presets_dir.glob("*.json")}
@@ -559,7 +561,7 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
         assert cfg["ar"]["model"]["token_penalty"] is None
         assert cfg["ar"]["sampling"] == {"temperature": 0.7, "top_p": 0.95, "top_k": 20}
         is_cfg = cfg["ar"]["algorithms"]["is"]
-        assert is_cfg["exploration_schedule"] == "adaptive"
+        assert is_cfg["exploration_schedule"] in {"adaptive", "progressive"}
         assert is_cfg["selection_ready"] is False
         assert is_cfg["selection"] == "block_metropolized"
         loaded[name] = cfg
@@ -568,11 +570,16 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["tensor_parallel_size"] == 2
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["gpu_memory_utilization"] == 0.88
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["stream_interval"] == 8
+    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
+    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
+    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["block_size"] == 1536
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["device"] == "cuda"
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["vllm"]["scalar_self_certainty"] is True
     assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["quantization"] == "fp8"
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["engine"]["vllm"]["quantization"] == "mxfp4"
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"]["block_size"] == 832
+    assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
+    assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
     assert loaded["openai_remote.json"]["ar"]["engine"]["backend"] == "openai"
     assert loaded["openai_remote.json"]["run"]["reward"] == "consilience"
 

@@ -24,7 +24,7 @@ INFERENCE_SCALING_SETTINGS=settings/presets/ascend_910b3_tp2.json python -m infe
 | 奖励 | `run.reward = "self_certainty"`（温度归一化全词表 KL 均值 + `incomplete_penalty=1.5`）；`consilience`（`initial_penalty=1.5, incomplete_penalty=2.0`）可作跨引擎替代 |
 | 奖励温度 / 评分温度 | `0.25` / `0.7`（与全局采样温度一致） |
 | 外部 IS 规模参数 | `M=4`、`K=2`、`B=1024`（`block_first=false`；可在请求 `scaling` 字段按次覆盖，低成本可选 `K=1`，昇腾页对齐可选 `B=1536`） |
-| 内部动态调度 | `exploration_schedule = "adaptive"`：`B//2` 试探门控 + 选择性前瞻 + 两阶段停滞剪枝 + ESS 自适应奖励温度 |
+| 内部动态调度 | 默认 `exploration_schedule = "adaptive"`（至多 2 阶段）；另支持 **`progressive`** 几何递进多阶段与多粒子块级 SMC（`max_stages`、`block_growth`、`beam_particles`，开箱预设见 `settings/presets/*_multistage_smc.json`） |
 | 选择核 | `block_metropolized`，`selection_ready = false` |
 | 概率统计 | 跨平台预掩码标量统计 `scalar_self_certainty = true`（昇腾与 NVIDIA vLLM 0.25–0.34+ 均无额外评分前向） |
 | 全局采样 | `temperature = 0.7`、`top_p = 0.95`、`top_k = 20`、`token_penalty = null` |
