@@ -50,8 +50,10 @@ class Conversation:
             raise ProtocolError("seed must be an integer in [0, 2**63)")
         if self.scaling is not None:
             if not isinstance(self.scaling, Mapping):
-                raise ProtocolError("scaling must be an object with candidate_count, rollout_count, or block_size")
-            allowed = {"candidate_count", "rollout_count", "block_size"}
+                raise ProtocolError(
+                    "scaling must be an object with candidate_count, rollout_count, block_size, max_stages, or beam_particles"
+                )
+            allowed = {"candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"}
             unknown = sorted(set(self.scaling) - allowed)
             if unknown:
                 raise ProtocolError("unknown scaling fields: " + ", ".join(unknown))

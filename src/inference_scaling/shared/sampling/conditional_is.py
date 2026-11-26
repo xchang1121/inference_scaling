@@ -212,5 +212,50 @@ def calibrate_reward_temperature(
     return 0.5 * (lo + hi)
 
 
+def resample_particles(
+    candidates: Sequence[ConditionalCandidate],
+    count: int,
+    seeds: SeedStream,
+    *key: object,
+) -> list[tuple[int, int]]:
+    """Systematic resampling of ``count`` (candidate_idx, rollout_idx) pairs.
+
+    Preserves exact marginal importance weights while minimizing resampling
+    variance and avoiding premature mode collapse relative to i.i.d. draws.
+    When the same candidate group is selected multiple times, its completions
+    are also drawn systematically to retain suffix diversity.
+    """
+    if count <= 0:
+        raise ValueError("particle count must be positive")
+    if not candidates or any(not candidate.rollouts for candidate in candidates):
+        raise ValueError("particle resampling requires non-empty candidate groups")
+    probs = normalize_log_weights([candidate.log_weight for candidate in candidates])
+    base_u = float(seeds.generator(*key, "systematic_groups").random())
+    selected_groups: list[int] = []
+    for slot in range(count):
+        u = min(1.0 - 1e-15, (base_u + slot) / count)
+        selected_groups.append(categorical_index_from_uniform(probs, u))
+
+    # Count multiplicity per group so replicated groups draw systematically across rollouts.
+    multiplicity: dict[int, int] = {}
+    for g in selected_groups:
+        multiplicity[g] = multiplicity.get(g, 0) + 1
+    group_completions: dict[int, list[int]] = {}
+    for g, copies in multiplicity.items():
+        r_probs = normalize_log_weights([rollout.log_weight for rollout in candidates[g].rollouts])
+        u0 = float(seeds.generator(*key, "candidate", g, "systematic_completion").random())
+        group_completions[g] = [
+            categorical_index_from_uniform(r_probs, min(1.0 - 1e-15, (u0 + slot) / copies))
+            for slot in range(copies)
+        ]
+    cursors: dict[int, int] = {}
+    pairs: list[tuple[int, int]] = []
+    for g in selected_groups:
+        pos = cursors.get(g, 0)
+        cursors[g] = pos + 1
+        pairs.append((g, group_completions[g][pos]))
+    return pairs
+
+
 __all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation",
-           "calibrate_reward_temperature", "select", "select_metropolized", "weigh"]
+           "calibrate_reward_temperature", "resample_particles", "select", "select_metropolized", "weigh"]

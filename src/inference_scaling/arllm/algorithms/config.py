@@ -71,9 +71,12 @@ class ConditionalISConfig:
 
     External inputs ``candidate_count`` (M), ``rollout_count`` (K), and
     ``block_size`` (B) fix the scaling budget. ``exploration_schedule="adaptive"``
-    adds dynamic scheduling on top of (M, K, B): B-anchored pilot escalation,
-    unbiased selective K-lookahead, stagnation-only straggler pruning, ESS-bounded
-    reward-temperature calibration, and bounded Stage-2 exploration.
+    adds dynamic two-stage scheduling on top of (M, K, B): B-anchored pilot
+    escalation, unbiased selective K-lookahead, stagnation-only straggler
+    pruning, ESS-bounded reward-temperature calibration, and bounded Stage-2
+    exploration. ``exploration_schedule="progressive"`` generalizes this to
+    geometric multi-stage refinement (``max_stages``, ``block_growth``) and
+    optional multi-particle Block-SMC (``beam_particles >= 1``).
     """
 
     candidate_count: int
@@ -84,7 +87,7 @@ class ConditionalISConfig:
     # Draw fresh candidates as blocks and their first completions with the other completions.
     block_first: bool
     # Fixed blocks are the CPU reference; two_stage bounds exploration to two pools;
-    # adaptive adds dynamic escalation, selective K-lookahead, straggler pruning, and ESS calibration.
+    # adaptive adds dynamic two-stage controls; progressive enables multi-stage + particle SMC.
     exploration_schedule: str = "fixed"
     # Fresh-suffix capacity; None retains weight-based allocation and the auxiliary length interval.
     final_pool_limit: int | None = None
@@ -92,20 +95,24 @@ class ConditionalISConfig:
     selection_ready: bool = False
     # Complete-pool index kernel; experimental alternatives leave generation unchanged.
     selection: str = "sir"
-    # Adaptive schedule dynamic controls (ignored unless exploration_schedule == "adaptive").
+    # Adaptive / progressive dynamic controls (ignored for fixed/two_stage).
     pilot_gate: bool = True
     selective_lookahead: bool = True
     straggler_pruning: bool = True
     adaptive_temperature: bool = True
     # Optional escalation horizon for pilot_gate; None defaults to block_size // 2 (B / 2).
     pilot_tokens: int | None = None
+    # Progressive multi-stage and particle Block-SMC controls (used when exploration_schedule == "progressive").
+    max_stages: int | None = 4
+    block_growth: float = 2.0
+    beam_particles: int = 1
 
     def __post_init__(self) -> None:
         for name in ("candidate_count", "rollout_count", "block_size", "total_length"):
             require_positive(name, getattr(self, name))
         if type(self.selection_ready) is not bool:
             raise ValueError("selection_ready must be a boolean")
-        if self.exploration_schedule not in {"fixed", "two_stage", "adaptive"}:
+        if self.exploration_schedule not in {"fixed", "two_stage", "adaptive", "progressive"}:
             raise ValueError("unknown IS exploration_schedule")
         if self.selection_ready and (self.exploration_schedule != "two_stage" or self.block_first):
             raise ValueError("selection_ready requires two_stage without block_first")
@@ -113,12 +120,22 @@ class ConditionalISConfig:
             raise ValueError("unknown IS selection")
         if self.selection_ready and self.selection != "sir":
             raise ValueError("Metropolized selection requires complete rollout weights; disable selection_ready")
-        if self.exploration_schedule == "adaptive" and self.block_first:
-            raise ValueError("adaptive exploration_schedule requires block_first=false")
+        if self.exploration_schedule in {"adaptive", "progressive"} and self.block_first:
+            raise ValueError(f"{self.exploration_schedule} exploration_schedule requires block_first=false")
         if self.final_pool_limit is not None and (type(self.final_pool_limit) is not int or self.final_pool_limit < 1):
             raise ValueError("final_pool_limit must be a positive integer or None")
         if self.pilot_tokens is not None:
             require_positive("pilot_tokens", self.pilot_tokens)
+        if self.max_stages is not None:
+            require_positive("max_stages", self.max_stages)
+        require_finite("block_growth", self.block_growth)
+        if self.block_growth < 1.0:
+            raise ValueError("block_growth must be at least 1.0")
+        require_positive("beam_particles", self.beam_particles)
+        if self.beam_particles > self.candidate_count:
+            raise ValueError("beam_particles cannot exceed candidate_count")
+        if self.beam_particles > 1 and self.exploration_schedule != "progressive":
+            raise ValueError("beam_particles > 1 requires exploration_schedule='progressive'")
         require_positive("reward_temperature", self.reward_temperature)
         if self.block_size > self.total_length:
             raise ValueError("block_size cannot exceed total_length")

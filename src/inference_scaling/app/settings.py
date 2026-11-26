@@ -203,7 +203,7 @@ SCHEMA: dict[str, Any] = {
                 "rollout_count": int,
                 "block_size": int,
                 "block_first": bool,
-                "exploration_schedule": _Choices({"fixed", "two_stage", "adaptive"}),
+                "exploration_schedule": _Choices({"fixed", "two_stage", "adaptive", "progressive"}),
                 "selection_ready": bool,
                 "selection": _Choices({"sir", "metropolized", "block_metropolized"}),
                 OptionalKey("pilot_gate"): bool,
@@ -211,6 +211,9 @@ SCHEMA: dict[str, Any] = {
                 OptionalKey("straggler_pruning"): bool,
                 OptionalKey("adaptive_temperature"): bool,
                 OptionalKey("pilot_tokens"): _NULLABLE_INT,
+                OptionalKey("max_stages"): _NULLABLE_INT,
+                OptionalKey("block_growth"): float,
+                OptionalKey("beam_particles"): int,
             },
         },
     },
@@ -319,13 +322,22 @@ def validate_settings(settings: dict[str, Any]) -> None:
     is_cfg = ar["algorithms"]["is"]
     if is_cfg["selection_ready"] and is_cfg["selection"] != "sir":
         raise SettingsError("Metropolized selection requires selection_ready=false")
-    if is_cfg["exploration_schedule"] == "adaptive":
+    if is_cfg["exploration_schedule"] in {"adaptive", "progressive"}:
         if is_cfg["selection_ready"]:
-            raise SettingsError("adaptive exploration_schedule uses stagnation pruning; set selection_ready=false")
+            raise SettingsError(f"{is_cfg['exploration_schedule']} exploration_schedule uses stagnation pruning; set selection_ready=false")
         if is_cfg["block_first"]:
-            raise SettingsError("adaptive exploration_schedule requires block_first=false")
+            raise SettingsError(f"{is_cfg['exploration_schedule']} exploration_schedule requires block_first=false")
     if is_cfg.get("pilot_tokens") is not None and is_cfg["pilot_tokens"] <= 0:
         raise SettingsError("ar.algorithms.is.pilot_tokens must be positive or null")
+    if is_cfg.get("max_stages") is not None and is_cfg["max_stages"] <= 0:
+        raise SettingsError("ar.algorithms.is.max_stages must be positive or null")
+    if "block_growth" in is_cfg and float(is_cfg["block_growth"]) < 1.0:
+        raise SettingsError("ar.algorithms.is.block_growth must be at least 1.0")
+    beam = int(is_cfg.get("beam_particles", 1))
+    if beam <= 0 or beam > int(is_cfg["candidate_count"]):
+        raise SettingsError("ar.algorithms.is.beam_particles must be in [1, candidate_count]")
+    if beam > 1 and is_cfg["exploration_schedule"] != "progressive":
+        raise SettingsError("ar.algorithms.is.beam_particles > 1 requires exploration_schedule='progressive'")
     if ar["max_new_tokens"] is not None and ar["max_new_tokens"] <= 0:
         raise SettingsError("ar.max_new_tokens must be positive")
     context = ar["engine"]["context_window"]

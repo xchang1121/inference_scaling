@@ -40,14 +40,16 @@ CONFIDENCE_REWARDS = frozenset({"self_certainty", "consilience"})
 
 @dataclass(frozen=True, slots=True)
 class ScalingOverrides:
-    """External runtime overrides for the three primary IS scaling dimensions (M, K, B)."""
+    """External runtime overrides for the primary IS scaling dimensions (M, K, B) and optional stage/particle caps."""
 
     candidate_count: int | None = None
     rollout_count: int | None = None
     block_size: int | None = None
+    max_stages: int | None = None
+    beam_particles: int | None = None
 
     def __post_init__(self) -> None:
-        for name in ("candidate_count", "rollout_count", "block_size"):
+        for name in ("candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"):
             value = getattr(self, name)
             if value is not None and (type(value) is not int or value <= 0):
                 raise ValueError(f"{name} must be a positive integer")
@@ -56,7 +58,7 @@ class ScalingOverrides:
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "ScalingOverrides | None":
         if not data:
             return None
-        allowed = {"candidate_count", "rollout_count", "block_size"}
+        allowed = {"candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"}
         unknown = sorted(set(data) - allowed)
         if unknown:
             raise ValueError("unknown scaling overrides: " + ", ".join(unknown))
@@ -64,6 +66,8 @@ class ScalingOverrides:
             candidate_count=data.get("candidate_count"),
             rollout_count=data.get("rollout_count"),
             block_size=data.get("block_size"),
+            max_stages=data.get("max_stages"),
+            beam_particles=data.get("beam_particles"),
         )
 
 
@@ -140,7 +144,7 @@ def conditional_is_config(
 
     schedule = str(config.get("exploration_schedule", "fixed"))
     scheduler = getattr(backend, "scheduler_config", None)
-    if schedule not in {"two_stage", "adaptive"} or not getattr(backend, "supports_streaming_generation", False):
+    if schedule not in {"two_stage", "adaptive", "progressive"} or not getattr(backend, "supports_streaming_generation", False):
         scheduler = None
     candidate_count = int(overrides.candidate_count if overrides and overrides.candidate_count is not None
                           else config["candidate_count"])
@@ -148,6 +152,10 @@ def conditional_is_config(
                         else config["rollout_count"])
     raw_block_size = int(overrides.block_size if overrides and overrides.block_size is not None
                          else config["block_size"])
+    max_stages = (overrides.max_stages if overrides and overrides.max_stages is not None
+                  else config.get("max_stages", 4))
+    beam_particles = int(overrides.beam_particles if overrides and overrides.beam_particles is not None
+                         else config.get("beam_particles", 1))
     return ConditionalISConfig(
         candidate_count=candidate_count,
         rollout_count=rollout_count,
@@ -164,6 +172,9 @@ def conditional_is_config(
         straggler_pruning=bool(config.get("straggler_pruning", True)),
         adaptive_temperature=bool(config.get("adaptive_temperature", True)),
         pilot_tokens=config.get("pilot_tokens"),
+        max_stages=max_stages,
+        block_growth=float(config.get("block_growth", 2.0)),
+        beam_particles=beam_particles,
     )
 
 

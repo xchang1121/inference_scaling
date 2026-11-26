@@ -575,3 +575,128 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"]["block_size"] == 832
     assert loaded["openai_remote.json"]["ar"]["engine"]["backend"] == "openai"
     assert loaded["openai_remote.json"]["run"]["reward"] == "consilience"
+
+
+def test_progressive_single_chain_geometric_stages_and_decaying_lookahead() -> None:
+    backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
+    # Give wide reward variance so dispersion stays well above 0.12 across all stages.
+    reward = pointwise(lambda _p, seq: float(sum(tok * (i + 1) for i, tok in enumerate(seq))))
+    cfg = ConditionalISConfig(
+        candidate_count=4, rollout_count=4, block_size=2, total_length=32,
+        reward_temperature=1.0, block_first=False, exploration_schedule="progressive",
+        selection="block_metropolized", pilot_gate=False, selective_lookahead=True,
+        max_stages=4, block_growth=2.0, beam_particles=1,
+    )
+    committed: list[tuple[int, ...]] = []
+    res = run_conditional_is(backend, (), cfg, reward, SeedStream(42), on_commit=committed.append)
+    assert len(res.token_ids) == 32
+    # Geometric checkpoints: B0=2 (K=4), B1=4 (K=2), B2=8 (K=1), B3=18 (seal, K=1) -> 4 stages!
+    assert len(res.steps) == 4
+    plans = [step.sampling_plan for step in res.steps]
+    assert [p[0] for p in plans] == [2, 4, 8, 18]
+    assert [p[2] for p in plans] == [4, 2, 1, 1]
+    assert [step.generated_length_before for step in res.steps] == [0, 2, 6, 14]
+    assert committed[-1] == res.token_ids
+    assert all(res.token_ids[:len(pref)] == pref for pref in committed)
+
+
+def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -> None:
+    from inference_scaling.shared.sampling.conditional_is import (
+        ConditionalCandidate, RolloutEvaluation, resample_particles,
+    )
+
+    # 1) Systematic particle resampling preserves diversity when remaining mass > 1/P.
+    cands = (
+        ConditionalCandidate((0,), (RolloutEvaluation((0,), 0.0, math.log(0.6)),), math.log(0.6)),
+        ConditionalCandidate((1,), (RolloutEvaluation((1,), 0.0, math.log(0.4)),), math.log(0.4)),
+    )
+    distinct_rate = sum(
+        len({g for g, _ in resample_particles(cands, 2, SeedStream(s), "t")}) == 2
+        for s in range(100)
+    ) / 100.0
+    assert distinct_rate > 0.7  # Exact systematic probability is 0.8 (vs 0.48 for i.i.d.)!
+
+    # 2) Easy problem with pilot_gate=True exits at 1x cost even when beam_particles=2.
+    easy_backend = TabularAutoregressiveBackend({(): (0.0, 0.0, 1.0)}, fallback=(0.0, 0.0, 1.0))
+    cfg_easy = ConditionalISConfig(
+        candidate_count=6, rollout_count=2, block_size=4, total_length=16,
+        reward_temperature=0.5, block_first=False, exploration_schedule="progressive",
+        selection="block_metropolized", pilot_gate=True, max_stages=4, block_growth=2.0, beam_particles=2,
+    )
+    res_easy = run_conditional_is(
+        easy_backend, (), cfg_easy, pointwise(lambda _p, g: float(len(g))), SeedStream(3),
+        sampling=SamplingConfig(eos_token_id=2),
+    )
+    assert len(res_easy.steps) == 1 and res_easy.steps[0].rollout_evaluations_performed == 1
+    assert res_easy.token_ids == (2,)
+
+    # 3) Hard multi-stage Block-SMC on batch backend runs 4 geometric stages with P=2 particles.
+    hard_backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
+    stat = TokenStatistic(SamplingConfig(), top_k=1)
+    recorder = StatisticRecorder(hard_backend, stat)
+    reward = pointwise(lambda _p, seq: float(sum(tok * (i + 1) for i, tok in enumerate(seq))))
+    cfg_smc = ConditionalISConfig(
+        candidate_count=6, rollout_count=2, block_size=2, total_length=24,
+        reward_temperature=1.0, block_first=False, exploration_schedule="progressive",
+        selection="block_metropolized", pilot_gate=False, selective_lookahead=True,
+        max_stages=4, block_growth=2.0, beam_particles=2,
+    )
+    committed: list[tuple[int, ...]] = []
+    res_smc = run_conditional_is(
+        recorder, (), cfg_smc, reward, SeedStream(11),
+        sampling=SamplingConfig(temperature=0.7, top_p=0.95, top_k=2),
+        on_commit=committed.append,
+    )
+    assert len(res_smc.token_ids) == 24
+    assert len(res_smc.steps) == 4
+    assert committed[-1] == res_smc.token_ids
+
+    # 4) Verify streaming DeltaEngine works cleanly with P=2 progressive Block-SMC!
+    engine = DeltaEngine(stream_interval=2)
+    stream_backend = backend_for(engine)
+    stream_backend.configure_scheduler(SchedulerConfig(max_in_flight=16))
+    stream_stat = TokenStatistic(SamplingConfig(), top_k=1)
+    stream_rec = StatisticRecorder(stream_backend, stream_stat)
+    try:
+        res_stream = run_conditional_is(
+            stream_rec, (1,),
+            ConditionalISConfig(
+                candidate_count=6, rollout_count=2, block_size=2, total_length=16,
+                reward_temperature=0.5, block_first=False, exploration_schedule="progressive",
+                selection="block_metropolized", pilot_gate=False, max_stages=3, block_growth=2.0, beam_particles=2,
+            ),
+            pointwise(lambda _p, seq: float(sum(seq))),
+            SeedStream(19),
+            sampling=SamplingConfig(eos_token_id=2),
+            prefix_reward=lambda _p, pref: float(sum(pref)) / max(1, len(pref)),
+        )
+        assert 1 <= len(res_stream.steps) <= 3
+        assert len(res_stream.token_ids) > 0
+    finally:
+        stream_backend.close()
+
+    # 5) Settings & Reasoner validation for progressive overrides (max_stages, beam_particles).
+    settings = copy.deepcopy(load_settings())
+    settings["ar"]["algorithms"]["is"].update(
+        exploration_schedule="progressive", candidate_count=6, max_stages=4, block_growth=2.0, beam_particles=2,
+    )
+    validate_settings(settings)
+    conv = openai_conversation({
+        "messages": [{"role": "user", "content": "hi"}],
+        "scaling": {"candidate_count": 4, "rollout_count": 2, "block_size": 2, "max_stages": 3, "beam_particles": 2},
+    })
+    reasoner = Reasoner(settings, _ChatBackend())
+    prepared = reasoner.prepare(conv)
+    assert prepared.scaling_overrides == ScalingOverrides(4, 2, 2, max_stages=3, beam_particles=2)
+    reply = reasoner.generate(prepared)
+    assert reply.finish == "stop"
+
+    bad = copy.deepcopy(settings)
+    bad["ar"]["algorithms"]["is"]["beam_particles"] = 8  # exceeds candidate_count=6
+    with pytest.raises(SettingsError, match="beam_particles"):
+        validate_settings(bad)
+    bad2 = copy.deepcopy(settings)
+    bad2["ar"]["algorithms"]["is"]["exploration_schedule"] = "adaptive"
+    bad2["ar"]["algorithms"]["is"]["beam_particles"] = 2
+    with pytest.raises(SettingsError, match="progressive"):
+        validate_settings(bad2)
