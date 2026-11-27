@@ -1,6 +1,6 @@
 {
   "run": {
-    "reward": "self_certainty",
+    "reward": "consilience",
     "seed": 20260808,
     "draws": 1,
     "hash_cache_dir": ".cache/artifact_hashes"
@@ -176,18 +176,9 @@
         "early_rejection": false
       },
       "is": {
-        "candidate_count": 4,
+        "candidate_count": 8,
         "rollout_count": 2,
-        "block_size": 1024,
-        "block_first": false,
-        "exploration_schedule": "adaptive",
-        "selection_ready": false,
-        "selection": "block_metropolized",
-        "pilot_gate": true,
-        "selective_lookahead": true,
-        "straggler_pruning": true,
-        "adaptive_temperature": true,
-        "pilot_tokens": null
+        "stages": 4
       }
     }
   },
@@ -196,7 +187,7 @@
       "host": "0.0.0.0",
       "port": 8000,
       "served_model_name": "qwen3.8-27b-is",
-      "max_concurrent_requests": 4,
+      "max_concurrent_requests": 2,
       "keepalive_seconds": 10.0
     },
     "max_seconds": null

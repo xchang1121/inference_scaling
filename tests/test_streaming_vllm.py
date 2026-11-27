@@ -92,11 +92,11 @@ def backend_for(engine, **options):
                             parameter_count=100, sampling_params_factory=lambda **kwargs: SimpleNamespace(**kwargs), **options)
 
 
-@pytest.mark.parametrize("block_first,rollouts,interval", [(False, 1, 1), (False, 1, 4), (False, 2, 4), (True, 4, 1)])
-def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_first, rollouts, interval):
+@pytest.mark.parametrize("stages,rollouts,interval", [(2, 1, 1), (2, 1, 4), (2, 2, 4), (4, 2, 1)])
+def test_delta_engine_preserves_native_request_stream_and_full_is_result(stages, rollouts, interval):
     engine = DeltaEngine(stream_interval=interval)
     backend = backend_for(engine)
-    config = ConditionalISConfig(4, rollouts, 4, 12, 1.0, block_first)
+    config = ConditionalISConfig(4, rollouts, stages, 12, 1.0, base_block_size=4)
     reward = pointwise(lambda prompt, output: float(sum(output)) / 3)
     try:
         baseline = run_conditional_is(backend, (1,), config, reward, SeedStream(4))
@@ -107,23 +107,20 @@ def test_delta_engine_preserves_native_request_stream_and_full_is_result(block_f
         before = backend.snapshot()
         result = run_conditional_is(backend, (1,), config, reward, SeedStream(4))
         assert result == baseline
-        assert all(len(step.candidates) == config.candidate_count for step in result.steps)
+        assert len(result.steps[0].candidates) == config.candidate_count
         assert 1 < engine.maximum_active <= 5
         assert not engine.aborted
         assert backend.snapshot().generated_tokens > 0
-        if rollouts == 1:
-            assert backend.snapshot().stream_events - before.stream_events == len([
-                event for event in engine.trace if event[0] == "start"])
-        if not block_first:
-            # Every root is one native request through its whole original horizon.
-            roots = [event for event in engine.trace if event[0] == "start" and event[3] == (1,)]
-            assert len(roots) == config.candidate_count
-            assert all(sum(event[0] == "token" and event[1] == root[1] for event in engine.trace) == 12 for root in roots)
-            if rollouts > 1:
-                first_child = next(index for index, event in enumerate(engine.trace) if event[0] == "start" and len(event[3]) == 5)
-                last_root_finish = max(index for index, event in enumerate(engine.trace)
-                                       if event[0] == "finish" and event[1] in {root[1] for root in roots})
-                assert first_child < last_root_finish
+        assert backend.snapshot().stream_events > before.stream_events
+        # Every Stage-0 root is one native request through its whole original horizon.
+        roots = [event for event in engine.trace if event[0] == "start" and event[3] == (1,)]
+        assert len(roots) == config.candidate_count
+        assert all(sum(event[0] == "token" and event[1] == root[1] for event in engine.trace) == 12 for root in roots)
+        if rollouts > 1:
+            first_child = next(index for index, event in enumerate(engine.trace) if event[0] == "start" and len(event[3]) == 5)
+            last_root_finish = max(index for index, event in enumerate(engine.trace)
+                                   if event[0] == "finish" and event[1] in {root[1] for root in roots})
+            assert first_child < last_root_finish
         assert backend.execution_config() == {
             "flat_logprobs": True,
             "scalar_self_certainty": False,
@@ -192,7 +189,7 @@ def test_failures_abort_and_release_every_request(failure):
 
     try:
         with pytest.raises(RuntimeError, match=f"{failure} failed"):
-            run_conditional_is(backend, (1,), ConditionalISConfig(3, 3, 1, 6, 1.0, False), reward, SeedStream(5))
+            run_conditional_is(backend, (1,), ConditionalISConfig(3, 3, 2, 6, 1.0, base_block_size=2), reward, SeedStream(5))
         assert engine.active == 0
         assert not backend._admission.queue.pending and not backend._admission.queue.active
         assert backend.snapshot().maximum_in_flight_requests <= 2
@@ -266,7 +263,7 @@ def test_streamed_scope_rewards_use_parent_prefix_statistics_before_the_parent_f
     backend = backend_for(engine)
     statistic = TokenStatistic(SamplingConfig(), top_k=1)
     parser = ThinkingParser((ThinkingFormat(marker, (9,)),))
-    config = ConditionalISConfig(4, rollouts, 1, 36, 1.0, False)
+    config = ConditionalISConfig(4, rollouts, 2, 36, 1.0, base_block_size=4)
 
     def unavailable(*args):
         raise AssertionError("generated prefix statistics should already be recorded")

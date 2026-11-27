@@ -137,8 +137,8 @@ def test_every_speedup_at_once_leaves_is_and_power_mh_unchanged():
         backend = TransformersBackend(model, TOKENIZER, **options, prefix_cache_bytes=2**24 * on, in_place_kv=on,
                                       cuda_graphs=on)
         runs.append((backend, run_conditional_is(
-            backend, (1, 4, 3), ConditionalISConfig(block_first=on, total_length=8, block_size=2, candidate_count=3,
-                                                    rollout_count=2, reward_temperature=0.5),
+            backend, (1, 4, 3), ConditionalISConfig(candidate_count=3, rollout_count=2, stages=2, total_length=8,
+                                                    reward_temperature=0.5, base_block_size=2),
             pointwise(lambda _prompt, tokens: float(sum(tokens) % 5)), SeedStream(5), sampling=SamplingConfig(eos_token_id=2)),
             run_mh_chain(backend, (1, 4, 3), MHConfig(
                 early_rejection=on, suffix_replay=on, alpha=4.0, reward_temperature=None, total_length=8, block_size=4,

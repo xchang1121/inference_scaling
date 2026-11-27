@@ -242,30 +242,52 @@ def test_self_certainty_and_consilience_refinements_and_incomplete_penalty() -> 
     assert sc_tnorm.describe()["temperature_normalized"] is True
 
 
-def test_adaptive_v2_stage2_forecast_and_final_pool_straggler_pruning() -> None:
-    from inference_scaling.arllm.algorithms.conditional_is import forecast_candidate_count
+def test_length_anchored_geometric_stage_plan_and_hardware_page_alignment() -> None:
+    from inference_scaling.arllm.algorithms.conditional_is import _next_stage_plan
+    from inference_scaling.arllm.pipeline import hardware_page_block_size
 
-    cfg = ConditionalISConfig(
-        candidate_count=4, rollout_count=2, block_size=1024, total_length=12288,
-        reward_temperature=0.25, block_first=False, exploration_schedule="adaptive",
-        selection="block_metropolized",
-    )
-    # Low dispersion across unused Stage-1 groups -> Stage 2 skipped (0 fresh suffixes).
-    flat_obs = ((1, 2, 4096, 10.0), (1, 2, 4096, 10.01), (2, 2, 4096, 10.02), (3, 1, 4096, 10.01))
-    assert forecast_candidate_count(flat_obs, 1024, cfg, SeedStream(1)) == 0
-    # High dispersion across unused Stage-1 groups -> Stage 2 capped strictly at M-1 = 3.
-    wide_obs = ((1, 2, 8192, 10.0), (2, 2, 8192, 14.0), (3, 1, 8192, 6.0))
-    fanout = forecast_candidate_count(wide_obs, 1024, cfg, SeedStream(1))
-    assert 1 <= fanout <= cfg.candidate_count - 1
+    # Hardware page alignment derives automatically from engine/device/quantization without exposing B externally.
+    assert hardware_page_block_size({"device": "npu", "vllm": {}}, stages=4, total_length=131072) == 1536
+    assert hardware_page_block_size({"device": "cuda", "vllm": {"quantization": None}}, stages=4, total_length=131072) == 1024
+    assert hardware_page_block_size(
+        {"device": "cuda", "context_window": 8192, "vllm": {"quantization": "mxfp4"}}, stages=2, total_length=8192,
+    ) == 832
+    assert hardware_page_block_size({"device": "npu", "vllm": {}}, stages=1, total_length=16384) == 16384
+    assert hardware_page_block_size({"device": "npu", "vllm": {}}, stages=2, total_length=1024) == 512
 
-    # Verify Stage 2 (final_pool) straggler pruning actually aborts a runaway Stage-2 suffix!
-    # Pick a seed whose Stage-2 length_window draw gives a wide upper bound (~1.9x) so the runaway crosses threshold_len.
+    # Automatic particle count: P=2 when S>=3 and M>=4, else P=1.
+    assert ConditionalISConfig(8, 2, 4, 32768, 2.0, base_block_size=1536).beam_particles == 2
+    assert ConditionalISConfig(4, 2, 3, 32768, 2.0, base_block_size=1536).beam_particles == 2
+    assert ConditionalISConfig(4, 2, 2, 32768, 2.0, base_block_size=1536).beam_particles == 1
+    assert ConditionalISConfig(3, 2, 4, 32768, 2.0, base_block_size=1536).beam_particles == 1
+
+    cfg_npu = ConditionalISConfig(8, 4, 4, 65536, 2.0, base_block_size=1536)
+    # 1) Low dispersion on final stage -> early-stop & reuse retained trajectory (None).
+    assert _next_stage_plan(cfg_npu, next_step=3, fixed_len=6144, retained_len=10000, dispersion=0.05, observed_rem=3800) is None
+    # 2) Short tail (<= 1536 remaining) -> auto-seals at Stage 1 instead of creating micro-stages.
+    short_plan = _next_stage_plan(cfg_npu, next_step=1, fixed_len=1536, retained_len=2800, dispersion=0.5, observed_rem=1200)
+    assert short_plan is not None and short_plan[3] is True and short_plan[2] == 1
+    # 3) 10k-token chain (observed_rem=8500): 8500/7=1214 -> snaps to half-page 768 or full-page 1536;
+    #    30k-token chain (observed_rem=28500): 28500/7=4071 -> snaps to exact multiple 4608 (3*1536), K decays 4->2!
+    long_plan = _next_stage_plan(cfg_npu, next_step=1, fixed_len=1536, retained_len=30000, dispersion=0.8, observed_rem=28500)
+    assert long_plan is not None
+    blk1, fresh1, k1, is_final1 = long_plan
+    assert blk1 == 4608 and blk1 % 1536 == 0 and 1 <= fresh1 <= 7 and k1 == 2 and is_final1 is False
+    stage2_plan = _next_stage_plan(cfg_npu, next_step=2, fixed_len=1536 + blk1, retained_len=30000, dispersion=0.8, observed_rem=24000)
+    assert stage2_plan is not None
+    blk2, fresh2, k2, is_final2 = stage2_plan
+    assert blk2 % 1536 == 0 and blk2 > blk1 and k2 == 1 and is_final2 is False
+    stage3_plan = _next_stage_plan(cfg_npu, next_step=3, fixed_len=1536 + blk1 + blk2, retained_len=30000, dispersion=0.8, observed_rem=16000)
+    assert stage3_plan is not None and stage3_plan[3] is True and stage3_plan[2] == 1
+
+
+def test_stage2_final_pool_straggler_pruning() -> None:
+    # Pick a seed whose Stage-1 length_window draw gives a wide upper bound (~1.9x) so the runaway crosses threshold_len.
     seed_s2 = next(
         s for s in range(1, 100)
         if float(SeedStream(s).generator("conditional_is", 1, "length_window").random()) > 0.85
     )
     stage2_straggler_seed = SeedStream(seed_s2).derive("conditional_is", 1, "candidate", 1)
-
     step0_seeds = {SeedStream(seed_s2).derive("conditional_is", 0, "candidate", i): i for i in range(4)}
 
     class Stage2StragglerEngine(DeltaEngine):
@@ -275,7 +297,7 @@ def test_adaptive_v2_stage2_forecast_and_final_pool_straggler_pruning() -> None:
             self.active += 1
             self.maximum_active = max(self.maximum_active, self.active)
             is_s2_runaway = params.seed == stage2_straggler_seed
-            # Step 0 prefixes finish at len=100 (suffix=96); Stage-2 fast peers finish at 96 (> min_len), runaway loops to 256.
+            # Step 0 prefixes finish at len=100 (suffix=96); Stage-1 fast peers finish at 96, runaway loops to 256.
             target_len = min(
                 params.max_tokens,
                 256 if is_s2_runaway else (96 if len(prompt["prompt_token_ids"]) > 1 else 100),
@@ -310,7 +332,6 @@ def test_adaptive_v2_stage2_forecast_and_final_pool_straggler_pruning() -> None:
         vals = recorder.recorded_statistics((1,), prefix, stat)
         if vals is None:
             return None
-        # Give Step 0 distinct group rewards so dispersion >= 0.15 triggers Stage 2.
         distinct = 1.5 if 4 in prefix[:4] else 0.0
         return -sum(vals) / len(vals) + distinct
 
@@ -319,43 +340,37 @@ def test_adaptive_v2_stage2_forecast_and_final_pool_straggler_pruning() -> None:
 
     try:
         cfg_s2 = ConditionalISConfig(
-            candidate_count=4, rollout_count=1, block_size=4, total_length=256,
-            reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
-            selection="block_metropolized", pilot_gate=False, straggler_pruning=True,
+            candidate_count=4, rollout_count=1, stages=2, total_length=256,
+            reward_temperature=0.5, base_block_size=4,
         )
         res = run_conditional_is(
             recorder, (1,), cfg_s2, full_reward, SeedStream(seed_s2),
             sampling=SamplingConfig(eos_token_id=2), prefix_reward=prefix_score,
         )
         assert len(res.steps) == 2
-        assert engine.aborted  # Stage-2 runaway suffix was aborted cleanly!
+        assert engine.aborted  # Stage-1 runaway suffix was aborted cleanly!
         assert len(res.token_ids) == 100
     finally:
         backend.close()
 
 
 def test_calibrate_reward_temperature_bounds_ess_and_is_symmetric() -> None:
-    # Already healthy spread: unchanged.
     assert calibrate_reward_temperature([[1.0], [1.2], [1.4], [1.6]], 0.5) == 0.5
-    # Extreme spread causing ESS collapse (< 1.35): raises effective temperature.
     raised = calibrate_reward_temperature([[0.0], [0.0], [0.0], [10.0]], 0.25)
     assert 0.25 < raised <= 1.0
-    # Flat cluster causing near-uniform ESS (> 0.85 * M): lowers effective temperature.
     lowered = calibrate_reward_temperature([[1.00], [1.01], [1.02], [1.03]], 2.0)
     assert 1.0 <= lowered < 2.0
-    # Permutation invariance and equal-reward safety.
     assert calibrate_reward_temperature([[10.0], [0.0], [0.0], [0.0]], 0.25) == pytest.approx(raised)
     assert math.isfinite(calibrate_reward_temperature([[2.0], [2.0], [2.0], [2.0]], 0.5))
 
 
-def test_adaptive_is_pilot_gate_early_exits_and_escalates_cleanly() -> None:
-    # Case 1: Easy problem — EOS token (2) appears immediately at length 1 < B=4.
+def test_pilot_gate_early_exits_and_escalates_with_selective_lookahead() -> None:
+    # Case 1: Easy problem — EOS token (2) appears immediately at length 1 < pilot_width=2 -> 1x exit even when S=4, P=2!
     easy_backend = TabularAutoregressiveBackend({(): (0.0, 0.0, 1.0)}, fallback=(0.0, 0.0, 1.0))
     cfg = ConditionalISConfig(
-        candidate_count=4, rollout_count=2, block_size=4, total_length=12,
-        reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
-        selection="block_metropolized", pilot_gate=True, selective_lookahead=True,
+        candidate_count=8, rollout_count=2, stages=4, total_length=16, reward_temperature=0.5, base_block_size=4,
     )
+    assert cfg.beam_particles == 2
     res_easy = run_conditional_is(
         easy_backend, (), cfg, pointwise(lambda _p, g: float(len(g))), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
@@ -365,22 +380,20 @@ def test_adaptive_is_pilot_gate_early_exits_and_escalates_cleanly() -> None:
     assert len(res_easy.steps[0].candidates) == 1
     assert res_easy.token_ids == (2,)
 
-    # Case 2: Hard problem — runs full length 10 > B=3, escalates pilot + runs unbiased selective K!
+    # Case 2: Hard problem — runs full length 10 > base_block_size=3, escalates pilot + runs unbiased selective K!
     hard_backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
     stat = TokenStatistic(SamplingConfig(), top_k=1)
     recorder = StatisticRecorder(hard_backend, stat)
     reward = ConsilienceReward(recorder, stat, scope="full", window_tokens=1, skip_fraction=0.0, initial_penalty=0.0)
     cfg_hard = ConditionalISConfig(
-        candidate_count=4, rollout_count=2, block_size=3, total_length=10,
-        reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
-        selection="block_metropolized", pilot_gate=True, selective_lookahead=True,
+        candidate_count=4, rollout_count=2, stages=2, total_length=10, reward_temperature=0.5, base_block_size=3,
     )
     res_hard = run_conditional_is(
         recorder, (), cfg_hard, reward.batch, SeedStream(13),
         sampling=SamplingConfig(temperature=0.8, top_p=0.95, top_k=2),
         prefix_reward=reward.cached_prefix,
     )
-    # Step 0 should have M=4 candidates; selective K=2 assigns 2 rollouts to ceil(4/2)=2 prefixes and 1 to the other 2 -> 6 total!
+    # Step 0 has M=4 candidates; selective K=2 assigns 2 rollouts to ceil(4/2)=2 prefixes and 1 to the rest -> 6 total!
     step0 = res_hard.steps[0]
     assert len(step0.candidates) == 4
     rollout_counts = sorted(len(c.rollouts) for c in step0.candidates)
@@ -388,10 +401,9 @@ def test_adaptive_is_pilot_gate_early_exits_and_escalates_cleanly() -> None:
     assert step0.rollout_evaluations_performed == 6
 
 
-def test_adaptive_is_streaming_straggler_pruning_aborts_runaway_loop() -> None:
+def test_streaming_straggler_pruning_aborts_runaway_loop() -> None:
     straggler_seed = SeedStream(9).derive("conditional_is", 0, "candidate", 1)
 
-    # Build a streaming engine where candidate 1 runs very long (len=96) with low confidence while others finish cleanly at len=5.
     class AsymmetricDeltaEngine(DeltaEngine):
         async def generate(self, *, prompt, sampling_params, request_id, **kwargs):
             import asyncio
@@ -399,8 +411,9 @@ def test_adaptive_is_streaming_straggler_pruning_aborts_runaway_loop() -> None:
             self.active += 1
             self.maximum_active = max(self.maximum_active, self.active)
             is_straggler = params.seed == straggler_seed
+            # Candidate 0 finishes at len=5 >= pilot_width=2 (escalates!), peers finish at 5, straggler loops to 96.
             target_len = min(params.max_tokens, 96 if is_straggler else 5)
-            tok_lp = -3.0 if is_straggler else -0.1  # lower reward (-3.0 vs -0.1) on straggler!
+            tok_lp = -3.0 if is_straggler else -0.1
             try:
                 for offset in range(target_len):
                     await asyncio.sleep(0.002 if is_straggler else 0.0005)
@@ -433,9 +446,8 @@ def test_adaptive_is_streaming_straggler_pruning_aborts_runaway_loop() -> None:
 
     try:
         cfg = ConditionalISConfig(
-            candidate_count=4, rollout_count=1, block_size=4, total_length=96,
-            reward_temperature=0.5, block_first=False, exploration_schedule="adaptive",
-            selection="block_metropolized", pilot_gate=False, straggler_pruning=True,
+            candidate_count=4, rollout_count=1, stages=2, total_length=96,
+            reward_temperature=0.5, base_block_size=4,
         )
         res = run_conditional_is(
             recorder, (1,), cfg, full_reward, SeedStream(9),
@@ -491,40 +503,44 @@ def test_openai_backend_and_pluggable_registry() -> None:
 def test_serve_per_request_scaling_overrides_and_health_capabilities() -> None:
     conv = openai_conversation({
         "messages": [{"role": "user", "content": "hi"}],
-        "scaling": {"candidate_count": 3, "rollout_count": 2, "block_size": 1},
+        "scaling": {"candidate_count": 4, "rollout_count": 2, "stages": 2},
     })
-    assert conv.scaling == {"candidate_count": 3, "rollout_count": 2, "block_size": 1}
+    assert conv.scaling == {"candidate_count": 4, "rollout_count": 2, "stages": 2}
     assert anthropic_conversation({
         "messages": [{"role": "user", "content": "hi"}], "max_tokens": 32,
-        "scaling": {"candidate_count": 2},
-    }).scaling == {"candidate_count": 2}
-    with pytest.raises(ProtocolError, match="unknown scaling"):
-        openai_conversation({"messages": [], "scaling": {"foo": 1}})
+        "scaling": {"stages": 2},
+    }).scaling == {"stages": 2}
+    for bad_key in ("foo", "block_size", "beam_particles"):
+        with pytest.raises(ProtocolError, match="unknown scaling"):
+            openai_conversation({"messages": [], "scaling": {bad_key: 1}})
     with pytest.raises(ProtocolError, match="positive integer"):
         openai_conversation({"messages": [], "scaling": {"candidate_count": 0}})
 
     settings = copy.deepcopy(load_settings())
-    settings["ar"]["algorithms"]["is"].update(selection_ready=False, exploration_schedule="adaptive", selection="block_metropolized")
     settings["ar"]["output"]["finish_sampling"] = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
     validate_settings(settings)
 
     backend = _ChatBackend()
     reasoner = Reasoner(settings, backend)
     caps = reasoner.capabilities()
-    assert caps["exploration_schedule"] == "adaptive"
-    assert caps["defaults"] == {"candidate_count": 4, "rollout_count": 2, "block_size": 1024}
+    assert caps["selection"] == "block_metropolized"
+    assert caps["beam_particles"] == 2
+    assert caps["defaults"] == {"candidate_count": 8, "rollout_count": 2, "stages": 4}
     prepared = reasoner.prepare(conv)
-    assert prepared.scaling_overrides == ScalingOverrides(3, 2, 1)
+    assert prepared.scaling_overrides == ScalingOverrides(4, 2, 2)
     reply = reasoner.generate(prepared)
-    assert (reply.scaling["candidate_count"], reply.scaling["rollout_count"], reply.scaling["block_size"]) == (3, 2, 1)
+    assert (reply.scaling["candidate_count"], reply.scaling["rollout_count"],
+            reply.scaling["stages"], reply.scaling["beam_particles"]) == (4, 2, 2, 1)
     assert "engine_capabilities" in reply.scaling
 
-    # Validate invalid adaptive + selection_ready conflict in settings.
     broken = copy.deepcopy(settings)
-    broken["ar"]["algorithms"]["is"]["selection"] = "sir"
-    broken["ar"]["algorithms"]["is"]["selection_ready"] = True
-    with pytest.raises(SettingsError, match="adaptive"):
+    broken["ar"]["algorithms"]["is"]["stages"] = 0
+    with pytest.raises(SettingsError, match="stages"):
         validate_settings(broken)
+    broken2 = copy.deepcopy(settings)
+    broken2["ar"]["algorithms"]["is"]["block_size"] = 1024
+    with pytest.raises(SettingsError, match="unknown keys"):
+        validate_settings(broken2)
 
 
 def test_settings_env_var_override(tmp_path, monkeypatch) -> None:
@@ -544,15 +560,13 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
     presets_dir = Path(__file__).resolve().parents[1] / "settings" / "presets"
     expected = {
         "ascend_910b3_tp2.json",
-        "ascend_910b3_tp2_multistage_smc.json",
         "cuda_gpu_bf16.json",
         "cuda_gpu_fp8.json",
         "cuda_gpu_24g_mxfp4.json",
-        "cuda_gpu_multistage_smc.json",
         "openai_remote.json",
     }
     found = {p.name for p in presets_dir.glob("*.json")}
-    assert expected.issubset(found)
+    assert found == expected
 
     loaded = {}
     for name in sorted(expected):
@@ -560,63 +574,58 @@ def test_all_hardware_presets_pass_strict_schema_validation() -> None:
         validate_settings(cfg)
         assert cfg["ar"]["model"]["token_penalty"] is None
         assert cfg["ar"]["sampling"] == {"temperature": 0.7, "top_p": 0.95, "top_k": 20}
-        is_cfg = cfg["ar"]["algorithms"]["is"]
-        assert is_cfg["exploration_schedule"] in {"adaptive", "progressive"}
-        assert is_cfg["selection_ready"] is False
-        assert is_cfg["selection"] == "block_metropolized"
+        assert set(cfg["ar"]["algorithms"]["is"]) == {"candidate_count", "rollout_count", "stages"}
         loaded[name] = cfg
 
+    assert loaded["ascend_910b3_tp2.json"]["run"]["reward"] == "consilience"
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["device"] == "npu"
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["tensor_parallel_size"] == 2
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["gpu_memory_utilization"] == 0.88
     assert loaded["ascend_910b3_tp2.json"]["ar"]["engine"]["vllm"]["stream_interval"] == 8
-    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["run"]["reward"] == "consilience"
-    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
-    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
-    assert loaded["ascend_910b3_tp2_multistage_smc.json"]["ar"]["algorithms"]["is"]["block_size"] == 1536
+    assert loaded["ascend_910b3_tp2.json"]["ar"]["algorithms"]["is"] == {"candidate_count": 8, "rollout_count": 2, "stages": 4}
+    assert loaded["cuda_gpu_bf16.json"]["run"]["reward"] == "consilience"
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["device"] == "cuda"
     assert loaded["cuda_gpu_bf16.json"]["ar"]["engine"]["vllm"]["scalar_self_certainty"] is True
+    assert loaded["cuda_gpu_bf16.json"]["ar"]["algorithms"]["is"] == {"candidate_count": 8, "rollout_count": 2, "stages": 4}
+    assert loaded["cuda_gpu_fp8.json"]["run"]["reward"] == "consilience"
     assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["quantization"] == "fp8"
     assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["context_window"] == 16384
     assert loaded["cuda_gpu_fp8.json"]["serve"]["server"]["max_concurrent_requests"] == 2
     assert loaded["cuda_gpu_fp8.json"]["ar"]["engine"]["vllm"]["engine_kwargs"]["quantization_config"]["ignore"] == [
         "re:.*visual.*", "re:.*lm_head.*",
     ]
+    assert loaded["cuda_gpu_24g_mxfp4.json"]["run"]["reward"] == "self_certainty"
     assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["engine"]["vllm"]["quantization"] == "mxfp4"
-    assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"]["block_size"] == 832
-    assert loaded["cuda_gpu_multistage_smc.json"]["run"]["reward"] == "consilience"
-    assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["exploration_schedule"] == "progressive"
-    assert loaded["cuda_gpu_multistage_smc.json"]["ar"]["algorithms"]["is"]["beam_particles"] == 2
+    assert loaded["cuda_gpu_24g_mxfp4.json"]["ar"]["algorithms"]["is"] == {"candidate_count": 4, "rollout_count": 2, "stages": 2}
     assert loaded["openai_remote.json"]["ar"]["engine"]["backend"] == "openai"
     assert loaded["openai_remote.json"]["run"]["reward"] == "consilience"
+    assert loaded["openai_remote.json"]["ar"]["algorithms"]["is"] == {"candidate_count": 8, "rollout_count": 2, "stages": 4}
 
 
-def test_progressive_single_chain_geometric_stages_and_decaying_lookahead() -> None:
+def test_multistage_single_chain_geometric_stages_and_decaying_lookahead() -> None:
     backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
-    # Give wide reward variance so dispersion stays well above 0.12 across all stages.
     reward = pointwise(lambda _p, seq: float(sum(tok * (i + 1) for i, tok in enumerate(seq))))
+    # M=3, S=4 -> single-chain P=1 with 4 adaptive geometric stages and decaying lookahead K: 4 -> 2 -> 1 -> 1.
     cfg = ConditionalISConfig(
-        candidate_count=4, rollout_count=4, block_size=2, total_length=32,
-        reward_temperature=1.0, block_first=False, exploration_schedule="progressive",
-        selection="block_metropolized", pilot_gate=False, selective_lookahead=True,
-        max_stages=4, block_growth=2.0, beam_particles=1,
+        candidate_count=3, rollout_count=4, stages=4, total_length=32, reward_temperature=1.0, base_block_size=2,
     )
+    assert cfg.beam_particles == 1
     committed: list[tuple[int, ...]] = []
     res = run_conditional_is(backend, (), cfg, reward, SeedStream(42), on_commit=committed.append)
     assert len(res.token_ids) == 32
-    # Geometric checkpoints: B0=2 (K=4), B1=4 (K=2), B2=8 (K=1), B3=18 (seal, K=1) -> 4 stages!
     assert len(res.steps) == 4
     plans = [step.sampling_plan for step in res.steps]
-    assert [p[0] for p in plans] == [2, 4, 8, 18]
     assert [p[2] for p in plans] == [4, 2, 1, 1]
-    assert [step.generated_length_before for step in res.steps] == [0, 2, 6, 14]
+    assert sum(p[0] for p in plans) == 32
     assert committed[-1] == res.token_ids
     assert all(res.token_ids[:len(pref)] == pref for pref in committed)
 
 
-def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -> None:
+def test_multistage_auto_particle_smc_streaming_and_mass_conservation() -> None:
     from inference_scaling.shared.sampling.conditional_is import (
-        ConditionalCandidate, RolloutEvaluation, resample_particles,
+        ConditionalCandidate,
+        RolloutEvaluation,
+        resample_particles,
     )
 
     # 1) Systematic particle resampling preserves diversity when remaining mass > 1/P.
@@ -628,33 +637,17 @@ def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -
         len({g for g, _ in resample_particles(cands, 2, SeedStream(s), "t")}) == 2
         for s in range(100)
     ) / 100.0
-    assert distinct_rate > 0.7  # Exact systematic probability is 0.8 (vs 0.48 for i.i.d.)!
+    assert distinct_rate > 0.7
 
-    # 2) Easy problem with pilot_gate=True exits at 1x cost even when beam_particles=2.
-    easy_backend = TabularAutoregressiveBackend({(): (0.0, 0.0, 1.0)}, fallback=(0.0, 0.0, 1.0))
-    cfg_easy = ConditionalISConfig(
-        candidate_count=6, rollout_count=2, block_size=4, total_length=16,
-        reward_temperature=0.5, block_first=False, exploration_schedule="progressive",
-        selection="block_metropolized", pilot_gate=True, max_stages=4, block_growth=2.0, beam_particles=2,
-    )
-    res_easy = run_conditional_is(
-        easy_backend, (), cfg_easy, pointwise(lambda _p, g: float(len(g))), SeedStream(3),
-        sampling=SamplingConfig(eos_token_id=2),
-    )
-    assert len(res_easy.steps) == 1 and res_easy.steps[0].rollout_evaluations_performed == 1
-    assert res_easy.token_ids == (2,)
-
-    # 3) Hard multi-stage Block-SMC on batch backend runs 4 geometric stages with P=2 particles.
+    # 2) Hard multi-stage Block-SMC on batch backend runs 4 geometric stages with automatic P=2 particles.
     hard_backend = TabularAutoregressiveBackend({}, fallback=(0.5, 0.5))
     stat = TokenStatistic(SamplingConfig(), top_k=1)
     recorder = StatisticRecorder(hard_backend, stat)
     reward = pointwise(lambda _p, seq: float(sum(tok * (i + 1) for i, tok in enumerate(seq))))
     cfg_smc = ConditionalISConfig(
-        candidate_count=6, rollout_count=2, block_size=2, total_length=24,
-        reward_temperature=1.0, block_first=False, exploration_schedule="progressive",
-        selection="block_metropolized", pilot_gate=False, selective_lookahead=True,
-        max_stages=4, block_growth=2.0, beam_particles=2,
+        candidate_count=6, rollout_count=2, stages=4, total_length=24, reward_temperature=1.0, base_block_size=2,
     )
+    assert cfg_smc.beam_particles == 2
     committed: list[tuple[int, ...]] = []
     res_smc = run_conditional_is(
         recorder, (), cfg_smc, reward, SeedStream(11),
@@ -665,7 +658,7 @@ def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -
     assert len(res_smc.steps) == 4
     assert committed[-1] == res_smc.token_ids
 
-    # 4) Verify streaming DeltaEngine works cleanly with P=2 progressive Block-SMC!
+    # 3) Verify streaming DeltaEngine works cleanly with automatic P=2 multi-stage Block-SMC!
     engine = DeltaEngine(stream_interval=2)
     stream_backend = backend_for(engine)
     stream_backend.configure_scheduler(SchedulerConfig(max_in_flight=16))
@@ -675,9 +668,7 @@ def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -
         res_stream = run_conditional_is(
             stream_rec, (1,),
             ConditionalISConfig(
-                candidate_count=6, rollout_count=2, block_size=2, total_length=16,
-                reward_temperature=0.5, block_first=False, exploration_schedule="progressive",
-                selection="block_metropolized", pilot_gate=False, max_stages=3, block_growth=2.0, beam_particles=2,
+                candidate_count=6, rollout_count=2, stages=3, total_length=16, reward_temperature=0.5, base_block_size=2,
             ),
             pointwise(lambda _p, seq: float(sum(seq))),
             SeedStream(19),
@@ -688,29 +679,3 @@ def test_progressive_particle_smc_multistage_streaming_and_mass_conservation() -
         assert len(res_stream.token_ids) > 0
     finally:
         stream_backend.close()
-
-    # 5) Settings & Reasoner validation for progressive overrides (max_stages, beam_particles).
-    settings = copy.deepcopy(load_settings())
-    settings["ar"]["algorithms"]["is"].update(
-        exploration_schedule="progressive", candidate_count=6, max_stages=4, block_growth=2.0, beam_particles=2,
-    )
-    validate_settings(settings)
-    conv = openai_conversation({
-        "messages": [{"role": "user", "content": "hi"}],
-        "scaling": {"candidate_count": 4, "rollout_count": 2, "block_size": 2, "max_stages": 3, "beam_particles": 2},
-    })
-    reasoner = Reasoner(settings, _ChatBackend())
-    prepared = reasoner.prepare(conv)
-    assert prepared.scaling_overrides == ScalingOverrides(4, 2, 2, max_stages=3, beam_particles=2)
-    reply = reasoner.generate(prepared)
-    assert reply.finish == "stop"
-
-    bad = copy.deepcopy(settings)
-    bad["ar"]["algorithms"]["is"]["beam_particles"] = 8  # exceeds candidate_count=6
-    with pytest.raises(SettingsError, match="beam_particles"):
-        validate_settings(bad)
-    bad2 = copy.deepcopy(settings)
-    bad2["ar"]["algorithms"]["is"]["exploration_schedule"] = "adaptive"
-    bad2["ar"]["algorithms"]["is"]["beam_particles"] = 2
-    with pytest.raises(SettingsError, match="progressive"):
-        validate_settings(bad2)

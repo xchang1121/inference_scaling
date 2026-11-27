@@ -1,12 +1,12 @@
 """Converged inference-scaling pipeline shared by CLI experiments and HTTP serving.
 
 This module is the single source of truth on the algorithm side for:
-- translating model/reward/IS settings (plus optional external M, K, B overrides)
-  into validated runtime configs;
+- translating model/reward/IS settings (plus optional external ``(M, K, S)`` overrides)
+  into validated runtime configs with hardware-aligned internal KV page quanta;
 - composing per-request backend wrappers (request metering, thinking budget,
   sampling scope, token-statistic recording);
-- executing Conditional IS and final-content generation with optional decoupled
-  ``finish_sampling``, streaming callbacks, and preemption-safe cost attribution.
+- executing converged multi-stage Block-SMC Conditional IS and final-content
+  generation with streaming callbacks and preemption-safe cost attribution.
 
 Neither CLI datasets nor HTTP protocols are imported here, so both ``app`` and
 ``serve`` remain thin adapters over the same engine-agnostic scaling pipeline.
@@ -40,16 +40,14 @@ CONFIDENCE_REWARDS = frozenset({"self_certainty", "consilience"})
 
 @dataclass(frozen=True, slots=True)
 class ScalingOverrides:
-    """External runtime overrides for the primary IS scaling dimensions (M, K, B) and optional stage/particle caps."""
+    """External runtime overrides for the three IS scaling dimensions ``(M, K, S)``."""
 
     candidate_count: int | None = None
     rollout_count: int | None = None
-    block_size: int | None = None
-    max_stages: int | None = None
-    beam_particles: int | None = None
+    stages: int | None = None
 
     def __post_init__(self) -> None:
-        for name in ("candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"):
+        for name in ("candidate_count", "rollout_count", "stages"):
             value = getattr(self, name)
             if value is not None and (type(value) is not int or value <= 0):
                 raise ValueError(f"{name} must be a positive integer")
@@ -58,17 +56,46 @@ class ScalingOverrides:
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "ScalingOverrides | None":
         if not data:
             return None
-        allowed = {"candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"}
+        allowed = {"candidate_count", "rollout_count", "stages"}
         unknown = sorted(set(data) - allowed)
         if unknown:
             raise ValueError("unknown scaling overrides: " + ", ".join(unknown))
         return cls(
             candidate_count=data.get("candidate_count"),
             rollout_count=data.get("rollout_count"),
-            block_size=data.get("block_size"),
-            max_stages=data.get("max_stages"),
-            beam_particles=data.get("beam_particles"),
+            stages=data.get("stages"),
         )
+
+
+def hardware_page_block_size(
+    engine_config: Mapping[str, Any] | None,
+    *,
+    stages: int,
+    total_length: int,
+) -> int:
+    """Derive the Stage-0 hardware-page-aligned base block size internally.
+
+    Aligns hybrid Mamba/Attention KV pages automatically without exposing block
+    size as an external algorithm hyperparameter:
+    - Ascend NPU (910B3): ``1536`` tokens;
+    - 24 GB CUDA GPU online ``mxfp4`` (``context_window <= 8192``): ``832`` tokens;
+    - All other backends (CUDA BF16/FP8, OpenAI remote, Transformers): ``1024`` tokens.
+    """
+    if stages == 1:
+        return total_length
+    hw = 1024
+    if engine_config is not None:
+        device = str(engine_config.get("device", "")).lower()
+        vllm = engine_config.get("vllm") or {}
+        quant = str(vllm.get("quantization") or "").lower()
+        context_window = engine_config.get("context_window")
+        if device == "npu":
+            hw = 1536
+        elif device == "cuda" and quant == "mxfp4" and context_window is not None and int(context_window) <= 8192:
+            hw = 832
+    if total_length < 2 * hw:
+        return max(1, total_length // 2)
+    return hw
 
 
 def sampling_policy_from_config(sampling: Mapping[str, Any], eos_token_id: int | None) -> SamplingConfig:
@@ -138,43 +165,37 @@ def conditional_is_config(
     *,
     total_length: int,
     backend: Any | None = None,
+    engine_config: Mapping[str, Any] | None = None,
     overrides: ScalingOverrides | None = None,
 ) -> ConditionalISConfig:
-    """Build :class:`ConditionalISConfig` from settings and optional external (M, K, B) overrides."""
+    """Build :class:`ConditionalISConfig` from ``(M, K, S)`` settings and optional runtime overrides."""
 
-    schedule = str(config.get("exploration_schedule", "fixed"))
-    scheduler = getattr(backend, "scheduler_config", None)
-    if schedule not in {"two_stage", "adaptive", "progressive"} or not getattr(backend, "supports_streaming_generation", False):
-        scheduler = None
-    candidate_count = int(overrides.candidate_count if overrides and overrides.candidate_count is not None
-                          else config["candidate_count"])
-    rollout_count = int(overrides.rollout_count if overrides and overrides.rollout_count is not None
-                        else config["rollout_count"])
-    raw_block_size = int(overrides.block_size if overrides and overrides.block_size is not None
-                         else config["block_size"])
-    max_stages = (overrides.max_stages if overrides and overrides.max_stages is not None
-                  else config.get("max_stages", 4))
-    beam_particles = int(overrides.beam_particles if overrides and overrides.beam_particles is not None
-                         else config.get("beam_particles", 1))
+    scheduler = (
+        getattr(backend, "scheduler_config", None)
+        if getattr(backend, "supports_streaming_generation", False)
+        else None
+    )
+    candidate_count = int(
+        overrides.candidate_count if overrides and overrides.candidate_count is not None
+        else config["candidate_count"]
+    )
+    rollout_count = int(
+        overrides.rollout_count if overrides and overrides.rollout_count is not None
+        else config["rollout_count"]
+    )
+    stages = int(
+        overrides.stages if overrides and overrides.stages is not None
+        else config["stages"]
+    )
+    base_block = hardware_page_block_size(engine_config, stages=stages, total_length=total_length)
     return ConditionalISConfig(
         candidate_count=candidate_count,
         rollout_count=rollout_count,
-        block_size=min(raw_block_size, total_length),
+        stages=stages,
         total_length=total_length,
         reward_temperature=reward.temperature,
-        block_first=bool(config["block_first"]),
-        exploration_schedule=schedule,
+        base_block_size=base_block,
         final_pool_limit=scheduler.max_in_flight if scheduler is not None else None,
-        selection_ready=bool(config.get("selection_ready", False)),
-        selection=str(config.get("selection", "sir")),
-        pilot_gate=bool(config.get("pilot_gate", True)),
-        selective_lookahead=bool(config.get("selective_lookahead", True)),
-        straggler_pruning=bool(config.get("straggler_pruning", True)),
-        adaptive_temperature=bool(config.get("adaptive_temperature", True)),
-        pilot_tokens=config.get("pilot_tokens"),
-        max_stages=max_stages,
-        block_growth=float(config.get("block_growth", 2.0)),
-        beam_particles=beam_particles,
     )
 
 
@@ -308,6 +329,7 @@ class ScalingPipeline:
             reward,
             total_length=request.maximum,
             backend=raw,
+            engine_config=ar["engine"],
             overrides=request.overrides,
         )
 
@@ -368,10 +390,11 @@ class ScalingPipeline:
         trace["generation_budget"] = dict(request.budget)
         trace["reward"] = dict(reward.description)
         trace["rollout_scheduler"] = rollout_scheduler
-        trace["exploration_schedule"] = config.exploration_schedule
+        trace["stages"] = config.stages
+        trace["beam_particles"] = config.beam_particles
+        trace["stage0_block_size"] = config.stage0_block_size
         trace["final_pool_limit"] = config.final_pool_limit
-        trace["selection_ready"] = config.selection_ready
-        trace["selection"] = config.selection
+        trace["selection"] = "block_metropolized"
         kept_reward = float(result.steps[-1].selected.rollouts[result.steps[-1].completion_index].reward)
         return ScalingResult(
             tokens=tokens,
@@ -401,5 +424,6 @@ __all__ = [
     "confidence_reward",
     "confidence_statistic",
     "finish_sampling_from_config",
+    "hardware_page_block_size",
     "sampling_policy_from_config",
 ]

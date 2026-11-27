@@ -9,30 +9,29 @@
 
 ```bash
 python -m pip install -e ".[serve,evaluation]"
-python -m inference_scaling.serve                                                             # 读取默认 settings/inference.json
-python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json           # 昇腾 910B3 TP=2 均衡预设
-python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2_multistage_smc.json # 昇腾多阶段 Block-SMC 冠军预设
-python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json              # 80–96GB NVIDIA GPU BF16 均衡预设
-python -m inference_scaling.serve --settings settings/presets/cuda_gpu_multistage_smc.json    # 80–96GB GPU 多阶段 Block-SMC 预设
-python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json         # 24GB 单卡 L4/4090 在线 mxfp4 预设
+python -m inference_scaling.serve                                                     # 读取默认 settings/inference.json
+python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json   # 昇腾 910B3 TP=2 BF16 开箱预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json      # 80–96GB NVIDIA GPU BF16 开箱预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_fp8.json       # 40–96GB NVIDIA GPU 在线 FP8 预设
+python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json # 24GB 单卡 L4/4090 在线 mxfp4 预设
+python -m inference_scaling.serve --settings settings/presets/openai_remote.json      # 远程 OpenAI /v1/completions 引擎预设
 INFERENCE_SCALING_SETTINGS=settings/presets/ascend_910b3_tp2.json python -m inference_scaling --dataset math500
 ```
 
 启动前设置权重路径和 `ar.engine.vllm.tensor_parallel_size`（或直接使用 `settings/presets/` 中对应硬件预设）。卡数、上下文与并发需满足设备内存容量，
-部署步骤见[服务文档](src/inference_scaling/serve/README.md)，完整 NPU/GPU 四基准实测见[收敛版 Adaptive IS 实测报告](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md)。
+部署步骤见[服务文档](src/inference_scaling/serve/README.md)，完整 NPU/GPU 四基准与多维度 Scaling Law 实测见[实测报告](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md)（完整历史消融分支保留于 `feat/converged-scaling-serve`）。
 
 | 通用默认 | 设置 |
 | --- | --- |
-| 奖励 | `run.reward = "self_certainty"`（温度归一化全词表 KL 均值 + `incomplete_penalty=1.5`）；`consilience`（`initial_penalty=1.5, incomplete_penalty=2.0`）可作跨引擎替代 |
-| 奖励温度 / 评分温度 | `0.25` / `0.7`（与全局采样温度一致） |
-| 外部 IS 规模参数 | `M=4`、`K=2`、`B=1024`（`block_first=false`；可在请求 `scaling` 字段按次覆盖，低成本可选 `K=1`，昇腾页对齐可选 `B=1536`） |
-| 内部动态调度 | 默认 `exploration_schedule = "adaptive"`（至多 2 阶段）；另支持 **`progressive`** 几何递进多阶段与多粒子块级 SMC（`max_stages`、`block_growth`、`beam_particles`，开箱预设见 `settings/presets/*_multistage_smc.json`） |
-| 选择核 | `block_metropolized`，`selection_ready = false` |
+| 奖励 | BF16 / FP8 / 远程服务默认 `run.reward = "consilience"`（`initial_penalty=1.5, incomplete_penalty=2.0`）；4-bit `mxfp4` 量化预设使用 `self_certainty`（温度归一化全词表 KL 均值 + `incomplete_penalty=1.5`） |
+| 奖励温度 / 评分温度 | `consilience`: `2.0 / 0.7`；`self_certainty`: `0.25 / 0.7`（评分温度与全局采样温度一致） |
+| 外部 IS 规模参数 `(M, K, S)` | `candidate_count = 8`、`rollout_count = 2`、`stages = 4`（可在 HTTP 请求 `scaling` 字段按次覆盖，例如低延迟两阶段传 `{"candidate_count": 4, "stages": 2}`） |
+| 内部自动调度 | 单一收敛多阶段 Block-SMC 实现：硬件 KV 页自动对齐首段检查点（昇腾 `1536` / GPU `1024` / L4 `832`）+ `B_0 // 2` 试探门控 + 实测长度自适应几何阶段切分 + 衰减选择性前瞻 + 全阶段长尾停滞剪枝 + 稀释校准 ESS 温控 + `S>=3, M>=4` 自动 `P=2` 多粒子系统重采样与精确父质量守恒 + `block_metropolized` 选择核 |
 | 概率统计 | 跨平台预掩码标量统计 `scalar_self_certainty = true`（昇腾与 NVIDIA vLLM 0.25–0.34+ 均无额外评分前向） |
 | 全局采样 | `temperature = 0.7`、`top_p = 0.95`、`top_k = 20`、`token_penalty = null` |
-| 引擎默认 | `gpu_memory_utilization = 0.88`、`stream_interval = 8`、`enforce_eager = false`、`enable_prefix_caching = true`、`max_concurrent_requests = 4` |
+| 引擎默认 | `gpu_memory_utilization = 0.88`、`stream_interval = 8`、`enforce_eager = false`、`enable_prefix_caching = true`、`max_concurrent_requests = 2` |
 
-`two_stage`、`fixed` 与 `sir` / `selection_ready=true` 均保留为显式选项以便历史复现。[算法与适用条件](docs/methods/ALGORITHMS.md#alg-conditional-is)
+其他对比算法（`sample`、`greedy`、`beam`、`best_of_n`、`mh`、`mh_power`）保持可用。[算法与适用条件](docs/methods/ALGORITHMS.md#alg-conditional-is)
 
 ### 长度与采样配置
 
@@ -108,7 +107,7 @@ Self-Certainty 直接复用生成时的概率统计。具体实现见[rollout �
 
 | 报告 | 主要结果 |
 | --- | --- |
-| [收敛版 Adaptive IS 与多阶段 Block-SMC：跨基准帕累托与 NPU/GPU 实测](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md) | Wave B1（880 组）锁定 `token_penalty=null, T=0.7, p=0.95, k=20`（89.90% vs 86.15%）；Wave B2 13 臂 × 88 题 Adaptive IS v2 达 **88.02%**；多阶段多维度 Block-SMC 8 臂 × 48 难题中 `prog_s4_m8_k2_p2_cons` 达 **85.42%（41/48，+2/-0 零退化，LCB 79.2% / MATH 91.7%）**；覆盖昇腾 910B3 与 Blackwell 96GB / A100-40GB / L4 24GB 三档 GPU 及 7 套开箱预设 |
+| [收敛版 Adaptive IS 与多阶段 Block-SMC：跨基准帕累托与 NPU/GPU 实测](docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md) | Wave B1（880 组）锁定 `token_penalty=null, T=0.7, p=0.95, k=20`（89.90% vs 86.15%）；Wave B2 13 臂 × 88 题 Adaptive IS v2 达 **88.02%**；多阶段多维度 Block-SMC 8 臂 × 48 难题中 `M=8, K=2, S=4` (`P=2` + `consilience`) 达 **85.42%（41/48，+2/-0 零退化，LCB 79.2% / MATH 91.7%）**；覆盖昇腾 910B3 与 Blackwell 96GB / A100-40GB / L4 24GB 三档 GPU 及 5 套收敛开箱预设 |
 | [代码评测：正确率、性能与思维链风格](experiments/qwen38-20261106/reports/coding/REPORT.md) | LiveCodeBench 100 题：按块 SC K=2 为 67%，Base 为 63%，配对区间含 0；HumanEval+ 164 题未超过 Base。含十二方法性能表和跨题风格分析 |
 | [100 题选择策略与奖励对照](docs/reports/QWEN38_IS_SELECTION.md) | Base / 快速 Consilience IS / 默认 Self-Certainty IS：92% / 93% / 94%。按块 SC K=2 为 95%，比快速 SC 耗时约多 20%、FLOPs 多 75%；准确率差区间包含 0 |
 | [IS 服务延迟与吞吐](docs/reports/QWEN38_IS_SERVING.md) | 同环境的 TP2/TP4、IS/Base 时延比、思考与内容 TTFT，以及输出吞吐 |

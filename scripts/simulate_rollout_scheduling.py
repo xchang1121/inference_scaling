@@ -30,7 +30,7 @@ from tests.tabular import TabularAutoregressiveBackend
 from inference_scaling.arllm.config import SamplingConfig
 from inference_scaling.arllm.types import ScoreRequest, SequenceSample
 from inference_scaling.shared.rng import SeedStream
-from inference_scaling.shared.sampling.importance import normalize_log_weights
+from inference_scaling.shared.sampling.conditional_is import _metropolized_probabilities
 from inference_scaling.shared.types import pointwise
 
 
@@ -45,8 +45,8 @@ def coupled_runs(trials):
     reward = pointwise(lambda prompt, tokens: .4 * sum(tokens) - .1 * len(tokens))
     sampling = SamplingConfig(eos_token_id=2)
     cases = []
-    for block_first, capacity, order in itertools.product((False, True), (1, 2, 8), ("fifo", "fair_lpt")):
-        config = ConditionalISConfig(4, 3, 2, 7, .7, block_first)
+    for stages, capacity, order in itertools.product((2, 3), (1, 2, 8), ("fifo", "fair_lpt")):
+        config = ConditionalISConfig(4, 3, stages, 7, .7, base_block_size=2)
         baseline_counts, scheduled_counts = Counter(), Counter()
         mismatches, steps, maximum = 0, 0, 0
         for seed in range(trials):
@@ -60,7 +60,7 @@ def coupled_runs(trials):
             scheduled_counts[scheduled.token_ids] += 1
         keys = baseline_counts.keys() | scheduled_counts.keys()
         tv = .5 * sum(abs(baseline_counts[key] - scheduled_counts[key]) for key in keys) / trials
-        cases.append({"block_first": block_first, "capacity": capacity, "policy": order, "paired_runs": trials,
+        cases.append({"stages": stages, "capacity": capacity, "policy": order, "paired_runs": trials,
                       "steps_compared": steps, "full_result_mismatches": mismatches,
                       "histogram_total_variation": tv, "maximum_active": maximum})
         if mismatches or tv or maximum > capacity:
@@ -69,9 +69,9 @@ def coupled_runs(trials):
 
 
 def exact_transition_check():
-    """Enumerate all auxiliary draws and integrate the actual implementation's weights.
+    """Enumerate all auxiliary draws and integrate the block-Metropolized weights.
 
-    For length two, M=K=2 and a retained (a,b), the independent draws are:
+    For length two, M=K=2, S=2 and a retained (a,b), the independent draws are:
     retained branch e, fresh candidate c and its own d, and fresh branch f.
     There are 16 combinations per retained state. Selection is integrated
     analytically from ConditionalISStep, rather than estimated with seed counts.
@@ -82,7 +82,7 @@ def exact_transition_check():
     reward = lambda tokens: 1.3 * sum(tokens)
     weights = [first[a] * second[a][b] * exp(reward((a, b))) for a, b in states]
     target = np.asarray(weights) / sum(weights)
-    config = ConditionalISConfig(2, 2, 1, 2, 1.0, False)
+    config = ConditionalISConfig(2, 2, 2, 2, 1.0, base_block_size=1)
 
     class Draws:
         model_id = "enumerated"
@@ -113,12 +113,21 @@ def exact_transition_check():
                                                 reward=pointwise(lambda prompt, tokens: reward(tokens)))
                 record, _ = adapter.step(RetainedSequence((a, b), reward((a, b))), 0, SeedStream(100))
                 proposal = second[a][e] * first[c] * second[c][d] * second[c][f]
-                candidate_probabilities = normalize_log_weights([candidate.log_weight for candidate in record.candidates])
-                for candidate, probability in zip(record.candidates, candidate_probabilities, strict=True):
-                    leaf_probabilities = normalize_log_weights([leaf.log_weight for leaf in candidate.rollouts])
-                    for leaf, conditional in zip(candidate.rollouts, leaf_probabilities, strict=True):
-                        output = candidate.token_ids + leaf.token_ids
-                        matrix[row, states.index(output)] += proposal * probability * conditional
+                labels = [(m, k) for m, cand in enumerate(record.candidates) for k in range(len(cand.rollouts))]
+                logs = np.array([
+                    record.candidates[m].rollouts[k].log_weight - log(len(record.candidates[m].rollouts))
+                    for m, k in labels
+                ])
+                w = np.exp(logs - logs.max())
+                groups: dict[tuple[int, ...], int] = {}
+                membership = np.array([groups.setdefault(record.candidates[m].token_ids, len(groups)) for m, _ in labels])
+                mass = np.asarray(np.bincount(membership, weights=w), dtype=np.float64)
+                cond = np.divide(w, mass[membership], out=np.zeros_like(w), where=mass[membership] > 0)
+                probs = _metropolized_probabilities(mass)[membership] * cond
+                probs /= probs.sum()
+                for (m, k), prob in zip(labels, probs, strict=True):
+                    output = record.candidates[m].token_ids + record.candidates[m].rollouts[k].token_ids
+                    matrix[row, states.index(output)] += proposal * float(prob)
         return matrix
 
     baseline = transition(None)
@@ -150,8 +159,9 @@ def stationary_runs(trials):
         results = []
         for streaming in (False, True):
             sim = SimulatedBackend(model, SchedulerConfig(max_in_flight=2), streaming=streaming, token_seconds=service_time)
-            adapter = ConditionalISAdapter(backend=sim, prompt=(), config=ConditionalISConfig(2, 2, 1, 3, 1.0, False),
-                                            sampling=SamplingConfig(), reward=pointwise(lambda prompt, tokens: reward(tokens)))
+            adapter = ConditionalISAdapter(backend=sim, prompt=(),
+                                           config=ConditionalISConfig(2, 2, 3, 3, 1.0, base_block_size=1),
+                                           sampling=SamplingConfig(), reward=pointwise(lambda prompt, tokens: reward(tokens)))
             state, records = initial, []
             while not adapter.is_terminal(state):
                 record, state = adapter.step(state, len(records), SeedStream(100000 + trial))
@@ -191,7 +201,7 @@ def latency_runs(trials):
                 model = LongTailModel() if scenario == "long_tail" else TabularAutoregressiveBackend({}, fallback=[.5, .5])
                 scheduler = SchedulerConfig(max_in_flight=capacity, policy="fair_lpt" if streaming else "fifo")
                 sim = SimulatedBackend(model, scheduler, streaming=streaming, prefill_seconds=.00002)
-                config = ConditionalISConfig(6, 4, 8, 192 if scenario == "long_tail" else 64, 1.0, False)
+                config = ConditionalISConfig(6, 4, 4, 192 if scenario == "long_tail" else 64, 1.0, base_block_size=8)
                 adapter = ConditionalISAdapter(backend=sim, prompt=(), config=config,
                     sampling=SamplingConfig(eos_token_id=2 if scenario == "long_tail" else None),
                     reward=pointwise(lambda prompt, tokens: float(sum(tokens)) / len(tokens)))

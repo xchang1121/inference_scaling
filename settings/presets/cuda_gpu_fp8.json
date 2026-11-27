@@ -1,6 +1,6 @@
 {
   "run": {
-    "reward": "self_certainty",
+    "reward": "consilience",
     "seed": 20260808,
     "draws": 1,
     "hash_cache_dir": ".cache/artifact_hashes"
@@ -184,16 +184,7 @@
       "is": {
         "candidate_count": 4,
         "rollout_count": 2,
-        "block_size": 1024,
-        "block_first": false,
-        "exploration_schedule": "adaptive",
-        "selection_ready": false,
-        "selection": "block_metropolized",
-        "pilot_gate": true,
-        "selective_lookahead": true,
-        "straggler_pruning": true,
-        "adaptive_temperature": true,
-        "pilot_tokens": null
+        "stages": 2
       }
     }
   },

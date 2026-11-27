@@ -99,10 +99,7 @@ class ARFamily:
         if self.workers < 1:
             raise ValueError("ar.engine.continuous_batching.workers must be positive")
         sampling = self.ar["sampling"]
-        needs_full_support = choices.algorithm in FULL_SUPPORT or (
-            choices.algorithm == "is" and self.config.get("exploration_schedule", "fixed") == "fixed"
-        )
-        if needs_full_support and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
+        if choices.algorithm in FULL_SUPPORT and (float(sampling["top_p"]) != 1.0 or sampling["top_k"] is not None):
             raise ValueError(f"{choices.algorithm} reweights the full-support base policy; set top_p = 1 and top_k = null")
         if choices.algorithm == "mh":
             size = self.config.get("ensemble_size", 1)
@@ -407,7 +404,9 @@ class ARFamily:
 
     def _is(self, task: _Task, reward: Reward | None, meter: Meter):
         assert reward is not None
-        config = conditional_is_config(self.config, reward, total_length=task.maximum, backend=self.raw)
+        config = conditional_is_config(
+            self.config, reward, total_length=task.maximum, backend=self.raw, engine_config=self.ar["engine"],
+        )
         result = run_conditional_is(
             task.backend, task.prompt, config,
             reward.batch, SeedStream(task.seed), sampling=task.sampling,
@@ -415,10 +414,11 @@ class ARFamily:
         )
         trace = importance_trace(list(result.steps))
         trace["rollout_scheduler"] = "streaming" if getattr(task.backend, "supports_streaming_generation", False) else "batch"
-        trace["exploration_schedule"] = self.config.get("exploration_schedule", "fixed")
+        trace["stages"] = config.stages
+        trace["beam_particles"] = config.beam_particles
+        trace["stage0_block_size"] = config.stage0_block_size
         trace["final_pool_limit"] = config.final_pool_limit
-        trace["selection_ready"] = config.selection_ready
-        trace["selection"] = config.selection
+        trace["selection"] = "block_metropolized"
         return result.token_ids, trace, _kept_reward(result.steps[-1])
 
 

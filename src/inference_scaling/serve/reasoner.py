@@ -125,14 +125,17 @@ class Reasoner:
     def capabilities(self) -> dict[str, Any]:
         """Expose active engine capabilities and external IS defaults for health/introspection."""
         is_cfg = self.ar["algorithms"]["is"]
+        m = int(is_cfg["candidate_count"])
+        s = int(is_cfg["stages"])
         return {
             "engine": self.pipeline.capabilities().to_dict() if self.pipeline is not None else None,
             "reward": self.reward_kind,
-            "exploration_schedule": is_cfg.get("exploration_schedule", "fixed"),
+            "selection": "block_metropolized",
+            "beam_particles": 2 if s >= 3 and m >= 4 else 1,
             "defaults": {
-                "candidate_count": int(is_cfg["candidate_count"]),
+                "candidate_count": m,
                 "rollout_count": int(is_cfg["rollout_count"]),
-                "block_size": int(is_cfg["block_size"]),
+                "stages": s,
             },
         }
 
@@ -187,7 +190,7 @@ class Reasoner:
 
         start = time.monotonic()
         clock_start = time.perf_counter()
-        first_commit = first_publish = first_content = None
+        first_commit = first_publish = first_content = thought_ready = None
 
         def emit_thinking(text: str) -> None:
             nonlocal first_publish
@@ -216,6 +219,11 @@ class Reasoner:
                 first_commit = time.perf_counter() - clock_start
             publisher.publish(tokens)
 
+        def search_complete(search_tokens: TokenSequence) -> None:
+            nonlocal thought_ready
+            thought_ready = time.perf_counter() - clock_start
+            publisher.publish(search_tokens, final=True)
+
         limit = self.serve["max_seconds"]
         deadline = None if limit is None else start + float(limit)
         outcome = self.pipeline.run_is(
@@ -230,7 +238,7 @@ class Reasoner:
                 deadline=deadline,
                 overrides=prepared.scaling_overrides,
                 on_commit=committed,
-                on_search_complete=lambda search_tokens: publisher.publish(search_tokens, final=True),
+                on_search_complete=search_complete,
                 on_content=content_publisher.publish if stream_content else None,
             ),
             track_preemptions=True,
@@ -253,7 +261,8 @@ class Reasoner:
         return Reply(thinking.strip(), content, calls, finish, len(prompt), len(outcome.tokens), {
             "effort": prepared.effort, "steps": len(outcome.steps), "stopping_reason": outcome.stopping_reason,
             "generation_budget": dict(prepared.budget), "max_seconds": limit,
-            "first_commit_seconds": first_commit, "thought_ready_seconds": outcome.thought_ready_seconds,
+            "first_commit_seconds": first_commit,
+            "thought_ready_seconds": outcome.thought_ready_seconds if thought_ready is None else thought_ready,
             "first_thinking_publish_seconds": first_publish,
             "first_content_publish_seconds": first_content,
             "sampling_seed": seeds, "cost": outcome.cost,
@@ -263,12 +272,11 @@ class Reasoner:
             "generated_tokens": outcome.generated_tokens,
             "tensor_parallel_size": ar["engine"]["vllm"]["tensor_parallel_size"],
             "candidate_count": config.candidate_count, "rollout_count": config.rollout_count,
-            "block_size": config.block_size,
+            "stages": config.stages, "beam_particles": config.beam_particles,
+            "stage0_block_size": config.stage0_block_size,
             "reward": self.reward_kind, "reward_config": dict(self.reward_settings),
-            "selection": config.selection,
-            "exploration_schedule": config.exploration_schedule,
+            "selection": "block_metropolized",
             "final_pool_limit": config.final_pool_limit,
-            "selection_ready": config.selection_ready,
             "sampling_plans": [step.sampling_plan for step in outcome.steps],
             "stopping_policy": "logical" if deadline is None else "wall_clock",
             "rollout_scheduler": outcome.rollout_scheduler,

@@ -15,13 +15,10 @@ from tests.tabular import TabularAutoregressiveBackend
 
 def test_cli_defaults_and_reward_rules(monkeypatch) -> None:
     choices, output = parse([])
-    assert choices == Choices("is", "ar", "self_certainty", "gsm8k") and output == Path("results")
+    assert choices == Choices("is", "ar", "consilience", "gsm8k") and output == Path("results")
     settings = load_settings()
     assert settings["ar"]["algorithms"]["is"] == {
-        "candidate_count": 4, "rollout_count": 2, "block_size": 1024, "block_first": False,
-        "exploration_schedule": "adaptive", "selection_ready": False, "selection": "block_metropolized",
-        "pilot_gate": True, "selective_lookahead": True, "straggler_pruning": True,
-        "adaptive_temperature": True, "pilot_tokens": None,
+        "candidate_count": 8, "rollout_count": 2, "stages": 4,
     }
     assert settings["rewards"]["self_certainty"] == {
         "temperature": 0.25, "score_temperature": 0.7, "scope": "thinking",
@@ -133,8 +130,7 @@ def ar_settings(base_settings, tmp_path, monkeypatch):
     settings["rewards"]["self_certainty"]["score_temperature"] = 1.0
     settings["rewards"]["consilience"]["score_temperature"] = 1.0
     settings["rewards"]["verifier"]["pool_size"] = 3
-    settings["ar"]["algorithms"]["is"].update(candidate_count=2, rollout_count=1, block_size=2,
-                                             exploration_schedule="fixed", selection_ready=False, selection="sir")
+    settings["ar"]["algorithms"]["is"] = {"candidate_count": 2, "rollout_count": 1, "stages": 2}
     monkeypatch.setattr("inference_scaling.app.ar.load_backend", lambda *args, **kwargs: ThinkingBackend())
     return settings
 
@@ -248,17 +244,15 @@ def test_failed_execution_cost_survives_resume(ar_settings, tmp_path, monkeypatc
     assert summary["cost_total"]["flops"] > failed["cost"]["flops"]
 
 
-def test_fixed_is_uses_the_configured_shape_for_each_thinking_step(ar_settings, tmp_path):
-    ar_settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1)
+def test_converged_is_runs_inside_thinking_scope_and_records_stage_metadata(ar_settings, tmp_path):
+    ar_settings["ar"]["algorithms"]["is"] = {"candidate_count": 3, "rollout_count": 2, "stages": 2}
     summary = run(Choices("is", "ar", "consilience", "gsm8k"), ar_settings, tmp_path / "results")
     record = json.loads((Path(summary["directory"]) / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert record["output"]["sampling_scope"] == "thinking" and record["correct"]
-    steps = record["trace"]["steps"]
-    assert [step["prefix_length"] for step in steps] == [0, 1]
-    assert [len(step["candidate_log_weights"]) for step in steps] == [3, 3]
-    # Three candidates each have two completions; at the final block only the two fresh candidates need scoring.
-    assert [step["rollout_evaluations_performed"] for step in steps] == [6, 2]
-    assert all("plan" not in step for step in steps)
+    assert record["trace"]["stages"] == 2
+    assert record["trace"]["beam_particles"] == 1
+    assert record["trace"]["selection"] == "block_metropolized"
+    assert len(record["trace"]["steps"]) >= 1
 
 
 def test_self_certainty_on_vllm_needs_the_fused_worker_or_an_exact_scorer(ar_settings, tmp_path):

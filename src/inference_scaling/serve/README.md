@@ -5,7 +5,7 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice=auto/none`、`stream`、`reasoning_effort`、请求级 `scaling: {candidate_count, rollout_count, block_size}` |
+| `POST /v1/chat/completions` | OpenAI 格式，支持 `tools`、`tool_choice=auto/none`、`stream`、`reasoning_effort`、请求级 `scaling: {candidate_count, rollout_count, stages}` |
 | `POST /v1/messages` | Anthropic 格式，支持 `tools`、`stream`、`thinking`、`output_config.effort`、请求级 `scaling` |
 | `POST /v1/messages/count_tokens` | Anthropic 的 token 计数 |
 | `GET /v1/models`、`GET /health` | 模型名、健康检查与引擎/算法能力自省（`capabilities`） |
@@ -32,8 +32,8 @@ keep-alive、角色事件和内部候选的首 token 不计入用户可见 TTFT�
 不完整的成本及生成量标为 `null`，避免跨客户端混算。
 
 服务层（`serve/reasoner.py`、`serve/server.py`）作为薄协议适配层调用收敛后的算法管道 `arllm/pipeline.py`（`ScalingPipeline`）。
-默认配置 `ar.algorithms.is.exploration_schedule="adaptive"` 使用外部规模参数 `M=4/K=2/B=1024`、`selection="block_metropolized"`、`selection_ready=false`，内部自动调度 `B//2` 试探门控、选择性前瞻、两阶段长尾剪枝与 ESS 自适应奖励温度；
-客户端可通过请求体可选字段 `scaling` 覆盖单次请求的 `candidate_count`（M）、`rollout_count`（K）、`block_size`（B）。
+`main` 分支已收敛为单一最优的多阶段 Block-SMC IS 实现：外部仅暴露三维规模参数 `candidate_count`（M）、`rollout_count`（K）、`stages`（S），默认 `M=8 / K=2 / S=4`（内部自动推导硬件 KV 页对齐块长、`S>=3, M>=4` 自动启 `P=2` 多粒子系统重采样与 `block_metropolized` 选择核）；
+客户端可通过请求体可选字段 `scaling` 按次覆盖 `candidate_count`、`rollout_count`、`stages`（例如低延迟两阶段传 `{"scaling": {"candidate_count": 4, "stages": 2}}`）。
 `GET /health` 与响应中的 `scaling.engine_capabilities` 暴露当前推理引擎能力矩阵。完整跨基准与硬件调优结果见[收敛版实测报告](../../../docs/reports/CONVERGED_IS_NPU_GPU_RESULTS.md)。
 
 `scaling.engine_execution` 记录引擎生效的输出间隔、扁平概率格式、内部异步调度与 CUDA Graph 配置。
@@ -76,7 +76,7 @@ huggingface-cli download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52
 | `ar.engine.vllm.fused_logprobs` / `scalar_self_certainty` | `false` / `true` | 跨平台（昇腾/CUDA）预掩码全词表 KL 标量，无额外评分前向，兼容 `top_p`/`top_k` 与原生异步调度 |
 | `ar.engine.vllm.engine_kwargs` | 删去所用 vLLM 不认识的键 | 如 `language_model_only` |
 | `ar.engine.vllm.enable_prefix_caching` | 默认 `true` | 复用共享前缀，多分支 IS 节省约 13%–14% 前向槽位 |
-| `ar.algorithms.is` | M=4、K=2、B=1024、`adaptive`、`selection_ready=false`、`block_metropolized` | 外部仅需关注 M/K/B；内部自动试探门控、选择性前瞻与停滞剪枝 |
+| `ar.algorithms.is` | `candidate_count=8`、`rollout_count=2`、`stages=4` | 外部仅需关注 `(M, K, S)`；内部自动硬件页对齐、试探门控、自适应几何阶段、选择性衰减前瞻、停滞剪枝与 `P=2` Block-SMC |
 | `ar.engine.rollout_scheduler` | 默认开启，全局最多 `32` 条原生请求 | 候选前缀就绪后立即释放其余补全；按题公平准入、长度预测与老化排序、KV 水位和预填充预算限流；[调度说明](../../../docs/methods/ROLLOUT_SCHEDULING.md) |
 
 `ar.max_new_tokens=null` 使用剩余上下文作为生成总长，`ar.engine.context_window=null` 读取模型/引擎配置；

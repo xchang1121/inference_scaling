@@ -29,17 +29,11 @@ from inference_scaling.shared.model.thinking import resolve_thinking
 from inference_scaling.shared.rng import SeedStream
 
 
-POOL_MODES = ("sir-k1", "met-k1", "sir-k2", "met-k2", "block-met-k2")
 SC_SUFFIX = "-self-certainty"
-SELECTION_PAIRS = (("sir-k1", "met-k1"), ("sir-k2", "met-k2"),
-                   ("sir-k2", "block-met-k2"), ("met-k2", "block-met-k2"))
 
 STUDIES = {
     "latency": ("base", "is"),
-    # K=1 with distinct blocks has identical leaf/block Metropolized kernels.
-    "selection": ("base", "is", *POOL_MODES),
     "rewards": ("base", "is", "bon-consilience", "is-self-certainty"),
-    "selection-self-certainty": ("base", "is-self-certainty", *(mode + SC_SUFFIX for mode in POOL_MODES)),
 }
 
 
@@ -322,12 +316,8 @@ def comparison_summary(rows, expected_pairs, modes):
             "versus_base": {mode: compare("base", mode) for mode in modes if mode != "base" and "base" in modes},
             "reward_pairs": [compare(reference, alternative) for reference, alternative in
                              (("is", "bon-consilience"), ("is", "is-self-certainty"),
-                              ("bon-consilience", "is-self-certainty"),
-                              *((mode, mode + SC_SUFFIX) for mode in POOL_MODES))
-                             if reference in modes and alternative in modes],
-            "selection_pairs": [compare(reference + suffix, alternative + suffix)
-                                for suffix in ("", SC_SUFFIX) for reference, alternative in SELECTION_PAIRS
-                                if reference + suffix in modes and alternative + suffix in modes]}
+                              ("bon-consilience", "is-self-certainty"))
+                             if reference in modes and alternative in modes]}
 
 
 def select_mode(family, mode, settings, *, study="latency"):
@@ -339,11 +329,6 @@ def select_mode(family, mode, settings, *, study="latency"):
         reward = settings["run"]["reward"]
     family.choices = SimpleNamespace(algorithm=algorithm, reward=reward)
     family.config = dict(family.ar["algorithms"][algorithm])
-    pool_mode = mode.removesuffix(SC_SUFFIX)
-    if pool_mode in POOL_MODES:
-        family.config.update(rollout_count=int(pool_mode[-1]), selection_ready=False,
-                             selection=("sir" if pool_mode.startswith("sir-") else
-                                        "block_metropolized" if pool_mode.startswith("block-") else "metropolized"))
     if mode == "bon-consilience":
         family.config["samples"] = 4
     family.reward_settings = None if reward is None else dict(settings["rewards"][reward])
@@ -409,8 +394,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--label")
     parser.add_argument("--study", choices=tuple(STUDIES), default="latency",
-                        help="selection compares Consilience pools; selection-self-certainty uses full-vocabulary KL; "
-                             "rewards compares Best-of-4 and fast IS rewards")
+                        help="latency pairs Base vs configured IS; rewards compares Base, Best-of-4, Consilience IS, and Self-Certainty IS")
     parser.add_argument("--modes", nargs="+", help="run only these arms from the selected study (independent supplement)")
     parser.add_argument("--summary", type=Path, help="summarize paired JSONL on CPU without loading a model")
     args = parser.parse_args()
@@ -450,12 +434,6 @@ def main():
     engine = ar["engine"]
     if engine["backend"] != "vllm" or not engine["vllm"]["asynchronous"] or engine["continuous_batching"]["workers"] != 1:
         parser.error("paired single-question measurements require asynchronous vLLM and workers=1")
-    if ar["algorithms"]["is"]["exploration_schedule"] != "two_stage":
-        parser.error("configure the fast two_stage IS path; fixed-block performance comparisons are retired")
-    if args.study.startswith("selection") and (ar["algorithms"]["is"]["candidate_count"] != 4
-                                             or ar["algorithms"]["is"]["rollout_count"] != 1
-                                             or not ar["algorithms"]["is"]["selection_ready"]):
-        parser.error("selection study requires the current M=4, K=1, selection_ready=true baseline")
     if "bon-consilience" in modes:
         ar["algorithms"]["best_of_n"]["samples"] = 4
     uses_self_certainty = (any(mode.endswith(SC_SUFFIX) for mode in modes)

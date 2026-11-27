@@ -1,6 +1,6 @@
 # 设置文件
 
-所有入口默认从仓库根目录读取 `settings/inference.json`，也支持通过环境变量 `INFERENCE_SCALING_SETTINGS` 或服务参数 `python -m inference_scaling.serve --settings <路径>` 切换至 `settings/presets/` 下的 7 套开箱硬件预设（`ascend_910b3_tp2.json`、`ascend_910b3_tp2_multistage_smc.json`、`cuda_gpu_bf16.json`、`cuda_gpu_multistage_smc.json`、`cuda_gpu_fp8.json`、`cuda_gpu_24g_mxfp4.json`、`openai_remote.json`）。模型、长度、奖励和执行参数共用同一来源。
+所有入口默认从仓库根目录读取 `settings/inference.json`，也支持通过环境变量 `INFERENCE_SCALING_SETTINGS` 或服务参数 `python -m inference_scaling.serve --settings <路径>` 切换至 `settings/presets/` 下的 5 套开箱硬件预设（`ascend_910b3_tp2.json`、`cuda_gpu_bf16.json`、`cuda_gpu_fp8.json`、`cuda_gpu_24g_mxfp4.json`、`openai_remote.json`）。模型、长度、奖励和执行参数共用同一来源。
 [`app/settings.py`](../src/inference_scaling/app/settings.py) 严格校验字段名称与类型，错误在加载模型前报出。
 标注为“对象”的字段原样传给对应库。
 下表中的数值是仓库提供的文件中的取值。
@@ -266,11 +266,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `mh.frozen_history.samples` / `mixture` | 历史样本数；从历史后缀提议的概率 |
 | `mh_power.early_rejection` | 先抽接受用的均匀数，proposal 一旦不可能被接受就停止生成（见[算法说明](methods/ALGORITHMS.md#mh-early-rejection)）：链与关闭时逐步相同，被拒 proposal 的尾部不再生成；要求 `proposal_temperature` 在 $`[1/\alpha,1]`$ 内，需要 `ar.engine.backend = transformers` |
 | `mh.suffix_replay` / `mh_power.suffix_replay` | 把当前后缀作为草稿交给后端重放（见[算法说明](methods/ALGORITHMS.md#mh-suffix-replay)）：proposal 与关闭时逐 token 相同，与当前后缀相同的开头部分不调用模型；需要 `ar.engine.backend = transformers` |
-| `is.candidate_count` / `rollout_count` / `block_size` | 外部主要规模参数 M、K、B，默认 `4 / 2 / 1024`（低成本可选 `K=1`，昇腾页对齐可选 `B=1536`，24GB L4 `mxfp4` 页对齐可选 `B=832`）；HTTP 服务支持按请求 `scaling` 字段动态覆盖 |
-| `is.exploration_schedule` | 默认 `adaptive`（至多 2 阶段动态调度）：启用 `B//2` 试探门控（`pilot_gate`）、选择性前瞻（`selective_lookahead`）、两阶段长尾停滞剪枝（`straggler_pruning`）、ESS 自适应奖励温度（`adaptive_temperature`）与 Stage-2 `M-1` 候选上限。可选 **`progressive`** 进一步开启几何递进多阶段（$B_s = \gamma^s B$，`max_stages` 默认 `4`，`block_growth` 默认 `2.0`）、分阶段衰减前瞻 $K_s = \max(1, \lceil K/2^s\rceil)$、后期前缀稀释 ESS 温度校准（`min_scale=0.15`）及多粒子块级 SMC（`beam_particles >= 1`，含系统重采样与精确父粒子质量守恒）；两者均要求 `selection_ready=false`、`block_first=false`。`two_stage` 与 `fixed` 保留为显式对照选项；详见[收敛版实测报告](reports/CONVERGED_IS_NPU_GPU_RESULTS.md) |
-| `is.selection_ready` | 默认 `false`（等待全部有效候选，消除提前选择偏差）。设 `true` 仅用于历史 `two_stage + sir` 快速对照 |
-| `is.selection` | 默认 `block_metropolized`（先合并同块质量再做 Metropolized 选择）；`sir` 与 `metropolized` 保留为可选核。Metropolized 核要求 `selection_ready=false` |
-| `is.block_first` | 新候选先只生成一块，再发第一条续写请求（见[算法说明](methods/ALGORITHMS.md#alg-conditional-is)）。默认 `false` 配合流式调度即可在 B 处释放其他分支，原请求继续为第零条补全；调度器不会更改此设置或重置原请求随机流 |
+| `is.candidate_count` / `rollout_count` / `stages` | 外部唯一三维规模参数 `M / K / S`，默认 `8 / 2 / 4`（40GB FP8 与 24GB L4 预设默认 `4 / 2 / 2`；HTTP 服务支持按请求 `scaling` 字段覆盖任意子集）。内部自动完成：硬件 KV 页对齐首段检查点（昇腾 `1536` / CUDA `1024` / L4 `832`）、`B_0 // 2` 试探门控、基于未选候选实测剩余长度的几何阶段切分、衰减选择性前瞻 $K_s = \max(1, \lceil K/2^s \rceil)$、全阶段长尾停滞剪枝、ESS 温控、`S>=3, M>=4` 自动 `P=2` 多粒子块级 SMC（系统重采样 + 父粒子质量守恒）及 `block_metropolized` 选择核；完整消融对照保留在分支 `feat/converged-scaling-serve` |
 
 <a id="ar-defaults"></a>
 ### 默认 AR 配置
@@ -279,7 +275,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 
 | 设置 | 当前值 |
 | --- | --- |
-| `run.reward` | `self_certainty`；思考段温度归一化全词表 KL 均值，奖励温度 `0.25`、评分温度 `0.7`、`incomplete_penalty=1.5` |
+| `run.reward` | `consilience`（BF16 / FP8 / 远程默认，首末窗口差分 `initial_penalty=1.5, incomplete_penalty=2.0`）；4-bit `mxfp4` 预设使用 `self_certainty`（思考段温度归一化全词表 KL 均值，`incomplete_penalty=1.5`） |
 | `ar.model` | 固定权重版本，BF16；首次下载约 55.6 GB |
 | `ar.model.token_penalty` | `null`（Wave B1 880 组配对验证关闭后效果最佳） |
 | `ar.engine.backend` / `device` / `dtype` | `vllm` / `npu` / `bfloat16`（NVIDIA GPU 与远程 OpenAI 见 `settings/presets/*.json`） |
@@ -288,7 +284,7 @@ Ascend 后端在 V1 worker 初始化时同步两级采样器的概率模式，�
 | `ar.engine.context_window` / `ar.max_new_tokens` | 均为 `null`，分别读取原生上下文与剩余生成空间 |
 | `ar.thinking` / `ar.output` | 默认 xhigh、131072 思考预算；启用思考、IS/MH 作用于思考段 |
 | `ar.sampling` | `temperature=0.7`、`top_p=0.95`、`top_k=20` |
-| `ar.algorithms.is` | M=4、K=2、B=1024；`adaptive`、`selection_ready=false`、`block_metropolized`、`block_first=false` |
+| `ar.algorithms.is` | `candidate_count=8`、`rollout_count=2`、`stages=4`（内部自动硬件页对齐、`P=2` 多粒子 Block-SMC 与 `block_metropolized`） |
 | `ar.algorithms.mh` / `mh_power` | 块长 1024，每块 3 次更新，均匀后缀；重放与提前拒绝关闭 |
 
 部署时按设备容量设置 TP/DP，校验权重、缓存、原生上下文与并发的总内存需求。

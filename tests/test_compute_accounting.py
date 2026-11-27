@@ -112,11 +112,6 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     assert incomplete["sample_quality_gate"] is None and incomplete["is"]["generated_tokens"] is None
     with pytest.raises(ValueError, match="duplicate"):
         pair_summary([base, base], 1)
-    alternatives = [base, {**base, "mode": "sir-k2", "correct": False}, {**fast, "mode": "block-met-k2"}]
-    matrix = comparison_summary(alternatives, 1, ("base", "sir-k2", "block-met-k2"))
-    assert matrix["selection_pairs"][0]["wins"] == 1 and matrix["selection_pairs"][0]["losses"] == 0
-    assert matrix["versus_base"]["sir-k2"]["losses"] == 1
-    assert matrix["versus_base"]["block-met-k2"]["latency_ratio_is_over_base"] == 1.5
     supplement = comparison_summary([{**base, "mode": "bon-consilience"}, {**fast, "mode": "is-self-certainty"}],
                                     1, ("bon-consilience", "is-self-certainty"))
     assert supplement["versus_base"] == {}
@@ -129,25 +124,18 @@ def test_execution_summary_marks_missing_cost_after_a_crash():
     family = SimpleNamespace(ar=settings["ar"])
     for mode, algorithm, reward in (("bon-consilience", "best_of_n", "consilience"),
                                    ("is-self-certainty", "is", "self_certainty"),
-                                   ("met-k1-self-certainty", "is", "self_certainty"),
-                                   ("met-k2-self-certainty", "is", "self_certainty"),
-                                   ("block-met-k2-self-certainty", "is", "self_certainty"),
                                    ("is", "is", "consilience")):
         select_mode(family, mode, settings, study="rewards")
         assert (family.choices.algorithm, family.choices.reward) == (algorithm, reward)
         assert family.reward_settings["scope"] == "thinking"
-        if "met-k" in mode:
-            assert not family.config["selection_ready"]
-            assert family.config["rollout_count"] == (1 if "-k1-" in mode else 2)
-            assert family.config["selection"] == ("block_metropolized" if mode.startswith("block-") else "metropolized")
     assert family.config == settings["ar"]["algorithms"]["is"]
     assert settings["ar"]["algorithms"]["best_of_n"]["samples"] == 8  # Mode overrides remain local.
     select_mode(family, "is", settings)
-    assert family.choices.reward == settings["run"]["reward"] == "self_certainty"
-    assert family.reward_settings == settings["rewards"]["self_certainty"]
-    settings["run"]["reward"] = "consilience"
+    assert family.choices.reward == settings["run"]["reward"] == "consilience"
+    assert family.reward_settings == settings["rewards"]["consilience"]
+    settings["run"]["reward"] = "self_certainty"
     select_mode(family, "is", settings)
-    assert family.choices.reward == "consilience"
+    assert family.choices.reward == "self_certainty"
 
 
 def test_standard_pass_at_k_estimator() -> None:

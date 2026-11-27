@@ -146,7 +146,7 @@ def test_model_rewards_read_the_statistics_that_generation_recorded(reward_class
     def run(backend):
         reward = reward_class(backend, statistic, scope="full").batch
         conditional = run_conditional_is(backend, (), ConditionalISConfig(
-            candidate_count=3, rollout_count=2, block_size=1, total_length=4, reward_temperature=0.5, block_first=False),
+            candidate_count=3, rollout_count=2, stages=2, total_length=4, reward_temperature=0.5, base_block_size=1),
             reward, SeedStream(3))
         if isinstance(backend, StatisticRecorder):
             assert sum(len(rows) for outputs in backend._outputs.values() for rows in outputs.values()) == 1

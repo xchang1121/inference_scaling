@@ -42,19 +42,15 @@ def test_resume_cannot_mix_changed_or_duplicate_measurements():
     assert completed_keys(rows + [{**row, 'status': 'failed'}], 'frozen') == {('he/0', 'base')}
 
 
-def test_twelve_modes_keep_kernel_and_reward_pairs_aligned():
-    settings = {'ar': {'algorithms': {'sample': {}, 'best_of_n': {'samples': 4},
-                'is': {'candidate_count': 4, 'rollout_count': 1, 'selection_ready': True,
-                       'selection': 'sir', 'exploration_schedule': 'two_stage'}}},
+def test_coding_modes_keep_reward_pairs_aligned():
+    settings = {'ar': {'algorithms': {'sample': {}, 'best_of_n': {'samples': 8},
+                'is': {'candidate_count': 8, 'rollout_count': 2, 'stages': 4}}},
                 'rewards': {'consilience': {'scope': 'thinking'}, 'self_certainty': {'scope': 'thinking'}}}
     family = SimpleNamespace(ar=settings['ar'])
     configurations = {}
     for mode in MODES:
-        select_mode(family, mode, settings, study='selection')
+        select_mode(family, mode, settings, study='rewards')
         configurations[mode] = family.config.copy()
         assert family.choices.reward != 'verifier'
-    for mode in ('is', 'met-k1', 'met-k2', 'block-met-k2'):
-        assert configurations[mode] == configurations[mode + '-self-certainty']
-    assert configurations['met-k2']['rollout_count'] == 2
-    assert configurations['block-met-k2']['selection'] == 'block_metropolized'
+    assert configurations['is'] == configurations['is-self-certainty'] == {'candidate_count': 8, 'rollout_count': 2, 'stages': 4}
     assert configurations['bon-consilience']['samples'] == 4

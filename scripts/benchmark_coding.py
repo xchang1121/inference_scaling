@@ -80,7 +80,7 @@ def main():
                 try:
                     family.max_new_tokens = 64
                     for mode in MODES:
-                        select_mode(family, mode, settings, study='selection')
+                        select_mode(family, mode, settings, study='rewards')
                         family.solve(dataset.problems[0], SeedStream(SeedStream(settings['run']['seed']).derive('coding-warmup', mode)))
                 finally:
                     family.max_new_tokens = maximum
@@ -91,7 +91,7 @@ def main():
                     for mode in MODES[offset:] + MODES[:offset]:
                         if (problem.id, mode) in done:
                             continue
-                        select_mode(family, mode, settings, study='selection')
+                        select_mode(family, mode, settings, study='rewards')
                         row = {"kind": "measurement", "problem_id": problem.id, "dataset": meta['dataset'],
                                "phase": meta['phase'], "repeat": 0, "mode": mode, "seed": seed,
                                "algorithm_config": family.config, "reward": family.choices.reward,

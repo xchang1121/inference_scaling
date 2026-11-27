@@ -216,22 +216,25 @@
 
 ---
 
-## 7. 开箱即用硬件预设与启动方式
+## 7. `main` 收敛形态与 5 套开箱硬件预设
 
-所有 7 套预设均位于 `settings/presets/` 并通过严格 Schema 校验，可通过 `--settings` 或环境变量 `INFERENCE_SCALING_SETTINGS` 一键切换：
+`main` 分支已按实测帕累托结果收敛为**单一最优的多阶段 Block-SMC IS 实现**（完整消融分支与多模式对照脚本保留于 `feat/converged-scaling-serve`）：
+- 外部接口统一为三维纯算法规模参数 **`(M, K, S)`**（`candidate_count`、`rollout_count`、`stages`）；
+- 底层硬件页对齐基础块长 $B_0$（昇腾 `1536` / CUDA `1024` / L4 `832`）下沉至引擎内部自动推导，后续阶段基于未选候选的实测中位剩余长度按 $B_s \approx L_{\text{rem}} / (2^{S-s} - 1)$ 几何切分并吸附硬件页粒度；
+- 当 $S \ge 3$ 且 $M \ge 4$ 时自动激活 $P=2$ 多粒子 Block-SMC，当 $S \le 2$ 或 $M < 4$ 时无缝退化为单链搜索。
 
-| 预设文件 | 适用硬件与场景 | 推荐算法与奖励 | 关键引擎配置 | 启动示例 |
+所有 5 套硬件预设均位于 `settings/presets/` 并通过严格 Schema 校验，可通过 `--settings` 或环境变量 `INFERENCE_SCALING_SETTINGS` 一键切换：
+
+| 预设文件 | 适用硬件与场景 | 默认 `(M, K, S)` 与奖励 | 关键引擎配置 | 启动示例 |
 | --- | --- | --- | --- | --- |
-| `settings/presets/ascend_910b3_tp2.json` | 昇腾 910B3 × 2 (BF16，均衡默认) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, ACLGraph+PrefixCache ON, `c=4` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json` |
-| `settings/presets/ascend_910b3_tp2_multistage_smc.json` | 昇腾 910B3 × 2 (BF16，高难多维扩展冠军) | **`progressive` Block-SMC** (`M=8, K=2, B=1536, S=4, P=2`), **`consilience`** | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, 1536 页对齐, `c=2` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2_multistage_smc.json` |
-| `settings/presets/cuda_gpu_bf16.json` | 80–96 GB NVIDIA GPU (H100 / A100-80G / Blackwell，均衡默认) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | `device="cuda"`, BF16 `TP=1`, `GPULogprobWorker`, `async_scheduling=true`, `stream_interval=8`, `c=4` | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json` |
-| `settings/presets/cuda_gpu_multistage_smc.json` | 80–96 GB NVIDIA GPU (BF16，高难多维扩展冠军) | **`progressive` Block-SMC** (`M=8, K=2, B=1024, S=4, P=2`), **`consilience`** | `device="cuda"`, BF16 `TP=1`, `async_scheduling=true`, `stream_interval=8`, `c=2`（4-bit 量化建议改 `self_certainty`） | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_multistage_smc.json` |
-| `settings/presets/cuda_gpu_fp8.json` | 40–96 GB NVIDIA GPU (A100-40G / L40S / H100) | `adaptive` (`M=4, K=2, B=1024`), `self_certainty` | 在线 `fp8`（忽略 visual/lm_head），40 GB 安全默认 `context_window=16384, c=2`（≥48 GB 可放宽至 `32768, c=4`；40 GB 跑 `M=8`/SMC 建议改 `mxfp4`） | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_fp8.json` |
-| `settings/presets/cuda_gpu_24g_mxfp4.json` | 单卡 24 GB NVIDIA GPU (Colab L4 / RTX 4090) | `adaptive` (`M=4, K=2, B=832`), `self_certainty` | 在线 `mxfp4` Marlin（忽略 visual/lm_head），`context_window=8192`, `B=832`, `c=2` | `VLLM_MARLIN_USE_ATOMIC_ADD=1 python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json` |
-| `settings/presets/openai_remote.json` | 任意外部 vLLM / SGLang / MindIE `/v1/completions` 服务 | `adaptive` (`M=4, K=2, B=1024`), `consilience` | `backend="openai"`, 仅需 top-5 logprobs，可切换 `progressive` + `beam_particles=2` | `python -m inference_scaling.serve --settings settings/presets/openai_remote.json` |
+| `settings/presets/ascend_910b3_tp2.json` | 昇腾 910B3 × 2 (BF16) | `M=8, K=2, S=4` (`P=2`), `consilience` | `TP=2`, `gpu_mem=0.88`, `stream_interval=8`, 自动 `1536` 页对齐, `c=2` | `ASCEND_RT_VISIBLE_DEVICES=0,1 python -m inference_scaling.serve --settings settings/presets/ascend_910b3_tp2.json` |
+| `settings/presets/cuda_gpu_bf16.json` | 80–96 GB NVIDIA GPU (H100 / A100-80G / Blackwell) | `M=8, K=2, S=4` (`P=2`), `consilience` | `device="cuda"`, BF16 `TP=1`, `GPULogprobWorker`, `async_scheduling=true`, `stream_interval=8`, `c=2` | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_bf16.json` |
+| `settings/presets/cuda_gpu_fp8.json` | 40–96 GB NVIDIA GPU (A100-40G / L40S / H100) | `M=4, K=2, S=2` (`P=1`), `consilience` | 在线 `fp8`（忽略 visual/lm_head），40 GB 安全默认 `context_window=16384, c=2`（≥48 GB 可放宽至 `32768` 并升至 `M=8, S=4`） | `python -m inference_scaling.serve --settings settings/presets/cuda_gpu_fp8.json` |
+| `settings/presets/cuda_gpu_24g_mxfp4.json` | 单卡 24 GB NVIDIA GPU (Colab L4 / RTX 4090) | `M=4, K=2, S=2` (`P=1`), `self_certainty` | 在线 `mxfp4` Marlin（忽略 visual/lm_head），`context_window=8192`, 自动 `832` 页对齐, `c=2` | `VLLM_MARLIN_USE_ATOMIC_ADD=1 python -m inference_scaling.serve --settings settings/presets/cuda_gpu_24g_mxfp4.json` |
+| `settings/presets/openai_remote.json` | 任意外部 vLLM / SGLang / MindIE `/v1/completions` 服务 | `M=8, K=2, S=4` (`P=2`), `consilience` | `backend="openai"`, 仅需 top-5 logprobs, `c=2` | `python -m inference_scaling.serve --settings settings/presets/openai_remote.json` |
 
-HTTP 服务请求支持按请求外部覆盖核心维度 `(M, K, B)` 以及可选的 `max_stages`、`beam_particles`，例如在 `/v1/chat/completions` 或 `/v1/messages` 请求体中传入：
+HTTP 服务请求支持按请求外部覆盖三维参数 `(M, K, S)`，例如日常低延迟请求可传入：
 
 ```json
-{"scaling": {"candidate_count": 8, "rollout_count": 2, "block_size": 1536, "max_stages": 4, "beam_particles": 2}}
+{"scaling": {"candidate_count": 4, "rollout_count": 2, "stages": 2}}
 ```

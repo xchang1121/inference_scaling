@@ -32,7 +32,7 @@ class Conversation:
     thinking_budget: int | None = None
     enable_thinking: bool | None = None
     seed: int | None = None
-    # Optional per-request external IS dimensions: candidate_count (M), rollout_count (K), block_size (B).
+    # Optional per-request external IS dimensions: candidate_count (M), rollout_count (K), stages (S).
     scaling: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
@@ -51,9 +51,9 @@ class Conversation:
         if self.scaling is not None:
             if not isinstance(self.scaling, Mapping):
                 raise ProtocolError(
-                    "scaling must be an object with candidate_count, rollout_count, block_size, max_stages, or beam_particles"
+                    "scaling must be an object with candidate_count, rollout_count, or stages"
                 )
-            allowed = {"candidate_count", "rollout_count", "block_size", "max_stages", "beam_particles"}
+            allowed = {"candidate_count", "rollout_count", "stages"}
             unknown = sorted(set(self.scaling) - allowed)
             if unknown:
                 raise ProtocolError("unknown scaling fields: " + ", ".join(unknown))

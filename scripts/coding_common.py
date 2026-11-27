@@ -7,9 +7,7 @@ from pathlib import Path
 
 from inference_scaling.datasets.base import Dataset, Grade, Problem, file_sha256
 
-MODES = ("base", "is", "sir-k1", "met-k1", "sir-k2", "met-k2", "block-met-k2",
-         "bon-consilience", "is-self-certainty", "met-k1-self-certainty",
-         "met-k2-self-certainty", "block-met-k2-self-certainty")
+MODES = ("base", "is", "bon-consilience", "is-self-certainty")
 
 
 def digest(value):

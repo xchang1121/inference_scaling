@@ -26,9 +26,9 @@ def _duration(request, offset, sample):
     return .001 * (1 + 6 * int(sample.token_ids[-1] == 1) + request.seed % 3)
 
 
-@pytest.mark.parametrize("block_first,capacity,policy", [(False, 1, "fifo"), (False, 2, "fair_lpt"), (True, 8, "fair_lpt")])
-def test_all_weights_choices_and_tokens_match_for_changed_execution_orders(block_first, capacity, policy):
-    config = ConditionalISConfig(4, 3, 2, 7, .7, block_first)
+@pytest.mark.parametrize("stages,capacity,policy", [(2, 1, "fifo"), (2, 2, "fair_lpt"), (3, 8, "fair_lpt")])
+def test_all_weights_choices_and_tokens_match_for_changed_execution_orders(stages, capacity, policy):
+    config = ConditionalISConfig(4, 3, stages, 7, .7, base_block_size=2)
     reward = pointwise(lambda prompt, tokens: .4 * sum(tokens) - .1 * len(tokens))
     policy_config = SamplingConfig(eos_token_id=2)
     for seed in range(3):
@@ -41,7 +41,7 @@ def test_all_weights_choices_and_tokens_match_for_changed_execution_orders(block
 
 
 def test_retained_children_start_without_waiting_for_fresh_candidate_tails():
-    config = ConditionalISConfig(3, 3, 1, 8, 1.0, False)
+    config = ConditionalISConfig(3, 3, 2, 8, 1.0, base_block_size=1)
     simulator = SimulatedBackend(TabularAutoregressiveBackend({}, fallback=[.5, .5]),
                                  SchedulerConfig(max_in_flight=6), token_seconds=_duration)
     adapter = ConditionalISAdapter(backend=simulator, prompt=(), config=config, sampling=SamplingConfig(),
@@ -50,17 +50,17 @@ def test_retained_children_start_without_waiting_for_fresh_candidate_tails():
     record, _ = adapter.step(state, 1, SeedStream(3))
     submitted = {event["id"]: event["time"] for event in simulator.trace if event["event"] == "submit"}
     completed = {event["id"]: event["time"] for event in simulator.trace if event["event"] == "finish"}
-    assert submitted["conditional-is:step:1:candidate:0:rollout:1"] == 0
+    assert submitted["conditional-is:step:1:candidate:0:rollout:1"] < completed["conditional-is:step:1:candidate:1"]
     assert submitted["conditional-is:step:1:candidate:1:rollout:1"] < completed["conditional-is:step:1:candidate:1"]
     assert record.candidates[0].rollouts[0].reward == 4.0
     assert record.rollout_evaluations_performed == 8
 
 
-@pytest.mark.parametrize("marker,block_first", [((1,), False), ((0, 1), True)])
-def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker, block_first):
+@pytest.mark.parametrize("marker", [(1,), (0, 1)])
+def test_streaming_scope_and_recorded_rewards_match_at_split_boundaries(marker):
     parser = ThinkingParser((ThinkingFormat(marker, (3,)),))
     statistic = TokenStatistic(SamplingConfig(), top_k=2)
-    config = ConditionalISConfig(3, 3, 2, 7, .7, block_first)
+    config = ConditionalISConfig(3, 3, 2, 7, .7, base_block_size=2)
     for seed in range(3):
         results = []
         for streamed in (False, True):
@@ -155,7 +155,7 @@ def test_reward_failure_closes_all_queued_and_running_jobs():
         raise ValueError("reward failed")
 
     with pytest.raises(ValueError, match="reward failed"):
-        run_conditional_is(simulator, (), ConditionalISConfig(3, 4, 1, 7, 1, False), reward, SeedStream(2))
+        run_conditional_is(simulator, (), ConditionalISConfig(3, 4, 2, 7, 1.0, base_block_size=2), reward, SeedStream(2))
     assert not simulator.queue.active and not simulator.queue.pending and not simulator.jobs
 
 

@@ -96,7 +96,7 @@ def test_a_stopped_prefix_has_no_continuation():
 def test_is_and_mh_return_complete_outputs_of_the_stopped_backend():
     backend = _backend()
     result = run_conditional_is(
-        backend, (3,), ConditionalISConfig(block_first=False, total_length=4, block_size=2, candidate_count=2, rollout_count=2, reward_temperature=1.0),
+        backend, (3,), ConditionalISConfig(candidate_count=2, rollout_count=2, stages=2, total_length=4, reward_temperature=1.0, base_block_size=2),
         pointwise(lambda prompt, sequence: float(sequence[0] == 0)), SeedStream(7),
         sampling=SamplingConfig(eos_token_id=2),
     )
@@ -160,13 +160,16 @@ def test_early_rejection_through_the_thinking_scope_leaves_the_chain_unchanged()
     assert [(step.cut, step.accepted) for step in runs[0].trace] == [(step.cut, step.accepted) for step in runs[1].trace]
 
 
-def test_block_first_through_the_thinking_scope_leaves_conditional_is_unchanged():
+def test_multistage_is_through_the_thinking_scope_returns_valid_stopped_outputs():
     raw = StoppingTabular({(3,): (0.3, 0.4, 0.3), (3, 1): (0.5, 0.2, 0.3)}, fallback=(0.4, 0.3, 0.3))
-    runs = [run_conditional_is(_backend(raw=raw), (3,), ConditionalISConfig(
-        block_first=block_first, total_length=6, block_size=2, candidate_count=3, rollout_count=2, reward_temperature=1.0),
-        pointwise(lambda prompt, sequence: float(sequence.count(0))), SeedStream(7), sampling=SamplingConfig(eos_token_id=2))
-        for block_first in (False, True)]
-    assert runs[0].token_ids == runs[1].token_ids and runs[0].steps == runs[1].steps
+    scoped = _backend(raw=raw)
+    for stages in (2, 3):
+        result = run_conditional_is(
+            scoped, (3,),
+            ConditionalISConfig(candidate_count=4, rollout_count=2, stages=stages, total_length=6, reward_temperature=1.0, base_block_size=2),
+            pointwise(lambda prompt, sequence: float(sequence.count(0))), SeedStream(7), sampling=SamplingConfig(eos_token_id=2),
+        )
+        assert result.token_ids in _outputs(scoped, 6)
 
 
 @pytest.mark.parametrize("marker", [(1,), (1, 4)])
@@ -223,7 +226,7 @@ def test_thinking_budget_preserves_sample_score_and_stream_laws(marker):
         assert bounded.score_batch([ScoreRequest(prefix, (sample.token_ids,))])[0] == sample.token_logprobs
     scoped = _backend(parser=parser, raw=bounded)
     result = run_conditional_is(scoped, (3,), ConditionalISConfig(
-        block_first=False, total_length=horizon, block_size=1, candidate_count=2, rollout_count=2, reward_temperature=1),
+        candidate_count=2, rollout_count=2, stages=2, total_length=horizon, reward_temperature=1.0, base_block_size=1),
         pointwise(lambda prompt, sequence: 0.0), SeedStream(7), sampling=SamplingConfig(eos_token_id=2))
     mh = run_mh_chain(scoped, (3,), MHConfig(
         reward_temperature=None, early_rejection=False, suffix_replay=False, total_length=horizon,

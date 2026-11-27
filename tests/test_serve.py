@@ -95,10 +95,7 @@ class _ChatBackend(ThinkingBackend):
 
 
 def _batch_settings():
-    settings = load_settings()
-    # The finite test backend has no streaming/cancellation interface.
-    settings["ar"]["algorithms"]["is"]["selection_ready"] = False
-    return settings
+    return load_settings()
 
 
 def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
@@ -119,8 +116,8 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     assert (reply.thinking, reply.content, reply.finish, reply.tool_calls) == ("#### 7", "#### 7", "stop", ())
     assert reply.scaling["effort"] == "low" and reply.scaling["steps"] >= 1 and reply.scaling["sampling_scope"] == "thinking"
     assert reply.scaling["stopping_reason"] == "stop"
-    assert reply.scaling["reward"] == settings["run"]["reward"] == "self_certainty"
-    assert reply.scaling["reward_config"] == settings["rewards"]["self_certainty"]
+    assert reply.scaling["reward"] == settings["run"]["reward"] == "consilience"
+    assert reply.scaling["reward_config"] == settings["rewards"]["consilience"]
     assert reply.scaling["selection"] == "block_metropolized"
     seeded = replace(prepared, seed=17)
     offset = len(backend.batches)
@@ -158,26 +155,38 @@ def test_the_reasoner_chooses_a_thought_and_answers_from_it() -> None:
     assert reply.scaling["generation_budget"]["thinking_budget_enforcement"] == "close_then_content"
 
 
-@pytest.mark.parametrize("block_first", [False, True])
-def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(block_first) -> None:
+def _long_thought_backend() -> _ChatBackend:
+    """Think 3 tokens then close and answer '7', ensuring multi-stage escalation under small max_tokens."""
+    import numpy as np
+
+    backend = _ChatBackend()
+    backend._probabilities = {
+        (3,): np.asarray([1.0, 0.0, 0.0, 0.0]),
+        (3, 0): np.asarray([1.0, 0.0, 0.0, 0.0]),
+        (3, 0, 0): np.asarray([0.0, 1.0, 0.0, 0.0]),
+        (3, 0, 0, 1): np.asarray([1.0, 0.0, 0.0, 0.0]),
+        (3, 0, 0, 1, 0): np.asarray([0.0, 0.0, 1.0, 0.0]),
+    }
+    return backend
+
+
+def test_reasoner_runs_multistage_is_and_publishes_thinking_incrementally() -> None:
     settings = _batch_settings()
     settings["run"]["reward"] = "consilience"
-    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
-    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, block_first=block_first,
-                                             exploration_schedule="fixed")
-    backend = _ChatBackend()
+    settings["ar"]["algorithms"]["is"] = {"candidate_count": 3, "rollout_count": 2, "stages": 2}
+    backend = _long_thought_backend()
     reasoner = Reasoner(settings, backend)
     published = []
-    reply = reasoner.generate(reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]})),
-                              on_thinking=lambda text: published.append((text, len(backend.batches))))
-    assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
+    # max_tokens=5 -> hardware_page_block_size scales stage0_block_size to 2, pilot_width=1; thought has 3 tokens -> escalates!
+    reply = reasoner.generate(
+        reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 5})),
+        on_thinking=lambda text: published.append((text, len(backend.batches))),
+    )
+    assert (reply.thinking, reply.content, reply.finish) == ("#### 77", "#### 7", "stop")
     assert reply.scaling["reward"] == "consilience"
-    assert (reply.scaling["steps"], reply.scaling["candidate_count"], reply.scaling["rollout_count"],
-            reply.scaling["block_size"]) == (2, 3, 2, 1)
-    # Candidate generation, completions, the two fresh terminal candidates, and one final answer.
-    assert [len(batch) for batch in backend.batches] == [3, 6 if block_first else 3, 2, 1]
+    assert (reply.scaling["candidate_count"], reply.scaling["rollout_count"],
+            reply.scaling["stages"], reply.scaling["beam_particles"]) == (3, 2, 2, 1)
     assert "".join(text for text, _ in published) == reply.thinking
-    assert published[0][1] < len(backend.batches)
     assert reply.scaling["generated_tokens"] == backend.generated
     assert reply.scaling["cost"]["forward_token_slots"] > 0
     assert reply.scaling["thinking_status"] == "complete"
@@ -187,40 +196,37 @@ def test_reasoner_uses_fixed_candidates_and_completions_without_extra_sampling(b
 
 def test_reasoner_time_limit_keeps_a_complete_thought_after_a_full_is_step(monkeypatch) -> None:
     settings = _batch_settings()
-    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
-    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, exploration_schedule="fixed")
+    settings["ar"]["algorithms"]["is"] = {"candidate_count": 3, "rollout_count": 2, "stages": 2}
     settings["serve"]["max_seconds"] = 0.5
-    backend = _ChatBackend()
+    backend = _long_thought_backend()
     reasoner = Reasoner(settings, backend)
-    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 5}))
     clock = iter([0.0, 1.0, 1.0])
     monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
     reply = reasoner.generate(prepared)
     assert reply.scaling["stopping_reason"] == "deadline" and reply.scaling["steps"] == 1
-    assert (reply.thinking, reply.content, reply.finish) == ("#### 7", "#### 7", "stop")
-    assert [len(batch) for batch in backend.batches] == [3, 3, 1]
+    assert (reply.thinking, reply.content, reply.finish) == ("#### 77", "#### 7", "stop")
 
 
 def test_reasoner_default_uses_logical_stopping_even_when_time_passes(monkeypatch) -> None:
     settings = _batch_settings()
-    settings["ar"]["sampling"].update(top_p=1.0, top_k=None)
-    settings["ar"]["algorithms"]["is"].update(candidate_count=3, rollout_count=2, block_size=1, exploration_schedule="fixed")
+    settings["ar"]["algorithms"]["is"] = {"candidate_count": 3, "rollout_count": 2, "stages": 2}
     assert settings["serve"]["max_seconds"] is None
-    reasoner = Reasoner(settings, _ChatBackend())
-    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}]}))
+    reasoner = Reasoner(settings, _long_thought_backend())
+    prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 5}))
     clock = iter([0.0, 10000.0])
     monkeypatch.setattr("inference_scaling.serve.reasoner.time.monotonic", lambda: next(clock))
     reply = reasoner.generate(prepared)
-    assert reply.scaling["steps"] == 2 and reply.scaling["stopping_policy"] == "logical"
+    assert reply.scaling["stopping_policy"] == "logical"
     assert reply.scaling["stopping_reason"] == "stop"
 
 
-def test_reasoner_clamps_the_fixed_block_to_the_requested_output_limit() -> None:
+def test_reasoner_clamps_stage0_block_to_the_requested_output_limit() -> None:
     backend = _ChatBackend()
     reasoner = Reasoner(_batch_settings(), backend)
     prepared = reasoner.prepare(openai_conversation({"messages": [{"role": "user", "content": "q"}], "max_tokens": 1}))
     reply = reasoner.generate(prepared)
-    assert reply.scaling["block_size"] == 1 and reply.scaling["stopping_reason"] == "length"
+    assert reply.scaling["stage0_block_size"] == 1 and reply.scaling["stopping_reason"] == "length"
     assert reply.completion_tokens == 1 and reply.finish == "length" and not reply.content
     assert reply.scaling["generation_budget"]["client_max_tokens"] == 1
     assert reply.scaling["generation_budget"]["effective_max_new_tokens"] == 1

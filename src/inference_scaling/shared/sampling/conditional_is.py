@@ -1,9 +1,10 @@
-"""Conditional SIR weights and selection, independent of the generation backend.
+"""Conditional IS weights, block-Metropolized selection, and SMC particle resampling.
 
-A step weighs each candidate block by the mean ``exp(reward / temperature)`` of
-its completions, selects a candidate in proportion to that weight and one of its
-completions in proportion to the completion's own weight, so it selects a whole
-suffix in proportion to its reward weight.
+Independent of the generation backend. Each candidate block is weighted by the
+mean ``exp(reward / temperature)`` of its completions; selection uses the
+block-Metropolized kernel (merging identical block mass before transferring),
+and multi-particle stages resample systematically to avoid premature mode
+collapse.
 """
 
 from __future__ import annotations
@@ -100,21 +101,6 @@ def weigh(blocks: Sequence[TokenSequence],
                  for block, group in zip(blocks, completions, strict=True))
 
 
-def select(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: object) -> tuple[int, int]:
-    """A candidate in proportion to its weight and one of its completions in proportion to the completion's weight.
-
-    A completion is drawn for every candidate, so the kept one does not depend on which candidate is selected.
-    """
-
-    completions = [categorical_index_from_uniform(
-        normalize_log_weights([rollout.log_weight for rollout in candidate.rollouts]),
-        float(seeds.generator(*key, "candidate", index, "completion").random()),
-    ) for index, candidate in enumerate(candidates)]
-    selected = categorical_index_from_uniform(normalize_log_weights([candidate.log_weight for candidate in candidates]),
-                                              float(seeds.generator(*key, "select").random()))
-    return selected, completions[selected]
-
-
 def _metropolized_probabilities(weights: NDArray[np.float64]) -> NDArray[np.float64]:
     # Sum complements directly: total - weight loses small off-diagonal masses.
     leave_out = np.array([fsum(float(w) for j, w in enumerate(weights) if i != j)
@@ -130,14 +116,13 @@ def _metropolized_probabilities(weights: NDArray[np.float64]) -> NDArray[np.floa
 
 
 def select_metropolized(candidates: Sequence[ConditionalCandidate], seeds: SeedStream, *key: object,
-                       group_blocks: bool = False) -> tuple[int, int]:
-    """One index update from candidate zero's first complete rollout.
+                        group_blocks: bool = True) -> tuple[int, int]:
+    """One block-Metropolized index update from candidate zero's first complete rollout.
 
-    Leaf mass is exp(log_weight) / group_size, including terminal one-leaf
-    groups. The update preserves SIR's conditional index distribution; one
-    update from a base sample need not reduce finite-budget error or raise
-    answer accuracy. Grouping sums identical blocks' masses, then samples a
-    leaf conditionally. It never drops duplicate mass or uses partial scores.
+    Leaf mass is ``exp(log_weight) / group_size``, including terminal one-leaf
+    groups. Grouping sums identical blocks' masses, applies the Metropolized
+    transfer across distinct blocks, then samples a leaf conditionally inside
+    the chosen block.
     """
     if not candidates or any(not candidate.rollouts for candidate in candidates):
         raise ValueError("Metropolized selection requires non-empty candidate groups")
@@ -257,5 +242,15 @@ def resample_particles(
     return pairs
 
 
-__all__ = ["ConditionalCandidate", "ConditionalISResult", "ConditionalISStep", "RolloutEvaluation",
-           "calibrate_reward_temperature", "resample_particles", "select", "select_metropolized", "weigh"]
+__all__ = [
+    "CandidateSummary",
+    "ConditionalCandidate",
+    "ConditionalISResult",
+    "ConditionalISStep",
+    "RolloutEvaluation",
+    "RolloutSummary",
+    "calibrate_reward_temperature",
+    "resample_particles",
+    "select_metropolized",
+    "weigh",
+]

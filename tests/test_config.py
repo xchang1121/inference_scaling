@@ -27,8 +27,9 @@ def test_policy_id_preserves_distinct_float_values() -> None:
         lambda: MHConfig(alpha=4.0, reward_temperature=0.0, early_rejection=False, suffix_replay=False, iterations=None, steps_per_block=10, total_length=4, block_size=2, suffix_schedule="uniform"),
         lambda: SamplingConfig(temperature=float("nan")),
         lambda: SamplingConfig(top_p=float("inf")),
-        lambda: ConditionalISConfig(block_first=False, reward_temperature=float("inf"), candidate_count=4, rollout_count=4, block_size=16, total_length=32768),
-        lambda: ConditionalISConfig(block_first=False, block_size=8, total_length=4, candidate_count=4, rollout_count=4, reward_temperature=1.0),
+        lambda: ConditionalISConfig(candidate_count=4, rollout_count=4, stages=4, total_length=32768, reward_temperature=float("inf")),
+        lambda: ConditionalISConfig(candidate_count=4, rollout_count=4, stages=0, total_length=4, reward_temperature=1.0),
+        lambda: ConditionalISConfig(candidate_count=4, rollout_count=4, stages=2, total_length=4, reward_temperature=1.0, base_block_size=0),
     ],
 )
 def test_invalid_configs_fail_early(factory) -> None:
